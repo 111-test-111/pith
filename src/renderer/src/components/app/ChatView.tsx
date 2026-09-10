@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, useSyncExternalStore } from 'react'
 import { AlertTriangle, X } from 'lucide-react'
 import { MessageGroup } from '@/components/agents/message'
 import { MessageScroller } from '@/components/agents/message-scroller'
@@ -6,7 +6,7 @@ import type { PreviewRailItem } from '@/components/motion/preview-rail'
 import { ThinkingShimmer } from '@/components/agents/loading-states'
 import { Button } from '@/components/motion/button'
 import type { AssistantMsg, ChatMessage, ToolResultMsg, UserMsg } from '../../../../shared/types'
-import type { PiState } from '@/state/pi-store'
+import type { PiStore, PiState } from '@/state/pi-store'
 import { useI18n } from '@/i18n'
 import { extractUserDisplay } from '@/lib/user-message'
 import { AssistantGroup, UserItem } from './MessageItems'
@@ -78,8 +78,14 @@ function excerpt(text: string, limit: number): string {
 const RAIL_TITLE_LIMIT = 56
 const RAIL_DESCRIPTION_LIMIT = 88
 
-export function ChatView({ state, onDismissError }: { state: PiState; onDismissError: () => void }) {
+/**
+ * Subscribes to the FULL store state itself — the transcript is the one place
+ * that must see every streaming delta — so the rest of the Workspace tree can
+ * subscribe to the cheaper shell slice instead.
+ */
+export function ChatView({ store, onDismissError }: { store: PiStore; onDismissError: () => void }) {
   const { t } = useI18n()
+  const state: PiState = useSyncExternalStore(store.subscribe, store.getState)
   const toolResults = useMemo(() => {
     const map = new Map<string, ToolResultMsg>()
     for (const message of state.messages) {

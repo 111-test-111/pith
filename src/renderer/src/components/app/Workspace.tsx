@@ -34,7 +34,7 @@ import type {
   SessionSummaryDTO,
   ThinkingLevel
 } from '../../../../shared/types'
-import { PiStore, type PiState } from '@/state/pi-store'
+import { PiStore } from '@/state/pi-store'
 import { ChatView } from './ChatView'
 import { Composer } from './Composer'
 import { SettingsPage } from './settings/SettingsPage'
@@ -76,7 +76,9 @@ function ResourceDeleteAction({ label, onSelect }: { label: string; onSelect: ()
 
 export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
   const { t } = useI18n()
-  const state = useSyncExternalStore(store.subscribe, store.getState) as PiState
+  // Shell slice only: its identity is stable across streaming deltas, so the
+  // sidebar/header/composer don't re-render while ChatView streams.
+  const shell = useSyncExternalStore(store.subscribe, store.getShell)
   const [models, setModels] = useState<ModelDTO[]>([])
   const [sessions, setSessions] = useState<SessionSummaryDTO[]>([])
   const [folders, setFolders] = useState<string[]>([])
@@ -143,9 +145,9 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
 
   const currentModel = useMemo(
     () =>
-      models.find((m) => state.model && m.providerId === state.model.providerId && m.id === state.model.id) ??
+      models.find((m) => shell.model && m.providerId === shell.model.providerId && m.id === shell.model.id) ??
       null,
-    [models, state.model]
+    [models, shell.model]
   )
 
   const handleSend = useCallback(
@@ -240,17 +242,17 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
       byFolder.set(session.cwd, list)
     }
     const activeListed =
-      state.cwd != null && (folders.includes(state.cwd) || byFolder.has(state.cwd))
+      shell.cwd != null && (folders.includes(shell.cwd) || byFolder.has(shell.cwd))
     const ordered = [
-      ...(state.cwd && activeListed ? [state.cwd] : []),
-      ...folders.filter((f) => f !== state.cwd),
-      ...[...byFolder.keys()].filter((f) => f !== state.cwd && !folders.includes(f))
+      ...(shell.cwd && activeListed ? [shell.cwd] : []),
+      ...folders.filter((f) => f !== shell.cwd),
+      ...[...byFolder.keys()].filter((f) => f !== shell.cwd && !folders.includes(f))
     ]
     const seen = new Set<string>()
     return ordered
       .filter((f) => !seen.has(f) && seen.add(f))
       .map((cwd) => ({ cwd, sessions: byFolder.get(cwd) ?? [] }))
-  }, [sessions, folders, state.cwd])
+  }, [sessions, folders, shell.cwd])
 
   const sessionItems: SidebarResource[] = useMemo(
     () =>
@@ -348,7 +350,7 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
                   key={folderKey}
                   items={sessionItems}
                   allowNesting={false}
-                  activeId={state.sessionPath ?? null}
+                  activeId={shell.sessionPath ?? null}
                   defaultExpandedIds={folderGroups.map((group) => `folder:${group.cwd}`)}
                   ariaLabel={t('workspace.sessionsAria')}
                   onActiveChange={(id) => {
@@ -432,7 +434,7 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
                 {currentModel ? currentModel.name : t('workspace.noModel')}
               </p>
               <p className="truncate text-[11px] text-muted-foreground">
-                {state.cwd ?? ''}
+                {shell.cwd ?? ''}
               </p>
             </div>
           </div>
@@ -449,13 +451,13 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
           </div>
         </header>
 
-        <ChatView state={state} onDismissError={() => store.clearError()} />
+        <ChatView store={store} onDismissError={() => store.clearError()} />
 
         <Composer
           models={models}
           model={currentModel}
-          thinkingLevel={state.thinkingLevel}
-          busy={state.isStreaming}
+          thinkingLevel={shell.thinkingLevel}
+          busy={shell.isStreaming}
           onSend={handleSend}
           onStop={() => void window.pi.abort()}
           onModelChange={(model) => void handleModelChange(model)}

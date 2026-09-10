@@ -37,6 +37,21 @@ export interface PiState {
   error: string | null
 }
 
+/**
+ * Workspace-chrome slice of PiState: fields the sidebar, header and composer
+ * read. Its object identity only changes when one of these fields changes, so
+ * `useSyncExternalStore(subscribe, getShell)` subscribers don't re-render while
+ * streaming deltas churn `streaming`/`toolRuns`/`messages` in the full state.
+ */
+export interface PiShellState {
+  ready: boolean
+  cwd: string | null
+  sessionPath: string | null
+  model: ModelRefDTO | null
+  thinkingLevel: ThinkingLevel
+  isStreaming: boolean
+}
+
 const initialState: PiState = {
   ready: false,
   cwd: null,
@@ -53,6 +68,17 @@ const initialState: PiState = {
   error: null
 }
 
+function shellOf(state: PiState): PiShellState {
+  return {
+    ready: state.ready,
+    cwd: state.cwd,
+    sessionPath: state.sessionPath,
+    model: state.model,
+    thinkingLevel: state.thinkingLevel,
+    isStreaming: state.isStreaming
+  }
+}
+
 type Listener = () => void
 
 /**
@@ -62,9 +88,12 @@ type Listener = () => void
  */
 export class PiStore {
   private state: PiState = initialState
+  private shellState: PiShellState = shellOf(initialState)
   private listeners = new Set<Listener>()
 
   getState = (): PiState => this.state
+
+  getShell = (): PiShellState => this.shellState
 
   subscribe = (listener: Listener): (() => void) => {
     this.listeners.add(listener)
@@ -72,7 +101,18 @@ export class PiStore {
   }
 
   private set(patch: Partial<PiState>): void {
-    this.state = { ...this.state, ...patch }
+    const prev = this.state
+    this.state = { ...prev, ...patch }
+    if (
+      prev.ready !== this.state.ready ||
+      prev.cwd !== this.state.cwd ||
+      prev.sessionPath !== this.state.sessionPath ||
+      prev.model !== this.state.model ||
+      prev.thinkingLevel !== this.state.thinkingLevel ||
+      prev.isStreaming !== this.state.isStreaming
+    ) {
+      this.shellState = shellOf(this.state)
+    }
     for (const listener of this.listeners) listener()
   }
 
