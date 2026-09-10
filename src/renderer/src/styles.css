@@ -1,0 +1,188 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:is(.dark *));
+
+@utility scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Theme tokens (shadcn-style) — light & dark, with accent-color presets.
+ * ------------------------------------------------------------------------- */
+
+:root {
+  --radius: 0.625rem;
+
+  --background: oklch(0.984 0.003 264);
+  --foreground: oklch(0.216 0.02 264);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.216 0.02 264);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.216 0.02 264);
+  --muted: oklch(0.955 0.006 264);
+  --muted-foreground: oklch(0.52 0.02 264);
+  --secondary: oklch(0.955 0.006 264);
+  --secondary-foreground: oklch(0.216 0.02 264);
+  --accent: oklch(0.945 0.01 264);
+  --accent-foreground: oklch(0.216 0.02 264);
+  --destructive: oklch(0.577 0.215 27);
+  --border: oklch(0.9 0.008 264);
+  --input: oklch(0.9 0.008 264);
+}
+
+.dark {
+  --background: oklch(0.168 0.012 264);
+  --foreground: oklch(0.93 0.008 264);
+  --card: oklch(0.208 0.014 264);
+  --card-foreground: oklch(0.93 0.008 264);
+  --popover: oklch(0.208 0.014 264);
+  --popover-foreground: oklch(0.93 0.008 264);
+  --muted: oklch(0.24 0.014 264);
+  --muted-foreground: oklch(0.68 0.014 264);
+  --secondary: oklch(0.24 0.014 264);
+  --secondary-foreground: oklch(0.93 0.008 264);
+  --accent: oklch(0.28 0.016 264);
+  --accent-foreground: oklch(0.93 0.008 264);
+  --destructive: oklch(0.65 0.19 25);
+  --border: oklch(0.29 0.014 264);
+  --input: oklch(0.29 0.014 264);
+}
+
+/* Accent presets: indigo (default) / blue / violet / emerald / amber / rose / cyan */
+
+:root {
+  --primary: oklch(0.51 0.21 275);
+  --primary-foreground: oklch(0.985 0.002 264);
+  --ring: oklch(0.51 0.21 275);
+}
+.dark {
+  --primary: oklch(0.67 0.16 275);
+  --primary-foreground: oklch(0.14 0.02 275);
+  --ring: oklch(0.67 0.16 275);
+}
+
+[data-accent='blue'] {
+  --primary: oklch(0.52 0.19 255);
+  --primary-foreground: oklch(0.985 0.002 255);
+  --ring: oklch(0.52 0.19 255);
+}
+.dark[data-accent='blue'] {
+  --primary: oklch(0.68 0.15 255);
+  --primary-foreground: oklch(0.14 0.02 255);
+  --ring: oklch(0.68 0.15 255);
+}
+
+[data-accent='violet'] {
+  --primary: oklch(0.5 0.24 300);
+  --primary-foreground: oklch(0.985 0.002 300);
+  --ring: oklch(0.5 0.24 300);
+}
+.dark[data-accent='violet'] {
+  --primary: oklch(0.7 0.17 300);
+  --primary-foreground: oklch(0.15 0.03 300);
+  --ring: oklch(0.7 0.17 300);
+}
+
+[data-accent='emerald'] {
+  --primary: oklch(0.51 0.14 163);
+  --primary-foreground: oklch(0.985 0.002 163);
+  --ring: oklch(0.51 0.14 163);
+}
+.dark[data-accent='emerald'] {
+  --primary: oklch(0.7 0.14 163);
+  --primary-foreground: oklch(0.14 0.03 163);
+  --ring: oklch(0.7 0.14 163);
+}
+
+[data-accent='amber'] {
+  --primary: oklch(0.6 0.15 65);
+  --primary-foreground: oklch(0.18 0.03 65);
+  --ring: oklch(0.6 0.15 65);
+}
+.dark[data-accent='amber'] {
+  --primary: oklch(0.78 0.15 75);
+  --primary-foreground: oklch(0.19 0.04 75);
+  --ring: oklch(0.78 0.15 75);
+}
+
+[data-accent='rose'] {
+  --primary: oklch(0.54 0.2 15);
+  --primary-foreground: oklch(0.985 0.002 15);
+  --ring: oklch(0.54 0.2 15);
+}
+.dark[data-accent='rose'] {
+  --primary: oklch(0.69 0.17 15);
+  --primary-foreground: oklch(0.15 0.03 15);
+  --ring: oklch(0.69 0.17 15);
+}
+
+[data-accent='cyan'] {
+  --primary: oklch(0.53 0.13 215);
+  --primary-foreground: oklch(0.985 0.002 215);
+  --ring: oklch(0.53 0.13 215);
+}
+.dark[data-accent='cyan'] {
+  --primary: oklch(0.72 0.12 215);
+  --primary-foreground: oklch(0.14 0.03 215);
+  --ring: oklch(0.72 0.12 215);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-background text-foreground antialiased;
+  font-family:
+    ui-sans-serif, system-ui, -apple-system, 'SF Pro Text', 'Segoe UI', Roboto,
+    'Helvetica Neue', Arial, sans-serif;
+  overflow: hidden;
+}
+
+/* Selection follows the accent color. */
+::selection {
+  background: color-mix(in oklch, var(--primary) 25%, transparent);
+}
+
+/* App-wide scrollbar styling. */
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: color-mix(in oklch, var(--foreground) 18%, transparent);
+  border-radius: 9999px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
