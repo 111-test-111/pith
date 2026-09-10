@@ -361,12 +361,15 @@ export function MessageScroller({
     const observer = new ResizeObserver(() => {
       scheduleRailSync();
       if (!followOutput || !followingRef.current) return;
-      scrollToEnd(reduce || !smooth ? "auto" : "smooth");
+      // local patch (pi-app): follow with instant scrolls while streaming —
+      // restarting a smooth scroll every frame as content grows janks the
+      // main thread during fast model output.
+      scrollToEnd(reduce || !smooth || busy ? "auto" : "smooth");
     });
     observer.observe(content);
 
     return () => observer.disconnect();
-  }, [followOutput, reduce, scheduleRailSync, scrollToEnd, smooth]);
+  }, [followOutput, reduce, scheduleRailSync, scrollToEnd, smooth, busy]);
 
   useEffect(() => {
     if (navigation !== "rail") {
