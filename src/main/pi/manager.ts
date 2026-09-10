@@ -24,6 +24,15 @@ import type {
 /** How many opened folders to keep in the sidebar/settings list. */
 const MAX_FOLDERS = 12
 
+/**
+ * Streaming updates (`message_update` carries the FULL accumulated partial
+ * message, `tool_execution_update` the partial tool output) can arrive dozens
+ * of times per second from fast models. Coalesce them (latest wins per key)
+ * and flush on this interval — the UI renders at most ~30fps anyway. Ordered
+ * events always flush pending updates first, so event order is preserved.
+ */
+const STREAM_FLUSH_MS = 33
+
 /** Drop functions/symbols and turn Dates into ISO strings before IPC. */
 function serialize(value: unknown): any {
   return JSON.parse(
@@ -51,6 +60,8 @@ export class PiManager {
   private unsubscribe: (() => void) | null = null
   private fileIndex: FileIndex | null = null
   private pendingAuth = new Map<string, { resolve: (v: string) => void; reject: (e: Error) => void }>()
+  private pendingStreamEvents = new Map<string, AgentSessionEvent>()
+  private streamFlushTimer: ReturnType<typeof setTimeout> | null = null
 
   cwd: string | null = null
   /** Folders the user has opened, most recent first — sessions of all of
@@ -89,8 +100,57 @@ export class PiManager {
   private teardownSession(): void {
     this.unsubscribe?.()
     this.unsubscribe = null
+    // Pending coalesced deltas belong to the session being torn down — drop
+    // them so they can never leak into the next session's UI state.
+    this.pendingStreamEvents.clear()
+    if (this.streamFlushTimer) {
+      clearTimeout(this.streamFlushTimer)
+      this.streamFlushTimer = null
+    }
     this.session?.dispose()
     this.session = null
+  }
+
+  /**
+   * Session event sink with streaming-delta coalescing: stream events wait for
+   * the flush interval (latest per key wins), everything else flushes them and
+   * is emitted immediately, preserving event order.
+   */
+  private emitEvent(event: AgentSessionEvent): void {
+    if (event.type !== 'message_update' && event.type !== 'tool_execution_update') {
+      this.flushStreamEvents()
+      this.emit('pi:event', serialize(event))
+      return
+    }
+    const key =
+      event.type === 'message_update'
+        ? 'message_update'
+        : `tool_execution_update:${event.toolCallId}`
+    this.pendingStreamEvents.set(key, event)
+    if (!this.streamFlushTimer) {
+      this.streamFlushTimer = setTimeout(() => {
+        this.streamFlushTimer = null
+        this.flushStreamEvents()
+      }, STREAM_FLUSH_MS)
+    }
+  }
+
+  private flushStreamEvents(): void {
+    if (this.streamFlushTimer) {
+      clearTimeout(this.streamFlushTimer)
+      this.streamFlushTimer = null
+    }
+    if (!this.pendingStreamEvents.size) return
+    for (const event of this.pendingStreamEvents.values()) {
+      if (event.type === 'message_update') {
+        // The raw delta is unused by the renderer; only the accumulated
+        // message crosses IPC.
+        this.emit('pi:event', serialize({ ...event, assistantMessageEvent: undefined }))
+      } else {
+        this.emit('pi:event', serialize(event))
+      }
+    }
+    this.pendingStreamEvents.clear()
   }
 
   private async buildSession(sessionManager: SessionManager): Promise<AgentSession> {
@@ -104,7 +164,7 @@ export class PiManager {
     })
     this.session = session
     this.unsubscribe = session.subscribe((event: AgentSessionEvent) => {
-      this.emit('pi:event', serialize(event))
+      this.emitEvent(event)
     })
     return session
   }
@@ -265,7 +325,7 @@ export class PiManager {
         })
       } catch (error) {
         this.notifyError(error instanceof Error ? error.message : String(error))
-        this.emit('pi:event', { type: 'agent_end', messages: [], willRetry: false })
+        this.emitEvent({ type: 'agent_end', messages: [], willRetry: false })
       }
     })()
   }

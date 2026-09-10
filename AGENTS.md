@@ -62,7 +62,7 @@ Hard rules:
 
 - Renderer **never** imports `electron` or pi packages; it talks only through `window.pi` (typed by `src/renderer/src/env.d.ts` referencing preload).
 - New IPC surface = add DTO to `shared/types.ts` + handler in `main/ipc.ts` + method in `preload/index.ts`.
-- Pi events flow: `PiManager` emits `pi:event` (serialized via JSON round-trip) → `PiStore.dispatch` → React. Render from `store.messages`; `store.streaming` is the live overlay.
+- Pi events flow: `PiManager` emits `pi:event` (serialized via JSON round-trip) → `PiStore.dispatch` → React. Render from `store.messages`; `store.streaming` is the live overlay. High-frequency deltas (`message_update`, `tool_execution_update`) are coalesced in `PiManager.emitEvent` (latest wins, ~33ms flush; ordered events flush first) — keep new hot-path events on that list.
 - User messages sent through the composer are mirrored optimistically (`__optimistic` flag) and replaced on the real `message_end`.
 - Settings are shared through `AppSettings` (`{ cwd, folders }`): the active `cwd` is what the file index / sessions / bash run in; `folders` is the sidebar's known list. Deleting a project moves its sessions to the OS trash and forgets the folder ([deleteFolderSessions](src/main/pi/manager.ts:231)).
 - Settings UI is a registry: add a section by appending one entry to `SECTIONS` in [SettingsPage.tsx](src/renderer/src/components/app/settings/SettingsPage.tsx) (label/description come from i18n keys) — the shell never changes.
