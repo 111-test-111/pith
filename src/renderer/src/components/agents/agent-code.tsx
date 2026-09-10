@@ -42,6 +42,9 @@ const LIGHT_THEME = "github-light-high-contrast";
 const DARK_THEME = "github-dark-high-contrast";
 let agentCodeHighlighter: Promise<Highlighter> | null = null;
 const tokenCache = new Map<string, AgentCodeTokenLines>();
+// local patch (pi-app): bound the cache — completed code is what gets
+// re-rendered; intermediate snapshots were never re-read but accumulated.
+const TOKEN_CACHE_MAX = 400;
 
 function getAgentCodeHighlighter() {
   if (!agentCodeHighlighter) {
@@ -60,9 +63,13 @@ function tokenCacheKey(code: string, language: AgentCodeLanguage) {
 export function useAgentCodeTokens(
   code: string,
   language: AgentCodeLanguage,
+  // local patch (pi-app): `enabled: false` (code still streaming) skips shiki
+  // entirely — re-highlighting the full growing block per delta was quadratic
+  // CPU. Highlighting runs once when the block completes.
+  enabled = true,
 ) {
-  const key = tokenCacheKey(code, language);
-  const cached = tokenCache.get(key);
+  const key = enabled ? tokenCacheKey(code, language) : "";
+  const cached = enabled ? tokenCache.get(key) : undefined;
   const [result, setResult] = useState<{
     key: string;
     code: string;
@@ -71,6 +78,7 @@ export function useAgentCodeTokens(
   } | null>(cached ? { key, code, language, lines: cached } : null);
 
   useEffect(() => {
+    if (!enabled) return;
     const current = tokenCache.get(key);
     if (current) {
       setResult({ key, code, language, lines: current });
@@ -96,14 +104,16 @@ export function useAgentCodeTokens(
             dark: token.variants.dark?.color,
           })),
       );
+      if (tokenCache.size >= TOKEN_CACHE_MAX) tokenCache.clear();
       tokenCache.set(key, lines);
       setResult({ key, code, language, lines });
     });
     return () => {
       cancelled = true;
     };
-  }, [code, key, language]);
+  }, [code, key, language, enabled]);
 
+  if (!enabled) return null;
   if (result?.key === key) return result.lines;
   if (result?.language === language && code.startsWith(result.code)) {
     return result.lines;

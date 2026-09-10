@@ -54,7 +54,9 @@ export function CodeBlock({
   const copyTimer = useRef<number | undefined>(undefined);
   const [copied, setCopied] = useState(false);
   const streaming = status === "streaming";
-  const tokens = useAgentCodeTokens(code, language);
+  // local patch (pi-app): skip shiki while the block is still streaming —
+  // lines render as plain text and get highlighted once on completion.
+  const tokens = useAgentCodeTokens(code, language, status !== "streaming");
   const highlighted = useMemo(
     () => new Set(highlightLines),
     [highlightLines],

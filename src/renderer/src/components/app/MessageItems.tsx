@@ -162,7 +162,7 @@ function AssistantParts({ message, streaming, toolResults, toolRuns }: { message
               copyText={plainText}
               showActions={!streaming}
             >
-              <Markdown>{text}</Markdown>
+              <Markdown streaming={streaming}>{text}</Markdown>
             </StreamingResponse>
           </MessageBubbleContent>
         </MessageBubble>

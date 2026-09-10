@@ -75,6 +75,7 @@ These are the only intentional edits inside `components/motion|agents/`; keep th
 - [ai-sidebar.tsx](src/renderer/src/components/agents/ai-sidebar.tsx) — `allowNesting` prop (app groups sessions by folder, never nests) + a themed native drag image (Chromium snapshots the motion row as an opaque white square).
 - [message-scroller.tsx](src/renderer/src/components/agents/message-scroller.tsx) — `railItems` prop so the nav rail is driven by app data and located via `[data-rail-id]` instead of DOM text.
 - [code-block.tsx](src/renderer/src/components/agents/code-block.tsx) / [message-bubble.tsx](src/renderer/src/components/agents/message-bubble.tsx) / [streaming-response.tsx](src/renderer/src/components/agents/streaming-response.tsx) — a `data-code-block-pre` marker plus `[&_pre:not([data-code-block-pre])]` selectors so raw-markdown `<pre>` framing doesn't double-box beUI's own `CodeBlock`.
+- [agent-code.tsx](src/renderer/src/components/agents/agent-code.tsx) / [code-block.tsx](src/renderer/src/components/agents/code-block.tsx) — `useAgentCodeTokens(code, language, enabled)` skips shiki while `status === 'streaming'` (highlighting a growing block per delta was quadratic CPU) and `tokenCache` is bounded (`TOKEN_CACHE_MAX`); the block highlights once on completion.
 
 ## Pi SDK facts (learned from the installed package, 0.85.x)
 
