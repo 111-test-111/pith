@@ -209,6 +209,31 @@ export interface AssistantGroupProps extends ToolContext {
 }
 
 /**
+ * memo comparator for AssistantGroup: a new `toolRuns` record identity (every
+ * tool_execution_update creates one) must not re-render the group unless one
+ * of the tool calls THIS group renders actually changed.
+ */
+function assistantGroupPropsEqual(prev: AssistantGroupProps, next: AssistantGroupProps): boolean {
+  if (
+    prev.messages !== next.messages ||
+    prev.streamingIndex !== next.streamingIndex ||
+    prev.pending !== next.pending ||
+    prev.toolResults !== next.toolResults
+  ) {
+    return false
+  }
+  if (prev.toolRuns === next.toolRuns) return true
+  for (const message of prev.messages) {
+    for (const part of message.content) {
+      if (part.type === 'toolCall' && prev.toolRuns[part.id] !== next.toolRuns[part.id]) {
+        return false
+      }
+    }
+  }
+  return true
+}
+
+/**
  * A whole assistant turn as one message row: one avatar and header, then each
  * model round's parts in order, and a single usage footer summing the turn.
  */
@@ -266,4 +291,4 @@ export const AssistantGroup = memo(function AssistantGroup({
       </MessageContent>
     </Message>
   )
-})
+}, assistantGroupPropsEqual)
