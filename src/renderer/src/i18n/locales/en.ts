@@ -18,6 +18,7 @@ const en = {
   'workspace.sessions': 'Sessions',
   'workspace.sessionsAria': 'Sessions by workspace folder',
   'workspace.settings': 'Settings',
+  'workspace.themeLabel': 'Theme: {mode}',
   'workspace.noModel': 'No model selected',
   'workspace.removeAttachment': 'Remove {name}',
   'workspace.deleteSession': 'Delete session',
@@ -33,6 +34,7 @@ const en = {
 
   // conversation
   'chat.transcriptAria': 'Conversation',
+  'chat.navGoTo': 'Go to message {index} of {count}',
   'chat.emptyTitle': 'Ready when you are',
   'chat.emptyBody':
     'Ask Pi to read, edit, search and run code in this workspace — or attach an image and reference files with @.',
@@ -88,8 +90,11 @@ const en = {
 
   // settings
   'settings.title': 'Settings',
+  'settings.back': 'Back to chat',
   'settings.general': 'General',
+  'settings.generalDesc': 'Storage, version and project information.',
   'settings.appearance': 'Appearance',
+  'settings.appearanceDesc': 'Theme, accent color and interface language.',
   'settings.providers': 'Providers',
   'settings.storage': 'Storage',
   'settings.credentials': 'Credentials',

@@ -24,11 +24,19 @@ import { ToolCallView } from './ToolCallView'
  * unbroken strings wrap instead of widening the conversation column. */
 const WRAP_ANYWHERE = '[overflow-wrap:anywhere]'
 
-export const UserItem = memo(function UserItem({ message }: { message: UserMsg }) {
+/** `railId` marks this row as a navigation-rail target (MessageScroller
+ * resolves app-provided rail items through data-rail-id). */
+export const UserItem = memo(function UserItem({
+  message,
+  railId
+}: {
+  message: UserMsg
+  railId?: string
+}) {
   const { t } = useI18n()
   const { text, files, images } = extractUserDisplay(message.content)
   return (
-    <Message from="user" animateIn>
+    <Message from="user" animateIn data-rail-id={railId}>
       <MessageAvatar>
         <User />
       </MessageAvatar>

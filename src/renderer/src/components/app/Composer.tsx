@@ -285,7 +285,6 @@ export function Composer({
             loading={busy}
             onStop={onStop}
             onSubmit={submit}
-            minRows={1}
             maxRows={8}
             placeholder={t('composer.placeholder')}
             leadingAction={

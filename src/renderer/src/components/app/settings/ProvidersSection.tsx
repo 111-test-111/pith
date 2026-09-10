@@ -54,18 +54,21 @@ export function ProvidersSection() {
   )
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="flex shrink-0 items-center justify-between px-3 pb-1.5 pt-1">
-        <div>
-          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{t('settings.providers')}</p>
-          <p className="mt-1 text-xs text-muted-foreground/70">{t('settings.providersDesc')}</p>
-        </div>
-        <Button variant="ghost" size="icon" aria-label={t('settings.refreshProviders')} onClick={() => void refresh()}>
+    <div className="space-y-3">
+      {/* The page shell renders the section title/description; this toolbar
+          carries the section's only action. */}
+      <div className="flex justify-end">
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label={t('settings.refreshProviders')}
+          onClick={() => void refresh()}
+        >
           {loading ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
         </Button>
       </div>
 
-      <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto px-0.5 pb-1 [scrollbar-width:thin]">
+      <div className="space-y-1.5">
         {sorted.map((provider) => (
           <div
             key={provider.id}

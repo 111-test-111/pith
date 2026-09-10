@@ -110,10 +110,21 @@ export function PromptInput({
     if (!textarea || !measurement || textarea.value !== currentValue) return;
 
     const lineHeight = 24;
-    const nextHeight = Math.min(
-      Math.max(measurement.scrollHeight, minRows * lineHeight),
-      maxRows * lineHeight,
-    );
+    // local patch (pi-app): the measurement div mirrors the textarea's text
+    // but not its vertical padding, so the padding must be added AFTER the
+    // row-range clamp. Adding it to the content term only (as an earlier
+    // attempt did) leaves the min-rows clamp short by the same padding, and
+    // the height then jumps by it the moment text wraps — the first line
+    // reads as shifting up.
+    const style = getComputedStyle(textarea);
+    const verticalPadding =
+      (Number.parseFloat(style.paddingTop) || 0) +
+      (Number.parseFloat(style.paddingBottom) || 0);
+    const nextHeight =
+      Math.min(
+        Math.max(measurement.scrollHeight, minRows * lineHeight),
+        maxRows * lineHeight,
+      ) + verticalPadding;
     const height = `${nextHeight}px`;
     if (textarea.style.height !== height) textarea.style.height = height;
   }, [currentValue, maxRows, minRows]);

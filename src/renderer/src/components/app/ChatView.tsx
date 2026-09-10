@@ -2,11 +2,13 @@ import { useMemo } from 'react'
 import { AlertTriangle, X } from 'lucide-react'
 import { MessageGroup } from '@/components/agents/message'
 import { MessageScroller } from '@/components/agents/message-scroller'
+import type { PreviewRailItem } from '@/components/motion/preview-rail'
 import { ThinkingShimmer } from '@/components/agents/loading-states'
 import { Button } from '@/components/motion/button'
 import type { AssistantMsg, ChatMessage, ToolResultMsg, UserMsg } from '../../../../shared/types'
 import type { PiState } from '@/state/pi-store'
 import { useI18n } from '@/i18n'
+import { extractUserDisplay } from '@/lib/user-message'
 import { AssistantGroup, UserItem } from './MessageItems'
 
 interface ChatTurn {
@@ -37,6 +39,45 @@ function buildTurns(messages: ChatMessage[]): ChatTurn[] {
   return turns
 }
 
+/** Final answer text of a turn: the last round that produced prose. */
+function finalReplyText(assistants: AssistantMsg[]): string {
+  for (let i = assistants.length - 1; i >= 0; i--) {
+    const text = assistants[i].content
+      .filter((part) => part.type === 'text')
+      .map((part) => (part as any).text as string)
+      .join('\n\n')
+      .trim()
+    if (text) return text
+  }
+  return ''
+}
+
+/** Markdown syntax off a reply so the rail excerpt reads as prose. Code fence
+ * bodies stay (they are often the answer); emphasis/link markers go. */
+function plainMarkdown(text: string): string {
+  return text
+    .replace(/```[\w-]*\n?/g, '')
+    .replace(/`([^`]*)`/g, '$1')
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\*\*(.*?)\*\*/g, '$1')
+    .replace(/\*(.*?)\*/g, '$1')
+    .replace(/__(.*?)__/g, '$1')
+    .replace(/^#{1,6}\s+/gm, '')
+    .replace(/^\s*[-*+]\s+/gm, '')
+}
+
+/** Word-boundary ellipsis, mirroring beUI's preview truncation. */
+function excerpt(text: string, limit: number): string {
+  const normalized = text.replace(/\s+/g, ' ').trim()
+  if (normalized.length <= limit) return normalized
+  const cut = normalized.slice(0, limit)
+  const boundary = cut.lastIndexOf(' ')
+  return `${cut.slice(0, boundary > limit * 0.65 ? boundary : limit).trim()}…`
+}
+
+const RAIL_TITLE_LIMIT = 56
+const RAIL_DESCRIPTION_LIMIT = 88
+
 export function ChatView({ state, onDismissError }: { state: PiState; onDismissError: () => void }) {
   const { t } = useI18n()
   const toolResults = useMemo(() => {
@@ -49,6 +90,34 @@ export function ChatView({ state, onDismissError }: { state: PiState; onDismissE
 
   const busy = state.isStreaming || Boolean(state.streaming)
   const turns = useMemo(() => buildTurns(state.messages), [state.messages])
+  /**
+   * Navigation rail: one tick per user turn. The hover preview pairs the
+   * user's message with the turn's final assistant reply — both excerpted
+   * from the message data, so UI chrome (tool cards, copy buttons, usage
+   * footers) never leaks into the rail the way DOM-derived previews did.
+   */
+  const railItems = useMemo<PreviewRailItem[]>(() => {
+    // buildTurns keeps assistant rounds in their own turns; pair each user
+    // turn with the assistant turns that follow it, up to the next user turn.
+    const pairs = turns.map((turn, index) => {
+      if (turn.role !== 'user') return null
+      const assistants: AssistantMsg[] = []
+      for (let next = index + 1; next < turns.length && turns[next].role === 'assistant'; next++) {
+        assistants.push(...turns[next].assistants)
+      }
+      return { turn, assistants }
+    })
+    const userTurns = pairs.filter((pair): pair is { turn: ChatTurn; assistants: AssistantMsg[] } => pair !== null)
+    return userTurns.map(({ turn, assistants }, index) => {
+      const reply = finalReplyText(assistants)
+      return {
+        id: turn.key,
+        label: excerpt(extractUserDisplay(turn.user!.content).text, RAIL_TITLE_LIMIT),
+        description: reply ? excerpt(plainMarkdown(reply), RAIL_DESCRIPTION_LIMIT) : undefined,
+        ariaLabel: t('chat.navGoTo', { index: index + 1, count: userTurns.length })
+      }
+    })
+  }, [turns, t])
   const streaming = state.streaming
   const lastTurn = turns[turns.length - 1]
   // A fresh streaming round either joins the trailing assistant turn or
@@ -62,6 +131,7 @@ export function ChatView({ state, onDismissError }: { state: PiState; onDismissE
       <MessageScroller
       busy={busy}
       navigation="rail"
+      railItems={railItems}
       label={t('chat.transcriptAria')}
       className="min-h-0 flex-1"
       viewportClassName="px-3 py-5 sm:px-5"
@@ -74,7 +144,7 @@ export function ChatView({ state, onDismissError }: { state: PiState; onDismissE
         {state.messages.length === 0 && !busy ? <EmptyState /> : null}
 
         {turns.map((turn) => {
-          if (turn.role === 'user') return <UserItem key={turn.key} message={turn.user!} />
+          if (turn.role === 'user') return <UserItem key={turn.key} message={turn.user!} railId={turn.key} />
 
           const isLast = turn === lastTurn
           const messages = isLast && streamingJoinsLastTurn ? [...turn.assistants, streaming!] : turn.assistants

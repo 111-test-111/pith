@@ -231,18 +231,16 @@ export class PiManager {
   /**
    * Trash every session belonging to a folder and forget the folder. If it is
    * the active workspace, a fresh empty session is opened there so the
-   * workspace keeps running; non-active folders disappear from the sidebar.
+   * workspace keeps running — but the folder still leaves the known list, so
+   * the sidebar only shows it again once a session in it exists.
    */
   async deleteFolderSessions(cwd: string): Promise<SessionSnapshotDTO | null> {
     const infos = await SessionManager.listAll().catch(() => [])
     const targets = infos.filter((info) => info.cwd === cwd)
     await Promise.all(targets.map((info) => shell.trashItem(info.path).catch(() => {})))
+    this.forgetFolder(cwd)
     if (this.cwd === cwd) {
-      this.forgetFolder(cwd)
-      this.rememberFolder(cwd) // active workspace stays listed
       await this.buildSession(SessionManager.create(cwd))
-    } else {
-      this.forgetFolder(cwd)
     }
     return this.session ? this.snapshot() : null
   }

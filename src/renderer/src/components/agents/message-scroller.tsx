@@ -91,6 +91,15 @@ export interface MessageScrollerProps extends ComponentPropsWithRef<"div"> {
   navigation?: "rail";
   /** Accessible label for the optional message navigation rail. */
   navigationLabel?: string;
+  /**
+   * Local extension (pi-app): drive the navigation rail from app data instead
+   * of DOM text. Each item is located in the transcript by a
+   * `[data-rail-id="<id>"]` attribute on the Message row it navigates to, so
+   * the caller controls exactly what a tick is and what its hover preview
+   * says (e.g. one tick per user turn, previewed from the message data).
+   * Without it, the rail falls back to the stock per-row behavior.
+   */
+  railItems?: PreviewRailItem[];
   viewportClassName?: string;
   contentClassName?: string;
   railClassName?: string;
@@ -114,6 +123,7 @@ export function MessageScroller({
   busy,
   navigation,
   navigationLabel = "Message navigation",
+  railItems,
   viewportClassName,
   contentClassName,
   railClassName,
@@ -135,7 +145,7 @@ export function MessageScroller({
   const railIdRef = useRef(new WeakMap<HTMLElement, string>());
   const railIdCounterRef = useRef(0);
   const railTargetsRef = useRef(new Map<string, HTMLElement>());
-  const [railItems, setRailItems] = useState<PreviewRailItem[]>([]);
+  const [internalRailItems, setRailItems] = useState<PreviewRailItem[]>([]);
   const [activeRailId, setActiveRailId] = useState("");
   const [railOverflowing, setRailOverflowing] = useState(false);
   const {
@@ -216,6 +226,41 @@ export function MessageScroller({
     const messages = Array.from(
       content.querySelectorAll<HTMLElement>('[data-slot="message"]'),
     );
+
+    // local patch (pi-app): app-driven rail — items arrive as data, rows are
+    // located by the caller's data-rail-id instead of derived from DOM text.
+    if (railItems) {
+      const targets = new Map<string, HTMLElement>();
+      const nextItems: PreviewRailItem[] = [];
+      for (const item of railItems) {
+        const element = content.querySelector<HTMLElement>(
+          `[data-rail-id="${CSS.escape(item.id)}"]`,
+        );
+        if (!element) continue;
+        targets.set(item.id, element);
+        nextItems.push(item);
+      }
+
+      railTargetsRef.current = targets;
+      setRailItems((current) => {
+        const unchanged =
+          current.length === nextItems.length &&
+          current.every(
+            (item, index) =>
+              item.id === nextItems[index]?.id &&
+              item.label === nextItems[index]?.label &&
+              item.description === nextItems[index]?.description &&
+              item.ariaLabel === nextItems[index]?.ariaLabel,
+          );
+        return unchanged ? current : nextItems;
+      });
+      setRailOverflowing(
+        viewport.scrollHeight > viewport.clientHeight + 1 &&
+          nextItems.length > 1,
+      );
+      return;
+    }
+
     const targets = new Map<string, HTMLElement>();
     const nextItems = messages.map((message, index) => {
       let id = railIdRef.current.get(message);
@@ -258,7 +303,7 @@ export function MessageScroller({
     setRailOverflowing(
       viewport.scrollHeight > viewport.clientHeight + 1 && messages.length > 1,
     );
-  }, [navigation]);
+  }, [navigation, railItems]);
 
   const scheduleRailSync = useCallback(() => {
     if (navigation !== "rail") return;
@@ -374,7 +419,7 @@ export function MessageScroller({
       const target = railTargetsRef.current.get(item.id);
       if (!viewport || !target) return;
 
-      const lastItem = railItems.at(-1)?.id === item.id;
+      const lastItem = internalRailItems.at(-1)?.id === item.id;
       setActiveRailId(item.id);
       if (lastItem) {
         setFollowing(true);
@@ -403,7 +448,7 @@ export function MessageScroller({
         programmaticScrollRef.current = false;
       }, behavior === "smooth" ? 320 : 0);
     },
-    [railItems, reduce, scrollToEnd, setFollowing, smooth],
+    [internalRailItems, reduce, scrollToEnd, setFollowing, smooth],
   );
 
   const viewport = (
@@ -460,7 +505,7 @@ export function MessageScroller({
     >
       {navigation === "rail" ? (
         <PreviewRail
-          items={railOverflowing ? railItems : []}
+          items={railOverflowing ? internalRailItems : []}
           label={navigationLabel}
           activeId={activeRailId}
           onItemSelect={scrollToRailItem}
@@ -486,3 +531,4 @@ export function MessageScroller({
     </div>
   );
 }
+

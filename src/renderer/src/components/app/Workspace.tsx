@@ -23,7 +23,7 @@ import {
   AnimatedSidebarRail,
   AnimatedSidebarTrigger
 } from '@/components/motion/animated-sidebar'
-import { ThemeToggle } from '@/components/motion/theme-toggle'
+import { ThemeButton } from './ThemeButton'
 import { Button } from '@/components/motion/button'
 import { basename } from '@/lib/format'
 import { useI18n } from '@/i18n'
@@ -37,7 +37,7 @@ import type {
 import { PiStore, type PiState } from '@/state/pi-store'
 import { ChatView } from './ChatView'
 import { Composer } from './Composer'
-import { SettingsDialog } from './settings/SettingsDialog'
+import { SettingsPage } from './settings/SettingsPage'
 import { AuthBridge } from './AuthBridge'
 import { ConfirmDialog } from './ConfirmDialog'
 import type { AuthNotifyDTO, AuthPromptDTO } from '../../../../shared/types'
@@ -228,7 +228,9 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
 
   /**
    * Sidebar tree: one folder node per known folder (opened in the app or with
-   * sessions on disk), active folder first, each listing its sessions.
+   * sessions on disk), active folder first, each listing its sessions. The
+   * active folder is only listed while it is known or still has sessions —
+   * deleting a project drops it until a new session shows up there.
    */
   const folderGroups = useMemo(() => {
     const byFolder = new Map<string, SessionSummaryDTO[]>()
@@ -237,8 +239,10 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
       list.push(session)
       byFolder.set(session.cwd, list)
     }
+    const activeListed =
+      state.cwd != null && (folders.includes(state.cwd) || byFolder.has(state.cwd))
     const ordered = [
-      ...(state.cwd ? [state.cwd] : []),
+      ...(state.cwd && activeListed ? [state.cwd] : []),
       ...folders.filter((f) => f !== state.cwd),
       ...[...byFolder.keys()].filter((f) => f !== state.cwd && !folders.includes(f))
     ]
@@ -281,7 +285,7 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
   const folderKey = folderGroups.map((group) => group.cwd).join('|')
 
   return (
-    <ChatApp className="h-full rounded-none border-0">
+    <ChatApp className="relative h-full rounded-none border-0">
       <AnimatedSidebar ariaLabel={t('workspace.sessions')} collapsible="offcanvas" className="min-h-0" panelClassName="h-full bg-background">
         <AnimatedSidebarContent className="gap-4 overflow-hidden px-2 py-4">
           <AnimatedSidebarGroup className="shrink-0 px-1 py-0">
@@ -343,6 +347,7 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
                 <AISidebar
                   key={folderKey}
                   items={sessionItems}
+                  allowNesting={false}
                   activeId={state.sessionPath ?? null}
                   defaultExpandedIds={folderGroups.map((group) => `folder:${group.cwd}`)}
                   ariaLabel={t('workspace.sessionsAria')}
@@ -440,7 +445,7 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
             >
               <SettingsIcon className="size-4" />
             </Button>
-            <ThemeToggle />
+            <ThemeButton />
           </div>
         </header>
 
@@ -458,9 +463,9 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
         />
       </AnimatedSidebarInset>
 
-      <SettingsDialog
+      <SettingsPage
         open={settingsOpen}
-        onClose={() => setSettingsOpen(false)}
+        onBack={() => setSettingsOpen(false)}
         accent={accent}
         onAccentChange={onAccentChange}
       />

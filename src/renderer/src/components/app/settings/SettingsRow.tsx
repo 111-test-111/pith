@@ -18,7 +18,7 @@ export function SettingsRow({
   className?: string
 }) {
   return (
-    <div className={cn('flex items-center justify-between gap-4 px-3 py-2.5', className)}>
+    <div className={cn('flex items-center justify-between gap-4 px-4 py-3', className)}>
       <div className="min-w-0">
         <p className="text-sm font-medium text-foreground">{label}</p>
         {description ? (
@@ -30,23 +30,25 @@ export function SettingsRow({
   )
 }
 
-/** A titled group of SettingsRows. */
+/** A titled group of settings, rendered as a divided card. */
 export function SettingsGroup({
   title,
   children,
   description
 }: {
   title: ReactNode
-  description?: ReactNode
   children: ReactNode
+  description?: ReactNode
 }) {
   return (
     <section>
-      <div className="px-3 pb-1.5 pt-1">
+      <div className="px-1 pb-2">
         <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{title}</p>
         {description ? <p className="mt-1 text-xs text-muted-foreground/70">{description}</p> : null}
       </div>
-      <div className="space-y-1">{children}</div>
+      <div className="divide-y divide-border/60 overflow-hidden rounded-xl border border-border/70 bg-card">
+        {children}
+      </div>
     </section>
   )
 }

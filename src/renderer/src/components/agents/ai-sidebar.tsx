@@ -87,6 +87,10 @@ export interface AISidebarProps {
   defaultActiveId?: string | null;
   onActiveChange?: (id: string) => void;
   defaultExpandedIds?: string[];
+  /** Allow rows to drop INTO container rows (sub-folder nesting) via drag,
+   * the row menu, and keyboard moves. False limits every move path to
+   * before/after reordering. Default: true. */
+  allowNesting?: boolean;
   renderIcon?: (item: SidebarResource) => ReactNode;
   renderMenu?: (
     item: SidebarResource,
@@ -491,6 +495,46 @@ function ResourceRow({
       onMouseLeave={() => setHovered(false)}
       onDragStartCapture={(event) => {
         draggedRef.current = true;
+        // local patch (pi-app): Chromium snapshots the composited row (a
+        // motion layout layer) onto an opaque white square for the native
+        // drag image. Build an offscreen clone styled as a theme card and
+        // use that as the drag image instead, anchored to the pointer.
+        const source = event.currentTarget;
+        const ghost = source.cloneNode(true) as HTMLElement;
+        ghost.removeAttribute("data-dragging");
+        ghost.removeAttribute("data-drop");
+        ghost.setAttribute("aria-hidden", "true");
+        ghost.className = cn(
+          source.className,
+          "bg-background shadow-lg ring-1 ring-border",
+        );
+        ghost.style.position = "fixed";
+        ghost.style.left = "0px";
+        ghost.style.top = "-10000px";
+        ghost.style.width = `${source.offsetWidth}px`;
+        ghost.style.margin = "0";
+        ghost.style.transform = "none";
+        ghost.style.pointerEvents = "none";
+        document.body.appendChild(ghost);
+        // setDragImage is only honored on the real drag's data store; guard
+        // so synthetic events can't break the drag state below.
+        try {
+          const rect = source.getBoundingClientRect();
+          const dx = Math.max(
+            0,
+            Math.min(source.offsetWidth, event.clientX - rect.left),
+          );
+          const dy = Math.max(
+            0,
+            Math.min(source.offsetHeight, event.clientY - rect.top),
+          );
+          event.dataTransfer.setDragImage(ghost, dx, dy);
+        } catch {
+          ghost.remove();
+        }
+        requestAnimationFrame(() => {
+          if (ghost.isConnected) ghost.remove();
+        });
         onDragStart(event, row.item.id);
       }}
       onDragEndCapture={() => {
@@ -596,6 +640,7 @@ export function AISidebar({
   defaultActiveId = null,
   onActiveChange,
   defaultExpandedIds = [],
+  allowNesting = true,
   renderIcon,
   renderMenu,
   ariaLabel = "Resources",
@@ -747,7 +792,12 @@ export function AISidebar({
       }
       // Only offer the reparent when it lands somewhere new — the row above a
       // folder's first child is the folder it already lives in.
-      if (previous && canContain(previous.item) && previous.item.id !== parentId) {
+      if (
+        allowNesting &&
+        previous &&
+        canContain(previous.item) &&
+        previous.item.id !== parentId
+      ) {
         commands.into = {
           label: previous.item.label,
           run: () => {
@@ -771,7 +821,7 @@ export function AISidebar({
 
       return commands;
     },
-    [flat, performMove],
+    [allowNesting, flat, performMove],
   );
 
   const handleKeyDown = useCallback(
@@ -828,7 +878,13 @@ export function AISidebar({
         void performMove({ itemId: row.item.id, targetId: next.item.id, position: "after" });
         return;
       }
-      if (moveModifier && event.key === "ArrowRight" && previous && canContain(previous.item)) {
+      if (
+        moveModifier &&
+        event.key === "ArrowRight" &&
+        allowNesting &&
+        previous &&
+        canContain(previous.item)
+      ) {
         event.preventDefault();
         setExpandedIds((current) => new Set(current).add(previous.item.id));
         void performMove({ itemId: row.item.id, targetId: previous.item.id, position: "inside" });
@@ -860,7 +916,7 @@ export function AISidebar({
         setMenuOpenId(row.item.id);
       }
     },
-    [expandedIds, flat, focusRow, performMove, select, toggle],
+    [allowNesting, expandedIds, flat, focusRow, performMove, select, toggle],
   );
 
   return (
@@ -942,6 +998,7 @@ export function AISidebar({
               const rect = event.currentTarget.getBoundingClientRect();
               const ratio = (event.clientY - rect.top) / rect.height;
               const position =
+                allowNesting &&
                 !targetRow.item.disabled &&
                 canContain(targetRow.item) &&
                 ratio >= 0.25 &&

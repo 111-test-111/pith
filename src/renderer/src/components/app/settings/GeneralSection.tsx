@@ -17,7 +17,7 @@ export function GeneralSection() {
   }, [])
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-6">
       <SettingsGroup title={t('settings.storage')}>
         <SettingsRow label={t('settings.credentials')} description={t('settings.credentialsDesc')} />
         <SettingsRow label={t('settings.sessions')} description={t('settings.sessionsDesc')} />

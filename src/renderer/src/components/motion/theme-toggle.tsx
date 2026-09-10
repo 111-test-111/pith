@@ -174,6 +174,51 @@ export function useThemeToggle({
   return { isDark, mounted, toggle };
 }
 
+// local patch (pi-app): the app header cycles light → dark → system instead
+// of flipping light/dark, so expose the same view-transition reveal for an
+// app-level toggle to wrap its own setTheme calls. ThemeToggle is unchanged.
+export function useThemeReveal({
+  variant = "rectangle",
+  start = "bottom-up",
+}: { variant?: ThemeVariant; start?: RectStart } = {}) {
+  const reduce = useReducedMotion() ?? false;
+  useEffect(() => {
+    if (document.getElementById(VT_STYLE_ID)) return;
+    const el = document.createElement("style");
+    el.id = VT_STYLE_ID;
+    el.textContent = VT_CSS;
+    document.head.appendChild(el);
+  }, []);
+  return (apply: () => void) => {
+    if (reduce || !("startViewTransition" in document)) {
+      apply();
+      return;
+    }
+
+    const root = document.documentElement;
+
+    if (variant === "rectangle") {
+      root.style.setProperty("--beui-vt-from", RECT_FROM[start]);
+      root.dataset.beuiVt = "rect";
+    } else if (variant === "blinds") {
+      root.dataset.beuiVt = "blinds";
+    } else {
+      root.style.setProperty("--beui-vt-origin", CIRCLE_ORIGIN[start]);
+      root.dataset.beuiVt = variant;
+    }
+
+    const vt = (
+      document as Document & {
+        startViewTransition(cb: () => void): { finished: Promise<void> };
+      }
+    ).startViewTransition(apply);
+
+    vt.finished.finally(() => {
+      delete root.dataset.beuiVt;
+    });
+  };
+}
+
 export function ThemeToggle({
   variant = "rectangle",
   start = "bottom-up",

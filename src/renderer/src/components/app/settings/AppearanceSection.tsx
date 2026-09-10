@@ -32,9 +32,9 @@ export function AppearanceSection({
   useEffect(() => setMounted(true), [])
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-6">
       <SettingsGroup title={t('settings.language')} description={t('settings.languageDesc')}>
-        <div className="px-3 py-2.5">
+        <div className="px-4 py-3.5">
           <RadioGroup
             orientation="horizontal"
             value={locale}
@@ -49,7 +49,7 @@ export function AppearanceSection({
       </SettingsGroup>
 
       <SettingsGroup title={t('settings.theme')}>
-        <div className="px-3 py-2.5">
+        <div className="px-4 py-3.5">
           <RadioGroup
             orientation="horizontal"
             value={mounted ? (theme ?? 'system') : 'system'}
@@ -64,7 +64,7 @@ export function AppearanceSection({
       </SettingsGroup>
 
       <SettingsGroup title={t('settings.accent')} description={t('settings.accentDesc')}>
-        <div className="px-3 py-2.5">
+        <div className="px-4 py-3.5">
           <div className="flex flex-wrap gap-2.5">
             {ACCENTS.map((preset) => (
               <button

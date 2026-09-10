@@ -16,6 +16,7 @@ const zhCN: Messages = {
   'workspace.sessions': '会话',
   'workspace.sessionsAria': '按工作区目录分组的会话',
   'workspace.settings': '设置',
+  'workspace.themeLabel': '主题：{mode}',
   'workspace.noModel': '未选择模型',
   'workspace.removeAttachment': '移除 {name}',
   'workspace.deleteSession': '删除会话',
@@ -30,6 +31,7 @@ const zhCN: Messages = {
 
   // conversation
   'chat.transcriptAria': '会话记录',
+  'chat.navGoTo': '跳转到第 {index} 条消息（共 {count} 条）',
   'chat.emptyTitle': '准备好了，随时开始',
   'chat.emptyBody': '让 Pi 在这个工作区里读代码、改代码、搜索和运行代码——也可以附加图片、用 @ 引用文件。',
   'chat.working': '正在处理…',
@@ -82,8 +84,11 @@ const zhCN: Messages = {
 
   // settings
   'settings.title': '设置',
+  'settings.back': '返回对话',
   'settings.general': '通用',
+  'settings.generalDesc': '存储、版本与项目信息。',
   'settings.appearance': '外观',
+  'settings.appearanceDesc': '主题、强调色与界面语言。',
   'settings.providers': '提供商',
   'settings.storage': '存储',
   'settings.credentials': '凭据',
