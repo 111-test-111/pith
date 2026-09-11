@@ -46,7 +46,10 @@ export function SettingsGroup({
         <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{title}</p>
         {description ? <p className="mt-1 text-xs text-muted-foreground/70">{description}</p> : null}
       </div>
-      <div className="divide-y divide-border/60 overflow-hidden rounded-xl border border-border/70 bg-card">
+      {/* no overflow-hidden: beUI Select renders its dropdown panel inside the
+          trigger, and clipping here would cut it off. Rows with full-bleed
+          hover backgrounds round their own end corners instead. */}
+      <div className="divide-y divide-border/60 rounded-xl border border-border/70 bg-card">
         {children}
       </div>
     </section>

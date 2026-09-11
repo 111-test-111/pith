@@ -1,10 +1,13 @@
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import {
   ChevronDown,
   Folder,
   FolderInput,
+  LoaderCircle,
+  MessageSquareDashed,
   MessageSquarePlus,
   PanelLeft,
+  Pencil,
   Settings as SettingsIcon,
   Trash2
 } from 'lucide-react'
@@ -26,15 +29,19 @@ import {
 import { ThemeButton } from './ThemeButton'
 import { Button } from '@/components/motion/button'
 import { basename } from '@/lib/format'
+import { extractUserParts } from '@/lib/user-message'
 import { useI18n } from '@/i18n'
 import type {
+  AssistantMsg,
   ImageContent,
   ModelDTO,
   SessionSnapshotDTO,
   SessionSummaryDTO,
-  ThinkingLevel
+  ThinkingLevel,
+  UserMsg
 } from '../../../../shared/types'
 import { PiStore } from '@/state/pi-store'
+import type { StreamingBehavior } from '@/lib/streaming-behavior'
 import { ChatView } from './ChatView'
 import { Composer } from './Composer'
 import { SettingsPage } from './settings/SettingsPage'
@@ -74,6 +81,20 @@ function ResourceDeleteAction({ label, onSelect }: { label: string; onSelect: ()
   )
 }
 
+/** Rename row for the same menu; starts the sidebar's inline label editor. */
+function ResourceRenameAction({ label, onSelect }: { label: string; onSelect: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      className="flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left text-xs text-foreground outline-none transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      <Pencil aria-hidden="true" className="size-3.5 shrink-0" />
+      <span className="min-w-0 truncate">{label}</span>
+    </button>
+  )
+}
+
 export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
   const { t } = useI18n()
   // Shell slice only: its identity is stable across streaming deltas, so the
@@ -88,6 +109,16 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null)
   /** How many sessions each folder currently reveals; default SESSION_PAGE_SIZE. */
   const [folderLimits, setFolderLimits] = useState<Record<string, number>>({})
+  /** Paths of sessions with a live agent run, tracked from pi events. The
+   * event stream keeps a background turn's spinner after the user switches
+   * to another session, when the session list itself is not re-read. */
+  const [liveSessionPaths, setLiveSessionPaths] = useState<ReadonlySet<string>>(new Set())
+  /** Latest navigation wins when session creation/opening responses race. */
+  const navigationRequest = useRef(0)
+  /** Bumped on resend/retry so the transcript jumps back to the live edge
+   * (the retried user message) even if the user had scrolled up or the
+   * rewind left the scroll position mid-history. */
+  const [scrollResetKey, setScrollResetKey] = useState(0)
 
   const refreshModels = useCallback(async () => {
     try {
@@ -118,9 +149,40 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
     void refreshSessions()
     void refreshFolders()
     const offEvent = window.pi.onEvent((event) => {
-      if (event.type === 'agent_end') void refreshSessions()
+      // Track agent runs per session from the event stream: they are emitted for
+      // background sessions too, so the sidebar spinner survives switching away
+      // from a running session. `agent_settled` (not `agent_end`) ends the run:
+      // auto-retry, compaction and queued messages continue after agent_end.
+      const path = event.sessionPath
+      if (path) {
+        if (event.type === 'agent_start') {
+          setLiveSessionPaths((current) => (current.has(path) ? current : new Set(current).add(path)))
+        } else if (event.type === 'agent_settled' || event.type === 'pi_error') {
+          setLiveSessionPaths((current) => {
+            if (!current.has(path)) return current
+            const next = new Set(current)
+            next.delete(path)
+            return next
+          })
+        }
+      }
+      // A materialized new session is already listed; refresh again as soon
+      // as its first user message is persisted so the temporary localized
+      // "New chat" label becomes the real title without waiting for the turn.
+      if (
+        event.type === 'agent_start' ||
+        event.type === 'agent_end' ||
+        event.type === 'session_info_changed' ||
+        (event.type === 'message_end' && event.message?.role === 'user')
+      ) {
+        void refreshSessions()
+      }
     })
     const offPrompt = window.pi.onAuthPrompt(setAuthPrompt)
+    const offDismiss = window.pi.onAuthDismiss(({ requestId }) => {
+      // The SDK settled a prompt out of band (or it timed out) — drop its dialog.
+      setAuthPrompt((current) => (current?.requestId === requestId ? null : current))
+    })
     const offNotify = window.pi.onAuthNotify((notify) => {
       setAuthNotify((current) => [...current.slice(-8), notify])
       if (notify.kind === 'auth_url' && notify.url) {
@@ -131,6 +193,7 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
     return () => {
       offEvent()
       offPrompt()
+      offDismiss()
       offNotify()
     }
   }, [refreshModels, refreshSessions, refreshFolders])
@@ -157,36 +220,129 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
         .map((f) => `<file path="${f.replace(/^\//, '')}">(pending)</file>`)
         .join('\n\n')
       store.appendOptimisticUser(files.length ? `${text}\n\n${blocks}` : text, images)
+      // Sending always returns to the live edge, even if the user was reading
+      // history when they hit send.
+      setScrollResetKey((value) => value + 1)
       void window.pi.prompt({ text, images, files })
     },
     [store]
   )
 
+  /**
+   * Queue a draft against the running turn — main passes streamingBehavior to
+   * AgentSession.prompt(), which decides atomically between queueing and a new
+   * run. No optimistic transcript echo: the composer's queue panel (fed by the
+   * SDK's queue_update) carries the state until the message is delivered.
+   */
+  const handleQueue = useCallback(
+    (payload: {
+      text: string
+      images: ImageContent[]
+      files: string[]
+      streamingBehavior: StreamingBehavior
+    }) => {
+      void window.pi.prompt(payload)
+    },
+    []
+  )
+
+  /** Recall queued messages: main clears the SDK queues and returns their
+   * texts for the composer to merge back into the draft. */
+  const handleRecallQueue = useCallback(async (): Promise<string[]> => {
+    try {
+      const cleared = await window.pi.clearQueue()
+      store.clearQueue()
+      return [...cleared.steering, ...cleared.followUp]
+    } catch (error) {
+      console.error('recall queue failed', error)
+      return []
+    }
+  }, [store])
+
   const handleModelChange = useCallback(
     async (model: ModelDTO) => {
+      const targetPath = store.getShell().sessionPath
       const snapshot: SessionSnapshotDTO = await window.pi.setModel(model.providerId, model.id)
-      store.applySnapshot(snapshot)
+      if (store.getShell().sessionPath === targetPath) store.applySnapshot(snapshot)
     },
     [store]
   )
 
   const handleThinkingChange = useCallback(
     async (level: ThinkingLevel) => {
+      const targetPath = store.getShell().sessionPath
       const snapshot: SessionSnapshotDTO = await window.pi.setThinkingLevel(level)
-      store.applySnapshot(snapshot)
+      if (store.getShell().sessionPath === targetPath) store.applySnapshot(snapshot)
     },
     [store]
   )
 
-  const newSession = useCallback(async () => {
-    const snapshot: SessionSnapshotDTO = await window.pi.newSession()
-    store.applySnapshot(snapshot)
-    void refreshSessions()
-  }, [store, refreshSessions])
+  /**
+   * Resend/retry a user message: main rewinds the session to it and re-prompts.
+   * The response snapshot replaces the transcript; the fresh run's events take
+   * over from there. A message that never persisted (failed send) is re-sent
+   * without rewinding — same IPC either way.
+   */
+  const handleResend = useCallback(
+    async (message: UserMsg) => {
+      const targetPath = store.getShell().sessionPath
+      const { text, images } = extractUserParts(message.content)
+      try {
+        const snapshot = await window.pi.resendMessage({ timestamp: message.timestamp, text, images })
+        if (store.getShell().sessionPath === targetPath) store.applySnapshot(snapshot)
+        setScrollResetKey((value) => value + 1)
+      } catch (error) {
+        console.error('resend failed', error)
+      }
+    },
+    [store]
+  )
+
+  /** Fork the session at an assistant message: the fork opens as the active
+   * session, gets its localized "Fork of …" title, and joins the sidebar. */
+  const handleFork = useCallback(
+    async (message: AssistantMsg) => {
+      const request = ++navigationRequest.current
+      try {
+        const { snapshot, baseLabel } = await window.pi.forkFromMessage(message.timestamp)
+        if (request !== navigationRequest.current) return
+        store.applySnapshot(snapshot)
+        if (snapshot.sessionPath && baseLabel) {
+          await window.pi
+            .renameSession(snapshot.sessionPath, t('chat.forkOf', { name: baseLabel }))
+            .catch(() => {})
+        }
+        void refreshSessions()
+      } catch (error) {
+        console.error('fork failed', error)
+      }
+    },
+    [store, refreshSessions, t]
+  )
+
+  /** New session in `cwd` (defaults to the active folder). */
+  const newSession = useCallback(
+    async (cwd?: string) => {
+      const request = ++navigationRequest.current
+      const snapshot: SessionSnapshotDTO = await window.pi.newSession(cwd)
+      if (request !== navigationRequest.current) return
+      store.applySnapshot(snapshot)
+      void refreshSessions()
+      void refreshFolders()
+    },
+    [store, refreshSessions, refreshFolders]
+  )
 
   const openSession = useCallback(
     async (path: string, cwd?: string) => {
-      const snapshot: SessionSnapshotDTO = await window.pi.openSession(path, cwd)
+      const request = ++navigationRequest.current
+      // Queue main-process activation first, then paint an already-visited
+      // session synchronously instead of waiting for the IPC round trip and
+      // full snapshot serialization.
+      const opening = window.pi.openSession(path, cwd)
+      store.activateCachedSession(path)
+      const snapshot: SessionSnapshotDTO = await opening
+      if (request !== navigationRequest.current) return
       store.applySnapshot(snapshot)
       void refreshFolders()
     },
@@ -198,12 +354,13 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
     const target = pendingDelete
     if (!target) return
     setPendingDelete(null)
+    const request = ++navigationRequest.current
     try {
       const snapshot =
         target.kind === 'session'
           ? await window.pi.deleteSession(target.id)
           : await window.pi.deleteFolder(target.id)
-      if (snapshot) store.applySnapshot(snapshot)
+      if (snapshot && request === navigationRequest.current) store.applySnapshot(snapshot)
     } catch (error) {
       console.error('delete failed', error)
     } finally {
@@ -220,7 +377,9 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
   const changeFolder = useCallback(async () => {
     const result = await window.pi.pickDirectory()
     if (!('cancelled' in result)) {
+      const request = ++navigationRequest.current
       const snapshot: SessionSnapshotDTO = await window.pi.init(result.cwd)
+      if (request !== navigationRequest.current) return
       store.applySnapshot(snapshot)
       void refreshSessions()
       void refreshModels()
@@ -267,7 +426,7 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
           children: [
             ...visible.map((session) => ({
               id: session.path,
-              label: session.label,
+              label: session.label ?? t('workspace.newChat'),
               kind: 'file' as const
             })),
             ...(remaining > 0
@@ -285,6 +444,18 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
     [folderGroups, folderLimits, t]
   )
   const folderKey = folderGroups.map((group) => group.cwd).join('|')
+  /** Session paths whose live SDK session is currently streaming, so the
+   * sidebar row shows the running spinner instead of the file glyph. The
+   * visible session is included from the shell slice so the spinner appears
+   * the instant its turn starts, without waiting for the list refresh. */
+  const runningPaths = useMemo(() => {
+    const paths = new Set(liveSessionPaths)
+    for (const session of sessions) {
+      if (session.running) paths.add(session.path)
+    }
+    if (shell.isStreaming && shell.sessionPath) paths.add(shell.sessionPath)
+    return paths
+  }, [liveSessionPaths, sessions, shell.isStreaming, shell.sessionPath])
 
   return (
     <ChatApp className="relative h-full rounded-none border-0">
@@ -322,7 +493,7 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
             <AnimatedSidebarGroupContent className="relative min-h-0 flex-1 overflow-hidden">
               <div
                 className={[
-                  'h-full overflow-y-auto overscroll-contain pb-8 [overflow-anchor:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden',
+                  'h-full overflow-y-auto overscroll-contain pb-8 [overflow-anchor:none]',
                   // “Show more” rows (identified by the [data-more-row] icon)
                   // are plain text actions, not session rows: no hover box and
                   // no row menu — hover only shifts the text color.
@@ -384,7 +555,36 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
                         </span>
                       )
                     }
-                    return undefined
+                    if (runningPaths.has(item.id)) {
+                      return (
+                        <LoaderCircle
+                          aria-hidden="true"
+                          className="size-4 animate-spin text-primary"
+                        />
+                      )
+                    }
+                    return <MessageSquareDashed aria-hidden="true" className="size-4" />
+                  }}
+                  renderActions={(item) => {
+                    // Only project (folder) rows get the shortcut; a session row
+                    // would just duplicate "new chat in its own project".
+                    if (item.kind !== 'folder') return null
+                    const cwd = item.id.slice('folder:'.length)
+                    return (
+                      <button
+                        type="button"
+                        aria-label={t('workspace.newChatInFolder', { label: item.label })}
+                        title={t('workspace.newChatInFolder', { label: item.label })}
+                        onClick={(event) => {
+                          // Keep the row's expand/select click from firing too.
+                          event.stopPropagation()
+                          void newSession(cwd)
+                        }}
+                        className="absolute right-11 top-1/2 z-10 grid size-7 -translate-y-1/2 place-items-center rounded-lg bg-background text-muted-foreground opacity-0 shadow-sm ring-1 ring-border/60 outline-none transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring group-hover/resource:opacity-100 group-data-[menu-open=true]/resource:opacity-100"
+                      >
+                        <MessageSquarePlus className="size-3.5" />
+                      </button>
+                    )
                   }}
                   renderMenu={(item, controls) =>
                     item.id.startsWith('more:') ? (
@@ -402,15 +602,30 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
                         }}
                       />
                     ) : (
-                      <ResourceDeleteAction
-                        label={t('workspace.deleteSession')}
-                        onSelect={() => {
-                          controls.close()
-                          setPendingDelete({ kind: 'session', id: item.id, label: item.label })
-                        }}
-                      />
+                      <>
+                        <ResourceRenameAction
+                          label={t('workspace.renameSession')}
+                          onSelect={() => controls.rename()}
+                        />
+                        <ResourceDeleteAction
+                          label={t('workspace.deleteSession')}
+                          onSelect={() => {
+                            controls.close()
+                            setPendingDelete({ kind: 'session', id: item.id, label: item.label })
+                          }}
+                        />
+                      </>
                     )
                   }
+                  onRename={(item, label) => {
+                    if (item.id.startsWith('more:') || item.kind === 'folder') return
+                    setSessions((current) =>
+                      current.map((session) =>
+                        session.path === item.id ? { ...session, label } : session
+                      )
+                    )
+                    void window.pi.renameSession(item.id, label)
+                  }}
                 />
               </div>
               <div
@@ -451,14 +666,25 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
           </div>
         </header>
 
-        <ChatView store={store} onDismissError={() => store.clearError()} />
+        <ChatView
+          store={store}
+          scrollResetKey={scrollResetKey}
+          onDismissError={() => store.clearError()}
+          onResend={handleResend}
+          onFork={handleFork}
+        />
 
         <Composer
           models={models}
           model={currentModel}
           thinkingLevel={shell.thinkingLevel}
+          availableThinkingLevels={shell.availableThinkingLevels}
           busy={shell.isStreaming}
+          contextUsage={shell.contextUsage}
+          queued={shell.queue}
           onSend={handleSend}
+          onQueue={handleQueue}
+          onRecallQueue={handleRecallQueue}
           onStop={() => void window.pi.abort()}
           onModelChange={(model) => void handleModelChange(model)}
           onThinkingLevelChange={(level) => void handleThinkingChange(level)}

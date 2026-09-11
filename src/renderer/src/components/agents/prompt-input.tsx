@@ -58,11 +58,19 @@ export interface PromptInputProps extends Omit<
   actions?: PromptAction[];
   onAction?: (action: string) => void;
   onSubmit?: (value: string, model?: string) => void | Promise<void>;
+  // local patch (pi-app): while `loading` (agent busy), submit routes here
+  // instead of being dropped — Enter / the send button queue the message as a
+  // steer or follow-up; the button then shows a queue arrow, not stop.
+  onQueueSubmit?: (value: string, model?: string) => void | Promise<void>;
   loading?: boolean;
   onStop?: () => void;
   minRows?: number;
   maxRows?: number;
   leadingAction?: ReactNode;
+  // local patch (pi-app): contextIndicator slot so the app can mount its
+  // context-usage ring immediately left of the send button (the controls
+  // row's bottom-right cluster).
+  contextIndicator?: ReactNode;
   className?: string;
 }
 
@@ -77,11 +85,13 @@ export function PromptInput({
   actions = [],
   onAction,
   onSubmit,
+  onQueueSubmit,
   loading = false,
   onStop,
   minRows = 2,
   maxRows = 8,
   leadingAction,
+  contextIndicator,
   className,
   disabled,
   placeholder = "Ask the agent to do something…",
@@ -103,6 +113,8 @@ export function PromptInput({
     (option) => option.value === currentModelValue,
   );
   const canSubmit = Boolean(currentValue.trim()) && !disabled && !loading;
+  // local patch (pi-app): a non-empty draft can be queued while streaming.
+  const canQueue = Boolean(onQueueSubmit) && Boolean(currentValue.trim()) && !disabled;
 
   const resizeTextarea = useCallback(() => {
     const textarea = textareaRef.current;
@@ -154,7 +166,13 @@ export function PromptInput({
   const submit = (event?: FormEvent) => {
     event?.preventDefault();
     const prompt = currentValue.trim();
-    if (!prompt || disabled || loading) return;
+    if (!prompt || disabled) return;
+    if (loading) {
+      if (!onQueueSubmit) return;
+      onQueueSubmit(prompt, currentModelValue);
+      textareaRef.current?.focus({ preventScroll: true });
+      return;
+    }
 
     onSubmit?.(prompt, currentModelValue);
     if (value === undefined) setInternalValue("");
@@ -308,31 +326,40 @@ export function PromptInput({
           </Select>
         ) : null}
 
-        <Button
-          type={loading ? "button" : "submit"}
-          size="icon"
-          disabled={loading ? !onStop : !canSubmit}
-          aria-label={loading ? "Stop generating" : "Send prompt"}
-          onClick={loading ? onStop : undefined}
-          className="ml-auto size-8 rounded-full"
-        >
-          <AnimatePresence initial={false} mode="popLayout">
-            <motion.span
-              key={loading ? "stop" : "send"}
-              initial={reduce ? { opacity: 1 } : { opacity: 0, y: 3, scale: 0.8 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={reduce ? { opacity: 0 } : { opacity: 0, y: -3, scale: 0.8 }}
-              transition={reduce ? { duration: 0 } : SPRING_SWAP}
-              className="grid place-items-center"
-            >
-              {loading ? (
-                <Square className="size-3 fill-current" />
-              ) : (
-                <ArrowUp className="size-4" />
-              )}
-            </motion.span>
-          </AnimatePresence>
-        </Button>
+        {/* local patch (pi-app): contextIndicator joins the send button in a
+            right-aligned cluster — the ring sits immediately left of send at
+            the controls row's bottom-right corner. */}
+        <div className="ml-auto flex items-center gap-1.5">
+          {contextIndicator}
+          {/* local patch (pi-app): while loading, the button queues a non-empty
+              draft (submit path) and only falls back to stop when it is empty —
+              send doubles as queue-while-busy, like pi's TUI. */}
+          <Button
+            type={loading && !canQueue ? "button" : "submit"}
+            size="icon"
+            disabled={loading && !canQueue ? !onStop : !canQueue && !canSubmit}
+            aria-label={loading ? (canQueue ? "Queue message" : "Stop generating") : "Send prompt"}
+            onClick={loading && !canQueue ? onStop : undefined}
+            className="size-8 rounded-full"
+          >
+            <AnimatePresence initial={false} mode="popLayout">
+              <motion.span
+                key={loading ? (canQueue ? "queue" : "stop") : "send"}
+                initial={reduce ? { opacity: 1 } : { opacity: 0, y: 3, scale: 0.8 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={reduce ? { opacity: 0 } : { opacity: 0, y: -3, scale: 0.8 }}
+                transition={reduce ? { duration: 0 } : SPRING_SWAP}
+                className="grid place-items-center"
+              >
+                {loading && !canQueue ? (
+                  <Square className="size-3 fill-current" />
+                ) : (
+                  <ArrowUp className="size-4" />
+                )}
+              </motion.span>
+            </AnimatePresence>
+          </Button>
+        </div>
       </div>
     </form>
   );

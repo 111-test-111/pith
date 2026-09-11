@@ -52,6 +52,13 @@ export interface StreamingResponseProps {
   announce?: boolean;
   /** Hides the built-in completion actions without changing response status. */
   showActions?: boolean;
+  // local patch (pi-app): extra action cells (retry/fork) rendered inside the
+  // completion-actions row, before the `meta` timestamp cell so the timestamp
+  // stays rightmost.
+  actions?: ReactNode;
+  // local patch (pi-app): slot for the turn's timestamp, rendered as one more
+  // cell of the completion-actions row so it shares the row's spacing.
+  meta?: ReactNode;
   className?: string;
   contentClassName?: string;
   actionsClassName?: string;
@@ -105,6 +112,8 @@ export function StreamingResponse({
   onFeedbackChange,
   announce = true,
   showActions = true,
+  actions,
+  meta,
   className,
   contentClassName,
   actionsClassName,
@@ -219,6 +228,16 @@ export function StreamingResponse({
                     <ThumbsDown className="size-3.5" />
                   </ResponseAction>
                 </>
+              ) : null}
+              {/* local patch (pi-app): app-supplied actions (retry/fork) share
+                  the row, immediately after the feedback cells. */}
+              {actions}
+              {/* local patch (pi-app): same cell padding as a ResponseAction, so
+                  the gap to the icons matches the gap between them. */}
+              {meta ? (
+                <span className="flex min-h-7 items-center pl-1.5 text-xs tabular-nums text-muted-foreground/70">
+                  {meta}
+                </span>
               ) : null}
               {hasSources ? (
                 <button

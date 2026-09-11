@@ -58,3 +58,19 @@ export function diffStats(lines: FileDiffLine[]): { added: number; removed: numb
   }
   return { added, removed }
 }
+
+/**
+ * Cheap +/- counts straight from the raw diff, for collapsed headers where
+ * turning the whole diff into line rows is deferred until the user opens it.
+ * Mirrors parseUnifiedDiff's rules (headers and "\ No newline" are ignored).
+ */
+export function countDiffChanges(diff: string): { added: number; removed: number } {
+  let added = 0
+  let removed = 0
+  for (const raw of diff.split('\n')) {
+    if (raw.startsWith('@@') || raw.startsWith('---') || raw.startsWith('+++') || raw.startsWith('\\')) continue
+    if (raw.startsWith('+')) added++
+    else if (raw.startsWith('-')) removed++
+  }
+  return { added, removed }
+}

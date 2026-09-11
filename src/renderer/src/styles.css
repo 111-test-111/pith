@@ -174,15 +174,13 @@ body {
   background: color-mix(in oklch, var(--primary) 25%, transparent);
 }
 
-/* App-wide scrollbar styling. */
+/* App-wide scrollbars are invisible: scrolling keeps working, the chrome never
+ * shows. Per-element `scrollbar-hide` is therefore redundant for app code, but
+ * the utility stays because vendored beUI components still reference it. */
+* {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
 *::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-*::-webkit-scrollbar-thumb {
-  background: color-mix(in oklch, var(--foreground) 18%, transparent);
-  border-radius: 9999px;
-}
-*::-webkit-scrollbar-track {
-  background: transparent;
+  display: none;
 }

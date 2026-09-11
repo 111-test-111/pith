@@ -37,7 +37,8 @@ export type ToolResultStatus = "running" | "success" | "error" | "cancelled";
 export type ToolResultKind = "terminal" | "request" | "custom";
 
 export interface ToolResultProps {
-  tool: ReactNode;
+  /** Optional trailing label. Omitted when the title already names the tool. */
+  tool?: ReactNode;
   title: ReactNode;
   children: ReactNode;
   status?: ToolResultStatus;
@@ -54,11 +55,16 @@ export interface ToolResultProps {
   onRetry?: () => void;
   className?: string;
   contentClassName?: string;
+  /** local patch (pi-app): disable blur/roll text swaps for hot tool rows. */
+  animateChanges?: boolean;
+  /** local patch (pi-app): do not mount expensive output while collapsed. */
+  lazyContent?: boolean;
 }
-
 export interface ToolResultOutputProps {
   children: string;
   language?: AgentCodeLanguage;
+  /** local patch (pi-app): skip Shiki while cumulative output is growing. */
+  highlight?: boolean;
   className?: string;
 }
 
@@ -138,12 +144,14 @@ function ToolResultAction({
 export function ToolResultOutput({
   children,
   language = "bash",
+  highlight = true,
   className,
 }: ToolResultOutputProps) {
   return (
     <AgentCode
       code={children}
       language={language}
+      highlight={highlight}
       className={cn(
         "whitespace-pre-wrap break-words text-foreground/80",
         className,
@@ -170,6 +178,8 @@ export function ToolResult({
   onRetry,
   className,
   contentClassName,
+  animateChanges = true,
+  lazyContent = false,
 }: ToolResultProps) {
   const reduce = useReducedMotion() ?? false;
   const baseId = useId();
@@ -225,7 +235,9 @@ export function ToolResult({
       if (typeof viewport.scrollTo === "function") {
         viewport.scrollTo({
           top: viewport.scrollHeight,
-          behavior: reduce ? "auto" : "smooth",
+          // local patch (pi-app): cumulative tool output can update rapidly;
+          // restarting smooth scrolling per update monopolizes the main thread.
+          behavior: "auto",
         });
       } else {
         viewport.scrollTop = viewport.scrollHeight;
@@ -264,23 +276,38 @@ export function ToolResult({
           {icon ?? <KindIcon kind={kind} />}
         </span>
         <span className="flex min-w-0 flex-1 items-baseline gap-2">
-          <span className="min-w-0 truncate font-medium text-foreground/90">
-            <ActionSwapRollText value={titleKey}>
-              {title}
-            </ActionSwapRollText>
+          {/* local patch (pi-app): the app renders every tool row through this
+              title; muted keeps it distinct from the tool's output text
+              (`text-foreground/80`) while staying on the UI font. */}
+          <span className="min-w-0 truncate font-medium text-muted-foreground">
+            {animateChanges ? (
+              <ActionSwapRollText value={titleKey}>{title}</ActionSwapRollText>
+            ) : (
+              title
+            )}
           </span>
           {meta ? (
             <span className="shrink-0 text-xs text-muted-foreground/60">
-              <ActionSwapRollText value={metaKey}>
-                {meta}
-              </ActionSwapRollText>
+              {animateChanges ? (
+                <ActionSwapRollText value={metaKey}>{meta}</ActionSwapRollText>
+              ) : (
+                meta
+              )}
             </span>
           ) : null}
-          <span className="min-w-0 truncate font-mono text-[11px] text-muted-foreground/55">
-            <ActionSwapRollText value={toolKey}>
-              {tool}
-            </ActionSwapRollText>
-          </span>
+          {/* local patch (pi-app): the header title already starts with the tool
+              name (`bash · …`), so the trailing copy was a duplicate that stole
+              the width the title needs. Render it only when a caller supplies
+              one (beUI previews still do). */}
+          {tool ? (
+            <span className="min-w-0 truncate font-mono text-[11px] text-muted-foreground/55">
+              {animateChanges ? (
+                <ActionSwapRollText value={toolKey}>{tool}</ActionSwapRollText>
+              ) : (
+                tool
+              )}
+            </span>
+          ) : null}
         </span>
         <span
           className={cn(
@@ -289,7 +316,11 @@ export function ToolResult({
           )}
         >
           <StatusIcon status={status} reduce={reduce} />
-          <ActionSwapRollText value={status}>{statusLabel}</ActionSwapRollText>
+          {animateChanges ? (
+            <ActionSwapRollText value={status}>{statusLabel}</ActionSwapRollText>
+          ) : (
+            statusLabel
+          )}
         </span>
         <motion.span
           aria-hidden="true"
@@ -307,46 +338,50 @@ export function ToolResult({
         aria-labelledby={triggerId}
         open={currentOpen}
       >
-        <div className="pl-6 pt-1.5">
-          <div className="overflow-hidden rounded-xl bg-muted/80">
-          <div
-            ref={viewportRef}
-            role="log"
-            aria-live="polite"
-            className="scrollbar-hide overflow-y-auto"
-            style={{ maxHeight }}
-          >
-            <div className={cn("p-3", contentClassName)}>{children}</div>
-          </div>
-
-            {canCopy || onRetry ? (
-              <div className="flex items-center gap-0.5 px-2 pb-1.5">
-              {canCopy ? (
-                <ToolResultAction
-                  label={copied ? "Copied" : "Copy result"}
-                  onClick={handleCopy}
-                >
-                  {copied ? (
-                    <Check className="size-3.5" />
-                  ) : (
-                    <Copy className="size-3.5" />
-                  )}
-                </ToolResultAction>
-              ) : null}
-              {onRetry ? (
-                <ToolResultAction label="Run again" onClick={onRetry}>
-                  <RotateCcw className="size-3.5" />
-                </ToolResultAction>
-              ) : null}
-              <span className="ml-auto text-[11px] text-muted-foreground/55">
-                <ActionSwapRollText value={status}>
-                  {statusLabel}
-                </ActionSwapRollText>
-              </span>
+        {lazyContent && !currentOpen ? null : (
+          <div className="pl-6 pt-1.5">
+            <div className="overflow-hidden rounded-xl bg-muted/80">
+              <div
+                ref={viewportRef}
+                role="log"
+                aria-live="polite"
+                className="scrollbar-hide overflow-y-auto"
+                style={{ maxHeight }}
+              >
+                <div className={cn("p-3", contentClassName)}>{children}</div>
               </div>
-            ) : null}
+
+              {canCopy || onRetry ? (
+                <div className="flex items-center gap-0.5 px-2 pb-1.5">
+                  {canCopy ? (
+                    <ToolResultAction
+                      label={copied ? "Copied" : "Copy result"}
+                      onClick={handleCopy}
+                    >
+                      {copied ? (
+                        <Check className="size-3.5" />
+                      ) : (
+                        <Copy className="size-3.5" />
+                      )}
+                    </ToolResultAction>
+                  ) : null}
+                  {onRetry ? (
+                    <ToolResultAction label="Run again" onClick={onRetry}>
+                      <RotateCcw className="size-3.5" />
+                    </ToolResultAction>
+                  ) : null}
+                  <span className="ml-auto text-[11px] text-muted-foreground/55">
+                    {animateChanges ? (
+                      <ActionSwapRollText value={status}>{statusLabel}</ActionSwapRollText>
+                    ) : (
+                      statusLabel
+                    )}
+                  </span>
+                </div>
+              ) : null}
+            </div>
           </div>
-        </div>
+        )}
       </AgentDisclosure>
     </div>
   );

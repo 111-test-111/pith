@@ -1,0 +1,114 @@
+import { Tooltip } from '@/components/motion/tooltip'
+import { useI18n } from '@/i18n'
+import type { ContextUsageDTO } from '../../../../shared/types'
+
+/** Hover-open delay mirrors the reference ring: brief pauses don't flicker. */
+const HOVER_DELAY_MS = 350
+
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${(n / 1000).toFixed(1)}K`
+  return String(n)
+}
+
+function formatCost(cost: number): string | null {
+  if (!(cost > 0)) return null
+  return `$${cost.toFixed(4)}`
+}
+
+/**
+ * Composer context-usage ring (bottom-right of the input box): a 14px arc of
+ * the context window that fills as the session grows. Hovering opens a beUI
+ * Tooltip with the simplified readout — percent used, estimated tokens of the
+ * window, cache hit rate and session cost — all straight from the SDK's
+ * AgentSession.getContextUsage() over the session's accumulated usage. The
+ * ring refreshes on every completed message (the events carry the payload).
+ */
+export function ContextRing({ usage }: { usage: ContextUsageDTO | null }) {
+  const { t } = useI18n()
+
+  if (!usage || !usage.contextWindow) return null
+
+  const percent = usage.percent
+  const radius = 5.5
+  const circumference = 2 * Math.PI * radius
+  const used = percent !== null ? Math.min(Math.max(percent, 0), 100) / 100 : 0
+  // Tokens are an estimate; fall back to a percent-derived count when the SDK
+  // cannot anchor one yet (e.g. right after compaction).
+  const usedTokens =
+    usage.tokens ?? (percent !== null ? Math.round((usage.contextWindow * percent) / 100) : null)
+  const cost = formatCost(usage.sessionCost)
+  // One decimal: high-hit sessions sit near the ceiling and integer rounding
+  // reports a misleading 100%.
+  const cacheHit =
+    usage.cacheHitRate !== null ? `${(usage.cacheHitRate * 100).toFixed(1)}%` : null
+
+  return (
+    <Tooltip
+      side="top"
+      delay={HOVER_DELAY_MS}
+      className="w-56 whitespace-normal rounded-xl px-3.5 py-3 text-left font-normal"
+      content={
+        <div>
+          <p className="text-sm font-medium tabular-nums text-foreground">
+            {percent !== null ? t('context.used', { percent: percent.toFixed(0) }) : '—'}
+          </p>
+          <p className="mt-0.5 text-xs tabular-nums text-muted-foreground">
+            {usedTokens !== null
+              ? t('context.tokens', {
+                  used: `~${formatTokens(usedTokens)}`,
+                  total: formatTokens(usage.contextWindow)
+                })
+              : '—'}
+          </p>
+          <div className="mt-2.5 grid grid-cols-2 gap-3 border-t border-border pt-2.5">
+            <div className="min-w-0">
+              <p className="truncate text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
+                {t('context.cacheHitLabel')}
+              </p>
+              <p
+                className={`mt-0.5 text-xs font-medium tabular-nums ${
+                  cacheHit !== null && usage.cacheHitRate! >= 0.8
+                    ? 'text-emerald-600 dark:text-emerald-400'
+                    : 'text-foreground'
+                }`}
+              >
+                {cacheHit ?? '—'}
+              </p>
+            </div>
+            <div className="min-w-0">
+              <p className="truncate text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
+                {t('context.costLabel')}
+              </p>
+              <p className="mt-0.5 truncate text-xs font-medium tabular-nums text-foreground">
+                {cost ?? '—'}
+              </p>
+            </div>
+          </div>
+        </div>
+      }
+    >
+      <span
+        role="status"
+        aria-label={t('context.label')}
+        className="grid size-8 cursor-default place-items-center rounded-full transition-colors hover:bg-muted"
+      >
+        <svg width={14} height={14} viewBox="0 0 16 16" style={{ transform: 'rotate(-90deg)' }} aria-hidden="true">
+          <circle cx={8} cy={8} r={radius} fill="none" strokeWidth={2.4} className="stroke-muted-foreground/30" />
+          {used > 0 ? (
+            <circle
+              cx={8}
+              cy={8}
+              r={radius}
+              fill="none"
+              strokeWidth={2.4}
+              strokeLinecap="round"
+              strokeDasharray={`${used * circumference} ${circumference}`}
+              className="stroke-primary transition-[stroke-dasharray] duration-500"
+            />
+          ) : null}
+        </svg>
+      </span>
+    </Tooltip>
+  )
+}

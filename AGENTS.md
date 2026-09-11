@@ -22,6 +22,13 @@ The UI ships in **English and 简体中文**; switching lives in Settings → Ap
 4. Known boundary: strings INSIDE vendored beUI components (e.g. ToolResult's "Completed", CodeBlock's "Ready") stay English — do not edit vendored files to translate them; pass app-level labels (`summary`, `activeLabel`, `title`, …) through `t()` instead.
 5. The main process sends only data over IPC (no prose); compose any user-visible message from the rendered text in the renderer.
 
+## Golden rule: scrollbars are invisible
+
+**No scroll container ever shows scrollbar chrome.** Scrolling still works; the bar itself is hidden everywhere in the app. This is implemented once, app-wide, in `src/renderer/src/styles.css` (`scrollbar-width: none` on `*` plus `*::-webkit-scrollbar { display: none }`) — its single source of truth.
+
+- Never style or re-enable scrollbars per element (no `::-webkit-scrollbar` rules, no width/thumb/track styling) and never edit a vendored beUI file to hide one. The `scrollbar-hide` utility stays only because vendored components still reference it; app code does not need it.
+- Because the bar takes no layout space, a scroll container that holds focusable inputs needs its own padding (e.g. `p-1`) so focus rings are not clipped by the box edge.
+
 ## Commands
 
 ```bash
@@ -63,6 +70,11 @@ Hard rules:
 - Renderer **never** imports `electron` or pi packages; it talks only through `window.pi` (typed by `src/renderer/src/env.d.ts` referencing preload).
 - New IPC surface = add DTO to `shared/types.ts` + handler in `main/ipc.ts` + method in `preload/index.ts`.
 - Pi events flow: `PiManager` emits `pi:event` (serialized via JSON round-trip) → `PiStore.dispatch` → React. Render from `store.messages`; `store.streaming` is the live overlay. High-frequency deltas (`message_update`, `tool_execution_update`) are coalesced in `PiManager.emitEvent` (latest wins, ~33ms flush; ordered events flush first) — keep new hot-path events on that list.
+- **`agent_settled` — not `agent_end` — means the run is over.** `agent_end` fires before post-run continuations (auto-retry, auto-compaction, queued messages), so clearing streaming/busy state or the sidebar spinner there lies while work continues. Only `agent_settled` (and `pi_error`) ends a run.
+- **Session-wide numbers come from the SDK, never from summing `session.messages`.** `AgentSession.getSessionStats()` aggregates every session entry (messages compacted out of context and tool-result usage included) → `sessionCost`/`cacheHitRate`; `getContextUsage()` is only the live context ring.
+- **`ChatMessage` mirrors the SDK's full agent-message union** (user/assistant/toolResult plus `compactionSummary`/`branchSummary`/`bashExecution`/`custom`) — a session is written by the app, the pi CLI and extensions, so every role must have a transcript row instead of being dropped.
+- **Thinking levels are model-derived**: use `AgentSession.getAvailableThinkingLevels()` (it gates `xhigh`/`max` on `thinkingLevelMap` and returns `['off']` for non-reasoning models). Never hardcode a level list.
+- **Bridge SDK callbacks whole**: auth prompts/notifies (`AuthPrompt.signal`, device-code `verificationUri`, `instructions`) and `compaction_end` payloads carry data the UI needs; forward them rather than re-deriving or dropping them.
 - User messages sent through the composer are mirrored optimistically (`__optimistic` flag) and replaced on the real `message_end`.
 - Settings are shared through `AppSettings` (`{ cwd, folders }`): the active `cwd` is what the file index / sessions / bash run in; `folders` is the sidebar's known list. Deleting a project moves its sessions to the OS trash and forgets the folder ([deleteFolderSessions](src/main/pi/manager.ts:231)).
 - Settings UI is a registry: add a section by appending one entry to `SECTIONS` in [SettingsPage.tsx](src/renderer/src/components/app/settings/SettingsPage.tsx) (label/description come from i18n keys) — the shell never changes.
@@ -73,9 +85,13 @@ These are the only intentional edits inside `components/motion|agents/`; keep th
 
 - [theme-toggle.tsx](src/renderer/src/components/motion/theme-toggle.tsx) — exports `useThemeReveal()` so the app header can cycle light→dark→system with the same View-Transition reveal the vendored `ThemeToggle` uses.
 - [ai-sidebar.tsx](src/renderer/src/components/agents/ai-sidebar.tsx) — `allowNesting` prop (app groups sessions by folder, never nests) + a themed native drag image (Chromium snapshots the motion row as an opaque white square).
-- [message-scroller.tsx](src/renderer/src/components/agents/message-scroller.tsx) — `railItems` prop so the nav rail is driven by app data and located via `[data-rail-id]` instead of DOM text; follow-scrolling uses instant (`auto`) scrolls while `busy` (restarting a smooth scroll per growing frame janks streaming output).
+- [message-scroller.tsx](src/renderer/src/components/agents/message-scroller.tsx) — `railItems` prop so the nav rail is driven by app data and located via `[data-rail-id]` instead of DOM text; follow-scrolling uses instant (`auto`) scrolls while `busy` (restarting a smooth scroll per growing frame janks streaming output); the layout effect sets `positionedScrollKey` synchronously instead of only inside its rAF, which otherwise left the whole transcript `invisible` when that frame got cancelled; a programmatic scroll keeps the `following` state untouched until it settles at the bottom (the old 0ms release let a growing stream's scroll event read as a user scroll, switching follow off for good).
 - [code-block.tsx](src/renderer/src/components/agents/code-block.tsx) / [message-bubble.tsx](src/renderer/src/components/agents/message-bubble.tsx) / [streaming-response.tsx](src/renderer/src/components/agents/streaming-response.tsx) — a `data-code-block-pre` marker plus `[&_pre:not([data-code-block-pre])]` selectors so raw-markdown `<pre>` framing doesn't double-box beUI's own `CodeBlock`.
+- [streaming-response.tsx](src/renderer/src/components/agents/streaming-response.tsx) — `meta` slot (the turn timestamp) plus an `actions` slot (retry/fork) rendered as extra cells of the completion-actions row, before the timestamp so it stays rightmost.
+- [message.tsx](src/renderer/src/components/agents/message.tsx) — the default `animate` target always includes the resting transform, so a row that mounts with `animateIn` and then flips to not-animated can't be left frozen at `scale(0)` (in layout but invisible).
+- [tool-result.tsx](src/renderer/src/components/agents/tool-result.tsx) / [file-diff.tsx](src/renderer/src/components/agents/file-diff.tsx) — tool-row titles use the UI font and the muted chrome color (FileDiff's file label was `font-mono text-foreground/80`), so every tool row reads alike and stays distinct from its own output text.
 - [agent-code.tsx](src/renderer/src/components/agents/agent-code.tsx) / [code-block.tsx](src/renderer/src/components/agents/code-block.tsx) — `useAgentCodeTokens(code, language, enabled)` skips shiki while `status === 'streaming'` (highlighting a growing block per delta was quadratic CPU) and `tokenCache` is bounded (`TOKEN_CACHE_MAX`); the block highlights once on completion.
+- [prompt-input.tsx](src/renderer/src/components/agents/prompt-input.tsx) — `contextIndicator` prop mounts the app's `ContextRing` immediately left of the send button (the controls row's bottom-right cluster).
 
 ## Pi SDK facts (learned from the installed package, 0.85.x)
 
@@ -84,6 +100,8 @@ These are the only intentional edits inside `components/motion|agents/`; keep th
 - Assistant messages have no id — key rows by `role+timestamp+index`.
 - Tools used: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`. `edit`/`write` return unified diffs in `details.diff` (parsed in `lib/diff.ts` → beUI `FileDiff` lines).
 - Credentials are shared with the `pi` CLI via `~/.pi/agent/auth.json`.
+- **Resend/retry = `navigateTree(userEntryId)` + re-`prompt`** (same file; the abandoned branch stays in the session tree). Targeting a user message drops it and everything after, and returns its text as `editorText`. It THROWS while streaming, and **emits no AgentSession event** — `PiManager.resendMessage` bumps `managed.eventSequence` by hand so the returned snapshot isn't mistaken for one the renderer already has. When the user message is already the leaf (a run that died before any assistant output) `navigateTree` no-ops — rewind via `sessionManager.branch(parentId)` / `resetLeaf()` + `agent.state.messages = buildSessionContext().messages` like it does internally.
+- **Fork at a message = `sessionManager.createBranchedSession(entryId)`** (read-only on the live manager; writes a new file ending at that entry, `parentSession` pointing back). Renderer messages are correlated to entries by `role+timestamp` over `buildContextEntries()` (`findMessageEntry`).
 
 ## Gotchas
 

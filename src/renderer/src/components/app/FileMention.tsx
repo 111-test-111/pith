@@ -51,7 +51,7 @@ export function FileMention({
         {loading ? t('mention.searching') : t('mention.filesCount', { count: hits.length })}
         <span className="ml-auto">{t('mention.hints')}</span>
       </div>
-      <div ref={listRef} className="scrollbar-hide max-h-64 overflow-y-auto p-1">
+      <div ref={listRef} className="max-h-64 overflow-y-auto p-1">
         {hits.length === 0 && !loading ? (
           <p className="px-3 py-6 text-center text-xs text-muted-foreground">{t('mention.noMatches')}</p>
         ) : null}

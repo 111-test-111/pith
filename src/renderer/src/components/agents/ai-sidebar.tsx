@@ -96,6 +96,9 @@ export interface AISidebarProps {
     item: SidebarResource,
     controls: SidebarResourceMenuControls,
   ) => ReactNode;
+  /** local patch (pi-app): extra row actions rendered to the left of the
+   * built-in menu button (used for the per-project "new chat" button). */
+  renderActions?: (item: SidebarResource) => ReactNode;
   ariaLabel?: string;
   className?: string;
 }
@@ -285,7 +288,13 @@ function MarqueeLabel({ active, children }: { active: boolean; children: string 
   const running = active && distance > 0 && !reduce;
 
   return (
-    <span ref={viewportRef} className="block min-w-0 flex-1 overflow-hidden">
+    // local patch (pi-app): on hover the row's floating actions sit over the
+    // title; fade the marquee's right end under them (a mask, so it works no
+    // matter how the transformed text layer composites).
+    <span
+      ref={viewportRef}
+      className="relative z-0 block min-w-0 flex-1 overflow-hidden transform-gpu [contain:paint] [mask-image:linear-gradient(to_right,black_calc(100%_-_2rem),transparent)]"
+    >
       <motion.span
         className="flex w-max items-center gap-6 whitespace-nowrap"
         animate={{ x: running ? [0, -distance] : 0 }}
@@ -352,6 +361,7 @@ interface ResourceRowProps {
   onToggle: () => void;
   renderIcon?: (item: SidebarResource) => ReactNode;
   renderMenu?: AISidebarProps["renderMenu"];
+  renderActions?: AISidebarProps["renderActions"];
   setRef: (node: HTMLDivElement | null) => void;
 }
 
@@ -379,6 +389,7 @@ function ResourceRow({
   onToggle,
   renderIcon,
   renderMenu,
+  renderActions,
   setRef,
 }: ResourceRowProps) {
   const reduce = useReducedMotion() ?? false;
@@ -592,10 +603,15 @@ function ResourceRow({
         <MarqueeLabel active={hovered || menuOpen}>{row.item.label}</MarqueeLabel>
       )}
 
+      {!renaming && !row.item.disabled ? renderActions?.(row.item) : null}
       {!renaming && !row.item.disabled ? (
+        // local patch (pi-app): float the actions menu over the row instead of
+        // reserving a ~28px slot for it, so a title can use the full row width
+        // instead of stopping well short of the right edge.
         <MorphPopover
           open={menuOpen}
           onOpenChange={onMenuOpenChange}
+          className="absolute right-3 top-1/2 z-10 -translate-y-1/2"
         >
           <MorphPopoverTrigger>
             <button
@@ -605,7 +621,11 @@ function ResourceRow({
               aria-label={`Actions for ${row.item.label}`}
               onClick={(event) => event.stopPropagation()}
               className={cn(
-                "grid size-7 shrink-0 place-items-center rounded-lg outline-none transition-opacity hover:bg-foreground/5 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring group-hover/resource:opacity-100 group-data-[menu-open=true]/resource:opacity-100",
+                // local patch (pi-app): opaque background so the row hover
+                // state can't show the title through the floating menu button.
+                // local patch (pi-app): opaque floating chip so the marquee
+                // title underneath can't show through the action button.
+                "grid size-7 shrink-0 place-items-center rounded-lg bg-background text-muted-foreground shadow-sm ring-1 ring-border/60 outline-none transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring group-hover/resource:opacity-100 group-data-[menu-open=true]/resource:opacity-100",
                 // A finger never hovers, and this menu is the only path to
                 // rename and move without a drag — keep it on screen there.
                 canTouch ? "opacity-100" : "opacity-0",
@@ -643,6 +663,7 @@ export function AISidebar({
   allowNesting = true,
   renderIcon,
   renderMenu,
+  renderActions,
   ariaLabel = "Resources",
   className,
 }: AISidebarProps) {
@@ -1022,6 +1043,7 @@ export function AISidebar({
             }}
             renderIcon={renderIcon}
             renderMenu={renderMenu}
+            renderActions={renderActions}
             setRef={(node) => {
               if (node) rowRefs.current.set(row.item.id, node);
               else rowRefs.current.delete(row.item.id);

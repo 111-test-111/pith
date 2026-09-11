@@ -1,23 +1,40 @@
 import { useMemo, useSyncExternalStore } from 'react'
-import { AlertTriangle, X } from 'lucide-react'
+import { AlertTriangle, RotateCcw, X } from 'lucide-react'
 import { MessageGroup } from '@/components/agents/message'
 import { MessageScroller } from '@/components/agents/message-scroller'
 import type { PreviewRailItem } from '@/components/motion/preview-rail'
-import { ThinkingShimmer } from '@/components/agents/loading-states'
 import { Button } from '@/components/motion/button'
-import type { AssistantMsg, ChatMessage, ToolResultMsg, UserMsg } from '../../../../shared/types'
-import type { PiStore, PiState } from '@/state/pi-store'
+import type {
+  AssistantMsg,
+  BashExecutionMsg,
+  BranchSummaryMsg,
+  ChatMessage,
+  CompactionSummaryMsg,
+  CustomMsg,
+  ToolResultMsg,
+  UserMsg
+} from '../../../../shared/types'
+import type { Notice, PiStore, PiState } from '@/state/pi-store'
 import { useI18n } from '@/i18n'
 import { extractUserDisplay } from '@/lib/user-message'
-import { AssistantGroup, UserItem } from './MessageItems'
+import { AssistantGroup, BashItem, CustomItem, SummaryItem, UserItem } from './MessageItems'
+import { TurnStatus } from './TurnStatus'
 
-interface ChatTurn {
+interface ChatTurnBase {
   key: string
-  role: 'user' | 'assistant'
-  user?: UserMsg
-  /** Consecutive assistant rounds of this turn, oldest first. */
-  assistants: AssistantMsg[]
 }
+
+/**
+ * A user message and the assistant rounds it triggered fold into one turn; the
+ * SDK's non-LLM transcript entries (summaries, bash executions, extension
+ * messages) each stand alone so nothing silently disappears from the history.
+ */
+type ChatTurn =
+  | (ChatTurnBase & { role: 'user'; user: UserMsg; assistants: [] })
+  | (ChatTurnBase & { role: 'assistant'; assistants: AssistantMsg[]; live?: boolean })
+  | (ChatTurnBase & { role: 'info'; message: CompactionSummaryMsg | BranchSummaryMsg })
+  | (ChatTurnBase & { role: 'bash'; message: BashExecutionMsg })
+  | (ChatTurnBase & { role: 'custom'; message: CustomMsg })
 
 /**
  * Folds the message log into turns: a user message opens a turn, every
@@ -28,12 +45,27 @@ interface ChatTurn {
 function buildTurns(messages: ChatMessage[]): ChatTurn[] {
   const turns: ChatTurn[] = []
   for (const message of messages) {
-    if (message.role === 'user') {
-      turns.push({ key: `u${message.timestamp}-${turns.length}`, role: 'user', user: message, assistants: [] })
-    } else if (message.role === 'assistant') {
-      const last = turns[turns.length - 1]
-      if (last && last.role === 'assistant') last.assistants.push(message)
-      else turns.push({ key: `a${message.timestamp}-${turns.length}`, role: 'assistant', assistants: [message] })
+    const last = turns[turns.length - 1]
+    switch (message.role) {
+      case 'user':
+        turns.push({ key: `u${message.timestamp}-${turns.length}`, role: 'user', user: message, assistants: [] })
+        break
+      case 'assistant':
+        if (last?.role === 'assistant') last.assistants.push(message)
+        else turns.push({ key: `a${message.timestamp}-${turns.length}`, role: 'assistant', assistants: [message] })
+        break
+      case 'toolResult':
+        break
+      case 'compactionSummary':
+      case 'branchSummary':
+        turns.push({ key: `s${message.timestamp}-${turns.length}`, role: 'info', message })
+        break
+      case 'bashExecution':
+        turns.push({ key: `b${message.timestamp}-${turns.length}`, role: 'bash', message })
+        break
+      case 'custom':
+        if (message.display) turns.push({ key: `c${message.timestamp}-${turns.length}`, role: 'custom', message })
+        break
     }
   }
   return turns
@@ -79,11 +111,48 @@ const RAIL_TITLE_LIMIT = 56
 const RAIL_DESCRIPTION_LIMIT = 88
 
 /**
+ * Localized text for an in-flight work notice. The main process ships the key
+ * and its parameters (never prose), and raw SDK error text rides along as a
+ * detail suffix.
+ */
+function noticeText(notice: Notice, t: ReturnType<typeof useI18n>['t']): string {
+  const base =
+    notice.key === 'retrying'
+      ? t('chat.noticeRetrying', {
+          attempt: notice.params?.attempt ?? 0,
+          maxAttempts: notice.params?.maxAttempts ?? 0
+        })
+      : notice.key === 'retryFailed'
+        ? t('chat.noticeRetryFailed')
+        : notice.key === 'compacting'
+          ? t('chat.noticeCompacting')
+          : t('chat.noticeCompactFailed')
+  return notice.detail ? `${base} · ${notice.detail}` : base
+}
+
+/**
  * Subscribes to the FULL store state itself — the transcript is the one place
  * that must see every streaming delta — so the rest of the Workspace tree can
  * subscribe to the cheaper shell slice instead.
  */
-export function ChatView({ store, onDismissError }: { store: PiStore; onDismissError: () => void }) {
+export function ChatView({
+  store,
+  scrollResetKey = 0,
+  onDismissError,
+  onResend,
+  onFork
+}: {
+  store: PiStore
+  /** Changes when a resend/retry lands, forcing the transcript back to the
+   * live edge so the retried user message is visible. */
+  scrollResetKey?: number
+  onDismissError: () => void
+  /** Resend a user message — rewinds the session to it and re-prompts. Both
+   * the per-message buttons and the error banner's retry funnel here. */
+  onResend: (message: UserMsg) => void
+  /** Fork the session at an assistant message; opens the fork. */
+  onFork: (message: AssistantMsg) => void
+}) {
   const { t } = useI18n()
   const state: PiState = useSyncExternalStore(store.subscribe, store.getState)
   const toolResults = useMemo(() => {
@@ -105,20 +174,23 @@ export function ChatView({ store, onDismissError }: { store: PiStore; onDismissE
   const railItems = useMemo<PreviewRailItem[]>(() => {
     // buildTurns keeps assistant rounds in their own turns; pair each user
     // turn with the assistant turns that follow it, up to the next user turn.
-    const pairs = turns.map((turn, index) => {
-      if (turn.role !== 'user') return null
+    const userTurns: { turn: Extract<ChatTurn, { role: 'user' }>; assistants: AssistantMsg[] }[] = []
+    for (let index = 0; index < turns.length; index++) {
+      const turn = turns[index]
+      if (turn.role !== 'user') continue
       const assistants: AssistantMsg[] = []
-      for (let next = index + 1; next < turns.length && turns[next].role === 'assistant'; next++) {
-        assistants.push(...turns[next].assistants)
+      for (let next = index + 1; next < turns.length; next++) {
+        const candidate = turns[next]
+        if (candidate.role !== 'assistant') break
+        assistants.push(...candidate.assistants)
       }
-      return { turn, assistants }
-    })
-    const userTurns = pairs.filter((pair): pair is { turn: ChatTurn; assistants: AssistantMsg[] } => pair !== null)
+      userTurns.push({ turn, assistants })
+    }
     return userTurns.map(({ turn, assistants }, index) => {
       const reply = finalReplyText(assistants)
       return {
         id: turn.key,
-        label: excerpt(extractUserDisplay(turn.user!.content).text, RAIL_TITLE_LIMIT),
+        label: excerpt(extractUserDisplay(turn.user.content).text, RAIL_TITLE_LIMIT),
         description: reply ? excerpt(plainMarkdown(reply), RAIL_DESCRIPTION_LIMIT) : undefined,
         ariaLabel: t('chat.navGoTo', { index: index + 1, count: userTurns.length })
       }
@@ -126,18 +198,110 @@ export function ChatView({ store, onDismissError }: { store: PiStore; onDismissE
   }, [turns, t])
   const streaming = state.streaming
   const lastTurn = turns[turns.length - 1]
+  /** Retry target for the error banner: the newest user turn. */
+  const lastUserTurn = (() => {
+    for (let index = turns.length - 1; index >= 0; index--) {
+      const turn = turns[index]
+      if (turn.role === 'user') return turn.user
+    }
+    return undefined
+  })()
   // A fresh streaming round either joins the trailing assistant turn or
-  // (first round of a new turn) becomes its own group.
+  // (first round of a new turn) opens one.
   const streamingJoinsLastTurn = Boolean(streaming && lastTurn?.role === 'assistant')
-  // Between rounds (tools running, no partial message yet) the shimmer sits
-  // inside the trailing turn instead of a separate avatar row.
+  // Between rounds (tools running, no partial message yet) the spinner sits
+  // inside the trailing turn instead of a separate row.
   const waitingInLastTurn = state.isStreaming && !streaming && lastTurn?.role === 'assistant'
+  // The first round of a turn streams before it exists as a message. Render it
+  // as a synthetic turn keyed exactly the way `buildTurns` will key the
+  // persisted message (`a<timestamp>-<index>`), and splice it into the same
+  // list. `message_end` then swaps the data WITHOUT remounting the group: the
+  // old separate `key="streaming"` row was torn down and re-created on every
+  // turn start, which replayed its entrance animation and re-rendered the whole
+  // turn (the visible jump at the start of a fast model's turn).
+  const liveTurn: ChatTurn | null =
+    streaming && !streamingJoinsLastTurn
+      ? {
+          key: `a${streaming.timestamp}-${turns.length}`,
+          role: 'assistant',
+          assistants: [streaming],
+          live: true
+        }
+      : null
+  const displayTurns = liveTurn ? [...turns, liveTurn] : turns
+  const lastDisplayTurn = displayTurns[displayTurns.length - 1]
+
+  /** One transcript row. Assistant rounds are folded by the group itself —
+   * only when a turn has many steps — so every user prompt and every turn's
+   * final reply stay visible. `previous` lets a user row sit a little further
+   * from the assistant turn above it than turns sit from each other. */
+  const renderTurn = (turn: ChatTurn, previous?: ChatTurn) => {
+    if (turn.role === 'user')
+      return (
+        <UserItem
+          key={turn.key}
+          message={turn.user}
+          railId={turn.key}
+          spaced={previous?.role === 'assistant'}
+          showActions={!busy}
+          // Only the transcript's newest row keeps its actions on screen; every
+          // older one reveals them on hover.
+          actionsAlwaysVisible={turn === lastTurn}
+          onResend={onResend}
+        />
+      )
+    if (turn.role === 'info') return <SummaryItem key={turn.key} message={turn.message} />
+    if (turn.role === 'bash') return <BashItem key={turn.key} message={turn.message} />
+    if (turn.role === 'custom') return <CustomItem key={turn.key} message={turn.message} />
+
+    const isLast = turn === lastDisplayTurn
+    const live = Boolean(turn.live)
+    const messages = live
+      ? turn.assistants
+      : isLast && streamingJoinsLastTurn
+        ? [...turn.assistants, streaming!]
+        : turn.assistants
+    // Retry rewinds to the user message that opened this turn's exchange;
+    // scanning stops at a summary (its user message may be compacted away).
+    // Fork keeps everything up to the turn's last round.
+    const index = displayTurns.indexOf(turn)
+    let retryFrom: UserMsg | undefined
+    for (let i = index - 1; i >= 0; i--) {
+      const candidate = displayTurns[i]
+      if (candidate.role === 'user') {
+        retryFrom = candidate.user
+        break
+      }
+      if (candidate.role === 'info') break
+    }
+    return (
+      <AssistantGroup
+        key={turn.key}
+        messages={messages}
+        streamingIndex={live ? 0 : isLast && streamingJoinsLastTurn ? turn.assistants.length : -1}
+        pending={!live && isLast && waitingInLastTurn}
+        retryFrom={retryFrom}
+        forkAt={turn.assistants[turn.assistants.length - 1]}
+        onResend={onResend}
+        onFork={onFork}
+        showActions={!busy}
+        actionsAlwaysVisible={isLast && !live}
+        toolResults={toolResults}
+        toolRuns={state.toolRuns}
+      />
+    )
+  }
 
   return (
       <MessageScroller
       busy={busy}
       navigation="rail"
       railItems={railItems}
+      // local patch (pi-app): bumping the reset key on resend/retry re-runs the
+      // scroller's live-edge reset (following = true + scroll to bottom), which
+      // a plain scroll can't do while the rewound transcript is too short to
+      // produce a scroll event.
+      initialScrollKey={state.sessionPath ? `${state.sessionPath}#${scrollResetKey}` : null}
       label={t('chat.transcriptAria')}
       className="min-h-0 flex-1"
       viewportClassName="px-3 py-5 sm:px-5"
@@ -149,48 +313,15 @@ export function ChatView({ store, onDismissError }: { store: PiStore; onDismissE
       <MessageGroup spacing="default">
         {state.messages.length === 0 && !busy ? <EmptyState /> : null}
 
-        {turns.map((turn) => {
-          if (turn.role === 'user') return <UserItem key={turn.key} message={turn.user!} railId={turn.key} />
-
-          const isLast = turn === lastTurn
-          const messages = isLast && streamingJoinsLastTurn ? [...turn.assistants, streaming!] : turn.assistants
-          return (
-            <AssistantGroup
-              key={turn.key}
-              messages={messages}
-              streamingIndex={isLast && streamingJoinsLastTurn ? turn.assistants.length : -1}
-              pending={isLast && waitingInLastTurn}
-              toolResults={toolResults}
-              toolRuns={state.toolRuns}
-            />
-          )
-        })}
-
-        {streaming && !streamingJoinsLastTurn ? (
-          <AssistantGroup
-            key="streaming"
-            messages={[streaming]}
-            streamingIndex={0}
-            toolResults={toolResults}
-            toolRuns={state.toolRuns}
-          />
-        ) : null}
+        {displayTurns.map((turn, index) => renderTurn(turn, displayTurns[index - 1]))}
 
         {state.isStreaming && !streaming && !waitingInLastTurn ? (
-          <div className="flex items-center gap-2 pl-11 text-sm text-muted-foreground">
-            <ThinkingShimmer>{t('chat.working')}</ThinkingShimmer>
-          </div>
-        ) : null}
-
-        {state.queue.steering.length ? (
-          <div className="rounded-xl border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">
-            {t('chat.queuedSteer', { text: state.queue.steering[state.queue.steering.length - 1] })}
-          </div>
+          <TurnStatus className="pl-11" />
         ) : null}
 
         {state.notice ? (
           <div className="rounded-xl bg-muted/60 px-3 py-2 text-xs text-muted-foreground">
-            {state.notice}
+            {noticeText(state.notice, t)}
           </div>
         ) : null}
 
@@ -200,9 +331,22 @@ export function ChatView({ store, onDismissError }: { store: PiStore; onDismissE
               <AlertTriangle className="mt-0.5 size-4 shrink-0" />
               {state.error}
             </span>
-            <Button variant="ghost" size="icon" className="size-6" aria-label="Dismiss error" onClick={onDismissError}>
-              <X className="size-3.5" />
-            </Button>
+            <span className="flex items-center gap-0.5">
+              {lastUserTurn && !busy ? (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="size-6 text-destructive hover:text-destructive"
+                  aria-label={t('chat.errorRetry')}
+                  onClick={() => onResend(lastUserTurn)}
+                >
+                  <RotateCcw className="size-3.5" />
+                </Button>
+              ) : null}
+              <Button variant="ghost" size="icon" className="size-6" aria-label={t('chat.dismissError')} onClick={onDismissError}>
+                <X className="size-3.5" />
+              </Button>
+            </span>
           </div>
         ) : null}
       </MessageGroup>

@@ -98,12 +98,13 @@ export function Message({
           }
           animate={
             animate ??
-            (animateIn && !reduce
-              ? {
-                  opacity: 1,
-                  transform: "translateY(0px) scale(1)",
-                }
-              : { opacity: 1 })
+            // local patch (pi-app): always target the resting transform. A row
+            // that mounts with `animateIn` (a streaming round joining it) and
+            // then flips to not-animated used to be left with a partial target,
+            // and motion kept the inline `transform: ... scale(0)` — the row
+            // stayed in layout but was scaled to nothing (invisible until the
+            // session was reopened).
+            { opacity: 1, transform: "translateY(0px) scale(1)" }
           }
           exit={
             exit ??

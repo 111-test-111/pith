@@ -50,6 +50,12 @@ export interface FileDiffProps {
   language?: AgentCodeLanguage;
   copyText?: string;
   onCopy?: () => void | Promise<void>;
+  /** local patch (pi-app): precomputed +/- counts shown in the header while
+   * `lazyContent` defers the parsed `lines`. */
+  additions?: number;
+  deletions?: number;
+  /** local patch (pi-app): do not mount/highlight diff rows while collapsed. */
+  lazyContent?: boolean;
   className?: string;
 }
 
@@ -82,6 +88,9 @@ export function FileDiff({
   language = "typescript",
   copyText,
   onCopy,
+  lazyContent = false,
+  additions: additionsProp,
+  deletions: deletionsProp,
   className,
 }: FileDiffProps) {
   const reduce = useReducedMotion() ?? false;
@@ -95,11 +104,13 @@ export function FileDiff({
   const [internalOpen, setInternalOpen] = useState(defaultOpen);
   const currentOpen = open ?? internalOpen;
   const streaming = status === "streaming";
-  const additions = lines.filter((line) => line.type === "added").length;
-  const deletions = lines.filter((line) => line.type === "removed").length;
+  const additions = additionsProp ?? lines.filter((line) => line.type === "added").length;
+  const deletions = deletionsProp ?? lines.filter((line) => line.type === "removed").length;
   const canCopy = Boolean(copyText || onCopy);
   const code = lines.map((line) => line.content).join("\n");
-  const tokens = useAgentCodeTokens(code, language);
+  // local patch (pi-app): Shiki and line DOM are deferred until the user
+  // opens the diff, and never rerun for cumulative streaming snapshots.
+  const tokens = useAgentCodeTokens(code, language, currentOpen && !streaming);
 
   const setOpen = useCallback(
     (next: boolean) => {
@@ -139,7 +150,9 @@ export function FileDiff({
       if (typeof viewport.scrollTo === "function") {
         viewport.scrollTo({
           top: viewport.scrollHeight,
-          behavior: reduce ? "auto" : "smooth",
+          // local patch (pi-app): avoid restarting a smooth scroll for every
+          // cumulative diff update while an expanded edit is streaming.
+          behavior: "auto",
         });
       } else {
         viewport.scrollTop = viewport.scrollHeight;
@@ -175,7 +188,10 @@ export function FileDiff({
           aria-hidden="true"
           className="size-4 shrink-0 text-muted-foreground"
         />
-        <span className="min-w-0 flex-1 truncate font-mono text-xs text-foreground/80">
+        {/* local patch (pi-app): the app's tool rows are prose labels
+            (`edit · file — path`), not code, so they use the same UI font,
+            size and muted chrome color as the ToolResult title. */}
+        <span className="min-w-0 flex-1 truncate font-medium text-muted-foreground">
           {file}
         </span>
         <span className="flex shrink-0 items-center gap-2">
@@ -208,8 +224,8 @@ export function FileDiff({
         aria-labelledby={triggerId}
         open={currentOpen}
       >
-        <div className="pl-6 pt-1.5">
-          <div className="overflow-hidden rounded-xl bg-muted/80">
+        {lazyContent && !currentOpen ? null : (
+          <div className="ml-6 mt-1.5 overflow-hidden rounded-xl bg-muted/80">
             <div
               ref={viewportRef}
               data-slot="file-diff-viewport"
@@ -282,7 +298,7 @@ export function FileDiff({
               </div>
             ) : null}
           </div>
-        </div>
+        )}
       </AgentDisclosure>
     </div>
   );

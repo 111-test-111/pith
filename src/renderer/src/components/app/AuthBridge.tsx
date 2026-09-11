@@ -28,28 +28,46 @@ export function AuthBridge({ prompt, notify, onReply }: AuthBridgeProps) {
   const masked = prompt.kind === 'secret' || prompt.kind === 'manual_code'
   const latestUrl = [...notify].reverse().find((n) => n.kind === 'auth_url' && n.url)
   const deviceCode = [...notify].reverse().find((n) => n.kind === 'device_code')
+  // A device-code flow carries the page the code must be entered on; without
+  // this the user sees the code but nowhere to use it.
+  const verificationUrl =
+    deviceCode?.verificationUri ?? latestUrl?.url ?? undefined
+  const instructions =
+    latestUrl?.instructions ??
+    [...notify].reverse().find((n) => n.instructions)?.instructions
 
   return (
     <div className="fixed inset-0 z-[90] grid place-items-center bg-background/60 p-6 [backdrop-filter:blur(8px)]">
       <div className="w-full max-w-sm rounded-2xl border border-border bg-card p-5 shadow-2xl">
         <p className="text-sm font-medium text-foreground">{prompt.message}</p>
 
-        {latestUrl?.url ? (
+        {verificationUrl ? (
           <Button
             variant="outline"
             size="sm"
             className="mt-3 w-full"
-            onClick={() => void window.pi.openExternal(latestUrl.url!)}
+            onClick={() => void window.pi.openExternal(verificationUrl)}
           >
             <ExternalLink className="size-3.5" />
-            {t('auth.openAuthPage')}
+            {deviceCode?.verificationUri
+              ? t('auth.openVerificationPage')
+              : t('auth.openAuthPage')}
           </Button>
+        ) : null}
+
+        {instructions ? (
+          <p className="mt-2 text-xs leading-5 text-muted-foreground">{instructions}</p>
         ) : null}
 
         {deviceCode ? (
           <div className="mt-3 rounded-xl bg-muted px-3 py-2.5 text-center">
             <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{t('auth.deviceCode')}</p>
             <p className="font-mono text-base font-semibold text-foreground">{deviceCode.userCode}</p>
+            {deviceCode.verificationUri ? (
+              <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
+                {deviceCode.verificationUri}
+              </p>
+            ) : null}
           </div>
         ) : null}
 

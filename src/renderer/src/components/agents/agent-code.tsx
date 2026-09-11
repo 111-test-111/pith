@@ -29,6 +29,8 @@ export type AgentCodeTokenLines = AgentCodeToken[][];
 export interface AgentCodeProps {
   code: string;
   language?: AgentCodeLanguage;
+  /** local patch (pi-app): disable Shiki for cumulative live tool output. */
+  highlight?: boolean;
   className?: string;
 }
 
@@ -151,9 +153,12 @@ export function AgentCodeLine({
 export function AgentCode({
   code,
   language = "bash",
+  highlight = true,
   className,
 }: AgentCodeProps) {
-  const tokens = useAgentCodeTokens(code, language);
+  // local patch (pi-app): highlighting a growing terminal snapshot on every
+  // tool update is quadratic; callers enable it after completion.
+  const tokens = useAgentCodeTokens(code, language, highlight);
   let offset = 0;
   const lines = code.split("\n").map((content) => {
     const line = { content, offset };

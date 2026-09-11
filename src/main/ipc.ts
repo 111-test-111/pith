@@ -1,7 +1,15 @@
 import { ipcMain, dialog, shell, BrowserWindow } from 'electron'
 import { PiManager } from './pi/manager'
 import { loadSettings, saveSettings } from './settings'
-import type { AppInfoDTO, PromptPayload, SessionSnapshotDTO, ThinkingLevel } from '../shared/types'
+import type {
+  AppInfoDTO,
+  CustomModelDTO,
+  ModelsConfigDTO,
+  PromptPayload,
+  ResendPayload,
+  SessionSnapshotDTO,
+  ThinkingLevel
+} from '../shared/types'
 
 export function createPiManager(): PiManager {
   const emit = (channel: string, payload: unknown) => {
@@ -36,23 +44,25 @@ export function registerIpc(pi: PiManager): void {
   })
 
   ipcMain.handle('pi:init', (_event, cwd: string): Promise<SessionSnapshotDTO> => pi.init(cwd))
-  ipcMain.handle('pi:newSession', (): Promise<SessionSnapshotDTO> => pi.newSession())
+  ipcMain.handle('pi:newSession', (_event, cwd?: string): Promise<SessionSnapshotDTO> => pi.newSession(cwd))
   ipcMain.handle('pi:openSession', (_event, path: string, cwd?: string) => pi.openSession(path, cwd))
   ipcMain.handle('pi:listSessions', () => pi.listSessions())
   ipcMain.handle('pi:deleteSession', (_event, path: string) => pi.deleteSession(path))
+  ipcMain.handle('pi:renameSession', (_event, path: string, name: string) =>
+    pi.renameSession(path, name)
+  )
   ipcMain.handle('pi:deleteFolder', (_event, cwd: string) => pi.deleteFolderSessions(cwd))
   ipcMain.handle('pi:prompt', (_event, payload: PromptPayload) => {
     pi.prompt(payload)
     return { accepted: true }
   })
-  ipcMain.handle('pi:steer', (_event, text: string) => {
-    pi.steer(text)
-    return { accepted: true }
-  })
+  ipcMain.handle('pi:clearQueue', () => pi.clearQueue())
   ipcMain.handle('pi:abort', () => {
     pi.abort()
     return { accepted: true }
   })
+  ipcMain.handle('pi:resendMessage', (_event, payload: ResendPayload) => pi.resendMessage(payload))
+  ipcMain.handle('pi:forkFromMessage', (_event, timestamp: number) => pi.forkFromMessage(timestamp))
   ipcMain.handle('pi:setModel', (_event, providerId: string, modelId: string) =>
     pi.setModel(providerId, modelId)
   )
@@ -65,6 +75,26 @@ export function registerIpc(pi: PiManager): void {
     pi.login(providerId, kind)
   )
   ipcMain.handle('pi:logout', (_event, providerId: string) => pi.logout(providerId))
+
+  ipcMain.handle('pi:modelsConfig', () => pi.modelsConfig())
+  ipcMain.handle('pi:saveModelsConfig', (_event, config: ModelsConfigDTO) =>
+    pi.saveModelsConfig(config)
+  )
+  ipcMain.handle('pi:providerModels', (_event, providerId: string) => pi.providerModels(providerId))
+  ipcMain.handle('pi:discoverModels', (_event, providerId: string) =>
+    pi.discoverProviderModels(providerId)
+  )
+  ipcMain.handle('pi:testModel', (_event, providerId: string, model: CustomModelDTO) =>
+    pi.testProviderModel(providerId, model)
+  )
+  ipcMain.handle('pi:defaultModel', () => pi.defaultModel())
+  ipcMain.handle('pi:setDefaultModel', (_event, providerId: string, modelId: string) =>
+    pi.setDefaultModel(providerId, modelId)
+  )
+  ipcMain.handle('pi:catalogPreset', (_event, providerId: string, modelId: string) =>
+    pi.catalogPreset(providerId, modelId)
+  )
+  ipcMain.handle('pi:configuredModels', () => pi.configuredModelSources())
 
   ipcMain.handle('files:search', (_event, query: string) => pi.searchFiles(query))
   ipcMain.handle('files:read', (_event, path: string) => pi.readFile(path))

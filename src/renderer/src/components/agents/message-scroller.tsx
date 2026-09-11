@@ -100,6 +100,9 @@ export interface MessageScrollerProps extends ComponentPropsWithRef<"div"> {
    * Without it, the rail falls back to the stock per-row behavior.
    */
   railItems?: PreviewRailItem[];
+  /** local patch (pi-app): changing this resets the viewport to the live edge
+   * synchronously before the newly selected transcript is painted. */
+  initialScrollKey?: string | null;
   viewportClassName?: string;
   contentClassName?: string;
   railClassName?: string;
@@ -124,6 +127,7 @@ export function MessageScroller({
   navigation,
   navigationLabel = "Message navigation",
   railItems,
+  initialScrollKey,
   viewportClassName,
   contentClassName,
   railClassName,
@@ -140,12 +144,13 @@ export function MessageScroller({
   const followingRef = useRef(followOutput);
   const programmaticScrollRef = useRef(false);
   const scrollTimerRef = useRef<number | undefined>(undefined);
-  const frameRef = useRef<number | undefined>(undefined);
+  const positionFrameRef = useRef<number | undefined>(undefined);
   const railFrameRef = useRef<number | undefined>(undefined);
   const railIdRef = useRef(new WeakMap<HTMLElement, string>());
   const railIdCounterRef = useRef(0);
   const railTargetsRef = useRef(new Map<string, HTMLElement>());
   const [internalRailItems, setRailItems] = useState<PreviewRailItem[]>([]);
+  const [positionedScrollKey, setPositionedScrollKey] = useState(initialScrollKey);
   const [activeRailId, setActiveRailId] = useState("");
   const [railOverflowing, setRailOverflowing] = useState(false);
   const {
@@ -324,18 +329,36 @@ export function MessageScroller({
     } else {
       viewport.scrollTop = viewport.scrollHeight;
     }
+    // local patch (pi-app): release the programmatic flag from handleScroll once
+    // the scroll settles at the bottom (or from leaveLiveEdge on a user
+    // gesture). The old 0ms timeout could fire before the scroll event; a
+    // growing stream then read as a user scroll, switched following off and
+    // left the transcript short of the bottom. The timer below is only a
+    // safety net for a programmatic scroll that produces no event at all.
     if (scrollTimerRef.current) window.clearTimeout(scrollTimerRef.current);
     scrollTimerRef.current = window.setTimeout(() => {
       programmaticScrollRef.current = false;
-    }, behavior === "smooth" ? 320 : 0);
+    }, behavior === "smooth" ? 400 : 250);
   }, []);
 
   const handleScroll = useCallback(() => {
     const viewport = viewportRef.current;
-    if (!viewport || programmaticScrollRef.current) return;
+    if (!viewport) return;
 
     const distance =
       viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
+
+    // local patch (pi-app): while a programmatic scroll is settling, keep the
+    // following state untouched instead of re-deriving it from the distance.
+    // Streamed growth moves the bottom between the scroll and its scroll event,
+    // so deriving it here misread every follow-up scroll as the user leaving
+    // the live edge — following went off and follow-scrolling stopped for good.
+    if (programmaticScrollRef.current) {
+      if (distance <= 1) programmaticScrollRef.current = false;
+      updateActiveRailItem();
+      return;
+    }
+
     setFollowing(distance <= followThreshold);
     updateActiveRailItem();
   }, [followThreshold, setFollowing, updateActiveRailItem]);
@@ -346,30 +369,43 @@ export function MessageScroller({
 
   useLayoutEffect(() => {
     followingRef.current = followOutput;
-    if (!followOutput) return;
-
-    frameRef.current = requestAnimationFrame(() => scrollToEnd("auto"));
+    if (followOutput) scrollToEnd("auto");
+    // local patch (pi-app): a newly selected transcript remains visibility-
+    // hidden through one positioning frame. The second instant scroll catches
+    // layout completed later in the commit without exposing any travel.
+    if (positionFrameRef.current) cancelAnimationFrame(positionFrameRef.current);
+    // local patch (pi-app): mark the key positioned synchronously instead of
+    // only in the rAF below. The rAF still re-scrolls after late layout, but if
+    // it gets cancelled (a rapid second key change / remount) the old code left
+    // `positionedScrollKey` stale and the whole transcript stayed `invisible`.
+    setPositionedScrollKey(initialScrollKey);
+    positionFrameRef.current = requestAnimationFrame(() => {
+      if (followOutput) scrollToEnd("auto");
+    });
     return () => {
-      if (frameRef.current) cancelAnimationFrame(frameRef.current);
+      if (positionFrameRef.current) cancelAnimationFrame(positionFrameRef.current);
     };
-  }, [followOutput, scrollToEnd]);
+  }, [followOutput, initialScrollKey, scrollToEnd]);
 
   useEffect(() => {
     const content = contentRef.current;
     if (!content || typeof ResizeObserver === "undefined") return;
 
     const observer = new ResizeObserver(() => {
-      scheduleRailSync();
+      // local patch (pi-app): app-driven rail targets are user rows and its
+      // labels come from data, so streamed assistant resizes do not require a
+      // full transcript query/measurement on every chunk.
+      if (!railItems) scheduleRailSync();
       if (!followOutput || !followingRef.current) return;
-      // local patch (pi-app): follow with instant scrolls while streaming —
-      // restarting a smooth scroll every frame as content grows janks the
-      // main thread during fast model output.
-      scrollToEnd(reduce || !smooth || busy ? "auto" : "smooth");
+      // local patch (pi-app): following cumulative output is always instant.
+      // Smooth resize-follow both burns CPU and exposes top-to-bottom travel
+      // while a newly selected transcript finishes laying out.
+      scrollToEnd("auto");
     });
     observer.observe(content);
 
     return () => observer.disconnect();
-  }, [followOutput, reduce, scheduleRailSync, scrollToEnd, smooth, busy]);
+  }, [followOutput, scheduleRailSync, scrollToEnd, railItems]);
 
   useEffect(() => {
     if (navigation !== "rail") {
@@ -384,8 +420,12 @@ export function MessageScroller({
     if (!content || !viewport) return;
 
     scheduleRailSync();
+    // local patch (pi-app): when railItems are app-driven, streamed text and
+    // assistant child mutations cannot add/remove navigation targets. Avoid a
+    // subtree MutationObserver and content ResizeObserver in that mode; the
+    // railItems dependency schedules the required sync after user rows change.
     const mutationObserver =
-      typeof MutationObserver === "undefined"
+      railItems || typeof MutationObserver === "undefined"
         ? null
         : new MutationObserver(scheduleRailSync);
     mutationObserver?.observe(content, {
@@ -398,19 +438,19 @@ export function MessageScroller({
       typeof ResizeObserver === "undefined"
         ? null
         : new ResizeObserver(scheduleRailSync);
-    resizeObserver?.observe(content);
+    if (!railItems) resizeObserver?.observe(content);
     resizeObserver?.observe(viewport);
 
     return () => {
       mutationObserver?.disconnect();
       resizeObserver?.disconnect();
     };
-  }, [navigation, scheduleRailSync]);
+  }, [navigation, railItems, scheduleRailSync]);
 
   useEffect(
     () => () => {
       if (scrollTimerRef.current) window.clearTimeout(scrollTimerRef.current);
-      if (frameRef.current) cancelAnimationFrame(frameRef.current);
+      if (positionFrameRef.current) cancelAnimationFrame(positionFrameRef.current);
       if (railFrameRef.current) cancelAnimationFrame(railFrameRef.current);
     },
     [],
@@ -483,6 +523,7 @@ export function MessageScroller({
           ? "[-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
           : "[scrollbar-gutter:stable]",
         viewportClassName,
+        positionedScrollKey !== initialScrollKey && "invisible",
         navigation === "rail" && railOverflowing && "pr-10",
       )}
     >
