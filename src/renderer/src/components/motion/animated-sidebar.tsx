@@ -75,7 +75,8 @@ const SUBMENU_TRANSITION = {
 const SUBMENU_VARIANTS: Variants = {
   closed: {
     opacity: 0,
-    clipPath: "inset(0 0 100% 0 round 8px)",
+    // local patch (pi-app): the reveal must not impose a second circular corner.
+    clipPath: "inset(0 0 100% 0)",
     transition: {
       duration: 0.14,
       ease: EASE_OUT,
@@ -85,7 +86,7 @@ const SUBMENU_VARIANTS: Variants = {
   },
   open: {
     opacity: 1,
-    clipPath: "inset(0 0 0% 0 round 8px)",
+    clipPath: "inset(0 0 0% 0)",
     transition: {
       duration: 0.2,
       delayChildren: 0.035,
@@ -468,7 +469,8 @@ function MobileSidebar({
         }}
         className={cn(
           "pointer-events-auto fixed inset-y-0 flex h-dvh w-(--sidebar-width-mobile) max-w-[88vw] flex-col overflow-hidden",
-          "border-border bg-background shadow-2xl will-change-transform",
+          // local patch (pi-app): the mobile overlay uses the shared elevation.
+          "border-border bg-background shadow-overlay will-change-transform",
           side === "left" ? "left-0 border-r" : "right-0 border-l",
           !context.openMobile && "pointer-events-none",
           className,

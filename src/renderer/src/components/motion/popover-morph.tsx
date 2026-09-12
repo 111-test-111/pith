@@ -8,6 +8,7 @@ import {
   type ReactElement,
   type ReactNode,
   type Ref,
+  type CSSProperties,
   useCallback,
   useContext,
   useEffect,
@@ -18,7 +19,9 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { usePopoverPortalPosition } from "@/components/motion/popover-position";
-import { EASE_OUT, SPRING_PANEL } from "@/lib/ease";
+import { SPRING_PANEL } from "@/lib/ease";
+// local patch (pi-app): release focus/pointer ownership as soon as exit starts.
+import { PresenceGate } from "@/lib/presence-gate";
 import { cn } from "@/lib/utils";
 
 type Side = "top" | "bottom";
@@ -61,9 +64,8 @@ export interface MorphPopoverProps {
 }
 
 /**
- * A popover whose panel morphs open from the trigger corner: it's laid out at
- * full size but clipped to the corner nearest the trigger, then unclips as one
- * piece. Closes on outside pointer / Escape. Controlled or uncontrolled.
+ * A popover whose panel opens from the trigger corner as one native surface.
+ * Closes on outside pointer / Escape. Controlled or uncontrolled.
  */
 export function MorphPopover({
   children,
@@ -207,23 +209,9 @@ export function MorphPopoverTrigger({ children }: MorphPopoverTriggerProps) {
 const originFor = (side: Side, align: Align) =>
   `${side === "bottom" ? "top" : "bottom"} ${align === "end" ? "right" : align === "center" ? "center" : "left"}`;
 
-// A clip that hides everything but the corner nearest the trigger, so the
-// panel appears to grow out of it. inset(top right bottom left).
-function clipHidden(side: Side, align: Align, radius: number) {
-  const top = side === "bottom" ? "0%" : "92%";
-  const bottom = side === "bottom" ? "92%" : "0%";
-  // Centered: the panel grows out of a horizontal sliver at its middle.
-  if (align === "center")
-    return `inset(${top} 50% ${bottom} 50% round ${radius}px)`;
-  const right = align === "end" ? "0%" : "92%";
-  const left = align === "end" ? "92%" : "0%";
-  return `inset(${top} ${right} ${bottom} ${left} round ${radius}px)`;
-}
-const clipShown = (radius: number) => `inset(0% 0% 0% 0% round ${radius}px)`;
-
-// Preserve the original spring character on the wrapper, but tween the complex
-// clip-path so it cannot snap when the spring resolves its final distance.
-const MORPH_CLIP_TRANSITION = { duration: 0.32, ease: EASE_OUT } as const;
+// local patch (pi-app): retain the anchored spring, but let the native border
+// own the silhouette. Circular inset masks cut the continuous corners off;
+// scaling one surface also keeps its child clipping and shadow in agreement.
 
 export interface MorphPopoverContentProps {
   children: ReactNode;
@@ -231,8 +219,8 @@ export interface MorphPopoverContentProps {
   align?: Align;
   /** Gap between trigger and panel, in px. Default 8. */
   sideOffset?: number;
-  /** Panel corner radius, in px. Default 16. */
-  radius?: number;
+  /** local patch (pi-app): accept a theme token; defaults to the window radius. */
+  radius?: CSSProperties["borderRadius"];
   /** local patch (pi-app): skip the morph entirely — the panel mounts and
    * unmounts at rest, for a preview handing over to another one in the same
    * frame (a hover moving from one file to the next). */
@@ -245,7 +233,7 @@ export function MorphPopoverContent({
   side = "bottom",
   align = "end",
   sideOffset = 8,
-  radius = 16,
+  radius = "var(--app-radius-window)",
   instant = false,
   className,
 }: MorphPopoverContentProps) {
@@ -285,18 +273,6 @@ export function MorphPopoverContent({
         hidden: { opacity: 0, scale: 0.96, transition: SPRING_PANEL },
         show: { opacity: 1, scale: 1, transition: SPRING_PANEL },
       };
-  const clip = still
-    ? undefined
-    : {
-        hidden: {
-          clipPath: clipHidden(side, align, radius),
-          transition: MORPH_CLIP_TRANSITION,
-        },
-        show: {
-          clipPath: clipShown(radius),
-          transition: MORPH_CLIP_TRANSITION,
-        },
-      };
 
   // Keep the server and first client render identical, then mount the portal.
   if (!portalReady) return null;
@@ -304,38 +280,41 @@ export function MorphPopoverContent({
   return createPortal(
     <AnimatePresence>
       {ctx.open ? (
-        <motion.div
-          data-morph-popover-portal=""
-          // Wrapper carries the shadow as a drop-shadow filter, which hugs the
-          // clipped shape below (box-shadow would just get clipped away).
-          variants={wrap}
-          initial={instant ? false : reduce ? { opacity: 0 } : "hidden"}
-          animate={instant ? undefined : reduce ? { opacity: 1 } : "show"}
-          exit={instant ? undefined : reduce ? { opacity: 0 } : "hidden"}
-          transition={instant || !reduce ? undefined : { duration: 0.12 }}
-          style={{
-            left,
-            top,
-            visibility: layout ? "visible" : "hidden",
-            transformOrigin: originFor(side, align),
-          }}
-          className="fixed z-[9999] [filter:drop-shadow(0_10px_18px_rgba(0,0,0,0.14))]"
-        >
-          <motion.div
-            ref={ctx.contentRef}
-            id={ctx.contentId}
-            role="dialog"
-            aria-labelledby={ctx.triggerId}
-            variants={clip}
-            style={{ borderRadius: radius }}
-            className={cn(
-              "overflow-hidden border border-border bg-background",
-              className,
-            )}
-          >
-            {children}
-          </motion.div>
-        </motion.div>
+        <PresenceGate>
+          {({ gate }) => (
+            <motion.div
+              data-morph-popover-portal=""
+              variants={wrap}
+              initial={instant ? false : reduce ? { opacity: 0 } : "hidden"}
+              animate={instant ? undefined : reduce ? { opacity: 1 } : "show"}
+              exit={instant ? undefined : reduce ? { opacity: 0 } : "hidden"}
+              transition={instant || !reduce ? undefined : { duration: 0.12 }}
+              {...gate}
+              style={{
+                ...gate.style,
+                left,
+                top,
+                visibility: layout ? "visible" : "hidden",
+                transformOrigin: originFor(side, align),
+              }}
+              className="fixed z-[9999]"
+            >
+              <motion.div
+                ref={ctx.contentRef}
+                id={ctx.contentId}
+                role="dialog"
+                aria-labelledby={ctx.triggerId}
+                style={{ borderRadius: radius }}
+                className={cn(
+                  "overflow-hidden border border-border bg-background shadow-overlay",
+                  className,
+                )}
+              >
+                {children}
+              </motion.div>
+            </motion.div>
+          )}
+        </PresenceGate>
       ) : null}
     </AnimatePresence>,
     document.body,

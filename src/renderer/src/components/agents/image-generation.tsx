@@ -1,4 +1,5 @@
 "use client";
+// local patch (pi-app): resolution badges and retry actions use semantic radii.
 // beui.dev/components/agents/chat-app
 
 import { Check, CircleAlert, RotateCcw } from "lucide-react";
@@ -93,10 +94,11 @@ function DitherMark({
       }}
       className="grid size-3.5 grid-cols-2 place-items-center gap-0.5"
     >
-      <span className="size-1 rounded-[1px] bg-current" />
-      <span className="size-1 rounded-[1px] bg-current opacity-55" />
-      <span className="size-1 rounded-[1px] bg-current opacity-55" />
-      <span className="size-1 rounded-[1px] bg-current" />
+      {/* local patch (pi-app): micro decoration uses the shared radius token. */}
+      <span className="size-1 rounded-detail bg-current" />
+      <span className="size-1 rounded-detail bg-current opacity-55" />
+      <span className="size-1 rounded-detail bg-current opacity-55" />
+      <span className="size-1 rounded-detail bg-current" />
     </motion.span>
   );
 }
@@ -329,7 +331,7 @@ export function ImageGeneration({
           </AnimatePresence>
 
           {resolution ? (
-            <span className="absolute top-2 right-2 z-10 rounded-full bg-background/75 px-2 py-0.5 font-mono text-[10px] tabular-nums text-muted-foreground">
+            <span className="absolute top-2 right-2 z-10 rounded-item bg-background/75 px-2 py-0.5 font-mono text-[10px] tabular-nums text-muted-foreground">
               {resolution}
             </span>
           ) : null}
@@ -377,7 +379,7 @@ export function ImageGeneration({
             onClick={onRetry}
             whileTap={reduce ? undefined : { scale: 0.96 }}
             transition={SPRING_PRESS}
-            className="mt-3 inline-flex min-h-10 items-center gap-2 rounded-full px-3 text-sm font-medium text-foreground outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
+            className="mt-3 inline-flex min-h-10 items-center gap-2 rounded-control px-3 text-sm font-medium text-foreground outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
           >
             <RotateCcw aria-hidden="true" className="size-4" />
             Try again

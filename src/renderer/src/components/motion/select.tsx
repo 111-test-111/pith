@@ -208,7 +208,12 @@ export function SelectTrigger({ className, children }: SelectTriggerProps) {
   const isTop = ctx.placement === "top";
   // edge facing the panel flattens then rounds; the far edge stays rounded.
   // All four corners are specified so none gets stranded when placement flips.
-  const kf = ctx.open ? [0, 0, 12] : [12, 0, 12];
+  // local patch (pi-app): animate the corner flattening as a multiplier, not
+  // fixed pixel radii. Native CSS resolves the token throughout the motion,
+  // including live token changes and the reduced-motion path.
+  const radius = "var(--app-radius-control)";
+  const nearRadius = "calc(var(--app-radius-control) * var(--select-corner-progress, 1))";
+  const kf = ctx.open ? [0, 0, 1] : [1, 0, 1];
   const kfT: Transition = ctx.reduce
     ? { duration: 0 }
     : ctx.open
@@ -226,18 +231,14 @@ export function SelectTrigger({ className, children }: SelectTriggerProps) {
       // Gooey: the edge facing the panel snaps flat (panel attached) then rounds
       // back once the panel pulls away — the two pinch apart.
       initial={false}
-      animate={{
-        borderTopLeftRadius: isTop ? kf : 12,
-        borderTopRightRadius: isTop ? kf : 12,
-        borderBottomLeftRadius: isTop ? 12 : kf,
-        borderBottomRightRadius: isTop ? 12 : kf,
+      style={{
+        borderTopLeftRadius: isTop ? nearRadius : radius,
+        borderTopRightRadius: isTop ? nearRadius : radius,
+        borderBottomLeftRadius: isTop ? radius : nearRadius,
+        borderBottomRightRadius: isTop ? radius : nearRadius,
       }}
-      transition={{
-        borderTopLeftRadius: isTop ? kfT : INSTANT_TRANSITION,
-        borderTopRightRadius: isTop ? kfT : INSTANT_TRANSITION,
-        borderBottomLeftRadius: isTop ? INSTANT_TRANSITION : kfT,
-        borderBottomRightRadius: isTop ? INSTANT_TRANSITION : kfT,
-      }}
+      animate={{ "--select-corner-progress": kf }}
+      transition={{ "--select-corner-progress": kfT }}
       className={cn(
         "relative z-10 flex w-full items-center justify-between gap-2 rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground outline-none transition-colors",
         "hover:border-(--color-border-strong) focus-visible:ring-2 focus-visible:ring-foreground/20",
@@ -316,7 +317,9 @@ export function SelectContent({ className, children }: SelectContentProps) {
   // stranded square corner when the placement flips between opens.
   const isTop = ctx.placement === "top";
   const nearGap = open ? 8 : 0;
-  const nearRadius = open ? 12 : 0;
+  // local patch (pi-app): share the trigger's semantic radius at animation rest.
+  const radius = "var(--app-radius-control)";
+  const nearRadius = "calc(var(--app-radius-control) * var(--select-corner-progress, 1))";
 
   const gapT: Transition = open
     ? { type: "spring", duration: 0.6, bounce: 0.5, delay: 0.12 }
@@ -336,9 +339,22 @@ export function SelectContent({ className, children }: SelectContentProps) {
       aria-hidden={!open}
       inert={!open}
       initial={false}
+      style={{
+        transformOrigin: isTop ? "bottom" : "top",
+        overflow: "hidden",
+        pointerEvents: open ? "auto" : "none",
+        borderTopLeftRadius: isTop ? radius : nearRadius,
+        borderTopRightRadius: isTop ? radius : nearRadius,
+        borderBottomLeftRadius: isTop ? nearRadius : radius,
+        borderBottomRightRadius: isTop ? nearRadius : radius,
+      }}
       animate={
         ctx.reduce
-          ? { opacity: open ? 1 : 0, height: open ? height : 0 }
+          ? {
+              opacity: open ? 1 : 0,
+              height: open ? height : 0,
+              "--select-corner-progress": open ? 1 : 0,
+            }
           : {
               opacity: open ? 1 : 0,
               height: open ? height : 0,
@@ -346,10 +362,7 @@ export function SelectContent({ className, children }: SelectContentProps) {
               marginTop: isTop ? 0 : nearGap,
               marginBottom: isTop ? nearGap : 0,
               // near corners go flat->round; far corners stay rounded
-              borderTopLeftRadius: isTop ? 12 : nearRadius,
-              borderTopRightRadius: isTop ? 12 : nearRadius,
-              borderBottomLeftRadius: isTop ? nearRadius : 12,
-              borderBottomRightRadius: isTop ? nearRadius : 12,
+              "--select-corner-progress": open ? 1 : 0,
             }
       }
       transition={
@@ -364,21 +377,14 @@ export function SelectContent({ className, children }: SelectContentProps) {
                 : { duration: 0.26, ease: EASE_OUT, delay: 0.14 },
               marginTop: isTop ? INSTANT_TRANSITION : gapT,
               marginBottom: isTop ? gapT : INSTANT_TRANSITION,
-              borderTopLeftRadius: isTop ? INSTANT_TRANSITION : radiusT,
-              borderTopRightRadius: isTop ? INSTANT_TRANSITION : radiusT,
-              borderBottomLeftRadius: isTop ? radiusT : INSTANT_TRANSITION,
-              borderBottomRightRadius: isTop ? radiusT : INSTANT_TRANSITION,
+              "--select-corner-progress": radiusT,
             }
       }
-      style={{
-        transformOrigin: isTop ? "bottom" : "top",
-        overflow: "hidden",
-        pointerEvents: open ? "auto" : "none",
-      }}
       // flush against the trigger, then separates into its own rounded pill;
       // sits above or below depending on available space
       className={cn(
-        "absolute left-0 right-0 z-20 rounded-xl border border-border bg-background shadow-lg",
+        // local patch (pi-app): all floating surfaces share themed elevation.
+        "absolute left-0 right-0 z-20 rounded-xl border border-border bg-background shadow-overlay",
         isTop ? "bottom-full" : "top-full",
         className,
       )}

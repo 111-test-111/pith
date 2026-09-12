@@ -102,7 +102,7 @@ export function SkillsSection() {
               <TabsTrigger
                 key={skill.filePath}
                 value={skill.filePath}
-                className="w-full justify-between gap-2 rounded-full px-3 py-2"
+                className="w-full justify-between gap-2 rounded-control px-3 py-2"
               >
                 <span className="truncate text-xs">{skill.name}</span>
                 <span
@@ -174,7 +174,7 @@ function SkillDetail({
             {skill.name}
           </span>
           {skill.packageName ? (
-            <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+            <span className="shrink-0 rounded-control bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
               {skill.packageName}
             </span>
           ) : null}

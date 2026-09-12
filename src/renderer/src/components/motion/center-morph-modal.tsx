@@ -50,7 +50,7 @@ export interface CenterMorphModalProps {
 }
 
 /**
- * A modal whose full-size surface unfolds outward from its exact center.
+ * A modal whose full-size surface opens outward from its exact center.
  * Supports controlled and uncontrolled state through composable primitives.
  */
 export function CenterMorphModal({
@@ -165,17 +165,14 @@ const FOCUSABLE_SELECTOR = [
   '[tabindex]:not([tabindex="-1"])',
 ].join(",");
 
-const CENTER_FOLDED_CLIP =
-  "inset(48% 48% 48% 48% round 30px)";
-const CENTER_OPEN_CLIP = "inset(0% 0% 0% 0% round 30px)";
-
-// Complex clip-path strings can snap when a spring resolves its final distance.
-// Keep the radius constant so the whole duration reads as surface unfolding,
-// rather than finishing early and spending its last frames rounding corners.
-const CENTER_UNFOLD_EASE = [0.2, 0, 0.2, 1] as const;
-const CENTER_UNFOLD_TRANSITION = {
-  duration: 0.43,
-  ease: CENTER_UNFOLD_EASE,
+// local patch (pi-app): animate the native surface as one piece. An inset(...
+// round ...) mask uses circular arcs even when the border is a squircle, and
+// removing that mask only at rest produces a visible last-frame shape change.
+// A small uniform scale keeps the border, child clipping and shadow identical
+// throughout entry/exit without per-frame layout or a second corner geometry.
+const CENTER_SURFACE_TRANSITION = {
+  duration: 0.22,
+  ease: EASE_OUT,
 } as const;
 
 function getFocusableElements(root: HTMLElement | null) {
@@ -282,11 +279,12 @@ export function CenterMorphModalContent({
                   tests/fixed-overlay-edge-sampling.test.tsx. */}
               <div
                 inert={!isPresent}
-                className="pointer-events-none fixed inset-4 z-[100] flex items-center justify-center overflow-y-auto drop-shadow-2xl"
+                className="pointer-events-none fixed inset-4 z-[100] flex items-center justify-center overflow-y-auto"
               >
-                {/* Drop-shadow reads the clipped child's alpha, so depth follows the
-                    unfolding silhouette without introducing another panel layer. */}
-                <div className="flex w-full flex-col items-center py-8">
+                {/* local patch (pi-app): the native panel owns its themed shadow;
+                    horizontal gutters keep a full-width panel's shadow inside
+                    the scroll viewport on narrow windows. */}
+                <div className="flex w-full flex-col items-center px-4 py-8">
                   <motion.div
                     ref={panelRef}
                     id={context.contentId}
@@ -295,34 +293,17 @@ export function CenterMorphModalContent({
                     aria-label={ariaLabel}
                     aria-describedby={ariaDescribedBy}
                     tabIndex={-1}
-                    initial={
-                      reduce
-                        ? { opacity: 0, clipPath: CENTER_OPEN_CLIP }
-                        : { opacity: 1, clipPath: CENTER_FOLDED_CLIP }
-                    }
-                    animate={{
-                      opacity: 1,
-                      clipPath: CENTER_OPEN_CLIP,
-                    }}
-                    exit={
-                      reduce
-                        ? {
-                            opacity: 0,
-                            clipPath: CENTER_OPEN_CLIP,
-                          }
-                        : {
-                            opacity: 1,
-                            clipPath: CENTER_FOLDED_CLIP,
-                          }
-                    }
+                    initial={{ opacity: 0, scale: reduce ? 1 : 0.96 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: reduce ? 1 : 0.98 }}
                     {...gate}
                     transition={
                       reduce
                         ? { duration: 0.14, ease: EASE_OUT }
-                        : CENTER_UNFOLD_TRANSITION
+                        : CENTER_SURFACE_TRANSITION
                     }
                     className={cn(
-                      "pointer-events-auto relative w-full max-w-[26rem] origin-center overflow-hidden rounded-[30px] border border-border bg-background will-change-[clip-path]",
+                      "pointer-events-auto relative w-full max-w-[26rem] origin-center overflow-hidden rounded-window border border-border bg-background shadow-overlay",
                       className,
                     )}
                   >
@@ -349,7 +330,8 @@ export function CenterMorphModalContent({
                           duration: reduce ? 0.12 : 0.2,
                           ease: EASE_OUT,
                         }}
-                        className="absolute right-4 top-4 inline-flex h-8 w-8 items-center justify-center rounded-full bg-foreground/[0.05] text-muted-foreground transition-colors hover:bg-foreground/[0.08] hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        // local patch (pi-app): the close control shares icon geometry.
+                        className="absolute right-4 top-4 inline-flex h-8 w-8 items-center justify-center rounded-icon bg-foreground/[0.05] text-muted-foreground transition-colors hover:bg-foreground/[0.08] hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       >
                         <X className="h-4 w-4" aria-hidden="true" />
                       </motion.button>

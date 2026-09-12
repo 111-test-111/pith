@@ -95,7 +95,8 @@ export function MorphingModal({
                 transition={SPRING_PANEL}
                 {...gate}
                 className={cn(
-                  "pointer-events-auto relative w-full max-w-sm overflow-hidden rounded-3xl border border-border bg-background shadow-2xl will-change-transform",
+                  // local patch (pi-app): dialogs share radius and themed elevation.
+                  "pointer-events-auto relative w-full max-w-sm overflow-hidden rounded-window border border-border bg-background shadow-overlay will-change-transform",
                   className,
                 )}
               >

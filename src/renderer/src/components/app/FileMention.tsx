@@ -45,7 +45,7 @@ export function FileMention({
   }, [onClose])
 
   return (
-    <div className="absolute bottom-full left-0 z-20 mb-2 w-full max-w-md overflow-hidden rounded-2xl border border-border bg-popover shadow-lg">
+    <div className="absolute bottom-full left-0 z-20 mb-2 w-full max-w-md overflow-hidden rounded-card border border-border bg-popover shadow-overlay">
       <div className="flex items-center gap-2 border-b border-border px-3 py-2 text-xs text-muted-foreground">
         <Search className="size-3.5" />
         {loading ? t('mention.searching') : t('mention.filesCount', { count: hits.length })}

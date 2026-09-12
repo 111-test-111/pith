@@ -43,7 +43,7 @@ export function AuthBridge({ prompt, notify, onReply, onCancel }: AuthBridgeProp
 
   return (
     <div className="fixed inset-0 z-[90] grid place-items-center bg-background/60 p-6 [backdrop-filter:blur(8px)]">
-      <div className="w-full max-w-sm rounded-2xl border border-border bg-card p-5 shadow-2xl">
+      <div className="w-full max-w-sm rounded-window border border-border bg-card p-5 shadow-overlay">
         <p className="flex items-center gap-2 text-sm font-medium text-foreground">
           {!prompt ? <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground" /> : null}
           {prompt ? prompt.message : t('auth.waiting')}

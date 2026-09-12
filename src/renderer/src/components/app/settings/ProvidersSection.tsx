@@ -156,7 +156,7 @@ export function ProvidersSection() {
           <p className="flex items-center gap-1.5 truncate text-sm font-medium text-foreground">
             <span className="truncate">{provider.name}</span>
             {provider.custom ? (
-              <span className="shrink-0 rounded-full bg-muted px-1.5 py-px text-[10px] font-medium text-muted-foreground">
+              <span className="shrink-0 rounded-control bg-muted px-1.5 py-px text-[10px] font-medium text-muted-foreground">
                 {t('settings.providerCustomBadge')}
               </span>
             ) : null}
@@ -302,7 +302,7 @@ export function ProvidersSection() {
                   onValueChange={(next) => void applyDefaultModel(next)}
                   className="w-auto"
                 >
-                  <SelectTrigger aria-label={t('settings.defaultModel')} className="h-8 w-auto max-w-56 rounded-full px-3 text-xs">
+                  <SelectTrigger aria-label={t('settings.defaultModel')} className="h-8 w-auto max-w-56 rounded-control px-3 text-xs">
                     <span className="truncate">
                       {currentDefault
                         ? `${currentDefault.providerName} / ${currentDefault.name}`

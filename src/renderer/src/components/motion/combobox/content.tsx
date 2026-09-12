@@ -143,7 +143,8 @@ export function ComboboxContent({
         } as CSSProperties
       }
       className={cn(
-        "fixed z-[9999] w-(--combobox-trigger-width) overflow-hidden rounded-xl border border-border bg-background text-popover-foreground outline-none will-change-[height,transform]",
+        // local patch (pi-app): floating lists use the shared surface geometry.
+        "fixed z-[9999] w-(--combobox-trigger-width) overflow-hidden rounded-card border border-border bg-background text-popover-foreground shadow-overlay outline-none will-change-[height,transform]",
         className,
       )}
     >

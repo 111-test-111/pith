@@ -15,7 +15,26 @@
  * ------------------------------------------------------------------------- */
 
 :root {
-  --radius: 0.625rem;
+  /* Geometry is independent of color, font size and theme. Both beUI's
+   * existing size classes and app-owned semantic classes use this scale.
+   * Squircles need more corner room than circular arcs at the same size. */
+  --app-corner-shape: squircle;
+  --app-radius-detail: 4px;
+  --app-radius-inner: 10px;
+  --app-radius-item: 14px;
+  --app-radius-control: var(--app-radius-item);
+  --app-radius-icon: var(--app-radius-item);
+  --app-radius-card: 20px;
+  --app-radius-window: 28px;
+  --app-radius-full: 9999px;
+  --radius: var(--app-radius-detail);
+
+  /* One elevation family for menus, previews and dialogs. Real borders and
+   * focus rings remain separate; no second hairline is hidden in the shadow. */
+  --app-elevation-contact: oklch(0.15 0.015 264 / 0.10);
+  --app-elevation-ambient: oklch(0.15 0.015 264 / 0.12);
+  --app-shadow-overlay: 0 2px 6px -2px var(--app-elevation-contact),
+    0 12px 32px -8px var(--app-elevation-ambient);
 
   /* Typefaces. The defaults below are what the app ships with; Settings →
    * Appearance overwrites them at runtime (inline style on <html>) through
@@ -72,6 +91,8 @@
 }
 
 .dark {
+  --app-elevation-contact: oklch(0 0 0 / 0.30);
+  --app-elevation-ambient: oklch(0 0 0 / 0.40);
   --background: oklch(0.168 0.012 264);
   --foreground: oklch(0.93 0.008 264);
   --card: oklch(0.208 0.014 264);
@@ -211,9 +232,48 @@
   --color-ring: var(--ring);
   --font-sans: var(--app-font-ui);
   --font-mono: var(--app-font-mono);
-  --radius-lg: var(--radius);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-sm: calc(var(--radius) - 4px);
+  --radius-xs: var(--app-radius-detail);
+  --radius-sm: var(--app-radius-detail);
+  --radius-md: var(--app-radius-inner);
+  --radius-lg: var(--app-radius-item);
+  --radius-xl: var(--app-radius-control);
+  --radius-2xl: var(--app-radius-card);
+  --radius-3xl: var(--app-radius-window);
+  --radius-4xl: var(--app-radius-window);
+  --radius-detail: var(--app-radius-detail);
+  --radius-inner: var(--app-radius-inner);
+  --radius-item: var(--app-radius-item);
+  --radius-control: var(--app-radius-control);
+  --radius-icon: var(--app-radius-icon);
+  --radius-card: var(--app-radius-card);
+  --radius-window: var(--app-radius-window);
+  --shadow-overlay: var(--app-shadow-overlay);
+}
+
+/* corner-shape does not inherit. Cover portals and pseudo-elements as well as
+ * the app root; unsupported engines retain the normal border-radius fallback.
+ * Keep this in base so explicit geometry utilities always win. */
+@layer base {
+  @supports (corner-shape: squircle) {
+    :where(*, *::before, *::after) {
+      corner-shape: var(--app-corner-shape);
+    }
+  }
+}
+
+/* Full means a real circle/capsule: switches, radio dots, avatars, activity
+ * indicators and ripples. Ordinary controls use rounded-control instead.
+ * As a utility this also handles before:/after: and other Tailwind variants. */
+@utility rounded-full {
+  border-radius: var(--app-radius-full);
+  corner-shape: round;
+}
+@utility corner-round {
+  corner-shape: round;
+}
+@utility rounded-inherit {
+  border-radius: inherit;
+  corner-shape: inherit;
 }
 
 html,

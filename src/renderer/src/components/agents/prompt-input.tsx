@@ -248,7 +248,8 @@ export function PromptInput({
               side="top"
               align="start"
               sideOffset={8}
-              radius={12}
+              // local patch (pi-app): the options surface consumes the theme scale.
+              radius="var(--app-radius-card)"
               className="w-56 p-1.5"
             >
               {actions.map((action) => (

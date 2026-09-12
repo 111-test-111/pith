@@ -565,7 +565,8 @@ function ResourceRow({
         ghost.setAttribute("aria-hidden", "true");
         ghost.className = cn(
           source.className,
-          "bg-background shadow-lg ring-1 ring-border",
+          // local patch (pi-app): the floating drag image shares themed elevation.
+          "bg-background shadow-overlay ring-1 ring-border",
         );
         ghost.style.position = "fixed";
         ghost.style.left = "0px";
@@ -687,7 +688,8 @@ function ResourceRow({
             side={menuSide}
             align="end"
             sideOffset={8}
-            radius={12}
+            // local patch (pi-app): resource menus consume the shared surface radius.
+            radius="var(--app-radius-card)"
             className="w-40 p-1.5"
           >
             <div data-sidebar-resource-menu={row.item.id}>{menu}</div>

@@ -347,7 +347,7 @@ export const TurnWrittenFiles = memo(function TurnWrittenFiles({
       {/* The portal survives every row hand-over. Close still unmounts it so an
           invisible exit animation cannot intercept the list's pointer events. */}
       {preview && (
-        <MorphPopoverContent side={preview.side} align="center" sideOffset={0} radius={12} instant>
+        <MorphPopoverContent side={preview.side} align="center" sideOffset={0} radius="var(--app-radius-card)" instant>
           <div
             className="bg-muted/80"
             // FileDiff owns the height cap; a short diff or the no-diff message

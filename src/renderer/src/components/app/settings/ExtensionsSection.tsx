@@ -115,7 +115,7 @@ export function ExtensionsSection() {
               <TabsTrigger
                 key={extension.id}
                 value={extension.id}
-                className="w-full justify-between gap-2 rounded-full px-3 py-2"
+                className="w-full justify-between gap-2 rounded-control px-3 py-2"
               >
                 <span className="truncate text-xs">{extension.name}</span>
                 <span
@@ -194,12 +194,12 @@ function ExtensionDetail({
             {extension.name}
           </span>
           {extension.version ? (
-            <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+            <span className="shrink-0 rounded-control bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
               v{extension.version}
             </span>
           ) : null}
           {extension.configuredVersion && extension.configuredVersion !== extension.version ? (
-            <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+            <span className="shrink-0 rounded-control bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
               {t('settings.extensionConfiguredVersion', { version: extension.configuredVersion })}
             </span>
           ) : null}

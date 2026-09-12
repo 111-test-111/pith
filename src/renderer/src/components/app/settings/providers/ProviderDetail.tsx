@@ -429,17 +429,17 @@ export function ProviderDetail({
                     <p className="flex items-center gap-1.5 truncate text-sm font-medium text-foreground">
                       <span className="truncate">{row.name || row.id || t('settings.modelDraft')}</span>
                       {row.source === 'draft' ? (
-                        <span className="shrink-0 rounded-full bg-amber-500/15 px-1.5 py-px text-[10px] font-medium text-amber-600 dark:text-amber-400">
+                        <span className="shrink-0 rounded-control bg-amber-500/15 px-1.5 py-px text-[10px] font-medium text-amber-600 dark:text-amber-400">
                           {t('settings.modelDraft')}
                         </span>
                       ) : null}
                       {row.source === 'custom' || row.source === 'both' ? (
-                        <span className="shrink-0 rounded-full bg-muted px-1.5 py-px text-[10px] font-medium text-muted-foreground">
+                        <span className="shrink-0 rounded-control bg-muted px-1.5 py-px text-[10px] font-medium text-muted-foreground">
                           {t('settings.modelCustom')}
                         </span>
                       ) : null}
                       {row.hasOverride ? (
-                        <span className="shrink-0 rounded-full bg-primary/10 px-1.5 py-px text-[10px] font-medium text-primary">
+                        <span className="shrink-0 rounded-control bg-primary/10 px-1.5 py-px text-[10px] font-medium text-primary">
                           {t('settings.modelEdited')}
                         </span>
                       ) : null}

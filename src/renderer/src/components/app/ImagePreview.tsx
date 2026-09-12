@@ -122,7 +122,7 @@ function ImagePreviewHost({
       }}
     >
       {/* Chromeless-ish panel: the frame is beUI's own surface (border, radius,
-          unfold), only its size is the viewer's. `pr-14` on the caption keeps it
+          motion), only its size is the viewer's. `pr-14` on the caption keeps it
           clear of the modal's own close control. */}
       <CenterMorphModalContent
         ariaLabel={request?.image.label || t('imagePreview.dialogLabel')}

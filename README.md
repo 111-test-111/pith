@@ -15,6 +15,8 @@ The desktop client for **pi-agent**: the **Pi SDK** kernel ([@earendil-works/pi-
 
 ## Features
 
+- **Continuous corners** — native Chromium squircles across controls, cards, conversation bubbles and floating surfaces, with a shared semantic radius scale and theme-aware overlay shadows. Switches, avatars, status dots and other circular affordances keep their true geometry. Dialog/popover animations preserve the native silhouette throughout entry and exit, including reduced-motion and instant-preview paths. `node scripts/check-corners.mjs` verifies the actual beUI components in isolated Electron without opening real sessions.
+
 - **Terminal panel** — real interactive login shells in the right sidebar, with compact beUI segment tabs distinct from the top-level underline tabs. An exited terminal page shows only its exit status and releases its emulator and scrollback. Opening Terminal creates one shell; new terminals use the current session's directory (home for projectless chats). Switching panes or collapsing the sidebar preserves running shells and scrollback; closing the last terminal closes its panel tab. The terminal follows the configured monospace font and light/dark background. Its dedicated ANSI palette preserves color meanings across all UI accents, with contrast-checked colors, selection and cursor. Supporting TUIs can query colors through OSC 10/11 and subscribe to live light/dark changes through mode 2031. xterm.js uses WebGL for the visible terminal, a 10,000-line scrollback, and smooth scrolling. Resizing retains the last rendered frame until the new canvas is painted, so dragging the sidebar does not flash blank. A separate Electron utility process hosts node-pty; batched output and parser acknowledgments bound the pipeline during heavy output. Close/reload/quit releases owned PTYs. `node scripts/check-terminal.mjs` verifies real shells, lifecycle, resizing and output performance in an isolated Electron profile after a build.
 
 - **Complete agent loop** — prompt → streaming text/thinking → tool calls (`read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`) → results → next turn, with abort and steering support. Sessions persist through pi's `SessionManager` (JSONL under `~/.pi/agent/sessions`).
@@ -36,6 +38,7 @@ npm install          # deps + electron binary (postinstall)
 npm run dev          # electron-vite dev (HMR)
 npm run typecheck    # tsc for main + renderer
 npm run build        # production build to out/
+node scripts/check-corners.mjs # native corner geometry, animations, themes and focus
 node scripts/check-session-search.mjs # search correctness + 1,000-session benchmark (after build)
 node scripts/check-session-persistence.mjs # session header + fork/delete/continue regression checks
 npm run preview      # run the built app

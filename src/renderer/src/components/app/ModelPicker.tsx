@@ -148,7 +148,7 @@ export function ModelPicker({
     >
       <SelectTrigger
         aria-label={t('model.choose')}
-        className="h-8 w-auto gap-1.5 rounded-full border-0 bg-transparent px-2.5 text-xs hover:bg-muted"
+        className="h-8 w-auto gap-1.5 rounded-control border-0 bg-transparent px-2.5 text-xs hover:bg-muted"
       >
         <span className="flex min-w-0 items-center gap-1.5 whitespace-nowrap">
           {current ? (

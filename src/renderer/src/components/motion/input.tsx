@@ -150,7 +150,8 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
           // instead of keeping the pill's fixed height and rounding, and its
           // vertical padding lives on the field so the <textarea> box itself
           // is exactly `rows` lines tall and clips at a line boundary.
-          multiline ? "rounded-2xl py-3" : "h-11 overflow-hidden rounded-full",
+          // local patch (pi-app): fields use the shared continuous control corner.
+          multiline ? "rounded-card py-3" : "h-11 overflow-hidden rounded-control",
           "border-border",
           focused && !hasError && "border-foreground/40 ring-2 ring-ring/40",
           hasError && "border-destructive ring-2 ring-destructive/25",

@@ -75,7 +75,8 @@ export function AgentProgress({
         {GRID_CELLS.map(({ id, delay }) => (
           <motion.span
             key={id}
-            className="rounded-[1px] bg-current"
+            // local patch (pi-app): micro decoration uses the shared radius token.
+            className="rounded-detail bg-current"
             animate={
               reduce
                 ? { opacity: [0.35, 0.8, 0.35] }

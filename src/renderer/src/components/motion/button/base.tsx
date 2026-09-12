@@ -53,11 +53,13 @@ const VARIANT_CLASS: Record<ButtonVariant, string> = {
     "border border-border bg-transparent text-foreground hover:bg-primary/5",
 };
 
+// local patch (pi-app): controls share the semantic squircle scale; full-round
+// is reserved for actual circles, including the ripple below.
 const SIZE_CLASS: Record<ButtonSize, string> = {
-  sm: "h-8 px-3 text-xs gap-1.5 rounded-full",
-  md: "h-10 px-5 text-sm gap-2 rounded-full",
-  lg: "h-12 px-6 text-base gap-2 rounded-full",
-  icon: "h-8 w-8 rounded-lg",
+  sm: "h-8 px-3 text-xs gap-1.5 rounded-control",
+  md: "h-10 px-5 text-sm gap-2 rounded-control",
+  lg: "h-12 px-6 text-base gap-2 rounded-control",
+  icon: "h-8 w-8 rounded-icon",
 };
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
@@ -111,6 +113,8 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
         className={cn(
           "inline-flex items-center justify-center font-medium select-none",
           "transition-colors",
+          // local patch (pi-app): keyboard rings follow the same native corners.
+          "outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
           "disabled:pointer-events-none disabled:opacity-50",
           ripple && "relative overflow-hidden",
           VARIANT_CLASS[variant],
@@ -120,7 +124,8 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
         {...rest}
       >
         {ripple && !reduce ? (
-          <span className="pointer-events-none absolute inset-0 overflow-hidden rounded-[inherit]">
+          // local patch (pi-app): inherit the corner shape as well as its radius.
+          <span className="pointer-events-none absolute inset-0 overflow-hidden rounded-inherit">
             <AnimatePresence>
               {ripples.map((r) => (
                 <motion.span
@@ -176,6 +181,8 @@ export const ButtonLink = forwardRef<HTMLAnchorElement, ButtonLinkProps>(
         className={cn(
           "inline-flex items-center justify-center font-medium select-none",
           "transition-colors",
+          // local patch (pi-app): links share the button's keyboard focus geometry.
+          "outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
           VARIANT_CLASS[variant],
           SIZE_CLASS[size],
           className,

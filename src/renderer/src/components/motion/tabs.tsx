@@ -151,7 +151,8 @@ export function TabsTrigger({
         <motion.span
           layoutId={layoutId}
           layout="position"
-          style={{ borderRadius: variant === "pill" ? 9999 : 8 }}
+          // local patch (pi-app): CSS owns radius and shape for both the moving
+          // indicator and its tab; inline numbers bypass the shared scale.
           className={cn(
             "absolute inset-0 bg-primary",
             radius,

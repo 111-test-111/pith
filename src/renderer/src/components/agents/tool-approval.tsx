@@ -1,4 +1,5 @@
 "use client";
+// local patch (pi-app): approval status badges use the semantic item radius.
 // beui.dev/components/agents/chat-app
 
 import {
@@ -182,7 +183,7 @@ export function ToolApproval({
             </div>
             <span
               className={cn(
-                "shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors",
+                "shrink-0 rounded-item border px-2 py-0.5 text-[11px] font-medium transition-colors",
                 getStatusBadgeClass(status),
               )}
             >

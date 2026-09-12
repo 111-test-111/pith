@@ -64,7 +64,7 @@ export function ToolsSection() {
           <TabsTrigger
             key={tool.name}
             value={tool.name}
-            className="w-full justify-between gap-2 rounded-full px-3 py-2"
+            className="w-full justify-between gap-2 rounded-control px-3 py-2"
           >
             <span className="flex min-w-0 items-center gap-2">
               <ToolIcon
@@ -115,17 +115,17 @@ function ToolDetail({ tool }: { tool: ToolInfoDTO }) {
           <code className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-xs font-semibold text-foreground">
             {tool.name}
           </code>
-          <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+          <span className="rounded-control bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
             {sourceLabel}
           </span>
           {tool.disabledByExtension ? (
-            <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+            <span className="rounded-control bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
               {t('settings.toolInactive')}
             </span>
           ) : (
             <span
               className={cn(
-                'rounded-full px-2 py-0.5 text-[11px] font-medium',
+                'rounded-control px-2 py-0.5 text-[11px] font-medium',
                 tool.active ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'
               )}
             >

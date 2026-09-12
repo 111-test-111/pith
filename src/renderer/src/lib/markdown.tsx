@@ -245,7 +245,7 @@ const components: MarkdownComponents = {
   code({ children }) {
     // Only inline code reaches this override — fenced code is consumed by `pre`.
     return (
-      <code className="rounded-[5px] bg-muted px-1.5 py-0.5 font-mono text-[0.85em] text-foreground">
+      <code className="rounded-detail bg-muted px-1.5 py-0.5 font-mono text-[0.85em] text-foreground">
         {children}
       </code>
     )

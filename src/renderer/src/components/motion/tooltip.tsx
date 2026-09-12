@@ -281,7 +281,8 @@ export function Tooltip({
                     exit="exit"
                     style={{ transformOrigin: transformOrigin[side] }}
                     className={cn(
-                      "block whitespace-nowrap rounded-lg border border-border bg-background px-2.5 py-1 text-xs font-medium text-foreground shadow-lg",
+                      // local patch (pi-app): use the shared floating-surface shadow.
+                      "block whitespace-nowrap rounded-lg border border-border bg-background px-2.5 py-1 text-xs font-medium text-foreground shadow-overlay",
                       className,
                     )}
                   >

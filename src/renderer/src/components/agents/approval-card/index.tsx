@@ -1,4 +1,5 @@
 "use client";
+// local patch (pi-app): approval actions and status badges use semantic radii.
 // beui.dev/components/agents/chat-app
 
 import {
@@ -327,7 +328,7 @@ export function ApprovalCard({
             ) : (
               <span
                 className={cn(
-                  "shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors",
+                  "shrink-0 rounded-item border px-2 py-0.5 text-[11px] font-medium transition-colors",
                   getStatusBadgeClass(status),
                 )}
               >
@@ -389,7 +390,7 @@ export function ApprovalCard({
                   aria-label="Previous question"
                   disabled={busy || currentStep === 0}
                   onClick={() => setStep(currentStep - 1)}
-                  className="rounded-full"
+                  className="rounded-control"
                 >
                   <ArrowLeft className="size-4" />
                 </Button>
@@ -406,7 +407,7 @@ export function ApprovalCard({
                   }
                   disabled={busy || !isAnswered(currentAnswer)}
                   onClick={continueQuestion}
-                  className="ml-auto rounded-full"
+                  className="ml-auto rounded-control"
                 >
                   {busy ? (
                     <LoaderCircle className={cn("size-4", !reduce && "animate-spin")} />
@@ -426,7 +427,7 @@ export function ApprovalCard({
                   size="sm"
                   disabled={busy}
                   onClick={onApprove}
-                  className="rounded-full"
+                  className="rounded-control"
                 >
                   {approveLabel}
                 </Button>
@@ -436,7 +437,7 @@ export function ApprovalCard({
                     size="sm"
                     disabled={busy}
                     onClick={onRequestChanges}
-                    className="rounded-full"
+                    className="rounded-control"
                   >
                     Request changes
                   </Button>
@@ -447,7 +448,7 @@ export function ApprovalCard({
                     size="sm"
                     disabled={busy}
                     onClick={onReject}
-                    className="rounded-full text-muted-foreground hover:text-rose-600 dark:hover:text-rose-400"
+                    className="rounded-control text-muted-foreground hover:text-rose-600 dark:hover:text-rose-400"
                   >
                     Reject
                   </Button>

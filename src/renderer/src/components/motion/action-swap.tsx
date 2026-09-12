@@ -150,11 +150,12 @@ const VARIANT_CLASS: Record<ActionSwapButtonVariant, string> = {
   ghost: "text-muted-foreground hover:bg-primary/5 hover:text-foreground",
 };
 
+// local patch (pi-app): match the shared Button's continuous control geometry.
 const SIZE_CLASS: Record<ActionSwapButtonSize, string> = {
-  sm: "h-8 gap-1.5 rounded-full px-3 text-xs",
-  md: "h-10 gap-2 rounded-full px-4 text-sm",
-  lg: "h-12 gap-2.5 rounded-full px-5 text-base",
-  icon: "h-10 w-10 rounded-full",
+  sm: "h-8 gap-1.5 rounded-control px-3 text-xs",
+  md: "h-10 gap-2 rounded-control px-4 text-sm",
+  lg: "h-12 gap-2.5 rounded-control px-5 text-base",
+  icon: "h-10 w-10 rounded-icon",
 };
 
 export function ActionSwapText({

@@ -1,4 +1,5 @@
 "use client";
+// local patch (pi-app): citation counts use item geometry; source avatars stay round.
 
 import { BookOpenText, ChevronDown, ExternalLink, Globe2 } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
@@ -260,7 +261,7 @@ export function Citations({
       >
         <BookOpenText className="size-4" />
         <span className="font-medium">{title}</span>
-        <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-semibold tabular-nums">
+        <span className="rounded-item bg-muted px-1.5 py-0.5 text-[10px] font-semibold tabular-nums">
           {citations.length}
         </span>
         <motion.span

@@ -1,4 +1,5 @@
 "use client";
+// local patch (pi-app): the expand action shares the control radius.
 // beui.dev/components/agents/chat-app
 
 import { ChevronDown } from "lucide-react";
@@ -177,7 +178,8 @@ function bubbleSurfaceClass(
   align: MessageBubbleAlign,
 ) {
   return cn(
-    "pointer-events-none absolute inset-0 -z-10 rounded-[inherit]",
+    // local patch (pi-app): layered backgrounds inherit shape as well as radius.
+    "pointer-events-none absolute inset-0 -z-10 rounded-inherit",
     align === "end" ? "origin-bottom-right" : "origin-bottom-left",
     variant === "solid" && "bg-foreground",
     variant === "soft" && "bg-muted",
@@ -359,7 +361,7 @@ export function MessageBubbleCollapsible({
         aria-controls={contentId}
         onClick={() => setOpen(!currentOpen)}
         className={cn(
-          "mt-2 inline-flex h-7 items-center gap-1 rounded-full px-2 text-xs font-medium text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
+          "mt-2 inline-flex h-7 items-center gap-1 rounded-control px-2 text-xs font-medium text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
           triggerClassName,
         )}
       >

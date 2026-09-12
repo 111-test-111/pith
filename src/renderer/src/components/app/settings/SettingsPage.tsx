@@ -129,7 +129,7 @@ export function SettingsPage({ open, onBack, ...sectionProps }: SettingsPageProp
                 <TabsTrigger
                   key={entry.id}
                   value={entry.id}
-                  className="w-full justify-start gap-2.5 rounded-full px-3.5 py-2.5"
+                  className="w-full justify-start gap-2.5 rounded-control px-3.5 py-2.5"
                 >
                   {entry.icon}
                   {t(entry.labelKey)}

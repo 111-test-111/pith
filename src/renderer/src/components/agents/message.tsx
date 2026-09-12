@@ -1,4 +1,5 @@
 "use client";
+// local patch (pi-app): separator labels use item geometry; avatars/dots stay round.
 // beui.dev/components/agents/chat-app
 
 import { motion, useReducedMotion } from "motion/react";
@@ -229,7 +230,7 @@ export function MessageMarker({ className, ...props }: MessageMarkerProps) {
     <div
       data-slot="message-marker"
       className={cn(
-        "mx-auto flex w-fit max-w-[88%] items-center gap-1.5 rounded-full bg-muted/70 px-2.5 py-1 text-center text-xs text-muted-foreground",
+        "mx-auto flex w-fit max-w-[88%] items-center gap-1.5 rounded-item bg-muted/70 px-2.5 py-1 text-center text-xs text-muted-foreground",
         className,
       )}
       {...props}

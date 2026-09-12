@@ -461,7 +461,7 @@ export function ModelEditorDialog({
           </p>
         </div>
         {target.kind === 'override' ? (
-          <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+          <span className="shrink-0 rounded-control bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
             {t('settings.overrideBadge')}
           </span>
         ) : null}
