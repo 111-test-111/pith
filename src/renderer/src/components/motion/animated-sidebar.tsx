@@ -493,6 +493,10 @@ export interface AnimatedSidebarProps
   collapsible?: SidebarCollapsible;
   ariaLabel?: string;
   panelClassName?: string;
+  // local patch (pi-app): the rail is dragged to resize the sidebar, and the
+  // width must follow the pointer exactly. The morph spring would otherwise
+  // trail the cursor by a frame or two and keep springing after the release.
+  resizing?: boolean;
 }
 
 export const AnimatedSidebar = forwardRef<HTMLElement, AnimatedSidebarProps>(
@@ -506,6 +510,8 @@ export const AnimatedSidebar = forwardRef<HTMLElement, AnimatedSidebarProps>(
       className,
       panelClassName,
       style,
+      // local patch (pi-app): see AnimatedSidebarProps.resizing.
+      resizing = false,
       ...props
     },
     forwardedRef,
@@ -544,7 +550,9 @@ export const AnimatedSidebar = forwardRef<HTMLElement, AnimatedSidebarProps>(
         data-side={side}
         animate={{ width }}
         transition={
-          context.reduce ? { duration: 0 } : SIDEBAR_MORPH_TRANSITION
+          // local patch (pi-app): a dragged width is a direct manipulation —
+          // no spring, no easing, the frame is the measurement.
+          context.reduce || resizing ? { duration: 0 } : SIDEBAR_MORPH_TRANSITION
         }
         style={style}
         className={cn(

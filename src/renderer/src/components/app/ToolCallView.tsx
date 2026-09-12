@@ -66,6 +66,15 @@ function statusOf(result: ToolResultMsg | undefined, run: ToolRun | undefined) {
 }
 
 /**
+ * A call the turn never got to execute (Stop, a provider error): its settled run
+ * carries no start time (PiStore.settleToolRuns), so it has no output and no
+ * diff, and the row must not fall back to a success placeholder like "Wrote x".
+ */
+function neverRan(status: ReturnType<typeof statusOf>, run: ToolRun | undefined): boolean {
+  return status === 'error' && run?.startedAt === 0
+}
+
+/**
  * The unified patch a file-writing result reported (`edit`, or a `write` that
  * chose to). The SDK returns BOTH a display-oriented `diff` — line numbers baked
  * into every line — and a real unified `patch`; only the latter is what
@@ -101,8 +110,10 @@ function outputProps(status: ReturnType<typeof statusOf>) {
 }
 
 /** Live marker or run duration; the label itself is localized by the caller. */
-function metaOf(result: ToolResultMsg | undefined, run: ToolRun | undefined): { live: boolean; seconds?: number } {
-  if (run?.startedAt && (run.status === 'running' || !result)) return { live: true }
+function metaOf(run: ToolRun | undefined): { live: boolean; seconds?: number } {
+  // Only an executing run is live: a settled one whose result message has not
+  // arrived yet (or never will — the turn was stopped) reports its duration.
+  if (run?.status === 'running') return { live: true }
   if (run?.startedAt && run.endedAt) {
     return { live: false, seconds: Math.max(0.1, (run.endedAt - run.startedAt) / 1000) }
   }
@@ -168,7 +179,10 @@ export const ToolCallView = memo(function ToolCallView({ call, result, run, cwd 
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
   const status = statusOf(result, run)
-  const metaInfo = metaOf(result, run)
+  /** Body text when the call produced nothing of its own. */
+  const placeholder = (fallback: string) =>
+    neverRan(status, run) ? t('tool.notRun') : fallback
+  const metaInfo = metaOf(run)
   const meta = metaInfo.live
     ? t('tool.live')
     : metaInfo.seconds !== undefined
@@ -209,7 +223,8 @@ export const ToolCallView = memo(function ToolCallView({ call, result, run, cwd 
           contentClassName={WRAP_OUTPUT}
         >
           {renderOutput(
-            (status === 'running' ? output.slice(-4000) : output) || (status === 'running' ? '' : t('tool.noOutput'))
+            (status === 'running' ? output.slice(-4000) : output) ||
+              (status === 'running' ? '' : placeholder(t('tool.noOutput')))
           )}
         </ToolResult>
       )
@@ -242,7 +257,7 @@ export const ToolCallView = memo(function ToolCallView({ call, result, run, cwd 
           collapseOnComplete={false}
           contentClassName={WRAP_OUTPUT}
         >
-          {renderOutput(output || (status === 'running' ? t('tool.editing') : t('tool.noDiff')))}
+          {renderOutput(output || (status === 'running' ? t('tool.editing') : placeholder(t('tool.noDiff'))))}
         </ToolResult>
       )
     }
@@ -280,7 +295,9 @@ export const ToolCallView = memo(function ToolCallView({ call, result, run, cwd 
           contentClassName={WRAP_OUTPUT}
         >
           {renderOutput(
-            status === 'running' ? t('tool.writingFile') : output || t('tool.wrote', { file: basename(path) })
+            status === 'running'
+              ? t('tool.writingFile')
+              : output || placeholder(t('tool.wrote', { file: basename(path) }))
           )}
         </ToolResult>
       )
@@ -302,7 +319,9 @@ export const ToolCallView = memo(function ToolCallView({ call, result, run, cwd 
           collapseOnComplete={false}
           contentClassName={WRAP_OUTPUT}
         >
-          {renderOutput(status === 'running' ? t('tool.reading') : output.slice(0, 4000) || t('tool.emptyFile'))}
+          {renderOutput(
+            status === 'running' ? t('tool.reading') : output.slice(0, 4000) || placeholder(t('tool.emptyFile'))
+          )}
         </ToolResult>
       )
     }
@@ -331,7 +350,9 @@ export const ToolCallView = memo(function ToolCallView({ call, result, run, cwd 
           contentClassName={WRAP_OUTPUT}
         >
           {renderOutput(
-            status === 'running' ? t('tool.runningPlaceholder') : output.slice(0, 4000) || t('tool.noOutput')
+            status === 'running'
+              ? t('tool.runningPlaceholder')
+              : output.slice(0, 4000) || placeholder(t('tool.noOutput'))
           )}
         </ToolResult>
       )

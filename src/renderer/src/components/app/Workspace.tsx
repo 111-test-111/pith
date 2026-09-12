@@ -1,15 +1,28 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore
+} from 'react'
+import {
+  ArrowDown,
+  ArrowUp,
   ChevronDown,
   Folder,
   FolderInput,
   FolderOpen,
   LoaderCircle,
+  type LucideIcon,
   MessageSquareDashed,
   MessageSquarePlus,
   PanelLeft,
   PanelRight,
   Pencil,
+  Pin,
+  PinOff,
   Settings as SettingsIcon,
   Trash2
 } from 'lucide-react'
@@ -25,11 +38,11 @@ import {
   AnimatedSidebarMenu,
   AnimatedSidebarMenuButton,
   AnimatedSidebarMenuItem,
-  AnimatedSidebarRail,
   AnimatedSidebarTrigger
 } from '@/components/motion/animated-sidebar'
 import { ThemeButton } from './ThemeButton'
 import { Button } from '@/components/motion/button'
+import { Tooltip } from '@/components/motion/tooltip'
 import { basename } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { extractUserParts } from '@/lib/user-message'
@@ -52,7 +65,28 @@ import { Composer } from './Composer'
 import { EditMessageDialog, type EditMessagePayload } from './EditMessageDialog'
 import { SettingsPage } from './settings/SettingsPage'
 import { SidebarPanel, type SidebarTabKind } from './SidebarPanel'
+import { SessionSearch, SessionSearchTrigger } from './SessionSearch'
+import {
+  CHATS_GROUP, PINNED_GROUP, canReorderSession, forgetSidebarSessions,
+  loadSidebarPreferences, orderSessions, reorderSession, saveSidebarPreferences,
+  toggleSessionPin, type SessionSidebarPreferences
+} from '@/lib/session-sidebar'
+import { PanelResizeHandle } from './PanelResizeHandle'
+import {
+  CHAT_MIN,
+  DEFAULT_PANEL_LAYOUT,
+  LEFT_PANEL_MAX,
+  LEFT_PANEL_MIN,
+  RIGHT_PANEL_MAX,
+  RIGHT_PANEL_MIN,
+  clampPanelWidth,
+  fitPanelLayout,
+  loadPanelLayout,
+  savePanelLayout,
+  type PanelLayout
+} from '@/lib/panel-layout'
 import { SideChatStore } from '@/state/side-chat-store'
+import { TerminalStore } from '@/state/terminal-store'
 import { AuthBridge } from './AuthBridge'
 import { ConfirmDialog } from './ConfirmDialog'
 import type { AuthNotifyDTO, AuthPromptDTO } from '../../../../shared/types'
@@ -75,36 +109,43 @@ const SESSION_PAGE_SIZE = 5
 const moreRowId = (cwd: string) => `more:${cwd}`
 
 /** Menu row shown inside beUI's AISidebar row menu — mirrors the vendored
- * ResourceMenuAction styling with destructive tokens. */
-function ResourceDeleteAction({ label, onSelect }: { label: string; onSelect: () => void }) {
+ * ResourceMenuAction styling, in the given tone. Every extra row the app adds
+ * to that menu (pin, move, rename, delete) goes through here so they all read
+ * alike; the ghost variant's muted text is overridden by `text-foreground`
+ * (`cn` resolves the conflict in the caller's favor). */
+function SidebarRowMenuAction({ icon: Icon, label, tone = 'default', onSelect }: {
+  icon: LucideIcon
+  label: string
+  tone?: 'default' | 'destructive'
+  onSelect: () => void
+}) {
   return (
-    <button
-      type="button"
+    <Button
+      variant="ghost"
+      size="sm"
       onClick={onSelect}
-      className="flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left text-xs text-destructive outline-none transition-colors hover:bg-destructive/10 focus-visible:bg-destructive/10 focus-visible:ring-2 focus-visible:ring-ring"
+      className={cn(
+        'flex h-8 w-full items-center justify-start gap-2 rounded-lg px-2.5 text-left text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring',
+        tone === 'destructive'
+          ? 'text-destructive hover:bg-destructive/10 focus-visible:bg-destructive/10'
+          : 'text-foreground hover:bg-muted focus-visible:bg-muted'
+      )}
     >
-      <Trash2 aria-hidden="true" className="size-3.5 shrink-0" />
+      <Icon aria-hidden="true" className="size-3.5 shrink-0" />
       <span className="min-w-0 truncate">{label}</span>
-    </button>
-  )
-}
-
-/** Rename row for the same menu; starts the sidebar's inline label editor. */
-function ResourceRenameAction({ label, onSelect }: { label: string; onSelect: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onSelect}
-      className="flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left text-xs text-foreground outline-none transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
-    >
-      <Pencil aria-hidden="true" className="size-3.5 shrink-0" />
-      <span className="min-w-0 truncate">{label}</span>
-    </button>
+    </Button>
   )
 }
 
 export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
   const { t } = useI18n()
+  const [sidebarPreferences, setSidebarPreferences] = useState(loadSidebarPreferences)
+  const [sidebarSaveError, setSidebarSaveError] = useState(false)
+  const persistSidebarPreferences = useCallback((next: SessionSidebarPreferences) => {
+    saveSidebarPreferences(next)
+    setSidebarPreferences(next)
+    setSidebarSaveError(false)
+  }, [])
   // Shell slice only: its identity is stable across streaming deltas, so the
   // sidebar/header/composer don't re-render while ChatView streams.
   const shell = useSyncExternalStore(store.subscribe, store.getShell)
@@ -113,15 +154,51 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
   const [folders, setFolders] = useState<string[]>([])
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [sidePanelOpen, setSidePanelOpen] = useState(false)
+  /** Left session sidebar open state — controlled so the shell knows how much
+   * room the panels actually take, and so the resize strip can toggle it. */
+  const [sidebarOpen, setSidebarOpen] = useState(true)
+  /**
+   * Panel widths the user has SET (dragged), persisted. Kept apart from what is
+   * on screen: a narrow window fits the panels down, and widening it again must
+   * bring back the widths the user chose rather than ratchet them narrower for
+   * good.
+   */
+  const [panelPreference, setPanelPreference] = useState(loadPanelLayout)
+  /** Shell width the fit is computed against (panel widths share its budget). */
+  const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth)
+  /** Which panel edge is being dragged right now (widths are direct then). */
+  const [resizing, setResizing] = useState<'left' | 'right' | null>(null)
+  /** Resize strips that are hovered or dragging, so the panel border they sit
+   * on can light up. */
+  const [activeEdge, setActiveEdge] = useState<{ left: boolean; right: boolean }>({
+    left: false,
+    right: false
+  })
+  /** Width captured when a drag starts, so each move is start + total travel. */
+  const dragStartWidth = useRef(0)
+  /** The pair a drag is currently showing — committed to state on release. */
+  const dragPair = useRef<PanelLayout | null>(null)
+  /** The two panel elements that carry their own width; written directly while
+   * a drag runs (see `applyPanelWidth`), and from the layout effect otherwise. */
+  const leftPanelRef = useRef<HTMLElement | null>(null)
+  const rightPanelRef = useRef<HTMLElement | null>(null)
   /** Panes hosted by the right rail; state lives here so closing and
    * re-opening the rail restores the same tabs. */
   const [sidePanelTabs, setSidePanelTabs] = useState<SidebarTabKind[]>([])
   const [sidePanelTab, setSidePanelTab] = useState<SidebarTabKind | null>(null)
+  const [terminals] = useState(() => new TerminalStore())
+  useEffect(() => () => terminals.dispose(), [terminals])
+  const newTerminal = useCallback(() => {
+    const current = store.getShell()
+    terminals.create(current.projectless ? null : current.cwd)
+  }, [store, terminals])
   /** The side chat's exchanges — created with its tab, dropped with it. */
   const [sideChat, setSideChat] = useState<SideChatStore | null>(null)
   /** Composer draft of the side chat; kept here so switching panel tabs (or
    * collapsing the rail) does not discard what was typed. */
   const [sideChatDraft, setSideChatDraft] = useState('')
+  /** The turn the review tab should show — set by a transcript Review click. */
+  const [reviewTurnId, setReviewTurnId] = useState<number | null>(null)
   /** The live side chat, for handlers that must not depend on its identity. */
   const sideChatRef = useRef<SideChatStore | null>(null)
   const [authPrompt, setAuthPrompt] = useState<AuthPromptDTO | null>(null)
@@ -450,6 +527,10 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
     setSideChat(created)
   }, [store])
 
+  /** Stable so a shell re-render (a panel resize) never re-renders the
+   * transcript: `ChatView` is memoized on its props. */
+  const dismissChatError = useCallback(() => store.clearError(), [store])
+
   /** Destroy the side chat: stop its answer and drop every exchange. */
   const closeSideChat = useCallback(() => {
     const current = sideChatRef.current
@@ -481,8 +562,9 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
       setSidePanelTab(kind)
       // A side chat is born with its tab.
       if (kind === 'chat') openSideChat()
+      if (kind === 'terminal' && terminals.getSnapshot().tabs.length === 0) newTerminal()
     },
-    [openSideChat]
+    [openSideChat, terminals, newTerminal]
   )
 
   /** Close a pane; the neighbour to its left takes over as the active tab. */
@@ -497,11 +579,153 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
       )
       // Closing the side-chat tab destroys the thread — nothing outlives it.
       if (kind === 'chat') closeSideChat()
+      if (kind === 'terminal') terminals.dispose()
+      // An empty rail has nothing to show (and its picker is one button away in
+      // the header), so closing the last tab folds it away.
+      if (next.length === 0) setSidePanelOpen(false)
     },
-    [sidePanelTabs, closeSideChat]
+    [sidePanelTabs, closeSideChat, terminals]
   )
 
-  /** New session in `cwd` (defaults to the active folder). */
+  useEffect(() => {
+    const onResize = () => setViewportWidth(window.innerWidth)
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
+
+  /**
+   * What is actually on screen: the three columns share one budget, so when the
+   * window shrinks (or a panel opens) the shortfall comes out of the panels —
+   * never out of the transcript, which keeps `CHAT_MIN` at every size.
+   */
+  const panelLayout = useMemo(
+    () =>
+      fitPanelLayout(panelPreference, viewportWidth, {
+        left: sidebarOpen,
+        right: sidePanelOpen
+      }),
+    [panelPreference, viewportWidth, sidebarOpen, sidePanelOpen]
+  )
+
+  // Only a drag changes the preference, so this is a per-gesture write, never a
+  // per-pointermove one.
+  useEffect(() => {
+    savePanelLayout(panelPreference)
+  }, [panelPreference])
+
+  /** A panel's own element, re-queried whenever the cached one was unmounted
+   * (the rail folds, a session switch rebuilds the sidebar). */
+  const panelElement = useCallback((side: 'left' | 'right') => {
+    const cached = side === 'left' ? leftPanelRef.current : rightPanelRef.current
+    if (cached?.isConnected) return cached
+    const found = document.querySelector<HTMLElement>(
+      side === 'left' ? 'aside[data-slot="sidebar"]' : '[data-panel="right"]'
+    )
+    if (side === 'left') leftPanelRef.current = found
+    else rightPanelRef.current = found
+    return found
+  }, [])
+
+  /**
+   * Publish one panel's width as a CSS variable ON THAT PANEL.
+   *
+   * Deliberately not on a shared ancestor: a custom property is inherited, so
+   * writing it higher up invalidates the computed style of every element below —
+   * ~25k of them in a long session, once per pointermove, which measured as 0.8s
+   * of style recalc for a single drag. On the panel itself the invalidation stops
+   * at that panel's own subtree, and the drag costs no React render at all: the
+   * two panels, and only they, reflow.
+   */
+  const applyPanelWidth = useCallback(
+    (side: 'left' | 'right', px: number) => {
+      const element = panelElement(side)
+      element?.style.setProperty(side === 'left' ? '--sidebar-width' : '--panel-right', `${px}px`)
+    },
+    [panelElement]
+  )
+
+  // Commit path: what is on screen is what the panels carry.
+  useLayoutEffect(() => {
+    applyPanelWidth('left', panelLayout.left)
+    applyPanelWidth('right', panelLayout.right)
+  }, [panelLayout, applyPanelWidth])
+
+
+  /**
+   * One panel's drag: the width it started at plus the pointer's total travel,
+   * clamped by its own bounds — and, when the pair would no longer fit beside
+   * the transcript, taken out of the OTHER panel (down to its minimum) rather
+   * than out of the chat.
+   *
+   * Nothing here goes through React: the pair is written straight to the CSS
+   * variables, so the two panels and the transcript reflow while the rest of the
+   * shell is untouched. `dragPair` carries the result to the release, which
+   * commits it as the user's new preference.
+   */
+  const resizePanels = useCallback(
+    (side: 'left' | 'right', delta: number) => {
+      const base = panelLayout
+      const budget = Math.max(0, viewportWidth - CHAT_MIN)
+      const min = side === 'left' ? LEFT_PANEL_MIN : RIGHT_PANEL_MIN
+      const max = side === 'left' ? LEFT_PANEL_MAX : RIGHT_PANEL_MAX
+      const value = Math.round(Math.min(Math.max(dragStartWidth.current + delta, min), max))
+      const next: PanelLayout = { ...base, [side]: value }
+
+      // The other panel gives way only while both are on screen.
+      const siblingVisible = side === 'left' ? sidePanelOpen : sidebarOpen
+      if (siblingVisible) {
+        const siblingMin = side === 'left' ? RIGHT_PANEL_MIN : LEFT_PANEL_MIN
+        const room = budget - value
+        const sibling = Math.max(siblingMin, Math.min(base[side === 'left' ? 'right' : 'left'], room))
+        if (side === 'left') next.right = Math.round(sibling)
+        else next.left = Math.round(sibling)
+      }
+
+      dragPair.current = next
+      applyPanelWidth('left', next.left)
+      applyPanelWidth('right', next.right)
+    },
+    [panelLayout, sidebarOpen, sidePanelOpen, viewportWidth, applyPanelWidth]
+  )
+
+  /** Light up the border line a resize strip sits on (nothing else is drawn). */
+  const setEdgeActive = useCallback((edge: 'left' | 'right', active: boolean) => {
+    setActiveEdge((current) => (current[edge] === active ? current : { ...current, [edge]: active }))
+  }, [])
+  const onLeftEdgeActive = useCallback(
+    (active: boolean) => setEdgeActive('left', active),
+    [setEdgeActive]
+  )
+  const onRightEdgeActive = useCallback(
+    (active: boolean) => setEdgeActive('right', active),
+    [setEdgeActive]
+  )
+
+  /** Release: make what the drag showed the user's preference, so the rendered
+   * layout is exactly what is on screen (and nothing jumps). */
+  const commitPanelDrag = useCallback(() => {
+    setResizing(null)
+    const pair = dragPair.current
+    dragPair.current = null
+    if (pair) setPanelPreference(pair)
+  }, [])
+
+  /**
+   * Open the review tab on one turn: the transcript's changed-files card hands
+   * over its turn's first assistant message, which is the identity the pane
+   * groups its own turns by. Reviewing is something the user asked to see, so
+   * the rail opens with it.
+   */
+  const openReview = useCallback(
+    (turnId: number) => {
+      setReviewTurnId(turnId)
+      openSidePanelTab('review')
+      setSidePanelOpen(true)
+    },
+    [openSidePanelTab]
+  )
+
+  /** Top-level action starts a chat without a project; project + passes cwd. */
   const newSession = useCallback(
     async (cwd?: string) => {
       const request = ++navigationRequest.current
@@ -542,13 +766,16 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
           ? await window.pi.deleteSession(target.id)
           : await window.pi.deleteFolder(target.id)
       if (snapshot && request === navigationRequest.current) store.applySnapshot(snapshot)
+      const removed = new Set(target.kind === 'session' ? [target.id] : sessions.filter((s) => s.cwd === target.id).map((s) => s.path))
+      try { persistSidebarPreferences(forgetSidebarSessions(sidebarPreferences, removed)) }
+      catch { setSidebarSaveError(true) }
     } catch (error) {
       console.error('delete failed', error)
     } finally {
       void refreshSessions()
       void refreshFolders()
     }
-  }, [pendingDelete, store, refreshSessions, refreshFolders])
+  }, [pendingDelete, store, refreshSessions, refreshFolders, sessions, sidebarPreferences, persistSidebarPreferences])
 
   const deleteSessionCount = useMemo(
     () => (pendingDelete?.kind === 'folder' ? sessions.filter((s) => s.cwd === pendingDelete.id).length : 0),
@@ -577,6 +804,7 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
   const folderGroups = useMemo(() => {
     const byFolder = new Map<string, SessionSummaryDTO[]>()
     for (const session of sessions) {
+      if (session.projectless) continue
       const list = byFolder.get(session.cwd) ?? []
       list.push(session)
       byFolder.set(session.cwd, list)
@@ -594,37 +822,33 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
       .map((cwd) => ({ cwd, sessions: byFolder.get(cwd) ?? [] }))
   }, [sessions, folders, shell.cwd])
 
-  const sessionItems: SidebarResource[] = useMemo(
-    () =>
-      folderGroups.map((group) => {
-        const limit = folderLimits[group.cwd] ?? SESSION_PAGE_SIZE
-        const visible = group.sessions.slice(0, limit)
-        const remaining = group.sessions.length - visible.length
-        return {
-          id: `folder:${group.cwd}`,
-          label: basename(group.cwd),
-          kind: 'folder' as const,
-          children: [
-            ...visible.map((session) => ({
-              id: session.path,
-              label: session.label ?? t('workspace.newChat'),
-              kind: 'file' as const
-            })),
-            ...(remaining > 0
-              ? [
-                  {
-                    id: moreRowId(group.cwd),
-                    label: t('workspace.showMore'),
-                    kind: 'file' as const
-                  }
-                ]
-              : [])
-          ]
-        }
-      }),
-    [folderGroups, folderLimits, t]
-  )
-  const folderKey = folderGroups.map((group) => group.cwd).join('|')
+  const sessionsByPath = useMemo(() => new Map(sessions.map((session) => [session.path, session])), [sessions])
+  const pinnedPaths = useMemo(() => new Set(sidebarPreferences.pinned), [sidebarPreferences.pinned])
+  const sidebarGroups = useMemo(() => {
+    const ranks = new Map(sidebarPreferences.order.map((path, index) => [path, index]))
+    const pinned = orderSessions(sessions.filter((session) => pinnedPaths.has(session.path)), sidebarPreferences.pinned)
+    const chats = orderSessions(sessions.filter((session) => session.projectless && !pinnedPaths.has(session.path)), ranks)
+    return [
+      ...(pinned.length ? [{ id: PINNED_GROUP, label: t('workspace.pinnedSessions'), sessions: pinned }] : []),
+      ...folderGroups.map((group) => ({
+        id: `folder:${group.cwd}`, label: basename(group.cwd),
+        sessions: orderSessions(group.sessions.filter((session) => !pinnedPaths.has(session.path)), ranks)
+      })),
+      { id: CHATS_GROUP, label: t('workspace.projectlessSessions'), sessions: chats }
+    ]
+  }, [sessions, pinnedPaths, sidebarPreferences, folderGroups, t])
+  const sessionItems: SidebarResource[] = useMemo(() => sidebarGroups.map((group) => {
+    const visible = group.sessions.slice(0, folderLimits[group.id] ?? SESSION_PAGE_SIZE)
+    return {
+      id: group.id, label: group.label, kind: 'folder',
+      children: [
+        ...visible.map((session) => ({ id: session.path, label: session.label ?? t('workspace.newChat'), kind: 'file' as const })),
+        ...(visible.length < group.sessions.length
+          ? [{ id: moreRowId(group.id), label: t('workspace.showMore'), kind: 'file' as const }] : [])
+      ]
+    }
+  }), [sidebarGroups, folderLimits, t])
+  const folderKey = sidebarGroups.map((group) => group.id).join('|')
   /** Session paths whose live SDK session is currently streaming, so the
    * sidebar row shows the running spinner instead of the file glyph. The
    * visible session is included from the shell slice so the spinner appears
@@ -639,8 +863,20 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
   }, [liveSessionPaths, sessions, shell.isStreaming, shell.sessionPath])
 
   return (
-    <ChatApp className="relative h-full rounded-none border-0">
-      <AnimatedSidebar ariaLabel={t('workspace.sessions')} collapsible="offcanvas" className="min-h-0" panelClassName="h-full bg-background">
+    <SessionSearch sessions={sessions} activePath={shell.sessionPath ?? null} runningPaths={runningPaths} onOpen={openSession}>
+    <ChatApp
+      className="relative h-full rounded-none border-0"
+      sidebarWidth={`${panelLayout.left}px`}
+      open={sidebarOpen}
+      onOpenChange={setSidebarOpen}
+    >
+      <AnimatedSidebar
+        ariaLabel={t('workspace.sessions')}
+        collapsible="offcanvas"
+        resizing={resizing === 'left'}
+        className="min-h-0"
+        panelClassName={cn('h-full bg-background', activeEdge.left && 'border-primary')}
+      >
         <AnimatedSidebarContent className="gap-4 overflow-hidden px-2 py-4">
           <AnimatedSidebarGroup className="shrink-0 px-1 py-0">
             <AnimatedSidebarGroupContent>
@@ -668,9 +904,13 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
           </AnimatedSidebarGroup>
 
           <AnimatedSidebarGroup className="min-h-0 flex-1 px-1 py-0">
-            <AnimatedSidebarGroupLabel className="mb-1 h-8 px-2 text-xs font-medium normal-case tracking-normal">
-              {t('workspace.sessions')}
-            </AnimatedSidebarGroupLabel>
+            <div className="mb-1 flex h-8 shrink-0 items-center justify-between pr-1">
+              <AnimatedSidebarGroupLabel className="flex h-8 items-center px-2 text-xs font-medium normal-case tracking-normal">
+                {t('workspace.sessions')}
+              </AnimatedSidebarGroupLabel>
+              <SessionSearchTrigger />
+            </div>
+            {sidebarSaveError ? <p role="alert" className="px-2 pb-2 text-xs text-destructive">{t('workspace.sidebarSaveError')}</p> : null}
             <AnimatedSidebarGroupContent className="relative min-h-0 flex-1 overflow-hidden">
               <div
                 className={[
@@ -680,7 +920,8 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
                   // no row menu — hover only shifts the text color.
                   '[&_[role=treeitem]:has(span[data-more-row])]:hover:bg-transparent',
                   '[&_[role=treeitem]:has(span[data-more-row])]:hover:text-primary',
-                  '[&_[role=treeitem]:has(span[data-more-row])>div:last-child]:!hidden'
+                  '[&_[role=treeitem]:has(span[data-more-row])>div:last-child]:!hidden',
+                  '[&_[role=treeitem]:has(span[data-session-section])>div:last-child]:!hidden'
                 ].join(' ')}
                 onClickCapture={(event) => {
                   // A click landing on an expanded folder row collapses it
@@ -688,7 +929,7 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
                   // reveal limit so the next expand starts from the first page.
                   const row = (event.target as HTMLElement).closest?.('[role=treeitem][aria-expanded]')
                   if (row?.getAttribute('aria-expanded') !== 'true') return
-                  const cwd = row.querySelector('[data-folder-cwd]')?.getAttribute('data-folder-cwd')
+                  const cwd = row.querySelector('[data-sidebar-group]')?.getAttribute('data-sidebar-group')
                   if (!cwd) return
                   setFolderLimits((current) => {
                     if (!(cwd in current)) return current
@@ -702,8 +943,12 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
                   key={folderKey}
                   items={sessionItems}
                   allowNesting={false}
+                  canDrag={(item) => sessionsByPath.has(item.id)}
+                  canMove={(move) => canReorderSession(move, sessionsByPath, pinnedPaths)}
+                  onMove={(move) => persistSidebarPreferences(reorderSession(sidebarPreferences, sessionsByPath, move))}
+                  onMoveError={() => setSidebarSaveError(true)}
                   activeId={shell.sessionPath ?? null}
-                  defaultExpandedIds={folderGroups.map((group) => `folder:${group.cwd}`)}
+                  defaultExpandedIds={sidebarGroups.map((group) => group.id)}
                   ariaLabel={t('workspace.sessionsAria')}
                   onActiveChange={(id) => {
                     if (id.startsWith('more:')) {
@@ -714,9 +959,8 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
                       }))
                       return
                     }
-                    if (id.startsWith('folder:')) return
-                    const session = sessions.find((s) => s.path === id)
-                    void openSession(id, session?.cwd)
+                    const session = sessionsByPath.get(id)
+                    if (session) void openSession(id, session.cwd)
                   }}
                   renderIcon={(item) => {
                     if (item.id.startsWith('more:')) {
@@ -726,13 +970,16 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
                         </span>
                       )
                     }
-                    // Folder rows carry their cwd so collapse clicks (captured
-                    // above) can reset the reveal limit. The glyph follows the
+                    if (item.id === PINNED_GROUP || item.id === CHATS_GROUP) {
+                      const Icon = item.id === PINNED_GROUP ? Pin : MessageSquareDashed
+                      return <span data-session-section data-sidebar-group={item.id} className="grid place-items-center"><Icon className="size-4" /></span>
+                    }
+                    // Group identity lets collapse clicks reset the reveal limit. The glyph follows the
                     // row's own `aria-expanded` (the row is `group/resource`),
                     // since renderIcon only receives the item, not its state.
                     if (item.kind === 'folder') {
                       return (
-                        <span data-folder-cwd={item.id.slice('folder:'.length)} className="grid place-items-center">
+                        <span data-sidebar-group={item.id} className="grid place-items-center">
                           <Folder className="size-4 group-aria-expanded/resource:hidden" />
                           <FolderOpen className="hidden size-4 group-aria-expanded/resource:block" />
                         </span>
@@ -751,29 +998,36 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
                   renderActions={(item) => {
                     // Only project (folder) rows get the shortcut; a session row
                     // would just duplicate "new chat in its own project".
-                    if (item.kind !== 'folder') return null
+                    if (!item.id.startsWith('folder:')) return null
                     const cwd = item.id.slice('folder:'.length)
                     return (
-                      <button
-                        type="button"
-                        aria-label={t('workspace.newChatInFolder', { label: item.label })}
-                        title={t('workspace.newChatInFolder', { label: item.label })}
-                        onClick={(event) => {
-                          // Keep the row's expand/select click from firing too.
-                          event.stopPropagation()
-                          void newSession(cwd)
-                        }}
-                        className="absolute right-11 top-1/2 z-10 grid size-7 -translate-y-1/2 place-items-center rounded-lg bg-background text-muted-foreground opacity-0 shadow-sm ring-1 ring-border/60 outline-none transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring group-hover/resource:opacity-100 group-data-[menu-open=true]/resource:opacity-100"
+                      <Tooltip
+                        content={t('workspace.newChatInFolder', { label: item.label })}
+                        wrapperClassName="absolute right-11 top-1/2 z-10 -translate-y-1/2"
                       >
-                        <MessageSquarePlus className="size-3.5" />
-                      </button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          aria-label={t('workspace.newChatInFolder', { label: item.label })}
+                          onClick={(event) => {
+                            // Keep the row's expand/select click from firing too.
+                            event.stopPropagation()
+                            void newSession(cwd)
+                          }}
+                          className="grid size-7 place-items-center rounded-lg bg-background text-muted-foreground opacity-0 shadow-sm ring-1 ring-border/60 outline-none transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring group-hover/resource:opacity-100 group-data-[menu-open=true]/resource:opacity-100"
+                        >
+                          <MessageSquarePlus className="size-3.5" />
+                        </Button>
+                      </Tooltip>
                     )
                   }}
                   renderMenu={(item, controls) =>
-                    item.id.startsWith('more:') ? (
+                    item.id.startsWith('more:') || item.id.startsWith('section:') ? (
                       <span className="hidden" />
                     ) : item.kind === 'folder' ? (
-                      <ResourceDeleteAction
+                      <SidebarRowMenuAction
+                        icon={Trash2}
+                        tone="destructive"
                         label={t('workspace.deleteProject')}
                         onSelect={() => {
                           controls.close()
@@ -786,17 +1040,26 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
                       />
                     ) : (
                       <>
-                        <ResourceRenameAction
-                          label={t('workspace.renameSession')}
-                          onSelect={() => controls.rename()}
+                        <SidebarRowMenuAction
+                          icon={pinnedPaths.has(item.id) ? PinOff : Pin}
+                          label={t(pinnedPaths.has(item.id) ? 'workspace.unpinSession' : 'workspace.pinSession')}
+                          onSelect={() => {
+                            controls.close()
+                            try { persistSidebarPreferences(toggleSessionPin(sidebarPreferences, item.id)) }
+                            catch { setSidebarSaveError(true) }
+                          }}
                         />
-                        <ResourceDeleteAction
-                          label={t('workspace.deleteSession')}
+                        {controls.moves.up ? <SidebarRowMenuAction icon={ArrowUp} label={t('workspace.moveSessionUp')}
+                          onSelect={() => { controls.close(); controls.moves.up?.() }} /> : null}
+                        {controls.moves.down ? <SidebarRowMenuAction icon={ArrowDown} label={t('workspace.moveSessionDown')}
+                          onSelect={() => { controls.close(); controls.moves.down?.() }} /> : null}
+                        <SidebarRowMenuAction icon={Pencil} label={t('workspace.renameSession')}
+                          onSelect={() => controls.rename()} />
+                        <SidebarRowMenuAction icon={Trash2} tone="destructive" label={t('workspace.deleteSession')}
                           onSelect={() => {
                             controls.close()
                             setPendingDelete({ kind: 'session', id: item.id, label: item.label })
-                          }}
-                        />
+                          }} />
                       </>
                     )
                   }
@@ -818,8 +1081,25 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
             </AnimatedSidebarGroupContent>
           </AnimatedSidebarGroup>
         </AnimatedSidebarContent>
-        <AnimatedSidebarRail />
       </AnimatedSidebar>
+
+      {/* The resize strip replaces the vendored rail: it lives outside the
+          sidebar (whose panel clips its own content), drags the width, and
+          toggles the sidebar on a press that never dragged. */}
+      {sidebarOpen ? (
+        <PanelResizeHandle
+          grow="right"
+          label={t('workspace.resizeSessions')}
+          onResizeStart={() => {
+            dragStartWidth.current = panelLayout.left
+            setResizing('left')
+          }}
+          onResize={(delta) => resizePanels('left', delta)}
+          onResizeEnd={commitPanelDrag}
+          onToggle={() => setSidebarOpen((open) => !open)}
+          onActiveChange={onLeftEdgeActive}
+        />
+      ) : null}
 
       <AnimatedSidebarInset className="min-h-0 bg-background">
         <header className="flex h-12 shrink-0 items-center justify-between gap-3 border-b border-border px-3">
@@ -831,7 +1111,7 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
               <p className="shrink-0 truncate text-sm font-medium text-foreground">
                 {currentModel ? currentModel.name : t('workspace.noModel')}
               </p>
-              {shell.cwd ? (
+              {shell.cwd && !shell.projectless ? (
                 <>
                   <span aria-hidden="true" className="shrink-0 text-xs text-muted-foreground/50">
                     ·
@@ -855,7 +1135,6 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
               variant="ghost"
               size="icon"
               aria-label={t('workspace.sidebar')}
-              title={t('workspace.sidebar')}
               aria-pressed={sidePanelOpen}
               onClick={() => setSidePanelOpen((open) => !open)}
               className={cn(sidePanelOpen && 'bg-primary/5 text-foreground')}
@@ -870,10 +1149,11 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
             <ChatView
               store={store}
               scrollResetKey={scrollResetKey}
-              onDismissError={() => store.clearError()}
+              onDismissError={dismissChatError}
               onResend={handleResend}
               onEditMessage={handleEditMessage}
               onFork={handleFork}
+              onReview={openReview}
             />
 
             <Composer
@@ -894,14 +1174,36 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
             />
           </div>
 
+          {sidePanelOpen ? (
+            <PanelResizeHandle
+              grow="left"
+              label={t('workspace.resizePanel')}
+              onResizeStart={() => {
+                dragStartWidth.current = panelLayout.right
+                setResizing('right')
+              }}
+              onResize={(delta) => resizePanels('right', delta)}
+              onResizeEnd={commitPanelDrag}
+              onActiveChange={onRightEdgeActive}
+            />
+          ) : null}
+
           <SidebarPanel
             open={sidePanelOpen}
+            width={panelLayout.right}
+            resizing={resizing === 'right'}
+            edgeActive={activeEdge.right}
             tabs={sidePanelTabs}
             activeTab={sidePanelTab}
             onSelectTab={setSidePanelTab}
             onOpenTab={openSidePanelTab}
             onCloseTab={closeSidePanelTab}
             pane={{
+              terminals,
+              onNewTerminal: newTerminal,
+              onTerminalsEmpty: () => closeSidePanelTab('terminal'),
+              store,
+              reviewTurnId,
               sideChat,
               sideChatDraft,
               onSideChatDraftChange: setSideChatDraft,
@@ -965,5 +1267,6 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
         onCancel={(providerId) => void window.pi.cancelLogin(providerId)}
       />
     </ChatApp>
+    </SessionSearch>
   )
 }

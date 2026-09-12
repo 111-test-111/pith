@@ -1,5 +1,5 @@
 import { PithIcon } from './PithIcon'
-import { useMemo, useSyncExternalStore } from 'react'
+import { memo, useMemo, useSyncExternalStore } from 'react'
 import { AlertTriangle, RotateCcw, X } from 'lucide-react'
 import { MessageGroup } from '@/components/agents/message'
 import { MessageScroller } from '@/components/agents/message-scroller'
@@ -82,13 +82,14 @@ function noticeText(notice: Notice, t: ReturnType<typeof useI18n>['t']): string 
  * that must see every streaming delta — so the rest of the Workspace tree can
  * subscribe to the cheaper shell slice instead.
  */
-export function ChatView({
+export const ChatView = memo(function ChatView({
   store,
   scrollResetKey = 0,
   onDismissError,
   onResend,
   onEditMessage,
-  onFork
+  onFork,
+  onReview
 }: {
   store: PiStore
   /** Changes when a resend/retry lands, forcing the transcript back to the
@@ -104,6 +105,9 @@ export function ChatView({
   onEditMessage: (message: UserMsg) => void
   /** Fork the session at an assistant message; opens the fork. */
   onFork: (message: AssistantMsg) => void
+  /** Open the review tab on a turn — the changed-files card's Review action.
+   * The id is the turn's first assistant message timestamp. */
+  onReview: (turnId: number) => void
 }) {
   const { t } = useI18n()
   const state: PiState = useSyncExternalStore(store.subscribe, store.getState)
@@ -256,6 +260,7 @@ export function ChatView({
         cwd={state.cwd}
         toolResults={toolResults}
         toolRuns={state.toolRuns}
+        onReview={onReview}
       />
     )
   }
@@ -322,7 +327,7 @@ export function ChatView({
       </MessageGroup>
     </MessageScroller>
   )
-}
+})
 
 function EmptyState() {
   const { t } = useI18n()

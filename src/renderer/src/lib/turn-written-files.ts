@@ -1,6 +1,7 @@
-import type { AssistantMsg, ToolCallContent, ToolResultMsg } from '../../../shared/types'
+import type { AssistantMsg, ChatMessage, ToolCallContent, ToolResultMsg } from '../../../shared/types'
 import { countDiffChanges, synthesizeWritePatch } from './diff'
 import { relativize, resolveFromCwd } from './tool-path'
+import { extractUserDisplay } from './user-message'
 
 /**
  * The files one assistant turn wrote — the data behind the transcript's
@@ -152,4 +153,80 @@ export function sumWrittenFileStats(
     removed += file.removed ?? 0
   }
   return added || removed ? { added, removed } : null
+}
+
+/**
+ * One turn of the review tab: every file the turn changed, plus what identifies
+ * it in the transcript so the tab can open on the turn the user came from.
+ */
+export interface ReviewTurn {
+  /**
+   * The turn's first assistant message timestamp — the same identity the
+   * transcript's AssistantGroup passes to its "Review" action, so a click there
+   * selects the very same turn here. (`buildTurns` keys a turn by its first
+   * assistant message, so the two derivations agree by construction.)
+   */
+  id: number
+  /** The user message that opened the turn, as the switcher's label. */
+  prompt: string | null
+  /** When the turn's last round landed — newest turn wins the initial selection. */
+  timestamp: number
+  files: WrittenFile[]
+}
+
+/** First line of a prompt, cut on a word boundary — the switcher's label. */
+function promptLabel(text: string, limit = 60): string | null {
+  const normalized = text.replace(/\s+/g, ' ').trim()
+  if (!normalized) return null
+  if (normalized.length <= limit) return normalized
+  const cut = normalized.slice(0, limit)
+  const boundary = cut.lastIndexOf(' ')
+  return `${cut.slice(0, boundary > limit * 0.6 ? boundary : limit).trim()}…`
+}
+
+/**
+ * Every turn of a session that changed files, oldest first — the review tab's
+ * model. Turns are folded exactly the way the transcript folds them (the
+ * assistant rounds between two user messages are one turn, and `toolResult`
+ * entries sit inside it rather than breaking it), and a turn with no changed
+ * file is left out so the switcher only walks reviews that have something to
+ * show.
+ */
+export function extractReviewTurns(
+  messages: readonly ChatMessage[],
+  cwd?: string | null
+): ReviewTurn[] {
+  const toolResults = new Map<string, ToolResultMsg>()
+  for (const message of messages) {
+    if (message.role === 'toolResult') toolResults.set(message.toolCallId, message)
+  }
+
+  const turns: ReviewTurn[] = []
+  let rounds: AssistantMsg[] = []
+  let prompt: string | null = null
+  const closeTurn = () => {
+    if (rounds.length === 0) return
+    const files = extractTurnWrittenFiles(rounds, toolResults, cwd)
+    if (files.length > 0) {
+      turns.push({
+        id: rounds[0].timestamp,
+        prompt,
+        timestamp: rounds[rounds.length - 1].timestamp,
+        files
+      })
+    }
+    rounds = []
+  }
+
+  for (const message of messages) {
+    if (message.role === 'toolResult') continue
+    if (message.role === 'assistant') {
+      rounds.push(message)
+      continue
+    }
+    closeTurn()
+    prompt = message.role === 'user' ? promptLabel(extractUserDisplay(message.content).text) : null
+  }
+  closeTurn()
+  return turns
 }

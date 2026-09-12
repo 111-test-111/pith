@@ -1,10 +1,11 @@
-import { useMemo, useSyncExternalStore } from 'react'
+import { memo, useMemo, useSyncExternalStore } from 'react'
 import { Link2, MessageCirclePlus } from 'lucide-react'
 import { Button } from '@/components/motion/button'
 import { Loader } from '@/components/motion/loader'
 import { MessageGroup, Message, MessageBubble, MessageBubbleContent } from '@/components/agents/message'
 import { MessageScroller } from '@/components/agents/message-scroller'
 import { PromptInput } from '@/components/agents/prompt-input'
+import { Tooltip } from '@/components/motion/tooltip'
 import { Markdown } from '@/lib/markdown'
 import { StreamingResponse } from '@/components/agents/streaming-response'
 import { formatTime } from '@/lib/format'
@@ -33,7 +34,7 @@ interface SideChatPaneProps {
  * product, minus the session-level affordances (edit/resend/fork) that belong to
  * the real conversation.
  */
-export function SideChatPane({
+export const SideChatPane = memo(function SideChatPane({
   store,
   draft,
   onDraftChange,
@@ -98,22 +99,23 @@ export function SideChatPane({
           // then; when it can act it is an ordinary ghost icon button — quiet at
           // rest, highlighted on hover (the variant's own hover styling).
           leadingAction={
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label={t('sidebar.chatRebind')}
-              title={t('sidebar.chatRebind')}
-              disabled={onCurrentSession}
-              onClick={onRebind}
-            >
-              <Link2 aria-hidden="true" className="size-4" />
-            </Button>
+            <Tooltip content={t('sidebar.chatRebind')}>
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label={t('sidebar.chatRebind')}
+                disabled={onCurrentSession}
+                onClick={onRebind}
+              >
+                <Link2 aria-hidden="true" className="size-4" />
+              </Button>
+            </Tooltip>
           }
         />
       </div>
     </div>
   )
-}
+})
 
 /** One question and its answer, as two transcript-style rows. */
 function SideChatExchangeRow({ exchange, spaced }: { exchange: SideChatExchange; spaced: boolean }) {

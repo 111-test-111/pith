@@ -38,6 +38,7 @@ import { TurnStatus } from './TurnStatus'
 import { TurnWrittenFiles } from './TurnWrittenFiles'
 import { CopyAction, MessageAction, MessageActions } from './MessageActions'
 import { PreviewThumb } from './ImagePreview'
+import { LabelTooltip } from './LabelTooltip'
 
 /** `anywhere` (unlike `break-words`) shrinks intrinsic min-content so long
  * unbroken strings wrap instead of widening the conversation column. */
@@ -93,16 +94,16 @@ export const UserItem = memo(function UserItem({
             {files.length ? (
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {files.map((path) => (
-                  <button
-                    key={path}
-                    type="button"
-                    onClick={() => void window.pi.openPath(path)}
-                    className="inline-flex max-w-64 items-center gap-1.5 rounded-lg bg-background/60 px-2 py-1 text-xs text-foreground/90 transition-colors hover:bg-background"
-                    title={path}
-                  >
-                    <FileText className="size-3.5 shrink-0" />
-                    <span className="truncate">{basename(path)}</span>
-                  </button>
+                  <LabelTooltip key={path} content={path} wrap>
+                    <button
+                      type="button"
+                      onClick={() => void window.pi.openPath(path)}
+                      className="inline-flex max-w-64 items-center gap-1.5 rounded-lg bg-background/60 px-2 py-1 text-xs text-foreground/90 transition-colors hover:bg-background"
+                    >
+                      <FileText className="size-3.5 shrink-0" />
+                      <span className="truncate">{basename(path)}</span>
+                    </button>
+                  </LabelTooltip>
                 ))}
               </div>
             ) : null}
@@ -511,6 +512,8 @@ export interface AssistantGroupProps extends ToolContext {
   actionsAlwaysVisible?: boolean
   /** Session working directory, used to resolve the turn's written files. */
   cwd?: string | null
+  /** Opens the review tab on this turn (its first assistant message id). */
+  onReview?: (turnId: number) => void
 }
 
 /**
@@ -530,7 +533,8 @@ function assistantGroupPropsEqual(prev: AssistantGroupProps, next: AssistantGrou
     prev.onResend !== next.onResend ||
     prev.onFork !== next.onFork ||
     prev.showActions !== next.showActions ||
-    prev.actionsAlwaysVisible !== next.actionsAlwaysVisible
+    prev.actionsAlwaysVisible !== next.actionsAlwaysVisible ||
+    prev.onReview !== next.onReview
   ) {
     return false
   }
@@ -592,6 +596,7 @@ export const AssistantGroup = memo(function AssistantGroup({
   showActions = false,
   actionsAlwaysVisible = false,
   cwd,
+  onReview,
   toolResults,
   toolRuns
 }: AssistantGroupProps) {
@@ -660,7 +665,12 @@ export const AssistantGroup = memo(function AssistantGroup({
    * reveals it.
    */
   const writtenFilesNode =
-    !live && writtenFiles.length > 0 ? <TurnWrittenFiles files={writtenFiles} /> : null
+    !live && writtenFiles.length > 0 ? (
+      <TurnWrittenFiles
+        files={writtenFiles}
+        onReview={onReview ? () => onReview(messages[0].timestamp) : undefined}
+      />
+    ) : null
   const writtenFilesInFooter = showTurnActions && Boolean(writtenFilesNode)
 
   if (!hasParts) return null

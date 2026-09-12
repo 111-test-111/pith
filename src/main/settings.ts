@@ -2,7 +2,20 @@ import { app } from 'electron'
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 
+/** Persisted geometry of the main window. `width`/`height` are the window's
+ * normal (restored) size, so maximizing or going full screen does not clobber
+ * the size to restore back to. */
+export interface WindowBounds {
+  x?: number
+  y?: number
+  width: number
+  height: number
+  maximized: boolean
+  fullscreen: boolean
+}
+
 export interface AppSettings {
+  /** Null means a projectless chat; its internal cwd is never a project. */
   cwd: string | null
   /** Folders opened through the app, most recent first. Sessions of every
    * folder stay visible in the sidebar; `cwd` is the active one. */
@@ -14,9 +27,18 @@ export interface AppSettings {
    * extension's resolved path so the preference survives a package update.
    * Kept app-local — the pi CLI's own package config is left untouched. */
   disabledExtensions: string[]
+  /** Last window size/position plus its maximized/full-screen state; null until
+   * the first window has ever been sized. */
+  windowBounds: WindowBounds | null
 }
 
-const defaults: AppSettings = { cwd: null, folders: [], contextFiles: true, disabledExtensions: [] }
+const defaults: AppSettings = {
+  cwd: null,
+  folders: [],
+  contextFiles: true,
+  disabledExtensions: [],
+  windowBounds: null
+}
 
 function settingsPath(): string {
   return join(app.getPath('userData'), 'app-settings.json')

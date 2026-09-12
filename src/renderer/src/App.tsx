@@ -42,12 +42,10 @@ function AppInner() {
       try {
         const info = await window.pi.appInfo()
         if (cancelled) return
-        if (info.cwd) {
-          const snapshot: SessionSnapshotDTO = await window.pi.init(info.cwd)
-          if (cancelled) return
-          store.applySnapshot(snapshot)
-          setHasCwd(true)
-        }
+        const snapshot: SessionSnapshotDTO = await window.pi.init(info.cwd ?? undefined)
+        if (cancelled) return
+        store.applySnapshot(snapshot)
+        setHasCwd(true)
       } catch (error) {
         if (!cancelled) {
           setInitError(error instanceof Error ? error.message : String(error))

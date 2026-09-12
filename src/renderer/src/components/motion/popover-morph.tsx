@@ -53,6 +53,10 @@ export interface MorphPopoverProps {
   /** Uncontrolled initial open state. */
   defaultOpen?: boolean;
   onOpenChange?: (open: boolean) => void;
+  // local patch (pi-app): multiple file rows share one persistent preview;
+  // switch its anchor/accessible label without remounting the portal.
+  anchor?: HTMLElement | null;
+  contentId?: string;
   className?: string;
 }
 
@@ -66,6 +70,8 @@ export function MorphPopover({
   open: controlledOpen,
   defaultOpen = false,
   onOpenChange,
+  anchor,
+  contentId,
   className,
 }: MorphPopoverProps) {
   const baseId = useId();
@@ -93,8 +99,8 @@ export function MorphPopover({
   // real trigger registers, and stands in again if that one unmounts. Both are
   // state, so a trigger arriving while the panel is open re-anchors it.
   const anchorRef = useMemo<React.MutableRefObject<HTMLElement | null>>(
-    () => ({ current: trigger ?? root }),
-    [root, trigger],
+    () => ({ current: anchor ?? trigger ?? root }),
+    [anchor, root, trigger],
   );
 
   // The panel is a `role="dialog"` and goes inert the moment it closes, so
@@ -105,14 +111,16 @@ export function MorphPopover({
   // registered, the root anchor stands in only if it can actually hold focus;
   // there is nowhere better than where the keyboard already is, so leave it.
   const close = useCallback(() => {
-    setOpen(false);
     const focused = document.activeElement;
     const inPanel =
       focused instanceof HTMLElement && contentRef.current?.contains(focused);
-    if (!inPanel) return;
-    const restore = trigger ?? (root && root.tabIndex >= 0 ? root : null);
-    restore?.focus();
-  }, [root, setOpen, trigger]);
+    // local patch (pi-app): return keyboard focus to the current shared anchor.
+    const restore = anchor ?? trigger ?? (root && root.tabIndex >= 0 ? root : null);
+    // local patch (pi-app): focus before dismissal, so a focus-to-preview handler
+    // cannot reopen the panel in response to restoring keyboard focus on Escape.
+    if (inPanel) restore?.focus();
+    setOpen(false);
+  }, [anchor, root, setOpen, trigger]);
 
   useEffect(() => {
     if (!open) return;
@@ -139,13 +147,14 @@ export function MorphPopover({
       open,
       setOpen,
       toggle,
-      triggerId: `${baseId}-trigger`,
-      contentId: `${baseId}-content`,
+      // local patch (pi-app): shared rows supply their own trigger/content IDs.
+      triggerId: anchor?.id || `${baseId}-trigger`,
+      contentId: contentId ?? `${baseId}-content`,
       triggerRef: anchorRef,
       registerTrigger: setTrigger,
       contentRef,
     }),
-    [open, setOpen, toggle, baseId, anchorRef],
+    [open, setOpen, toggle, baseId, anchorRef, anchor, contentId],
   );
 
   return (

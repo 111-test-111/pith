@@ -133,7 +133,6 @@ export function CopyConfigDialog({
                 ) : null}
                 <button
                   type="button"
-                  title={`${model.providerName} · ${model.id}`}
                   onClick={() => onPick(model)}
                   className="flex w-full items-center justify-between gap-3 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-muted"
                 >

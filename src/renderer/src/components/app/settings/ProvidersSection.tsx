@@ -8,6 +8,7 @@ import {
   SelectItem,
   SelectTrigger
 } from '@/components/motion/select'
+import { Tooltip } from '@/components/motion/tooltip'
 import { EASE_OUT } from '@/lib/ease'
 import { useI18n } from '@/i18n'
 import type {
@@ -223,18 +224,19 @@ export function ProvidersSection() {
             )}
           </Button>
         ) : null}
-        <Button
-          variant="ghost"
-          size="icon"
-          aria-label={t('settings.viewProvider', { name: provider.name })}
-          title={t('settings.viewProvider', { name: provider.name })}
-          onClick={(event) => {
-            event.stopPropagation()
-            setSelection(provider.id)
-          }}
-        >
-          <ChevronRight className="size-4" />
-        </Button>
+        <Tooltip content={t('settings.viewProvider', { name: provider.name })}>
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label={t('settings.viewProvider', { name: provider.name })}
+            onClick={(event) => {
+              event.stopPropagation()
+              setSelection(provider.id)
+            }}
+          >
+            <ChevronRight className="size-4" />
+          </Button>
+        </Tooltip>
       </div>
     </div>
   )

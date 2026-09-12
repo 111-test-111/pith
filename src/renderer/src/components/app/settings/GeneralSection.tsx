@@ -52,7 +52,6 @@ export function GeneralSection() {
             variant="ghost"
             size="sm"
             aria-label={t('settings.openProjectPage')}
-            title={t('settings.openProjectPage')}
             onClick={() => void window.pi.openExternal('https://github.com/earendil-works/pi-coding-agent')}
           >
             {t('settings.openProjectPage')}

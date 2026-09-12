@@ -21,12 +21,15 @@ import {
 } from "react";
 import {
   type AgentCodeLanguage,
+  type AgentCodeTokenLines,
   AgentCodeLine,
   useAgentCodeTokens,
 } from "@/components/agents/agent-code";
 import { AgentDisclosure } from "@/components/agents/agent-disclosure";
 import { SPRING_PRESS, SPRING_SWAP } from "@/lib/ease";
 import { cn } from "@/lib/utils";
+// local patch (pi-app): bounded row DOM for the scrollable hover preview.
+import { DIFF_ROW_HEIGHT, useDiffWindow } from "@/lib/hooks/use-diff-window";
 
 export type FileDiffStatus = "streaming" | "complete";
 export type FileDiffLineType = "added" | "removed" | "context";
@@ -64,10 +67,24 @@ export interface FileDiffProps {
    * for hosts that supply their own chrome (the turn's written-files hover
    * preview) — the body also drops the header's indent so it fills the panel. */
   headerless?: boolean;
+  /** local patch (pi-app): `null` removes the body's height cap, so the diff
+   * grows with the page and one scrollbar (with sticky file headers) drives the
+   * whole view — the review tab's case — instead of a scroll region per file. */
+  maxHeightOverride?: number | null;
+  /** local patch (pi-app): classes for the body's own frame. The review tab
+   * squares its corners (`rounded-none`) so the diff sits flush under the file
+   * header it belongs to; the vendored default is a rounded card. */
+  bodyClassName?: string;
   /** local patch (pi-app): skip Shiki for this diff. The preview panel turns it
    * off: highlighting a few hundred rows lands ~10-95ms AFTER the panel mounts,
    * which reads as the content settling twice on every hover hand-over. */
   highlight?: boolean;
+  // local patch (pi-app): the preview snapshots prewarmed tokens, avoiding an
+  // asynchronous plain-to-coloured repaint while the pointer switches files.
+  tokenLines?: AgentCodeTokenLines | null;
+  // local patch (pi-app): only mount visible rows plus overscan in a bounded
+  // preview. Unlike containRows, DOM creation is independent of file length.
+  virtualize?: boolean;
   /** local patch (pi-app): skip layout/paint of rows outside the diff's own
    * scrollport. A long `write` diff is thousands of rows, and measuring them all
    * on every hover-preview mount made switching files stutter; the intrinsic
@@ -103,12 +120,16 @@ export function FileDiff({
   onOpenChange,
   collapseOnComplete = true,
   maxHeight = 220,
+  maxHeightOverride,
+  bodyClassName,
   language = "typescript",
   copyText,
   onCopy,
   icon,
   headerless = false,
   highlight = true,
+  tokenLines,
+  virtualize = false,
   lazyContent = false,
   containRows = false,
   additions: additionsProp,
@@ -129,19 +150,40 @@ export function FileDiff({
   const additions = additionsProp ?? lines.filter((line) => line.type === "added").length;
   const deletions = deletionsProp ?? lines.filter((line) => line.type === "removed").length;
   const canCopy = Boolean(copyText || onCopy);
-  const code = lines.map((line) => line.content).join("\n");
+  // local patch (pi-app): plain/pretokenized previews need no joined copy of a
+  // large file on every scroll-window update.
+  const code = useMemo(
+    () => highlight && tokenLines === undefined ? lines.map((line) => line.content).join("\n") : "",
+    [lines, highlight, tokenLines],
+  );
   // local patch (pi-app): the widest row, so `containRows` can lay the body out
   // at a fixed width instead of measuring it from `w-max` — with rows skipped by
   // `content-visibility`, `w-max` only sees the rows that happen to be rendered,
-  // which would cut horizontal scrolling short. The diff is monospace, so the
-  // widest line in `ch` is exact.
+  // which would cut horizontal scrolling short. Tabs and Unicode use a
+  // conservative column bound, while ASCII monospace columns are exact.
   const widestLine = useMemo(
-    () => lines.reduce((widest, line) => Math.max(widest, line.content.length), 0),
+    () => lines.reduce((widest, line) => {
+      // local patch (pi-app): tabs and wide Unicode must not truncate horizontal
+      // scrolling when the widest line is outside the mounted window. Use a
+      // conservative column bound for non-ASCII glyphs (including CJK fonts).
+      if (!/[\t\u0080-\uFFFF]/.test(line.content)) return Math.max(widest, line.content.length);
+      let columns = 0;
+      for (const character of line.content) {
+        if (character === "\t") columns += 8 - columns % 8;
+        else columns += character.codePointAt(0)! > 127 ? 2 : 1;
+      }
+      return Math.max(widest, columns);
+    }, 0),
     [lines],
   );
   // local patch (pi-app): Shiki and line DOM are deferred until the user
   // opens the diff, and never rerun for cumulative streaming snapshots.
-  const tokens = useAgentCodeTokens(code, language, highlight && currentOpen && !streaming);
+  const liveTokens = useAgentCodeTokens(code, language, highlight && tokenLines === undefined && currentOpen && !streaming);
+  const tokens = tokenLines === undefined ? liveTokens : tokenLines;
+  // local patch (pi-app): uncapped reviews and growing transcript diffs retain
+  // their complete DOM. The opt-in preview has fixed 20px, non-wrapping rows.
+  const virtual = virtualize && !streaming && maxHeightOverride !== null;
+  const { start, end, onScroll } = useDiffWindow(viewportRef, lines.length, virtual, maxHeightOverride ?? maxHeight);
 
   const setOpen = useCallback(
     (next: boolean) => {
@@ -263,6 +305,7 @@ export function FileDiff({
           <div
             className={cn(
               "overflow-hidden rounded-xl bg-muted/80",
+              bodyClassName,
               // local patch (pi-app): a headerless body is the panel, not a row
               // indented under its own disclosure header.
               !headerless && "ml-6 mt-1.5",
@@ -272,8 +315,9 @@ export function FileDiff({
               ref={viewportRef}
               data-slot="file-diff-viewport"
               aria-live="polite"
+              onScroll={virtual ? onScroll : undefined}
               className="scrollbar-hide overflow-auto"
-              style={{ maxHeight }}
+              style={{ maxHeight: maxHeightOverride === undefined ? maxHeight : maxHeightOverride ?? undefined }}
             >
               {/* local patch (pi-app): the row wrapper is as wide as the widest
                   line (never narrower than the viewport), so a row's added/
@@ -281,16 +325,25 @@ export function FileDiff({
                   instead of stopping where the viewport ends. */}
               <div
                 className="w-max min-w-full font-mono text-xs leading-5"
-                style={containRows ? { width: `calc(6.5rem + ${widestLine}ch)` } : undefined}
+                style={containRows || virtual ? {
+                  width: `calc(6.5rem + ${widestLine}ch)`,
+                  // local patch (pi-app): spacers preserve the full scroll range
+                  // without mounting the skipped rows; no estimated heights.
+                  paddingTop: virtual ? start * DIFF_ROW_HEIGHT : undefined,
+                  paddingBottom: virtual ? (lines.length - end) * DIFF_ROW_HEIGHT : undefined,
+                } : undefined}
               >
                 <span className="sr-only">File changes</span>
-                {lines.map((line, index) => {
+                {(virtual ? lines.slice(start, end) : lines).map((line, offset) => {
+                  const index = start + offset;
                   const type = line.type ?? "context";
                   return (
                     <div
                       key={line.id}
                       style={
-                        containRows
+                        virtual
+                          ? { height: DIFF_ROW_HEIGHT }
+                          : containRows
                           ? {
                               contentVisibility: "auto",
                               containIntrinsicSize: "auto 20px",

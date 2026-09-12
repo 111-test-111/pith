@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useTheme } from 'next-themes'
 import { RadioGroup, RadioGroupItem } from '@/components/motion/radio'
 import { Input } from '@/components/motion/input'
+import { Tooltip } from '@/components/motion/tooltip'
 import { cn } from '@/lib/utils'
 import { useFontSettings, type UIFont } from '@/lib/fonts'
 import { useI18n, LOCALE_NAMES, type Locale } from '@/i18n'
@@ -129,21 +130,21 @@ export function AppearanceSection({
         <div className="px-4 py-3.5">
           <div className="flex flex-wrap gap-2.5">
             {ACCENTS.map((preset) => (
-              <button
-                key={preset.id}
-                type="button"
-                aria-label={t('settings.accentAria', { id: preset.id })}
-                aria-pressed={accent === preset.id}
-                title={preset.id}
-                onClick={() => onAccentChange(preset.id)}
-                className={cn(
-                  'grid size-8 place-items-center rounded-full transition-transform hover:scale-110',
-                  accent === preset.id && 'ring-2 ring-foreground/60 ring-offset-2 ring-offset-background'
-                )}
-                style={{ background: preset.color }}
-              >
-                {accent === preset.id ? <span className="size-2 rounded-full bg-white/90" /> : null}
-              </button>
+              <Tooltip key={preset.id} content={t('settings.accentAria', { id: preset.id })}>
+                <button
+                  type="button"
+                  aria-label={t('settings.accentAria', { id: preset.id })}
+                  aria-pressed={accent === preset.id}
+                  onClick={() => onAccentChange(preset.id)}
+                  className={cn(
+                    'grid size-8 place-items-center rounded-full transition-transform hover:scale-110',
+                    accent === preset.id && 'ring-2 ring-foreground/60 ring-offset-2 ring-offset-background'
+                  )}
+                  style={{ background: preset.color }}
+                >
+                  {accent === preset.id ? <span className="size-2 rounded-full bg-white/90" /> : null}
+                </button>
+              </Tooltip>
             ))}
           </div>
         </div>

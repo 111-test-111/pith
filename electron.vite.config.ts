@@ -13,7 +13,11 @@ export default defineConfig({
     },
     build: {
       rollupOptions: {
-        input: { index: resolve('src/main/index.ts') },
+        input: {
+          index: resolve('src/main/index.ts'),
+          'session-search-worker': resolve('src/main/pi/session-search-worker.ts'),
+          'terminal-host': resolve('src/main/terminal/host.ts')
+        },
         output: { format: 'es', entryFileNames: '[name].mjs' }
       }
     }

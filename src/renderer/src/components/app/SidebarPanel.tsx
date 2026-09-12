@@ -13,18 +13,19 @@ import {
 import { Button } from '@/components/motion/button'
 import { SharedLayoutBg } from '@/components/motion/shared-layout-bg'
 import { Tabs, TabsList, TabsTrigger } from '@/components/motion/tabs'
+import { Tooltip } from '@/components/motion/tooltip'
 import { DURATION, EASE_OUT, motionTransition } from '@/lib/ease'
 import { useI18n } from '@/i18n'
 import type { MessageKey } from '@/i18n/locales/en'
 import { cn } from '@/lib/utils'
 import { SideChatPane } from './SideChatPane'
+import { ReviewPane } from './ReviewPane'
+import { TerminalPane } from './TerminalPane'
+import type { TerminalStore } from '@/state/terminal-store'
 import type { SideChatStore } from '@/state/side-chat-store'
+import type { PiStore } from '@/state/pi-store'
 
-/**
- * Fixed panel width. The shell animates the panel's width while its content
- * keeps this width, so labels never re-wrap mid-slide — the sliding edge just
- * clips them like a curtain.
- */
+/** Fallback width before the workspace has applied the user's panel layout. */
 export const SIDEBAR_PANEL_WIDTH = 400
 
 /** The panes the right rail can host. */
@@ -44,6 +45,13 @@ interface SidebarTabSpec {
  * don't need it ignore the argument (only the side chat does today).
  */
 export interface SidebarPaneProps {
+  terminals: TerminalStore
+  onNewTerminal: () => void
+  onTerminalsEmpty: () => void
+  /** The workspace store, for panes that read the session's transcript. */
+  store: PiStore
+  /** Turn the review pane should open on (from the transcript's Review action). */
+  reviewTurnId: number | null
   /** The side chat's store, or null while its pane is not open. */
   sideChat: SideChatStore | null
   sideChatDraft: string
@@ -64,14 +72,14 @@ export const SIDEBAR_TABS: SidebarTabSpec[] = [
     labelKey: 'sidebar.review',
     shortcutKey: 'sidebar.shortcutReview',
     icon: ScanSearch,
-    render: () => <SidebarPanePlaceholder kind="review" />
+    render: (props) => <ReviewPane store={props.store} focusTurnId={props.reviewTurnId} />
   },
   {
     id: 'terminal',
     labelKey: 'sidebar.terminal',
     shortcutKey: 'sidebar.shortcutTerminal',
     icon: SquareTerminal,
-    render: () => <SidebarPanePlaceholder kind="terminal" />
+    render: (props) => <TerminalPane terminals={props.terminals} onNew={props.onNewTerminal} onEmpty={props.onTerminalsEmpty} />
   },
   {
     id: 'browser',
@@ -212,44 +220,59 @@ function SidebarTabStrip({
                     <spec.icon aria-hidden="true" className="size-3.5 shrink-0" />
                     <span className="max-w-32 truncate text-xs">{label}</span>
                   </TabsTrigger>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    aria-label={t('sidebar.closeTab', { label })}
-                    title={t('sidebar.closeTab', { label })}
-                    onClick={() => onClose(kind)}
-                    className={cn(
-                      'absolute right-1 z-10 size-5 rounded-md focus-visible:opacity-100 group-hover/tab:opacity-100',
-                      // The active tab keeps its close button visible; the others
-                      // reveal it on hover, so the strip stays quiet.
-                      isActive ? 'opacity-100' : 'opacity-0'
-                    )}
+                  <Tooltip
+                    content={t('sidebar.closeTab', { label })}
+                    wrapperClassName="absolute right-1 z-10"
                   >
-                    <X aria-hidden="true" className="size-3" />
-                  </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      aria-label={t('sidebar.closeTab', { label })}
+                      onClick={() => onClose(kind)}
+                      className={cn(
+                        'size-5 rounded-md focus-visible:opacity-100 group-hover/tab:opacity-100',
+                        // The active tab keeps its close button visible; the others
+                        // reveal it on hover, so the strip stays quiet.
+                        isActive ? 'opacity-100' : 'opacity-0'
+                      )}
+                    >
+                      <X aria-hidden="true" className="size-3" />
+                    </Button>
+                  </Tooltip>
                 </div>
               )
             })}
           </TabsList>
         </Tabs>
       </div>
-      <Button
-        variant="ghost"
-        size="icon"
-        aria-label={t('sidebar.newTab')}
-        title={t('sidebar.newTab')}
-        aria-pressed={pickerOpen}
-        onClick={onTogglePicker}
-        className={cn('shrink-0', pickerOpen && 'bg-primary/5 text-foreground')}
-      >
-        <Plus aria-hidden="true" className="size-4" />
-      </Button>
+      <Tooltip content={t('sidebar.newTab')}>
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label={t('sidebar.newTab')}
+          aria-pressed={pickerOpen}
+          onClick={onTogglePicker}
+          className={cn('shrink-0', pickerOpen && 'bg-primary/5 text-foreground')}
+        >
+          <Plus aria-hidden="true" className="size-4" />
+        </Button>
+      </Tooltip>
     </div>
   )
 }
 
 interface SidebarPanelProps {
   open: boolean
+  /** Panel width in px, owned by the workspace (it shares one budget with the
+   * sidebar and the transcript, and persists what the user dragged). */
+  width: number
+  /** True while the user is dragging the panel edge: the width is then read
+   * straight from `--panel-right` (the drag writes it to the DOM), so a drag
+   * costs no React render at all and the panel tracks the pointer exactly. */
+  resizing?: boolean
+  /** True while the resize strip is hovered or dragging: light up the panel's
+   * own border line instead of drawing a second one. */
+  edgeActive?: boolean
   tabs: SidebarTabKind[]
   activeTab: SidebarTabKind | null
   onSelectTab: (kind: SidebarTabKind) => void
@@ -267,6 +290,9 @@ interface SidebarPanelProps {
  */
 export function SidebarPanel({
   open,
+  width,
+  resizing = false,
+  edgeActive = false,
   tabs,
   activeTab,
   onSelectTab,
@@ -291,13 +317,22 @@ export function SidebarPanel({
         <motion.aside
           key="sidebar-panel"
           aria-label={t('sidebar.title')}
+          data-panel="right"
           initial={{ width: 0, opacity: 0 }}
-          animate={{ width: SIDEBAR_PANEL_WIDTH, opacity: 1 }}
+          animate={{ width: resizing ? 'var(--panel-right)' : width, opacity: 1 }}
           exit={{ width: 0, opacity: 0 }}
-          transition={motionTransition(reduce, { duration: DURATION.base, ease: EASE_OUT })}
-          className="relative shrink-0 overflow-hidden border-l border-border bg-background"
+          transition={
+            reduce || resizing ? { duration: 0 } : { duration: DURATION.base, ease: EASE_OUT }
+          }
+          className={cn(
+            'relative shrink-0 overflow-hidden border-l bg-background',
+            edgeActive ? 'border-primary' : 'border-border'
+          )}
         >
-          <div className="flex h-full flex-col" style={{ width: SIDEBAR_PANEL_WIDTH }}>
+          <div
+            className="flex h-full flex-col"
+            style={{ width: resizing ? 'var(--panel-right)' : width }}
+          >
             {hasTabs ? (
               <SidebarTabStrip
                 tabs={tabs}

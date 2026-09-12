@@ -7,6 +7,7 @@ import type {
   QueuedItemDTO,
   SessionSnapshotDTO,
   ThinkingLevel,
+  ToolCallContent,
   ToolResultMsg,
   UserMsg
 } from '../../../shared/types'
@@ -35,6 +36,7 @@ export interface Notice {
 export interface PiState {
   ready: boolean
   cwd: string | null
+  projectless: boolean
   sessionId: string | null
   /** Path of the open session file — the sidebar's active item id. */
   sessionPath: string | null
@@ -65,6 +67,7 @@ export interface PiState {
 export interface PiShellState {
   ready: boolean
   cwd: string | null
+  projectless: boolean
   sessionPath: string | null
   model: ModelRefDTO | null
   thinkingLevel: ThinkingLevel
@@ -98,6 +101,7 @@ function userProse(content: UserMsg['content']): string {
 const initialState: PiState = {
   ready: false,
   cwd: null,
+  projectless: false,
   sessionId: null,
   sessionPath: null,
   model: null,
@@ -117,6 +121,7 @@ function shellOf(state: PiState, availableThinkingLevels: ThinkingLevel[]): PiSh
   return {
     ready: state.ready,
     cwd: state.cwd,
+    projectless: state.projectless,
     sessionPath: state.sessionPath,
     model: state.model,
     thinkingLevel: state.thinkingLevel,
@@ -180,6 +185,7 @@ export class PiStore {
     if (
       prev.ready !== this.state.ready ||
       prev.cwd !== this.state.cwd ||
+      prev.projectless !== this.state.projectless ||
       prev.sessionPath !== this.state.sessionPath ||
       prev.model !== this.state.model ||
       prev.thinkingLevel !== this.state.thinkingLevel ||
@@ -214,6 +220,7 @@ export class PiStore {
       ...(unchanged ? cached : {}),
       ready: true,
       cwd: snapshot.cwd,
+      projectless: snapshot.projectless,
       sessionId: snapshot.sessionId,
       sessionPath,
       model: snapshot.model,
@@ -228,6 +235,10 @@ export class PiStore {
       notice: unchanged ? cached.notice : null,
       error: unchanged ? cached.error : null
     })
+    // An idle session has no tool executing: a run restored from disk (the
+    // session was stopped, or the app died mid-execution) is a failure, not a
+    // live row. A streaming snapshot keeps its runs untouched.
+    if (!snapshot.isStreaming) this.settleToolRuns()
     if (!sessionPath) return
     const pending = this.pendingEvents.get(sessionPath) ?? []
     this.pendingEvents.delete(sessionPath)
@@ -253,6 +264,58 @@ export class PiStore {
   setContextUsage(usage: ContextUsageDTO | null): void {
     if (sameUsage(this.state.contextUsage, usage)) return
     this.set({ contextUsage: usage })
+  }
+
+  /**
+   * Close every tool run that can no longer finish.
+   *
+   * A run that dies with its agent — Stop, a provider error, a crash — never
+   * receives its `tool_execution_end` (the SDK's loop returns as soon as a round
+   * ends aborted/errored), and a call the abort cut off before execution never
+   * starts a run at all. Either way the row would read "Running" forever, so the
+   * transcript settles them as failures the moment the run is known to be over:
+   * every run still marked running, plus a synthesized error run for a
+   * transcript tool call with neither a result nor a run.
+   */
+  private settleToolRuns(): void {
+    const pending = new Map<string, ToolCallContent>()
+    const resolved = new Set<string>()
+    // The live overlay is not in `messages` yet; at settle time its tool calls
+    // are just as dead as the ones already committed to the transcript.
+    const history = this.state.streaming
+      ? [...this.state.messages, this.state.streaming]
+      : this.state.messages
+    for (const message of history) {
+      if (message.role === 'assistant') {
+        for (const part of message.content) {
+          if (part.type === 'toolCall' && !pending.has(part.id)) pending.set(part.id, part)
+        }
+      } else if (message.role === 'toolResult') {
+        resolved.add(message.toolCallId)
+      }
+    }
+    const toolRuns = { ...this.state.toolRuns }
+    const now = Date.now()
+    let changed = false
+    for (const [id, run] of Object.entries(toolRuns)) {
+      if (run.status !== 'running') continue
+      toolRuns[id] = { ...run, status: 'error', endedAt: run.endedAt ?? now }
+      changed = true
+    }
+    for (const [id, call] of pending) {
+      if (resolved.has(id) || toolRuns[id]) continue
+      // `startedAt: 0` — the call never ran, so the row reports no duration.
+      toolRuns[id] = {
+        toolCallId: id,
+        toolName: call.name,
+        args: call.arguments,
+        status: 'error',
+        partial: undefined,
+        startedAt: 0
+      }
+      changed = true
+    }
+    if (changed) this.set({ toolRuns })
   }
 
   /** Immediately show a previously visited session while main-process
@@ -366,6 +429,12 @@ export class PiStore {
             streaming:
               this.state.streaming?.timestamp === incoming.timestamp ? null : this.state.streaming
           })
+          // A round that ended aborted/errored runs no tool call of its own and
+          // ends the run, so whatever it left hanging is settled as failed here
+          // rather than staying "Running" until (or past) `agent_settled`.
+          if (incoming.stopReason === 'aborted' || incoming.stopReason === 'error') {
+            this.settleToolRuns()
+          }
         } else if (message.role === 'toolResult') {
           const incoming = message as ToolResultMsg
           const toolRuns = { ...this.state.toolRuns }
@@ -444,6 +513,9 @@ export class PiStore {
 
       case 'agent_settled':
         this.set({ isStreaming: false, streaming: null })
+        // The run is over: nothing can still be executing, so a run without an
+        // end is one that never got to finish (Stop, provider error, a crash).
+        this.settleToolRuns()
         break
 
       case 'queue_update':

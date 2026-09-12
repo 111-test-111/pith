@@ -97,7 +97,7 @@ export function QueuePanel({
                         )}
                       </span>
                     </Tooltip>
-                    <span className="min-w-0 flex-1 truncate py-1 text-xs text-foreground/80" title={display.text}>
+                    <span className="min-w-0 flex-1 truncate py-1 text-xs text-foreground/80">
                       {display.text}
                       {row.imageCount > 0 ? (
                         <span className="ml-1.5 inline-flex items-center gap-0.5 align-baseline text-muted-foreground">

@@ -18,6 +18,8 @@ import { homedir } from 'node:os'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { FileIndex, readAttachment } from './files'
+import { SessionSearch } from './session-search'
+import { ensureDefaultWorkspace, isDefaultWorkspace } from './default-workspace'
 import { appendPromptPath, readAppendPrompt, writeAppendPrompt } from './append-prompt'
 import {
   builtinProviderBaseUrls,
@@ -64,6 +66,8 @@ import type {
   RecalledItemDTO,
   ResendPayload,
   SessionSnapshotDTO,
+  SessionSearchRequest,
+  SessionSearchResultDTO,
   SessionSummaryDTO,
   SideChatAskPayload,
   SideChatHistoryEntry,
@@ -217,6 +221,7 @@ interface ManagedSession {
 }
 
 export class PiManager {
+  private sessionSearch = new SessionSearch()
   private modelRuntime: ModelRuntime | null = null
   /** Lazily created; reads/writes ~/.pi/agent/settings.json (default model). */
   private settingsManagerInstance: SettingsManager | null = null
@@ -243,7 +248,7 @@ export class PiManager {
   cwd: string | null = null
   /** Folders the user has opened, most recent first — sessions of all of
    * them stay listed; `cwd` is the active workspace. */
-  folders: string[] = loadSettings().folders.filter((f) => typeof f === 'string')
+  folders: string[] = loadSettings().folders.filter((f) => typeof f === 'string' && !isDefaultWorkspace(f))
   /** Whether context files (AGENTS.md/CLAUDE.md) are injected into the system
    * prompt. Read live by the resource-loader override, so a reload applies it. */
   private includeContextFiles = loadSettings().contextFiles !== false
@@ -300,8 +305,10 @@ export class PiManager {
 
   /** Move a folder to the front of the known list and persist it. */
   private rememberFolder(cwd: string): void {
-    this.folders = [cwd, ...this.folders.filter((f) => f !== cwd)].slice(0, MAX_FOLDERS)
-    saveSettings({ ...loadSettings(), cwd: this.cwd, folders: this.folders })
+    if (!isDefaultWorkspace(cwd)) {
+      this.folders = [cwd, ...this.folders.filter((f) => f !== cwd)].slice(0, MAX_FOLDERS)
+    }
+    saveSettings({ ...loadSettings(), cwd: this.cwd && !isDefaultWorkspace(this.cwd) ? this.cwd : null, folders: this.folders })
   }
 
   /** Switch the active workspace folder (file index, session dir context). */
@@ -437,7 +444,16 @@ export class PiManager {
     if (event.type === 'message_start' || event.type === 'message_update') {
       if ((event as any).message?.role === 'assistant') managed.streaming = (event as any).message
     } else if (event.type === 'message_end') {
-      if ((event as any).message?.role === 'assistant') managed.streaming = null
+      const message = (event as any).message
+      if (message?.role === 'assistant') {
+        managed.streaming = null
+        // An aborted or errored round makes the SDK's loop return before it
+        // executes its tool calls; its `stopReason` is the earliest signal that
+        // whatever is still marked running will never get an end event.
+        if (message.stopReason === 'aborted' || message.stopReason === 'error') {
+          this.settleToolRuns(managed)
+        }
+      }
     } else if (event.type === 'tool_execution_start') {
       managed.toolRuns[(event as any).toolCallId] = {
         toolCallId: (event as any).toolCallId,
@@ -467,12 +483,16 @@ export class PiManager {
       ;(routed as any).followUp = managed.queueMirror.followUp.map(dtoOf)
     } else if (event.type === 'agent_end') {
       managed.streaming = null
-    } else if (event.type === 'agent_settled' && managed.reloadPending) {
-      managed.reloadPending = false
-      // Applied out of band: reload() emits no prompt-related event, so the
-      // renderer's transcript is unaffected; only the next turn's system
-      // prompt differs.
-      void managed.session.reload().catch(() => {})
+    } else if (event.type === 'agent_settled') {
+      // The run is over: no tool can still be executing.
+      this.settleToolRuns(managed)
+      if (managed.reloadPending) {
+        managed.reloadPending = false
+        // Applied out of band: reload() emits no prompt-related event, so the
+        // renderer's transcript is unaffected; only the next turn's system
+        // prompt differs.
+        void managed.session.reload().catch(() => {})
+      }
     }
 
     if (event.type !== 'message_update' && event.type !== 'tool_execution_update') {
@@ -509,6 +529,48 @@ export class PiManager {
       this.emit('pi:event', serialize(event))
     }
     managed.pendingStreamEvents.clear()
+  }
+
+  /**
+   * Close tool runs that can no longer finish. An aborted or errored round makes
+   * the SDK's loop return before it executes (or finishes) its tool calls, so no
+   * `tool_execution_end` ever arrives; a call the abort cut off before execution
+   * never even starts a run. The row would then stay "Running" in every later
+   * snapshot, so settle them as failures: every run still marked running, plus a
+   * run for a transcript tool call with neither a result nor a run.
+   * The renderer applies the same rule to its own view (PiStore.settleToolRuns).
+   */
+  private settleToolRuns(managed: ManagedSession): void {
+    const pending = new Map<string, { name: string; args: any }>()
+    const resolved = new Set<string>()
+    for (const message of managed.session.messages as ChatMessage[]) {
+      if (message.role === 'assistant') {
+        for (const part of message.content) {
+          if (part.type === 'toolCall' && !pending.has(part.id)) {
+            pending.set(part.id, { name: part.name, args: part.arguments })
+          }
+        }
+      } else if (message.role === 'toolResult') {
+        resolved.add(message.toolCallId)
+      }
+    }
+    const now = Date.now()
+    for (const [id, run] of Object.entries(managed.toolRuns)) {
+      if (run.status !== 'running') continue
+      managed.toolRuns[id] = { ...run, status: 'error', endedAt: run.endedAt ?? now }
+    }
+    for (const [id, call] of pending) {
+      if (resolved.has(id) || managed.toolRuns[id]) continue
+      // `startedAt: 0` — the call never ran, so the row reports no duration.
+      managed.toolRuns[id] = {
+        toolCallId: id,
+        toolName: call.name,
+        args: call.args,
+        status: 'error',
+        partial: undefined,
+        startedAt: 0
+      }
+    }
   }
 
   private emitSessionError(managed: ManagedSession, message: string): void {
@@ -697,6 +759,7 @@ export class PiManager {
       sessionId: managed.session.sessionId,
       sessionPath: managed.path,
       cwd: managed.cwd,
+      projectless: isDefaultWorkspace(managed.cwd),
       messages,
       streaming: serialize(managed.streaming) as any,
       toolRuns: serialize(managed.toolRuns),
@@ -741,8 +804,9 @@ export class PiManager {
   }
 
   /** Initialize (or re-initialize for a new cwd) with the most recent session. */
-  async init(cwd: string): Promise<SessionSnapshotDTO> {
+  async init(cwd?: string): Promise<SessionSnapshotDTO> {
     const navigationEpoch = ++this.navigationEpoch
+    cwd = cwd && !isDefaultWorkspace(cwd) ? cwd : await ensureDefaultWorkspace()
     const sessions = await SessionManager.list(cwd).catch(() => [])
     const latest = sessions[0]
     const sessionManager = latest
@@ -752,11 +816,10 @@ export class PiManager {
     return this.snapshot()
   }
 
-  /** New session. `cwd` targets a specific folder; omitted uses the active one. */
+  /** New chat without a project, or inside an explicitly selected project. */
   async newSession(cwd?: string): Promise<SessionSnapshotDTO> {
     const navigationEpoch = ++this.navigationEpoch
-    const target = cwd ?? this.cwd
-    if (!target) throw new Error('No working directory selected')
+    const target = cwd ?? await ensureDefaultWorkspace()
     await this.buildSession(SessionManager.create(target), true, navigationEpoch)
     return this.snapshot()
   }
@@ -838,6 +901,7 @@ export class PiManager {
    * the sidebar can group them.
    */
   async listSessions(): Promise<SessionSummaryDTO[]> {
+    this.sessionSearch.warm()
     const infos = await SessionManager.listAll().catch(() => [])
     const byFolder = new Map<string, typeof infos>()
     for (const info of infos) {
@@ -877,11 +941,17 @@ export class PiManager {
           modified: s.modified instanceof Date ? s.modified.toISOString() : String(s.modified),
           messageCount: s.messageCount,
           cwd: folder,
+          projectless: isDefaultWorkspace(folder),
           running: this.sessions.get(s.path)?.session.isStreaming ?? false
         })
       }
     }
     return summaries
+  }
+
+  async searchSessions(request: SessionSearchRequest): Promise<SessionSearchResultDTO> {
+    const result = await this.sessionSearch.search(request)
+    return { ...result, hits: result.hits.map((hit) => ({ ...hit, projectless: isDefaultWorkspace(hit.cwd) })) }
   }
 
   /** Drop a folder from the known list (and stop treating it as active). */
@@ -1193,7 +1263,10 @@ export class PiManager {
     const file = sessionManager.getSessionFile()
     if (!file || !existsSync(file)) throw new Error('The session has not been saved yet')
 
-    const forkedPath = sessionManager.createBranchedSession(entry.id)
+    // The SDK switches the receiver's file/id/branch when forking. Keep the
+    // live source manager untouched, or it will append to the fork even after
+    // that fork is deleted (recreating a message-only file without a header).
+    const forkedPath = SessionManager.open(file).createBranchedSession(entry.id)
     if (!forkedPath) throw new Error('Failed to create the forked session')
 
     let baseLabel = managed.session.sessionName?.trim() || null
@@ -1742,6 +1815,7 @@ export class PiManager {
   }
 
   dispose(): void {
+    this.sessionSearch.dispose()
     if (this.contextUsageTimer) clearInterval(this.contextUsageTimer)
     this.contextUsageTimer = null
     this.disposeAllSessions()

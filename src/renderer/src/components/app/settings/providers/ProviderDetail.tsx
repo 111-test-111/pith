@@ -21,6 +21,7 @@ import {
   SelectItem,
   SelectTrigger
 } from '@/components/motion/select'
+import { Tooltip } from '@/components/motion/tooltip'
 import { useI18n } from '@/i18n'
 import type {
   CustomProviderDTO,
@@ -414,12 +415,16 @@ export function ProviderDetail({
                 }}
               >
                 <div className="flex min-w-0 items-center gap-2.5">
-                  <span
-                    className={`size-1.5 shrink-0 rounded-full ${
-                      row.available ? 'bg-emerald-500' : 'bg-muted-foreground/40'
-                    }`}
-                    title={row.available ? t('settings.modelAvailable') : t('settings.modelUnavailable')}
-                  />
+                  <Tooltip
+                    content={row.available ? t('settings.modelAvailable') : t('settings.modelUnavailable')}
+                    wrapperClassName="shrink-0"
+                  >
+                    <span
+                      className={`size-1.5 shrink-0 rounded-full ${
+                        row.available ? 'bg-emerald-500' : 'bg-muted-foreground/40'
+                      }`}
+                    />
+                  </Tooltip>
                   <div className="min-w-0">
                     <p className="flex items-center gap-1.5 truncate text-sm font-medium text-foreground">
                       <span className="truncate">{row.name || row.id || t('settings.modelDraft')}</span>
@@ -449,32 +454,34 @@ export function ProviderDetail({
                 </div>
                 <div className="flex shrink-0 items-center gap-0.5">
                   {row.hasOverride ? (
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      aria-label={t('settings.resetOverride')}
-                      title={t('settings.resetOverride')}
-                      onClick={(event) => {
-                        event.stopPropagation()
-                        clearOverride(row.id)
-                      }}
-                    >
-                      <RotateCcw className="size-3.5" />
-                    </Button>
+                    <Tooltip content={t('settings.resetOverride')}>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        aria-label={t('settings.resetOverride')}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          clearOverride(row.id)
+                        }}
+                      >
+                        <RotateCcw className="size-3.5" />
+                      </Button>
+                    </Tooltip>
                   ) : null}
                   {row.carrierIndex !== null ? (
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      aria-label={t('settings.deleteModel')}
-                      title={t('settings.deleteModel')}
-                      onClick={(event) => {
-                        event.stopPropagation()
-                        removeCarrier(row.carrierIndex!)
-                      }}
-                    >
-                      <Trash2 className="size-3.5" />
-                    </Button>
+                    <Tooltip content={t('settings.deleteModel')}>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        aria-label={t('settings.deleteModel')}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          removeCarrier(row.carrierIndex!)
+                        }}
+                      >
+                        <Trash2 className="size-3.5" />
+                      </Button>
+                    </Tooltip>
                   ) : null}
                   <ChevronRight className="size-4 text-muted-foreground/60" />
                 </div>

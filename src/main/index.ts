@@ -1,6 +1,7 @@
-import { app, BrowserWindow, shell } from 'electron'
+import { app, BrowserWindow, screen, shell } from 'electron'
 import { join } from 'node:path'
 import { createPiManager, registerIpc } from './ipc'
+import { loadSettings, saveSettings, type WindowBounds } from './settings'
 
 // Keep existing settings and Chromium storage through the product rename.
 app.setPath('userData', join(app.getPath('appData'), 'pi-app'))
@@ -15,12 +16,46 @@ process.on('unhandledRejection', (reason) => {
   console.error('[Pith] Unhandled rejection:', reason)
 })
 
+const DEFAULT_WIDTH = 1320
+const DEFAULT_HEIGHT = 880
+const MIN_WIDTH = 760
+const MIN_HEIGHT = 560
+/** Resize/move fire per frame; one write per gesture is enough. */
+const BOUNDS_SAVE_DELAY_MS = 400
+/** How much of the window must still land on a display to reuse its position. */
+const MIN_VISIBLE_EDGE = 48
+
+/**
+ * The size/position to open with: the saved normal bounds when a window has
+ * been sized before, otherwise the built-in default. A saved position is reused
+ * only while it still lands on a connected display — a monitor that was
+ * unplugged since must not put the window off-screen — and the size is clamped
+ * to the window minimums.
+ */
+function restoredWindowBounds(saved: WindowBounds | null): { x?: number; y?: number; width: number; height: number } {
+  if (!saved) return { width: DEFAULT_WIDTH, height: DEFAULT_HEIGHT }
+  const width = Math.max(MIN_WIDTH, Math.round(saved.width) || DEFAULT_WIDTH)
+  const height = Math.max(MIN_HEIGHT, Math.round(saved.height) || DEFAULT_HEIGHT)
+  const x = typeof saved.x === 'number' ? Math.round(saved.x) : undefined
+  const y = typeof saved.y === 'number' ? Math.round(saved.y) : undefined
+  if (x === undefined || y === undefined) return { width, height }
+  const onScreen = screen.getAllDisplays().some(({ workArea }) => {
+    return (
+      x + width > workArea.x + MIN_VISIBLE_EDGE &&
+      x < workArea.x + workArea.width - MIN_VISIBLE_EDGE &&
+      y + height > workArea.y + MIN_VISIBLE_EDGE &&
+      y < workArea.y + workArea.height - MIN_VISIBLE_EDGE
+    )
+  })
+  return onScreen ? { x, y, width, height } : { width, height }
+}
+
 function createWindow(): BrowserWindow {
+  const saved = loadSettings().windowBounds
   const win = new BrowserWindow({
-    width: 1320,
-    height: 880,
-    minWidth: 760,
-    minHeight: 560,
+    ...restoredWindowBounds(saved),
+    minWidth: MIN_WIDTH,
+    minHeight: MIN_HEIGHT,
     show: false,
     title: 'Pith',
     icon: join(iconDirectory, process.platform === 'win32' ? 'icon.ico' : '512x512.png'),
@@ -34,7 +69,48 @@ function createWindow(): BrowserWindow {
     }
   })
 
-  win.on('ready-to-show', () => win.show())
+  // Restore the maximized state the window was closed in. Reading bounds while
+  // maximized or full screen yields the maximized rect, so persistence always
+  // goes through `getNormalBounds` (below) to keep the size to return to.
+  if (saved?.maximized) win.maximize()
+
+  let boundsSaveTimer: NodeJS.Timeout | undefined
+  const persistBounds = (): void => {
+    clearTimeout(boundsSaveTimer)
+    boundsSaveTimer = undefined
+    const bounds = win.isMaximized() || win.isFullScreen() ? win.getNormalBounds() : win.getBounds()
+    saveSettings({
+      ...loadSettings(),
+      windowBounds: {
+        x: bounds.x,
+        y: bounds.y,
+        width: bounds.width,
+        height: bounds.height,
+        maximized: win.isMaximized(),
+        fullscreen: win.isFullScreen()
+      }
+    })
+  }
+  const scheduleBoundsSave = (): void => {
+    clearTimeout(boundsSaveTimer)
+    boundsSaveTimer = setTimeout(persistBounds, BOUNDS_SAVE_DELAY_MS)
+  }
+  win.on('resize', scheduleBoundsSave)
+  win.on('move', scheduleBoundsSave)
+  win.on('maximize', scheduleBoundsSave)
+  win.on('unmaximize', scheduleBoundsSave)
+  win.on('enter-full-screen', scheduleBoundsSave)
+  win.on('leave-full-screen', scheduleBoundsSave)
+  // Flush the pending write so a resize in the last 400ms before quitting is
+  // not lost.
+  win.on('close', persistBounds)
+
+  win.on('ready-to-show', () => {
+    win.show()
+    // macOS ignores setFullScreen before the window is visible, so restore the
+    // full-screen state only once it is on screen.
+    if (saved?.fullscreen) win.setFullScreen(true)
+  })
 
   // Open external links in the system browser instead of a new app window.
   win.webContents.setWindowOpenHandler(({ url }) => {

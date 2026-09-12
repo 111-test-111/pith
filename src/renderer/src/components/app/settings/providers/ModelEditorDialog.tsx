@@ -531,9 +531,7 @@ export function ModelEditorDialog({
               fillStatus.error ? 'text-destructive' : 'text-muted-foreground'
             }`}
           >
-            <span className="min-w-0 truncate" title={fillStatus.text}>
-              {fillStatus.text}
-            </span>
+            <span className="min-w-0 truncate">{fillStatus.text}</span>
             {fillStatus.undo ? (
               <button
                 type="button"

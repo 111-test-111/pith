@@ -1,0 +1,95 @@
+import { useEffect, useRef, useSyncExternalStore } from 'react'
+import { Plus, X } from 'lucide-react'
+import { Button } from '@/components/motion/button'
+import { Tabs, TabsList, TabsTrigger } from '@/components/motion/tabs'
+import { Tooltip } from '@/components/motion/tooltip'
+import { LabelTooltip } from './LabelTooltip'
+import { useI18n } from '@/i18n'
+import { cn } from '@/lib/utils'
+import type { TerminalStore } from '@/state/terminal-store'
+
+export function TerminalPane({ terminals, onNew, onEmpty }: {
+  terminals: TerminalStore
+  onNew: () => void
+  onEmpty: () => void
+}) {
+  const { t } = useI18n()
+  const { tabs, active } = useSyncExternalStore(terminals.subscribe, terminals.getSnapshot)
+  const host = useRef<HTMLDivElement>(null)
+  const strip = useRef<HTMLDivElement>(null)
+  const tab = tabs.find((item) => item.id === active)
+  const showScreen = tab?.status === 'starting' || tab?.status === 'running'
+  const promptLabel = t('terminal.input')
+  const tooMuchOutput = t('terminal.tooMuchOutput')
+  useEffect(() => {
+    if (showScreen && active && host.current) return terminals.attach(active, host.current, promptLabel, tooMuchOutput)
+    return undefined
+  }, [terminals, active, showScreen, promptLabel, tooMuchOutput])
+  useEffect(() => {
+    strip.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  }, [active])
+
+  const close = (id: string): void => {
+    terminals.close(id)
+    if (terminals.getSnapshot().tabs.length === 0) onEmpty()
+  }
+  return (
+    <div className="flex h-full min-h-0 flex-col bg-background" data-terminal-pane
+      onKeyDown={(event) => event.stopPropagation()} onKeyUp={(event) => event.stopPropagation()}>
+      <div className="flex shrink-0 items-center gap-1 px-2 py-1.5">
+        <div ref={strip} className="min-w-0 flex-1 overflow-x-auto p-1" onKeyDown={(event) => {
+          if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+          event.preventDefault()
+          const index = tabs.findIndex((item) => item.id === active)
+          const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1
+            : (index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length
+          if (tabs[next]) {
+            terminals.select(tabs[next].id)
+            requestAnimationFrame(() => strip.current?.querySelector<HTMLElement>('[aria-selected="true"]')?.focus())
+          }
+        }}>
+          <Tabs value={active ?? ''} onValueChange={terminals.select} variant="segment" className="w-max">
+            <TabsList className="gap-1 bg-muted/60 p-0.5">
+              {tabs.map((item) => {
+                const label = item.title || t('terminal.tab', { n: item.number })
+                return (
+                  <div key={item.id} className="group/terminal relative flex items-center" data-terminal-tab={item.id}>
+                    <TabsTrigger value={item.id}
+                      indicatorClassName="bg-background shadow-xs ring-1 ring-border"
+                      className={cn('h-7 min-h-0 pl-2.5 pr-7', active === item.id && 'text-foreground')}>
+                      <LabelTooltip content={item.info?.cwd} wrap wrapperClassName="max-w-36">
+                        <span className="truncate text-xs">{label}</span>
+                      </LabelTooltip>
+                    </TabsTrigger>
+                    <Tooltip content={t('terminal.close', { label })} wrapperClassName="absolute right-0.5 z-10">
+                      <Button variant="ghost" size="icon" aria-label={t('terminal.close', { label })}
+                        onClick={() => close(item.id)}
+                        className={cn('size-5 rounded-md group-hover/terminal:opacity-100 focus-visible:opacity-100', active === item.id ? 'opacity-100' : 'opacity-0')}>
+                        <X aria-hidden="true" className="size-3" />
+                      </Button>
+                    </Tooltip>
+                  </div>
+                )
+              })}
+            </TabsList>
+          </Tabs>
+        </div>
+        <Tooltip content={t('terminal.new')}>
+          <Button variant="ghost" size="icon" className="size-7 shrink-0" aria-label={t('terminal.new')} onClick={onNew}>
+            <Plus aria-hidden="true" className="size-4" />
+          </Button>
+        </Tooltip>
+      </div>
+      {tab && tab.status !== 'running' ? (
+        <div role="status" className="shrink-0 px-3 py-2 text-xs text-muted-foreground">
+          <span>{tab.status === 'starting' ? t('terminal.starting') : tab.status === 'exited'
+            ? t('terminal.exited', { code: tab.exitCode ?? 0 })
+            : t(tab.error === 'directory' ? 'terminal.directoryError' : 'terminal.startError')}</span>
+        </div>
+      ) : null}
+      {showScreen ? <div className="min-h-0 min-w-0 flex-1 overflow-hidden p-2" role="tabpanel" aria-label={t('sidebar.terminal')}>
+        <div ref={host} className="h-full w-full" data-terminal-surface />
+      </div> : null}
+    </div>
+  )
+}

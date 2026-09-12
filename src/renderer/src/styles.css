@@ -44,6 +44,31 @@
   --destructive: oklch(0.577 0.215 27);
   --border: oklch(0.9 0.008 264);
   --input: oklch(0.9 0.008 264);
+
+  /* Terminal content has its own semantic palette, independent of the UI
+   * accent. Chromatic ANSI text meets 4.5:1 against --background in each mode.
+   * Keep ANSI black/white literal: TUIs also use them as background colors. */
+  --terminal-black: #242936;
+  --terminal-red: #bf2240;
+  --terminal-green: #166534;
+  --terminal-yellow: #855900;
+  --terminal-blue: #175cd3;
+  --terminal-magenta: #753ac1;
+  --terminal-cyan: #006b73;
+  --terminal-white: #d5dbe5;
+  --terminal-bright-black: #596273;
+  --terminal-bright-red: #d1243c;
+  --terminal-bright-green: #197239;
+  --terminal-bright-yellow: #926100;
+  --terminal-bright-blue: #215fe5;
+  --terminal-bright-magenta: #8741c5;
+  --terminal-bright-cyan: #087780;
+  --terminal-bright-white: #ffffff;
+  /* Opaque selection + explicit text works over ANSI and truecolor fills.
+   * The inactive selection keeps its contrast but loses the blue emphasis. */
+  --terminal-selection-background: #2459b8;
+  --terminal-selection-foreground: #ffffff;
+  --terminal-selection-inactive-background: #59667e;
 }
 
 .dark {
@@ -62,6 +87,26 @@
   --destructive: oklch(0.65 0.19 25);
   --border: oklch(0.29 0.014 264);
   --input: oklch(0.29 0.014 264);
+
+  --terminal-black: #1a202b;
+  --terminal-red: #f07886;
+  --terminal-green: #83cf98;
+  --terminal-yellow: #e5bd68;
+  --terminal-blue: #82aaff;
+  --terminal-magenta: #c69aef;
+  --terminal-cyan: #6dcbd6;
+  --terminal-white: #b7c0cd;
+  --terminal-bright-black: #788598;
+  --terminal-bright-red: #ff9aa6;
+  --terminal-bright-green: #a3e5b5;
+  --terminal-bright-yellow: #f2d48e;
+  --terminal-bright-blue: #a6c3ff;
+  --terminal-bright-magenta: #dfb8ff;
+  --terminal-bright-cyan: #97e3eb;
+  --terminal-bright-white: #f0f3f9;
+  --terminal-selection-background: #9ebcff;
+  --terminal-selection-foreground: #121826;
+  --terminal-selection-inactive-background: #8793ac;
 }
 
 /* Accent presets: indigo (default) / blue / violet / emerald / amber / rose / cyan.
@@ -197,4 +242,24 @@ body {
 }
 *::-webkit-scrollbar {
   display: none;
+}
+/* xterm 6 draws its scrollbars as DOM instead of browser chrome. Keep the same
+ * app-wide policy here; terminal components carry no scrollbar styling. */
+.xterm-scrollable-element > .scrollbar {
+  display: none;
+}
+
+/* The transcript skips layout/paint for the turns outside the viewport: a long
+ * session is ~20k elements (Shiki spans, diff rows, tool output) and re-wrapping
+ * all of it is what makes a panel resize stutter — it is also pure waste while
+ * reading, when only the two or three rows on screen can be seen. `auto` keeps
+ * each row's last measured height, so scrolling stays stable and the transcript
+ * still pins to the live edge.
+ *
+ * Deliberately always on rather than toggled for the duration of a drag:
+ * switching it off again forces the browser to lay out every skipped row at
+ * once, which landed as a ~120ms freeze at the end of every resize. */
+[data-slot="message-group"] > * {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 400px;
 }

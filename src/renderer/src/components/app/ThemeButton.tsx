@@ -32,7 +32,6 @@ export function ThemeButton() {
       variant="ghost"
       size="icon"
       aria-label={label}
-      title={label}
       onClick={() => reveal(() => setTheme(next))}
     >
       <ActionSwapIcon value={mode} animation="blur" className="size-4">

@@ -6,6 +6,7 @@ import {
   SelectItem,
   SelectTrigger
 } from '@/components/motion/select'
+import { Tooltip } from '@/components/motion/tooltip'
 import { useI18n } from '@/i18n'
 import type { MessageKey } from '@/i18n/locales/en'
 import { ProviderIcon } from './ProviderIcon'
@@ -164,15 +165,16 @@ export function ModelPicker({
           {levelsFor ? (
             <>
               <div className="flex items-center gap-1 px-1.5 pb-0.5 pt-1">
-                <button
-                  type="button"
-                  aria-label={t('model.backToModels')}
-                  title={t('model.backToModels')}
-                  onClick={() => setLevelsFor(null)}
-                  className="grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-                >
-                  <ChevronLeft className="size-3.5" />
-                </button>
+                <Tooltip content={t('model.backToModels')}>
+                  <button
+                    type="button"
+                    aria-label={t('model.backToModels')}
+                    onClick={() => setLevelsFor(null)}
+                    className="grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <ChevronLeft className="size-3.5" />
+                  </button>
+                </Tooltip>
                 <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-foreground">
                   {current?.name ?? levelsFor}
                 </span>

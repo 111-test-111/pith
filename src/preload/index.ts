@@ -23,27 +23,45 @@ import type {
   RecalledItemDTO,
   ResendPayload,
   SessionSnapshotDTO,
+  SessionSearchRequest,
+  SessionSearchResultDTO,
   SessionSummaryDTO,
   SideChatAskPayload,
   SideChatEvent,
   SkillContentDTO,
   TestModelResultDTO,
   ThinkingLevel,
+  TerminalCreatePayload,
+  TerminalCreateResult,
+  TerminalEvent,
   ToolCatalogDTO
 } from '../shared/types'
 
 const api = {
+  terminalCreate: (payload: TerminalCreatePayload): Promise<TerminalCreateResult> =>
+    ipcRenderer.invoke('terminal:create', payload),
+  terminalInput: (id: string, data: string, binary = false): void =>
+    ipcRenderer.send('terminal:command', { type: 'input', id, data, binary }),
+  terminalResize: (id: string, cols: number, rows: number): void =>
+    ipcRenderer.send('terminal:command', { type: 'resize', id, cols, rows }),
+  terminalAck: (id: string, chars: number): void =>
+    ipcRenderer.send('terminal:command', { type: 'ack', id, chars }),
+  terminalClose: (id: string): void =>
+    ipcRenderer.send('terminal:command', { type: 'close', id }),
+  onTerminalEvent: (listener: (event: TerminalEvent) => void) => subscribe('terminal:event', listener),
   appInfo: (): Promise<AppInfoDTO> => ipcRenderer.invoke('app:info'),
   setContextFiles: (enabled: boolean): Promise<boolean> =>
     ipcRenderer.invoke('app:setContextFiles', enabled),
   pickDirectory: (): Promise<{ cwd: string } | { cancelled: true }> =>
     ipcRenderer.invoke('app:pickDirectory'),
 
-  init: (cwd: string): Promise<SessionSnapshotDTO> => ipcRenderer.invoke('pi:init', cwd),
+  init: (cwd?: string): Promise<SessionSnapshotDTO> => ipcRenderer.invoke('pi:init', cwd),
   newSession: (cwd?: string): Promise<SessionSnapshotDTO> => ipcRenderer.invoke('pi:newSession', cwd),
   openSession: (path: string, cwd?: string): Promise<SessionSnapshotDTO> =>
     ipcRenderer.invoke('pi:openSession', path, cwd),
   listSessions: (): Promise<SessionSummaryDTO[]> => ipcRenderer.invoke('pi:listSessions'),
+  searchSessions: (request: SessionSearchRequest): Promise<SessionSearchResultDTO> =>
+    ipcRenderer.invoke('pi:searchSessions', request),
   deleteSession: (path: string): Promise<SessionSnapshotDTO | null> =>
     ipcRenderer.invoke('pi:deleteSession', path),
   renameSession: (path: string, name: string): Promise<void> =>

@@ -1,5 +1,7 @@
 import { app, ipcMain, dialog, shell, BrowserWindow } from 'electron'
 import { PiManager } from './pi/manager'
+import { TerminalManager } from './terminal/manager'
+import { isDefaultWorkspace } from './pi/default-workspace'
 import { loadSettings, saveSettings } from './settings'
 import type {
   AppInfoDTO,
@@ -9,6 +11,7 @@ import type {
   QueueActionPayload,
   ResendPayload,
   SessionSnapshotDTO,
+  SessionSearchRequest,
   SideChatAskPayload,
   ThinkingLevel
 } from '../shared/types'
@@ -24,11 +27,22 @@ export function createPiManager(): PiManager {
 }
 
 export function registerIpc(pi: PiManager): void {
+  const terminals = new TerminalManager()
+  ipcMain.handle('terminal:create', (event, payload) => terminals.create(event.sender, payload))
+  ipcMain.on('terminal:command', (event, command) => terminals.command(event.sender, command))
+  let quitting = false
+  app.on('before-quit', (event) => {
+    if (quitting) return
+    event.preventDefault()
+    quitting = true
+    void terminals.dispose().finally(() => app.quit())
+  })
+
   ipcMain.handle('app:info', (): AppInfoDTO => {
     const settings = loadSettings()
     return {
-      cwd: settings.cwd,
-      folders: settings.folders.filter((f) => typeof f === 'string'),
+      cwd: settings.cwd && !isDefaultWorkspace(settings.cwd) ? settings.cwd : null,
+      folders: settings.folders.filter((f) => typeof f === 'string' && !isDefaultWorkspace(f)),
       contextFiles: settings.contextFiles !== false,
       version: app.getVersion()
     }
@@ -49,10 +63,11 @@ export function registerIpc(pi: PiManager): void {
     return { cwd }
   })
 
-  ipcMain.handle('pi:init', (_event, cwd: string): Promise<SessionSnapshotDTO> => pi.init(cwd))
+  ipcMain.handle('pi:init', (_event, cwd?: string): Promise<SessionSnapshotDTO> => pi.init(cwd))
   ipcMain.handle('pi:newSession', (_event, cwd?: string): Promise<SessionSnapshotDTO> => pi.newSession(cwd))
   ipcMain.handle('pi:openSession', (_event, path: string, cwd?: string) => pi.openSession(path, cwd))
   ipcMain.handle('pi:listSessions', () => pi.listSessions())
+  ipcMain.handle('pi:searchSessions', (_event, request: SessionSearchRequest) => pi.searchSessions(request))
   ipcMain.handle('pi:deleteSession', (_event, path: string) => pi.deleteSession(path))
   ipcMain.handle('pi:renameSession', (_event, path: string, name: string) =>
     pi.renameSession(path, name)

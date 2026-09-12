@@ -21,6 +21,7 @@ import {
   type ReactNode,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -91,6 +92,10 @@ export interface AISidebarProps {
    * the row menu, and keyboard moves. False limits every move path to
    * before/after reordering. Default: true. */
   allowNesting?: boolean;
+  // local patch (pi-app): app-owned membership rules apply before optimistic
+  // updates, and to pointer, keyboard and menu moves alike.
+  canDrag?: (item: SidebarResource) => boolean;
+  canMove?: (move: SidebarResourceMove) => boolean;
   renderIcon?: (item: SidebarResource) => ReactNode;
   renderMenu?: (
     item: SidebarResource,
@@ -337,8 +342,17 @@ function ResourceMenuAction({
   );
 }
 
+// local patch (pi-app): the row menu is portalled to the viewport, so a row
+// near the bottom edge would have its panel cut off by the window — see
+// ResourceRow.resolveMenuSide. Tallest menu the app renders (six h-8 actions
+// plus the panel's padding and divider), and the gap kept from the window edge.
+const ROW_MENU_HEIGHT = 200;
+const ROW_MENU_EDGE_MARGIN = 12;
+
 interface ResourceRowProps {
   row: FlatResource;
+  // local patch (pi-app): project and synthetic rows cannot start a drag.
+  draggable: boolean;
   active: boolean;
   expanded: boolean;
   focused: boolean;
@@ -367,6 +381,7 @@ interface ResourceRowProps {
 
 function ResourceRow({
   row,
+  draggable,
   active,
   expanded,
   focused,
@@ -396,6 +411,31 @@ function ResourceRow({
   const canTouch = useTouchCapable();
   const [hovered, setHovered] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  // local patch (pi-app): a row near the bottom of the window must open its
+  // menu upward — the panel is portalled to the viewport, so it is otherwise
+  // cut off by the window edge. The row measures itself (the merged ref keeps
+  // the parent's row map intact) and settles the direction on hover, before
+  // the panel mounts, and again as the menu opens, for the keyboard and touch
+  // opens that never hover.
+  const rowNodeRef = useRef<HTMLDivElement | null>(null);
+  const [menuSide, setMenuSide] = useState<"top" | "bottom">("bottom");
+  const measureRow = useCallback((node: HTMLDivElement | null) => {
+    rowNodeRef.current = node;
+    setRef(node);
+  }, [setRef]);
+  /** Upward when the room below the row cannot hold the menu; when neither
+   * side fits, the roomier one wins. */
+  const resolveMenuSide = useCallback(() => {
+    const node = rowNodeRef.current;
+    if (!node) return;
+    const rect = node.getBoundingClientRect();
+    const below = window.innerHeight - rect.bottom - ROW_MENU_EDGE_MARGIN;
+    const above = rect.top - ROW_MENU_EDGE_MARGIN;
+    setMenuSide(below >= ROW_MENU_HEIGHT || below >= above ? "bottom" : "top");
+  }, []);
+  useLayoutEffect(() => {
+    if (menuOpen) resolveMenuSide();
+  }, [menuOpen, resolveMenuSide]);
   const skipRenameBlurRef = useRef(false);
   const draggedRef = useRef(false);
   const [draft, setDraft] = useState(row.item.label);
@@ -465,7 +505,7 @@ function ResourceRow({
     // popping in while siblings glide. No `exit` — collapse keeps its
     // instant-removal + sibling-glide behavior. Reduce-motion skips entirely.
     <motion.div
-      ref={setRef}
+      ref={measureRow}
       layout="position"
       initial={reduce ? false : { opacity: 0, y: -4 }}
       animate={{ opacity: 1, y: 0 }}
@@ -480,7 +520,7 @@ function ResourceRow({
       aria-expanded={acceptsChildren ? expanded : undefined}
       aria-disabled={row.item.disabled || undefined}
       tabIndex={focused ? 0 : -1}
-      draggable={!row.item.disabled && !renaming}
+      draggable={draggable && !row.item.disabled && !renaming}
       data-menu-open={menuOpen || undefined}
       data-drop={dropPosition ?? undefined}
       data-dragging={isDragging || undefined}
@@ -502,9 +542,17 @@ function ResourceRow({
         event.preventDefault();
         onRenameStart();
       }}
-      onMouseEnter={() => setHovered(true)}
+      onMouseEnter={() => {
+        setHovered(true);
+        resolveMenuSide();
+      }}
       onMouseLeave={() => setHovered(false)}
       onDragStartCapture={(event) => {
+        // local patch (pi-app): reject synthetic/descendant drags as well.
+        if (!draggable || row.item.disabled || renaming) {
+          event.preventDefault();
+          return;
+        }
         draggedRef.current = true;
         // local patch (pi-app): Chromium snapshots the composited row (a
         // motion layout layer) onto an opaque white square for the native
@@ -634,8 +682,9 @@ function ResourceRow({
               <MoreHorizontal aria-hidden="true" className="size-4" />
             </button>
           </MorphPopoverTrigger>
+          {/* local patch (pi-app): follows `menuSide` — see resolveMenuSide. */}
           <MorphPopoverContent
-            side="bottom"
+            side={menuSide}
             align="end"
             sideOffset={8}
             radius={12}
@@ -661,6 +710,8 @@ export function AISidebar({
   onActiveChange,
   defaultExpandedIds = [],
   allowNesting = true,
+  canDrag,
+  canMove,
   renderIcon,
   renderMenu,
   renderActions,
@@ -729,6 +780,8 @@ export function AISidebar({
 
   const performMove = useCallback(
     async (move: SidebarResourceMove) => {
+      // local patch (pi-app): never reparent the optimistic tree on rejection.
+      if (canMove && !canMove(move)) return;
       if (movePendingRef.current) {
         setAnnouncement("Wait for the current move to finish.");
         return;
@@ -759,7 +812,7 @@ export function AISidebar({
         movePendingRef.current = false;
       }
     },
-    [onMove, onMoveError, renderedItems, updateItems],
+    [canMove, onMove, onMoveError, renderedItems, updateItems],
   );
 
   const focusRow = useCallback((id: string) => {
@@ -840,9 +893,16 @@ export function AISidebar({
           });
       }
 
+      // local patch (pi-app): hide forbidden commands, not just their effects.
+      if (canMove) {
+        if (previous && !canMove({ itemId: row.item.id, targetId: previous.item.id, position: "before" })) delete commands.up;
+        if (next && !canMove({ itemId: row.item.id, targetId: next.item.id, position: "after" })) delete commands.down;
+        if (previous && !canMove({ itemId: row.item.id, targetId: previous.item.id, position: "inside" })) delete commands.into;
+        if (parentId && !canMove({ itemId: row.item.id, targetId: parentId, position: "after" })) delete commands.out;
+      }
       return commands;
     },
-    [allowNesting, flat, performMove],
+    [allowNesting, canMove, flat, performMove],
   );
 
   const handleKeyDown = useCallback(
@@ -940,6 +1000,9 @@ export function AISidebar({
     [allowNesting, expandedIds, flat, focusRow, performMove, select, toggle],
   );
 
+  // local patch (pi-app): omit the root drop affordance when membership is fixed.
+  const canDropAtRoot = !!draggingId && (!canMove || canMove({ itemId: draggingId, targetId: null, position: "after" }));
+
   return (
     <>
       <div
@@ -948,12 +1011,17 @@ export function AISidebar({
       aria-multiselectable="false"
       onDragOver={(event) => {
         if (!draggingId || event.target !== event.currentTarget) return;
+        if (!canDropAtRoot) {
+          setDropTarget(null);
+          event.dataTransfer.dropEffect = "none";
+          return;
+        }
         event.preventDefault();
         setDropTarget({ id: null, position: "after" });
       }}
       onDrop={(event) => {
         event.preventDefault();
-        if (draggingId && dropTarget) {
+        if (draggingId && dropTarget?.id === null && canDropAtRoot) {
           void performMove({
             itemId: draggingId,
             targetId: dropTarget.id,
@@ -963,7 +1031,8 @@ export function AISidebar({
       }}
       className={cn(
         "relative flex min-w-0 flex-col gap-0.5 [overflow-anchor:none] group-data-[state=collapsed]/sidebar:hidden",
-        draggingId && "select-none pb-9",
+        draggingId && "select-none",
+        canDropAtRoot && "pb-9",
         className,
       )}
     >
@@ -972,6 +1041,7 @@ export function AISidebar({
           <ResourceRow
             key={row.item.id}
             row={row}
+            draggable={canDrag?.(row.item) ?? true}
             active={selectedId === row.item.id}
             expanded={expandedIds.has(row.item.id)}
             focused={focusedRow === row.item.id}
@@ -1011,11 +1081,14 @@ export function AISidebar({
               setDropTarget(null);
             }}
             onDragOver={(event, targetRow) => {
+              // local patch (pi-app): invalid targets clear any previous marker;
+              // otherwise dropping on a project can execute an earlier valid move.
+              event.stopPropagation();
+              setDropTarget(null);
+              event.dataTransfer.dropEffect = "none";
               if (!draggingId || draggingId === targetRow.item.id) return;
               const source = findResource(renderedItems, draggingId);
               if (source && containsResource(source, targetRow.item.id)) return;
-              event.preventDefault();
-              event.stopPropagation();
               const rect = event.currentTarget.getBoundingClientRect();
               const ratio = (event.clientY - rect.top) / rect.height;
               const position =
@@ -1028,12 +1101,15 @@ export function AISidebar({
                   : ratio < 0.5
                     ? "before"
                     : "after";
+              if (canMove && !canMove({ itemId: draggingId, targetId: targetRow.item.id, position })) return;
+              event.preventDefault();
+              event.dataTransfer.dropEffect = "move";
               setDropTarget({ id: targetRow.item.id, position });
             }}
             onDrop={(event) => {
               event.preventDefault();
               event.stopPropagation();
-              if (draggingId && dropTarget) {
+              if (draggingId && dropTarget && dropTarget.id === row.item.id) {
                 void performMove({
                   itemId: draggingId,
                   targetId: dropTarget.id,
@@ -1052,7 +1128,7 @@ export function AISidebar({
         ))}
       </AnimatePresence>
 
-      {draggingId ? (
+      {canDropAtRoot ? (
         <div
           aria-hidden="true"
           data-active={dropTarget?.id === null || undefined}

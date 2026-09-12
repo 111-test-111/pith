@@ -321,8 +321,51 @@ export interface SessionSummaryDTO {
   messageCount: number
   /** Folder (working directory) the session belongs to. */
   cwd: string
+  /** Internal default directory; never show cwd in workspace chrome. */
+  projectless: boolean
   /** True while the live SDK session (active or background) is streaming. */
   running: boolean
+}
+
+/** Order of the folder groups and of the sessions inside a group. */
+export type SessionSearchSort = 'newest' | 'oldest'
+
+export interface SessionSearchRequest {
+  query: string
+  /** Titles and conversation prose are always searched together. Tool I/O, attachment bodies and thinking are opt-in. */
+  includeDetails?: boolean
+  /** Defaults to 'newest' when omitted. */
+  sort?: SessionSearchSort
+  offset?: number
+}
+
+/** Half-open UTF-16 ranges in the accompanying original text. */
+export interface SearchTextDTO {
+  text: string
+  ranges: [number, number][]
+}
+
+export type SessionSearchSource = 'user' | 'assistant' | 'summary' | 'custom' | 'tool' | 'thinking' | 'attachment'
+
+export interface SessionSearchHitDTO {
+  path: string
+  id: string
+  cwd: string
+  /** Internal default directory; never show cwd in workspace chrome. */
+  projectless?: boolean
+  modified: string
+  title: SearchTextDTO
+  snippet: SearchTextDTO | null
+  /** Source of the excerpt, never inferred from its text by the renderer. */
+  snippetSource?: SessionSearchSource
+  snippetToolName?: string
+}
+
+export interface SessionSearchResultDTO {
+  hits: SessionSearchHitDTO[]
+  total: number
+  /** Internal diagnostics only; never displayed in the search panel. */
+  incomplete: number
 }
 
 export type ThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
@@ -468,6 +511,8 @@ export interface SessionSnapshotDTO {
   sessionId: string
   sessionPath?: string
   cwd: string
+  /** Internal default directory; never show cwd in workspace chrome. */
+  projectless: boolean
   /** Completed messages only; the live assistant is carried separately. */
   messages: ChatMessage[]
   streaming?: AssistantMsg | null
@@ -661,3 +706,35 @@ export interface ForkResultDTO {
   snapshot: SessionSnapshotDTO
   baseLabel: string | null
 }
+/** Terminal traffic is independent of Pi events and never enters the chat store. */
+export interface TerminalCreatePayload {
+  id: string
+  /** null means home, including projectless chats. */
+  cwd: string | null
+  cols: number
+  rows: number
+}
+
+export interface TerminalInfoDTO {
+  id: string
+  cwd: string
+  shell: string
+  pid: number
+}
+
+export type TerminalErrorCode = 'directory' | 'spawn' | 'host' | 'closed'
+export type TerminalCreateResult = { terminal: TerminalInfoDTO } | { error: TerminalErrorCode }
+export type TerminalEvent =
+  | { type: 'data'; id: string; data: string }
+  | { type: 'exit'; id: string; exitCode: number; signal?: number }
+  | { type: 'error'; id: string; error: TerminalErrorCode }
+
+export type TerminalCommand =
+  | { type: 'create'; payload: TerminalCreatePayload }
+  | { type: 'input'; id: string; data: string; binary?: boolean }
+  | { type: 'resize'; id: string; cols: number; rows: number }
+  | { type: 'ack'; id: string; chars: number }
+  | { type: 'close'; id: string }
+  | { type: 'dispose' }
+
+export type TerminalHostEvent = TerminalEvent | { type: 'ready'; terminal: TerminalInfoDTO }

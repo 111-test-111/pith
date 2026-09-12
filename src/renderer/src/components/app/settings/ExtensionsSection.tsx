@@ -23,6 +23,7 @@ import type {
   ExtensionResourceKind
 } from '../../../../../shared/types'
 import { ConfirmDialog } from '../ConfirmDialog'
+import { LabelTooltip } from '../LabelTooltip'
 
 const RESOURCE_LABEL: Record<ExtensionResourceKind, MessageKey> = {
   extension: 'settings.resourceExtension',
@@ -189,10 +190,7 @@ function ExtensionDetail({
             and keeping them separate means the name truncates instead of
             pushing the switch out of the panel. */}
         <div className="flex min-w-0 items-center gap-1.5">
-          <span
-            className="min-w-0 truncate text-sm font-semibold text-foreground"
-            title={extension.name}
-          >
+          <span className="min-w-0 truncate text-sm font-semibold text-foreground">
             {extension.name}
           </span>
           {extension.version ? (
@@ -297,9 +295,14 @@ function ExtensionDetail({
                       <li
                         key={`${resource.kind}:${resource.path}`}
                         className="truncate text-xs text-muted-foreground"
-                        title={resource.path}
                       >
-                        {resource.name}
+                        <LabelTooltip
+                          content={resource.path}
+                          wrap
+                          wrapperClassName="inline align-baseline"
+                        >
+                          <span>{resource.name}</span>
+                        </LabelTooltip>
                       </li>
                     ))}
                   </ul>

@@ -128,6 +128,12 @@ export function prefetchAgentCodeTokens(
   return ensureAgentCodeTokens(code, language).then(() => undefined);
 }
 
+// local patch (pi-app): previews snapshot already-warm tokens on entry. A cold
+// preview stays plain for that visit instead of repainting after Shiki lands.
+export function getCachedAgentCodeTokens(code: string, language: AgentCodeLanguage) {
+  return tokenCache.get(tokenCacheKey(code, language));
+}
+
 export function useAgentCodeTokens(
   code: string,
   language: AgentCodeLanguage,

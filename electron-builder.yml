@@ -6,6 +6,9 @@ directories:
 files:
   - out/**/*
   - package.json
+# node-pty's native module and macOS spawn-helper must be real filesystem files.
+asarUnpack:
+  - node_modules/node-pty/**/*
 extraResources:
   - from: resources/icons
     to: icons

@@ -29,6 +29,7 @@ import { PreviewThumb } from './ImagePreview'
 import { ModelPicker } from './ModelPicker'
 import { ContextRing } from './ContextRing'
 import { QueuePanel } from './QueuePanel'
+import { LabelTooltip } from './LabelTooltip'
 import { useI18n } from '@/i18n'
 
 export interface ImageAttachment {
@@ -456,22 +457,24 @@ export function Composer({
               </span>
             ))}
             {files.map((attachment) => (
-              <span
+              <LabelTooltip
                 key={attachment.id}
-                className="group inline-flex max-w-56 items-center gap-1.5 rounded-xl border border-border bg-card px-2 py-1.5 text-xs text-foreground"
-                title={`${attachment.relPath} · ${formatBytes(attachment.size)}`}
+                content={`${attachment.relPath} · ${formatBytes(attachment.size)}`}
+                wrap
               >
-                <FileText className="size-3.5 shrink-0 text-primary" />
-                <span className="truncate">{basename(attachment.relPath)}</span>
-                <button
-                  type="button"
-                  aria-label={t('workspace.removeAttachment', { name: attachment.relPath })}
-                  onClick={() => removeFile(attachment.id)}
-                  className="grid size-4 shrink-0 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                >
-                  <X className="size-3" />
-                </button>
-              </span>
+                <span className="group inline-flex max-w-56 items-center gap-1.5 rounded-xl border border-border bg-card px-2 py-1.5 text-xs text-foreground">
+                  <FileText className="size-3.5 shrink-0 text-primary" />
+                  <span className="truncate">{basename(attachment.relPath)}</span>
+                  <button
+                    type="button"
+                    aria-label={t('workspace.removeAttachment', { name: attachment.relPath })}
+                    onClick={() => removeFile(attachment.id)}
+                    className="grid size-4 shrink-0 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                  >
+                    <X className="size-3" />
+                  </button>
+                </span>
+              </LabelTooltip>
             ))}
           </div>
         ) : null}
