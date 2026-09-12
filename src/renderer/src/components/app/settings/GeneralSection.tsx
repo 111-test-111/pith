@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react'
-import { Globe } from 'lucide-react'
 import { Button } from '@/components/motion/button'
 import { RadioGroup, RadioGroupItem } from '@/components/motion/radio'
 import { useI18n } from '@/i18n'
@@ -42,15 +41,21 @@ export function GeneralSection() {
       </SettingsGroup>
 
       <SettingsGroup title={t('settings.about')}>
-        <SettingsRow label="Pi" description={version ? t('settings.version', { version }) : t('settings.versionUnknown')}>
+        <SettingsRow
+          label={t('app.name')}
+          description={t('settings.appDescription')}
+        >
+          <span className="text-xs text-muted-foreground">
+            {version ? t('settings.version', { version }) : t('settings.versionUnknown')}
+          </span>
           <Button
             variant="ghost"
-            size="icon"
+            size="sm"
             aria-label={t('settings.openProjectPage')}
             title={t('settings.openProjectPage')}
             onClick={() => void window.pi.openExternal('https://github.com/earendil-works/pi-coding-agent')}
           >
-            <Globe className="size-4" />
+            {t('settings.openProjectPage')}
           </Button>
         </SettingsRow>
       </SettingsGroup>

@@ -1,18 +1,24 @@
 import {
   createAgentSessionFromServices,
   createAgentSessionServices,
+  DefaultPackageManager,
+  estimateTokens,
+  getAgentDir,
   SessionManager,
   ModelRuntime,
   SettingsManager,
   type AgentSession,
   type AgentSessionEvent,
-  type AgentSessionServices
+  type AgentSessionServices,
+  type Extension,
+  type ResourceLoader
 } from '@earendil-works/pi-coding-agent'
 import { shell } from 'electron'
 import { homedir } from 'node:os'
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { FileIndex, readAttachment } from './files'
+import { appendPromptPath, readAppendPrompt, writeAppendPrompt } from './append-prompt'
 import {
   builtinProviderBaseUrls,
   builtinProviderIds,
@@ -26,7 +32,16 @@ import {
   writeModelsConfig
 } from './models-config'
 import { loadSettings, saveSettings } from '../settings'
+import { buildToolCatalog, extensionId, loadPackageResources, type PackageResources } from './catalog'
+import { setDisableModelInvocation } from './skill-frontmatter'
+import {
+  buildSideChatContext,
+  runSideChatAnswer,
+  SIDE_CHAT_HISTORY_LIMIT,
+  SIDE_CHAT_QUESTION_CHAR_LIMIT
+} from './side-chat'
 import type {
+  AppendPromptDTO,
   CatalogRecommendationDTO,
   ChatMessage,
   ContextUsageDTO,
@@ -44,16 +59,32 @@ import type {
   ProviderDTO,
   ProviderModelDTO,
   PromptPayload,
+  QueuedItemDTO,
+  QueueActionPayload,
+  RecalledItemDTO,
   ResendPayload,
   SessionSnapshotDTO,
   SessionSummaryDTO,
+  SideChatAskPayload,
+  SideChatHistoryEntry,
   TestModelResultDTO,
   ThinkingLevel,
-  ToolRunDTO
+  ToolCatalogDTO,
+  ToolInfoDTO,
+  ToolRunDTO,
+  SkillContentDTO
 } from '../../shared/types'
 
 /** How many opened folders to keep in the sidebar/settings list. */
 const MAX_FOLDERS = 12
+
+/**
+ * The built-in tools the app keeps active. Passed explicitly because a `tools`
+ * allowlist would also filter out every extension-registered tool (see
+ * `AgentSession._refreshToolRegistry`), which is why the manager omits it and
+ * sets the active set by hand instead.
+ */
+const BUILTIN_TOOL_NAMES = ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls']
 
 /**
  * Streaming updates (`message_update` carries the FULL accumulated partial
@@ -66,6 +97,30 @@ const STREAM_FLUSH_MS = 50
 /** Tool output is normally collapsed; a lower live cadence avoids repeatedly
  * cloning and reconciling large cumulative terminal/diff payloads. */
 const TOOL_STREAM_FLUSH_MS = 150
+/**
+ * The context ring is polled, not event-driven: `getContextUsage()` only moves
+ * when a message completes, while the ring is meant to track the context as the
+ * session works. Read it on a fixed cadence and push only what actually moved.
+ */
+const CONTEXT_USAGE_POLL_MS = 2000
+
+/** Cap for the Settings → Skills SKILL.md preview. */
+const MAX_SKILL_BYTES = 200_000
+
+/**
+ * Bound the replay history an untrusted renderer sends. Only the newest
+ * exchanges ever reach a prompt, so only those are validated and clamped.
+ */
+function sanitizeSideChatHistory(history: SideChatHistoryEntry[] | undefined): SideChatHistoryEntry[] {
+  if (!Array.isArray(history)) return []
+  return history
+    .filter((entry) => entry && typeof entry.question === 'string' && typeof entry.answer === 'string')
+    .slice(-SIDE_CHAT_HISTORY_LIMIT)
+    .map((entry) => ({
+      question: entry.question.slice(0, SIDE_CHAT_QUESTION_CHAR_LIMIT),
+      answer: entry.answer.slice(0, SIDE_CHAT_QUESTION_CHAR_LIMIT * 2)
+    }))
+}
 
 /** Drop functions/symbols and turn Dates into ISO strings before IPC. */
 function serialize(value: unknown): any {
@@ -88,6 +143,46 @@ function modelRef(model: any): ModelRefDTO | null {
   }
 }
 
+/**
+ * A queued message with its full payload. The SDK only exposes queued
+ * messages as text (getSteeringMessages()/clearQueue() return strings);
+ * images live solely in the agent's private queue. The mirror below keeps the
+ * rich payload app-side so recall/promote/remove can rebuild without losing
+ * it — the SDK's text arrays stay the authoritative ORDER, reconciled on
+ * every queue_update.
+ */
+interface QueuedItem {
+  /** SDK-visible text (file blocks inlined, templates expanded). */
+  text: string
+  /** The user's draft as typed — what recall puts back into the composer. */
+  originalText: string
+  images: ImageContent[]
+  filePaths: string[]
+}
+
+function dtoOf(item: QueuedItem): QueuedItemDTO {
+  return {
+    text: item.text,
+    originalText: item.originalText,
+    imageCount: item.images.length,
+    filePaths: [...item.filePaths]
+  }
+}
+
+/**
+ * Payload of one prompt that is (or may be) mid-enqueue. The SDK emits its
+ * queue_update — and our reconcile — DURING session.prompt(), so the payload
+ * has to be parked before the call and claimed by the reconcile when the
+ * freshly queued text appears.
+ */
+interface PendingQueuePayload {
+  /** Text the SDK will store verbatim (file blocks inlined, templates expanded). */
+  composedText: string
+  originalText: string
+  images: ImageContent[]
+  filePaths: string[]
+}
+
 interface ManagedSession {
   session: AgentSession
   path: string
@@ -97,8 +192,28 @@ interface ManagedSession {
   streamFlushTimer: ReturnType<typeof setTimeout> | null
   streaming: ChatMessage | null
   toolRuns: Record<string, ToolRunDTO>
-  queue: { steering: string[]; followUp: string[] }
+  /** Rich payload mirror of the SDK's two queues, keyed by queued text. */
+  queueMirror: { steering: QueuedItem[]; followUp: QueuedItem[] }
+  /**
+   * Parked payloads of prompts currently mid-enqueue. A LIST, not a single
+   * slot: an enqueue can yield inside session.prompt() (a "/" command, an
+   * input extension), so two prompts can overlap, and the earlier one's
+   * finally must not wipe the later one's payload. Claimed by text, newest
+   * first (the prompt that just queued owns the text it just pushed).
+   */
+  pendingQueuePayloads: PendingQueuePayload[]
+  /** While clear+requeue rebuilds the SDK queues, its intermediate
+   * queue_update events (empty → partial) are swallowed whole and one final
+   * state is emitted instead — the renderer never flashes an empty panel. */
+  queueRebuilding: boolean
   eventSequence: number
+  /** Serialized context usage last sent for this session — the poll skips
+   * unchanged values (and events that already carried them). */
+  contextUsageKey: string | null
+  /** A prompt/resource setting changed while this session was mid-run; the
+   * reload that applies it is deferred to `agent_settled` (reloading during
+   * a turn would swap the extension runner under an in-flight request). */
+  reloadPending: boolean
 }
 
 export class PiManager {
@@ -114,17 +229,74 @@ export class PiManager {
   /** Invalidates slower session creations when a newer navigation wins. */
   private navigationEpoch = 0
   private fileIndex: FileIndex | null = null
-  private pendingAuth = new Map<string, { resolve: (v: string) => void; reject: (e: Error) => void }>()
+  private pendingAuth = new Map<
+    string,
+    { providerId: string; resolve: (v: string) => void; reject: (e: Error) => void }
+  >()
+  /** In-flight logins, keyed by provider id — the one cancel hits. */
+  private loginAborts = new Map<string, AbortController>()
+  /** Fixed-cadence context-usage poll (see CONTEXT_USAGE_POLL_MS). */
+  private contextUsageTimer: ReturnType<typeof setInterval> | null = null
+  /** In-flight side-chat answers, keyed by exchange id (see sideChatAsk). */
+  private sideChats = new Map<string, AbortController>()
 
   cwd: string | null = null
   /** Folders the user has opened, most recent first — sessions of all of
    * them stay listed; `cwd` is the active workspace. */
   folders: string[] = loadSettings().folders.filter((f) => typeof f === 'string')
+  /** Whether context files (AGENTS.md/CLAUDE.md) are injected into the system
+   * prompt. Read live by the resource-loader override, so a reload applies it. */
+  private includeContextFiles = loadSettings().contextFiles !== false
+  /** Extensions switched off in Settings. Read live by the loader wrapper, so
+   * `session.reload()` applies a toggle without rebuilding services. */
+  private disabledExtensions = new Set(loadSettings().disabledExtensions ?? [])
+  /** The real (unfiltered) resource loader per cwd — Settings → Tools /
+   * Extensions reads it, while the session only sees the filtered view. */
+  private extensionLoaders = new Map<string, ResourceLoader>()
+  /** Catalog snapshot keyed by cwd + disabled set; invalidated on toggle. */
+  private catalogCache: { key: string; value: ToolCatalogDTO } | null = null
+  /** Tools a now-disabled extension had registered at runtime, so a lazily
+   * registering extension (pi-fff) keeps its tools listed while switched off. */
+  private knownExtensionTools = new Map<string, ToolInfoDTO[]>()
 
   constructor(
     private emit: (channel: string, payload: unknown) => void,
     private notifyError: (message: string) => void
-  ) {}
+  ) {
+    // The ring refreshes on a timer rather than only when the SDK reports a
+    // boundary, so it tracks the context while a turn is in flight.
+    this.contextUsageTimer = setInterval(() => this.pollContextUsage(), CONTEXT_USAGE_POLL_MS)
+  }
+
+  /**
+   * Push context usage for every live session whose value moved, so the composer
+   * ring tracks the context between message boundaries. Every managed session is
+   * polled rather than only the active one: a visible session then can never be
+   * starved by an active-session mismatch (the renderer drops pushes for
+   * sessions it is not showing).
+   *
+   * No `eventSequence`: this is a metadata ping, not a step of the session's
+   * event log, and bumping the sequence would make the renderer treat an
+   * unchanged snapshot as a newer one (remounting the transcript).
+   */
+  private pollContextUsage(): void {
+    for (const managed of this.sessions.values()) {
+      const usage = this.contextUsageOf(managed)
+      const key = JSON.stringify(usage)
+      if (key === managed.contextUsageKey) continue
+      managed.contextUsageKey = key
+      this.emit(
+        'pi:event',
+        serialize({
+          type: 'context_usage',
+          sessionId: managed.session.sessionId,
+          sessionPath: managed.path,
+          cwd: managed.cwd,
+          contextUsage: usage
+        })
+      )
+    }
+  }
 
   /** Move a folder to the front of the known list and persist it. */
   private rememberFolder(cwd: string): void {
@@ -155,8 +327,22 @@ export class PiManager {
   private async servicesFor(cwd: string): Promise<AgentSessionServices> {
     const cached = this.sessionServices.get(cwd)
     if (cached) return cached
-    const pending = (async () =>
-      createAgentSessionServices({ cwd, modelRuntime: await this.runtime() }))()
+    const pending = (async () => {
+      const services = await createAgentSessionServices({
+        cwd,
+        modelRuntime: await this.runtime(),
+        resourceLoaderOptions: {
+          // Read live, not captured: `session.reload()` re-runs this override,
+          // so toggling the setting reaches every session without rebuilding
+          // the services (or the loader).
+          agentsFilesOverride: (base) => (this.includeContextFiles ? base : { agentsFiles: [] })
+        }
+      })
+      // Keep the full loader for the Settings catalog; hand the session the
+      // filtered view. Extensions still load (and get enriched) exactly once.
+      this.extensionLoaders.set(cwd, services.resourceLoader)
+      return { ...services, resourceLoader: this.filterExtensions(services.resourceLoader) }
+    })()
     this.sessionServices.set(cwd, pending)
     try {
       return await pending
@@ -164,6 +350,31 @@ export class PiManager {
       this.sessionServices.delete(cwd)
       throw error
     }
+  }
+
+  /**
+   * Wrap a resource loader so the extension runner only ever sees extensions
+   * the user left enabled. Everything else delegates to the real loader —
+   * including `reload()`, so extensions are still resolved and enriched once.
+   * The filter reads `disabledExtensions` live, which is what makes
+   * `session.reload()` apply a toggle.
+   */
+  private filterExtensions(loader: ResourceLoader): ResourceLoader {
+    const isDisabled = (extension: Extension): boolean =>
+      this.disabledExtensions.has(extensionId(extension))
+    return new Proxy(loader, {
+      get: (target, prop) => {
+        if (prop === 'getExtensions') {
+          const getExtensions = target.getExtensions.bind(target)
+          return () => {
+            const result = getExtensions()
+            return { ...result, extensions: result.extensions.filter((e) => !isDisabled(e)) }
+          }
+        }
+        const value = Reflect.get(target, prop, target)
+        return typeof value === 'function' ? value.bind(target) : value
+      }
+    }) as ResourceLoader
   }
 
   private disposeManaged(managed: ManagedSession): void {
@@ -194,6 +405,10 @@ export class PiManager {
   }
 
   private routeEvent(managed: ManagedSession, event: AgentSessionEvent): void {
+    // Rebuilds publish exactly one final queue_update (emitQueueState); the
+    // SDK's own intermediate events for the same rebuild are swallowed before
+    // they can touch the sequence or the renderer.
+    if (event.type === 'queue_update' && managed.queueRebuilding) return
     managed.eventSequence += 1
     const routed = {
       ...event,
@@ -203,10 +418,13 @@ export class PiManager {
       eventSequence: managed.eventSequence
     } as PiEvent
 
-    // Usage (and cost) move on completed messages and compaction boundaries —
-    // the composer ring rides along instead of polling.
+    // Usage (and cost) move on completed messages and compaction boundaries;
+    // attach the payload so those updates land in the same render as the
+    // message itself (the fixed-cadence poll covers everything between).
     if (event.type === 'message_end' || event.type === 'compaction_end') {
-      ;(routed as any).contextUsage = this.contextUsageOf(managed)
+      const usage = this.contextUsageOf(managed)
+      ;(routed as any).contextUsage = usage
+      managed.contextUsageKey = JSON.stringify(usage)
     }
     // Compaction rewrites the session's message list (the summary replaces the
     // summarized tail). Ship the new list with the event so the transcript
@@ -243,9 +461,18 @@ export class PiManager {
         }
       }
     } else if (event.type === 'queue_update') {
-      managed.queue = { steering: [...(event as any).steering], followUp: [...(event as any).followUp] }
+      this.reconcileQueue(managed, (event as any).steering ?? [], (event as any).followUp ?? [])
+      // The renderer sees the rich mirror (payload counts), never raw text.
+      ;(routed as any).steering = managed.queueMirror.steering.map(dtoOf)
+      ;(routed as any).followUp = managed.queueMirror.followUp.map(dtoOf)
     } else if (event.type === 'agent_end') {
       managed.streaming = null
+    } else if (event.type === 'agent_settled' && managed.reloadPending) {
+      managed.reloadPending = false
+      // Applied out of band: reload() emits no prompt-related event, so the
+      // renderer's transcript is unaffected; only the next turn's system
+      // prompt differs.
+      void managed.session.reload().catch(() => {})
     }
 
     if (event.type !== 'message_update' && event.type !== 'tool_execution_update') {
@@ -296,6 +523,72 @@ export class PiManager {
     })
   }
 
+  /**
+   * Rebuild the payload mirror from the SDK's authoritative text arrays.
+   * The SDK shrinks a queue by removing the FIRST occurrence of a delivered
+   * text (indexOf + splice), so duplicates keep that same order: the removed
+   * difference is dropped from the FRONT of the mirror, and the survivors are
+   * then matched to the new list in order. A text with no surviving payload
+   * resolves against the parked prompt payloads (newest first — the prompt
+   * that just queued owns the text it just pushed), then falls back to a
+   * text-only item: the SDK drops payload data at its boundary (extensions
+   * queueing, template-expanded texts), and leftovers from a silent SDK-side
+   * clear simply disappear with the rebuild.
+   */
+  private reconcileQueue(managed: ManagedSession, steering: readonly string[], followUp: readonly string[]): void {
+    managed.queueMirror = {
+      steering: this.reconcileSide(managed, managed.queueMirror.steering, steering),
+      followUp: this.reconcileSide(managed, managed.queueMirror.followUp, followUp)
+    }
+  }
+
+  /** One queue's worth of {@link reconcileQueue} — see it for the ordering rules. */
+  private reconcileSide(managed: ManagedSession, prev: QueuedItem[], next: readonly string[]): QueuedItem[] {
+    const pool = [...prev]
+    const nextCounts = new Map<string, number>()
+    for (const text of next) nextCounts.set(text, (nextCounts.get(text) ?? 0) + 1)
+    const prevCounts = new Map<string, number>()
+    for (const item of prev) prevCounts.set(item.text, (prevCounts.get(item.text) ?? 0) + 1)
+    // Drop the messages that left this queue from the front, mirroring the
+    // SDK's indexOf+splice on delivery so duplicate texts stay aligned.
+    for (const [text, count] of prevCounts) {
+      const removed = count - (nextCounts.get(text) ?? 0)
+      for (let i = 0; i < removed; i++) {
+        const index = pool.findIndex((item) => item.text === text)
+        if (index < 0) break
+        pool.splice(index, 1)
+      }
+    }
+    return next.map((text) => {
+      const index = pool.findIndex((item) => item.text === text)
+      if (index >= 0) return pool.splice(index, 1)[0]
+      return this.claimPendingPayload(managed, text)
+    })
+  }
+
+  /**
+   * Take the payload parked for `text` (newest first, since the prompt that
+   * just queued is the one that produced it), or synthesize a text-only item
+   * when none is parked — extension-queued or template-expanded texts.
+   */
+  private claimPendingPayload(managed: ManagedSession, text: string): QueuedItem {
+    const index = managed.pendingQueuePayloads.findLastIndex((pending) => pending.composedText === text)
+    if (index < 0) return { text, originalText: text, images: [], filePaths: [] }
+    const stash = managed.pendingQueuePayloads.splice(index, 1)[0]
+    return { text, originalText: stash.originalText, images: stash.images, filePaths: stash.filePaths }
+  }
+
+  /** Publish the mirror as a single queue_update (after rebuilds swallowed
+   * the SDK's own intermediate events). Routing it back through reconcile is
+   * an identity re-match, so the stash is never mis-consumed. */
+  private emitQueueState(managed: ManagedSession): void {
+    this.routeEvent(managed, {
+      type: 'queue_update',
+      steering: managed.queueMirror.steering.map((item) => item.text),
+      followUp: managed.queueMirror.followUp.map((item) => item.text)
+    } as AgentSessionEvent)
+  }
+
   private disposeAllSessions(): void {
     for (const managed of [...this.sessions.values()]) this.disposeManaged(managed)
   }
@@ -323,7 +616,7 @@ export class PiManager {
      * not immediately resurface the folder just removed. */
     materialize = true,
     navigationEpoch = this.navigationEpoch
-  ): Promise<AgentSession> {
+  ): Promise<ManagedSession> {
     const shouldActivate = () => navigationEpoch === this.navigationEpoch
     if (materialize) this.materializeSession(sessionManager)
     const requestedPath = sessionManager.getSessionFile()
@@ -331,15 +624,35 @@ export class PiManager {
       const existing = this.sessions.get(requestedPath)
       if (existing) {
         if (shouldActivate()) this.activateSession(existing)
-        return existing.session
+        return existing
       }
     }
     const services = await this.servicesFor(sessionManager.getCwd())
-    const { session } = await createAgentSessionFromServices({
-      services,
-      sessionManager,
-      tools: ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls']
-    })
+    const { session } = await createAgentSessionFromServices({ services, sessionManager })
+    // Extensions register tools/commands in `session_start`, and every CLI
+    // mode binds them before the first turn. Without this, a lazily
+    // registering extension (pi-fff) only appears on the first
+    // `before_agent_start`. No UI context: the app owns the UI, so extension
+    // UI calls fall through to the SDK's no-op context. `onError` also keeps
+    // `session.reload()` emitting `session_start` (the SDK only re-emits it
+    // when a binding is present), so a re-enabled extension gets registered.
+    await session
+      .bindExtensions({
+        mode: 'print',
+        onError: (error) => {
+          console.error(`Extension error (${error.extensionPath}): ${error.error}`)
+        }
+      })
+      .catch(() => {})
+    // No `tools` allowlist: it applies to extension tools too, so it would
+    // hide everything an extension registers. Set the active set by hand
+    // instead — the built-ins plus every tool of an enabled extension.
+    session.setActiveToolsByName([
+      ...BUILTIN_TOOL_NAMES,
+      ...services.resourceLoader
+        .getExtensions()
+        .extensions.flatMap((extension) => [...extension.tools.keys()])
+    ])
     const path = session.sessionFile ?? requestedPath ?? `memory:${session.sessionId}`
     const managed: ManagedSession = {
       session,
@@ -350,18 +663,27 @@ export class PiManager {
       streamFlushTimer: null,
       streaming: null,
       toolRuns: {},
-      queue: { steering: [], followUp: [] },
-      eventSequence: 0
+      queueMirror: { steering: [], followUp: [] },
+      pendingQueuePayloads: [],
+      queueRebuilding: false,
+      eventSequence: 0,
+      contextUsageKey: null,
+      reloadPending: false
     }
     managed.unsubscribe = session.subscribe((event: AgentSessionEvent) => this.routeEvent(managed, event))
     this.sessions.set(path, managed)
     if (shouldActivate()) this.activateSession(managed, materialize)
-    return session
+    return managed
   }
 
   snapshot(): SessionSnapshotDTO {
     const managed = this.activeSession
     if (!managed || !this.cwd) throw new Error('Pi session is not initialized')
+    return this.snapshotOf(managed)
+  }
+
+  /** Serialize one session's current state for the renderer. */
+  private snapshotOf(managed: ManagedSession): SessionSnapshotDTO {
     this.flushStreamEvents(managed)
     const messages = serialize(managed.session.messages) as ChatMessage[]
     const live = managed.streaming as ChatMessage | null
@@ -378,7 +700,10 @@ export class PiManager {
       messages,
       streaming: serialize(managed.streaming) as any,
       toolRuns: serialize(managed.toolRuns),
-      queue: managed.queue,
+      queue: {
+        steering: managed.queueMirror.steering.map(dtoOf),
+        followUp: managed.queueMirror.followUp.map(dtoOf)
+      },
       model: modelRef(managed.session.model),
       thinkingLevel: (managed.session.thinkingLevel ?? 'medium') as ThinkingLevel,
       availableThinkingLevels: managed.session.getAvailableThinkingLevels() as ThinkingLevel[],
@@ -393,16 +718,23 @@ export class PiManager {
    * `getSessionStats()` aggregates every session entry — messages compacted out
    * of the context and tool-result usage included — which summing
    * `session.messages` alone would undercount.
+   *
+   * The in-flight partial is added on top (same estimator the SDK's own
+   * compaction uses): the SDK only accounts for COMPLETED messages, so without
+   * it the ring's numbers would sit still for a whole generation and only jump
+   * when each round lands.
    */
   private contextUsageOf(managed: ManagedSession): ContextUsageDTO | null {
     const stats = managed.session.getSessionStats()
     const usage = stats.contextUsage
     if (!usage || !usage.contextWindow) return null
+    const live = managed.streaming ? estimateTokens(managed.streaming as any) : 0
+    const tokens = usage.tokens === null || usage.tokens === undefined ? null : usage.tokens + live
     const cacheable = stats.tokens.cacheRead + stats.tokens.input
     return {
-      tokens: usage.tokens ?? null,
+      tokens,
       contextWindow: usage.contextWindow,
-      percent: usage.percent ?? null,
+      percent: tokens === null ? null : (tokens / usage.contextWindow) * 100,
       sessionCost: stats.cost,
       cacheHitRate: cacheable > 0 ? Math.min(stats.tokens.cacheRead / cacheable, 1) : null
     }
@@ -446,6 +778,58 @@ export class PiManager {
     if (!folder) throw new Error('No working directory selected')
     await this.buildSession(sessionManager, true, navigationEpoch)
     return this.snapshot()
+  }
+
+  /**
+   * Ask a side question. The answer is a single no-tools completion over a
+   * snapshot of the bound session plus the side chat's own earlier exchanges —
+   * see `pi/side-chat.ts`. Nothing here touches an AgentSession: the question
+   * cannot enter the session file, queue behind a running prompt, or reach the
+   * extension runner, so a side chat can never disturb the run it asks about.
+   */
+  async sideChatAsk(payload: SideChatAskPayload): Promise<{ exchangeId: string }> {
+    // The renderer keeps its side chat bound to the session it was opened
+    // against, so switching the workspace to another session does NOT repoint
+    // it: the question still draws on (and inherits the model/effort of) that
+    // original session, which stays live in the background. Only when the bound
+    // session is gone — deleted, or its folder deleted — does this fall back to
+    // whatever session is active now.
+    const bound =
+      (payload.sessionPath ? this.sessions.get(payload.sessionPath) : undefined) ?? this.activeSession
+    if (!bound) throw new Error('Pi session is not initialized')
+    const model = bound.session.model
+    if (!model) throw new Error('No model selected for the side question')
+    // Inherit the bound session's effort too: the side answer is about that
+    // run, so it should reason at the same level (no separate setting).
+    const reasoning = bound.session.thinkingLevel
+    const question = payload.question.trim().slice(0, SIDE_CHAT_QUESTION_CHAR_LIMIT)
+    if (!question) throw new Error('The side question is empty')
+    const history = sanitizeSideChatHistory(payload.history)
+
+    // The renderer owns the id, so its optimistic exchange and the stream that
+    // answers it line up without a remap race.
+    const exchangeId = payload.exchangeId.replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 64)
+    if (!exchangeId) throw new Error('The side question has no exchange id')
+    const controller = new AbortController()
+    this.sideChats.set(exchangeId, controller)
+    const runtime = await this.runtime()
+    const sessionMessages = bound.session.messages as unknown as ChatMessage[]
+    void runSideChatAnswer({
+      runtime,
+      model,
+      reasoning: reasoning === 'off' ? undefined : reasoning,
+      exchangeId,
+      context: buildSideChatContext({ sessionMessages, history, question, cwd: bound.cwd }),
+      signal: controller.signal,
+      emit: (event) => this.emit('pi:side-chat', event)
+    }).finally(() => this.sideChats.delete(exchangeId))
+    return { exchangeId }
+  }
+
+  /** Stop a side-chat answer. The partial text already streamed stays on screen. */
+  sideChatAbort(exchangeId: string): void {
+    this.sideChats.get(exchangeId)?.abort()
+    this.sideChats.delete(exchangeId)
   }
 
   /**
@@ -589,13 +973,30 @@ export class PiManager {
         }
         const fileBlocks = await this.readFileBlocks(payload.files)
         const text = fileBlocks ? `${payload.text}\n\n${fileBlocks}` : payload.text
-        // streamingBehavior only matters while streaming (AgentSession.prompt
-        // decides atomically: idle → new run, busy → steer/followUp queue), so
-        // a queue request that races a settling run still lands as a prompt.
-        await session.prompt(text, {
+        // Only a streaming session can queue, and only then does a payload
+        // need parking — an idle prompt just starts a run and is never claimed.
+        const queueing = session.isStreaming
+        const stash: PendingQueuePayload = {
+          composedText: text,
+          originalText: payload.text,
           images: payload.images,
-          streamingBehavior: session.isStreaming ? (payload.streamingBehavior ?? 'steer') : undefined
-        })
+          filePaths: payload.files
+        }
+        if (queueing) managed.pendingQueuePayloads.push(stash)
+        try {
+          // streamingBehavior only matters while streaming (AgentSession.prompt
+          // decides atomically: idle → new run, busy → steer/followUp queue), so
+          // a queue request that races a settling run still lands as a prompt.
+          await session.prompt(text, {
+            images: payload.images,
+            streamingBehavior: queueing ? (payload.streamingBehavior ?? 'steer') : undefined
+          })
+        } finally {
+          // Remove only OUR parked payload: an overlapping enqueue may have
+          // parked its own (and the reconcile may already have claimed this one).
+          const index = managed.pendingQueuePayloads.indexOf(stash)
+          if (index >= 0) managed.pendingQueuePayloads.splice(index, 1)
+        }
       } catch (error) {
         this.emitSessionError(managed, error instanceof Error ? error.message : String(error))
       }
@@ -625,15 +1026,75 @@ export class PiManager {
   }
 
   /**
-   * Clear the active session's queued steering/follow-up messages and return
-   * their texts so the renderer can put them back into the composer. SDK
-   * clearQueue() empties both queue layers, emits `queue_update` (which
-   * refreshes managed.queue through the event route) and is the only dequeue.
+   * Clear the active session's queues and return the messages WITH their full
+   * payloads (images, referenced file paths) from the mirror — the SDK's own
+   * clearQueue() only returns texts. The SDK emits an empty queue_update
+   * which reconciles the mirror back to empty.
    */
-  clearQueue(): { steering: string[]; followUp: string[] } {
+  clearQueue(): { steering: RecalledItemDTO[]; followUp: RecalledItemDTO[] } {
     const managed = this.activeSession
     if (!managed) return { steering: [], followUp: [] }
-    return managed.session.clearQueue()
+    const recallOf = (items: QueuedItem[]): RecalledItemDTO[] =>
+      items.map((item) => ({
+        text: item.text,
+        originalText: item.originalText,
+        images: item.images,
+        filePaths: [...item.filePaths]
+      }))
+    const result = {
+      steering: recallOf(managed.queueMirror.steering),
+      followUp: recallOf(managed.queueMirror.followUp)
+    }
+    managed.session.clearQueue()
+    return result
+  }
+
+  /**
+   * Per-item queue surgery. The SDK has no single-item dequeue, so both
+   * operations rebuild the queues: clearQueue() then re-queue the surviving
+   * MIRROR items (payload included) in order, all in ONE synchronous block —
+   * steer()/followUp() push into the queues without awaiting (their
+   * skill/template expansion is synchronous), so the agent loop cannot
+   * interleave a drain mid-rebuild. The SDK's intermediate queue_updates are
+   * swallowed (`queueRebuilding`) and one final state is emitted, so the
+   * renderer never flashes an empty panel. Residual race: a message the loop
+   * already drained for the upcoming turn (not yet message_start-ed) can be
+   * delivered twice; that window is a few ms around a turn boundary and the
+   * outcome is a visible duplicate, never a lost message.
+   */
+  queueAction(payload: QueueActionPayload): void {
+    const managed = this.activeSession
+    if (!managed) return
+    const session = managed.session
+    managed.queueRebuilding = true
+    try {
+      session.clearQueue()
+      const nextSteering: QueuedItem[] = []
+      const nextFollowUp: QueuedItem[] = []
+      managed.queueMirror.steering.forEach((item, index) => {
+        if (payload.action === 'remove' && payload.kind === 'steering' && payload.index === index) return
+        nextSteering.push(item)
+      })
+      managed.queueMirror.followUp.forEach((item, index) => {
+        if (payload.kind === 'followUp' && payload.index === index) {
+          // promote → steering queue (behind surviving steers, preserving
+          // FIFO); remove → dropped outright.
+          if (payload.action === 'promote') nextSteering.push(item)
+          return
+        }
+        nextFollowUp.push(item)
+      })
+      // The mirror reflects the intended end state even if a requeue call
+      // throws midway — later SDK queue_updates re-reconcile toward truth.
+      managed.queueMirror = { steering: nextSteering, followUp: nextFollowUp }
+      for (const item of nextSteering) session.steer(item.text, item.images)
+      for (const item of nextFollowUp) session.followUp(item.text, item.images)
+    } catch (error) {
+      this.emitSessionError(managed, error instanceof Error ? error.message : String(error))
+    } finally {
+      managed.queueRebuilding = false
+    }
+    this.emitQueueState(managed)
   }
 
   /**
@@ -674,8 +1135,13 @@ export class PiManager {
     let images = payload.images
     const entry = this.findMessageEntry(managed, 'user', payload.timestamp)
     if (entry) {
-      const content = Array.isArray(entry.message.content) ? entry.message.content : []
-      images = content.filter((part): part is ImageContent => part.type === 'image')
+      // The plain retry path re-sends exactly what is stored (text, images and
+      // the already-inlined file blocks); the edit path sends the user's new
+      // text/images/files instead, so it must not be overwritten here.
+      if (!payload.edited) {
+        const content = Array.isArray(entry.message.content) ? entry.message.content : []
+        images = content.filter((part): part is ImageContent => part.type === 'image')
+      }
       const sessionManager = session.sessionManager
       if (sessionManager.getLeafId() === entry.id) {
         // The user message is already the leaf — its run died before any
@@ -688,12 +1154,20 @@ export class PiManager {
       } else {
         const result = await session.navigateTree(entry.id)
         if (result.cancelled) throw new Error('Resend cancelled')
-        if (result.editorText) text = result.editorText
+        // navigateTree hands back the stored message text for the editor; an
+        // edit must keep the user's replacement text instead.
+        if (!payload.edited && result.editorText) text = result.editorText
       }
       // navigateTree (and the manual rewind) emit no AgentSession event; bump
       // the sequence so the renderer cannot mistake the returned snapshot for
       // one it already rendered.
       managed.eventSequence += 1
+    }
+    // Edited file references are re-inlined from disk (fresh content) — the
+    // retry path carries its blocks inside the stored text already.
+    if (payload.edited && payload.files?.length) {
+      const fileBlocks = await this.readFileBlocks(payload.files)
+      if (fileBlocks) text = text ? `${text}\n\n${fileBlocks}` : fileBlocks
     }
     if (!text && !images.length) throw new Error('Nothing to resend')
 
@@ -883,6 +1357,219 @@ export class PiManager {
     await manager.flush()
   }
 
+  // ---- global append prompt (~/.pi/agent/APPEND_SYSTEM.md) ----
+
+  appendPrompt(): AppendPromptDTO {
+    return { path: appendPromptPath(), text: readAppendPrompt() }
+  }
+
+  /**
+   * Write the global append prompt and reload the live sessions so it reaches
+   * their NEXT turn without a restart.
+   */
+  async setAppendPrompt(text: string): Promise<AppendPromptDTO> {
+    writeAppendPrompt(text)
+    await this.reloadLiveSessions()
+    return this.appendPrompt()
+  }
+
+  // ---- context files (AGENTS.md / CLAUDE.md) ----
+
+  contextFilesEnabled(): boolean {
+    return this.includeContextFiles
+  }
+
+  /**
+   * Toggle injection of AGENTS.md/CLAUDE.md context files. The resource-loader
+   * override reads this flag live, so reloading each session re-derives its
+   * system prompt without rebuilding the shared services.
+   */
+  async setContextFilesEnabled(enabled: boolean): Promise<boolean> {
+    this.includeContextFiles = enabled
+    saveSettings({ ...loadSettings(), contextFiles: enabled })
+    await this.reloadLiveSessions()
+    return this.includeContextFiles
+  }
+
+  // ---- tools & extensions (Settings → Tools / Extensions) ----
+
+  /**
+   * The tools + extensions catalog for the active workspace. Reads the real
+   * (unfiltered) loader so a disabled extension still appears, with its tools
+   * listed but inactive. Built-ins, active-tool membership and lazily
+   * registered extension tools come from the live session's registry, while
+   * package details (installed path, version, bundled skills) are resolved
+   * through the package manager.
+   */
+  async catalog(): Promise<ToolCatalogDTO> {
+    const cwd = this.cwd
+    const loader = cwd ? this.extensionLoaders.get(cwd) : undefined
+    if (!cwd || !loader) {
+      return { tools: [], extensions: [], skills: [], skillDiagnostics: [] }
+    }
+    const key = `${cwd}\u0000${[...this.disabledExtensions].sort().join('\u0000')}`
+    if (this.catalogCache?.key === key) return this.catalogCache.value
+    const packages = await loadPackageResources(cwd, getAgentDir()).catch(
+      () => new Map<string, PackageResources>()
+    )
+    const session = this.activeSession?.session
+    const value = buildToolCatalog(
+      loader,
+      session?.getAllTools() ?? [],
+      session?.getActiveToolNames() ?? [],
+      this.disabledExtensions,
+      packages,
+      this.knownExtensionTools
+    )
+    this.catalogCache = { key, value }
+    return value
+  }
+
+  // ---- skills (Settings → Skills) ----
+
+  /**
+   * Toggle a skill's `disable-model-invocation` frontmatter key. Only paths the
+   * current loader actually knows are accepted, so a renderer bug can't turn
+   * this into an arbitrary file write. The system prompt is rebuilt afterwards
+   * (skills are formatted into it), hence the session reload.
+   */
+  async setSkillModelInvocation(
+    filePath: string,
+    disableModelInvocation: boolean
+  ): Promise<ToolCatalogDTO> {
+    const cwd = this.requireCwd()
+    const loader = this.extensionLoaders.get(cwd)
+    if (!loader || !loader.getSkills().skills.some((skill) => skill.filePath === filePath)) {
+      throw new Error('Unknown skill file')
+    }
+    const content = readFileSync(filePath, 'utf8')
+    writeFileSync(filePath, setDisableModelInvocation(content, disableModelInvocation), 'utf8')
+    this.catalogCache = null
+    await this.reloadLiveSessions()
+    return this.catalog()
+  }
+
+  /** SKILL.md text for the Settings → Skills preview (validated like the toggle). */
+  readSkill(filePath: string): SkillContentDTO {
+    const cwd = this.requireCwd()
+    const loader = this.extensionLoaders.get(cwd)
+    if (!loader || !loader.getSkills().skills.some((skill) => skill.filePath === filePath)) {
+      throw new Error('Unknown skill file')
+    }
+    const handle = readFileSync(filePath)
+    const truncated = handle.byteLength > MAX_SKILL_BYTES
+    return {
+      path: filePath,
+      text: (truncated ? handle.subarray(0, MAX_SKILL_BYTES) : handle).toString('utf8'),
+      truncated
+    }
+  }
+
+  /**
+   * Persist an extension's enabled state (app-local; the pi CLI's package
+   * config is untouched) and reload the live sessions so the runner is rebuilt
+   * from the filtered loader. A streaming session defers to `agent_settled`.
+   *
+   * Disabling snapshots the tools the extension had registered at runtime
+   * first: a lazily-registering extension (pi-fff) only appears on the session
+   * registry, so without the snapshot its tools would vanish from the catalog.
+   */
+  async setExtensionEnabled(id: string, enabled: boolean): Promise<ToolCatalogDTO> {
+    if (!enabled && !this.disabledExtensions.has(id)) {
+      const before = await this.catalog()
+      const owned = before.tools.filter((tool) => tool.source.extensionId === id)
+      if (owned.length > 0) this.knownExtensionTools.set(id, owned)
+    }
+    if (enabled) this.disabledExtensions.delete(id)
+    else this.disabledExtensions.add(id)
+    saveSettings({ ...loadSettings(), disabledExtensions: [...this.disabledExtensions] })
+    this.catalogCache = null
+    await this.reloadLiveSessions()
+    return this.catalog()
+  }
+
+  // ---- extension package actions (Settings → Extensions) ----
+
+  /**
+   * Update the package behind an extension through the SDK's package manager
+   * (npm install / git pull), then rebuild the live sessions so new code and
+   * tools take effect. Throws with the manager's message on failure.
+   */
+  async updateExtension(source: string): Promise<ToolCatalogDTO> {
+    const cwd = this.requireCwd()
+    await this.packageManagerFor(cwd).update(source)
+    return this.reloadAfterPackageChange()
+  }
+
+  /** Uninstall a package: it is removed from the pi settings and the live
+   * sessions reload without it. */
+  async removeExtension(source: string): Promise<ToolCatalogDTO> {
+    const cwd = this.requireCwd()
+    await this.packageManagerFor(cwd).removeAndPersist(source)
+    return this.reloadAfterPackageChange()
+  }
+
+  /** Install a new package by source (`npm:…`, `git:…`, a local path). */
+  async installExtension(source: string): Promise<ToolCatalogDTO> {
+    const cwd = this.requireCwd()
+    await this.packageManagerFor(cwd).installAndPersist(source)
+    return this.reloadAfterPackageChange()
+  }
+
+  private requireCwd(): string {
+    if (!this.cwd) throw new Error('No workspace is open')
+    return this.cwd
+  }
+  private packageManagerFor(cwd: string): DefaultPackageManager {
+    const agentDir = getAgentDir()
+    return new DefaultPackageManager({
+      cwd,
+      agentDir,
+      settingsManager: SettingsManager.create(cwd, agentDir)
+    })
+  }
+
+  /**
+   * After a package install/update/remove: drop the cached catalog, prune
+   * disabled ids whose extension no longer exists, and reload the sessions.
+   * `listConfiguredPackages` reads the settings before the next resolve, so the
+   * prune uses the freshly loaded extension list.
+   */
+  private async reloadAfterPackageChange(): Promise<ToolCatalogDTO> {
+    this.catalogCache = null
+    this.knownExtensionTools.clear()
+    await this.reloadLiveSessions()
+    const loader = this.cwd ? this.extensionLoaders.get(this.cwd) : undefined
+    if (loader) {
+      const present = new Set(
+        loader.getExtensions().extensions.map((extension) => extensionId(extension))
+      )
+      const next = [...this.disabledExtensions].filter((id) => present.has(id))
+      if (next.length !== this.disabledExtensions.size) {
+        this.disabledExtensions = new Set(next)
+        saveSettings({ ...loadSettings(), disabledExtensions: next })
+      }
+    }
+    return this.catalog()
+  }
+
+  /**
+   * Rebuild the cached system prompt of every live session. Sessions share one
+   * resource loader per folder, but each caches its own built prompt, so every
+   * session has to reload; one that is mid-run defers to `agent_settled` (see
+   * routeEvent), since reloading would swap the extension runner under an
+   * in-flight request.
+   */
+  private async reloadLiveSessions(): Promise<void> {
+    for (const managed of [...this.sessions.values()]) {
+      if (managed.session.isStreaming) {
+        managed.reloadPending = true
+        continue
+      }
+      await managed.session.reload().catch(() => {})
+    }
+  }
+
   async models(): Promise<ModelDTO[]> {
     const runtime = await this.runtime()
     const available = new Set(
@@ -920,7 +1607,13 @@ export class PiManager {
     const provider = runtime.getProviders().find((p) => p.id === providerId)
     if (!provider) throw new Error(`Unknown provider ${providerId}`)
 
+    // One login per provider: a new attempt supersedes a dangling one.
+    this.loginAborts.get(providerId)?.abort()
+    const controller = new AbortController()
+    this.loginAborts.set(providerId, controller)
+
     const interaction = {
+      signal: controller.signal,
       prompt: async (prompt: any): Promise<string> => {
         const requestId = `${providerId}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`
         const normalizedKind =
@@ -966,6 +1659,7 @@ export class PiManager {
           }
           signal?.addEventListener('abort', onAbort, { once: true })
           this.pendingAuth.set(requestId, {
+            providerId,
             resolve: (value) => {
               cleanup()
               resolve(value)
@@ -977,18 +1671,38 @@ export class PiManager {
           })
         })
       },
+      // The SDK names the event field `type`; the DTO (and the renderer that
+      // keys off it) uses `kind`. Forwarding it verbatim left `kind` undefined,
+      // so the browser was never opened and the device-code/URL UI never showed.
       notify: (event: any) => {
-        this.emit('pi:auth-notify', { providerId, ...event })
+        const { type, ...rest } = event ?? {}
+        this.emit('pi:auth-notify', { providerId, kind: type, ...rest })
       }
     }
 
     try {
       await runtime.login(providerId, kind, interaction as any)
     } finally {
-      for (const pending of this.pendingAuth.values()) {
+      if (this.loginAborts.get(providerId) === controller) this.loginAborts.delete(providerId)
+      for (const [requestId, pending] of this.pendingAuth) {
+        if (pending.providerId !== providerId) continue
+        this.pendingAuth.delete(requestId)
         pending.reject(new Error('Login cancelled'))
       }
-      this.pendingAuth.clear()
+      // Settle/close whatever dialog the renderer opened for this login.
+      this.emit('pi:auth-dismiss', { providerId })
+    }
+  }
+
+  /** Cancel an in-flight login (the dialog's Cancel button / a superseding try). */
+  cancelLogin(providerId: string): void {
+    this.loginAborts.get(providerId)?.abort()
+    // The provider may not have linked the flow's signal to the pending prompt,
+    // so reject that too or the login would hang until the 5-minute timeout.
+    for (const [requestId, pending] of this.pendingAuth) {
+      if (pending.providerId !== providerId) continue
+      this.pendingAuth.delete(requestId)
+      pending.reject(new Error('Login cancelled'))
     }
   }
 
@@ -1028,6 +1742,8 @@ export class PiManager {
   }
 
   dispose(): void {
+    if (this.contextUsageTimer) clearInterval(this.contextUsageTimer)
+    this.contextUsageTimer = null
     this.disposeAllSessions()
   }
 }

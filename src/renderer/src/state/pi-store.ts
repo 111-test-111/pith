@@ -4,6 +4,7 @@ import type {
   ContextUsageDTO,
   ModelRefDTO,
   PiEvent,
+  QueuedItemDTO,
   SessionSnapshotDTO,
   ThinkingLevel,
   ToolResultMsg,
@@ -40,7 +41,8 @@ export interface PiState {
   model: ModelRefDTO | null
   thinkingLevel: ThinkingLevel
   isStreaming: boolean
-  /** SDK context usage for the composer ring; moves only on turn boundaries. */
+  /** SDK context usage for the composer ring; refreshed by the main process'
+   * 2s poll (`context_usage`) and by every turn boundary. */
   contextUsage: ContextUsageDTO | null
   messages: ChatMessage[]
   /** Last routed event incorporated into this view. */
@@ -48,7 +50,8 @@ export interface PiState {
   /** Partial assistant message while the agent is streaming a response. */
   streaming: AssistantMsg | null
   toolRuns: Record<string, ToolRun>
-  queue: { steering: string[]; followUp: string[] }
+  /** Queued steer/follow-up messages with payload counts (mirror-fed). */
+  queue: { steering: QueuedItemDTO[]; followUp: QueuedItemDTO[] }
   notice: Notice | null
   error: string | null
 }
@@ -70,11 +73,27 @@ export interface PiShellState {
   isStreaming: boolean
   contextUsage: ContextUsageDTO | null
   /** Pending steering/follow-up messages (SDK queue state) for the composer. */
-  queue: { steering: string[]; followUp: string[] }
+  queue: { steering: QueuedItemDTO[]; followUp: QueuedItemDTO[] }
 }
 
 /** Fallback while no session/model is known (SDK returns all levels then). */
 const ALL_THINKING_LEVELS: ThinkingLevel[] = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+
+/**
+ * Prose part of a user message — the text before any inlined `<file path>`
+ * block. Used to match an optimistic echo against its persisted twin without
+ * the blocks' content (the echo only carries "(pending)" placeholders).
+ */
+function userProse(content: UserMsg['content']): string {
+  const text =
+    typeof content === 'string'
+      ? content
+      : content
+          .filter((part) => part.type === 'text')
+          .map((part) => (part as any).text ?? '')
+          .join('\n')
+  return text.split('\n\n<file path=')[0].trim()
+}
 
 const initialState: PiState = {
   ready: false,
@@ -109,6 +128,24 @@ function shellOf(state: PiState, availableThinkingLevels: ThinkingLevel[]): PiSh
 }
 
 type Listener = () => void
+
+/**
+ * Context usage only "changed" when one of its numbers moved: the main process
+ * re-pushes the same payload on a fixed cadence, and a fresh object with equal
+ * numbers must not re-render the workspace. `===` on the nullable halves keeps
+ * a null → null transition free.
+ */
+function sameUsage(a: ContextUsageDTO | null, b: ContextUsageDTO | null): boolean {
+  if (a === b) return true
+  if (!a || !b) return false
+  return (
+    a.tokens === b.tokens &&
+    a.contextWindow === b.contextWindow &&
+    a.percent === b.percent &&
+    a.sessionCost === b.sessionCost &&
+    a.cacheHitRate === b.cacheHitRate
+  )
+}
 
 /**
  * External store fed by Pi SDK session events over IPC. The messages array is
@@ -205,6 +242,19 @@ export class PiStore {
     this.set({ queue: { steering: [], followUp: [] } })
   }
 
+  /**
+   * Replace the composer ring's payload (per turn boundary and every 2s from
+   * the main process' poll). Published through `set()` so the shell slice the
+   * composer reads is rebuilt in the same notification: staging it straight
+   * onto `state` — as message boundaries used to — left the ring showing
+   * whatever the last shell-relevant field change happened to publish, which
+   * could freeze the readout for a whole run.
+   */
+  setContextUsage(usage: ContextUsageDTO | null): void {
+    if (sameUsage(this.state.contextUsage, usage)) return
+    this.set({ contextUsage: usage })
+  }
+
   /** Immediately show a previously visited session while main-process
    * activation and snapshot reconciliation continue in the background. */
   activateCachedSession(sessionPath: string): boolean {
@@ -274,11 +324,9 @@ export class PiStore {
       }
 
       case 'message_end': {
-        // Main attaches SDK context usage to these events; stage it before the
-        // role branches below so their set() calls publish it in one notification.
-        if ('contextUsage' in event) {
-          this.state = { ...this.state, contextUsage: event.contextUsage ?? null }
-        }
+        // Main attaches SDK context usage to these events, so the ring lands in
+        // the same tick as the message it belongs to.
+        if ('contextUsage' in event) this.setContextUsage(event.contextUsage ?? null)
         const message = event.message as ChatMessage
         if (message.role === 'user') {
           const incoming = message as UserMsg
@@ -290,7 +338,20 @@ export class PiStore {
             messages[lastIndex] = incoming
             this.set({ messages })
           } else if (!last || last.timestamp !== incoming.timestamp) {
-            this.set({ messages: [...this.state.messages, incoming] })
+            // A send the renderer believed idle can be queued as a steer when
+            // the main process disagrees (double-send before agent_start
+            // arrives); its message_end then lands mid-run with the echo no
+            // longer the tail. Drop the matching echo instead of duplicating
+            // the row until the next snapshot. Comparison ignores inlined
+            // file blocks — the echo carries "(pending)" placeholders there.
+            const prose = userProse(incoming.content)
+            const withoutEcho = prose
+              ? messages.filter(
+                  (m) =>
+                    !((m as any).__optimistic && m.role === 'user' && userProse(m.content) === prose)
+                )
+              : messages
+            this.set({ messages: [...withoutEcho, incoming] })
           }
         } else if (message.role === 'assistant') {
           const incoming = message as AssistantMsg
@@ -408,6 +469,13 @@ export class PiStore {
 
       case 'compaction_start':
         this.set({ notice: { key: 'compacting' } })
+        break
+
+      // Main-process 2s poll: the ring tracks the growing context while a turn
+      // is in flight, instead of jumping only at message boundaries. Carries no
+      // eventSequence — it is metadata, not a step of the session's event log.
+      case 'context_usage':
+        this.setContextUsage(event.contextUsage ?? null)
         break
 
       case 'compaction_end': {

@@ -19,10 +19,16 @@ function formatCost(cost: number): string | null {
 /**
  * Composer context-usage ring (bottom-right of the input box): a 14px arc of
  * the context window that fills as the session grows. Hovering opens a beUI
- * Tooltip with the simplified readout — percent used, estimated tokens of the
- * window, cache hit rate and session cost — all straight from the SDK's
- * AgentSession.getContextUsage() over the session's accumulated usage. The
- * ring refreshes on every completed message (the events carry the payload).
+ * Tooltip with the full readout — percent used, estimated tokens of the window
+ * (the in-flight message included), cache hit rate and session cost — all
+ * straight from the SDK's AgentSession.getContextUsage() plus the session's
+ * accumulated usage. The value is refreshed by the main process' 2s poll and on
+ * every turn boundary, so hovering just reveals a readout that is already
+ * current.
+ *
+ * The numbers are printed at full precision (exact token count, one decimal of
+ * percent) on purpose: on a large window a coarse readout moves so rarely that a
+ * live ring reads as frozen.
  */
 export function ContextRing({ usage }: { usage: ContextUsageDTO | null }) {
   const { t } = useI18n()
@@ -51,12 +57,12 @@ export function ContextRing({ usage }: { usage: ContextUsageDTO | null }) {
       content={
         <div>
           <p className="text-sm font-medium tabular-nums text-foreground">
-            {percent !== null ? t('context.used', { percent: percent.toFixed(0) }) : '—'}
+            {percent !== null ? t('context.used', { percent: percent.toFixed(1) }) : '—'}
           </p>
           <p className="mt-0.5 text-xs tabular-nums text-muted-foreground">
             {usedTokens !== null
               ? t('context.tokens', {
-                  used: `~${formatTokens(usedTokens)}`,
+                  used: `~${usedTokens.toLocaleString()}`,
                   total: formatTokens(usage.contextWindow)
                 })
               : '—'}

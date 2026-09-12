@@ -15,6 +15,7 @@ import {
   useEffect,
   useId,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -50,12 +51,29 @@ export interface FileDiffProps {
   language?: AgentCodeLanguage;
   copyText?: string;
   onCopy?: () => void | Promise<void>;
+  /** local patch (pi-app): glyph for the row; the app maps tool names to icons
+   * (edit vs write) and falls back to the vendored FileCode2 when omitted. */
+  icon?: ReactNode;
   /** local patch (pi-app): precomputed +/- counts shown in the header while
    * `lazyContent` defers the parsed `lines`. */
   additions?: number;
   deletions?: number;
   /** local patch (pi-app): do not mount/highlight diff rows while collapsed. */
   lazyContent?: boolean;
+  /** local patch (pi-app): render the diff body without its disclosure header,
+   * for hosts that supply their own chrome (the turn's written-files hover
+   * preview) — the body also drops the header's indent so it fills the panel. */
+  headerless?: boolean;
+  /** local patch (pi-app): skip Shiki for this diff. The preview panel turns it
+   * off: highlighting a few hundred rows lands ~10-95ms AFTER the panel mounts,
+   * which reads as the content settling twice on every hover hand-over. */
+  highlight?: boolean;
+  /** local patch (pi-app): skip layout/paint of rows outside the diff's own
+   * scrollport. A long `write` diff is thousands of rows, and measuring them all
+   * on every hover-preview mount made switching files stutter; the intrinsic
+   * size keeps the scroll height right without laying each row out. Only the
+   * preview turns this on — the transcript's diff keeps full fidelity. */
+  containRows?: boolean;
   className?: string;
 }
 
@@ -88,7 +106,11 @@ export function FileDiff({
   language = "typescript",
   copyText,
   onCopy,
+  icon,
+  headerless = false,
+  highlight = true,
   lazyContent = false,
+  containRows = false,
   additions: additionsProp,
   deletions: deletionsProp,
   className,
@@ -108,9 +130,18 @@ export function FileDiff({
   const deletions = deletionsProp ?? lines.filter((line) => line.type === "removed").length;
   const canCopy = Boolean(copyText || onCopy);
   const code = lines.map((line) => line.content).join("\n");
+  // local patch (pi-app): the widest row, so `containRows` can lay the body out
+  // at a fixed width instead of measuring it from `w-max` — with rows skipped by
+  // `content-visibility`, `w-max` only sees the rows that happen to be rendered,
+  // which would cut horizontal scrolling short. The diff is monospace, so the
+  // widest line in `ch` is exact.
+  const widestLine = useMemo(
+    () => lines.reduce((widest, line) => Math.max(widest, line.content.length), 0),
+    [lines],
+  );
   // local patch (pi-app): Shiki and line DOM are deferred until the user
   // opens the diff, and never rerun for cumulative streaming snapshots.
-  const tokens = useAgentCodeTokens(code, language, currentOpen && !streaming);
+  const tokens = useAgentCodeTokens(code, language, highlight && currentOpen && !streaming);
 
   const setOpen = useCallback(
     (next: boolean) => {
@@ -176,56 +207,67 @@ export function FileDiff({
       aria-busy={streaming}
       className={cn("w-full text-sm", className)}
     >
-      <button
-        id={triggerId}
-        type="button"
-        aria-expanded={currentOpen}
-        aria-controls={contentId}
-        onClick={() => setOpen(!currentOpen)}
-        className="group flex min-h-9 w-full items-center gap-2 rounded-md py-1 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-      >
-        <FileCode2
-          aria-hidden="true"
-          className="size-4 shrink-0 text-muted-foreground"
-        />
-        {/* local patch (pi-app): the app's tool rows are prose labels
-            (`edit · file — path`), not code, so they use the same UI font,
-            size and muted chrome color as the ToolResult title. */}
-        <span className="min-w-0 flex-1 truncate font-medium text-muted-foreground">
-          {file}
-        </span>
-        <span className="flex shrink-0 items-center gap-2">
-          <ChangeCount value={additions} type="added" />
-          <ChangeCount value={deletions} type="removed" />
-        </span>
-        <span className="grid size-4 shrink-0 place-items-center text-muted-foreground/60">
-          {streaming ? (
-            <LoaderCircle
-              aria-label="Applying changes"
-              className={cn("size-3.5", !reduce && "animate-spin")}
-            />
-          ) : (
-            <Check aria-label="Changes applied" className="size-3.5" />
-          )}
-        </span>
-        <motion.span
-          aria-hidden="true"
-          animate={{ rotate: currentOpen ? 180 : 0 }}
-          transition={reduce ? { duration: 0 } : SPRING_SWAP}
-          className="shrink-0 text-muted-foreground/45 transition-colors group-hover:text-muted-foreground"
+      {headerless ? null : (
+        <button
+          id={triggerId}
+          type="button"
+          aria-expanded={currentOpen}
+          aria-controls={contentId}
+          onClick={() => setOpen(!currentOpen)}
+          className="group flex min-h-9 w-full items-center gap-2 rounded-md py-1 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
         >
-          <ChevronDown className="size-3.5" />
-        </motion.span>
-      </button>
+          {icon ?? (
+            <FileCode2
+              aria-hidden="true"
+              className="size-4 shrink-0 text-muted-foreground"
+            />
+          )}
+          {/* local patch (pi-app): the app's tool rows are prose labels
+              (`edit · file — path`), not code, so they use the same UI font,
+              size and muted chrome color as the ToolResult title. */}
+          <span className="min-w-0 flex-1 truncate font-medium text-muted-foreground">
+            {file}
+          </span>
+          <span className="flex shrink-0 items-center gap-2">
+            <ChangeCount value={additions} type="added" />
+            <ChangeCount value={deletions} type="removed" />
+          </span>
+          <span className="grid size-4 shrink-0 place-items-center text-muted-foreground/60">
+            {streaming ? (
+              <LoaderCircle
+                aria-label="Applying changes"
+                className={cn("size-3.5", !reduce && "animate-spin")}
+              />
+            ) : (
+              <Check aria-label="Changes applied" className="size-3.5" />
+            )}
+          </span>
+          <motion.span
+            aria-hidden="true"
+            animate={{ rotate: currentOpen ? 180 : 0 }}
+            transition={reduce ? { duration: 0 } : SPRING_SWAP}
+            className="shrink-0 text-muted-foreground/45 transition-colors group-hover:text-muted-foreground"
+          >
+            <ChevronDown className="size-3.5" />
+          </motion.span>
+        </button>
+      )}
 
       <AgentDisclosure
         id={contentId}
-        role="region"
-        aria-labelledby={triggerId}
+        role={headerless ? undefined : "region"}
+        aria-labelledby={headerless ? undefined : triggerId}
         open={currentOpen}
       >
         {lazyContent && !currentOpen ? null : (
-          <div className="ml-6 mt-1.5 overflow-hidden rounded-xl bg-muted/80">
+          <div
+            className={cn(
+              "overflow-hidden rounded-xl bg-muted/80",
+              // local patch (pi-app): a headerless body is the panel, not a row
+              // indented under its own disclosure header.
+              !headerless && "ml-6 mt-1.5",
+            )}
+          >
             <div
               ref={viewportRef}
               data-slot="file-diff-viewport"
@@ -233,13 +275,28 @@ export function FileDiff({
               className="scrollbar-hide overflow-auto"
               style={{ maxHeight }}
             >
-              <div className="font-mono text-xs leading-5">
+              {/* local patch (pi-app): the row wrapper is as wide as the widest
+                  line (never narrower than the viewport), so a row's added/
+                  removed tint spans the whole horizontally scrolled width
+                  instead of stopping where the viewport ends. */}
+              <div
+                className="w-max min-w-full font-mono text-xs leading-5"
+                style={containRows ? { width: `calc(6.5rem + ${widestLine}ch)` } : undefined}
+              >
                 <span className="sr-only">File changes</span>
                 {lines.map((line, index) => {
                   const type = line.type ?? "context";
                   return (
                     <div
                       key={line.id}
+                      style={
+                        containRows
+                          ? {
+                              contentVisibility: "auto",
+                              containIntrinsicSize: "auto 20px",
+                            }
+                          : undefined
+                      }
                       className={cn(
                         "grid grid-cols-[2.25rem_2.25rem_1rem_minmax(0,1fr)]",
                         type === "added" && "bg-emerald-500/[0.07]",

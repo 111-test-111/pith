@@ -1,6 +1,5 @@
-import { memo, useState } from 'react'
-import { motion, useReducedMotion } from 'motion/react'
-import { Brain, FileText, GitFork, History, RefreshCw, RotateCcw } from 'lucide-react'
+import { memo, useMemo, useState, type ReactNode } from 'react'
+import { Brain, FileText, GitFork, History, Pencil, RotateCcw } from 'lucide-react'
 import { AgentActivity } from '@/components/agents/agent-activity'
 import { AgentDisclosure } from '@/components/agents/agent-disclosure'
 import {
@@ -11,10 +10,11 @@ import {
 } from '@/components/agents/message'
 import { ToolResult, ToolResultOutput } from '@/components/agents/tool-result'
 import { StreamingResponse } from '@/components/agents/streaming-response'
-import { EASE_OUT } from '@/lib/ease'
 import { Markdown } from '@/lib/markdown'
 import { cn } from '@/lib/utils'
+import { ToolIcon } from '@/lib/tool-icons'
 import { formatTime, formatTokenCount, basename } from '@/lib/format'
+import { extractTurnWrittenFiles } from '@/lib/turn-written-files'
 import { extractUserDisplay } from '@/lib/user-message'
 import type {
   AssistantMsg,
@@ -33,8 +33,11 @@ import { useI18n } from '@/i18n'
 import { ToolCallView } from './ToolCallView'
 import { Button } from '@/components/motion/button'
 import { ReasoningText } from './ReasoningText'
+import { RowReveal } from './RowReveal'
 import { TurnStatus } from './TurnStatus'
+import { TurnWrittenFiles } from './TurnWrittenFiles'
 import { CopyAction, MessageAction, MessageActions } from './MessageActions'
+import { PreviewThumb } from './ImagePreview'
 
 /** `anywhere` (unlike `break-words`) shrinks intrinsic min-content so long
  * unbroken strings wrap instead of widening the conversation column. */
@@ -55,21 +58,21 @@ export const UserItem = memo(function UserItem({
   spaced,
   showActions = false,
   actionsAlwaysVisible = false,
-  onResend
+  onEdit
 }: {
   message: UserMsg
   railId?: string
   /** Extra space above the bubble so it clears the assistant turn's completion
    * action row above — deliberately larger than the normal turn spacing. */
   spaced?: boolean
-  /** False while a run streams: resend rewinds the session, which the SDK
+  /** False while a run streams: editing rewinds the session, which the SDK
    * only allows when idle. */
   showActions?: boolean
   /** True only for the transcript's newest row: its actions stay visible
    * instead of being revealed on hover like every older message. */
   actionsAlwaysVisible?: boolean
-  /** Rewinds to this message and re-sends it (drops what came after). */
-  onResend?: (message: UserMsg) => void
+  /** Opens the edit-and-resend dialog for this message. */
+  onEdit?: (message: UserMsg) => void
 }) {
   const { t } = useI18n()
   const { text, files, images } = extractUserDisplay(message.content)
@@ -106,23 +109,24 @@ export const UserItem = memo(function UserItem({
             {images.length ? (
               <div className="mt-2 flex flex-wrap gap-2">
                 {images.map((image, index) => (
-                  <img
+                  <PreviewThumb
                     key={index}
                     src={`data:${image.mimeType};base64,${image.data}`}
-                    alt={`attachment ${index + 1}`}
-                    className="max-h-44 max-w-64 rounded-lg border border-border object-cover"
+                    alt={t('imagePreview.attachment', { index: index + 1 })}
+                    className="max-w-64 rounded-lg"
+                    imageClassName="max-h-44 w-auto max-w-full object-cover"
                   />
                 ))}
               </div>
             ) : null}
           </MessageBubbleContent>
         </MessageBubble>
-        {showActions && text ? (
+        {showActions ? (
           <MessageActions alwaysVisible={actionsAlwaysVisible}>
-            <CopyAction text={text} />
-            {onResend ? (
-              <MessageAction label={t('chat.messageResend')} onClick={() => onResend(message)}>
-                <RefreshCw className="size-3.5" />
+            {text ? <CopyAction text={text} /> : null}
+            {onEdit ? (
+              <MessageAction label={t('chat.messageResend')} onClick={() => onEdit(message)}>
+                <Pencil className="size-3.5" />
               </MessageAction>
             ) : null}
           </MessageActions>
@@ -203,7 +207,7 @@ export const BashItem = memo(function BashItem({ message }: { message: BashExecu
       onOpenChange={setOpen}
       title={`$ ${message.command}`}
       status={status}
-      kind="terminal"
+      icon={<ToolIcon name="bash" />}
       meta={meta || undefined}
       copyText={message.output || message.command}
       defaultOpen={false}
@@ -234,11 +238,12 @@ export const CustomItem = memo(function CustomItem({ message }: { message: Custo
       {images.length ? (
         <div className="mt-2 flex flex-wrap gap-2">
           {images.map((image, index) => (
-            <img
+            <PreviewThumb
               key={index}
               src={`data:${image.mimeType};base64,${image.data}`}
-              alt={`attachment ${index + 1}`}
-              className="max-h-44 max-w-64 rounded-lg border border-border object-cover"
+              alt={t('imagePreview.attachment', { index: index + 1 })}
+              className="max-w-64 rounded-lg"
+              imageClassName="max-h-44 w-auto max-w-full object-cover"
             />
           ))}
         </div>
@@ -270,6 +275,11 @@ interface AssistantPartsProps extends ToolContext {
   forkAt?: AssistantMsg
   onResend?: (message: UserMsg) => void
   onFork?: (message: AssistantMsg) => void
+  /** Turn-level content shown between the answer and the completion-actions row
+   * (the files this turn wrote); only the round that renders that row gets it. */
+  footer?: ReactNode
+  /** Session working directory, used to render each tool call's target path. */
+  cwd?: string | null
 }
 
 type AssistantBlock =
@@ -314,11 +324,12 @@ const AssistantParts = memo(function AssistantParts({
   forkAt,
   onResend,
   onFork,
+  footer,
+  cwd,
   toolResults,
   toolRuns,
 }: AssistantPartsProps) {
   const { t } = useI18n()
-  const reduce = useReducedMotion() ?? false
   const blocks = groupContent(message.content)
   const hasContent = blocks.length > 0
 
@@ -354,53 +365,42 @@ const AssistantParts = memo(function AssistantParts({
           // disclosure stays collapsed by default, so the growing text is cheap
           // and the user can expand it live.
           return (
-            <AgentActivity
-              key={`thinking-${index}`}
-              status="complete"
-              summary={
-                // Same leading-icon shape as a tool row, so the Reasoning row
-                // scans like the tool calls under it.
-                <span className="inline-flex items-center gap-2">
-                  <Brain aria-hidden="true" className="size-4 shrink-0" />
-                  {t('chat.reasoning')}
-                </span>
-              }
-              defaultOpen={false}
-              collapseOnComplete={false}
-              contentClassName={WRAP_ANYWHERE}
-              items={block.parts.map((part, partIndex) => ({
-                id: `think-${index}-${partIndex}`,
-                type: 'text' as const,
-                content: <ReasoningText text={part.thinking || '(redacted)'} />,
-              }))}
-            />
+            <RowReveal key={`thinking-${index}`} animate={streaming} className="w-full">
+              <AgentActivity
+                status="complete"
+                summary={
+                  // Same leading-icon shape as a tool row, so the Reasoning row
+                  // scans like the tool calls under it.
+                  <span className="inline-flex items-center gap-2">
+                    <Brain aria-hidden="true" className="size-4 shrink-0" />
+                    {t('chat.reasoning')}
+                  </span>
+                }
+                defaultOpen={false}
+                collapseOnComplete={false}
+                contentClassName={WRAP_ANYWHERE}
+                items={block.parts.map((part, partIndex) => ({
+                  id: `think-${index}-${partIndex}`,
+                  type: 'text' as const,
+                  content: <ReasoningText text={part.thinking || '(redacted)'} />,
+                }))}
+              />
+            </RowReveal>
           )
         }
 
         if (block.kind === 'tool') {
           return (
             <div key={`tool-${index}`} className="w-full space-y-2">
-              {/* A round's tool calls land as a batch and used to snap into the
-                  transcript. Fade each row in with a short, transform-free
-                  opacity transition: no `y`/`layout`, so the animation itself
-                  can never move a row and jitter the transcript (which a fast
-                  model's rapid batches made obvious). The row still takes its
-                  layout slot immediately; only its paint fades.
-                  `initial` is dropped for historical rounds (`!streaming`), so
-                  opening a session does not animate its whole tool history. */}
               {block.parts.map((call) => (
-                <motion.div
-                  key={call.id}
-                  initial={streaming && !reduce ? { opacity: 0 } : false}
-                  animate={{ opacity: 1 }}
-                  transition={{ duration: 0.15, ease: EASE_OUT }}
-                >
+                <RowReveal key={call.id} animate={streaming}>
                   <ToolCallView
                     call={call}
                     result={toolResults.get(call.id)}
                     run={toolRuns[call.id]}
+                    cwd={cwd}
                   />
-                </motion.div>
+                </RowReveal>
               ))}
             </div>
           )
@@ -408,13 +408,15 @@ const AssistantParts = memo(function AssistantParts({
 
         const text = block.parts.map((part) => part.text).join('\n\n')
         if (!text) return null
+        const isFinalBlock = index === blocks.length - 1
         return (
           <MessageBubble key={`text-${index}`} variant="ghost" className="w-full">
             <MessageBubbleContent>
               <StreamingResponse
                 status={streaming ? 'streaming' : 'complete'}
                 copyText={text}
-                showActions={!streaming && showActions && index === blocks.length - 1}
+                showActions={!streaming && showActions && isFinalBlock}
+                footer={!streaming && showActions && isFinalBlock ? footer : undefined}
                 actions={
                   !streaming && index === blocks.length - 1 ? retryForkActions : undefined
                 }
@@ -436,25 +438,27 @@ const AssistantParts = memo(function AssistantParts({
         // Reuses the reasoning disclosure (beUI AgentActivity): a collapsed row
         // that expands to the raw provider/SDK error instead of dumping a red
         // box into the transcript.
-        <AgentActivity
-          status="complete"
-          summary={<span className="text-destructive">{t('chat.error')}</span>}
-          defaultOpen={false}
-          collapseOnComplete={false}
-          contentClassName={WRAP_ANYWHERE}
-          items={[
-            {
-              id: 'error',
-              type: 'text' as const,
-              content: (
-                <span className="text-destructive">
-                  {message.errorMessage}
-                  {message.stopReason === 'aborted' ? t('chat.aborted') : ''}
-                </span>
-              ),
-            },
-          ]}
-        />
+        <RowReveal animate={streaming} className="w-full">
+          <AgentActivity
+            status="complete"
+            summary={<span className="text-destructive">{t('chat.error')}</span>}
+            defaultOpen={false}
+            collapseOnComplete={false}
+            contentClassName={WRAP_ANYWHERE}
+            items={[
+              {
+                id: 'error',
+                type: 'text' as const,
+                content: (
+                  <span className="text-destructive">
+                    {message.errorMessage}
+                    {message.stopReason === 'aborted' ? t('chat.aborted') : ''}
+                  </span>
+                ),
+              },
+            ]}
+          />
+        </RowReveal>
       ) : null}
     </>
   )
@@ -466,9 +470,11 @@ function assistantPartsPropsEqual(prev: AssistantPartsProps, next: AssistantPart
     prev.streaming !== next.streaming ||
     prev.showActions !== next.showActions ||
     prev.actionsAlwaysVisible !== next.actionsAlwaysVisible ||
+    prev.cwd !== next.cwd ||
     prev.turnTimestamp !== next.turnTimestamp ||
     prev.retryFrom !== next.retryFrom ||
     prev.forkAt !== next.forkAt ||
+    prev.footer !== next.footer ||
     prev.onResend !== next.onResend ||
     prev.onFork !== next.onFork ||
     prev.toolResults !== next.toolResults
@@ -503,6 +509,8 @@ export interface AssistantGroupProps extends ToolContext {
   /** True only for the transcript's newest turn: its completion-actions row
    * (icons + timestamp) stays visible instead of revealing on hover. */
   actionsAlwaysVisible?: boolean
+  /** Session working directory, used to resolve the turn's written files. */
+  cwd?: string | null
 }
 
 /**
@@ -516,6 +524,7 @@ function assistantGroupPropsEqual(prev: AssistantGroupProps, next: AssistantGrou
     prev.streamingIndex !== next.streamingIndex ||
     prev.pending !== next.pending ||
     prev.toolResults !== next.toolResults ||
+    prev.cwd !== next.cwd ||
     prev.retryFrom !== next.retryFrom ||
     prev.forkAt !== next.forkAt ||
     prev.onResend !== next.onResend ||
@@ -582,6 +591,7 @@ export const AssistantGroup = memo(function AssistantGroup({
   onFork,
   showActions = false,
   actionsAlwaysVisible = false,
+  cwd,
   toolResults,
   toolRuns
 }: AssistantGroupProps) {
@@ -627,6 +637,31 @@ export const AssistantGroup = memo(function AssistantGroup({
     lastRound?.stopReason === 'error' ||
     Boolean(lastRound?.errorMessage)
   const showTurnActions = !live && lastRoundHasText && !incomplete
+  /**
+   * The files this turn wrote, derived here rather than passed in: the group's
+   * memo already keeps untouched turns out of the render path, so only the turn
+   * that changed pays for the extraction (and the per-result patch cache in
+   * `turn-written-files` keeps repeat work off the streaming path).
+   */
+  const writtenFiles = useMemo(
+    () => extractTurnWrittenFiles(messages, toolResults, cwd),
+    [messages, toolResults, cwd]
+  )
+  /**
+   * The list belongs between the answer and the completion-actions row, so it
+   * rides in that row's `footer` slot whenever the turn renders one. A turn that
+   * ends on tools, or was stopped/errored, has no such row — there it stays a
+   * plain row above the standalone retry/fork fallback.
+   *
+   * Either way it only appears once THIS turn stopped writing: `live` is the
+   * turn's own flag, not the session's `busy`, so a run in progress shows nothing
+   * (no half-written file set) while an earlier, settled turn keeps its list even
+   * as the next turn streams. Every ending — completed, stopped, errored —
+   * reveals it.
+   */
+  const writtenFilesNode =
+    !live && writtenFiles.length > 0 ? <TurnWrittenFiles files={writtenFiles} /> : null
+  const writtenFilesInFooter = showTurnActions && Boolean(writtenFilesNode)
 
   if (!hasParts) return null
 
@@ -676,6 +711,7 @@ export const AssistantGroup = memo(function AssistantGroup({
                     showActions={false}
                     actionsAlwaysVisible={false}
                     turnTimestamp={turnTimestamp}
+                    cwd={cwd}
                     toolResults={toolResults}
                     toolRuns={toolRuns}
                   />
@@ -696,13 +732,21 @@ export const AssistantGroup = memo(function AssistantGroup({
             forkAt={forkAt}
             onResend={onResend}
             onFork={onFork}
+            footer={
+              writtenFilesInFooter && index === visibleMessages.length - 1
+                ? writtenFilesNode
+                : undefined
+            }
             turnTimestamp={turnTimestamp}
+            cwd={cwd}
             toolResults={toolResults}
             toolRuns={toolRuns}
           />
         ))}
 
         {live ? <TurnStatus /> : null}
+
+        {writtenFilesNode && !writtenFilesInFooter ? writtenFilesNode : null}
 
         {/* Retry/fork normally live inside the final text round's completion
             actions row (so they share a line with copy/feedback and the

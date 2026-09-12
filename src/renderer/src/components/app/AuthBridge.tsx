@@ -9,13 +9,17 @@ interface AuthBridgeProps {
   prompt: AuthPromptDTO | null
   notify: AuthNotifyDTO[]
   onReply: (requestId: string, value: string | null) => void
+  /** Drop an in-flight login (its dialog has no prompt to cancel through). */
+  onCancel: (providerId: string) => void
 }
 
 /**
  * Renders login prompts raised by the Pi SDK (API keys, OAuth codes) and the
- * provider's progress notifications (auth URLs, device codes).
+ * provider's progress notifications (auth URLs, device codes). Device-code
+ * flows raise no prompt at all, so the notification alone must be enough to
+ * open the dialog — otherwise the user sees a spinner and nothing else.
  */
-export function AuthBridge({ prompt, notify, onReply }: AuthBridgeProps) {
+export function AuthBridge({ prompt, notify, onReply, onCancel }: AuthBridgeProps) {
   const { t } = useI18n()
   const [value, setValue] = useState('')
 
@@ -23,23 +27,27 @@ export function AuthBridge({ prompt, notify, onReply }: AuthBridgeProps) {
     setValue('')
   }, [prompt?.requestId])
 
-  if (!prompt) return null
+  const reversed = [...notify].reverse()
+  const deviceCode = reversed.find((n) => n.kind === 'device_code')
+  const latestUrl = reversed.find((n) => n.kind === 'auth_url' && n.url)
+  const progress = reversed.find((n) => n.kind === 'progress' && n.message)
 
-  const masked = prompt.kind === 'secret' || prompt.kind === 'manual_code'
-  const latestUrl = [...notify].reverse().find((n) => n.kind === 'auth_url' && n.url)
-  const deviceCode = [...notify].reverse().find((n) => n.kind === 'device_code')
+  if (!prompt && !deviceCode && !latestUrl) return null
+
+  const providerId = prompt?.providerId ?? deviceCode?.providerId ?? latestUrl?.providerId ?? ''
+  const masked = prompt?.kind === 'secret' || prompt?.kind === 'manual_code'
   // A device-code flow carries the page the code must be entered on; without
   // this the user sees the code but nowhere to use it.
-  const verificationUrl =
-    deviceCode?.verificationUri ?? latestUrl?.url ?? undefined
-  const instructions =
-    latestUrl?.instructions ??
-    [...notify].reverse().find((n) => n.instructions)?.instructions
+  const verificationUrl = deviceCode?.verificationUri ?? latestUrl?.url ?? undefined
+  const instructions = latestUrl?.instructions ?? reversed.find((n) => n.instructions)?.instructions
 
   return (
     <div className="fixed inset-0 z-[90] grid place-items-center bg-background/60 p-6 [backdrop-filter:blur(8px)]">
       <div className="w-full max-w-sm rounded-2xl border border-border bg-card p-5 shadow-2xl">
-        <p className="text-sm font-medium text-foreground">{prompt.message}</p>
+        <p className="flex items-center gap-2 text-sm font-medium text-foreground">
+          {!prompt ? <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground" /> : null}
+          {prompt ? prompt.message : t('auth.waiting')}
+        </p>
 
         {verificationUrl ? (
           <Button
@@ -49,9 +57,7 @@ export function AuthBridge({ prompt, notify, onReply }: AuthBridgeProps) {
             onClick={() => void window.pi.openExternal(verificationUrl)}
           >
             <ExternalLink className="size-3.5" />
-            {deviceCode?.verificationUri
-              ? t('auth.openVerificationPage')
-              : t('auth.openAuthPage')}
+            {deviceCode ? t('auth.openVerificationPage') : t('auth.openAuthPage')}
           </Button>
         ) : null}
 
@@ -71,7 +77,11 @@ export function AuthBridge({ prompt, notify, onReply }: AuthBridgeProps) {
           </div>
         ) : null}
 
-        {prompt.options?.length ? (
+        {!prompt && progress?.message ? (
+          <p className="mt-2 text-xs leading-5 text-muted-foreground">{progress.message}</p>
+        ) : null}
+
+        {prompt?.options?.length ? (
           <div className="mt-3 space-y-1.5">
             {prompt.options.map((option, index) => (
               <button
@@ -92,7 +102,7 @@ export function AuthBridge({ prompt, notify, onReply }: AuthBridgeProps) {
               </button>
             ))}
           </div>
-        ) : (
+        ) : prompt ? (
           <form
             className="mt-3"
             onSubmit={(event) => {
@@ -117,6 +127,14 @@ export function AuthBridge({ prompt, notify, onReply }: AuthBridgeProps) {
               </Button>
             </div>
           </form>
+        ) : (
+          // No prompt to cancel through — the device-code/URL step polls until
+          // the user finishes in the browser, so offer an explicit way out.
+          <div className="mt-4 flex justify-end">
+            <Button type="button" variant="ghost" size="sm" onClick={() => onCancel(providerId)}>
+              {t('common.cancel')}
+            </Button>
+          </div>
         )}
       </div>
     </div>

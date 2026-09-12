@@ -49,6 +49,28 @@ export function parseUnifiedDiff(diff: string): FileDiffLine[] {
   return lines
 }
 
+/**
+ * Reconstructs the unified patch for a `write` call.
+ *
+ * pi's `write` tool reports no `details` at all — no patch and no counts — so
+ * the app derives them from the one thing the call does carry: the full
+ * `content` it wrote. `write` is documented as "new files or complete
+ * rewrites", and the result holds no before-image, so the content reads as a
+ * single all-insertion hunk (`--- /dev/null`). That is exactly right for a
+ * created file and the honest answer for a rewrite: the diff shows what the
+ * file now contains. Empty content has no hunk to show, so it returns null and
+ * the call falls back to its plain disclosure.
+ */
+export function synthesizeWritePatch(path: string, content: string): string | null {
+  if (!content) return null
+  // A trailing newline terminates the last line rather than starting an empty
+  // one, so drop it before splitting ("a\nb\n" is two lines, not three).
+  const body = content.endsWith('\n') ? content.slice(0, -1) : content
+  const lines = body.split('\n')
+  const header = [`--- /dev/null`, `+++ b/${path}`, `@@ -0,0 +1,${lines.length} @@`]
+  return [...header, ...lines.map((line) => `+${line}`)].join('\n')
+}
+
 export function diffStats(lines: FileDiffLine[]): { added: number; removed: number } {
   let added = 0
   let removed = 0

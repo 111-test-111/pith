@@ -17,6 +17,18 @@
 :root {
   --radius: 0.625rem;
 
+  /* Typefaces. The defaults below are what the app ships with; Settings →
+   * Appearance overwrites them at runtime (inline style on <html>) through
+   * lib/fonts.ts, and the `@theme inline` mapping below makes Tailwind's
+   * `font-sans`/`font-mono` utilities follow the change everywhere. The
+   * interface stack is sans or serif depending on the setting, hence "ui". */
+  --app-font-ui:
+    ui-sans-serif, system-ui, -apple-system, 'SF Pro Text', 'Segoe UI', Roboto,
+    'Helvetica Neue', Arial, sans-serif;
+  --app-font-mono:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New',
+    monospace;
+
   --background: oklch(0.984 0.003 264);
   --foreground: oklch(0.216 0.02 264);
   --card: oklch(1 0 0);
@@ -52,83 +64,85 @@
   --input: oklch(0.29 0.014 264);
 }
 
-/* Accent presets: indigo (default) / blue / violet / emerald / amber / rose / cyan */
+/* Accent presets: indigo (default) / blue / violet / emerald / amber / rose / cyan.
+ * Chroma is deliberately kept a notch below the pure hue: these colors fill
+ * buttons, badges and links app-wide, and full saturation read as too loud. */
 
 :root {
-  --primary: oklch(0.51 0.21 275);
+  --primary: oklch(0.52 0.185 275);
   --primary-foreground: oklch(0.985 0.002 264);
-  --ring: oklch(0.51 0.21 275);
+  --ring: oklch(0.52 0.185 275);
 }
 .dark {
-  --primary: oklch(0.67 0.16 275);
+  --primary: oklch(0.685 0.145 275);
   --primary-foreground: oklch(0.14 0.02 275);
-  --ring: oklch(0.67 0.16 275);
+  --ring: oklch(0.685 0.145 275);
 }
 
 [data-accent='blue'] {
-  --primary: oklch(0.52 0.19 255);
+  --primary: oklch(0.53 0.17 255);
   --primary-foreground: oklch(0.985 0.002 255);
-  --ring: oklch(0.52 0.19 255);
+  --ring: oklch(0.53 0.17 255);
 }
 .dark[data-accent='blue'] {
-  --primary: oklch(0.68 0.15 255);
+  --primary: oklch(0.695 0.135 255);
   --primary-foreground: oklch(0.14 0.02 255);
-  --ring: oklch(0.68 0.15 255);
+  --ring: oklch(0.695 0.135 255);
 }
 
 [data-accent='violet'] {
-  --primary: oklch(0.5 0.24 300);
+  --primary: oklch(0.51 0.21 300);
   --primary-foreground: oklch(0.985 0.002 300);
-  --ring: oklch(0.5 0.24 300);
+  --ring: oklch(0.51 0.21 300);
 }
 .dark[data-accent='violet'] {
-  --primary: oklch(0.7 0.17 300);
+  --primary: oklch(0.715 0.15 300);
   --primary-foreground: oklch(0.15 0.03 300);
-  --ring: oklch(0.7 0.17 300);
+  --ring: oklch(0.715 0.15 300);
 }
 
 [data-accent='emerald'] {
-  --primary: oklch(0.51 0.14 163);
+  --primary: oklch(0.52 0.125 163);
   --primary-foreground: oklch(0.985 0.002 163);
-  --ring: oklch(0.51 0.14 163);
+  --ring: oklch(0.52 0.125 163);
 }
 .dark[data-accent='emerald'] {
-  --primary: oklch(0.7 0.14 163);
+  --primary: oklch(0.715 0.125 163);
   --primary-foreground: oklch(0.14 0.03 163);
-  --ring: oklch(0.7 0.14 163);
+  --ring: oklch(0.715 0.125 163);
 }
 
 [data-accent='amber'] {
-  --primary: oklch(0.6 0.15 65);
+  --primary: oklch(0.61 0.135 65);
   --primary-foreground: oklch(0.18 0.03 65);
-  --ring: oklch(0.6 0.15 65);
+  --ring: oklch(0.61 0.135 65);
 }
 .dark[data-accent='amber'] {
-  --primary: oklch(0.78 0.15 75);
+  --primary: oklch(0.795 0.135 75);
   --primary-foreground: oklch(0.19 0.04 75);
-  --ring: oklch(0.78 0.15 75);
+  --ring: oklch(0.795 0.135 75);
 }
 
 [data-accent='rose'] {
-  --primary: oklch(0.54 0.2 15);
+  --primary: oklch(0.55 0.175 15);
   --primary-foreground: oklch(0.985 0.002 15);
-  --ring: oklch(0.54 0.2 15);
+  --ring: oklch(0.55 0.175 15);
 }
 .dark[data-accent='rose'] {
-  --primary: oklch(0.69 0.17 15);
+  --primary: oklch(0.705 0.15 15);
   --primary-foreground: oklch(0.15 0.03 15);
-  --ring: oklch(0.69 0.17 15);
+  --ring: oklch(0.705 0.15 15);
 }
 
 [data-accent='cyan'] {
-  --primary: oklch(0.53 0.13 215);
+  --primary: oklch(0.54 0.115 215);
   --primary-foreground: oklch(0.985 0.002 215);
-  --ring: oklch(0.53 0.13 215);
+  --ring: oklch(0.54 0.115 215);
 }
 .dark[data-accent='cyan'] {
-  --primary: oklch(0.72 0.12 215);
+  --primary: oklch(0.735 0.105 215);
   --primary-foreground: oklch(0.14 0.03 215);
-  --ring: oklch(0.72 0.12 215);
+  --ring: oklch(0.735 0.105 215);
 }
 
 @theme inline {
@@ -150,6 +164,8 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+  --font-sans: var(--app-font-ui);
+  --font-mono: var(--app-font-mono);
   --radius-lg: var(--radius);
   --radius-md: calc(var(--radius) - 2px);
   --radius-sm: calc(var(--radius) - 4px);
@@ -163,9 +179,7 @@ body,
 
 body {
   @apply bg-background text-foreground antialiased;
-  font-family:
-    ui-sans-serif, system-ui, -apple-system, 'SF Pro Text', 'Segoe UI', Roboto,
-    'Helvetica Neue', Arial, sans-serif;
+  font-family: var(--app-font-ui);
   overflow: hidden;
 }
 

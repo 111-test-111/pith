@@ -2,11 +2,15 @@ import React from 'react'
 import { createRoot } from 'react-dom/client'
 import { ThemeProvider } from 'next-themes'
 import App from './App'
+import { initFonts } from './lib/fonts'
 import './styles.css'
 
 // Apply the persisted accent before first paint to avoid a flash.
 const accent = window.localStorage.getItem('pi-app:accent')
 if (accent) document.documentElement.dataset.accent = accent
+
+// Same for the interface/monospace typefaces (Settings → Appearance).
+initFonts()
 
 // Same for the interface language on <html lang>.
 const locale = window.localStorage.getItem('pi-app:locale')

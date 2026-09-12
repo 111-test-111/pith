@@ -22,7 +22,9 @@ import { EASE_OUT, SPRING_PANEL } from "@/lib/ease";
 import { cn } from "@/lib/utils";
 
 type Side = "top" | "bottom";
-type Align = "start" | "end";
+// local patch (pi-app): "center" anchors the panel on the trigger's midpoint
+// (the turn's hover-preview pops out of the middle of its row).
+type Align = "start" | "end" | "center";
 
 type MorphContextValue = {
   open: boolean;
@@ -194,13 +196,16 @@ export function MorphPopoverTrigger({ children }: MorphPopoverTriggerProps) {
 }
 
 const originFor = (side: Side, align: Align) =>
-  `${side === "bottom" ? "top" : "bottom"} ${align === "end" ? "right" : "left"}`;
+  `${side === "bottom" ? "top" : "bottom"} ${align === "end" ? "right" : align === "center" ? "center" : "left"}`;
 
 // A clip that hides everything but the corner nearest the trigger, so the
 // panel appears to grow out of it. inset(top right bottom left).
 function clipHidden(side: Side, align: Align, radius: number) {
   const top = side === "bottom" ? "0%" : "92%";
   const bottom = side === "bottom" ? "92%" : "0%";
+  // Centered: the panel grows out of a horizontal sliver at its middle.
+  if (align === "center")
+    return `inset(${top} 50% ${bottom} 50% round ${radius}px)`;
   const right = align === "end" ? "0%" : "92%";
   const left = align === "end" ? "92%" : "0%";
   return `inset(${top} ${right} ${bottom} ${left} round ${radius}px)`;
@@ -219,6 +224,10 @@ export interface MorphPopoverContentProps {
   sideOffset?: number;
   /** Panel corner radius, in px. Default 16. */
   radius?: number;
+  /** local patch (pi-app): skip the morph entirely — the panel mounts and
+   * unmounts at rest, for a preview handing over to another one in the same
+   * frame (a hover moving from one file to the next). */
+  instant?: boolean;
   className?: string;
 }
 
@@ -228,6 +237,7 @@ export function MorphPopoverContent({
   align = "end",
   sideOffset = 8,
   radius = 16,
+  instant = false,
   className,
 }: MorphPopoverContentProps) {
   const ctx = useMorphContext("MorphPopoverContent");
@@ -243,7 +253,11 @@ export function MorphPopoverContent({
   const left = layout
     ? align === "end"
       ? layout.trigger.left + layout.trigger.width - layout.content.width
-      : layout.trigger.left
+      : align === "center"
+        ? layout.trigger.left +
+          layout.trigger.width / 2 -
+          layout.content.width / 2
+        : layout.trigger.left
     : 0;
   const top = layout
     ? side === "bottom"
@@ -253,13 +267,16 @@ export function MorphPopoverContent({
 
   // Both directions travel between the exact same hidden/show states. Exit
   // targets "hidden" directly instead of introducing separate choreography.
-  const wrap = reduce
+  // `instant` skips the morph on both ends: no variants and no initial/animate/
+  // exit state, so the panel is at rest the moment it mounts.
+  const still = reduce || instant;
+  const wrap = still
     ? undefined
     : {
         hidden: { opacity: 0, scale: 0.96, transition: SPRING_PANEL },
         show: { opacity: 1, scale: 1, transition: SPRING_PANEL },
       };
-  const clip = reduce
+  const clip = still
     ? undefined
     : {
         hidden: {
@@ -283,10 +300,10 @@ export function MorphPopoverContent({
           // Wrapper carries the shadow as a drop-shadow filter, which hugs the
           // clipped shape below (box-shadow would just get clipped away).
           variants={wrap}
-          initial={reduce ? { opacity: 0 } : "hidden"}
-          animate={reduce ? { opacity: 1 } : "show"}
-          exit={reduce ? { opacity: 0 } : "hidden"}
-          transition={reduce ? { duration: 0.12 } : undefined}
+          initial={instant ? false : reduce ? { opacity: 0 } : "hidden"}
+          animate={instant ? undefined : reduce ? { opacity: 1 } : "show"}
+          exit={instant ? undefined : reduce ? { opacity: 0 } : "hidden"}
+          transition={instant || !reduce ? undefined : { duration: 0.12 }}
           style={{
             left,
             top,

@@ -330,7 +330,8 @@ export type ThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhi
 /**
  * Live context usage of the active session, straight from the SDK's
  * AgentSession.getContextUsage() plus the session's running cost. Attached to
- * snapshots and to message_end events so the composer ring updates per turn.
+ * snapshots and to message_end events, and pushed by the main process' 2s
+ * `context_usage` poll, so the composer ring tracks the session live.
  */
 export interface ContextUsageDTO {
   /** Estimated context tokens, or null if unknown (e.g. right after compaction). */
@@ -343,6 +344,114 @@ export interface ContextUsageDTO {
   /** Cache hit rate 0–1 over the session (cacheRead / (cacheRead + input)),
    * or null before any cacheable usage arrives. */
   cacheHitRate: number | null
+}
+
+// ---- Tools & extensions catalog (Settings → Tools / Extensions) ----
+
+/** Where a tool comes from: a built-in SDK tool or an installed extension. */
+export interface ToolSourceDTO {
+  kind: 'builtin' | 'extension'
+  /** Extension identity (`resolvedPath`) when `kind` is "extension". */
+  extensionId?: string
+  /** Display label — "Built-in" or the extension's package name. */
+  label: string
+}
+
+/**
+ * One tool the agent can call, with the metadata Settings → Tools renders.
+ * `active` mirrors the live session's active tool set; `disabledByExtension`
+ * marks tools belonging to an extension the user switched off.
+ */
+export interface ToolInfoDTO {
+  name: string
+  description: string
+  /** JSON Schema (TypeBox) for the tool's arguments. */
+  parameters: Record<string, any>
+  promptGuidelines?: string[]
+  source: ToolSourceDTO
+  active: boolean
+  disabledByExtension: boolean
+}
+
+/** Kinds of resource a package can contribute. */
+export type ExtensionResourceKind = 'extension' | 'skill' | 'prompt' | 'theme'
+
+/** One resource an extension's package ships (e.g. a bundled skill). */
+export interface ExtensionResourceDTO {
+  kind: ExtensionResourceKind
+  name: string
+  path: string
+  /** Path relative to the package root, when inside it. */
+  relativePath?: string
+}
+
+/** One installed extension as Settings → Extensions lists it. */
+export interface ExtensionInfoDTO {
+  /** Stable identity used for the enable/disable preference. */
+  id: string
+  /** Package name when resolvable, else the directory/file name. */
+  name: string
+  version?: string
+  /** Version pinned in the configured source spec, when any. */
+  configuredVersion?: string
+  /** Package source (e.g. `npm:@tavily/pi-extension`) or the local path. */
+  source: string
+  scope: 'user' | 'project' | 'temporary'
+  origin: 'package' | 'top-level'
+  path: string
+  toolNames: string[]
+  enabled: boolean
+  /** Present when the extension comes from a configured package. */
+  packageName?: string
+  installedPath?: string
+  /** Skills/prompts/themes/extensions the owning package ships. */
+  resources: ExtensionResourceDTO[]
+  /** True when the extension belongs to a configured package, so it can be
+   * updated or removed through the package manager. */
+  manageable: boolean
+}
+
+/** One skill (SKILL.md) the agent can invoke. */
+export interface SkillInfoDTO {
+  name: string
+  description: string
+  /** Absolute path to the skill's SKILL.md. */
+  filePath: string
+  baseDir: string
+  /** Package source (e.g. `npm:pi-mcp-adapter`) or the local path. */
+  source: string
+  scope: 'user' | 'project' | 'temporary'
+  origin: 'package' | 'top-level'
+  /** Owning package's display name when the skill ships in a package. */
+  packageName?: string
+  /** When true the skill is excluded from the system prompt and can only be
+   * invoked explicitly (its `disable-model-invocation` frontmatter key). */
+  disableModelInvocation: boolean
+}
+
+/** A skill-parsing problem reported by the SDK's skill loader. */
+export interface SkillDiagnosticDTO {
+  type: string
+  message: string
+}
+
+/** SKILL.md text for the Settings → Skills preview. */
+export interface SkillContentDTO {
+  path: string
+  text: string
+  truncated: boolean
+}
+
+/**
+ * Full tools + extensions + skills catalog for the active workspace.
+ * Extensions and skills are read from the unfiltered resource loader, so a
+ * disabled extension still appears (and its tools stay listed but inactive).
+ */
+export interface ToolCatalogDTO {
+  tools: ToolInfoDTO[]
+  extensions: ExtensionInfoDTO[]
+  skills: SkillInfoDTO[]
+  skillDiagnostics: SkillDiagnosticDTO[]
 }
 
 export interface ToolRunDTO {
@@ -363,7 +472,7 @@ export interface SessionSnapshotDTO {
   messages: ChatMessage[]
   streaming?: AssistantMsg | null
   toolRuns?: Record<string, ToolRunDTO>
-  queue?: { steering: string[]; followUp: string[] }
+  queue?: { steering: QueuedItemDTO[]; followUp: QueuedItemDTO[] }
   model: ModelRefDTO | null
   thinkingLevel: ThinkingLevel
   /** Levels the current model actually supports (SDK getAvailableThinkingLevels),
@@ -376,11 +485,48 @@ export interface SessionSnapshotDTO {
   eventSequence?: number
 }
 
+/**
+ * Side chat (`/btw`): a no-tools completion over a snapshot of a session. The
+ * renderer owns the exchange list — main stays stateless between questions.
+ */
+export interface SideChatHistoryEntry {
+  question: string
+  answer: string
+}
+
+export interface SideChatAskPayload {
+  /** Renderer-generated id; every stream event for this ask carries it. */
+  exchangeId: string
+  /** Session whose committed context answers the question; omitted = active one. */
+  sessionPath?: string | null
+  question: string
+  /** Earlier side exchanges, replayed as plain user/assistant turns. */
+  history: SideChatHistoryEntry[]
+}
+
+/**
+ * Incremental side-chat stream, on its own channel (`pi:side-chat`) so it never
+ * touches the workspace store's event log.
+ */
+export type SideChatEvent =
+  | { type: 'delta'; exchangeId: string; text: string }
+  | { type: 'done'; exchangeId: string }
+  | { type: 'error'; exchangeId: string; message: string }
+  | { type: 'aborted'; exchangeId: string }
+
 export interface AppInfoDTO {
   cwd: string | null
   /** Every folder the user has opened, most recent first (active cwd included). */
   folders: string[]
+  /** Whether AGENTS.md/CLAUDE.md context files are injected into the prompt. */
+  contextFiles: boolean
   version: string
+}
+
+/** Global append system prompt (~/.pi/agent/APPEND_SYSTEM.md). */
+export interface AppendPromptDTO {
+  path: string
+  text: string
 }
 
 export type FileKind = 'image' | 'text' | 'other'
@@ -455,6 +601,55 @@ export interface ResendPayload {
   timestamp: number
   text: string
   images: ImageContent[]
+  /**
+   * Referenced workspace files to (re-)inline as `<file>` blocks. Set by the
+   * edit-and-resend path, where the user may have added or removed file
+   * references; the plain retry path leaves this undefined so it keeps
+   * re-sending the file blocks already stored in the message text.
+   */
+  files?: string[]
+  /**
+   * True when `text`/`images`/`files` are a user edit and must win over the
+   * persisted entry (the rewind normally restores the stored text/images).
+   */
+  edited?: boolean
+}
+
+/** Identifies one row of the SDK queue (steering or follow-up). */
+export interface QueueItemPayload {
+  kind: 'steering' | 'followUp'
+  index: number
+}
+
+/**
+ * Per-item queue surgery. The SDK's only dequeue is a full clearQueue(), so
+ * the main process rebuilds the queues: `promote` moves a follow-up into the
+ * steering queue (deliver at the next turn boundary instead of after the
+ * run), `remove` drops the item.
+ */
+export type QueueActionPayload = QueueItemPayload & { action: 'promote' | 'remove' }
+
+/**
+ * One queued message as the renderer sees it: the SDK-visible text plus
+ * payload counts. The SDK only exposes queued messages as text — these DTOs
+ * are fed by the main process's payload mirror, and image bytes never ride
+ * the event stream; they return only via clearQueue() (RecalledItemDTO).
+ */
+export interface QueuedItemDTO {
+  /** SDK-visible text (file blocks inlined, templates expanded). */
+  text: string
+  /** The user's draft as typed — what recall puts back into the composer. */
+  originalText: string
+  imageCount: number
+  filePaths: string[]
+}
+
+/** A recalled queued message with its full payload (images included). */
+export interface RecalledItemDTO {
+  text: string
+  originalText: string
+  images: ImageContent[]
+  filePaths: string[]
 }
 
 /**

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { ImagePreviewProvider } from './components/app/ImagePreview'
 import { Welcome } from './components/app/Welcome'
 import { Workspace } from './components/app/Workspace'
 import { PiStore } from './state/pi-store'
@@ -91,7 +92,11 @@ function AppInner() {
     )
   }
 
-  return <Workspace store={store} accent={accent} onAccentChange={setAccent} />
+  return (
+    <ImagePreviewProvider>
+      <Workspace store={store} accent={accent} onAccentChange={setAccent} />
+    </ImagePreviewProvider>
+  )
 }
 
 /** The provider wraps the whole app so every string — including the boot

@@ -2,8 +2,17 @@ import { app, BrowserWindow, shell } from 'electron'
 import { join } from 'node:path'
 import { createPiManager, registerIpc } from './ipc'
 
+// Keep existing settings and Chromium storage through the product rename.
+app.setPath('userData', join(app.getPath('appData'), 'pi-app'))
+app.setName('Pith')
+if (process.platform === 'win32') app.setAppUserModelId('app.pith.desktop')
+
+const iconDirectory = app.isPackaged
+  ? join(process.resourcesPath, 'icons')
+  : join(app.getAppPath(), 'resources/icons')
+
 process.on('unhandledRejection', (reason) => {
-  console.error('[pi-app] Unhandled rejection:', reason)
+  console.error('[Pith] Unhandled rejection:', reason)
 })
 
 function createWindow(): BrowserWindow {
@@ -13,7 +22,8 @@ function createWindow(): BrowserWindow {
     minWidth: 760,
     minHeight: 560,
     show: false,
-    title: 'Pi',
+    title: 'Pith',
+    icon: join(iconDirectory, process.platform === 'win32' ? 'icon.ico' : '512x512.png'),
     backgroundColor: '#0b0b0d',
     webPreferences: {
       preload: join(__dirname, '../preload/index.mjs'),
@@ -42,6 +52,8 @@ function createWindow(): BrowserWindow {
 }
 
 app.whenReady().then(() => {
+  // BrowserWindow.icon does not set the macOS Dock icon during development.
+  if (process.platform === 'darwin') app.dock?.setIcon(join(iconDirectory, '512x512.png'))
   const pi = createPiManager()
   registerIpc(pi)
   createWindow()

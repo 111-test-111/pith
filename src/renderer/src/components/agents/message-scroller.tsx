@@ -400,6 +400,17 @@ export function MessageScroller({
       // local patch (pi-app): following cumulative output is always instant.
       // Smooth resize-follow both burns CPU and exposes top-to-bottom travel
       // while a newly selected transcript finishes laying out.
+      // Only scroll when growth actually left the bottom: a width-only reflow
+      // (or any frame where nothing changed below the fold) used to re-arm the
+      // programmatic-scroll flag and its safety timer for nothing, which churns
+      // on every frame of a fast stream.
+      const viewport = viewportRef.current;
+      if (
+        viewport &&
+        viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight <= 1
+      ) {
+        return;
+      }
       scrollToEnd("auto");
     });
     observer.observe(content);

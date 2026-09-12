@@ -24,7 +24,7 @@ import {
   CitationStack,
 } from "@/components/agents/citations";
 import { AgentDisclosure } from "@/components/agents/agent-disclosure";
-import { EASE_OUT, SPRING_PRESS, SPRING_SWAP } from "@/lib/ease";
+import { DURATION, EASE_OUT, SPRING_PRESS, SPRING_SWAP } from "@/lib/ease";
 import { cn } from "@/lib/utils";
 
 export type StreamingResponseStatus = "streaming" | "complete" | "error";
@@ -59,6 +59,9 @@ export interface StreamingResponseProps {
   // local patch (pi-app): slot for the turn's timestamp, rendered as one more
   // cell of the completion-actions row so it shares the row's spacing.
   meta?: ReactNode;
+  // local patch (pi-app): turn-level content that belongs between the answer and
+  // its completion-actions row (the files the turn wrote).
+  footer?: ReactNode;
   className?: string;
   contentClassName?: string;
   actionsClassName?: string;
@@ -114,6 +117,7 @@ export function StreamingResponse({
   showActions = true,
   actions,
   meta,
+  footer,
   className,
   contentClassName,
   actionsClassName,
@@ -184,13 +188,19 @@ export function StreamingResponse({
         {children}
       </div>
 
+      {/* local patch (pi-app): the footer sits above the completion actions, so a
+          turn can list what it changed and still end on the action row. */}
+      {footer ? <div className="mt-3">{footer}</div> : null}
+
       <AnimatePresence initial={false}>
         {shouldShowActions ? (
           <motion.div
             initial={reduce ? { opacity: 0 } : { opacity: 0, y: 4 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0 }}
-            transition={{ duration: reduce ? 0.12 : 0.22, ease: EASE_OUT }}
+            // local patch (pi-app): use the app's shared content duration for
+            // the completion-actions row instead of a one-off literal.
+            transition={{ duration: reduce ? 0.12 : DURATION.base, ease: EASE_OUT }}
             className="mt-3"
           >
             <div className={cn("flex items-center gap-0.5", actionsClassName)}>
@@ -211,7 +221,11 @@ export function StreamingResponse({
                   <RotateCcw className="size-3.5" />
                 </ResponseAction>
               ) : null}
-              {complete ? (
+              {/* local patch (pi-app): the feedback thumbs are only meaningful
+                  when the host wires them up. The app never passes
+                  `onFeedbackChange`/`feedback`, so rendering them produced
+                  buttons that highlighted and then did nothing. */}
+              {complete && (onFeedbackChange || feedback !== undefined) ? (
                 <>
                   <ResponseAction
                     label="Helpful"

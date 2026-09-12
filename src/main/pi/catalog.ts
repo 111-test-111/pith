@@ -1,0 +1,356 @@
+import {
+  DefaultPackageManager,
+  SettingsManager,
+  type Extension,
+  type ResolvedResource,
+  type ResourceLoader,
+  type ToolInfo
+} from '@earendil-works/pi-coding-agent'
+import { existsSync, readFileSync } from 'node:fs'
+import { basename, dirname, extname, join, relative } from 'node:path'
+import type {
+  ExtensionInfoDTO,
+  ExtensionResourceDTO,
+  ExtensionResourceKind,
+  SkillDiagnosticDTO,
+  SkillInfoDTO,
+  ToolCatalogDTO,
+  ToolInfoDTO
+} from '../../shared/types'
+
+/**
+ * Settings → Tools / Extensions reads the *unfiltered* resource loader, so a
+ * disabled extension stays visible (with its tools listed but inactive) even
+ * though the session's runner never sees it. The manager keeps the real loader
+ * and wraps only the runner-facing one in a Proxy (see `PiManager.servicesFor`).
+ *
+ * Two registration styles matter here: extensions like Tavily register their
+ * tools at load time (visible on `extension.tools`), while others (e.g. pi-fff)
+ * call `pi.registerTool` from `session_start`, so their tools only exist on the
+ * live session's registry. The catalog merges both.
+ */
+
+/** Stable identity for an extension: its resolved entry file. */
+export function extensionId(extension: Extension): string {
+  return extension.resolvedPath || extension.path
+}
+
+/** Package name/version for an installed package root. */
+function readPackageJson(packageRoot: string): { name?: string; version?: string } {
+  try {
+    const parsed = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')) as {
+      name?: unknown
+      version?: unknown
+    }
+    return {
+      name: typeof parsed.name === 'string' ? parsed.name : undefined,
+      version: typeof parsed.version === 'string' ? parsed.version : undefined
+    }
+  } catch {
+    return {}
+  }
+}
+
+/**
+ * Walk up from an extension entry's directory to the enclosing package.json —
+ * `sourceInfo.baseDir` points at the entry file's dir, which for `src/index.ts`
+ * is one level below the package root.
+ */
+function findPackageMeta(baseDir?: string): { name?: string; version?: string } {
+  if (!baseDir) return {}
+  let dir = baseDir
+  for (let depth = 0; depth < 4; depth += 1) {
+    const meta = readPackageJson(dir)
+    if (meta.name) return meta
+    const parent = dirname(dir)
+    if (parent === dir) break
+    dir = parent
+  }
+  return {}
+}
+
+function fallbackName(extension: Extension): string {
+  const fromBase = extension.sourceInfo.baseDir ? basename(extension.sourceInfo.baseDir) : ''
+  const candidate = fromBase || basename(extensionId(extension))
+  return candidate.replace(/\.(ts|js|mjs|cjs)$/i, '') || candidate
+}
+
+/** Version pinned in the configured source spec (`npm:pkg@1.2.3`, `git:…#tag`). */
+function configuredVersion(source: string): string | undefined {
+  if (source.startsWith('npm:')) {
+    const spec = source.slice(4)
+    const at = spec.lastIndexOf('@')
+    const nameEnd = spec.startsWith('@') ? spec.indexOf('/', 1) : 0
+    return at > nameEnd ? spec.slice(at + 1) || undefined : undefined
+  }
+  if (source.startsWith('git:') || /^[a-z]+:\/\//.test(source)) {
+    const at = source.lastIndexOf('@')
+    if (at > Math.max(source.lastIndexOf('/'), source.lastIndexOf(':'))) {
+      return source.slice(at + 1) || undefined
+    }
+  }
+  return undefined
+}
+
+const GENERIC_SOURCE_DIRS = new Set(['src', 'dist', 'lib', 'build', 'out', 'esm', 'cjs'])
+
+function resourceName(path: string, kind: ExtensionResourceKind): string {
+  const file = basename(path)
+  const ext = extname(file)
+  if (kind === 'skill' && file.toLowerCase() === 'skill.md') return basename(dirname(path))
+  if (kind === 'extension' && /^index\.(ts|js|mjs|cjs)$/.test(file)) {
+    const dir = basename(dirname(path))
+    // `src/index.ts`, `dist/index.js`: the enclosing package is the useful name.
+    return GENERIC_SOURCE_DIRS.has(dir) ? basename(dirname(dirname(path))) : dir
+  }
+  return ext ? file.slice(0, -ext.length) : file
+}
+
+function toResourceInfo(resource: ResolvedResource, kind: ExtensionResourceKind): ExtensionResourceDTO {
+  const baseDir = resource.metadata.baseDir
+  const rel = baseDir ? relative(baseDir, resource.path) : ''
+  return {
+    kind,
+    name: resourceName(resource.path, kind),
+    path: resource.path,
+    relativePath: rel && !rel.startsWith('..') ? rel : undefined
+  }
+}
+
+/** Package-derived details the Extensions tab shows alongside each extension. */
+export interface PackageResources {
+  installedPath?: string
+  packageName?: string
+  version?: string
+  configuredVersion?: string
+  resources: ExtensionResourceDTO[]
+}
+
+/**
+ * Resolve every configured package's installed path and the resources it ships
+ * (extensions/skills/prompts/themes). Missing sources are skipped — a settings
+ * entry with nothing installed must not trigger a surprise network install.
+ */
+export async function loadPackageResources(
+  cwd: string,
+  agentDir: string
+): Promise<Map<string, PackageResources>> {
+  const packages = new Map<string, PackageResources>()
+  const settingsManager = SettingsManager.create(cwd, agentDir)
+  const packageManager = new DefaultPackageManager({ cwd, agentDir, settingsManager })
+
+  for (const pkg of packageManager.listConfiguredPackages()) {
+    const meta = pkg.installedPath ? readPackageJson(pkg.installedPath) : {}
+    packages.set(pkg.source, {
+      installedPath: pkg.installedPath,
+      packageName: meta.name,
+      version: meta.version,
+      configuredVersion: configuredVersion(pkg.source),
+      resources: []
+    })
+  }
+
+  let resolved
+  try {
+    resolved = await packageManager.resolve(async () => 'skip')
+  } catch {
+    return packages
+  }
+
+  const kinds: [readonly ExtensionResourceKind[], ResolvedResource[]][] = [
+    [['extension'], resolved.extensions],
+    [['skill'], resolved.skills],
+    [['prompt'], resolved.prompts],
+    [['theme'], resolved.themes]
+  ]
+  for (const [kindList, resources] of kinds) {
+    for (const resource of resources) {
+      if (resource.metadata.origin !== 'package') continue
+      const entry = packages.get(resource.metadata.source)
+      if (!entry) continue
+      entry.resources.push(toResourceInfo(resource, kindList[0]))
+    }
+  }
+  return packages
+}
+
+/** Drop functions/symbols (TypeBox schemas carry a `Kind` symbol) before IPC. */
+function plain(value: unknown): any {
+  return JSON.parse(JSON.stringify(value ?? {}))
+}
+
+interface ToolLike {
+  description?: string
+  parameters?: unknown
+  promptGuidelines?: string[]
+}
+
+function toolDTO(
+  name: string,
+  definition: ToolLike,
+  source: ToolInfoDTO['source'],
+  active: boolean,
+  disabledByExtension: boolean
+): ToolInfoDTO {
+  return {
+    name,
+    description: definition.description ?? '',
+    parameters: plain(definition.parameters),
+    promptGuidelines: definition.promptGuidelines ? [...definition.promptGuidelines] : undefined,
+    source,
+    active,
+    disabledByExtension
+  }
+}
+
+function setTool(
+  map: Map<string, Map<string, ToolInfoDTO>>,
+  id: string,
+  dto: ToolInfoDTO
+): void {
+  const tools = map.get(id) ?? new Map<string, ToolInfoDTO>()
+  tools.set(dto.name, dto)
+  map.set(id, tools)
+}
+
+/**
+ * Build the catalog for one workspace. `sessionTools`/`activeToolNames` come
+ * from the live session (built-ins, enabled extension tools — including ones
+ * registered lazily during `session_start`); the extension list comes from the
+ * real loader and therefore covers disabled ones too.
+ *
+ * `knownTools` is the manager's snapshot of tools an extension had while it was
+ * still enabled, used to keep a disabled lazy extension's tools listed.
+ */
+export function buildToolCatalog(
+  loader: ResourceLoader,
+  sessionTools: ToolInfo[],
+  activeToolNames: string[],
+  disabledExtensions: Set<string>,
+  packages: Map<string, PackageResources>,
+  knownTools: Map<string, ToolInfoDTO[]>
+): ToolCatalogDTO {
+  const extensions = loader.getExtensions().extensions
+  const active = new Set(activeToolNames)
+
+  const infos = new Map<string, ExtensionInfoDTO>()
+  const labels = new Map<string, string>()
+  for (const extension of extensions) {
+    const id = extensionId(extension)
+    const source = extension.sourceInfo.source
+    const pkg = packages.get(source)
+    const fallback = pkg?.packageName ? undefined : findPackageMeta(extension.sourceInfo.baseDir)
+    const name = pkg?.packageName ?? fallback?.name ?? fallbackName(extension)
+    labels.set(id, name)
+    infos.set(id, {
+      id,
+      name,
+      version: pkg?.version ?? fallback?.version,
+      configuredVersion: pkg?.configuredVersion,
+      source,
+      scope: extension.sourceInfo.scope,
+      origin: extension.sourceInfo.origin,
+      path: id,
+      toolNames: [],
+      enabled: !disabledExtensions.has(id),
+      packageName: pkg?.packageName,
+      installedPath: pkg?.installedPath,
+      resources: pkg?.resources ?? [],
+      manageable: packages.has(source)
+    })
+  }
+
+  const perExtension = new Map<string, Map<string, ToolInfoDTO>>()
+
+  // Tools registered at load time (static `extension.tools` map).
+  for (const extension of extensions) {
+    const id = extensionId(extension)
+    const enabled = !disabledExtensions.has(id)
+    const label = labels.get(id) ?? id
+    for (const [name, registered] of extension.tools) {
+      setTool(
+        perExtension,
+        id,
+        toolDTO(
+          name,
+          registered.definition,
+          { kind: 'extension', extensionId: id, label },
+          enabled && active.has(name),
+          !enabled
+        )
+      )
+    }
+  }
+
+  // Tools registered at runtime — attributed back to their extension via the
+  // source info the runner stamped on them (this is how pi-fff shows up).
+  const extensionByPath = new Map<string, Extension>()
+  for (const extension of extensions) {
+    extensionByPath.set(extension.path, extension)
+    if (extension.resolvedPath) extensionByPath.set(extension.resolvedPath, extension)
+  }
+  for (const tool of sessionTools) {
+    if (tool.sourceInfo.source === 'builtin') continue
+    const extension = extensionByPath.get(tool.sourceInfo.path)
+    const id = extension ? extensionId(extension) : tool.sourceInfo.source
+    const label = labels.get(id) ?? tool.sourceInfo.source
+    const enabled = !disabledExtensions.has(id)
+    setTool(
+      perExtension,
+      id,
+      toolDTO(
+        tool.name,
+        tool,
+        { kind: 'extension', extensionId: id, label },
+        enabled && active.has(tool.name),
+        !enabled
+      )
+    )
+  }
+
+  // A disabled lazily-registering extension has no live tools left; reuse the
+  // snapshot captured when it was switched off so they still show (inactive).
+  for (const [id, snapshot] of knownTools) {
+    if (!disabledExtensions.has(id) || perExtension.get(id)?.size) continue
+    for (const dto of snapshot) {
+      setTool(perExtension, id, { ...dto, active: false, disabledByExtension: true })
+    }
+  }
+
+  const tools: ToolInfoDTO[] = []
+  for (const map of perExtension.values()) tools.push(...map.values())
+
+  const present = new Set(tools.map((tool) => tool.name))
+  const builtinSeen = new Set<string>()
+  for (const tool of sessionTools) {
+    if (tool.sourceInfo.source !== 'builtin' || present.has(tool.name)) continue
+    if (builtinSeen.has(tool.name)) continue
+    builtinSeen.add(tool.name)
+    tools.push(
+      toolDTO(tool.name, tool, { kind: 'builtin', label: 'builtin' }, active.has(tool.name), false)
+    )
+  }
+
+  for (const info of infos.values()) {
+    info.toolNames = [...(perExtension.get(info.id)?.keys() ?? [])]
+  }
+
+  const skillsResult = loader.getSkills()
+  const skills: SkillInfoDTO[] = skillsResult.skills.map((skill) => ({
+    name: skill.name,
+    description: skill.description,
+    filePath: skill.filePath,
+    baseDir: skill.baseDir,
+    source: skill.sourceInfo.source,
+    scope: skill.sourceInfo.scope,
+    origin: skill.sourceInfo.origin,
+    packageName: packages.get(skill.sourceInfo.source)?.packageName,
+    disableModelInvocation: skill.disableModelInvocation
+  }))
+  const skillDiagnostics: SkillDiagnosticDTO[] = skillsResult.diagnostics.map((diagnostic) => ({
+    type: diagnostic.type,
+    message: diagnostic.message
+  }))
+
+  return { tools, extensions: [...infos.values()], skills, skillDiagnostics }
+}

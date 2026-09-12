@@ -1,14 +1,18 @@
 import { useState, type ReactNode } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
-import { ArrowLeft, KeyRound, Palette, Settings2 } from 'lucide-react'
+import { ArrowLeft, GraduationCap, KeyRound, Palette, Puzzle, ScrollText, Settings2, Wrench } from 'lucide-react'
 import { Button } from '@/components/motion/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/motion/tabs'
 import { EASE_OUT } from '@/lib/ease'
 import type { MessageKey } from '@/i18n/locales/en'
 import { useI18n } from '@/i18n'
 import { GeneralSection } from './GeneralSection'
+import { PromptSection } from './PromptSection'
 import { AppearanceSection } from './AppearanceSection'
 import { ProvidersSection } from './ProvidersSection'
+import { ToolsSection } from './ToolsSection'
+import { ExtensionsSection } from './ExtensionsSection'
+import { SkillsSection } from './SkillsSection'
 
 interface SectionProps {
   accent: string
@@ -36,6 +40,13 @@ const SECTIONS: {
     render: () => <GeneralSection />
   },
   {
+    id: 'prompt',
+    labelKey: 'settings.prompt',
+    descriptionKey: 'settings.promptDesc',
+    icon: <ScrollText className="size-4" />,
+    render: () => <PromptSection />
+  },
+  {
     id: 'appearance',
     labelKey: 'settings.appearance',
     descriptionKey: 'settings.appearanceDesc',
@@ -50,6 +61,27 @@ const SECTIONS: {
     descriptionKey: 'settings.providersDesc',
     icon: <KeyRound className="size-4" />,
     render: () => <ProvidersSection />
+  },
+  {
+    id: 'tools',
+    labelKey: 'settings.tools',
+    descriptionKey: 'settings.toolsDesc',
+    icon: <Wrench className="size-4" />,
+    render: () => <ToolsSection />
+  },
+  {
+    id: 'extensions',
+    labelKey: 'settings.extensions',
+    descriptionKey: 'settings.extensionsDesc',
+    icon: <Puzzle className="size-4" />,
+    render: () => <ExtensionsSection />
+  },
+  {
+    id: 'skills',
+    labelKey: 'settings.skills',
+    descriptionKey: 'settings.skillsDesc',
+    icon: <GraduationCap className="size-4" />,
+    render: () => <SkillsSection />
   }
 ]
 

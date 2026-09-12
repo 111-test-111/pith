@@ -1,0 +1,29 @@
+appId: app.pith.desktop
+productName: Pith
+directories:
+  output: dist
+  buildResources: resources
+files:
+  - out/**/*
+  - package.json
+extraResources:
+  - from: resources/icons
+    to: icons
+mac:
+  icon: resources/icons/icon.icns
+  category: public.app-category.developer-tools
+  target:
+    - dmg
+    - zip
+win:
+  icon: resources/icons/icon.ico
+  target:
+    - nsis
+linux:
+  icon: resources/icons
+  category: Development
+  target:
+    - AppImage
+    - deb
+nsis:
+  shortcutName: Pith

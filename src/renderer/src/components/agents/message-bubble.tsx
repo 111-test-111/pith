@@ -160,7 +160,10 @@ function bubbleContentClass(
     // data-code-block-pre) is excluded from the raw-markdown framing —
     // CodeBlock frames itself, and these margins/paddings/background showed
     // up as a second box around fenced code.
-    "[&_a]:font-medium [&_a]:underline [&_a]:underline-offset-4 [&_code]:rounded [&_code]:bg-background/60 [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[0.9em] [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_p+p]:mt-2 [&_pre:not([data-code-block-pre])]:my-2 [&_pre:not([data-code-block-pre])]:overflow-x-auto [&_pre:not([data-code-block-pre])]:rounded-xl [&_pre:not([data-code-block-pre])]:bg-background/60 [&_pre:not([data-code-block-pre])]:p-3 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5",
+    // local patch (pi-app): the app renders its own lists inside a bubble body
+    // (the turn's written files) — `data-plain-list` opts those out of the
+    // markdown list styling, which would otherwise add a 20px indent and bullets.
+    "[&_a]:font-medium [&_a]:underline [&_a]:underline-offset-4 [&_code]:rounded [&_code]:bg-background/60 [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[0.9em] [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_p+p]:mt-2 [&_pre:not([data-code-block-pre])]:my-2 [&_pre:not([data-code-block-pre])]:overflow-x-auto [&_pre:not([data-code-block-pre])]:rounded-xl [&_pre:not([data-code-block-pre])]:bg-background/60 [&_pre:not([data-code-block-pre])]:p-3 [&_ul:not([data-plain-list])]:my-2 [&_ul:not([data-plain-list])]:list-disc [&_ul:not([data-plain-list])]:pl-5",
     variant === "solid" && "text-background",
     variant === "ghost" && "w-full max-w-none rounded-none px-0 py-0",
     variant === "danger" && "text-destructive",

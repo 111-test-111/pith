@@ -1,8 +1,10 @@
 import { memo, useMemo, useState } from 'react'
 import { FileDiff } from '@/components/agents/file-diff'
 import { ToolResult, ToolResultOutput } from '@/components/agents/tool-result'
-import { parseUnifiedDiff, countDiffChanges } from '@/lib/diff'
+import { parseUnifiedDiff, countDiffChanges, synthesizeWritePatch } from '@/lib/diff'
 import { basename } from '@/lib/format'
+import { displayToolDir } from '@/lib/tool-path'
+import { ToolIcon } from '@/lib/tool-icons'
 import type { ImageContent, ToolCallContent, ToolResultMsg } from '../../../../shared/types'
 import type { ToolRun } from '@/state/pi-store'
 import { useI18n } from '@/i18n'
@@ -11,6 +13,8 @@ interface ToolCallViewProps {
   call: ToolCallContent
   result?: ToolResultMsg
   run?: ToolRun
+  /** Session working directory, used to render a file tool's target path. */
+  cwd?: string | null
 }
 
 /** Image parts a tool returned (the SDK's read tool inlines image files). */
@@ -62,6 +66,27 @@ function statusOf(result: ToolResultMsg | undefined, run: ToolRun | undefined) {
 }
 
 /**
+ * The unified patch a file-writing result reported (`edit`, or a `write` that
+ * chose to). The SDK returns BOTH a display-oriented `diff` — line numbers baked
+ * into every line — and a real unified `patch`; only the latter is what
+ * `parseUnifiedDiff` can read back, so the patch wins wherever both exist.
+ */
+function patchOf(
+  result: ToolResultMsg | undefined,
+  run: ToolRun | undefined
+): { patch: string } | undefined {
+  const sources = [result?.details, (run?.partial as any)?.details] as (
+    | { patch?: unknown; diff?: unknown }
+    | undefined
+  )[]
+  for (const source of sources) {
+    const patch = source?.patch ?? source?.diff
+    if (typeof patch === 'string' && patch) return { patch }
+  }
+  return undefined
+}
+
+/**
  * Tool output is free-form text (command output, file contents, SDK errors),
  * not a script — the default bash grammar tokenized it and colored the first
  * word as a command. Render all of it as plain text; failures get the
@@ -85,6 +110,17 @@ function metaOf(result: ToolResultMsg | undefined, run: ToolRun | undefined): { 
 }
 
 /**
+ * The row label for a file tool: `edit · drive.mjs — src`. The basename leads
+ * so the row scans by file; only the file's directory follows — relative inside
+ * the session cwd, absolute outside it — so the filename is never repeated.
+ * The directory is omitted when it IS the workspace root.
+ */
+function fileToolLabel(tool: string, path: string, cwd: string | null | undefined): string {
+  const dir = displayToolDir(path, cwd)
+  return `${tool} · ${basename(path)}${dir ? ` — ${dir}` : ''}`
+}
+
+/**
  * `overflow-wrap: anywhere` (unlike `break-words`) lowers the intrinsic
  * min-content width, so unbroken tool output (e.g. minified JSON) wraps
  * instead of blowing out the conversation's width.
@@ -95,11 +131,13 @@ interface LazyDiffProps {
   file: string
   diff: string
   status: 'streaming' | 'complete'
+  /** Tool name whose icon heads the diff row (`edit`/`write`). */
+  tool: string
 }
 
 /** Keep diff parsing and line rendering out of the hot path while the card is
  * collapsed. Historical sessions commonly contain many large edit results. */
-function LazyDiff({ file, diff, status }: LazyDiffProps) {
+function LazyDiff({ file, diff, status, tool }: LazyDiffProps) {
   const [open, setOpen] = useState(false)
   // Counts for the collapsed header; parsing the full diff into rows stays
   // deferred until the user opens it.
@@ -107,6 +145,7 @@ function LazyDiff({ file, diff, status }: LazyDiffProps) {
   return (
     <FileDiff
       lazyContent
+      icon={<ToolIcon name={tool} className="text-muted-foreground" />}
       file={file}
       lines={open ? parseUnifiedDiff(diff) : []}
       additions={changes.added}
@@ -121,10 +160,11 @@ function LazyDiff({ file, diff, status }: LazyDiffProps) {
 
 /**
  * Maps a pi tool call + its execution state onto beUI disclosure components:
- * bash/read/search tools become ToolResult terminals, edit/write become
- * FileDiff surfaces driven by the unified diff in the tool details.
+ * every tool becomes a ToolResult row (edit/write prefer a FileDiff surface when
+ * the SDK returned a unified diff). The row's glyph comes from the app-wide
+ * tool→icon map in `lib/tool-icons`.
  */
-export const ToolCallView = memo(function ToolCallView({ call, result, run }: ToolCallViewProps) {
+export const ToolCallView = memo(function ToolCallView({ call, result, run, cwd }: ToolCallViewProps) {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
   const status = statusOf(result, run)
@@ -161,7 +201,7 @@ export const ToolCallView = memo(function ToolCallView({ call, result, run }: To
           // line here; the ellipsis marks that the rest is in the expansion.
           title={`bash · ${firstLine.slice(0, 72)}${firstLine.length > 72 || command.includes('\n') ? '…' : ''}`}
           status={status}
-          kind="terminal"
+          icon={<ToolIcon name="bash" />}
           meta={meta}
           copyText={output || command}
           defaultOpen={false}
@@ -177,11 +217,12 @@ export const ToolCallView = memo(function ToolCallView({ call, result, run }: To
 
     case 'edit': {
       const path = String(args.path ?? '')
-      const diff = (result?.details as any)?.diff ?? (run?.partial as any)?.details?.diff
+      const diff = patchOf(result, run)?.patch
       if (typeof diff === 'string' && diff) {
         return (
           <LazyDiff
-            file={`edit · ${basename(path)}${path && !path.includes('/') ? '' : ` — ${path}`}`}
+            tool="edit"
+            file={fileToolLabel('edit', path, cwd)}
             diff={diff}
             status={status === 'running' ? 'streaming' : 'complete'}
           />
@@ -193,9 +234,9 @@ export const ToolCallView = memo(function ToolCallView({ call, result, run }: To
           lazyContent
           open={open}
           onOpenChange={setOpen}
-          title={`edit · ${basename(path)}`}
+          title={fileToolLabel('edit', path, cwd)}
           status={status}
-          kind="terminal"
+          icon={<ToolIcon name="edit" />}
           meta={meta}
           defaultOpen={false}
           collapseOnComplete={false}
@@ -208,11 +249,17 @@ export const ToolCallView = memo(function ToolCallView({ call, result, run }: To
 
     case 'write': {
       const path = String(args.path ?? '')
-      const diff = (result?.details as any)?.diff
+      const content = typeof args.content === 'string' ? args.content : ''
+      // pi's `write` returns no `details`, so the diff comes from the content
+      // the call wrote — the same all-insertion patch the turn's changed-files
+      // list derives. A real `details.patch` still wins if a future SDK adds
+      // one.
+      const diff = patchOf(result, run)?.patch ?? synthesizeWritePatch(path, content) ?? undefined
       if (typeof diff === 'string' && diff) {
         return (
           <LazyDiff
-            file={`write · ${basename(path)}`}
+            tool="write"
+            file={fileToolLabel('write', path, cwd)}
             diff={diff}
             status={status === 'running' ? 'streaming' : 'complete'}
           />
@@ -224,9 +271,9 @@ export const ToolCallView = memo(function ToolCallView({ call, result, run }: To
           lazyContent
           open={open}
           onOpenChange={setOpen}
-          title={`write · ${basename(path)}`}
+          title={fileToolLabel('write', path, cwd)}
           status={status}
-          kind="terminal"
+          icon={<ToolIcon name="write" />}
           meta={meta}
           defaultOpen={false}
           collapseOnComplete={false}
@@ -247,9 +294,9 @@ export const ToolCallView = memo(function ToolCallView({ call, result, run }: To
           lazyContent
           open={open}
           onOpenChange={setOpen}
-          title={`read · ${basename(path)}`}
+          title={fileToolLabel('read', path, cwd)}
           status={status}
-          kind="terminal"
+          icon={<ToolIcon name="read" />}
           meta={meta}
           defaultOpen={false}
           collapseOnComplete={false}
@@ -277,7 +324,7 @@ export const ToolCallView = memo(function ToolCallView({ call, result, run }: To
           onOpenChange={setOpen}
           title={label}
           status={status}
-          kind="terminal"
+          icon={<ToolIcon name={call.name} />}
           meta={meta}
           defaultOpen={false}
           collapseOnComplete={false}

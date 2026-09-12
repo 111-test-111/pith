@@ -1,3 +1,4 @@
+import { PithIcon } from './PithIcon'
 import { useMemo, useSyncExternalStore } from 'react'
 import { AlertTriangle, RotateCcw, X } from 'lucide-react'
 import { MessageGroup } from '@/components/agents/message'
@@ -6,70 +7,16 @@ import type { PreviewRailItem } from '@/components/motion/preview-rail'
 import { Button } from '@/components/motion/button'
 import type {
   AssistantMsg,
-  BashExecutionMsg,
-  BranchSummaryMsg,
-  ChatMessage,
-  CompactionSummaryMsg,
-  CustomMsg,
   ToolResultMsg,
   UserMsg
 } from '../../../../shared/types'
 import type { Notice, PiStore, PiState } from '@/state/pi-store'
 import { useI18n } from '@/i18n'
+import { buildTurns, type ChatTurn } from '@/lib/chat-turns'
 import { extractUserDisplay } from '@/lib/user-message'
 import { AssistantGroup, BashItem, CustomItem, SummaryItem, UserItem } from './MessageItems'
+import { RowReveal } from './RowReveal'
 import { TurnStatus } from './TurnStatus'
-
-interface ChatTurnBase {
-  key: string
-}
-
-/**
- * A user message and the assistant rounds it triggered fold into one turn; the
- * SDK's non-LLM transcript entries (summaries, bash executions, extension
- * messages) each stand alone so nothing silently disappears from the history.
- */
-type ChatTurn =
-  | (ChatTurnBase & { role: 'user'; user: UserMsg; assistants: [] })
-  | (ChatTurnBase & { role: 'assistant'; assistants: AssistantMsg[]; live?: boolean })
-  | (ChatTurnBase & { role: 'info'; message: CompactionSummaryMsg | BranchSummaryMsg })
-  | (ChatTurnBase & { role: 'bash'; message: BashExecutionMsg })
-  | (ChatTurnBase & { role: 'custom'; message: CustomMsg })
-
-/**
- * Folds the message log into turns: a user message opens a turn, every
- * following assistant round (tool rounds, then the final text) joins the same
- * turn so it renders as ONE message row. toolResult entries are skipped —
- * they are rendered through the toolResults map on the calling round.
- */
-function buildTurns(messages: ChatMessage[]): ChatTurn[] {
-  const turns: ChatTurn[] = []
-  for (const message of messages) {
-    const last = turns[turns.length - 1]
-    switch (message.role) {
-      case 'user':
-        turns.push({ key: `u${message.timestamp}-${turns.length}`, role: 'user', user: message, assistants: [] })
-        break
-      case 'assistant':
-        if (last?.role === 'assistant') last.assistants.push(message)
-        else turns.push({ key: `a${message.timestamp}-${turns.length}`, role: 'assistant', assistants: [message] })
-        break
-      case 'toolResult':
-        break
-      case 'compactionSummary':
-      case 'branchSummary':
-        turns.push({ key: `s${message.timestamp}-${turns.length}`, role: 'info', message })
-        break
-      case 'bashExecution':
-        turns.push({ key: `b${message.timestamp}-${turns.length}`, role: 'bash', message })
-        break
-      case 'custom':
-        if (message.display) turns.push({ key: `c${message.timestamp}-${turns.length}`, role: 'custom', message })
-        break
-    }
-  }
-  return turns
-}
 
 /** Final answer text of a turn: the last round that produced prose. */
 function finalReplyText(assistants: AssistantMsg[]): string {
@@ -140,6 +87,7 @@ export function ChatView({
   scrollResetKey = 0,
   onDismissError,
   onResend,
+  onEditMessage,
   onFork
 }: {
   store: PiStore
@@ -147,9 +95,13 @@ export function ChatView({
    * live edge so the retried user message is visible. */
   scrollResetKey?: number
   onDismissError: () => void
-  /** Resend a user message — rewinds the session to it and re-prompts. Both
-   * the per-message buttons and the error banner's retry funnel here. */
+  /** Retry a turn's response — rewinds the session to the user message that
+   * opened it and re-prompts. The assistant turn's retry cell and the error
+   * banner funnel here. */
   onResend: (message: UserMsg) => void
+  /** Open the edit-and-resend dialog for a user message (does not resend by
+   * itself — the dialog's Resend press does). */
+  onEditMessage: (message: UserMsg) => void
   /** Fork the session at an assistant message; opens the fork. */
   onFork: (message: AssistantMsg) => void
 }) {
@@ -247,12 +199,27 @@ export function ChatView({
           // Only the transcript's newest row keeps its actions on screen; every
           // older one reveals them on hover.
           actionsAlwaysVisible={turn === lastTurn}
-          onResend={onResend}
+          onEdit={onEditMessage}
         />
       )
-    if (turn.role === 'info') return <SummaryItem key={turn.key} message={turn.message} />
-    if (turn.role === 'bash') return <BashItem key={turn.key} message={turn.message} />
-    if (turn.role === 'custom') return <CustomItem key={turn.key} message={turn.message} />
+    if (turn.role === 'info')
+      return (
+        <RowReveal key={turn.key} animate={busy}>
+          <SummaryItem message={turn.message} />
+        </RowReveal>
+      )
+    if (turn.role === 'bash')
+      return (
+        <RowReveal key={turn.key} animate={busy}>
+          <BashItem message={turn.message} />
+        </RowReveal>
+      )
+    if (turn.role === 'custom')
+      return (
+        <RowReveal key={turn.key} animate={busy}>
+          <CustomItem message={turn.message} />
+        </RowReveal>
+      )
 
     const isLast = turn === lastDisplayTurn
     const live = Boolean(turn.live)
@@ -286,6 +253,7 @@ export function ChatView({
         onFork={onFork}
         showActions={!busy}
         actionsAlwaysVisible={isLast && !live}
+        cwd={state.cwd}
         toolResults={toolResults}
         toolRuns={state.toolRuns}
       />
@@ -315,39 +283,41 @@ export function ChatView({
 
         {displayTurns.map((turn, index) => renderTurn(turn, displayTurns[index - 1]))}
 
-        {state.isStreaming && !streaming && !waitingInLastTurn ? (
-          <TurnStatus className="pl-11" />
-        ) : null}
+        {state.isStreaming && !streaming && !waitingInLastTurn ? <TurnStatus /> : null}
 
         {state.notice ? (
-          <div className="rounded-xl bg-muted/60 px-3 py-2 text-xs text-muted-foreground">
-            {noticeText(state.notice, t)}
-          </div>
+          <RowReveal animate>
+            <div className="rounded-xl bg-muted/60 px-3 py-2 text-xs text-muted-foreground">
+              {noticeText(state.notice, t)}
+            </div>
+          </RowReveal>
         ) : null}
 
         {state.error ? (
-          <div className="flex items-start justify-between gap-3 rounded-xl border border-destructive/40 bg-destructive/10 px-3 py-2.5 text-sm text-destructive">
-            <span className="flex items-start gap-2">
-              <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-              {state.error}
-            </span>
-            <span className="flex items-center gap-0.5">
-              {lastUserTurn && !busy ? (
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="size-6 text-destructive hover:text-destructive"
-                  aria-label={t('chat.errorRetry')}
-                  onClick={() => onResend(lastUserTurn)}
-                >
-                  <RotateCcw className="size-3.5" />
+          <RowReveal animate>
+            <div className="flex items-start justify-between gap-3 rounded-xl border border-destructive/40 bg-destructive/10 px-3 py-2.5 text-sm text-destructive">
+              <span className="flex items-start gap-2">
+                <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+                {state.error}
+              </span>
+              <span className="flex items-center gap-0.5">
+                {lastUserTurn && !busy ? (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="size-6 text-destructive hover:text-destructive"
+                    aria-label={t('chat.errorRetry')}
+                    onClick={() => onResend(lastUserTurn)}
+                  >
+                    <RotateCcw className="size-3.5" />
+                  </Button>
+                ) : null}
+                <Button variant="ghost" size="icon" className="size-6" aria-label={t('chat.dismissError')} onClick={onDismissError}>
+                  <X className="size-3.5" />
                 </Button>
-              ) : null}
-              <Button variant="ghost" size="icon" className="size-6" aria-label={t('chat.dismissError')} onClick={onDismissError}>
-                <X className="size-3.5" />
-              </Button>
-            </span>
-          </div>
+              </span>
+            </div>
+          </RowReveal>
         ) : null}
       </MessageGroup>
     </MessageScroller>
@@ -361,9 +331,7 @@ function EmptyState() {
   const [before, after] = t('chat.emptyBody').split('@')
   return (
     <div className="flex flex-col items-center justify-center gap-3 py-24 text-center">
-      <div className="grid size-12 place-items-center rounded-2xl bg-primary/10 font-mono text-2xl font-bold text-primary">
-        π
-      </div>
+      <PithIcon className="size-16" />
       <p className="text-base font-medium text-foreground">{t('chat.emptyTitle')}</p>
       <p className="max-w-sm text-sm text-muted-foreground">
         {before}

@@ -12,8 +12,11 @@ import {
   useId,
   useRef,
   useState,
+  type FocusEvent,
   type InputHTMLAttributes,
   type ReactNode,
+  type Ref,
+  type TextareaHTMLAttributes,
 } from "react";
 import { cn } from "@/lib/utils";
 
@@ -45,6 +48,11 @@ export interface InputProps extends Omit<
   rightIcon?: ReactNode;
   className?: string;
   classNames?: InputClassNames;
+  // local patch (pi-app): render a multiline <textarea> with the same field
+  // chrome instead of an <input> (beUI ships no textarea component).
+  multiline?: boolean;
+  // local patch (pi-app): visible rows for the multiline variant.
+  rows?: number;
 }
 
 export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
@@ -65,6 +73,8 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
     disabled,
     id: idProp,
     type,
+    multiline = false,
+    rows = 6,
     ...rest
   },
   ref,
@@ -86,6 +96,11 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
 
   // Right edge shows the success check, otherwise the caller's right icon.
   const rightSlot = success ? null : rightIcon;
+  // local patch (pi-app): pin the multiline height to a whole number of text
+  // rows — `rows` lines at the field's leading-6 (1.5rem). The vertical
+  // padding sits on the field, not here, so the clip edge lands exactly on a
+  // line boundary and no half line ever shows.
+  const multilineHeight = `calc(${rows} * 1.5rem)`;
 
   // Shake the field when an error appears.
   useEffect(() => {
@@ -130,7 +145,12 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
                 : "idle"
         }
         className={cn(
-          "relative h-11 overflow-hidden rounded-full border transition-colors duration-200",
+          "relative border transition-colors duration-200",
+          // local patch (pi-app): the multiline variant grows with its rows
+          // instead of keeping the pill's fixed height and rounding, and its
+          // vertical padding lives on the field so the <textarea> box itself
+          // is exactly `rows` lines tall and clips at a line boundary.
+          multiline ? "rounded-2xl py-3" : "h-11 overflow-hidden rounded-full",
           "border-border",
           focused && !hasError && "border-foreground/40 ring-2 ring-ring/40",
           hasError && "border-destructive ring-2 ring-destructive/25",
@@ -149,33 +169,64 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
           </span>
         ) : null}
 
-        <input
-          ref={ref}
-          id={id}
-          type={type}
-          value={value}
-          disabled={disabled}
-          aria-invalid={hasError || undefined}
-          aria-describedby={errorMessage ? `${id}-error` : undefined}
-          {...rest}
-          onChange={(e) => handleChange(e.target.value)}
-          onFocus={(event) => {
-            setFocused(true);
-            onFocus?.(event);
-          }}
-          onBlur={(event) => {
-            setFocused(false);
-            onBlur?.(event);
-          }}
-          className={cn(
-            "peer h-full w-full bg-transparent text-base leading-6 text-foreground caret-foreground outline-none",
-            "placeholder:text-muted-foreground/60",
-            leftIcon ? "pl-10" : "pl-3.5",
-            rightSlot || success ? "pr-10" : "pr-3.5",
-            disabled && "cursor-not-allowed",
-            classNames?.input,
-          )}
-        />
+        {multiline ? (
+          <textarea
+            ref={ref as unknown as Ref<HTMLTextAreaElement>}
+            id={id}
+            rows={rows}
+            value={value}
+            disabled={disabled}
+            aria-invalid={hasError || undefined}
+            aria-describedby={errorMessage ? `${id}-error` : undefined}
+            {...(rest as TextareaHTMLAttributes<HTMLTextAreaElement>)}
+            style={{ height: multilineHeight }}
+            onChange={(e) => handleChange(e.target.value)}
+            onFocus={(event) => {
+              setFocused(true);
+              onFocus?.(event as unknown as FocusEvent<HTMLInputElement>);
+            }}
+            onBlur={(event) => {
+              setFocused(false);
+              onBlur?.(event as unknown as FocusEvent<HTMLInputElement>);
+            }}
+            className={cn(
+              "peer block w-full resize-none bg-transparent py-0 text-base leading-6 text-foreground caret-foreground outline-none",
+              "placeholder:text-muted-foreground/60",
+              leftIcon ? "pl-10" : "pl-3.5",
+              rightSlot || success ? "pr-10" : "pr-3.5",
+              disabled && "cursor-not-allowed",
+              classNames?.input,
+            )}
+          />
+        ) : (
+          <input
+            ref={ref}
+            id={id}
+            type={type}
+            value={value}
+            disabled={disabled}
+            aria-invalid={hasError || undefined}
+            aria-describedby={errorMessage ? `${id}-error` : undefined}
+            {...rest}
+            onChange={(e) => handleChange(e.target.value)}
+            onFocus={(event) => {
+              setFocused(true);
+              onFocus?.(event);
+            }}
+            onBlur={(event) => {
+              setFocused(false);
+              onBlur?.(event);
+            }}
+            className={cn(
+              "peer h-full w-full bg-transparent text-base leading-6 text-foreground caret-foreground outline-none",
+              "placeholder:text-muted-foreground/60",
+              leftIcon ? "pl-10" : "pl-3.5",
+              rightSlot || success ? "pr-10" : "pr-3.5",
+              disabled && "cursor-not-allowed",
+              classNames?.input,
+            )}
+          />
+        )}
 
         {success ? (
           <motion.svg

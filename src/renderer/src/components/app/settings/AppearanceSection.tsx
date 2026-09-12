@@ -1,21 +1,61 @@
 import { useEffect, useState } from 'react'
 import { useTheme } from 'next-themes'
 import { RadioGroup, RadioGroupItem } from '@/components/motion/radio'
+import { Input } from '@/components/motion/input'
 import { cn } from '@/lib/utils'
+import { useFontSettings, type UIFont } from '@/lib/fonts'
 import { useI18n, LOCALE_NAMES, type Locale } from '@/i18n'
 import { SettingsGroup, SettingsRow } from './SettingsRow'
 
+/** Swatch colors: the light-mode `--primary` of each preset, lifted a touch so
+ * the dot reads as a paint chip rather than a filled button. Keep the chroma in
+ * step with `styles.css` — the swatches are the presets' visual identity. */
 export const ACCENTS = [
-  { id: 'indigo', color: 'oklch(0.58 0.2 275)' },
-  { id: 'blue', color: 'oklch(0.58 0.18 255)' },
-  { id: 'violet', color: 'oklch(0.58 0.23 300)' },
-  { id: 'emerald', color: 'oklch(0.58 0.13 163)' },
-  { id: 'amber', color: 'oklch(0.66 0.14 68)' },
-  { id: 'rose', color: 'oklch(0.6 0.19 15)' },
-  { id: 'cyan', color: 'oklch(0.6 0.12 215)' }
+  { id: 'indigo', color: 'oklch(0.59 0.18 275)' },
+  { id: 'blue', color: 'oklch(0.59 0.16 255)' },
+  { id: 'violet', color: 'oklch(0.59 0.2 300)' },
+  { id: 'emerald', color: 'oklch(0.59 0.12 163)' },
+  { id: 'amber', color: 'oklch(0.67 0.13 68)' },
+  { id: 'rose', color: 'oklch(0.61 0.165 15)' },
+  { id: 'cyan', color: 'oklch(0.61 0.105 215)' }
 ] as const
 
-/** Language / theme mode / accent — everything that changes how the app looks. */
+/** Free-text monospace family; empty leaves the app on the platform default.
+ * The field previews the typed family while its placeholder stays interface
+ * text (it is a normal UI string, not a font sample). */
+function MonoFontPicker({
+  label,
+  description,
+  placeholder,
+  value,
+  onChange
+}: {
+  label: string
+  description: string
+  placeholder: string
+  value: string
+  onChange: (family: string) => void
+}) {
+  return (
+    <SettingsRow label={label} description={description}>
+      <Input
+        value={value}
+        onChange={onChange}
+        placeholder={placeholder}
+        aria-label={label}
+        spellCheck={false}
+        autoComplete="off"
+        classNames={{
+          root: 'w-56',
+          field: 'h-8',
+          input: 'font-mono text-xs placeholder:font-sans'
+        }}
+      />
+    </SettingsRow>
+  )
+}
+
+/** Language / theme mode / accent / fonts — everything that changes how the app looks. */
 export function AppearanceSection({
   accent,
   onAccentChange
@@ -25,6 +65,7 @@ export function AppearanceSection({
 }) {
   const { t, locale, setLocale } = useI18n()
   const { theme, setTheme } = useTheme()
+  const [fonts, setFonts] = useFontSettings()
   const [mounted, setMounted] = useState(false)
 
   // next-themes resolves the stored theme after mount; render the neutral
@@ -61,6 +102,27 @@ export function AppearanceSection({
             <RadioGroupItem value="system" label={t('settings.system')} />
           </RadioGroup>
         </div>
+      </SettingsGroup>
+
+      <SettingsGroup title={t('settings.fonts')} description={t('settings.fontsDesc')}>
+        <SettingsRow label={t('settings.uiFont')} description={t('settings.uiFontDesc')}>
+          <RadioGroup
+            orientation="horizontal"
+            value={fonts.ui}
+            onValueChange={(next) => setFonts({ ui: next as UIFont })}
+            className="gap-6"
+          >
+            <RadioGroupItem value="sans" label={t('settings.fontSans')} />
+            <RadioGroupItem value="serif" label={t('settings.fontSerif')} />
+          </RadioGroup>
+        </SettingsRow>
+        <MonoFontPicker
+          label={t('settings.monoFont')}
+          description={t('settings.monoFontDesc')}
+          placeholder={t('settings.fontDefault')}
+          value={fonts.mono}
+          onChange={(mono) => setFonts({ mono })}
+        />
       </SettingsGroup>
 
       <SettingsGroup title={t('settings.accent')} description={t('settings.accentDesc')}>

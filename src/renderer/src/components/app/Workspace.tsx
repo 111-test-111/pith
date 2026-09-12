@@ -3,10 +3,12 @@ import {
   ChevronDown,
   Folder,
   FolderInput,
+  FolderOpen,
   LoaderCircle,
   MessageSquareDashed,
   MessageSquarePlus,
   PanelLeft,
+  PanelRight,
   Pencil,
   Settings as SettingsIcon,
   Trash2
@@ -29,12 +31,15 @@ import {
 import { ThemeButton } from './ThemeButton'
 import { Button } from '@/components/motion/button'
 import { basename } from '@/lib/format'
+import { cn } from '@/lib/utils'
 import { extractUserParts } from '@/lib/user-message'
 import { useI18n } from '@/i18n'
 import type {
   AssistantMsg,
   ImageContent,
   ModelDTO,
+  ModelRefDTO,
+  RecalledItemDTO,
   SessionSnapshotDTO,
   SessionSummaryDTO,
   ThinkingLevel,
@@ -44,7 +49,10 @@ import { PiStore } from '@/state/pi-store'
 import type { StreamingBehavior } from '@/lib/streaming-behavior'
 import { ChatView } from './ChatView'
 import { Composer } from './Composer'
+import { EditMessageDialog, type EditMessagePayload } from './EditMessageDialog'
 import { SettingsPage } from './settings/SettingsPage'
+import { SidebarPanel, type SidebarTabKind } from './SidebarPanel'
+import { SideChatStore } from '@/state/side-chat-store'
 import { AuthBridge } from './AuthBridge'
 import { ConfirmDialog } from './ConfirmDialog'
 import type { AuthNotifyDTO, AuthPromptDTO } from '../../../../shared/types'
@@ -104,6 +112,18 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
   const [sessions, setSessions] = useState<SessionSummaryDTO[]>([])
   const [folders, setFolders] = useState<string[]>([])
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [sidePanelOpen, setSidePanelOpen] = useState(false)
+  /** Panes hosted by the right rail; state lives here so closing and
+   * re-opening the rail restores the same tabs. */
+  const [sidePanelTabs, setSidePanelTabs] = useState<SidebarTabKind[]>([])
+  const [sidePanelTab, setSidePanelTab] = useState<SidebarTabKind | null>(null)
+  /** The side chat's exchanges — created with its tab, dropped with it. */
+  const [sideChat, setSideChat] = useState<SideChatStore | null>(null)
+  /** Composer draft of the side chat; kept here so switching panel tabs (or
+   * collapsing the rail) does not discard what was typed. */
+  const [sideChatDraft, setSideChatDraft] = useState('')
+  /** The live side chat, for handlers that must not depend on its identity. */
+  const sideChatRef = useRef<SideChatStore | null>(null)
   const [authPrompt, setAuthPrompt] = useState<AuthPromptDTO | null>(null)
   const [authNotify, setAuthNotify] = useState<AuthNotifyDTO[]>([])
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null)
@@ -115,6 +135,16 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
   const [liveSessionPaths, setLiveSessionPaths] = useState<ReadonlySet<string>>(new Set())
   /** Latest navigation wins when session creation/opening responses race. */
   const navigationRequest = useRef(0)
+  /** Latest model/thinking change still in flight, so an immediate Resend from
+   * the edit dialog waits for it instead of re-prompting on the old model. */
+  const settingsPending = useRef<Promise<unknown>>(Promise.resolve())
+  /** The user message open in the edit-and-resend dialog, if any. */
+  const [editTarget, setEditTarget] = useState<UserMsg | null>(null)
+  /** Model + thinking level captured when the dialog opens, restored on Cancel
+   * so dismissing the editor leaves no session change behind. */
+  const editBaseline = useRef<{ model: ModelRefDTO | null; thinkingLevel: ThinkingLevel } | null>(
+    null
+  )
   /** Bumped on resend/retry so the transcript jumps back to the live edge
    * (the retried user message) even if the user had scrolled up or the
    * rewind left the scroll position mid-history. */
@@ -179,16 +209,27 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
       }
     })
     const offPrompt = window.pi.onAuthPrompt(setAuthPrompt)
-    const offDismiss = window.pi.onAuthDismiss(({ requestId }) => {
+    const offDismiss = window.pi.onAuthDismiss(({ requestId, providerId }) => {
       // The SDK settled a prompt out of band (or it timed out) — drop its dialog.
-      setAuthPrompt((current) => (current?.requestId === requestId ? null : current))
+      setAuthPrompt((current) =>
+        current && (current.requestId === requestId || current.providerId === providerId)
+          ? null
+          : current
+      )
+      // A finished/cancelled login also closes its result UI (device code, links).
+      if (providerId) setAuthNotify((current) => current.filter((n) => n.providerId !== providerId))
     })
     const offNotify = window.pi.onAuthNotify((notify) => {
       setAuthNotify((current) => [...current.slice(-8), notify])
-      if (notify.kind === 'auth_url' && notify.url) {
-        // Most providers expect the system browser; the dialog also carries a link.
-        void window.pi.openExternal(notify.url)
-      }
+      // Bring the provider's page up immediately. Device-code flows get no
+      // prompt but still need the browser (their URI often carries the code).
+      const target =
+        notify.kind === 'auth_url'
+          ? notify.url
+          : notify.kind === 'device_code'
+            ? notify.verificationUri
+            : undefined
+      if (target) void window.pi.openExternal(target)
     })
     return () => {
       offEvent()
@@ -246,9 +287,9 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
     []
   )
 
-  /** Recall queued messages: main clears the SDK queues and returns their
-   * texts for the composer to merge back into the draft. */
-  const handleRecallQueue = useCallback(async (): Promise<string[]> => {
+  /** Recall queued messages: main clears the SDK queues and returns them
+   * with full payloads (images, file paths) for the composer to restore. */
+  const handleRecallQueue = useCallback(async (): Promise<RecalledItemDTO[]> => {
     try {
       const cleared = await window.pi.clearQueue()
       store.clearQueue()
@@ -262,7 +303,9 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
   const handleModelChange = useCallback(
     async (model: ModelDTO) => {
       const targetPath = store.getShell().sessionPath
-      const snapshot: SessionSnapshotDTO = await window.pi.setModel(model.providerId, model.id)
+      const run = window.pi.setModel(model.providerId, model.id)
+      settingsPending.current = run
+      const snapshot: SessionSnapshotDTO = await run
       if (store.getShell().sessionPath === targetPath) store.applySnapshot(snapshot)
     },
     [store]
@@ -271,7 +314,9 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
   const handleThinkingChange = useCallback(
     async (level: ThinkingLevel) => {
       const targetPath = store.getShell().sessionPath
-      const snapshot: SessionSnapshotDTO = await window.pi.setThinkingLevel(level)
+      const run = window.pi.setThinkingLevel(level)
+      settingsPending.current = run
+      const snapshot: SessionSnapshotDTO = await run
       if (store.getShell().sessionPath === targetPath) store.applySnapshot(snapshot)
     },
     [store]
@@ -298,6 +343,78 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
     [store]
   )
 
+  /** Open the edit dialog for a user message; capture the session settings so
+   * Cancel can restore them. Does not touch the session yet. */
+  const handleEditMessage = useCallback(
+    (message: UserMsg) => {
+      const shell = store.getShell()
+      editBaseline.current = { model: shell.model, thinkingLevel: shell.thinkingLevel }
+      setEditTarget(message)
+    },
+    [store]
+  )
+
+  /**
+   * Resend the edited message: main rewinds the session to it and re-prompts
+   * with the dialog's text/images/files (`edited: true`, so the stored
+   * text/images are not restored). The session model/thinking picked in the
+   * dialog were already applied through the normal setters and stay. The
+   * response snapshot replaces the transcript.
+   */
+  const handleEditResend = useCallback(
+    async (payload: EditMessagePayload) => {
+      const target = editTarget
+      if (!target) return
+      const targetPath = store.getShell().sessionPath
+      try {
+        await settingsPending.current.catch(() => {})
+        const snapshot = await window.pi.resendMessage({
+          timestamp: target.timestamp,
+          text: payload.text,
+          images: payload.images,
+          files: payload.files,
+          edited: true
+        })
+        if (store.getShell().sessionPath === targetPath) store.applySnapshot(snapshot)
+        setScrollResetKey((value) => value + 1)
+      } catch (error) {
+        console.error('edit resend failed', error)
+      } finally {
+        editBaseline.current = null
+        setEditTarget(null)
+      }
+    },
+    [store, editTarget]
+  )
+
+  /** Dismiss the editor without resending; restore any model/thinking change
+   * the user made inside it so Cancel is truly a no-op. */
+  const handleCancelEdit = useCallback(async () => {
+    const before = editBaseline.current
+    editBaseline.current = null
+    setEditTarget(null)
+    if (!before) return
+    const shell = store.getShell()
+    const modelChanged =
+      (shell.model?.providerId ?? null) !== (before.model?.providerId ?? null) ||
+      (shell.model?.id ?? null) !== (before.model?.id ?? null)
+    try {
+      if (modelChanged) {
+        await settingsPending.current.catch(() => {})
+        if (before.model) {
+          const snapshot = await window.pi.setModel(before.model.providerId, before.model.id)
+          store.applySnapshot(snapshot)
+        }
+      }
+      if (store.getShell().thinkingLevel !== before.thinkingLevel) {
+        const snapshot = await window.pi.setThinkingLevel(before.thinkingLevel)
+        store.applySnapshot(snapshot)
+      }
+    } catch (error) {
+      console.error('restore edit settings failed', error)
+    }
+  }, [store])
+
   /** Fork the session at an assistant message: the fork opens as the active
    * session, gets its localized "Fork of …" title, and joins the sidebar. */
   const handleFork = useCallback(
@@ -318,6 +435,70 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
       }
     },
     [store, refreshSessions, t]
+  )
+
+  /**
+   * Open the side chat. It is renderer state only — the questions are no-tools
+   * completions over this session's committed context, so there is no session
+   * to create and nothing to clean up when the tab closes.
+   */
+  const openSideChat = useCallback(() => {
+    if (sideChatRef.current) return
+    const created = new SideChatStore(store.getShell().sessionPath)
+    sideChatRef.current = created
+    setSideChatDraft('')
+    setSideChat(created)
+  }, [store])
+
+  /** Destroy the side chat: stop its answer and drop every exchange. */
+  const closeSideChat = useCallback(() => {
+    const current = sideChatRef.current
+    sideChatRef.current = null
+    setSideChatDraft('')
+    setSideChat(null)
+    current?.dispose()
+  }, [])
+
+  /**
+   * Point the side chat at the session the workspace is showing now. The thread
+   * and its context belong to the session it was asked against, so rebinding
+   * starts over: closing the old store aborts any running answer and drops the
+   * exchanges, then a new store binds to the current session. A click while the
+   * two already match does nothing.
+   */
+  const rebindSideChat = useCallback(() => {
+    const current = sideChatRef.current
+    const target = store.getShell().sessionPath
+    if (current && current.boundSessionPath === target) return
+    closeSideChat()
+    openSideChat()
+  }, [closeSideChat, openSideChat, store])
+
+  /** Open a pane in the right rail (idempotent) and make it the active tab. */
+  const openSidePanelTab = useCallback(
+    (kind: SidebarTabKind) => {
+      setSidePanelTabs((current) => (current.includes(kind) ? current : [...current, kind]))
+      setSidePanelTab(kind)
+      // A side chat is born with its tab.
+      if (kind === 'chat') openSideChat()
+    },
+    [openSideChat]
+  )
+
+  /** Close a pane; the neighbour to its left takes over as the active tab. */
+  const closeSidePanelTab = useCallback(
+    (kind: SidebarTabKind) => {
+      const index = sidePanelTabs.indexOf(kind)
+      if (index < 0) return
+      const next = sidePanelTabs.filter((tab) => tab !== kind)
+      setSidePanelTabs(next)
+      setSidePanelTab((active) =>
+        active === kind ? (next[index - 1] ?? next[index] ?? null) : active
+      )
+      // Closing the side-chat tab destroys the thread — nothing outlives it.
+      if (kind === 'chat') closeSideChat()
+    },
+    [sidePanelTabs, closeSideChat]
   )
 
   /** New session in `cwd` (defaults to the active folder). */
@@ -546,12 +727,14 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
                       )
                     }
                     // Folder rows carry their cwd so collapse clicks (captured
-                    // above) can reset the reveal limit. Static Folder glyph —
-                    // the vendored open/closed glyph swap is given up for it.
+                    // above) can reset the reveal limit. The glyph follows the
+                    // row's own `aria-expanded` (the row is `group/resource`),
+                    // since renderIcon only receives the item, not its state.
                     if (item.kind === 'folder') {
                       return (
                         <span data-folder-cwd={item.id.slice('folder:'.length)} className="grid place-items-center">
-                          <Folder className="size-4" />
+                          <Folder className="size-4 group-aria-expanded/resource:hidden" />
+                          <FolderOpen className="hidden size-4 group-aria-expanded/resource:block" />
                         </span>
                       )
                     }
@@ -639,21 +822,26 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
       </AnimatedSidebar>
 
       <AnimatedSidebarInset className="min-h-0 bg-background">
-        <header className="flex h-14 shrink-0 items-center justify-between border-b border-border px-4">
-          <div className="flex min-w-0 items-center gap-2.5">
+        <header className="flex h-12 shrink-0 items-center justify-between gap-3 border-b border-border px-3">
+          <div className="flex min-w-0 items-center gap-2">
             <AnimatedSidebarTrigger className="text-muted-foreground hover:bg-muted hover:text-foreground">
               <PanelLeft className="size-4" />
             </AnimatedSidebarTrigger>
-            <div className="min-w-0">
-              <p className="truncate text-sm font-medium text-foreground">
+            <div className="flex min-w-0 items-baseline gap-2">
+              <p className="shrink-0 truncate text-sm font-medium text-foreground">
                 {currentModel ? currentModel.name : t('workspace.noModel')}
               </p>
-              <p className="truncate text-[11px] text-muted-foreground">
-                {shell.cwd ?? ''}
-              </p>
+              {shell.cwd ? (
+                <>
+                  <span aria-hidden="true" className="shrink-0 text-xs text-muted-foreground/50">
+                    ·
+                  </span>
+                  <p className="min-w-0 truncate text-xs text-muted-foreground">{shell.cwd}</p>
+                </>
+              ) : null}
             </div>
           </div>
-          <div className="flex items-center gap-1.5">
+          <div className="flex shrink-0 items-center gap-1.5">
             <Button
               variant="ghost"
               size="icon"
@@ -663,32 +851,66 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
               <SettingsIcon className="size-4" />
             </Button>
             <ThemeButton />
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label={t('workspace.sidebar')}
+              title={t('workspace.sidebar')}
+              aria-pressed={sidePanelOpen}
+              onClick={() => setSidePanelOpen((open) => !open)}
+              className={cn(sidePanelOpen && 'bg-primary/5 text-foreground')}
+            >
+              <PanelRight className="size-4" />
+            </Button>
           </div>
         </header>
 
-        <ChatView
-          store={store}
-          scrollResetKey={scrollResetKey}
-          onDismissError={() => store.clearError()}
-          onResend={handleResend}
-          onFork={handleFork}
-        />
+        <div className="flex min-h-0 flex-1">
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+            <ChatView
+              store={store}
+              scrollResetKey={scrollResetKey}
+              onDismissError={() => store.clearError()}
+              onResend={handleResend}
+              onEditMessage={handleEditMessage}
+              onFork={handleFork}
+            />
 
-        <Composer
-          models={models}
-          model={currentModel}
-          thinkingLevel={shell.thinkingLevel}
-          availableThinkingLevels={shell.availableThinkingLevels}
-          busy={shell.isStreaming}
-          contextUsage={shell.contextUsage}
-          queued={shell.queue}
-          onSend={handleSend}
-          onQueue={handleQueue}
-          onRecallQueue={handleRecallQueue}
-          onStop={() => void window.pi.abort()}
-          onModelChange={(model) => void handleModelChange(model)}
-          onThinkingLevelChange={(level) => void handleThinkingChange(level)}
-        />
+            <Composer
+              models={models}
+              model={currentModel}
+              thinkingLevel={shell.thinkingLevel}
+              availableThinkingLevels={shell.availableThinkingLevels}
+              busy={shell.isStreaming}
+              escapeStopsRun={!settingsOpen && !authPrompt}
+              contextUsage={shell.contextUsage}
+              queued={shell.queue}
+              onSend={handleSend}
+              onQueue={handleQueue}
+              onRecallQueue={handleRecallQueue}
+              onStop={() => void window.pi.abort()}
+              onModelChange={(model) => void handleModelChange(model)}
+              onThinkingLevelChange={(level) => void handleThinkingChange(level)}
+            />
+          </div>
+
+          <SidebarPanel
+            open={sidePanelOpen}
+            tabs={sidePanelTabs}
+            activeTab={sidePanelTab}
+            onSelectTab={setSidePanelTab}
+            onOpenTab={openSidePanelTab}
+            onCloseTab={closeSidePanelTab}
+            pane={{
+              sideChat,
+              sideChatDraft,
+              onSideChatDraftChange: setSideChatDraft,
+              sideChatOnCurrentSession:
+                sideChat != null && sideChat.boundSessionPath === shell.sessionPath,
+              onSideChatRebind: rebindSideChat
+            }}
+          />
+        </div>
       </AnimatedSidebarInset>
 
       <SettingsPage
@@ -720,6 +942,19 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
         onClose={() => setPendingDelete(null)}
       />
 
+      <EditMessageDialog
+        open={editTarget !== null}
+        message={editTarget}
+        models={models}
+        model={currentModel}
+        thinkingLevel={shell.thinkingLevel}
+        availableThinkingLevels={shell.availableThinkingLevels}
+        onModelChange={(model) => void handleModelChange(model)}
+        onThinkingLevelChange={(level) => void handleThinkingChange(level)}
+        onResend={(payload) => void handleEditResend(payload)}
+        onCancel={() => void handleCancelEdit()}
+      />
+
       <AuthBridge
         prompt={authPrompt}
         notify={authNotify}
@@ -727,6 +962,7 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
           setAuthPrompt(null)
           window.pi.replyAuth(requestId, value)
         }}
+        onCancel={(providerId) => void window.pi.cancelLogin(providerId)}
       />
     </ChatApp>
   )

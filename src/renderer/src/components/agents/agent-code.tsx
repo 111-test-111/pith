@@ -44,6 +44,9 @@ const LIGHT_THEME = "github-light-high-contrast";
 const DARK_THEME = "github-dark-high-contrast";
 let agentCodeHighlighter: Promise<Highlighter> | null = null;
 const tokenCache = new Map<string, AgentCodeTokenLines>();
+// local patch (pi-app): in-flight tokenizations, so a hover prefetch and the
+// panel that mounts moments later never tokenize the same code twice.
+const tokenPending = new Map<string, Promise<AgentCodeTokenLines>>();
 // local patch (pi-app): bound the cache — completed code is what gets
 // re-rendered; intermediate snapshots were never re-read but accumulated.
 const TOKEN_CACHE_MAX = 400;
@@ -60,6 +63,69 @@ function getAgentCodeHighlighter() {
 
 function tokenCacheKey(code: string, language: AgentCodeLanguage) {
   return `${language}\u0000${code}`;
+}
+
+/**
+ * Tokenizes `code` into the cache, deduped across concurrent callers.
+ *
+ * local patch (pi-app): shared by the hook below and `prefetchAgentCodeTokens`,
+ * so a panel mounting while its prefetch is still running waits on the same
+ * promise instead of starting a second (tens of ms) tokenization.
+ */
+function ensureAgentCodeTokens(
+  code: string,
+  language: AgentCodeLanguage,
+): Promise<AgentCodeTokenLines> {
+  const key = tokenCacheKey(code, language);
+  const cached = tokenCache.get(key);
+  if (cached) return Promise.resolve(cached);
+  const pending = tokenPending.get(key);
+  if (pending) return pending;
+
+  const promise = getAgentCodeHighlighter()
+    .then((highlighter) => {
+      const already = tokenCache.get(key);
+      if (already) return already;
+      const lines = highlighter
+        .codeToTokensWithThemes(code, {
+          lang: language,
+          themes: {
+            light: LIGHT_THEME,
+            dark: DARK_THEME,
+          },
+        })
+        .map((line) =>
+          line.map((token) => ({
+            content: token.content,
+            offset: token.offset,
+            light: token.variants.light?.color,
+            dark: token.variants.dark?.color,
+          })),
+        );
+      if (tokenCache.size >= TOKEN_CACHE_MAX) tokenCache.clear();
+      tokenCache.set(key, lines);
+      return lines;
+    })
+    .finally(() => {
+      tokenPending.delete(key);
+    });
+  tokenPending.set(key, promise);
+  return promise;
+}
+
+/**
+ * local patch (pi-app): warm the token cache from outside React.
+ *
+ * The turn's file rows prefetch their diffs while the pointer is on the list, so
+ * hovering one mounts the panel already highlighted — otherwise the tokens land
+ * tens of ms later and repaint the whole diff a second time, which shows up as a
+ * hitch on every hover hand-over.
+ */
+export function prefetchAgentCodeTokens(
+  code: string,
+  language: AgentCodeLanguage,
+): Promise<void> {
+  return ensureAgentCodeTokens(code, language).then(() => undefined);
 }
 
 export function useAgentCodeTokens(
@@ -88,26 +154,8 @@ export function useAgentCodeTokens(
     }
 
     let cancelled = false;
-    getAgentCodeHighlighter().then((highlighter) => {
+    ensureAgentCodeTokens(code, language).then((lines) => {
       if (cancelled) return;
-      const lines = highlighter
-        .codeToTokensWithThemes(code, {
-          lang: language,
-          themes: {
-            light: LIGHT_THEME,
-            dark: DARK_THEME,
-          },
-        })
-        .map((line) =>
-          line.map((token) => ({
-            content: token.content,
-            offset: token.offset,
-            light: token.variants.light?.color,
-            dark: token.variants.dark?.color,
-          })),
-      );
-      if (tokenCache.size >= TOKEN_CACHE_MAX) tokenCache.clear();
-      tokenCache.set(key, lines);
       setResult({ key, code, language, lines });
     });
     return () => {

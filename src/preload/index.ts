@@ -1,6 +1,7 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type {
   AppInfoDTO,
+  AppendPromptDTO,
   AuthPromptDTO,
   AuthNotifyDTO,
   CatalogRecommendationDTO,
@@ -18,15 +19,23 @@ import type {
   PromptPayload,
   ProviderDTO,
   ProviderModelDTO,
+  QueueActionPayload,
+  RecalledItemDTO,
   ResendPayload,
   SessionSnapshotDTO,
   SessionSummaryDTO,
+  SideChatAskPayload,
+  SideChatEvent,
+  SkillContentDTO,
   TestModelResultDTO,
-  ThinkingLevel
+  ThinkingLevel,
+  ToolCatalogDTO
 } from '../shared/types'
 
 const api = {
   appInfo: (): Promise<AppInfoDTO> => ipcRenderer.invoke('app:info'),
+  setContextFiles: (enabled: boolean): Promise<boolean> =>
+    ipcRenderer.invoke('app:setContextFiles', enabled),
   pickDirectory: (): Promise<{ cwd: string } | { cancelled: true }> =>
     ipcRenderer.invoke('app:pickDirectory'),
 
@@ -43,8 +52,19 @@ const api = {
     ipcRenderer.invoke('pi:deleteFolder', cwd),
   prompt: (payload: PromptPayload): Promise<{ accepted: boolean }> =>
     ipcRenderer.invoke('pi:prompt', payload),
-  clearQueue: (): Promise<{ steering: string[]; followUp: string[] }> =>
+  /**
+   * Side chat (`/btw`): one no-tools question per call, streamed back on
+   * `pi:side-chat`. The exchange list lives in the renderer, so main holds no
+   * side-chat state between questions.
+   */
+  sideChatAsk: (payload: SideChatAskPayload): Promise<{ exchangeId: string }> =>
+    ipcRenderer.invoke('pi:sideChatAsk', payload),
+  sideChatAbort: (exchangeId: string): Promise<{ accepted: boolean }> =>
+    ipcRenderer.invoke('pi:sideChatAbort', exchangeId),
+  clearQueue: (): Promise<{ steering: RecalledItemDTO[]; followUp: RecalledItemDTO[] }> =>
     ipcRenderer.invoke('pi:clearQueue'),
+  queueAction: (payload: QueueActionPayload): Promise<{ accepted: boolean }> =>
+    ipcRenderer.invoke('pi:queueAction', payload),
   abort: (): Promise<{ accepted: boolean }> => ipcRenderer.invoke('pi:abort'),
   resendMessage: (payload: ResendPayload): Promise<SessionSnapshotDTO> =>
     ipcRenderer.invoke('pi:resendMessage', payload),
@@ -58,6 +78,8 @@ const api = {
   models: (): Promise<ModelDTO[]> => ipcRenderer.invoke('pi:models'),
   login: (providerId: string, kind: 'api_key' | 'oauth'): Promise<void> =>
     ipcRenderer.invoke('pi:login', providerId, kind),
+  cancelLogin: (providerId: string): Promise<void> =>
+    ipcRenderer.invoke('pi:loginCancel', providerId),
   logout: (providerId: string): Promise<void> => ipcRenderer.invoke('pi:logout', providerId),
 
   modelsConfig: (): Promise<ModelsConfigDTO> => ipcRenderer.invoke('pi:modelsConfig'),
@@ -77,20 +99,54 @@ const api = {
   configuredModels: (): Promise<ModelConfigSourceDTO[]> =>
     ipcRenderer.invoke('pi:configuredModels'),
 
+  appendPrompt: (): Promise<AppendPromptDTO> => ipcRenderer.invoke('pi:appendPrompt'),
+  setAppendPrompt: (text: string): Promise<AppendPromptDTO> =>
+    ipcRenderer.invoke('pi:setAppendPrompt', text),
+
+  toolsCatalog: (): Promise<ToolCatalogDTO> => ipcRenderer.invoke('pi:toolsCatalog'),
+  setExtensionEnabled: (id: string, enabled: boolean): Promise<ToolCatalogDTO> =>
+    ipcRenderer.invoke('pi:setExtensionEnabled', id, enabled),
+  updateExtension: (source: string): Promise<ToolCatalogDTO> =>
+    ipcRenderer.invoke('pi:updateExtension', source),
+  removeExtension: (source: string): Promise<ToolCatalogDTO> =>
+    ipcRenderer.invoke('pi:removeExtension', source),
+  installExtension: (source: string): Promise<ToolCatalogDTO> =>
+    ipcRenderer.invoke('pi:installExtension', source),
+  setSkillModelInvocation: (filePath: string, disabled: boolean): Promise<ToolCatalogDTO> =>
+    ipcRenderer.invoke('pi:setSkillModelInvocation', filePath, disabled),
+  readSkill: (filePath: string): Promise<SkillContentDTO> =>
+    ipcRenderer.invoke('pi:readSkill', filePath),
+
   searchFiles: (query: string): Promise<FileHitDTO[]> =>
     ipcRenderer.invoke('files:search', query),
   readFile: (path: string): Promise<FilePreviewDTO> => ipcRenderer.invoke('files:read', path),
   readImage: (path: string): Promise<ImageContent | null> =>
     ipcRenderer.invoke('files:readImage', path),
+  /**
+   * Absolute path backing a File from a file picker, drag-drop or paste.
+   * Electron removed the old non-standard `File.path` in v32; `webUtils` is its
+   * supported replacement and must run here in the preload. Returns '' for a
+   * File with no local backing (e.g. dragged out of a browser page).
+   */
+  pathForFile: (file: Parameters<typeof webUtils.getPathForFile>[0]): string => {
+    try {
+      return webUtils.getPathForFile(file)
+    } catch {
+      return ''
+    }
+  },
 
   openPath: (path: string): Promise<string> => ipcRenderer.invoke('shell:openPath', path),
   showInFolder: (path: string): Promise<void> => ipcRenderer.invoke('shell:showInFolder', path),
   openExternal: (url: string): Promise<void> => ipcRenderer.invoke('shell:openExternal', url),
 
   onEvent: (listener: (event: PiEvent) => void) => subscribe('pi:event', listener),
+  /** Side-chat stream (deltas and the terminal status of one exchange). */
+  onSideChatEvent: (listener: (event: SideChatEvent) => void) =>
+    subscribe('pi:side-chat', listener),
   onAuthPrompt: (listener: (prompt: AuthPromptDTO) => void) =>
     subscribe('pi:auth-prompt', listener),
-  onAuthDismiss: (listener: (payload: { requestId: string }) => void) =>
+  onAuthDismiss: (listener: (payload: { requestId?: string; providerId?: string }) => void) =>
     subscribe('pi:auth-dismiss', listener),
   onAuthNotify: (listener: (notify: AuthNotifyDTO) => void) =>
     subscribe('pi:auth-notify', listener),

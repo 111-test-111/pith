@@ -1,4 +1,4 @@
-import { ipcMain, dialog, shell, BrowserWindow } from 'electron'
+import { app, ipcMain, dialog, shell, BrowserWindow } from 'electron'
 import { PiManager } from './pi/manager'
 import { loadSettings, saveSettings } from './settings'
 import type {
@@ -6,8 +6,10 @@ import type {
   CustomModelDTO,
   ModelsConfigDTO,
   PromptPayload,
+  QueueActionPayload,
   ResendPayload,
   SessionSnapshotDTO,
+  SideChatAskPayload,
   ThinkingLevel
 } from '../shared/types'
 
@@ -27,14 +29,18 @@ export function registerIpc(pi: PiManager): void {
     return {
       cwd: settings.cwd,
       folders: settings.folders.filter((f) => typeof f === 'string'),
-      version: process.env.npm_package_version ?? '0.1.0'
+      contextFiles: settings.contextFiles !== false,
+      version: app.getVersion()
     }
   })
+
+  ipcMain.handle('app:setContextFiles', (_event, enabled: boolean): Promise<boolean> =>
+    pi.setContextFilesEnabled(enabled)
+  )
 
   ipcMain.handle('app:pickDirectory', async (): Promise<{ cwd: string } | { cancelled: true }> => {
     const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
     const result = await dialog.showOpenDialog(win, {
-      title: 'Choose a working directory for Pi',
       properties: ['openDirectory', 'createDirectory']
     })
     if (result.canceled || !result.filePaths[0]) return { cancelled: true }
@@ -56,7 +62,16 @@ export function registerIpc(pi: PiManager): void {
     pi.prompt(payload)
     return { accepted: true }
   })
+  ipcMain.handle('pi:sideChatAsk', (_event, payload: SideChatAskPayload) => pi.sideChatAsk(payload))
+  ipcMain.handle('pi:sideChatAbort', (_event, exchangeId: string) => {
+    pi.sideChatAbort(exchangeId)
+    return { accepted: true }
+  })
   ipcMain.handle('pi:clearQueue', () => pi.clearQueue())
+  ipcMain.handle('pi:queueAction', (_event, payload: QueueActionPayload) => {
+    pi.queueAction(payload)
+    return { accepted: true }
+  })
   ipcMain.handle('pi:abort', () => {
     pi.abort()
     return { accepted: true }
@@ -74,6 +89,7 @@ export function registerIpc(pi: PiManager): void {
   ipcMain.handle('pi:login', (_event, providerId: string, kind: 'api_key' | 'oauth') =>
     pi.login(providerId, kind)
   )
+  ipcMain.handle('pi:loginCancel', (_event, providerId: string) => pi.cancelLogin(providerId))
   ipcMain.handle('pi:logout', (_event, providerId: string) => pi.logout(providerId))
 
   ipcMain.handle('pi:modelsConfig', () => pi.modelsConfig())
@@ -95,6 +111,23 @@ export function registerIpc(pi: PiManager): void {
     pi.catalogPreset(providerId, modelId)
   )
   ipcMain.handle('pi:configuredModels', () => pi.configuredModelSources())
+
+  ipcMain.handle('pi:appendPrompt', () => pi.appendPrompt())
+  ipcMain.handle('pi:setAppendPrompt', (_event, text: string) => pi.setAppendPrompt(text))
+
+  ipcMain.handle('pi:toolsCatalog', () => pi.catalog())
+  ipcMain.handle('pi:setExtensionEnabled', (_event, id: string, enabled: boolean) =>
+    pi.setExtensionEnabled(id, enabled)
+  )
+  ipcMain.handle('pi:updateExtension', (_event, source: string) => pi.updateExtension(source))
+  ipcMain.handle('pi:removeExtension', (_event, source: string) => pi.removeExtension(source))
+  ipcMain.handle('pi:installExtension', (_event, source: string) => pi.installExtension(source))
+  ipcMain.handle(
+    'pi:setSkillModelInvocation',
+    (_event, filePath: string, disableModelInvocation: boolean) =>
+      pi.setSkillModelInvocation(filePath, disableModelInvocation)
+  )
+  ipcMain.handle('pi:readSkill', (_event, filePath: string) => pi.readSkill(filePath))
 
   ipcMain.handle('files:search', (_event, query: string) => pi.searchFiles(query))
   ipcMain.handle('files:read', (_event, path: string) => pi.readFile(path))

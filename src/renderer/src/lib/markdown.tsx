@@ -1,11 +1,21 @@
-import { createContext, memo, useContext, type ComponentPropsWithoutRef, type ReactNode } from 'react'
+import {
+  createContext,
+  memo,
+  useContext,
+  useEffect,
+  useState,
+  type ComponentPropsWithoutRef,
+  type ReactNode
+} from 'react'
 import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
 import { CodeBlock } from '@/components/agents/code-block'
+import { PreviewThumb } from '@/components/app/ImagePreview'
+import { REMARK_PLUGINS } from '@/lib/markdown-plugins'
 
 /**
  * Assistant markdown renderer: react-markdown + GFM (tables, task lists,
- * strikethrough), with output styled through beUI theme tokens. Fenced code
+ * strikethrough) plus the CJK emphasis/autolink fixes in `markdown-plugins`,
+ * with output styled through beUI theme tokens. Fenced code
  * renders with beUI's CodeBlock; everything else maps to token-styled elements.
  *
  * While `streaming`, the text is split at blank-line boundaries OUTSIDE code
@@ -20,6 +30,123 @@ import { CodeBlock } from '@/components/agents/code-block'
 /** True while the surrounding Markdown is streaming — CodeBlock renders its
  * streaming state (no highlighting, "Writing" chip) instead of "complete". */
 const StreamingMarkdownContext = createContext(false)
+
+/**
+ * Markdown image sources are usually WORKSPACE paths (`output/cat.png`), not
+ * browser URLs: the renderer is served from its own origin (dev server, or the
+ * packaged `file://` page), so a raw `src` resolves next to the renderer bundle
+ * and 404s. Resolve them through the main process the same way @mentions are
+ * resolved (relative to the active workspace, absolute paths as-is) and hand
+ * the image a data URL — plus its absolute path, so the preview overlay can
+ * offer "open in default app".
+ *
+ * Only successful reads are cached (10s TTL, bounded) so a streaming turn that
+ * references a file a later tool call still has to write can retry, and a
+ * regenerated file under the same name is not served from a stale cache.
+ */
+const IMAGE_SRC_TTL_MS = 10_000
+const IMAGE_SRC_CACHE_MAX = 32
+interface ResolvedImage {
+  url: string
+  /** Absolute local path, when the source was a workspace file. */
+  path?: string
+}
+const imageSrcCache = new Map<string, { image: ResolvedImage; at: number }>()
+const imageSrcPending = new Map<string, Promise<ResolvedImage | null>>()
+
+/** `data:`/`blob:`/`http(s):` sources the browser can load on its own. */
+function inlineImageSrc(src: string): string | null {
+  return /^(data:|blob:|https?:)/i.test(src) ? src : null
+}
+
+/** Local path behind a source — a plain path, or the pathname of a `file:` URL. */
+function filePathOf(src: string): string | null {
+  if (!/^file:/i.test(src)) return src
+  try {
+    return decodeURIComponent(new URL(src).pathname)
+  } catch {
+    return null
+  }
+}
+
+function resolveImage(src: string): Promise<ResolvedImage | null> {
+  const cached = imageSrcCache.get(src)
+  if (cached && Date.now() - cached.at < IMAGE_SRC_TTL_MS) return Promise.resolve(cached.image)
+  const pending = imageSrcPending.get(src)
+  if (pending) return pending
+  const localPath = filePathOf(src)
+  if (!localPath) return Promise.resolve(null)
+  const promise = window.pi
+    .readFile(localPath)
+    .then((preview) => {
+      if (!preview.base64 || !preview.mimeType) return null
+      const image: ResolvedImage = {
+        url: `data:${preview.mimeType};base64,${preview.base64}`,
+        path: preview.path
+      }
+      imageSrcCache.set(src, { image, at: Date.now() })
+      if (imageSrcCache.size > IMAGE_SRC_CACHE_MAX) {
+        // Map iterates in insertion order — drop the oldest entry.
+        const oldest = imageSrcCache.keys().next().value
+        if (oldest) imageSrcCache.delete(oldest)
+      }
+      return image
+    })
+    .catch(() => null)
+    .finally(() => {
+      imageSrcPending.delete(src)
+    })
+  imageSrcPending.set(src, promise)
+  return promise
+}
+
+function MarkdownImage({ src, alt }: ComponentPropsWithoutRef<'img'>) {
+  const streaming = useContext(StreamingMarkdownContext)
+  const direct = typeof src === 'string' ? inlineImageSrc(src) : null
+  const [resolved, setResolved] = useState<ResolvedImage | null>(direct ? { url: direct } : null)
+  const [failed, setFailed] = useState(false)
+
+  useEffect(() => {
+    if (typeof src !== 'string' || !src) {
+      setResolved(null)
+      setFailed(false)
+      return
+    }
+    const inline = inlineImageSrc(src)
+    if (inline) {
+      setResolved({ url: inline })
+      setFailed(false)
+      return
+    }
+    let cancelled = false
+    void resolveImage(src).then((image) => {
+      if (cancelled) return
+      setResolved(image)
+      setFailed(!image)
+    })
+    return () => {
+      cancelled = true
+    }
+    // `streaming` is a dependency on purpose: a reference that cannot be read
+    // mid-turn (the file appears later in the same turn) is retried once the
+    // completed message re-renders with `streaming: false`.
+  }, [src, streaming])
+
+  if (resolved) {
+    return (
+      <PreviewThumb
+        src={resolved.url}
+        alt={alt ?? ''}
+        path={resolved.path}
+        className="rounded-xl"
+        imageClassName="max-h-72 max-w-full object-contain"
+      />
+    )
+  }
+  // Unreadable source: show its alt text instead of Chromium's broken-image
+  // glyph. Nothing while a read is merely in flight (no placeholder flash).
+  return failed && alt ? <span className="text-muted-foreground">{alt}</span> : null
+}
 
 const LANGUAGE_ALIASES: Record<string, string> = {
   js: 'typescript',
@@ -192,22 +319,14 @@ const components: MarkdownComponents = {
   hr() {
     return <hr className="border-border" />
   },
-  img({ src, alt }) {
-    return (
-      <img
-        src={typeof src === 'string' ? src : undefined}
-        alt={alt ?? ''}
-        className="max-h-72 max-w-full rounded-xl border border-border object-contain"
-      />
-    )
-  }
+  img: MarkdownImage
 }
 
 /** One already-final markdown block — memoized so stable blocks never
  * re-parse while the tail streams. */
 const MarkdownBlock = memo(function MarkdownBlock({ children }: { children: string }) {
   return (
-    <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+    <ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={components}>
       {children}
     </ReactMarkdown>
   )
@@ -236,7 +355,7 @@ export const Markdown = memo(function Markdown({
             {blocks.tail ? <MarkdownBlock>{blocks.tail}</MarkdownBlock> : null}
           </>
         ) : (
-          <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+          <ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={components}>
             {children}
           </ReactMarkdown>
         )}

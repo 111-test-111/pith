@@ -7,10 +7,8 @@ import {
   type ClipboardEvent as ReactClipboardEvent,
   type DragEvent as ReactDragEvent
 } from 'react'
-import { FileText, ImagePlus, Loader2, Paperclip, Undo2, X } from 'lucide-react'
+import { FileText, ImagePlus, Loader2, Paperclip, X } from 'lucide-react'
 import { PromptInput } from '@/components/agents/prompt-input'
-import { Button } from '@/components/motion/button'
-import { Tooltip } from '@/components/motion/tooltip'
 import { basename, formatBytes } from '@/lib/format'
 import {
   otherBehavior,
@@ -22,11 +20,15 @@ import type {
   FileHitDTO,
   ImageContent,
   ModelDTO,
+  QueuedItemDTO,
+  RecalledItemDTO,
   ThinkingLevel
 } from '../../../../shared/types'
 import { FileMention, type MentionState } from './FileMention'
+import { PreviewThumb } from './ImagePreview'
 import { ModelPicker } from './ModelPicker'
 import { ContextRing } from './ContextRing'
+import { QueuePanel } from './QueuePanel'
 import { useI18n } from '@/i18n'
 
 export interface ImageAttachment {
@@ -44,12 +46,6 @@ export interface FileAttachment {
   size: number
 }
 
-/** Pending steer / follow-up messages of the open session (SDK queue state). */
-export interface QueuedMessages {
-  steering: string[]
-  followUp: string[]
-}
-
 interface ComposerProps {
   models: ModelDTO[]
   model: ModelDTO | null
@@ -57,8 +53,11 @@ interface ComposerProps {
   /** Levels the current model supports; the cycle button only walks these. */
   availableThinkingLevels: ThinkingLevel[]
   busy: boolean
+  /** Escape stops the running turn. False while a full-page Settings or auth
+   * overlay owns the surface, so Esc there does not abort a background run. */
+  escapeStopsRun?: boolean
   contextUsage?: ContextUsageDTO | null
-  queued: QueuedMessages
+  queued: { steering: QueuedItemDTO[]; followUp: QueuedItemDTO[] }
   onSend: (payload: { text: string; images: ImageContent[]; files: string[] }) => void
   /** Queue the draft against the running turn — steer interrupts before the
    * next model call, followUp waits for the run to finish. */
@@ -68,8 +67,9 @@ interface ComposerProps {
     files: string[]
     streamingBehavior: StreamingBehavior
   }) => void
-  /** Clear the session's queues; resolves with the recalled texts. */
-  onRecallQueue: () => Promise<string[]>
+  /** Clear the session's queues; resolves with the recalled messages and
+   * their full payloads (images, file paths). */
+  onRecallQueue: () => Promise<RecalledItemDTO[]>
   onStop: () => void
   onModelChange: (model: ModelDTO) => void
   onThinkingLevelChange: (level: ThinkingLevel) => void
@@ -86,6 +86,7 @@ export function Composer({
   thinkingLevel,
   availableThinkingLevels,
   busy,
+  escapeStopsRun = true,
   contextUsage,
   queued,
   onSend,
@@ -135,6 +136,51 @@ export function Composer({
         : [...current, { id: nextId(), path: hit.path, relPath: hit.relPath, kind: hit.kind, size: hit.size }]
     )
   }, [])
+
+  /** Add a chip for a real path, stat'ing it through the main process so the
+   * chip carries a usable relPath/kind/size — inside OR outside the workspace.
+   * The main process resolves relative to the active cwd either way. */
+  const addFilePath = useCallback(async (path: string) => {
+    try {
+      const preview = await window.pi.readFile(path)
+      setFiles((current) =>
+        current.some((f) => f.path === preview.path)
+          ? current
+          : [
+              ...current,
+              {
+                id: nextId(),
+                path: preview.path,
+                relPath: preview.relPath,
+                kind: preview.kind,
+                size: preview.size
+              }
+            ]
+      )
+    } catch {
+      /* unreadable / deleted — drop it silently, like a failed mention */
+    }
+  }, [])
+
+  /**
+   * Attach a File from a picker, paste or drop. Electron removed `File.path`
+   * in v32, so the backing path comes through the preload's webUtils bridge;
+   * a File with no local path (dragged out of a browser) falls back to a name
+   * search in the workspace index.
+   */
+  const addFileAttachment = useCallback(
+    async (file: globalThis.File) => {
+      const path = window.pi.pathForFile(file)
+      if (path) {
+        await addFilePath(path)
+        return
+      }
+      const hits = await window.pi.searchFiles(file.name)
+      const hit = hits.find((h) => h.name === file.name) ?? hits[0]
+      if (hit) addFileHit(hit)
+    },
+    [addFilePath, addFileHit]
+  )
 
   const removeImage = (id: string) => setImages((c) => c.filter((a) => a.id !== id))
   const removeFile = (id: string) => {
@@ -207,33 +253,119 @@ export function Composer({
     setMention(null)
   }
 
+  /**
+   * Merge recalled messages back into the composer: the original draft texts
+   * (file blocks stripped — they restore as chips) go first, then whatever
+   * draft text was already typed. Image attachments rebuild from base64;
+   * file chips re-stat through the file index, and a failed stat is
+   * non-fatal — the draft's @mention still references the file.
+   */
+  const mergeRecalled = useCallback(
+    async (items: RecalledItemDTO[]) => {
+      const recalledText = items.map((item) => item.originalText).filter(Boolean).join('\n\n')
+      if (recalledText) {
+        setValue((current) => (current ? `${recalledText}\n\n${current}` : recalledText))
+      }
+      setMention(null)
+      const restoredImages = items
+        .flatMap((item) => item.images)
+        .map((image) => ({
+          id: nextId(),
+          name: t('composer.recalledImage'),
+          dataUrl: `data:${image.mimeType};base64,${image.data}`,
+          image
+        }))
+      if (restoredImages.length) setImages((current) => [...current, ...restoredImages])
+      const paths = [...new Set(items.flatMap((item) => item.filePaths))]
+      for (const path of paths.slice(0, 12)) {
+        try {
+          const preview = await window.pi.readFile(path)
+          setFiles((current) =>
+            current.some((f) => f.path === path)
+              ? current
+              : [
+                  ...current,
+                  { id: nextId(), path, relPath: preview.relPath, kind: preview.kind, size: preview.size }
+                ]
+          )
+        } catch {
+          /* keep the @mention reference in the draft */
+        }
+      }
+    },
+    [t]
+  )
+
   const handleRecall = async () => {
-    const texts = await onRecallQueue()
-    if (!texts.length) return
-    // Mirrors pi's queue restore: recalled text first, then the draft.
-    setValue((current) => (current ? `${texts.join('\n\n')}\n\n${current}` : texts.join('\n\n')))
-    setMention(null)
+    const items = await onRecallQueue()
+    if (!items.length) return
+    await mergeRecalled(items)
     textareaRef.current?.focus()
   }
 
+  /**
+   * pi TUI parity for Stop ("restoreQueuedMessagesToEditor({abort:true})"):
+   * the SDK keeps both queues across abort(), and a stray steering message
+   * would otherwise hijack the opening of the next run. Recall queued
+   * messages (payload included) back into the composer, then abort.
+   */
+  const handleStop = useCallback(async () => {
+    const items = await onRecallQueue()
+    if (items.length) await mergeRecalled(items)
+    onStop()
+  }, [onRecallQueue, onStop, mergeRecalled])
+
+  /**
+   * Stop on Escape even when focus has left the composer (scrolling the
+   * transcript, a tool disclosure…), where the textarea handler cannot see the
+   * key. Overlays take priority: React handlers (the mention popup, disabled
+   * popovers) run before this window listener and signal via
+   * `defaultPrevented`, while CenterMorphModal registers its Esc handler later
+   * than this one, so its open dialog is detected through `aria-modal`.
+   */
+  useEffect(() => {
+    if (!busy || !escapeStopsRun) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return
+      if (document.querySelector('[aria-modal="true"]')) return
+      event.preventDefault()
+      void handleStop()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [busy, escapeStopsRun, handleStop])
+
+  const handlePromoteQueued = useCallback((index: number) => {
+    void window.pi.queueAction({ action: 'promote', kind: 'followUp', index })
+  }, [])
+
+  const handleRemoveQueued = useCallback((kind: 'steering' | 'followUp', index: number) => {
+    void window.pi.queueAction({ action: 'remove', kind, index })
+  }, [])
+
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
-    if (mention && mentionHits.length) {
-      if (event.key === 'ArrowDown') {
-        event.preventDefault()
-        setMentionIndex((i) => (i + 1) % mentionHits.length)
-        return
-      }
-      if (event.key === 'ArrowUp') {
-        event.preventDefault()
-        setMentionIndex((i) => (i - 1 + mentionHits.length) % mentionHits.length)
-        return
-      }
-      if (event.key === 'Enter' || event.key === 'Tab') {
-        event.preventDefault()
-        selectMention(mentionHits[mentionIndex])
-        return
+    if (mention) {
+      if (mentionHits.length) {
+        if (event.key === 'ArrowDown') {
+          event.preventDefault()
+          setMentionIndex((i) => (i + 1) % mentionHits.length)
+          return
+        }
+        if (event.key === 'ArrowUp') {
+          event.preventDefault()
+          setMentionIndex((i) => (i - 1 + mentionHits.length) % mentionHits.length)
+          return
+        }
+        if (event.key === 'Enter' || event.key === 'Tab') {
+          event.preventDefault()
+          selectMention(mentionHits[mentionIndex])
+          return
+        }
       }
       if (event.key === 'Escape') {
+        // Consume Esc (even with no hits while loading/empty) so the global
+        // stop shortcut doesn't fire while the mention popup is open.
+        event.preventDefault()
         setMention(null)
         return
       }
@@ -261,29 +393,28 @@ export function Composer({
   // ---- paste & drag/drop --------------------------------------------------
   const handlePaste = (event: ReactClipboardEvent<HTMLTextAreaElement>) => {
     const pasted = Array.from(event.clipboardData.files)
-    const imgs = pasted.filter((f) => f.type.startsWith('image/'))
-    if (imgs.length) {
-      event.preventDefault()
-      imgs.forEach(addImageFile)
+    if (!pasted.length) return
+    // A clipboard holding files must not also paste their names as text.
+    event.preventDefault()
+    for (const file of pasted) {
+      if (file.type.startsWith('image/')) addImageFile(file)
+      else void addFileAttachment(file)
     }
   }
 
   const handleDrop = (event: ReactDragEvent<HTMLDivElement>) => {
     event.preventDefault()
     setDragOver(false)
-    const dropped = Array.from(event.dataTransfer.files)
-    dropped.filter((f) => f.type.startsWith('image/')).forEach(addImageFile)
+    for (const file of Array.from(event.dataTransfer.files)) {
+      if (file.type.startsWith('image/')) addImageFile(file)
+      else void addFileAttachment(file)
+    }
   }
 
   // ---- queued messages ----------------------------------------------------
-  const queuedCount = queued.steering.length + queued.followUp.length
-  const queuedRows = [
-    ...queued.steering.map((text, index) => ({ kind: 'steer' as const, text, key: `steer-${index}` })),
-    ...queued.followUp.map((text, index) => ({ kind: 'followUp' as const, text, key: `followUp-${index}` }))
-  ]
 
   return (
-    <div className="shrink-0 border-t border-border bg-background p-3">
+    <div className="shrink-0 bg-background px-3 pb-3">
       <div className="relative mx-auto w-full max-w-3xl" onDragOver={(e) => { e.preventDefault(); setDragOver(true) }} onDragLeave={() => setDragOver(false)} onDrop={handleDrop}>
         {mention ? (
           <FileMention
@@ -296,51 +427,23 @@ export function Composer({
           />
         ) : null}
 
-        {queuedCount > 0 ? (
-          <div className="mb-2 rounded-xl border border-dashed border-border/80 bg-muted/30">
-            <div className="flex items-center justify-between gap-2 pl-3 pr-1.5 pt-1.5">
-              <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                {t('composer.queuedTitle', { count: queuedCount })}
-              </span>
-              <Tooltip content={t('composer.recallQueueTitle')} side="top">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="size-6 text-muted-foreground hover:text-foreground"
-                  aria-label={t('composer.recallQueue')}
-                  onClick={() => void handleRecall()}
-                >
-                  <Undo2 className="size-3.5" />
-                </Button>
-              </Tooltip>
-            </div>
-            <div className="space-y-1 px-3 pb-2 pt-1">
-              {queuedRows.map((row) => (
-                <div key={row.key} className="flex min-w-0 items-center gap-2 text-xs" title={row.text}>
-                  <span
-                    className={
-                      row.kind === 'steer'
-                        ? 'shrink-0 rounded-full border border-primary/40 bg-primary/10 px-1.5 py-px font-medium text-primary'
-                        : 'shrink-0 rounded-full border border-border bg-muted px-1.5 py-px font-medium text-muted-foreground'
-                    }
-                  >
-                    {t(row.kind === 'steer' ? 'composer.badgeSteer' : 'composer.badgeFollowUp')}
-                  </span>
-                  <span className="min-w-0 truncate text-muted-foreground">{row.text}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        ) : null}
+        <QueuePanel
+          steering={queued.steering}
+          followUp={queued.followUp}
+          onPromote={handlePromoteQueued}
+          onRemove={handleRemoveQueued}
+          onRecall={() => void handleRecall()}
+        />
 
         {images.length || files.length ? (
           <div className="mb-2 flex flex-wrap items-center gap-2">
             {images.map((attachment) => (
               <span key={attachment.id} className="group relative">
-                <img
+                <PreviewThumb
                   src={attachment.dataUrl}
                   alt={attachment.name}
-                  className="h-14 w-14 rounded-xl border border-border object-cover"
+                  className="h-14 w-14 rounded-xl"
+                  imageClassName="h-full w-full object-cover"
                 />
                 <button
                   type="button"
@@ -382,7 +485,7 @@ export function Composer({
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
             loading={busy}
-            onStop={onStop}
+            onStop={() => void handleStop()}
             onSubmit={() => dispatch(behavior)}
             onQueueSubmit={() => dispatch(behavior)}
             maxRows={8}
@@ -450,15 +553,11 @@ export function Composer({
         <input
           ref={fileInputRef}
           type="file"
+          multiple
           hidden
           onChange={async (event) => {
             const picked = Array.from(event.target.files ?? [])
-            for (const file of picked) {
-              // Resolve absolute paths through the main process file index.
-              const hits = await window.pi.searchFiles(file.name)
-              const hit = hits.find((h) => h.name === file.name) ?? hits[0]
-              if (hit) addFileHit(hit)
-            }
+            for (const file of picked) await addFileAttachment(file)
             event.target.value = ''
           }}
         />
