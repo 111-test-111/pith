@@ -36,6 +36,8 @@ export interface TodoItem {
 }
 
 export interface TodoListProps {
+  // local patch (pi-app): the shared task panel owns the heading/disclosure.
+  headerless?: boolean;
   items: TodoItem[];
   title?: ReactNode;
   open?: boolean;
@@ -199,6 +201,7 @@ function TodoStatusIcon({
 }
 
 export function TodoList({
+  headerless = false,
   items,
   title = "To-dos",
   open,
@@ -264,7 +267,8 @@ export function TodoList({
         className,
       )}
     >
-      <button
+      {/* local patch (pi-app): embed the native rows in the task panel without a second toggle. */}
+      {!headerless && <button
         id={triggerId}
         type="button"
         aria-expanded={currentOpen}
@@ -301,13 +305,13 @@ export function TodoList({
         >
           <ChevronDown className="size-3.5" />
         </motion.span>
-      </button>
+      </button>}
 
       <AgentDisclosure
         id={contentId}
-        role="region"
-        aria-labelledby={triggerId}
-        open={currentOpen}
+        role={headerless ? undefined : "region"}
+        aria-labelledby={headerless ? undefined : triggerId}
+        open={headerless || currentOpen}
       >
         <div
           ref={viewportRef}

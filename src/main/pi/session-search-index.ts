@@ -8,7 +8,7 @@ import { highlightSearchText, normalizeSearchText, searchGrams, searchTerms } fr
 import { contentPassages, isConversationPassage, messagePassages, passageSnippet, type SearchPassage } from './session-search-passages'
 
 const PAGE_SIZE = 40
-const INDEX_VERSION = 2
+const INDEX_VERSION = 3
 
 interface DocumentRow {
   rowid: number
@@ -140,7 +140,7 @@ export class SessionSearchIndex {
         } else if (entry.type === 'compaction' || entry.type === 'branch_summary') {
           if (typeof entry.summary === 'string') passages.push({ text: entry.summary, source: 'summary' })
         } else if (entry.type === 'custom_message' && entry.display !== false) {
-          passages.push(...contentPassages(entry.content, 'custom'))
+          passages.push(...messagePassages({ ...entry, role: 'custom' }))
           count++
         }
       }

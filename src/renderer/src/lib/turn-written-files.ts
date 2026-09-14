@@ -2,6 +2,7 @@ import type { AssistantMsg, ChatMessage, ToolCallContent, ToolResultMsg } from '
 import { countDiffChanges, synthesizeWritePatch } from './diff'
 import { relativize, resolveFromCwd } from './tool-path'
 import { extractUserDisplay } from './user-message'
+import { buildTurns, collectChangeScopes } from './chat-turns'
 
 /**
  * The files one assistant turn wrote — the data behind the transcript's
@@ -161,10 +162,8 @@ export function sumWrittenFileStats(
  */
 export interface ReviewTurn {
   /**
-   * The turn's first assistant message timestamp — the same identity the
-   * transcript's AssistantGroup passes to its "Review" action, so a click there
-   * selects the very same turn here. (`buildTurns` keys a turn by its first
-   * assistant message, so the two derivations agree by construction.)
+   * The cumulative scope's first assistant timestamp, shared with the
+   * transcript's Review action even if user steers created more display groups.
    */
   id: number
   /** The user message that opened the turn, as the switcher's label. */
@@ -186,11 +185,8 @@ function promptLabel(text: string, limit = 60): string | null {
 
 /**
  * Every turn of a session that changed files, oldest first — the review tab's
- * model. Turns are folded exactly the way the transcript folds them (the
- * assistant rounds between two user messages are one turn, and `toolResult`
- * entries sit inside it rather than breaking it), and a turn with no changed
- * file is left out so the switcher only walks reviews that have something to
- * show.
+ * model. Use the transcript's cumulative scopes, which can span user-steer
+ * folds and idle task continuations. A scope with no changed file is omitted.
  */
 export function extractReviewTurns(
   messages: readonly ChatMessage[],
@@ -202,31 +198,17 @@ export function extractReviewTurns(
   }
 
   const turns: ReviewTurn[] = []
-  let rounds: AssistantMsg[] = []
-  let prompt: string | null = null
-  const closeTurn = () => {
-    if (rounds.length === 0) return
+  for (const scope of collectChangeScopes(buildTurns([...messages])).values()) {
+    const rounds = scope.assistants
     const files = extractTurnWrittenFiles(rounds, toolResults, cwd)
     if (files.length > 0) {
       turns.push({
-        id: rounds[0].timestamp,
-        prompt,
+        id: scope.reviewId,
+        prompt: scope.prompt ? promptLabel(extractUserDisplay(scope.prompt.content).text) : null,
         timestamp: rounds[rounds.length - 1].timestamp,
         files
       })
     }
-    rounds = []
   }
-
-  for (const message of messages) {
-    if (message.role === 'toolResult') continue
-    if (message.role === 'assistant') {
-      rounds.push(message)
-      continue
-    }
-    closeTurn()
-    prompt = message.role === 'user' ? promptLabel(extractUserDisplay(message.content).text) : null
-  }
-  closeTurn()
   return turns
 }

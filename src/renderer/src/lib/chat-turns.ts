@@ -22,10 +22,12 @@ interface ChatTurnBase {
  */
 export type ChatTurn =
   | (ChatTurnBase & { role: 'user'; user: UserMsg; assistants: [] })
-  | (ChatTurnBase & { role: 'assistant'; assistants: AssistantMsg[]; live?: boolean })
+  | (ChatTurnBase & { role: 'assistant'; assistants: AssistantMsg[]; notices?: TurnNotice[]; live?: boolean })
   | (ChatTurnBase & { role: 'info'; message: CompactionSummaryMsg | BranchSummaryMsg })
   | (ChatTurnBase & { role: 'bash'; message: BashExecutionMsg })
   | (ChatTurnBase & { role: 'custom'; message: CustomMsg })
+
+export interface TurnNotice { beforeRound: number; message: CustomMsg }
 
 /**
  * Folds the message log into turns: a user message opens a turn, every
@@ -47,7 +49,8 @@ export function buildTurns(messages: ChatMessage[]): ChatTurn[] {
         })
         break
       case 'assistant':
-        if (last?.role === 'assistant') last.assistants.push(message)
+        if (last?.role === 'assistant' && (!message.changeScopeId || !last.assistants[0]?.changeScopeId ||
+          last.assistants[0].changeScopeId === message.changeScopeId)) last.assistants.push(message)
         else
           turns.push({
             key: `a${message.timestamp}-${turns.length}`,
@@ -65,10 +68,48 @@ export function buildTurns(messages: ChatMessage[]): ChatTurn[] {
         turns.push({ key: `b${message.timestamp}-${turns.length}`, role: 'bash', message })
         break
       case 'custom':
-        if (message.display)
+        if (message.display && message.customType === 'bash_task_completion') {
+          if (last?.role === 'assistant') {
+            ;(last.notices ??= []).push({ beforeRound: last.assistants.length, message })
+          } else {
+            turns.push({ key: `a${message.timestamp}-${turns.length}`, role: 'assistant', assistants: [],
+              notices: [{ beforeRound: 0, message }] })
+          }
+        } else if (message.display)
           turns.push({ key: `c${message.timestamp}-${turns.length}`, role: 'custom', message })
         break
     }
   }
   return turns
+}
+
+/** One file list per execution scope, even when user steers create multiple
+ * display groups. Ownership moves to the last group without copying results. */
+export interface ChangeScope {
+  id: string
+  reviewId: number
+  ownerKey: string
+  assistants: AssistantMsg[]
+  prompt: UserMsg | null
+}
+
+export function collectChangeScopes(turns: readonly ChatTurn[]): Map<string, ChangeScope> {
+  const scopes = new Map<string, ChangeScope>()
+  let prompt: UserMsg | null = null
+  for (const turn of turns) {
+    if (turn.role === 'user') prompt = turn.user
+    if (turn.role === 'info') prompt = null
+    if (turn.role !== 'assistant') continue
+    for (const message of turn.assistants) {
+      const id = message.changeScopeId ?? turn.key
+      let scope = scopes.get(id)
+      if (!scope) {
+        scope = { id, reviewId: message.timestamp, ownerKey: turn.key, assistants: [], prompt }
+        scopes.set(id, scope)
+      }
+      scope.ownerKey = turn.key
+      scope.assistants.push(message)
+    }
+  }
+  return scopes
 }

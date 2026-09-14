@@ -2,6 +2,8 @@ import { app, BrowserWindow, screen, shell } from 'electron'
 import { join } from 'node:path'
 import { createPiManager, registerIpc } from './ipc'
 import { loadSettings, saveSettings, type WindowBounds } from './settings'
+import { registerQuitShortcut } from './shutdown'
+import { windowChromeOptions } from './window-chrome'
 
 // Keep existing settings and Chromium storage through the product rename.
 app.setPath('userData', join(app.getPath('appData'), 'pi-app'))
@@ -54,6 +56,7 @@ function createWindow(): BrowserWindow {
   const saved = loadSettings().windowBounds
   const win = new BrowserWindow({
     ...restoredWindowBounds(saved),
+    ...windowChromeOptions(),
     minWidth: MIN_WIDTH,
     minHeight: MIN_HEIGHT,
     show: false,
@@ -68,6 +71,8 @@ function createWindow(): BrowserWindow {
       spellcheck: false
     }
   })
+
+  registerQuitShortcut(win.webContents, () => app.quit())
 
   // Restore the maximized state the window was closed in. Reading bounds while
   // maximized or full screen yields the maximized rect, so persistence always
@@ -131,14 +136,12 @@ app.whenReady().then(() => {
   // BrowserWindow.icon does not set the macOS Dock icon during development.
   if (process.platform === 'darwin') app.dock?.setIcon(join(iconDirectory, '512x512.png'))
   const pi = createPiManager()
-  registerIpc(pi)
+  const isQuitting = registerIpc(pi)
   createWindow()
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    if (!isQuitting() && BrowserWindow.getAllWindows().length === 0) createWindow()
   })
-
-  app.on('before-quit', () => pi.dispose())
 })
 
 app.on('window-all-closed', () => {

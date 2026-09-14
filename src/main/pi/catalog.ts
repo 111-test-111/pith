@@ -1,3 +1,6 @@
+import { APP_BASH_TOOL_NAMES } from './bash-tools'
+import { TODO_TOOL_NAME } from './todo-protocol'
+
 import {
   DefaultPackageManager,
   SettingsManager,
@@ -17,6 +20,8 @@ import type {
   ToolCatalogDTO,
   ToolInfoDTO
 } from '../../shared/types'
+
+const APP_TOOL_NAMES: readonly string[] = [...APP_BASH_TOOL_NAMES, TODO_TOOL_NAME]
 
 /**
  * Settings → Tools / Extensions reads the *unfiltered* resource loader, so a
@@ -230,7 +235,7 @@ export function buildToolCatalog(
   packages: Map<string, PackageResources>,
   knownTools: Map<string, ToolInfoDTO[]>
 ): ToolCatalogDTO {
-  const extensions = loader.getExtensions().extensions
+  const extensions = loader.getExtensions().extensions.filter((extension) => !extension.hidden)
   const active = new Set(activeToolNames)
 
   const infos = new Map<string, ExtensionInfoDTO>()
@@ -268,6 +273,7 @@ export function buildToolCatalog(
     const enabled = !disabledExtensions.has(id)
     const label = labels.get(id) ?? id
     for (const [name, registered] of extension.tools) {
+      if (APP_TOOL_NAMES.some((appName) => appName === name)) continue
       setTool(
         perExtension,
         id,
@@ -290,7 +296,7 @@ export function buildToolCatalog(
     if (extension.resolvedPath) extensionByPath.set(extension.resolvedPath, extension)
   }
   for (const tool of sessionTools) {
-    if (tool.sourceInfo.source === 'builtin') continue
+    if (tool.sourceInfo.source === 'builtin' || (tool.sourceInfo.source === 'sdk' && APP_TOOL_NAMES.some((name) => name === tool.name))) continue
     const extension = extensionByPath.get(tool.sourceInfo.path)
     const id = extension ? extensionId(extension) : tool.sourceInfo.source
     const label = labels.get(id) ?? tool.sourceInfo.source
@@ -323,7 +329,7 @@ export function buildToolCatalog(
   const present = new Set(tools.map((tool) => tool.name))
   const builtinSeen = new Set<string>()
   for (const tool of sessionTools) {
-    if (tool.sourceInfo.source !== 'builtin' || present.has(tool.name)) continue
+    if ((tool.sourceInfo.source !== 'builtin' && !(tool.sourceInfo.source === 'sdk' && APP_TOOL_NAMES.some((name) => name === tool.name))) || present.has(tool.name)) continue
     if (builtinSeen.has(tool.name)) continue
     builtinSeen.add(tool.name)
     tools.push(

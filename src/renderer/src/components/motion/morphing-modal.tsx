@@ -6,7 +6,10 @@ import {
   motion,
   useReducedMotion,
 } from "motion/react";
-import { type ReactNode, useEffect } from "react";
+import { type ReactNode } from "react";
+// local patch (pi-app): nested modal cleanup must not unlock an open parent or
+// leave scrolling locked when both surfaces unmount in the same commit.
+import { useModalScrollLock } from "@/lib/hooks/use-modal-scroll-lock";
 import { EASE_OUT, SPRING_PANEL } from "@/lib/ease";
 import { PresenceGate } from "@/lib/presence-gate";
 import { cn } from "@/lib/utils";
@@ -33,14 +36,7 @@ export function MorphingModal({
   const enterY = reduce ? 0 : placement === "bottom" ? 40 : 20;
   const enterScale = reduce ? 1 : 0.97;
 
-  useEffect(() => {
-    if (!open) return;
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.body.style.overflow = prev;
-    };
-  }, [open]);
+  useModalScrollLock(open);
 
   // Mounted only while open, and while open the chrome is two fixed siblings
   // rather than one wrapper: the backdrop spans the viewport edges but carries

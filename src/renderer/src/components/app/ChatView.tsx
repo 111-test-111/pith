@@ -1,4 +1,5 @@
-import { PithIcon } from './PithIcon'
+import { BashTasksProvider } from '@/lib/bash-tasks'
+import { SessionTasks } from './SessionTasks'
 import { memo, useMemo, useSyncExternalStore } from 'react'
 import { AlertTriangle, RotateCcw, X } from 'lucide-react'
 import { MessageGroup } from '@/components/agents/message'
@@ -12,7 +13,7 @@ import type {
 } from '../../../../shared/types'
 import type { Notice, PiStore, PiState } from '@/state/pi-store'
 import { useI18n } from '@/i18n'
-import { buildTurns, type ChatTurn } from '@/lib/chat-turns'
+import { buildTurns, collectChangeScopes, type ChatTurn } from '@/lib/chat-turns'
 import { extractUserDisplay } from '@/lib/user-message'
 import { AssistantGroup, BashItem, CustomItem, SummaryItem, UserItem } from './MessageItems'
 import { RowReveal } from './RowReveal'
@@ -88,6 +89,7 @@ export const ChatView = memo(function ChatView({
   onDismissError,
   onResend,
   onEditMessage,
+  onRewindMessage,
   onFork,
   onReview
 }: {
@@ -103,6 +105,7 @@ export const ChatView = memo(function ChatView({
   /** Open the edit-and-resend dialog for a user message (does not resend by
    * itself — the dialog's Resend press does). */
   onEditMessage: (message: UserMsg) => void
+  onRewindMessage?: (message: UserMsg) => void
   /** Fork the session at an assistant message; opens the fork. */
   onFork: (message: AssistantMsg) => void
   /** Open the review tab on a turn — the changed-files card's Review action.
@@ -121,6 +124,7 @@ export const ChatView = memo(function ChatView({
 
   const busy = state.isStreaming || Boolean(state.streaming)
   const turns = useMemo(() => buildTurns(state.messages), [state.messages])
+  const changeScopes = useMemo(() => collectChangeScopes(turns), [turns])
   /**
    * Navigation rail: one tick per user turn. The hover preview pairs the
    * user's message with the turn's final assistant reply — both excerpted
@@ -164,10 +168,12 @@ export const ChatView = memo(function ChatView({
   })()
   // A fresh streaming round either joins the trailing assistant turn or
   // (first round of a new turn) opens one.
-  const streamingJoinsLastTurn = Boolean(streaming && lastTurn?.role === 'assistant')
+  const lastScopeId = lastTurn?.role === 'assistant' ? lastTurn.assistants[0]?.changeScopeId : undefined
+  const continuesLastScope = !state.activeChangeScopeId || !lastScopeId || state.activeChangeScopeId === lastScopeId
+  const streamingJoinsLastTurn = Boolean(streaming && lastTurn?.role === 'assistant' && continuesLastScope)
   // Between rounds (tools running, no partial message yet) the spinner sits
   // inside the trailing turn instead of a separate row.
-  const waitingInLastTurn = state.isStreaming && !streaming && lastTurn?.role === 'assistant'
+  const waitingInLastTurn = state.isStreaming && !streaming && lastTurn?.role === 'assistant' && continuesLastScope
   // The first round of a turn streams before it exists as a message. Render it
   // as a synthetic turn keyed exactly the way `buildTurns` will key the
   // persisted message (`a<timestamp>-<index>`), and splice it into the same
@@ -204,6 +210,7 @@ export const ChatView = memo(function ChatView({
           // older one reveals them on hover.
           actionsAlwaysVisible={turn === lastTurn}
           onEdit={onEditMessage}
+          onRewind={onRewindMessage}
         />
       )
     if (turn.role === 'info')
@@ -232,6 +239,8 @@ export const ChatView = memo(function ChatView({
       : isLast && streamingJoinsLastTurn
         ? [...turn.assistants, streaming!]
         : turn.assistants
+    const scopeId = turn.assistants[0]?.changeScopeId ?? turn.key
+    const changes = changeScopes.get(scopeId)
     // Retry rewinds to the user message that opened this turn's exchange;
     // scanning stops at a summary (its user message may be compacted away).
     // Fork keeps everything up to the turn's last round.
@@ -249,6 +258,10 @@ export const ChatView = memo(function ChatView({
       <AssistantGroup
         key={turn.key}
         messages={messages}
+        notices={turn.notices}
+        writtenMessages={changes?.assistants}
+        writtenReviewId={changes?.reviewId}
+        showWrittenFiles={changes?.ownerKey === turn.key && !(busy && scopeId === state.activeChangeScopeId)}
         streamingIndex={live ? 0 : isLast && streamingJoinsLastTurn ? turn.assistants.length : -1}
         pending={!live && isLast && waitingInLastTurn}
         retryFrom={retryFrom}
@@ -266,6 +279,8 @@ export const ChatView = memo(function ChatView({
   }
 
   return (
+    <BashTasksProvider sessionPath={state.sessionPath}>
+      <SessionTasks key={state.sessionPath} todos={state.todos} busy={busy} />
       <MessageScroller
       busy={busy}
       navigation="rail"
@@ -284,8 +299,6 @@ export const ChatView = memo(function ChatView({
       contentClassName="mx-auto min-h-full w-full max-w-3xl overflow-x-clip"
     >
       <MessageGroup spacing="default">
-        {state.messages.length === 0 && !busy ? <EmptyState /> : null}
-
         {displayTurns.map((turn, index) => renderTurn(turn, displayTurns[index - 1]))}
 
         {state.isStreaming && !streaming && !waitingInLastTurn ? <TurnStatus /> : null}
@@ -303,7 +316,7 @@ export const ChatView = memo(function ChatView({
             <div className="flex items-start justify-between gap-3 rounded-xl border border-destructive/40 bg-destructive/10 px-3 py-2.5 text-sm text-destructive">
               <span className="flex items-start gap-2">
                 <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-                {state.error}
+                {typeof state.error === 'string' ? state.error : t(`rewind.error.${state.error.code}`)}
               </span>
               <span className="flex items-center gap-0.5">
                 {lastUserTurn && !busy ? (
@@ -326,23 +339,6 @@ export const ChatView = memo(function ChatView({
         ) : null}
       </MessageGroup>
     </MessageScroller>
+    </BashTasksProvider>
   )
 })
-
-function EmptyState() {
-  const { t } = useI18n()
-  // Both locales carry exactly one literal `@` (the mention trigger); split
-  // around it so it keeps its inline-code styling.
-  const [before, after] = t('chat.emptyBody').split('@')
-  return (
-    <div className="flex flex-col items-center justify-center gap-3 py-24 text-center">
-      <PithIcon className="size-16" />
-      <p className="text-base font-medium text-foreground">{t('chat.emptyTitle')}</p>
-      <p className="max-w-sm text-sm text-muted-foreground">
-        {before}
-        <code className="rounded bg-muted px-1 py-0.5 text-xs">@</code>
-        {after}
-      </p>
-    </div>
-  )
-}

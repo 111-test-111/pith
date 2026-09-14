@@ -1,3 +1,5 @@
+import { useBashTask, bashTaskStatus } from '@/lib/bash-tasks'
+import { BashTaskRow } from './BashTaskView'
 import { memo, useMemo, useState } from 'react'
 import { FileDiff } from '@/components/agents/file-diff'
 import { ToolResult, ToolResultOutput } from '@/components/agents/tool-result'
@@ -59,7 +61,21 @@ function resultText(source: ToolResultMsg | ToolRun | undefined): string {
   return ''
 }
 
-function statusOf(result: ToolResultMsg | undefined, run: ToolRun | undefined) {
+/** Managed bash wraps its final result for the model. Foreground rows still
+ * render ordinary command output, including after the task record expires.
+ * Only unwrap an envelope for this exact call; stdout may itself be JSON. */
+function managedBashOutput(text: string, toolCallId: string): {
+  output: string; error?: string; exitCode?: number; status?: string; truncated?: boolean
+} | undefined {
+  try {
+    const value = JSON.parse(text)
+    if (value?.toolCallId === toolCallId && typeof value.id === 'string' &&
+      typeof value.background === 'boolean' && typeof value.output === 'string') return value
+  } catch { /* Legacy bash results and streaming stdout are plain text. */ }
+  return undefined
+}
+
+export function statusOf(result: ToolResultMsg | undefined, run: ToolRun | undefined) {
   if (result) return result.isError ? 'error' : 'success'
   if (run) return run.status === 'running' ? 'running' : run.status
   return 'running' as const
@@ -178,7 +194,9 @@ function LazyDiff({ file, diff, status, tool }: LazyDiffProps) {
 export const ToolCallView = memo(function ToolCallView({ call, result, run, cwd }: ToolCallViewProps) {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
-  const status = statusOf(result, run)
+  const task = useBashTask(call.name === 'bash' ? call.id : undefined, result?.details?.bashTask ?? run?.partial?.details?.bashTask)
+  const backgroundTask = call.name === 'bash' && task?.background ? task : undefined
+  const status = backgroundTask ? bashTaskStatus(backgroundTask) : statusOf(result, run)
   /** Body text when the call produced nothing of its own. */
   const placeholder = (fallback: string) =>
     neverRan(status, run) ? t('tool.notRun') : fallback
@@ -192,7 +210,16 @@ export const ToolCallView = memo(function ToolCallView({ call, result, run, cwd 
   const images = resultImages(result ?? run)
   // Tool payloads can be large cumulative snapshots. Do not flatten them into
   // text on every update unless the user is actually viewing this disclosure.
-  const output = open ? resultText(result ?? run) : ''
+  let output = open ? resultText(result ?? run) : ''
+  const bashOutput = open && call.name === 'bash' && result ? managedBashOutput(output, call.id) : undefined
+  if (bashOutput) {
+    const lines = [bashOutput.output]
+    if (typeof bashOutput.error === 'string' && bashOutput.error !== bashOutput.output) lines.push(bashOutput.error)
+    if (typeof bashOutput.exitCode === 'number' && bashOutput.exitCode !== 0) lines.push(t('bashTask.exitCode', { code: bashOutput.exitCode }))
+    if (bashOutput.status === 'timed_out' || bashOutput.status === 'cancelled' || bashOutput.status === 'interrupted') lines.push(t(`bashTask.${bashOutput.status}`))
+    if (bashOutput.truncated) lines.push(t('chat.bashTruncated'))
+    output = lines.filter(Boolean).join('\n')
+  }
   // Text output plus any image content the tool returned.
   const renderOutput = (children: string) => (
     <>
@@ -202,7 +229,16 @@ export const ToolCallView = memo(function ToolCallView({ call, result, run, cwd 
   )
 
   switch (call.name) {
+    case 'todo_write':
+      return (
+        <ToolResult animateChanges={false} lazyContent open={open} onOpenChange={setOpen}
+          title={t('todo.updated')} status={status} icon={<ToolIcon name="todo_write" />} meta={meta}
+          collapseOnComplete={false} contentClassName={WRAP_OUTPUT}>
+          {renderOutput(output || placeholder(t('tool.noOutput')))}
+        </ToolResult>
+      )
     case 'bash': {
+      if (backgroundTask) return <BashTaskRow task={backgroundTask} />
       const command = typeof args.command === 'string' ? args.command : JSON.stringify(args)
       const firstLine = command.split('\n')[0]
       return (

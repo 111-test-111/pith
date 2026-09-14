@@ -1,5 +1,6 @@
-import { memo, useMemo, useState, type ReactNode } from 'react'
-import { Brain, FileText, GitFork, History, Pencil, RotateCcw } from 'lucide-react'
+import { BashTaskRow } from './BashTaskView'
+import { Fragment, memo, useMemo, useState, type ReactNode } from 'react'
+import { Brain, FileText, GitFork, Pencil, RotateCcw } from 'lucide-react'
 import { AgentActivity } from '@/components/agents/agent-activity'
 import { AgentDisclosure } from '@/components/agents/agent-disclosure'
 import {
@@ -15,22 +16,35 @@ import { cn } from '@/lib/utils'
 import { ToolIcon } from '@/lib/tool-icons'
 import { formatTime, formatTokenCount, basename } from '@/lib/format'
 import { extractTurnWrittenFiles } from '@/lib/turn-written-files'
+import type { TurnNotice } from '@/lib/chat-turns'
 import { extractUserDisplay } from '@/lib/user-message'
 import type {
   AssistantMsg,
+  BashTaskDTO,
   BashExecutionMsg,
   BranchSummaryMsg,
   CompactionSummaryMsg,
   CustomMsg,
-  TextContent,
-  ThinkingContent,
-  ToolCallContent,
   ToolResultMsg,
   UserMsg
 } from '../../../../shared/types'
 import type { ToolRun } from '@/state/pi-store'
+import { splitByToolCategory } from '@/lib/tool-categories'
+import {
+  buildToolPlan,
+  groupContent,
+  planRowCount,
+  sameToolPlan,
+  textBlockRenders,
+  toolPlanKey,
+  type ToolPlan
+} from '@/lib/tool-runs'
 import { useI18n } from '@/i18n'
+import type { MessageKey } from '@/i18n/locales/en'
+import { useShowReasoning } from '@/lib/show-reasoning'
+import { useToolGrouping } from '@/lib/tool-grouping'
 import { ToolCallView } from './ToolCallView'
+import { ToolGroupView } from './ToolGroupView'
 import { Button } from '@/components/motion/button'
 import { ReasoningText } from './ReasoningText'
 import { RowReveal } from './RowReveal'
@@ -43,6 +57,10 @@ import { LabelTooltip } from './LabelTooltip'
 /** `anywhere` (unlike `break-words`) shrinks intrinsic min-content so long
  * unbroken strings wrap instead of widening the conversation column. */
 const WRAP_ANYWHERE = '[overflow-wrap:anywhere]'
+
+/** The i18n translate function, so module-level label helpers (a turn's
+ * elapsed time) can compose localized text without re-rendering. */
+type Translate = (key: MessageKey, params?: Record<string, string | number>) => string
 
 /** Hover-reveal for action rows that keep their layout slot (opacity, not
  * display) so the transcript doesn't shift when they appear. Mirrors
@@ -59,7 +77,8 @@ export const UserItem = memo(function UserItem({
   spaced,
   showActions = false,
   actionsAlwaysVisible = false,
-  onEdit
+  onEdit,
+  onRewind
 }: {
   message: UserMsg
   railId?: string
@@ -74,6 +93,7 @@ export const UserItem = memo(function UserItem({
   actionsAlwaysVisible?: boolean
   /** Opens the edit-and-resend dialog for this message. */
   onEdit?: (message: UserMsg) => void
+  onRewind?: (message: UserMsg) => void
 }) {
   const { t } = useI18n()
   const { text, files, images } = extractUserDisplay(message.content)
@@ -125,6 +145,7 @@ export const UserItem = memo(function UserItem({
         {showActions ? (
           <MessageActions alwaysVisible={actionsAlwaysVisible}>
             {text ? <CopyAction text={text} /> : null}
+            {onRewind ? <MessageAction label={t('rewind.title')} onClick={() => onRewind(message)}><RotateCcw className="size-3.5" /></MessageAction> : null}
             {onEdit ? (
               <MessageAction label={t('chat.messageResend')} onClick={() => onEdit(message)}>
                 <Pencil className="size-3.5" />
@@ -154,7 +175,7 @@ export const SummaryItem = memo(function SummaryItem({
   return (
     <div className="rounded-xl border border-dashed border-border bg-muted/30 px-3 py-2">
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        <History aria-hidden="true" className="size-3.5 shrink-0" />
+        <RotateCcw aria-hidden="true" className="size-3.5 shrink-0" />
         <span className="font-medium text-foreground">
           {branch ? t('chat.summaryBranchTitle') : t('chat.summaryTitle')}
         </span>
@@ -226,6 +247,8 @@ export const BashItem = memo(function BashItem({ message }: { message: BashExecu
 export const CustomItem = memo(function CustomItem({ message }: { message: CustomMsg }) {
   const { t } = useI18n()
   const { text, images } = extractUserDisplay(message.content)
+  const task = (message.details as { bashTask?: BashTaskDTO } | undefined)?.bashTask
+  if (message.customType === 'bash_task_completion' && task) return <BashTaskRow task={task} completion />
   return (
     <div className="rounded-xl border border-border bg-card px-3 py-2">
       <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
@@ -281,37 +304,16 @@ interface AssistantPartsProps extends ToolContext {
   footer?: ReactNode
   /** Session working directory, used to render each tool call's target path. */
   cwd?: string | null
-}
-
-type AssistantBlock =
-  | { kind: 'thinking'; parts: ThinkingContent[] }
-  | { kind: 'text'; parts: TextContent[] }
-  | { kind: 'tool'; parts: ToolCallContent[] }
-
-/**
- * Groups a message's content into consecutive same-kind blocks, preserving the
- * model's actual output order. GPT-family models emit phase text BEFORE the tool
- * calls it introduces in the same assistant message; a fixed
- * thinking -> tools -> text order rendered those tools above their own text.
- */
-function groupContent(content: AssistantMsg['content']): AssistantBlock[] {
-  const blocks: AssistantBlock[] = []
-  for (const part of content) {
-    if (part.type === 'thinking') {
-      const last = blocks[blocks.length - 1]
-      if (last?.kind === 'thinking') last.parts.push(part)
-      else blocks.push({ kind: 'thinking', parts: [part] })
-    } else if (part.type === 'text') {
-      const last = blocks[blocks.length - 1]
-      if (last?.kind === 'text') last.parts.push(part)
-      else blocks.push({ kind: 'text', parts: [part] })
-    } else {
-      const last = blocks[blocks.length - 1]
-      if (last?.kind === 'tool') last.parts.push(part)
-      else blocks.push({ kind: 'tool', parts: [part] })
-    }
-  }
-  return blocks
+  /** Absolute index of this message within the turn — plan key prefix. */
+  messageIndex: number
+  /** Cross-message tool-run plan shared by every round of the turn. */
+  toolPlan: ToolPlan
+  /** First/last block of this round to paint. A settled turn folds the blocks
+   * before its reply into the fold, so the round holding the reply renders as
+   * two halves: its process blocks inside the fold, the reply below it. Block
+   * indices stay absolute, so `toolPlan` lookups are unaffected. */
+  blocksFrom?: number
+  blocksTo?: number
 }
 
 /** One assistant model round (thinking + tool calls + text) inside a merged group. */
@@ -327,12 +329,25 @@ const AssistantParts = memo(function AssistantParts({
   onFork,
   footer,
   cwd,
+  messageIndex,
+  toolPlan,
+  blocksFrom,
+  blocksTo,
   toolResults,
   toolRuns,
 }: AssistantPartsProps) {
   const { t } = useI18n()
+  // Settings → General: reasoning blocks can be hidden entirely. The hook makes
+  // this memoized round re-render on its own when the preference flips.
+  const [showReasoning] = useShowReasoning()
   const blocks = groupContent(message.content)
   const hasContent = blocks.length > 0
+  const from = blocksFrom ?? 0
+  const to = blocksTo ?? blocks.length
+  // Only the instance that owns the round's tail paints its error disclosure
+  // and its completion row; a folded half of the same round must not repeat
+  // them (the row belongs at the very bottom of the turn).
+  const ownsTail = to >= blocks.length
 
   // Retry/fork ride in the completion-actions row of the turn's final text
   // block (rendered only when `showActions`, i.e. the turn is idle and this is
@@ -358,8 +373,14 @@ const AssistantParts = memo(function AssistantParts({
 
   return (
     <>
-      {blocks.map((block, index) => {
+      {blocks.slice(from, to).map((block, offset) => {
+        // Absolute block index: plan keys and "is this the round's last block"
+        // are both about the whole round, not about the rendered slice.
+        const index = from + offset
         if (block.kind === 'thinking') {
+          // Hidden from Settings → General: the round keeps its tool/text rows,
+          // and `buildToolPlan` treats the block as painting nothing.
+          if (!showReasoning) return null
           // Render from the first delta. The old guard hid the block until the
           // round completed, so a round whose reasoning led into a tool call
           // only revealed its Reasoning row AFTER the tool call appeared. The
@@ -391,18 +412,42 @@ const AssistantParts = memo(function AssistantParts({
         }
 
         if (block.kind === 'tool') {
+          // The turn-wide plan merges adjacent tool blocks across rounds. A
+          // block that continues a run an earlier block already rendered stays
+          // out of the DOM entirely.
+          const planRows = toolPlan.get(toolPlanKey(messageIndex, index))
+          if (planRows === null) return null
+          const rows = planRows ?? splitByToolCategory(block.parts)
           return (
             <div key={`tool-${index}`} className="w-full space-y-2">
-              {block.parts.map((call) => (
-                <RowReveal key={call.id} animate={streaming}>
-                  <ToolCallView
-                    call={call}
-                    result={toolResults.get(call.id)}
-                    run={toolRuns[call.id]}
-                    cwd={cwd}
-                  />
-                </RowReveal>
-              ))}
+              {/* Adjacent same-category calls fold into one row; everything
+                  else (including a lone categorized call) keeps its own row,
+                  so reasoning or a different category between two calls never
+                  merges them. */}
+              {rows.flatMap((run) =>
+                run.category && run.items.length > 1 ? (
+                  <RowReveal key={run.items[0].id} animate={streaming}>
+                    <ToolGroupView
+                      category={run.category}
+                      calls={run.items}
+                      toolResults={toolResults}
+                      toolRuns={toolRuns}
+                      cwd={cwd}
+                    />
+                  </RowReveal>
+                ) : (
+                  run.items.map((call) => (
+                    <RowReveal key={call.id} animate={streaming}>
+                      <ToolCallView
+                        call={call}
+                        result={toolResults.get(call.id)}
+                        run={toolRuns[call.id]}
+                        cwd={cwd}
+                      />
+                    </RowReveal>
+                  ))
+                )
+              )}
             </div>
           )
         }
@@ -435,7 +480,7 @@ const AssistantParts = memo(function AssistantParts({
         )
       })}
 
-      {message.errorMessage ? (
+      {ownsTail && message.errorMessage ? (
         // Reuses the reasoning disclosure (beUI AgentActivity): a collapsed row
         // that expands to the raw provider/SDK error instead of dumping a red
         // box into the transcript.
@@ -478,10 +523,16 @@ function assistantPartsPropsEqual(prev: AssistantPartsProps, next: AssistantPart
     prev.footer !== next.footer ||
     prev.onResend !== next.onResend ||
     prev.onFork !== next.onFork ||
-    prev.toolResults !== next.toolResults
+    prev.toolResults !== next.toolResults ||
+    prev.messageIndex !== next.messageIndex ||
+    prev.blocksFrom !== next.blocksFrom ||
+    prev.blocksTo !== next.blocksTo
   ) {
     return false
   }
+  // Plans are rebuilt (new Map identity) whenever any round changes, so compare
+  // by value — an untouched round must keep its memo.
+  if (!sameToolPlan(prev.toolPlan, next.toolPlan, prev.message, prev.messageIndex)) return false
   if (prev.toolRuns === next.toolRuns) return true
   for (const part of prev.message.content) {
     if (part.type === 'toolCall' && prev.toolRuns[part.id] !== next.toolRuns[part.id]) return false
@@ -490,6 +541,11 @@ function assistantPartsPropsEqual(prev: AssistantPartsProps, next: AssistantPart
 }
 
 export interface AssistantGroupProps extends ToolContext {
+  notices?: TurnNotice[]
+  /** File ownership can span multiple user-steer display groups. */
+  writtenMessages?: readonly AssistantMsg[]
+  writtenReviewId?: number
+  showWrittenFiles?: boolean
   /** Consecutive assistant rounds of one turn, oldest first. */
   messages: AssistantMsg[]
   /** Index of the live streaming round inside `messages`; -1 when idle. */
@@ -524,6 +580,10 @@ export interface AssistantGroupProps extends ToolContext {
 function assistantGroupPropsEqual(prev: AssistantGroupProps, next: AssistantGroupProps): boolean {
   if (
     prev.messages !== next.messages ||
+    prev.notices !== next.notices ||
+    prev.writtenMessages !== next.writtenMessages ||
+    prev.writtenReviewId !== next.writtenReviewId ||
+    prev.showWrittenFiles !== next.showWrittenFiles ||
     prev.streamingIndex !== next.streamingIndex ||
     prev.pending !== next.pending ||
     prev.toolResults !== next.toolResults ||
@@ -549,44 +609,130 @@ function assistantGroupPropsEqual(prev: AssistantGroupProps, next: AssistantGrou
   return true
 }
 
-const ASSISTANT_ROUND_PAGE = 8
+/**
+ * Where a settled turn's visible tail starts: the block holding the final reply,
+ * i.e. the turn's LAST non-empty prose block. Everything before it — including
+ * the reasoning (and any tool calls) the final round emitted before it wrote
+ * that prose — is process and folds away, so a finished turn reads as its
+ * answer alone. `round === messages.length` when the turn produced no prose at
+ * all, which folds every block it has.
+ */
+interface TurnBoundary {
+  round: number
+  block: number
+}
 
-/** Index of the last round that produced prose — the turn's final reply. */
-function lastTextRoundIndex(messages: AssistantMsg[]): number {
-  for (let index = messages.length - 1; index >= 0; index--) {
-    if (messages[index].content.some((part) => part.type === 'text' && part.text.trim())) return index
+function replyBoundary(messages: AssistantMsg[]): TurnBoundary {
+  for (let round = messages.length - 1; round >= 0; round--) {
+    const blocks = groupContent(messages[round].content)
+    for (let block = blocks.length - 1; block >= 0; block--) {
+      const candidate = blocks[block]
+      if (candidate.kind === 'text' && textBlockRenders(candidate)) return { round, block }
+    }
   }
-  return -1
+  return { round: messages.length, block: 0 }
+}
+
+/** The fold boundary: the reply block, pulled back to an errored round — that
+ * disclosure IS the turn's outcome and has to stay on screen. */
+function processBoundary(messages: AssistantMsg[]): TurnBoundary {
+  const reply = replyBoundary(messages)
+  const error = messages.findIndex((message) => Boolean(message.errorMessage))
+  return error >= 0 && error < reply.round ? { round: error, block: 0 } : reply
 }
 
 /**
- * How many transcript rows a set of rounds renders once expanded: one per
- * thinking/text block and one per tool call. The fold's "show earlier" count
- * uses this so the number matches what expanding actually reveals (a round can
- * hold several reasoning/tool rows).
+ * How many transcript rows the folded side paints: every block before the
+ * boundary, one row per thinking/text block and one per tool block's planned
+ * rows (a folded run counts once). Used to decide whether a collapsed turn
+ * actually has process content to hide, so the fold trigger never appears over
+ * nothing.
  */
-function stepCount(messages: AssistantMsg[]): number {
+function foldedRows(
+  messages: AssistantMsg[],
+  boundary: TurnBoundary,
+  plan: ToolPlan,
+  showReasoning: boolean
+): number {
   let count = 0
-  for (const message of messages) {
-    for (const block of groupContent(message.content)) {
-      if (block.kind === 'tool') count += block.parts.length
+  messages.forEach((message, messageIndex) => {
+    if (messageIndex > boundary.round) return
+    const blocks = groupContent(message.content)
+    const limit = messageIndex === boundary.round ? boundary.block : blocks.length
+    blocks.forEach((block, blockIndex) => {
+      if (blockIndex >= limit) return
+      if (block.kind === 'tool') {
+        // Continuation blocks are absent/`null` in the plan and render nothing.
+        const rows = plan.get(toolPlanKey(messageIndex, blockIndex))
+        if (rows) count += planRowCount(rows)
+      }
       // An all-blank text block renders nothing (AssistantParts bails on it).
-      else if (block.kind === 'text') count += block.parts.some((part) => part.text.trim()) ? 1 : 0
-      else count += 1
-    }
+      else if (block.kind === 'text') count += textBlockRenders(block) ? 1 : 0
+      // Reasoning rows are not painted when the preference is off, so they
+      // cannot make the folded part look non-empty either.
+      else count += showReasoning ? 1 : 0
+    })
     if (message.errorMessage) count += 1
-  }
+  })
   return count
+}
+
+/**
+ * How long a settled turn took: from the prompt that opened it to the last
+ * committed message or tool result. `completedAt` is the session entry's write
+ * time, attached by the main process (the SDK's own `timestamp` marks when a
+ * message was CREATED, which would leave out the final answer's generation).
+ * Falls back to creation times so an untimed message still yields a bound.
+ */
+function turnDurationMs(
+  messages: AssistantMsg[],
+  toolResults: Map<string, ToolResultMsg>,
+  openedBy?: UserMsg
+): number {
+  const start = openedBy?.timestamp ?? messages[0]?.timestamp ?? 0
+  let end = start
+  for (const message of messages) {
+    end = Math.max(end, message.completedAt ?? message.timestamp)
+    for (const part of message.content) {
+      if (part.type !== 'toolCall') continue
+      const result = toolResults.get(part.id)
+      if (result) end = Math.max(end, result.completedAt ?? result.timestamp)
+    }
+  }
+  return Math.max(0, end - start)
+}
+
+/** Compact elapsed time for the fold trigger: `32s`, `2m 5s`, `1h 4m`. */
+function formatDuration(t: Translate, ms: number): string {
+  const seconds = Math.max(1, Math.round(ms / 1000))
+  if (seconds < 60) return t('chat.durationSeconds', { count: seconds })
+  const minutes = Math.floor(seconds / 60)
+  const restSeconds = seconds % 60
+  if (minutes < 60) {
+    return restSeconds
+      ? t('chat.durationMinutesSeconds', { minutes, seconds: restSeconds })
+      : t('chat.durationMinutes', { minutes })
+  }
+  const hours = Math.floor(minutes / 60)
+  const restMinutes = minutes % 60
+  return restMinutes
+    ? t('chat.durationHoursMinutes', { hours, minutes: restMinutes })
+    : t('chat.durationHours', { hours })
 }
 
 /**
  * A whole assistant turn as one message row: each model round's parts in order,
  * a single timestamp beside the completion actions, and — while it is the live
- * turn — one spinner. A turn with many rounds folds the earlier steps, but its
- * final reply text and newest rounds always stay visible.
+ * turn — one spinner. A live turn never folds (watching the run is the point);
+ * once it settles every round before the final reply folds behind one trigger
+ * showing how long the turn took, expandable at any time.
  */
 export const AssistantGroup = memo(function AssistantGroup({
   messages,
+  notices,
+  writtenMessages = messages,
+  writtenReviewId,
+  showWrittenFiles = true,
   streamingIndex,
   pending = false,
   retryFrom,
@@ -601,21 +747,55 @@ export const AssistantGroup = memo(function AssistantGroup({
   toolRuns
 }: AssistantGroupProps) {
   const { t } = useI18n()
-  const [roundsOpen, setRoundsOpen] = useState(false)
-  const [roundWindow] = useState(ASSISTANT_ROUND_PAGE)
+  // Same preference the rounds read; subscribing here too keeps the two tool
+  // plans below (and the fold's step count) in step with it.
+  const [showReasoning] = useShowReasoning()
+  // Grouping preference: off turns the plan into one singleton row per call,
+  // restoring the pre-grouping transcript without touching the render path.
+  const [toolGrouping] = useToolGrouping()
+  const [processOpen, setProcessOpen] = useState(false)
   const live = streamingIndex >= 0 || pending
-  const windowStart = Math.max(0, messages.length - roundWindow)
-  // Pull the window back far enough to include the final reply: a turn that
-  // ends on tool rounds must not hide the answer it produced mid-turn.
-  const answerRound = lastTextRoundIndex(messages)
-  const firstVisibleRound = answerRound >= 0 ? Math.min(windowStart, answerRound) : windowStart
-  const visibleMessages = messages.slice(firstVisibleRound)
-  const hiddenMessages = messages.slice(0, firstVisibleRound)
+  // Nothing folds while the turn runs — the rows the user is watching stay put,
+  // and the fold appears in the same frame the turn settles. Settled, the
+  // boundary is the turn's own final reply block, so every block before it is
+  // process — including the reasoning the reply's own round emitted first.
+  const boundary: TurnBoundary = live ? { round: 0, block: 0 } : processBoundary(messages)
+  const boundaryRound = messages[boundary.round]
+  const foldedMessages = messages.slice(0, boundary.round)
+  const tailMessages = messages.slice(boundary.round)
   const visibleStreamingIndex =
-    streamingIndex >= firstVisibleRound ? streamingIndex - firstVisibleRound : -1
-  const hiddenStepCount = stepCount(hiddenMessages)
-  const turnTimestamp = messages[0].timestamp
-  const hasParts = live || messages.some((message) => message.content.length > 0 || message.errorMessage)
+    streamingIndex >= boundary.round ? streamingIndex - boundary.round : -1
+  // Plan runs per sequence: the folded process and the visible tail never merge
+  // across the fold, which is a deliberate UI break. The boundary round goes
+  // into the folded plan as well, so the blocks it contributes there keep their
+  // run continuations resolved.
+  const noticeBoundaries = new Set(notices?.map((notice) => notice.beforeRound))
+  const foldedToolPlan = buildToolPlan(
+    messages.slice(0, boundary.round + 1),
+    0,
+    showReasoning,
+    toolGrouping,
+    noticeBoundaries
+  )
+  const tailToolPlan = buildToolPlan(
+    tailMessages,
+    boundary.round,
+    showReasoning,
+    toolGrouping,
+    noticeBoundaries
+  )
+  const foldedRowCount = live
+    ? 0
+    : foldedRows(messages, boundary, foldedToolPlan, showReasoning) +
+      (notices?.filter((notice) => notice.beforeRound <= boundary.round).length ?? 0)
+  const noticeRows = (index: number) => notices?.filter((notice) => notice.beforeRound === index)
+    .map((notice, index) => <CustomItem key={`notice-${notice.message.timestamp}-${index}`} message={notice.message} />)
+  const turnDuration = useMemo(
+    () => turnDurationMs(messages, toolResults, retryFrom),
+    [messages, toolResults, retryFrom]
+  )
+  const turnTimestamp = messages[0]?.timestamp ?? notices?.[0]?.message.timestamp ?? 0
+  const hasParts = live || Boolean(notices?.length) || messages.some((message) => message.content.length > 0 || message.errorMessage)
   // Copy/feedback actions (and the turn timestamp beside them) belong to the
   // turn's final prose only: phase text that precedes tool calls must stay
   // chrome-free, and an unfinished tool round has no completed answer to act
@@ -649,8 +829,8 @@ export const AssistantGroup = memo(function AssistantGroup({
    * `turn-written-files` keeps repeat work off the streaming path).
    */
   const writtenFiles = useMemo(
-    () => extractTurnWrittenFiles(messages, toolResults, cwd),
-    [messages, toolResults, cwd]
+    () => !live && showWrittenFiles ? extractTurnWrittenFiles(writtenMessages, toolResults, cwd) : [],
+    [live, showWrittenFiles, writtenMessages, toolResults, cwd]
   )
   /**
    * The list belongs between the answer and the completion-actions row, so it
@@ -658,17 +838,17 @@ export const AssistantGroup = memo(function AssistantGroup({
    * ends on tools, or was stopped/errored, has no such row — there it stays a
    * plain row above the standalone retry/fork fallback.
    *
-   * Either way it only appears once THIS turn stopped writing: `live` is the
-   * turn's own flag, not the session's `busy`, so a run in progress shows nothing
-   * (no half-written file set) while an earlier, settled turn keeps its list even
-   * as the next turn streams. Every ending — completed, stopped, errored —
-   * reveals it.
+   * The parent grants ownership only to the cumulative scope's final group,
+   * and hides that scope synchronously for its entire active run. A user steer
+   * can settle this display group without settling its files. An unrelated
+   * later run leaves the old scope's card alone. No effect/animation may expose
+   * an intermediate list before the final settled event.
    */
   const writtenFilesNode =
     !live && writtenFiles.length > 0 ? (
       <TurnWrittenFiles
         files={writtenFiles}
-        onReview={onReview ? () => onReview(messages[0].timestamp) : undefined}
+        onReview={onReview ? () => onReview(writtenReviewId ?? turnTimestamp) : undefined}
       />
     ) : null
   const writtenFilesInFooter = showTurnActions && Boolean(writtenFilesNode)
@@ -680,10 +860,10 @@ export const AssistantGroup = memo(function AssistantGroup({
     // wobbles the whole turn), and an assistant turn fills with content while
     // it streams, so the wobble lands on a large block and reads as jitter.
     // The rise-from-the-live-edge entrance stays with sent user messages.
-    <Message from="assistant">
+    <Message from="assistant" data-assistant-group={turnTimestamp}>
       <MessageContent className="gap-3">
-        {hiddenStepCount > 0 ? (
-          // Trigger + a bare disclosure. The earlier rounds are rendered as a
+        {foldedRowCount > 0 ? (
+          // Trigger + a bare disclosure. The folded rounds are rendered as a
           // plain `flex flex-col gap-3` (the same container `MessageContent`
           // uses) instead of through AgentActivity's item/TextRow pipeline:
           // that pipeline injected its own vertical padding and typography, so
@@ -692,31 +872,37 @@ export const AssistantGroup = memo(function AssistantGroup({
           <>
             <AgentActivity
               status="complete"
-              summary={<span className="text-primary">{t(roundsOpen ? 'chat.hideEarlier' : 'chat.showEarlier', { count: hiddenStepCount })}</span>}
-              open={roundsOpen}
-              onOpenChange={setRoundsOpen}
+              summary={t('chat.turnDuration', { duration: formatDuration(t, turnDuration) })}
+              open={processOpen}
+              onOpenChange={setProcessOpen}
               collapseOnComplete={false}
               items={[]}
               // The trigger renders no items; zero the empty list's padding so
               // the only space between it and the rounds below is the flex gap.
               contentClassName="py-0"
-              // The fold reads as a section header: its first row sits a little
-              // further below the trigger (16px) than body rows sit from each
-              // other (12px), identically whether the fold is open or closed.
-              className="mb-1"
+              // The fold reads as a section header: a hairline under the trigger
+              // separates the process it hides from the answer below it, and its
+              // first row sits a little further below the trigger (16px) than
+              // body rows sit from each other (12px), identically whether the
+              // fold is open or closed.
+              className="mb-1 border-b border-border/70 pb-1"
             />
             <AgentDisclosure
-              open={roundsOpen}
+              open={processOpen}
               // Closed, the (zero-height) body must leave the flex flow — else
               // it adds its own flex gap and the collapsed spacing would be
               // 8px larger than the expanded one.
-              className={cn('w-full', !roundsOpen && 'hidden')}
+              className={cn('w-full', !processOpen && 'hidden')}
             >
-              <div className="flex flex-col gap-3">
-                {hiddenMessages.map((message, index) => (
+              <div className="flex flex-col gap-3" data-turn-process>
+                {foldedMessages.map((message, index) => (
+                  <Fragment key={`${message.timestamp}-h${index}`}>
+                  {noticeRows(index)}
                   <AssistantParts
                     key={`${message.timestamp}-h${index}`}
                     message={message}
+                    messageIndex={index}
+                    toolPlan={foldedToolPlan}
                     streaming={false}
                     showActions={false}
                     actionsAlwaysVisible={false}
@@ -725,25 +911,53 @@ export const AssistantGroup = memo(function AssistantGroup({
                     toolResults={toolResults}
                     toolRuns={toolRuns}
                   />
+                  </Fragment>
                 ))}
+                {noticeRows(boundary.round)}
+                {/* The reply's own round contributes everything it emitted
+                    before that prose to the fold, so no process row is left
+                    stranded above the answer. */}
+                {boundaryRound && boundary.block > 0 ? (
+                  <AssistantParts
+                    key={`${boundaryRound.timestamp}-h${boundary.round}`}
+                    message={boundaryRound}
+                    messageIndex={boundary.round}
+                    blocksTo={boundary.block}
+                    toolPlan={foldedToolPlan}
+                    streaming={false}
+                    showActions={false}
+                    actionsAlwaysVisible={false}
+                    turnTimestamp={turnTimestamp}
+                    cwd={cwd}
+                    toolResults={toolResults}
+                    toolRuns={toolRuns}
+                  />
+                ) : null}
               </div>
             </AgentDisclosure>
           </>
         ) : null}
 
-        {visibleMessages.map((message, index) => (
+        {tailMessages.map((message, index) => (
+          <Fragment key={`${message.timestamp}-${boundary.round + index}`}>
+          {index === 0 && foldedRowCount > 0 ? null : noticeRows(boundary.round + index)}
           <AssistantParts
-            key={`${message.timestamp}-${firstVisibleRound + index}`}
+            key={`${message.timestamp}-${boundary.round + index}`}
             message={message}
+            messageIndex={boundary.round + index}
+            // A folded-away prefix paints nothing, so rendering the round from
+            // its reply block on is the same transcript either way.
+            blocksFrom={index === 0 ? boundary.block : 0}
+            toolPlan={tailToolPlan}
             streaming={index === visibleStreamingIndex}
-            showActions={showTurnActions && index === visibleMessages.length - 1}
+            showActions={showTurnActions && index === tailMessages.length - 1}
             actionsAlwaysVisible={actionsAlwaysVisible}
             retryFrom={retryFrom}
             forkAt={forkAt}
             onResend={onResend}
             onFork={onFork}
             footer={
-              writtenFilesInFooter && index === visibleMessages.length - 1
+              writtenFilesInFooter && index === tailMessages.length - 1
                 ? writtenFilesNode
                 : undefined
             }
@@ -752,7 +966,9 @@ export const AssistantGroup = memo(function AssistantGroup({
             toolResults={toolResults}
             toolRuns={toolRuns}
           />
+          </Fragment>
         ))}
+        {tailMessages.length > 0 || foldedRowCount === 0 ? noticeRows(messages.length) : null}
 
         {live ? <TurnStatus /> : null}
 

@@ -31,6 +31,8 @@ import { ContextRing } from './ContextRing'
 import { QueuePanel } from './QueuePanel'
 import { LabelTooltip } from './LabelTooltip'
 import { useI18n } from '@/i18n'
+import { cn } from '@/lib/utils'
+import { NewSessionHeader, NewSessionSuggestions, type NewSessionContext } from './NewSession'
 
 export interface ImageAttachment {
   id: string
@@ -48,12 +50,14 @@ export interface FileAttachment {
 }
 
 interface ComposerProps {
+  start?: NewSessionContext
   models: ModelDTO[]
   model: ModelDTO | null
   thinkingLevel: ThinkingLevel
   /** Levels the current model supports; the cycle button only walks these. */
   availableThinkingLevels: ThinkingLevel[]
   busy: boolean
+  initializing?: boolean
   /** Escape stops the running turn. False while a full-page Settings or auth
    * overlay owns the surface, so Esc there does not abort a background run. */
   escapeStopsRun?: boolean
@@ -70,8 +74,7 @@ interface ComposerProps {
   }) => void
   /** Clear the session's queues; resolves with the recalled messages and
    * their full payloads (images, file paths). */
-  onRecallQueue: () => Promise<RecalledItemDTO[]>
-  onStop: () => void
+  onRecallQueue: (stopping?: boolean) => Promise<RecalledItemDTO[]>
   onModelChange: (model: ModelDTO) => void
   onThinkingLevelChange: (level: ThinkingLevel) => void
 }
@@ -82,18 +85,19 @@ const nextId = () => `att-${Date.now()}-${attachmentSeq++}`
 const IS_MAC = typeof navigator !== 'undefined' && /mac/i.test(navigator.platform)
 
 export function Composer({
+  start,
   models,
   model,
   thinkingLevel,
   availableThinkingLevels,
   busy,
+  initializing = false,
   escapeStopsRun = true,
   contextUsage,
   queued,
   onSend,
   onQueue,
   onRecallQueue,
-  onStop,
   onModelChange,
   onThinkingLevelChange
 }: ComposerProps) {
@@ -110,6 +114,7 @@ export function Composer({
   const imageInputRef = useRef<HTMLInputElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const inputContainerRef = useRef<HTMLDivElement>(null)
   const debounceRef = useRef<number>(0)
 
   const addImageFile = useCallback((file: globalThis.File) => {
@@ -239,6 +244,7 @@ export function Composer({
   /** Send when idle; queue against the running turn when busy. The behavior
    * override is how Cmd/Ctrl+Enter submits the inverse of the preference. */
   const dispatch = (sendBehavior: StreamingBehavior) => {
+    if (initializing) return
     const text = value.trim()
     if (!text && !images.length && !files.length) return
     const payload = {
@@ -308,13 +314,13 @@ export function Composer({
    * pi TUI parity for Stop ("restoreQueuedMessagesToEditor({abort:true})"):
    * the SDK keeps both queues across abort(), and a stray steering message
    * would otherwise hijack the opening of the next run. Recall queued
-   * messages (payload included) back into the composer, then abort.
+   * messages (payload included). Main pauses wakeups, clears the queues and
+   * aborts that same session atomically before returning the recalled drafts.
    */
   const handleStop = useCallback(async () => {
-    const items = await onRecallQueue()
+    const items = await onRecallQueue(true)
     if (items.length) await mergeRecalled(items)
-    onStop()
-  }, [onRecallQueue, onStop, mergeRecalled])
+  }, [onRecallQueue, mergeRecalled])
 
   /**
    * Stop on Escape even when focus has left the composer (scrolling the
@@ -391,6 +397,21 @@ export function Composer({
     detectMention(next, caret)
   }
 
+  const selectStarter = (prompt: string) => {
+    // Keep an existing draft and its attachments; suggestions are editable
+    // starting points and never submit a request on the user's behalf.
+    setValue((current) => current.trim() ? `${current.trimEnd()}\n\n${prompt}` : prompt)
+    setMention(null)
+    requestAnimationFrame(() => {
+      const textarea = inputContainerRef.current?.querySelector('textarea')
+      if (!textarea) return
+      // On a short window the selected card can be below the input. Let
+      // native focus scroll the editor back into view before editing.
+      textarea.focus()
+      textarea.setSelectionRange(textarea.value.length, textarea.value.length)
+    })
+  }
+
   // ---- paste & drag/drop --------------------------------------------------
   const handlePaste = (event: ReactClipboardEvent<HTMLTextAreaElement>) => {
     const pasted = Array.from(event.clipboardData.files)
@@ -415,155 +436,172 @@ export function Composer({
   // ---- queued messages ----------------------------------------------------
 
   return (
-    <div className="shrink-0 bg-background px-3 pb-3">
-      <div className="relative mx-auto w-full max-w-3xl" onDragOver={(e) => { e.preventDefault(); setDragOver(true) }} onDragLeave={() => setDragOver(false)} onDrop={handleDrop}>
-        {mention ? (
-          <FileMention
-            hits={mentionHits}
-            loading={mentionLoading}
-            activeIndex={mentionIndex}
-            onActiveIndexChange={setMentionIndex}
-            onSelect={selectMention}
-            onClose={() => setMention(null)}
+    <div className={cn('shrink-0 bg-background px-3 pb-3', start && '@container flex min-h-0 flex-1 flex-col overflow-y-auto px-6')}>
+      {/* Keep the composer in one tree position when the first turn begins;
+          moving it between landing/transcript branches discards draft state. */}
+      <div className={cn('mx-auto w-full max-w-3xl', start && 'my-auto max-w-2xl py-8')}>
+        {start ? <NewSessionHeader {...start} /> : null}
+        <div ref={inputContainerRef} className="relative w-full" onDragOver={(e) => { e.preventDefault(); setDragOver(true) }} onDragLeave={() => setDragOver(false)} onDrop={handleDrop}>
+          {mention ? (
+            <FileMention
+              hits={mentionHits}
+              loading={mentionLoading}
+              activeIndex={mentionIndex}
+              onActiveIndexChange={setMentionIndex}
+              onSelect={selectMention}
+              onClose={() => setMention(null)}
+            />
+          ) : null}
+
+          <QueuePanel
+            steering={queued.steering}
+            followUp={queued.followUp}
+            onPromote={handlePromoteQueued}
+            onRemove={handleRemoveQueued}
+            onRecall={() => void handleRecall()}
           />
-        ) : null}
 
-        <QueuePanel
-          steering={queued.steering}
-          followUp={queued.followUp}
-          onPromote={handlePromoteQueued}
-          onRemove={handleRemoveQueued}
-          onRecall={() => void handleRecall()}
-        />
-
-        {images.length || files.length ? (
-          <div className="mb-2 flex flex-wrap items-center gap-2">
-            {images.map((attachment) => (
-              <span key={attachment.id} className="group relative">
-                <PreviewThumb
-                  src={attachment.dataUrl}
-                  alt={attachment.name}
-                  className="h-14 w-14 rounded-xl"
-                  imageClassName="h-full w-full object-cover"
-                />
-                <button
-                  type="button"
-                  aria-label={t('workspace.removeAttachment', { name: attachment.name })}
-                  onClick={() => removeImage(attachment.id)}
-                  className="absolute -right-1.5 -top-1.5 grid size-5 place-items-center rounded-full bg-foreground text-background opacity-0 transition-opacity group-hover:opacity-100"
-                >
-                  <X className="size-3" />
-                </button>
-              </span>
-            ))}
-            {files.map((attachment) => (
-              <LabelTooltip
-                key={attachment.id}
-                content={`${attachment.relPath} · ${formatBytes(attachment.size)}`}
-                wrap
-              >
-                <span className="group inline-flex max-w-56 items-center gap-1.5 rounded-xl border border-border bg-card px-2 py-1.5 text-xs text-foreground">
-                  <FileText className="size-3.5 shrink-0 text-primary" />
-                  <span className="truncate">{basename(attachment.relPath)}</span>
+          {images.length || files.length ? (
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              {images.map((attachment) => (
+                <span key={attachment.id} className="group relative">
+                  <PreviewThumb
+                    src={attachment.dataUrl}
+                    alt={attachment.name}
+                    className="h-14 w-14 rounded-xl"
+                    imageClassName="h-full w-full object-cover"
+                  />
                   <button
                     type="button"
-                    aria-label={t('workspace.removeAttachment', { name: attachment.relPath })}
-                    onClick={() => removeFile(attachment.id)}
-                    className="grid size-4 shrink-0 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                    aria-label={t('workspace.removeAttachment', { name: attachment.name })}
+                    onClick={() => removeImage(attachment.id)}
+                    className="absolute -right-1.5 -top-1.5 grid size-5 place-items-center rounded-full bg-foreground text-background opacity-0 transition-opacity group-hover:opacity-100"
                   >
                     <X className="size-3" />
                   </button>
                 </span>
-              </LabelTooltip>
-            ))}
-          </div>
-        ) : null}
+              ))}
+              {files.map((attachment) => (
+                <LabelTooltip
+                  key={attachment.id}
+                  content={`${attachment.relPath} · ${formatBytes(attachment.size)}`}
+                  wrap
+                >
+                  <span className="group inline-flex max-w-56 items-center gap-1.5 rounded-xl border border-border bg-card px-2 py-1.5 text-xs text-foreground">
+                    <FileText className="size-3.5 shrink-0 text-primary" />
+                    <span className="truncate">{basename(attachment.relPath)}</span>
+                    <button
+                      type="button"
+                      aria-label={t('workspace.removeAttachment', { name: attachment.relPath })}
+                      onClick={() => removeFile(attachment.id)}
+                      className="grid size-4 shrink-0 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                    >
+                      <X className="size-3" />
+                    </button>
+                  </span>
+                </LabelTooltip>
+              ))}
+            </div>
+          ) : null}
 
-        <div
-          className={dragOver ? 'rounded-2xl ring-2 ring-primary/60 transition-shadow' : 'transition-shadow'}
-        >
-          <PromptInput
-            value={value}
-            onValueChange={handleChange}
-            onKeyDown={handleKeyDown}
-            onPaste={handlePaste}
-            loading={busy}
-            onStop={() => void handleStop()}
-            onSubmit={() => dispatch(behavior)}
-            onQueueSubmit={() => dispatch(behavior)}
-            maxRows={8}
-            placeholder={
-              busy
-                ? t(behavior === 'steer' ? 'composer.hintSteer' : 'composer.hintFollowUp', {
-                    modifier: IS_MAC ? '⌘' : 'Ctrl'
-                  })
-                : t('composer.placeholder')
-            }
-            leadingAction={
-              <ModelPicker
-                models={models}
-                value={model ? `${model.providerId}/${model.id}` : null}
-                thinkingLevel={thinkingLevel}
-                availableThinkingLevels={availableThinkingLevels}
-                onChange={onModelChange}
-                onThinkingLevelChange={onThinkingLevelChange}
-                disabled={busy}
-              />
-            }
-            contextIndicator={<ContextRing usage={contextUsage ?? null} />}
-            actions={[
-              {
-                value: 'attach-image',
-                label: t('composer.attachImage'),
-                description: t('composer.attachImageDesc'),
-                icon: <ImagePlus />
-              },
-              {
-                value: 'attach-file',
-                label: t('composer.attachFile'),
-                description: t('composer.attachFileDesc'),
-                icon: <Paperclip />
+          <div
+            className={dragOver ? 'rounded-2xl ring-2 ring-primary/60 transition-shadow' : 'transition-shadow'}
+          >
+            <PromptInput
+              aria-label={t('composer.inputAria')}
+              className={start ? 'bg-card' : undefined}
+              minRows={start ? 3 : 2}
+              value={value}
+              onFocus={(event) => { textareaRef.current = event.currentTarget }}
+              onValueChange={handleChange}
+              onKeyDown={handleKeyDown}
+              onPaste={handlePaste}
+              loading={busy}
+              submitDisabled={initializing}
+              onStop={() => void handleStop()}
+              onSubmit={() => dispatch(behavior)}
+              onQueueSubmit={() => dispatch(behavior)}
+              maxRows={8}
+              placeholder={
+                busy
+                  ? t(behavior === 'steer' ? 'composer.hintSteer' : 'composer.hintFollowUp', {
+                      modifier: IS_MAC ? '⌘' : 'Ctrl'
+                    })
+                  : t(start ? 'newSession.placeholder' : 'composer.placeholder')
               }
-            ]}
-            onAction={(action) => {
-              if (action === 'attach-image') imageInputRef.current?.click()
-              else if (action === 'attach-file') fileInputRef.current?.click()
+              leadingAction={
+                <ModelPicker
+                  models={models}
+                  value={model ? `${model.providerId}/${model.id}` : null}
+                  thinkingLevel={thinkingLevel}
+                  availableThinkingLevels={availableThinkingLevels}
+                  onChange={onModelChange}
+                  onThinkingLevelChange={onThinkingLevelChange}
+                  disabled={busy || initializing}
+                />
+              }
+              contextIndicator={initializing ? (
+                <LabelTooltip content={t('composer.initializing')}>
+                  <span role="status" aria-label={t('composer.initializing')} className="grid size-7 place-items-center text-muted-foreground">
+                    <Loader2 aria-hidden="true" className="size-3.5 animate-spin" />
+                  </span>
+                </LabelTooltip>
+              ) : <ContextRing usage={contextUsage ?? null} />}
+              actions={[
+                {
+                  value: 'attach-image',
+                  label: t('composer.attachImage'),
+                  description: t('composer.attachImageDesc'),
+                  icon: <ImagePlus />
+                },
+                {
+                  value: 'attach-file',
+                  label: t('composer.attachFile'),
+                  description: t('composer.attachFileDesc'),
+                  icon: <Paperclip />
+                }
+              ]}
+              onAction={(action) => {
+                if (action === 'attach-image') imageInputRef.current?.click()
+                else if (action === 'attach-file') fileInputRef.current?.click()
+              }}
+            />
+          </div>
+
+          {dragOver ? (
+            <div className="pointer-events-none absolute inset-0 grid place-items-center rounded-2xl bg-background/70 text-sm font-medium text-primary">
+              {t('composer.dropImages')}
+            </div>
+          ) : null}
+
+          {mentionLoading ? (
+            <Loader2 className="absolute right-3 top-3 size-3.5 animate-spin text-muted-foreground" />
+          ) : null}
+
+          <input
+            ref={imageInputRef}
+            type="file"
+            accept="image/*"
+            multiple
+            hidden
+            onChange={(event) => {
+              Array.from(event.target.files ?? []).forEach(addImageFile)
+              event.target.value = ''
+            }}
+          />
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            hidden
+            onChange={async (event) => {
+              const picked = Array.from(event.target.files ?? [])
+              for (const file of picked) await addFileAttachment(file)
+              event.target.value = ''
             }}
           />
         </div>
-
-        {dragOver ? (
-          <div className="pointer-events-none absolute inset-0 grid place-items-center rounded-2xl bg-background/70 text-sm font-medium text-primary">
-            {t('composer.dropImages')}
-          </div>
-        ) : null}
-
-        {mentionLoading ? (
-          <Loader2 className="absolute right-3 top-3 size-3.5 animate-spin text-muted-foreground" />
-        ) : null}
-
-        <input
-          ref={imageInputRef}
-          type="file"
-          accept="image/*"
-          multiple
-          hidden
-          onChange={(event) => {
-            Array.from(event.target.files ?? []).forEach(addImageFile)
-            event.target.value = ''
-          }}
-        />
-        <input
-          ref={fileInputRef}
-          type="file"
-          multiple
-          hidden
-          onChange={async (event) => {
-            const picked = Array.from(event.target.files ?? [])
-            for (const file of picked) await addFileAttachment(file)
-            event.target.value = ''
-          }}
-        />
+        {start ? <NewSessionSuggestions {...start} onSelect={selectStarter} /> : null}
       </div>
     </div>
   )

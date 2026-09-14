@@ -4,11 +4,13 @@ import type {
   ContextUsageDTO,
   ModelRefDTO,
   PiEvent,
+  RewindErrorDTO,
   QueuedItemDTO,
   SessionSnapshotDTO,
   ThinkingLevel,
   ToolCallContent,
   ToolResultMsg,
+  TodoSnapshotDTO,
   UserMsg
 } from '../../../shared/types'
 
@@ -34,6 +36,8 @@ export interface Notice {
 }
 
 export interface PiState {
+  initializing: boolean
+  todos: TodoSnapshotDTO | null
   ready: boolean
   cwd: string | null
   projectless: boolean
@@ -43,6 +47,7 @@ export interface PiState {
   model: ModelRefDTO | null
   thinkingLevel: ThinkingLevel
   isStreaming: boolean
+  activeChangeScopeId?: string | null
   /** SDK context usage for the composer ring; refreshed by the main process'
    * 2s poll (`context_usage`) and by every turn boundary. */
   contextUsage: ContextUsageDTO | null
@@ -55,7 +60,7 @@ export interface PiState {
   /** Queued steer/follow-up messages with payload counts (mirror-fed). */
   queue: { steering: QueuedItemDTO[]; followUp: QueuedItemDTO[] }
   notice: Notice | null
-  error: string | null
+  error: string | RewindErrorDTO | null
 }
 
 /**
@@ -65,6 +70,7 @@ export interface PiState {
  * streaming deltas churn `streaming`/`toolRuns`/`messages` in the full state.
  */
 export interface PiShellState {
+  initializing: boolean
   ready: boolean
   cwd: string | null
   projectless: boolean
@@ -99,6 +105,8 @@ function userProse(content: UserMsg['content']): string {
 }
 
 const initialState: PiState = {
+  initializing: false,
+  todos: null,
   ready: false,
   cwd: null,
   projectless: false,
@@ -119,6 +127,7 @@ const initialState: PiState = {
 
 function shellOf(state: PiState, availableThinkingLevels: ThinkingLevel[]): PiShellState {
   return {
+    initializing: state.initializing,
     ready: state.ready,
     cwd: state.cwd,
     projectless: state.projectless,
@@ -184,6 +193,7 @@ export class PiStore {
     if (this.state.sessionPath) this.sessionStates.set(this.state.sessionPath, this.state)
     if (
       prev.ready !== this.state.ready ||
+      prev.initializing !== this.state.initializing ||
       prev.cwd !== this.state.cwd ||
       prev.projectless !== this.state.projectless ||
       prev.sessionPath !== this.state.sessionPath ||
@@ -211,6 +221,13 @@ export class PiStore {
     const sessionPath = snapshot.sessionPath ?? null
     const cached = sessionPath ? this.sessionStates.get(sessionPath) : undefined
     const snapshotSequence = snapshot.eventSequence ?? 0
+    // A readiness/event push can overtake an IPC snapshot of a cached session.
+    // Keep the newer projection (including its sequence), then replay any
+    // background events instead of reverting to an initialization that ended.
+    if (cached && cached.eventSequence > snapshotSequence) {
+      this.activateCachedSession(sessionPath!)
+      return
+    }
     this.setAvailableThinkingLevels(snapshot.availableThinkingLevels)
     // An unchanged visited session keeps its message/tool object identities so
     // switching back does not remount Markdown and tool trees after the instant
@@ -219,6 +236,7 @@ export class PiStore {
     this.set({
       ...(unchanged ? cached : {}),
       ready: true,
+      initializing: snapshot.initializing ?? false,
       cwd: snapshot.cwd,
       projectless: snapshot.projectless,
       sessionId: snapshot.sessionId,
@@ -226,9 +244,11 @@ export class PiStore {
       model: snapshot.model,
       thinkingLevel: snapshot.thinkingLevel,
       isStreaming: snapshot.isStreaming,
+      activeChangeScopeId: snapshot.activeChangeScopeId ?? null,
       contextUsage: unchanged ? cached.contextUsage : (snapshot.contextUsage ?? null),
       eventSequence: snapshotSequence,
       messages: unchanged ? cached.messages : snapshot.messages,
+      todos: unchanged ? cached.todos : (snapshot.todos ?? null),
       streaming: unchanged ? cached.streaming : (snapshot.streaming ?? null),
       toolRuns: unchanged ? cached.toolRuns : (snapshot.toolRuns ?? {}),
       queue: unchanged ? cached.queue : (snapshot.queue ?? { steering: [], followUp: [] }),
@@ -365,9 +385,18 @@ export class PiStore {
       this.state = { ...this.state, eventSequence: event.eventSequence }
     }
 
+    // Main sends committed task state with its sequenced message/branch event.
+    // It is independent of compaction's replacement transcript.
+    if ('todos' in event) this.state = { ...this.state, todos: event.todos ?? null }
     switch (event.type) {
+      case 'session_initialized':
+        this.setAvailableThinkingLevels(event.availableThinkingLevels)
+        this.set({ initializing: false, model: event.model, thinkingLevel: event.thinkingLevel,
+          contextUsage: event.contextUsage ?? null })
+        break
+
       case 'agent_start':
-        this.set({ isStreaming: true, notice: null, error: null })
+        this.set({ isStreaming: true, activeChangeScopeId: event.changeScopeId ?? null, notice: null, error: null })
         break
 
       case 'message_start': {
@@ -512,7 +541,7 @@ export class PiStore {
         break
 
       case 'agent_settled':
-        this.set({ isStreaming: false, streaming: null })
+        this.set({ isStreaming: Boolean(event.continuing), streaming: null })
         // The run is over: nothing can still be executing, so a run without an
         // end is one that never got to finish (Stop, provider error, a crash).
         this.settleToolRuns()
@@ -565,7 +594,7 @@ export class PiStore {
       }
 
       case 'pi_error':
-        this.set({ error: event.message, isStreaming: false, streaming: null })
+        this.set({ error: event.rewindError ?? event.message, isStreaming: false, streaming: null })
         break
 
       default:

@@ -9,9 +9,12 @@ export function parseUnifiedDiff(diff: string): FileDiffLine[] {
   let oldLine = 0
   let newLine = 0
   let counter = 0
+  const hasHunks = diff.includes('@@')
+  let inHunk = !hasHunks
 
   for (const raw of diff.split('\n')) {
     if (raw.startsWith('@@')) {
+      inHunk = true
       const match = /@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(raw)
       if (match) {
         oldLine = Number(match[1])
@@ -19,7 +22,7 @@ export function parseUnifiedDiff(diff: string): FileDiffLine[] {
       }
       continue
     }
-    if (raw.startsWith('---') || raw.startsWith('+++')) continue
+    if (!inHunk || raw === '' || (!hasHunks && (raw.startsWith('--- ') || raw.startsWith('+++ ')))) continue
     if (raw.startsWith('\\')) continue // "\ No newline at end of file"
 
     if (raw.startsWith('+')) {
@@ -89,8 +92,11 @@ export function diffStats(lines: FileDiffLine[]): { added: number; removed: numb
 export function countDiffChanges(diff: string): { added: number; removed: number } {
   let added = 0
   let removed = 0
+  const hasHunks = diff.includes('@@')
+  let inHunk = !hasHunks
   for (const raw of diff.split('\n')) {
-    if (raw.startsWith('@@') || raw.startsWith('---') || raw.startsWith('+++') || raw.startsWith('\\')) continue
+    if (raw.startsWith('@@')) { inHunk = true; continue }
+    if (!inHunk || (!hasHunks && (raw.startsWith('--- ') || raw.startsWith('+++ ')))) continue
     if (raw.startsWith('+')) added++
     else if (raw.startsWith('-')) removed++
   }

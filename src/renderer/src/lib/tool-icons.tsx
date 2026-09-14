@@ -7,10 +7,11 @@ import {
   FileText,
   FolderTree,
   Globe,
+  ListTodo,
   Plug,
   ScanSearch,
   Search,
-  SquareTerminal,
+  Terminal,
   TextSearch,
   Wrench,
   type LucideIcon
@@ -30,9 +31,13 @@ import { cn } from '@/lib/utils'
  * prefix below.
  */
 const TOOL_ICONS: Record<string, LucideIcon> = {
-  // Built-in file + shell tools.
-  bash: SquareTerminal,
-  powershell: SquareTerminal,
+  // Built-in file + shell tools. The shell rows use the plain `Terminal` glyph;
+  // the terminal *category* group keeps the boxed `SquareTerminal` (see
+  // lib/tool-categories.ts), so a folded run and its rows are distinguishable.
+  bash: Terminal,
+  bash_task: Terminal,
+  todo_write: ListTodo,
+  powershell: Terminal,
   read: FileText,
   edit: FilePen,
   write: FilePlus2,

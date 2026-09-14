@@ -35,7 +35,7 @@ const verify = async (manager) => {
 try {
   const outfile = join(temp, 'manager.mjs')
   await build({
-    entryPoints: [resolve('src/main/pi/manager.ts')], bundle: true, platform: 'node', format: 'esm', outfile,
+    stdin: { contents: "export { PiManager } from './src/main/pi/manager'; export { TodoState } from './src/main/pi/todo'; export { CheckoutCoordinator } from './src/main/rewind/coordinator';", resolveDir: resolve('.') }, bundle: true, platform: 'node', format: 'esm', outfile,
     plugins: [{ name: 'isolated-runtime', setup(builder) {
       builder.onResolve({ filter: /^@earendil-works\/pi-coding-agent$/ }, () => ({
         path: fileURLToPath(import.meta.resolve('@earendil-works/pi-coding-agent')), external: true
@@ -46,14 +46,15 @@ try {
       }))
     } }]
   })
-  const { PiManager } = await import(pathToFileURL(outfile).href)
+  const { PiManager, TodoState, CheckoutCoordinator } = await import(pathToFileURL(outfile).href)
   // Skip the runtime constructor; execute the real methods against real SDK
   // managers, replacing only model activation and renderer snapshots.
   const app = Object.create(PiManager.prototype)
+  app.checkoutCoordinator = new CheckoutCoordinator()
   app.navigationEpoch = 0
   app.snapshot = () => ({ sessionPath: app.activeSession.path })
   app.buildSession = async (sessionManager) => {
-    app.activeSession = { path: sessionManager.getSessionFile(), session: { sessionManager } }
+    app.activeSession = { todos: new TodoState(sessionManager), path: sessionManager.getSessionFile(), session: { sessionManager } }
     return app.activeSession
   }
 
@@ -68,7 +69,7 @@ try {
   const before = await readFile(original, 'utf8')
   const originalId = source.getSessionId()
   const originalLeaf = source.getLeafId()
-  const managed = { path: original, session: {
+  const managed = { cwd: temp, todos: new TodoState(source), path: original, session: {
     sessionManager: source, isStreaming: false,
     agent: { state: { messages: source.buildSessionContext().messages } },
     prompt: async (text) => { source.appendMessage(user(text, 6)) }

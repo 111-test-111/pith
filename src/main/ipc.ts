@@ -1,10 +1,15 @@
 import { app, ipcMain, dialog, shell, BrowserWindow } from 'electron'
 import { PiManager } from './pi/manager'
 import { TerminalManager } from './terminal/manager'
+import { registerQuitHandler } from './shutdown'
 import { isDefaultWorkspace } from './pi/default-workspace'
 import { loadSettings, saveSettings } from './settings'
+import { setWindowTheme } from './window-chrome'
 import type {
   AppInfoDTO,
+  RewindRequest,
+  RewindStatsTargetDTO,
+  BashTaskRequest,
   CustomModelDTO,
   ModelsConfigDTO,
   PromptPayload,
@@ -13,7 +18,8 @@ import type {
   SessionSnapshotDTO,
   SessionSearchRequest,
   SideChatAskPayload,
-  ThinkingLevel
+  ThinkingLevel,
+  WindowTheme
 } from '../shared/types'
 
 export function createPiManager(): PiManager {
@@ -26,17 +32,15 @@ export function createPiManager(): PiManager {
   return new PiManager(emit, notifyError)
 }
 
-export function registerIpc(pi: PiManager): void {
-  const terminals = new TerminalManager()
+export function registerIpc(pi: PiManager): () => boolean {
+  ipcMain.on('window:setTheme', (event, theme: WindowTheme) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    if (win && !win.isDestroyed()) setWindowTheme(win, theme)
+  })
+  const terminals = new TerminalManager(pi.checkoutCoordinator)
   ipcMain.handle('terminal:create', (event, payload) => terminals.create(event.sender, payload))
   ipcMain.on('terminal:command', (event, command) => terminals.command(event.sender, command))
-  let quitting = false
-  app.on('before-quit', (event) => {
-    if (quitting) return
-    event.preventDefault()
-    quitting = true
-    void terminals.dispose().finally(() => app.quit())
-  })
+  const isQuitting = registerQuitHandler(app, [() => terminals.dispose(), () => pi.dispose()])
 
   ipcMain.handle('app:info', (): AppInfoDTO => {
     const settings = loadSettings()
@@ -44,9 +48,25 @@ export function registerIpc(pi: PiManager): void {
       cwd: settings.cwd && !isDefaultWorkspace(settings.cwd) ? settings.cwd : null,
       folders: settings.folders.filter((f) => typeof f === 'string' && !isDefaultWorkspace(f)),
       contextFiles: settings.contextFiles !== false,
+      bashMaxWaitMs: settings.bashMaxWaitMs,
+      checkpointsEnabled: settings.checkpointsEnabled !== false,
       version: app.getVersion()
     }
   })
+
+  ipcMain.handle('rewind:list', (_event, path: string) => pi.rewindList(path))
+  ipcMain.handle('rewind:preview', (_event, path: string, checkpoint: string, action?: 'undo' | 'redo') => pi.rewindPreview(path, checkpoint, action))
+  ipcMain.handle('rewind:preview-file', (_event, path: string, token: string, file: string) => pi.rewindPreviewFile(path, token, file))
+  ipcMain.handle('rewind:stats', (_event, path: string, token: string, file: string, area: 'worktree' | 'index', stage?: number) => pi.rewindStats(path, token, file, area, stage))
+  ipcMain.handle('rewind:stats-batch', (_event, path: string, token: string, targets: RewindStatsTargetDTO[]) => pi.rewindStatsBatch(path, token, targets))
+  ipcMain.handle('rewind:patch', (_event, path: string, token: string, file: string, area: 'worktree' | 'index', stage?: number) => pi.rewindPatch(path, token, file, area, stage))
+  ipcMain.handle('rewind:restore', (_event, request: RewindRequest) => pi.rewindRestore(request))
+  ipcMain.handle('rewind:recover', (_event, path: string, operationId: string) => pi.rewindRecover(path, operationId))
+  ipcMain.handle('app:setCheckpointsEnabled', (_event, enabled: boolean) => pi.setCheckpointsEnabled(enabled))
+  ipcMain.handle('app:setBashMaxWaitMs', (_event, value: number) => pi.setBashMaxWaitMs(value))
+  ipcMain.handle('bash:list', (_event, sessionPath: string) => pi.listBashTasks(sessionPath))
+  ipcMain.handle('bash:output', (_event, request: BashTaskRequest) => pi.bashTaskOutput(request))
+  ipcMain.handle('bash:stop', (_event, request: BashTaskRequest) => pi.stopBashTask(request))
 
   ipcMain.handle('app:setContextFiles', (_event, enabled: boolean): Promise<boolean> =>
     pi.setContextFilesEnabled(enabled)
@@ -82,7 +102,7 @@ export function registerIpc(pi: PiManager): void {
     pi.sideChatAbort(exchangeId)
     return { accepted: true }
   })
-  ipcMain.handle('pi:clearQueue', () => pi.clearQueue())
+  ipcMain.handle('pi:clearQueue', (_event, stopping?: boolean) => pi.clearQueue(stopping))
   ipcMain.handle('pi:queueAction', (_event, payload: QueueActionPayload) => {
     pi.queueAction(payload)
     return { accepted: true }
@@ -155,4 +175,5 @@ export function registerIpc(pi: PiManager): void {
   ipcMain.on('pi:auth-reply', (_event, payload: { requestId: string; value: string | null }) => {
     pi.resolveAuthPrompt(payload)
   })
+  return isQuitting
 }

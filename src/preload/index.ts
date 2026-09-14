@@ -1,6 +1,15 @@
+import type { RewindPatchDTO, RewindStatsDTO, RewindStatsTargetDTO } from '../shared/types'
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type {
   AppInfoDTO,
+  RewindResult,
+  RewindListDTO,
+  RewindPreviewDTO,
+  RewindCommitDTO,
+  RewindRequest,
+  BashTaskDTO,
+  BashTaskOutputDTO,
+  BashTaskRequest,
   AppendPromptDTO,
   AuthPromptDTO,
   AuthNotifyDTO,
@@ -34,10 +43,23 @@ import type {
   TerminalCreatePayload,
   TerminalCreateResult,
   TerminalEvent,
-  ToolCatalogDTO
+  ToolCatalogDTO,
+  WindowTheme
 } from '../shared/types'
 
 const api = {
+  platform: process.platform,
+  rewindList: (path: string): Promise<RewindResult<RewindListDTO>> => ipcRenderer.invoke('rewind:list', path),
+  rewindPreview: (path: string, checkpoint: string, action?: 'undo' | 'redo'): Promise<RewindResult<RewindPreviewDTO>> => ipcRenderer.invoke('rewind:preview', path, checkpoint, action),
+  rewindPreviewFile: (path: string, token: string, file: string): Promise<RewindResult<RewindPreviewDTO>> => ipcRenderer.invoke('rewind:preview-file', path, token, file),
+  rewindStats: (path: string, token: string, file: string, area: 'worktree' | 'index', stage?: number): Promise<RewindResult<RewindStatsDTO>> => ipcRenderer.invoke('rewind:stats', path, token, file, area, stage),
+  rewindStatsBatch: (path: string, token: string, targets: RewindStatsTargetDTO[]): Promise<RewindResult<RewindStatsDTO[]>> => ipcRenderer.invoke('rewind:stats-batch', path, token, targets),
+  rewindPatch: (path: string, token: string, file: string, area: 'worktree' | 'index', stage?: number): Promise<RewindResult<RewindPatchDTO>> => ipcRenderer.invoke('rewind:patch', path, token, file, area, stage),
+  rewindRestore: (request: RewindRequest): Promise<RewindResult<RewindCommitDTO>> => ipcRenderer.invoke('rewind:restore', request),
+  rewindRecover: (path: string, operationId: string): Promise<RewindResult<RewindCommitDTO>> => ipcRenderer.invoke('rewind:recover', path, operationId),
+  onRewind: (listener: (event: { sessionPath: string }) => void) => subscribe('pi:rewind', listener),
+  setCheckpointsEnabled: (enabled: boolean): Promise<boolean> => ipcRenderer.invoke('app:setCheckpointsEnabled', enabled),
+  setWindowTheme: (theme: WindowTheme): void => ipcRenderer.send('window:setTheme', theme),
   terminalCreate: (payload: TerminalCreatePayload): Promise<TerminalCreateResult> =>
     ipcRenderer.invoke('terminal:create', payload),
   terminalInput: (id: string, data: string, binary = false): void =>
@@ -49,6 +71,11 @@ const api = {
   terminalClose: (id: string): void =>
     ipcRenderer.send('terminal:command', { type: 'close', id }),
   onTerminalEvent: (listener: (event: TerminalEvent) => void) => subscribe('terminal:event', listener),
+  listBashTasks: (sessionPath: string): Promise<BashTaskDTO[]> => ipcRenderer.invoke('bash:list', sessionPath),
+  bashTaskOutput: (request: BashTaskRequest): Promise<BashTaskOutputDTO> => ipcRenderer.invoke('bash:output', request),
+  stopBashTask: (request: BashTaskRequest): Promise<BashTaskDTO> => ipcRenderer.invoke('bash:stop', request),
+  onBashTask: (listener: (task: BashTaskDTO) => void) => subscribe('pi:bash-task', listener),
+  setBashMaxWaitMs: (value: number): Promise<number> => ipcRenderer.invoke('app:setBashMaxWaitMs', value),
   appInfo: (): Promise<AppInfoDTO> => ipcRenderer.invoke('app:info'),
   setContextFiles: (enabled: boolean): Promise<boolean> =>
     ipcRenderer.invoke('app:setContextFiles', enabled),
@@ -79,8 +106,8 @@ const api = {
     ipcRenderer.invoke('pi:sideChatAsk', payload),
   sideChatAbort: (exchangeId: string): Promise<{ accepted: boolean }> =>
     ipcRenderer.invoke('pi:sideChatAbort', exchangeId),
-  clearQueue: (): Promise<{ steering: RecalledItemDTO[]; followUp: RecalledItemDTO[] }> =>
-    ipcRenderer.invoke('pi:clearQueue'),
+  clearQueue: (stopping = false): Promise<{ steering: RecalledItemDTO[]; followUp: RecalledItemDTO[] }> =>
+    ipcRenderer.invoke('pi:clearQueue', stopping),
   queueAction: (payload: QueueActionPayload): Promise<{ accepted: boolean }> =>
     ipcRenderer.invoke('pi:queueAction', payload),
   abort: (): Promise<{ accepted: boolean }> => ipcRenderer.invoke('pi:abort'),

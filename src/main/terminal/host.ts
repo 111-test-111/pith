@@ -10,6 +10,8 @@ const LOW_WATER = 32 * 1024
 const BATCH_SIZE = 32 * 1024
 const BATCH_DELAY_MS = 4
 interface Session {
+  closing?: boolean
+  killTimer?: ReturnType<typeof setTimeout>
   pty: IPty
   chunks: string[]
   buffered: number
@@ -18,6 +20,7 @@ interface Session {
   timer?: ReturnType<typeof setTimeout>
 }
 const sessions = new Map<string, Session>()
+let disposing = false
 const send = (event: TerminalHostEvent): void => process.parentPort?.postMessage(event)
 
 function flush(id: string, session: Session): void {
@@ -32,25 +35,33 @@ function flush(id: string, session: Session): void {
 
 function close(id: string): void {
   const session = sessions.get(id)
-  if (!session) return
-  sessions.delete(id)
+  if (!session || session.closing) return
+  session.closing = true
   clearTimeout(session.timer)
+  if (session.paused) { session.paused = false; session.pty.resume() }
   // Signal the session's process group as well as the shell. ConPTY's kill
   // closes its console and owned processes on Windows.
   if (process.platform !== 'win32') {
     try { process.kill(-session.pty.pid, 'SIGHUP') } catch { /* already exited */ }
   }
   try { session.pty.kill() } catch { /* already exited */ }
+  session.killTimer = setTimeout(() => {
+    if (process.platform !== 'win32') { try { process.kill(-session.pty.pid, 'SIGKILL') } catch {} }
+    try { session.pty.kill('SIGKILL') } catch {}
+  }, 250)
 }
 
 process.parentPort?.on('message', ({ data }: { data: TerminalCommand }) => {
   if (data.type === 'dispose') {
+    disposing = true
     for (const id of sessions.keys()) close(id)
-    process.exit(0)
+    if (!sessions.size) process.exit(0)
+    setTimeout(() => process.exit(0), 750)
+    return
   }
   if (data.type === 'create') {
     const { id, cwd, cols, rows } = data.payload
-    if (sessions.has(id)) return
+    if (disposing || sessions.has(id)) return
     try {
       const shell = process.platform === 'win32'
         ? process.env.COMSPEC || 'cmd.exe'
@@ -68,7 +79,7 @@ process.parentPort?.on('message', ({ data }: { data: TerminalCommand }) => {
       const session: Session = { pty, chunks: [], buffered: 0, outstanding: 0, paused: false }
       sessions.set(id, session)
       pty.onData((chunk) => {
-        if (sessions.get(id) !== session) return
+        if (sessions.get(id) !== session || session.closing) return
         session.chunks.push(chunk)
         session.buffered += chunk.length
         session.outstanding += chunk.length
@@ -81,9 +92,12 @@ process.parentPort?.on('message', ({ data }: { data: TerminalCommand }) => {
       })
       pty.onExit(({ exitCode, signal }) => {
         if (sessions.get(id) !== session) return
+        clearTimeout(session.killTimer)
+        if (session.closing && process.platform !== 'win32') { try { process.kill(-pty.pid, 'SIGKILL') } catch {} }
         flush(id, session)
         sessions.delete(id)
         send({ type: 'exit', id, exitCode, signal })
+        if (disposing && !sessions.size) process.exit(0)
       })
       send({ type: 'ready', terminal: { id, cwd: cwd!, shell: basename(shell), pid: pty.pid } })
     } catch {
@@ -93,6 +107,7 @@ process.parentPort?.on('message', ({ data }: { data: TerminalCommand }) => {
   }
   const session = sessions.get(data.id)
   if (!session) return
+  if (session.closing && data.type !== 'ack') return
   try {
     switch (data.type) {
       case 'input':

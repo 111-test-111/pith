@@ -90,7 +90,7 @@ try {
   await writeFile(main, `const {app,BrowserWindow}=require('electron');
 app.setPath('userData',${JSON.stringify(join(temporary,'profile'))});
 app.commandLine.appendSwitch('remote-debugging-port','0');
-app.whenReady().then(()=>{const w=new BrowserWindow({width:1200,height:1000,title:'Diff preview regression',webPreferences:{backgroundThrottling:false}});w.loadURL(${JSON.stringify(url)});});
+app.whenReady().then(()=>{const w=new BrowserWindow({show:false,width:1200,height:1000,title:'Diff preview regression',webPreferences:{backgroundThrottling:false}});w.loadURL(${JSON.stringify(url)});});
 app.on('window-all-closed',()=>app.quit());`)
   child = spawn(electron,[main],{stdio:['ignore','ignore','pipe']})
   const endpoint = await new Promise((resolve,reject) => {
@@ -127,6 +127,9 @@ app.on('window-all-closed',()=>app.quit());`)
     if (result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails))
     return result.result.value
   }
+  // Native pointer movement must not interrupt the CDP hover sequence while
+  // the user works. The hidden window still renders and receives CDP input.
+  await send('Emulation.setFocusEmulationEnabled',{enabled:true})
   const move=(x,y)=>send('Input.dispatchMouseEvent',{type:'mouseMoved',x,y})
   const click=async(x,y)=>{
     await move(x,y)

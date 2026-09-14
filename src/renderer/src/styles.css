@@ -15,6 +15,7 @@
  * ------------------------------------------------------------------------- */
 
 :root {
+  --app-titlebar-height: 52px;
   /* Geometry is independent of color, font size and theme. Both beUI's
    * existing size classes and app-owned semantic classes use this scale.
    * Squircles need more corner room than circular arcs at the same size. */
@@ -263,10 +264,15 @@
 
 /* Full means a real circle/capsule: switches, radio dots, avatars, activity
  * indicators and ripples. Ordinary controls use rounded-control instead.
- * As a utility this also handles before:/after: and other Tailwind variants. */
+ * As a utility this also handles before:/after: and other Tailwind variants.
+ *
+ * `!important` keeps the circle authoritative: Tailwind emits custom @utility
+ * rules *before* its own sorted radius scale, so a control that also carries a
+ * semantic radius (`size="icon"` adds rounded-icon) would otherwise come back
+ * a rounded square at the 14px token instead of a circle. */
 @utility rounded-full {
-  border-radius: var(--app-radius-full);
-  corner-shape: round;
+  border-radius: var(--app-radius-full) !important;
+  corner-shape: round !important;
 }
 @utility corner-round {
   corner-shape: round;
@@ -286,6 +292,31 @@ body {
   @apply bg-background text-foreground antialiased;
   font-family: var(--app-font-ui);
   overflow: hidden;
+}
+
+/* A single title row shared by the workspace, Settings and startup. Keep the
+ * macOS traffic lights clear even in fullscreen; the native controls return
+ * there when the pointer reaches the top edge. Windows/Linux expose their
+ * actual caption-button width through the Window Controls Overlay API. */
+.window-titlebar {
+  height: var(--app-titlebar-height);
+  padding-inline: 12px;
+  -webkit-app-region: drag;
+  user-select: none;
+}
+:root[data-platform="darwin"] .window-titlebar {
+  padding-left: 92px;
+}
+:root:is([data-platform="win32"], [data-platform="linux"]) .window-titlebar {
+  padding-right: max(148px, calc(100% - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100%) + 12px));
+}
+.window-titlebar :is(button, a, input, [role="button"], [data-window-interactive]) {
+  -webkit-app-region: no-drag;
+}
+/* Portalled beUI dialogs own the entire window while open, including the
+ * strip behind their backdrop. A press there must dismiss, never drag. */
+body:has([aria-modal="true"]:not([aria-hidden="true"])) .window-titlebar {
+  -webkit-app-region: no-drag;
 }
 
 /* Selection follows the accent color. */

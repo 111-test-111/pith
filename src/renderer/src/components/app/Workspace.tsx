@@ -11,6 +11,7 @@ import {
   ArrowDown,
   ArrowUp,
   ChevronDown,
+  ChevronRight,
   Folder,
   FolderInput,
   FolderOpen,
@@ -41,6 +42,8 @@ import {
   AnimatedSidebarTrigger
 } from '@/components/motion/animated-sidebar'
 import { ThemeButton } from './ThemeButton'
+import { WindowTitlebar } from './WindowTitlebar'
+import { useOverflowFade } from '@/lib/hooks/use-overflow-fade'
 import { Button } from '@/components/motion/button'
 import { Tooltip } from '@/components/motion/tooltip'
 import { basename } from '@/lib/format'
@@ -88,6 +91,8 @@ import {
 import { SideChatStore } from '@/state/side-chat-store'
 import { TerminalStore } from '@/state/terminal-store'
 import { AuthBridge } from './AuthBridge'
+import { AlertTriangle, RotateCcw } from 'lucide-react'
+import { RewindDialog } from './RewindDialog'
 import { ConfirmDialog } from './ConfirmDialog'
 import type { AuthNotifyDTO, AuthPromptDTO } from '../../../../shared/types'
 
@@ -139,6 +144,7 @@ function SidebarRowMenuAction({ icon: Icon, label, tone = 'default', onSelect }:
 
 export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
   const { t } = useI18n()
+  const titleFade = useOverflowFade()
   const [sidebarPreferences, setSidebarPreferences] = useState(loadSidebarPreferences)
   const [sidebarSaveError, setSidebarSaveError] = useState(false)
   const persistSidebarPreferences = useCallback((next: SessionSidebarPreferences) => {
@@ -149,6 +155,13 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
   // Shell slice only: its identity is stable across streaming deltas, so the
   // sidebar/header/composer don't re-render while ChatView streams.
   const shell = useSyncExternalStore(store.subscribe, store.getShell)
+  // Subscribe to a boolean so transcript deltas never re-render the shell.
+  // Errors/notices still belong to ChatView, even before the first message.
+  const isNewSession = useSyncExternalStore(store.subscribe, () => {
+    const state = store.getState()
+    return state.ready && state.messages.length === 0 && !state.isStreaming &&
+      !state.streaming && !state.error && !state.notice
+  })
   const [models, setModels] = useState<ModelDTO[]>([])
   const [sessions, setSessions] = useState<SessionSummaryDTO[]>([])
   const [folders, setFolders] = useState<string[]>([])
@@ -203,6 +216,31 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
   const sideChatRef = useRef<SideChatStore | null>(null)
   const [authPrompt, setAuthPrompt] = useState<AuthPromptDTO | null>(null)
   const [authNotify, setAuthNotify] = useState<AuthNotifyDTO[]>([])
+  const [rewindTarget, setRewindTarget] = useState<{ path: string; messageTimestamp?: number; messageEntryId?: string } | null>(null)
+  const [rewindWarning, setRewindWarning] = useState(false)
+  const closeRewind = useCallback(() => setRewindTarget(null), [])
+  const rewindMessage = useCallback((message: UserMsg) => {
+    const path = store.getShell().sessionPath
+    if (path) setRewindTarget({ path, messageTimestamp: message.timestamp, messageEntryId: message.sessionEntryId })
+  }, [store])
+  useEffect(() => {
+    const path = shell.sessionPath
+    setRewindWarning(false)
+    if (!path) return
+    let cancelled = false, request = 0
+    const refresh = async () => {
+      const sequence = ++request
+      try {
+        const reply = await window.pi.rewindList(path)
+        if (cancelled || sequence !== request) return
+        setRewindWarning('error' in reply || !!reply.value.error)
+        if ('value' in reply && reply.value.pending.length) setRewindTarget({ path })
+      } catch { if (!cancelled && sequence === request) setRewindWarning(true) }
+    }
+    void refresh()
+    const unsubscribe = window.pi.onRewind(event => { if (event.sessionPath === path) void refresh() })
+    return () => { cancelled = true; unsubscribe() }
+  }, [shell.sessionPath])
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null)
   /** How many sessions each folder currently reveals; default SESSION_PAGE_SIZE. */
   const [folderLimits, setFolderLimits] = useState<Record<string, number>>({})
@@ -366,9 +404,9 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
 
   /** Recall queued messages: main clears the SDK queues and returns them
    * with full payloads (images, file paths) for the composer to restore. */
-  const handleRecallQueue = useCallback(async (): Promise<RecalledItemDTO[]> => {
+  const handleRecallQueue = useCallback(async (stopping = false): Promise<RecalledItemDTO[]> => {
     try {
-      const cleared = await window.pi.clearQueue()
+      const cleared = await window.pi.clearQueue(stopping)
       store.clearQueue()
       return [...cleared.steering, ...cleared.followUp]
     } catch (error) {
@@ -865,19 +903,65 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
   return (
     <SessionSearch sessions={sessions} activePath={shell.sessionPath ?? null} runningPaths={runningPaths} onOpen={openSession}>
     <ChatApp
-      className="relative h-full rounded-none border-0"
+      className="relative h-full flex-col rounded-none border-0"
       sidebarWidth={`${panelLayout.left}px`}
       open={sidebarOpen}
       onOpenChange={setSidebarOpen}
     >
+      {/* The title row owns the shell's top rule: it spans the whole window,
+          sidebar included, so the line under the header reaches the app's left
+          edge. The content pane therefore carries no top border of its own. */}
+      <WindowTitlebar className="border-b border-border/50">
+        <Tooltip content={t('workspace.toggleSessions')}>
+          <AnimatedSidebarTrigger aria-label={t('workspace.toggleSessions')} className="size-8 text-muted-foreground hover:bg-muted hover:text-foreground">
+            <PanelLeft className="size-4" />
+          </AnimatedSidebarTrigger>
+        </Tooltip>
+        <div className="flex min-w-0 flex-1 items-center gap-2 text-sm">
+          {shell.cwd && !shell.projectless ? (
+            <>
+              <Tooltip content={shell.cwd}>
+                <span data-window-interactive className="flex max-w-40 items-center gap-1.5 text-muted-foreground">
+                  <Folder className="size-3.5 shrink-0" aria-hidden="true" />
+                  <span className="truncate">{basename(shell.cwd)}</span>
+                </span>
+              </Tooltip>
+              <ChevronRight className="size-3 shrink-0 text-muted-foreground/50" aria-hidden="true" />
+            </>
+          ) : null}
+          <span ref={titleFade.viewportRef} className="min-w-0 overflow-hidden whitespace-nowrap font-medium text-foreground data-[overflow]:[mask-image:linear-gradient(to_right,black_calc(100%-24px),transparent)]">
+            <span ref={titleFade.textRef} className="inline-block">
+              {isNewSession ? t('workspace.newChat') : sessionsByPath.get(shell.sessionPath ?? '')?.label ?? t('workspace.newChat')}
+            </span>
+          </span>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          <Tooltip content={t(rewindWarning ? 'rewind.captureWarning' : 'rewind.title')}>
+            <Button variant="ghost" size="icon" className="size-8" aria-label={t(rewindWarning ? 'rewind.captureWarning' : 'rewind.title')} data-rewind-entry disabled={!shell.sessionPath} onClick={() => { if (shell.sessionPath) setRewindTarget({ path: shell.sessionPath }) }}>{rewindWarning ? <AlertTriangle className="size-4 text-destructive" /> : <RotateCcw className="size-4" />}</Button>
+          </Tooltip>
+          <Tooltip content={t('workspace.settings')} className={settingsOpen ? 'hidden' : undefined}>
+            <Button variant="ghost" size="icon" className="size-8" aria-label={t('workspace.settings')} onClick={() => setSettingsOpen(true)}>
+              <SettingsIcon className="size-4" />
+            </Button>
+          </Tooltip>
+          <ThemeButton />
+          <Tooltip content={t('workspace.sidebar')}>
+            <Button variant="ghost" size="icon" aria-label={t('workspace.sidebar')} aria-pressed={sidePanelOpen}
+              onClick={() => setSidePanelOpen((open) => !open)} className={cn('size-8', sidePanelOpen && 'bg-primary/5 text-foreground')}>
+              <PanelRight className="size-4" />
+            </Button>
+          </Tooltip>
+        </div>
+      </WindowTitlebar>
+      <div className="flex min-h-0 flex-1">
       <AnimatedSidebar
         ariaLabel={t('workspace.sessions')}
         collapsible="offcanvas"
         resizing={resizing === 'left'}
-        className="min-h-0"
-        panelClassName={cn('h-full bg-background', activeEdge.left && 'border-primary')}
+        className="min-h-0 data-[mobile=true]:pt-[var(--app-titlebar-height)]"
+        panelClassName={cn('h-full border-border/50 bg-background', activeEdge.left && 'border-primary')}
       >
-        <AnimatedSidebarContent className="gap-4 overflow-hidden px-2 py-4">
+        <AnimatedSidebarContent className="gap-5 overflow-hidden px-2 pb-3 pt-2">
           <AnimatedSidebarGroup className="shrink-0 px-1 py-0">
             <AnimatedSidebarGroupContent>
               <AnimatedSidebarMenu className="gap-1">
@@ -885,7 +969,7 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
                   <AnimatedSidebarMenuButton
                     icon={<MessageSquarePlus className="size-4" />}
                     onSelect={() => void newSession()}
-                    className="font-normal"
+                    className="bg-muted/70 font-medium text-foreground"
                   >
                     {t('workspace.newChat')}
                   </AnimatedSidebarMenuButton>
@@ -1053,6 +1137,11 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
                           onSelect={() => { controls.close(); controls.moves.up?.() }} /> : null}
                         {controls.moves.down ? <SidebarRowMenuAction icon={ArrowDown} label={t('workspace.moveSessionDown')}
                           onSelect={() => { controls.close(); controls.moves.down?.() }} /> : null}
+                        <SidebarRowMenuAction icon={RotateCcw} label={t('rewind.title')} onSelect={() => {
+                          controls.close()
+                          const session = sessionsByPath.get(item.id)
+                          if (session) void openSession(session.path, session.cwd).then(() => setRewindTarget({ path: session.path }))
+                        }} />
                         <SidebarRowMenuAction icon={Pencil} label={t('workspace.renameSession')}
                           onSelect={() => controls.rename()} />
                         <SidebarRowMenuAction icon={Trash2} tone="destructive" label={t('workspace.deleteSession')}
@@ -1101,74 +1190,41 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
         />
       ) : null}
 
-      <AnimatedSidebarInset className="min-h-0 bg-background">
-        <header className="flex h-12 shrink-0 items-center justify-between gap-3 border-b border-border px-3">
-          <div className="flex min-w-0 items-center gap-2">
-            <AnimatedSidebarTrigger className="text-muted-foreground hover:bg-muted hover:text-foreground">
-              <PanelLeft className="size-4" />
-            </AnimatedSidebarTrigger>
-            <div className="flex min-w-0 items-baseline gap-2">
-              <p className="shrink-0 truncate text-sm font-medium text-foreground">
-                {currentModel ? currentModel.name : t('workspace.noModel')}
-              </p>
-              {shell.cwd && !shell.projectless ? (
-                <>
-                  <span aria-hidden="true" className="shrink-0 text-xs text-muted-foreground/50">
-                    ·
-                  </span>
-                  <p className="min-w-0 truncate text-xs text-muted-foreground">{shell.cwd}</p>
-                </>
-              ) : null}
-            </div>
-          </div>
-          <div className="flex shrink-0 items-center gap-1.5">
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label={t('workspace.settings')}
-              onClick={() => setSettingsOpen(true)}
-            >
-              <SettingsIcon className="size-4" />
-            </Button>
-            <ThemeButton />
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label={t('workspace.sidebar')}
-              aria-pressed={sidePanelOpen}
-              onClick={() => setSidePanelOpen((open) => !open)}
-              className={cn(sidePanelOpen && 'bg-primary/5 text-foreground')}
-            >
-              <PanelRight className="size-4" />
-            </Button>
-          </div>
-        </header>
-
+      {/* No top border here: the rule belongs to the title row. The pull left
+          by the resize strip's half-width keeps the pane's own left edge on the
+          sidebar's right border, so the strip's 3px overlap costs it nothing. */}
+      <AnimatedSidebarInset className="min-h-0 overflow-hidden bg-background md:-ml-[3px]">
         <div className="flex min-h-0 flex-1">
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-            <ChatView
-              store={store}
-              scrollResetKey={scrollResetKey}
-              onDismissError={dismissChatError}
-              onResend={handleResend}
-              onEditMessage={handleEditMessage}
-              onFork={handleFork}
-              onReview={openReview}
-            />
+            {!isNewSession ? (
+              <ChatView
+                store={store}
+                scrollResetKey={scrollResetKey}
+                onDismissError={dismissChatError}
+                onResend={handleResend}
+                onEditMessage={handleEditMessage}
+                onRewindMessage={rewindMessage}
+                onFork={handleFork}
+                onReview={openReview}
+              />
+            ) : null}
 
             <Composer
+              start={isNewSession
+                ? { projectName: shell.cwd && !shell.projectless ? basename(shell.cwd) : null }
+                : undefined}
               models={models}
               model={currentModel}
               thinkingLevel={shell.thinkingLevel}
               availableThinkingLevels={shell.availableThinkingLevels}
               busy={shell.isStreaming}
+              initializing={shell.initializing}
               escapeStopsRun={!settingsOpen && !authPrompt}
               contextUsage={shell.contextUsage}
               queued={shell.queue}
               onSend={handleSend}
               onQueue={handleQueue}
               onRecallQueue={handleRecallQueue}
-              onStop={() => void window.pi.abort()}
               onModelChange={(model) => void handleModelChange(model)}
               onThinkingLevelChange={(level) => void handleThinkingChange(level)}
             />
@@ -1214,6 +1270,7 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
           />
         </div>
       </AnimatedSidebarInset>
+      </div>
 
       <SettingsPage
         open={settingsOpen}
@@ -1222,6 +1279,10 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
         onAccentChange={onAccentChange}
       />
 
+      <RewindDialog sessionPath={rewindTarget?.path ?? null} messageTimestamp={rewindTarget?.messageTimestamp} messageEntryId={rewindTarget?.messageEntryId} onClose={closeRewind} onCommitted={value => {
+        if (value.snapshot?.sessionPath === store.getShell().sessionPath) store.applySnapshot(value.snapshot)
+        setScrollResetKey(previous => previous + 1)
+      }} />
       <ConfirmDialog
         open={pendingDelete !== null}
         title={t(

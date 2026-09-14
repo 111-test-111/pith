@@ -1,3 +1,4 @@
+import type { RewindPatchDTO, RewindStatsDTO, RewindStatsTargetDTO } from '../../shared/types'
 import {
   createAgentSessionFromServices,
   createAgentSessionServices,
@@ -13,10 +14,24 @@ import {
   type Extension,
   type ResourceLoader
 } from '@earendil-works/pi-coding-agent'
-import { shell } from 'electron'
+import { app, shell } from 'electron'
+import { settleWithin, SESSION_DISPOSE_TIMEOUT_MS } from '../shutdown'
 import { homedir } from 'node:os'
+import { open as openFile } from 'node:fs/promises'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { dirname, join } from 'node:path'
+import { BashTaskManager } from '../bash/manager'
+import { createManagedBashTools, APP_BASH_TOOL_NAMES } from './bash-tools'
+import { TaskNotifications } from './task-notifications'
+import { RewindClient } from '../rewind/client'
+import { checkoutRoot, CheckoutCoordinator } from '../rewind/coordinator'
+import { uncoveredWrites } from '../rewind/coverage'
+import { RewindRecorder } from '../rewind/recorder'
+import { RewindFailure, failure as rewindFailure } from '../rewind/types'
+import { ChangeScopes } from './change-scopes'
+import { TodoState, createTodoTool } from './todo'
+import { TODO_TOOL_NAME } from './todo-protocol'
+import { BASH_MIN_WAIT_MS, BASH_MAX_WAIT_MS } from '../../shared/types'
 import { FileIndex, readAttachment } from './files'
 import { SessionSearch } from './session-search'
 import { ensureDefaultWorkspace, isDefaultWorkspace } from './default-workspace'
@@ -36,6 +51,7 @@ import {
 import { loadSettings, saveSettings } from '../settings'
 import { buildToolCatalog, extensionId, loadPackageResources, type PackageResources } from './catalog'
 import { setDisableModelInvocation } from './skill-frontmatter'
+import { desktopExtension } from './extension-startup'
 import {
   buildSideChatContext,
   runSideChatAnswer,
@@ -44,6 +60,9 @@ import {
 } from './side-chat'
 import type {
   AppendPromptDTO,
+  BashTaskDTO,
+  BashTaskRequest,
+  BashTaskOutputDTO,
   CatalogRecommendationDTO,
   ChatMessage,
   ContextUsageDTO,
@@ -64,6 +83,12 @@ import type {
   QueuedItemDTO,
   QueueActionPayload,
   RecalledItemDTO,
+  RewindResult,
+  RewindListDTO,
+  RewindPreviewDTO,
+  RewindRequest,
+  RewindUncoveredPathDTO,
+  RewindCommitDTO,
   ResendPayload,
   SessionSnapshotDTO,
   SessionSearchRequest,
@@ -188,6 +213,17 @@ interface PendingQueuePayload {
 }
 
 interface ManagedSession {
+  recoveryOnly?: boolean
+  rewind?: RewindRecorder
+  todos: TodoState
+  /** One real loader/runtime per session; the SDK receives its filtered proxy. */
+  resourceLoader: ResourceLoader
+  initializing: boolean
+  lifecyclePromise: Promise<void> | null
+  disposePromise: Promise<void> | null
+  disposing: boolean
+  changeScopes: ChangeScopes
+  notifications: TaskNotifications
   session: AgentSession
   path: string
   cwd: string
@@ -221,13 +257,46 @@ interface ManagedSession {
 }
 
 export class PiManager {
+  readonly checkoutCoordinator = new CheckoutCoordinator()
+  private rewindClient = new RewindClient()
+  private rewindPreviews = new Map<string, { path: string; leaf: string | null; target: string | null; file?: string; uncovered?: RewindUncoveredPathDTO[] }>()
+  private commandTasksInstance: BashTaskManager | null = null
+  private disposePromise: Promise<void> | null = null
+  private closing = false
+  private bashMaxWaitMs = loadSettings().bashMaxWaitMs
+
+  private get commandTasks(): BashTaskManager {
+    return this.commandTasksInstance ??= new BashTaskManager(join(app.getPath('userData'), 'bash-tasks'),
+      (task) => this.emit('pi:bash-task', task),
+      (task) => {
+        const managed = this.sessions.get(task.sessionPath)
+        managed?.notifications.complete(task)
+      }, this.checkoutCoordinator)
+  }
+
+  listBashTasks(sessionPath: string): BashTaskDTO[] { return this.commandTasks.list(sessionPath) }
+  bashTaskOutput(request: BashTaskRequest): BashTaskOutputDTO {
+    return this.commandTasks.output(request.sessionPath, request.taskId, request.cursor)
+  }
+  async stopBashTask(request: BashTaskRequest): Promise<BashTaskDTO> {
+    const task = this.commandTasks.get(request.sessionPath, request.taskId)
+    if (task.background && (task.status === 'running' || task.status === 'stopping')) {
+      this.sessions.get(request.sessionPath)?.notifications.expectUserStop(request.taskId)
+    }
+    return this.commandTasks.stop(request.sessionPath, request.taskId)
+  }
+  setBashMaxWaitMs(value: number): number {
+    if (!Number.isInteger(value) || value < BASH_MIN_WAIT_MS || value > BASH_MAX_WAIT_MS) throw new Error('Invalid bash wait threshold')
+    saveSettings({ ...loadSettings(), bashMaxWaitMs: value })
+    this.bashMaxWaitMs = value
+    return value
+  }
   private sessionSearch = new SessionSearch()
   private modelRuntime: ModelRuntime | null = null
   /** Lazily created; reads/writes ~/.pi/agent/settings.json (default model). */
   private settingsManagerInstance: SettingsManager | null = null
-  /** Resource discovery is cwd-bound but session-independent; sharing these
-   * services avoids rescanning extensions/skills/context on every switch. */
-  private sessionServices = new Map<string, Promise<AgentSessionServices>>()
+  /** Navigation can request the same file while its extensions are loading. */
+  private sessionBuilds = new Map<string, Promise<ManagedSession>>()
   /** Every currently active or background-running SDK session, keyed by file. */
   private sessions = new Map<string, ManagedSession>()
   private activeSession: ManagedSession | null = null
@@ -255,10 +324,7 @@ export class PiManager {
   /** Extensions switched off in Settings. Read live by the loader wrapper, so
    * `session.reload()` applies a toggle without rebuilding services. */
   private disabledExtensions = new Set(loadSettings().disabledExtensions ?? [])
-  /** The real (unfiltered) resource loader per cwd — Settings → Tools /
-   * Extensions reads it, while the session only sees the filtered view. */
-  private extensionLoaders = new Map<string, ResourceLoader>()
-  /** Catalog snapshot keyed by cwd + disabled set; invalidated on toggle. */
+  /** Catalog snapshot keyed by session + disabled set; invalidated on reload. */
   private catalogCache: { key: string; value: ToolCatalogDTO } | null = null
   /** Tools a now-disabled extension had registered at runtime, so a lazily
    * registering extension (pi-fff) keeps its tools listed while switched off. */
@@ -268,6 +334,7 @@ export class PiManager {
     private emit: (channel: string, payload: unknown) => void,
     private notifyError: (message: string) => void
   ) {
+    this.checkoutCoordinator.initialize(() => this.rewindClient.recoveryMarkers())
     // The ring refreshes on a timer rather than only when the SDK reports a
     // boundary, so it tracks the context while a turn is in flight.
     this.contextUsageTimer = setInterval(() => this.pollContextUsage(), CONTEXT_USAGE_POLL_MS)
@@ -331,32 +398,20 @@ export class PiManager {
     return this.modelRuntime
   }
 
-  private async servicesFor(cwd: string): Promise<AgentSessionServices> {
-    const cached = this.sessionServices.get(cwd)
-    if (cached) return cached
-    const pending = (async () => {
-      const services = await createAgentSessionServices({
-        cwd,
-        modelRuntime: await this.runtime(),
-        resourceLoaderOptions: {
-          // Read live, not captured: `session.reload()` re-runs this override,
-          // so toggling the setting reaches every session without rebuilding
-          // the services (or the loader).
-          agentsFilesOverride: (base) => (this.includeContextFiles ? base : { agentsFiles: [] })
-        }
-      })
-      // Keep the full loader for the Settings catalog; hand the session the
-      // filtered view. Extensions still load (and get enriched) exactly once.
-      this.extensionLoaders.set(cwd, services.resourceLoader)
-      return { ...services, resourceLoader: this.filterExtensions(services.resourceLoader) }
-    })()
-    this.sessionServices.set(cwd, pending)
-    try {
-      return await pending
-    } catch (error) {
-      this.sessionServices.delete(cwd)
-      throw error
-    }
+  private async servicesFor(cwd: string, todos: TodoState, recoveryOnly = false): Promise<AgentSessionServices> {
+    // A loader owns mutable extension closures and an ExtensionRuntime whose
+    // actions bind to ONE session. Sharing it by cwd lets another session's
+    // bind/reload/dispose overwrite or invalidate a still-live MCP context.
+    return createAgentSessionServices({
+      cwd,
+      modelRuntime: await this.runtime(),
+      resourceLoaderOptions: {
+        noExtensions: recoveryOnly,
+        extensionFactories: [todos.extension()],
+        // Read live so session.reload() applies context-file settings.
+        agentsFilesOverride: (base) => (this.includeContextFiles ? base : { agentsFiles: [] })
+      }
+    })
   }
 
   /**
@@ -368,14 +423,14 @@ export class PiManager {
    */
   private filterExtensions(loader: ResourceLoader): ResourceLoader {
     const isDisabled = (extension: Extension): boolean =>
-      this.disabledExtensions.has(extensionId(extension))
+      !extension.hidden && this.disabledExtensions.has(extensionId(extension))
     return new Proxy(loader, {
       get: (target, prop) => {
         if (prop === 'getExtensions') {
           const getExtensions = target.getExtensions.bind(target)
           return () => {
             const result = getExtensions()
-            return { ...result, extensions: result.extensions.filter((e) => !isDisabled(e)) }
+            return { ...result, extensions: result.extensions.filter((e) => !isDisabled(e)).map(desktopExtension) }
           }
         }
         const value = Reflect.get(target, prop, target)
@@ -384,13 +439,40 @@ export class PiManager {
     }) as ResourceLoader
   }
 
-  private disposeManaged(managed: ManagedSession): void {
-    managed.unsubscribe()
-    if (managed.streamFlushTimer) clearTimeout(managed.streamFlushTimer)
-    managed.pendingStreamEvents.clear()
-    managed.session.dispose()
-    this.sessions.delete(managed.path)
-    if (this.activeSession === managed) this.activeSession = null
+  private disposeManaged(managed: ManagedSession): Promise<void> {
+    if (managed.disposePromise) return managed.disposePromise
+    managed.disposing = true
+    managed.rewind?.dispose()
+    managed.reloadPending = false
+    managed.notifications?.dispose()
+    managed.disposePromise = (async () => {
+      const abort = Promise.resolve().then(() => { managed.session.clearQueue(); return managed.session.abort() })
+      // Cancel async MCP initialization before invalidating its captured ctx.
+      // Wait for an in-flight bind/reload so shutdown reaches the new runner.
+      // If it outlives our deadline, its eventual completion still tears down.
+      const shutdown = async (): Promise<void> => {
+        await managed.lifecyclePromise
+        try {
+          await managed.session.extensionRunner?.emit({ type: 'session_shutdown', reason: 'quit' })
+          // Let cooperative aborts persist the interrupted turn before dispose
+          // disconnects the SDK's message listeners.
+          await settleWithin([abort], SESSION_DISPOSE_TIMEOUT_MS)
+        }
+        finally { managed.session.dispose() }
+      }
+      const settled = await settleWithin([
+        abort,
+        Promise.resolve().then(() => this.commandTasksInstance?.stopSession(managed.path)),
+        shutdown()
+      ], SESSION_DISPOSE_TIMEOUT_MS)
+      if (!settled) managed.session.dispose()
+      managed.unsubscribe()
+      if (managed.streamFlushTimer) clearTimeout(managed.streamFlushTimer)
+      managed.pendingStreamEvents.clear()
+      if (this.sessions.get(managed.path) === managed) this.sessions.delete(managed.path)
+      if (this.activeSession === managed) this.activeSession = null
+    })()
+    return managed.disposePromise
   }
 
   /**
@@ -399,6 +481,7 @@ export class PiManager {
    * deletion and application shutdown.
    */
   private activateSession(managed: ManagedSession, remember = true): void {
+    if (this.closing || managed.disposing) return
     this.activeSession = managed
     if (remember) {
       this.activateFolder(managed.cwd)
@@ -411,7 +494,8 @@ export class PiManager {
     this.cwd = managed.cwd
   }
 
-  private routeEvent(managed: ManagedSession, event: AgentSessionEvent): void {
+  private routeEvent(managed: ManagedSession, event: AgentSessionEvent | PiEvent): void {
+    if (managed.disposing) return
     // Rebuilds publish exactly one final queue_update (emitQueueState); the
     // SDK's own intermediate events for the same rebuild are swallowed before
     // they can touch the sequence or the renderer.
@@ -438,7 +522,7 @@ export class PiManager {
     // collapses at the same moment the notice appears instead of keeping a
     // pre-compaction view until the next session switch.
     if (event.type === 'compaction_end' && !(event as any).aborted) {
-      ;(routed as any).messages = serialize(managed.session.messages)
+      ;(routed as any).messages = serialize(managed.session.messages.map((message) => managed.changeScopes.stamp(message as ChatMessage)))
     }
 
     if (event.type === 'message_start' || event.type === 'message_update') {
@@ -491,13 +575,19 @@ export class PiManager {
         // Applied out of band: reload() emits no prompt-related event, so the
         // renderer's transcript is unaffected; only the next turn's system
         // prompt differs.
-        void managed.session.reload().catch(() => {})
+        void this.reloadManagedSession(managed)
       }
     }
 
     if (event.type !== 'message_update' && event.type !== 'tool_execution_update') {
       this.flushStreamEvents(managed)
-      this.emit('pi:event', serialize(routed))
+      const payload = serialize(routed) as any
+      // A live message has no session entry to read a completion time back from
+      // (`stampCompletedAt` covers restored ones), so take the moment its entry
+      // is written here. Stamped on the serialized copy: `routed` still holds
+      // the SDK's own message object, which must not grow app-only fields.
+      if (event.type === 'message_end' && payload?.message) payload.message.completedAt = Date.now()
+      this.emit('pi:event', payload)
       return
     }
     const key = event.type === 'message_update' ? 'message_update' : `tool_execution_update:${(event as any).toolCallId}`
@@ -573,11 +663,11 @@ export class PiManager {
     }
   }
 
-  private emitSessionError(managed: ManagedSession, message: string): void {
+  private emitSessionError(managed: ManagedSession, error: unknown): void {
     managed.streaming = null
     this.emit('pi:event', {
       type: 'pi_error',
-      message,
+      ...(error instanceof RewindFailure ? { rewindError: error.dto() } : { message: error instanceof Error ? error.message : String(error) }),
       sessionId: managed.session.sessionId,
       sessionPath: managed.path,
       cwd: managed.cwd,
@@ -651,8 +741,11 @@ export class PiManager {
     } as AgentSessionEvent)
   }
 
-  private disposeAllSessions(): void {
-    for (const managed of [...this.sessions.values()]) this.disposeManaged(managed)
+  private async disposeAllSessions(): Promise<void> {
+    await Promise.allSettled([
+      ...[...this.sessions.values()].map((managed) => this.disposeManaged(managed)),
+      ...this.sessionBuilds.values()
+    ])
   }
 
   /**
@@ -679,44 +772,62 @@ export class PiManager {
     materialize = true,
     navigationEpoch = this.navigationEpoch
   ): Promise<ManagedSession> {
-    const shouldActivate = () => navigationEpoch === this.navigationEpoch
+    if (this.closing) throw new Error('Application is shutting down')
+    const shouldActivate = () => !this.closing && navigationEpoch === this.navigationEpoch
     if (materialize) this.materializeSession(sessionManager)
     const requestedPath = sessionManager.getSessionFile()
     if (requestedPath) {
       const existing = this.sessions.get(requestedPath)
-      if (existing) {
+      if (existing && !existing.disposing) {
+        if (this.closing || existing.disposing) throw new Error('Session was closed during initialization')
         if (shouldActivate()) this.activateSession(existing)
         return existing
       }
     }
-    const services = await this.servicesFor(sessionManager.getCwd())
-    const { session } = await createAgentSessionFromServices({ services, sessionManager })
-    // Extensions register tools/commands in `session_start`, and every CLI
-    // mode binds them before the first turn. Without this, a lazily
-    // registering extension (pi-fff) only appears on the first
-    // `before_agent_start`. No UI context: the app owns the UI, so extension
-    // UI calls fall through to the SDK's no-op context. `onError` also keeps
-    // `session.reload()` emitting `session_start` (the SDK only re-emits it
-    // when a binding is present), so a re-enabled extension gets registered.
-    await session
-      .bindExtensions({
-        mode: 'print',
-        onError: (error) => {
-          console.error(`Extension error (${error.extensionPath}): ${error.error}`)
-        }
-      })
-      .catch(() => {})
-    // No `tools` allowlist: it applies to extension tools too, so it would
-    // hide everything an extension registers. Set the active set by hand
-    // instead — the built-ins plus every tool of an enabled extension.
-    session.setActiveToolsByName([
-      ...BUILTIN_TOOL_NAMES,
-      ...services.resourceLoader
-        .getExtensions()
-        .extensions.flatMap((extension) => [...extension.tools.keys()])
-    ])
-    const path = session.sessionFile ?? requestedPath ?? `memory:${session.sessionId}`
+    const key = requestedPath ?? `memory:${sessionManager.getSessionId()}`
+    let pending = this.sessionBuilds.get(key)
+    if (!pending) {
+      pending = this.createManagedSession(sessionManager)
+      this.sessionBuilds.set(key, pending)
+    }
+    try {
+      const managed = await pending
+      if (shouldActivate()) this.activateSession(managed, materialize)
+      return managed
+    } finally {
+      if (this.sessionBuilds.get(key) === pending) this.sessionBuilds.delete(key)
+    }
+  }
+
+  private async createManagedSession(sessionManager: SessionManager): Promise<ManagedSession> {
+    await this.checkoutCoordinator.ready()
+    if (this.checkoutCoordinator.needsRecovery(sessionManager.getCwd())) {
+      const status = await this.rewindClient.call('list', sessionManager.getCwd(), sessionManager.getSessionId())
+      this.checkoutCoordinator.setRecovery(sessionManager.getCwd(), status.pending[0]?.id)
+    }
+    const recoveryOnly = this.checkoutCoordinator.needsRecovery(sessionManager.getCwd())
+    const todos = new TodoState(sessionManager)
+    const fullServices = await this.servicesFor(sessionManager.getCwd(), todos, recoveryOnly)
+    const services = { ...fullServices, resourceLoader: this.filterExtensions(fullServices.resourceLoader) }
+    let notifications: TaskNotifications | undefined
+    const { session } = await createAgentSessionFromServices({ services, sessionManager,
+      customTools: [...createManagedBashTools({ tasks: this.commandTasks, services,
+        sessionId: sessionManager.getSessionId(), sessionPath: sessionManager.getSessionFile()!,
+        maxWaitMs: () => this.bashMaxWaitMs, canStart: () => notifications?.canStart ?? false }),
+        createTodoTool(todos, () => notifications?.canStart ?? false)]
+    })
+    notifications = new TaskNotifications(session, this.commandTasks)
+    const path = session.sessionFile ?? `memory:${session.sessionId}`
     const managed: ManagedSession = {
+      recoveryOnly,
+      todos,
+      resourceLoader: fullServices.resourceLoader,
+      initializing: true,
+      lifecyclePromise: null,
+      disposePromise: null,
+      disposing: false,
+      changeScopes: new ChangeScopes(sessionManager),
+      notifications,
       session,
       path,
       cwd: sessionManager.getCwd(),
@@ -732,10 +843,94 @@ export class PiManager {
       contextUsageKey: null,
       reloadPending: false
     }
-    managed.unsubscribe = session.subscribe((event: AgentSessionEvent) => this.routeEvent(managed, event))
+    // Publish ownership before awaiting extension startup, so quitting also
+    // finds sessions with a slow session_start handler.
     this.sessions.set(path, managed)
-    if (shouldActivate()) this.activateSession(managed, materialize)
+    if (this.closing) {
+      await this.disposeManaged(managed)
+      throw new Error('Application is shutting down')
+    }
+    notifications.onSettledWithQueued = () => queueMicrotask(() => {
+      if (!notifications?.canStart || !session.isIdle) return
+      this.rebuildQueues(managed)
+    })
+    notifications.onWake = () => managed.changeScopes.continue()
+    managed.rewind = new RewindRecorder({ session, sessionPath: managed.path, cwd: managed.cwd,
+      client: this.rewindClient, coordinator: this.checkoutCoordinator,
+      enabled: () => loadSettings().checkpointsEnabled !== false,
+      changed: () => this.emit('pi:rewind', { sessionPath: managed.path }) })
+    const observeEvent = (event: AgentSessionEvent): void => {
+      managed.rewind?.observe(event)
+      const previousTodos = managed.todos.snapshot
+      managed.todos.observe(event)
+      managed.changeScopes.observe(event)
+      const leaf = session.sessionManager.getLeafEntry()
+      const userEntryId = event.type === 'message_end' && event.message.role === 'user' && leaf?.type === 'message' && leaf.message === event.message ? leaf.id : undefined
+      const routed = { ...event,
+        ...(event.type === 'agent_start' || previousTodos !== managed.todos.snapshot ? { todos: managed.todos.snapshot } : {}),
+        ...('message' in event ? { message: { ...managed.changeScopes.stamp(event.message as ChatMessage), ...(userEntryId ? { sessionEntryId: userEntryId } : {}) } } : {}),
+        ...(event.type === 'agent_start' ? { changeScopeId: managed.changeScopes.active } : {}),
+        ...(event.type === 'agent_settled' ? { continuing: notifications!.continuesAtSettled } : {})
+      }
+      this.routeEvent(managed, routed as AgentSessionEvent)
+      notifications!.observe(event)
+    }
+    managed.unsubscribe = session.subscribe(event => {
+      // User message persistence immediately follows SDK session listeners.
+      // Route on the microtask boundary so the DTO carries its actual entry
+      // identity, including two identical messages created in one millisecond.
+      if (event.type === 'message_end' && event.message.role === 'user') queueMicrotask(() => observeEvent(event))
+      else observeEvent(event)
+    })
+    // Navigation only needs the restored transcript. A session_start hook can
+    // wait on a file scan or network connection for many seconds; do not put
+    // that wait on init/new/open. Subscribe first so startup events are kept.
+    // Prompt and reload still share this barrier, and disposal owns its tail.
+    const startup = this.initializeSession(managed, services.resourceLoader)
+    managed.lifecyclePromise = startup
+    void startup.finally(() => {
+      if (managed.lifecyclePromise === startup) managed.lifecyclePromise = null
+    }).catch(() => {})
     return managed
+  }
+
+  private async initializeSession(managed: ManagedSession, loader: ResourceLoader): Promise<void> {
+    // Publish the managed session and its barrier before running extension code.
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    if (this.closing || managed.disposing) return
+    const startedAt = performance.now()
+    try {
+      // Keep print mode + onError: lazy tools register during session_start,
+      // and the binding is also required for reload to re-emit session_start.
+      await managed.session.bindExtensions({ mode: 'print', onError: (error) => {
+        console.error(`Extension error (${error.extensionPath}): ${error.error}`)
+      } })
+      if (this.closing || managed.disposing) return
+      // An SDK tools allowlist would also hide extension tools. Activate the
+      // complete set after lazy registration, deduplicating app overrides.
+      managed.session.setActiveToolsByName([...new Set([
+        ...BUILTIN_TOOL_NAMES, ...APP_BASH_TOOL_NAMES, TODO_TOOL_NAME,
+        ...loader.getExtensions().extensions.flatMap((extension) => [...extension.tools.keys()])
+      ])])
+    } catch (error) {
+      if (!this.closing && !managed.disposing) {
+        this.emitSessionError(managed, error)
+      }
+    } finally {
+      managed.initializing = false
+      if (!this.closing && !managed.disposing) {
+        this.catalogCache = null
+        this.routeEvent(managed, {
+          type: 'session_initialized',
+          model: modelRef(managed.session.model),
+          thinkingLevel: managed.session.thinkingLevel,
+          availableThinkingLevels: managed.session.getAvailableThinkingLevels(),
+          contextUsage: this.contextUsageOf(managed)
+        })
+      }
+      const elapsed = Math.round(performance.now() - startedAt)
+      if (elapsed >= 1000) console.warn(`[Pith] Session extension startup took ${elapsed}ms (${managed.path})`)
+    }
   }
 
   snapshot(): SessionSnapshotDTO {
@@ -747,7 +942,7 @@ export class PiManager {
   /** Serialize one session's current state for the renderer. */
   private snapshotOf(managed: ManagedSession): SessionSnapshotDTO {
     this.flushStreamEvents(managed)
-    const messages = serialize(managed.session.messages) as ChatMessage[]
+    const messages = (serialize(managed.session.messages) as ChatMessage[]).map((message) => managed.changeScopes.stamp(message))
     const live = managed.streaming as ChatMessage | null
     if (live?.role === 'assistant') {
       const index = messages.findLastIndex(
@@ -755,12 +950,16 @@ export class PiManager {
       )
       if (index >= 0) messages.splice(index, 1)
     }
+    this.stampCompletedAt(managed, messages)
     return {
       sessionId: managed.session.sessionId,
       sessionPath: managed.path,
       cwd: managed.cwd,
       projectless: isDefaultWorkspace(managed.cwd),
+      initializing: managed.initializing,
       messages,
+      todos: managed.todos.snapshot,
+      activeChangeScopeId: managed.changeScopes.current,
       streaming: serialize(managed.streaming) as any,
       toolRuns: serialize(managed.toolRuns),
       queue: {
@@ -770,9 +969,46 @@ export class PiManager {
       model: modelRef(managed.session.model),
       thinkingLevel: (managed.session.thinkingLevel ?? 'medium') as ThinkingLevel,
       availableThinkingLevels: managed.session.getAvailableThinkingLevels() as ThinkingLevel[],
-      isStreaming: managed.session.isStreaming,
+      isStreaming: managed.session.isStreaming || managed.notifications.continuesAtSettled,
       contextUsage: this.contextUsageOf(managed),
       eventSequence: managed.eventSequence
+    }
+  }
+
+  /**
+   * Attach every committed message's completion time, read from the session
+   * entries' write timestamps. The SDK's message objects only carry the time
+   * they were CREATED, and a turn's elapsed time has to run to the moment its
+   * last message finished — which for a long final answer is most of it.
+   * Entries are correlated the way the transcript already correlates messages
+   * with session entries (role + creation timestamp; tool results also by
+   * toolCallId), and a message without a matching entry keeps no completion
+   * time rather than a wrong one.
+   */
+  private stampCompletedAt(managed: ManagedSession, messages: ChatMessage[]): void {
+    const times = new Map<string, number>()
+    const userEntries = new Map<string, string[]>()
+    for (const entry of managed.session.sessionManager.buildContextEntries()) {
+      if (entry.type !== 'message') continue
+      if (entry.message.role === 'user') {
+        const key = JSON.stringify([entry.message.timestamp, entry.message.content])
+        const ids = userEntries.get(key) ?? []; ids.push(entry.id); userEntries.set(key, ids)
+      }
+      const at = Date.parse(entry.timestamp)
+      if (!Number.isFinite(at)) continue
+      const message = entry.message as { role?: string; timestamp?: number; toolCallId?: string }
+      if (message.toolCallId) times.set(`t${message.toolCallId}`, at)
+      if (message.role && typeof message.timestamp === 'number') {
+        times.set(`${message.role}:${message.timestamp}`, at)
+      }
+    }
+    for (const message of messages) {
+      if (message.role === 'user') message.sessionEntryId = userEntries.get(JSON.stringify([message.timestamp, message.content]))?.shift()
+      const toolCallId = (message as { toolCallId?: string }).toolCallId
+      const at = times.get(
+        toolCallId ? `t${toolCallId}` : `${message.role}:${message.timestamp}`
+      )
+      if (at !== undefined) (message as { completedAt?: number }).completedAt = at
     }
   }
 
@@ -830,9 +1066,12 @@ export class PiManager {
    * workspace folder if the session belongs to a different one.
    */
   async openSession(path: string, cwd?: string): Promise<SessionSnapshotDTO> {
+    if (this.closing) throw new Error('Application is shutting down')
     const navigationEpoch = ++this.navigationEpoch
     const existing = this.sessions.get(path)
-    if (existing) {
+    if (existing && !existing.disposing) {
+      if (this.closing || existing.disposing) throw new Error('Session was closed during initialization')
+      if (navigationEpoch !== this.navigationEpoch) return this.snapshot()
       this.activateSession(existing)
       return this.snapshot()
     }
@@ -989,7 +1228,10 @@ export class PiManager {
   async deleteSession(path: string): Promise<SessionSnapshotDTO | null> {
     ++this.navigationEpoch
     const managed = this.sessions.get(path)
-    if (managed) this.disposeManaged(managed)
+    await this.checkoutCoordinator.ready()
+    const targetCwd = managed?.cwd ?? SessionManager.open(path).getCwd()
+    if (this.checkoutCoordinator.needsRecovery(targetCwd) || !this.checkoutCoordinator.canStart(targetCwd)) throw new RewindFailure('busy')
+    if (managed) await this.disposeManaged(managed)
     await shell.trashItem(path).catch(() => {})
     if (!this.activeSession && this.cwd) {
       const sessions = await SessionManager.list(this.cwd).catch(() => [])
@@ -1006,12 +1248,14 @@ export class PiManager {
    * the sidebar only shows it again once a session in it exists.
    */
   async deleteFolderSessions(cwd: string): Promise<SessionSnapshotDTO | null> {
+    await this.checkoutCoordinator.ready()
+    if (!this.checkoutCoordinator.canStart(cwd)) throw new RewindFailure('busy')
     ++this.navigationEpoch
     const infos = await SessionManager.listAll().catch(() => [])
     const targets = infos.filter((info) => info.cwd === cwd)
     const managedTargets = [...this.sessions.values()].filter((managed) => managed.cwd === cwd)
     const wasActive = this.activeSession?.cwd === cwd
-    for (const managed of managedTargets) this.disposeManaged(managed)
+    await Promise.all(managedTargets.map((managed) => this.disposeManaged(managed)))
     const paths = new Set([...targets.map((info) => info.path), ...managedTargets.map((managed) => managed.path)])
     await Promise.all([...paths].map((path) => shell.trashItem(path).catch(() => {})))
     this.forgetFolder(cwd)
@@ -1028,10 +1272,13 @@ export class PiManager {
   prompt(payload: PromptPayload): void {
     const managed = this.activeSession
     const session = managed?.session
+    if (this.closing || managed?.disposing) return
+    managed?.notifications.resume()
     if (!managed || !session) {
       this.notifyError('Pi session is not initialized. Pick a working directory first.')
       return
     }
+    managed.notifications.holdWake()
     void (async () => {
       try {
         // A replacement session kept after project deletion intentionally has
@@ -1042,6 +1289,8 @@ export class PiManager {
           this.rememberFolder(managed.cwd)
         }
         const fileBlocks = await this.readFileBlocks(payload.files)
+        await managed.lifecyclePromise
+        if (this.closing || managed.disposing || !managed.notifications.canStart) return
         const text = fileBlocks ? `${payload.text}\n\n${fileBlocks}` : payload.text
         // Only a streaming session can queue, and only then does a payload
         // need parking — an idle prompt just starts a run and is never claimed.
@@ -1068,7 +1317,9 @@ export class PiManager {
           if (index >= 0) managed.pendingQueuePayloads.splice(index, 1)
         }
       } catch (error) {
-        this.emitSessionError(managed, error instanceof Error ? error.message : String(error))
+        this.emitSessionError(managed, error)
+      } finally {
+        managed.notifications.releaseWake()
       }
     })()
   }
@@ -1101,7 +1352,7 @@ export class PiManager {
    * clearQueue() only returns texts. The SDK emits an empty queue_update
    * which reconciles the mirror back to empty.
    */
-  clearQueue(): { steering: RecalledItemDTO[]; followUp: RecalledItemDTO[] } {
+  clearQueue(stopping = false): { steering: RecalledItemDTO[]; followUp: RecalledItemDTO[] } {
     const managed = this.activeSession
     if (!managed) return { steering: [], followUp: [] }
     const recallOf = (items: QueuedItem[]): RecalledItemDTO[] =>
@@ -1115,7 +1366,14 @@ export class PiManager {
       steering: recallOf(managed.queueMirror.steering),
       followUp: recallOf(managed.queueMirror.followUp)
     }
+    if (stopping) {
+      managed.notifications.pause()
+      void this.commandTasksInstance?.stopSession(managed.path)
+    }
     managed.session.clearQueue()
+    managed.notifications.queuesCleared()
+    if (stopping) void managed.session.abort().catch(() => {})
+    else managed.notifications.flush()
     return result
   }
 
@@ -1135,18 +1393,23 @@ export class PiManager {
   queueAction(payload: QueueActionPayload): void {
     const managed = this.activeSession
     if (!managed) return
+    this.rebuildQueues(managed, payload)
+  }
+
+  private rebuildQueues(managed: ManagedSession, payload?: QueueActionPayload): void {
     const session = managed.session
     managed.queueRebuilding = true
     try {
       session.clearQueue()
+      managed.notifications.queuesCleared()
       const nextSteering: QueuedItem[] = []
       const nextFollowUp: QueuedItem[] = []
       managed.queueMirror.steering.forEach((item, index) => {
-        if (payload.action === 'remove' && payload.kind === 'steering' && payload.index === index) return
+        if (payload?.action === 'remove' && payload.kind === 'steering' && payload.index === index) return
         nextSteering.push(item)
       })
       managed.queueMirror.followUp.forEach((item, index) => {
-        if (payload.kind === 'followUp' && payload.index === index) {
+        if (payload?.kind === 'followUp' && payload.index === index) {
           // promote → steering queue (behind surviving steers, preserving
           // FIFO); remove → dropped outright.
           if (payload.action === 'promote') nextSteering.push(item)
@@ -1160,11 +1423,12 @@ export class PiManager {
       for (const item of nextSteering) session.steer(item.text, item.images)
       for (const item of nextFollowUp) session.followUp(item.text, item.images)
     } catch (error) {
-      this.emitSessionError(managed, error instanceof Error ? error.message : String(error))
+      this.emitSessionError(managed, error)
     } finally {
       managed.queueRebuilding = false
     }
     this.emitQueueState(managed)
+    managed.notifications.flush()
   }
 
   /**
@@ -1199,52 +1463,64 @@ export class PiManager {
     const managed = this.activeSession
     const session = managed?.session
     if (!managed || !session) throw new Error('No active session')
-    if (session.isStreaming) throw new Error('Wait for the current response to finish')
+    await managed.lifecyclePromise
+    const release = await this.checkoutCoordinator.enter(managed.cwd, 'run', managed.path)
+    try {
+      if (this.closing || managed.disposing) throw new Error('Session is shutting down')
+      if (session.isStreaming) throw new Error('Wait for the current response to finish')
+      // Rewinding a branch invalidates every old task notification.
+      managed.notifications?.pause()
+      await this.commandTasksInstance?.stopSession(managed.path)
+      session.clearQueue?.()
 
-    let text = payload.text
-    let images = payload.images
-    const entry = this.findMessageEntry(managed, 'user', payload.timestamp)
-    if (entry) {
-      // The plain retry path re-sends exactly what is stored (text, images and
-      // the already-inlined file blocks); the edit path sends the user's new
-      // text/images/files instead, so it must not be overwritten here.
-      if (!payload.edited) {
-        const content = Array.isArray(entry.message.content) ? entry.message.content : []
-        images = content.filter((part): part is ImageContent => part.type === 'image')
+      let text = payload.text
+      let images = payload.images
+      const entry = this.findMessageEntry(managed, 'user', payload.timestamp)
+      if (entry) {
+        // The plain retry path re-sends exactly what is stored (text, images and
+        // the already-inlined file blocks); the edit path sends the user's new
+        // text/images/files instead, so it must not be overwritten here.
+        if (!payload.edited) {
+          const content = Array.isArray(entry.message.content) ? entry.message.content : []
+          images = content.filter((part): part is ImageContent => part.type === 'image')
+        }
+        const sessionManager = session.sessionManager
+        if (sessionManager.getLeafId() === entry.id) {
+          // The user message is already the leaf — its run died before any
+          // assistant output — so navigateTree(targetId) would no-op. Rewind by
+          // hand the way it does internally: move the leaf to the parent (or
+          // reset to an empty root) and rebuild the agent's message list.
+          if (entry.parentId) sessionManager.branch(entry.parentId)
+          else sessionManager.resetLeaf()
+          session.agent.state.messages = sessionManager.buildSessionContext().messages
+        } else {
+          const result = await session.navigateTree(entry.id)
+          if (result.cancelled) throw new Error('Resend cancelled')
+          // navigateTree hands back the stored message text for the editor; an
+          // edit must keep the user's replacement text instead.
+          if (!payload.edited && result.editorText) text = result.editorText
+        }
+        // navigateTree (and the manual rewind) emit no AgentSession event; bump
+        // the sequence so the renderer cannot mistake the returned snapshot for
+        // one it already rendered.
+        managed.eventSequence += 1
+        managed.todos.restore()
       }
-      const sessionManager = session.sessionManager
-      if (sessionManager.getLeafId() === entry.id) {
-        // The user message is already the leaf — its run died before any
-        // assistant output — so navigateTree(targetId) would no-op. Rewind by
-        // hand the way it does internally: move the leaf to the parent (or
-        // reset to an empty root) and rebuild the agent's message list.
-        if (entry.parentId) sessionManager.branch(entry.parentId)
-        else sessionManager.resetLeaf()
-        session.agent.state.messages = sessionManager.buildSessionContext().messages
-      } else {
-        const result = await session.navigateTree(entry.id)
-        if (result.cancelled) throw new Error('Resend cancelled')
-        // navigateTree hands back the stored message text for the editor; an
-        // edit must keep the user's replacement text instead.
-        if (!payload.edited && result.editorText) text = result.editorText
+      // Edited file references are re-inlined from disk (fresh content) — the
+      // retry path carries its blocks inside the stored text already.
+      if (payload.edited && payload.files?.length) {
+        const fileBlocks = await this.readFileBlocks(payload.files)
+        if (fileBlocks) text = text ? `${text}\n\n${fileBlocks}` : fileBlocks
       }
-      // navigateTree (and the manual rewind) emit no AgentSession event; bump
-      // the sequence so the renderer cannot mistake the returned snapshot for
-      // one it already rendered.
-      managed.eventSequence += 1
-    }
-    // Edited file references are re-inlined from disk (fresh content) — the
-    // retry path carries its blocks inside the stored text already.
-    if (payload.edited && payload.files?.length) {
-      const fileBlocks = await this.readFileBlocks(payload.files)
-      if (fileBlocks) text = text ? `${text}\n\n${fileBlocks}` : fileBlocks
-    }
-    if (!text && !images.length) throw new Error('Nothing to resend')
+      if (!text && !images.length) throw new Error('Nothing to resend')
 
-    void session.prompt(text, { images }).catch((error) =>
-      this.emitSessionError(managed, error instanceof Error ? error.message : String(error))
-    )
-    return this.snapshot()
+      managed.notifications?.resume()
+      managed.notifications?.holdWake()
+      void session.prompt(text, { images }).catch((error) =>
+        this.emitSessionError(managed, error)
+      ).finally(() => managed.notifications?.releaseWake())
+      return this.snapshot()
+    } finally { release() }
   }
 
   /**
@@ -1298,7 +1574,12 @@ export class PiManager {
   }
 
   abort(): void {
-    void this.activeSession?.session.abort().catch(() => {})
+    const managed = this.activeSession
+    if (!managed) return
+    managed.notifications.pause()
+    managed.session.clearQueue()
+    void this.commandTasksInstance?.stopSession(managed.path)
+    void managed.session.abort().catch(() => {})
   }
 
   async setModel(providerId: string, modelId: string): Promise<SessionSnapshotDTO> {
@@ -1475,17 +1756,19 @@ export class PiManager {
    * through the package manager.
    */
   async catalog(): Promise<ToolCatalogDTO> {
-    const cwd = this.cwd
-    const loader = cwd ? this.extensionLoaders.get(cwd) : undefined
+    const managed = this.activeSession
+    const cwd = managed?.cwd
+    const loader = managed?.resourceLoader
     if (!cwd || !loader) {
       return { tools: [], extensions: [], skills: [], skillDiagnostics: [] }
     }
-    const key = `${cwd}\u0000${[...this.disabledExtensions].sort().join('\u0000')}`
+    await managed.lifecyclePromise
+    const key = `${managed.path}\u0000${[...this.disabledExtensions].sort().join('\u0000')}`
     if (this.catalogCache?.key === key) return this.catalogCache.value
     const packages = await loadPackageResources(cwd, getAgentDir()).catch(
       () => new Map<string, PackageResources>()
     )
-    const session = this.activeSession?.session
+    const session = managed.session
     const value = buildToolCatalog(
       loader,
       session?.getAllTools() ?? [],
@@ -1510,8 +1793,7 @@ export class PiManager {
     filePath: string,
     disableModelInvocation: boolean
   ): Promise<ToolCatalogDTO> {
-    const cwd = this.requireCwd()
-    const loader = this.extensionLoaders.get(cwd)
+    const loader = this.activeSession?.resourceLoader
     if (!loader || !loader.getSkills().skills.some((skill) => skill.filePath === filePath)) {
       throw new Error('Unknown skill file')
     }
@@ -1524,8 +1806,7 @@ export class PiManager {
 
   /** SKILL.md text for the Settings → Skills preview (validated like the toggle). */
   readSkill(filePath: string): SkillContentDTO {
-    const cwd = this.requireCwd()
-    const loader = this.extensionLoaders.get(cwd)
+    const loader = this.activeSession?.resourceLoader
     if (!loader || !loader.getSkills().skills.some((skill) => skill.filePath === filePath)) {
       throw new Error('Unknown skill file')
     }
@@ -1612,7 +1893,7 @@ export class PiManager {
     this.catalogCache = null
     this.knownExtensionTools.clear()
     await this.reloadLiveSessions()
-    const loader = this.cwd ? this.extensionLoaders.get(this.cwd) : undefined
+    const loader = this.activeSession?.resourceLoader
     if (loader) {
       const present = new Set(
         loader.getExtensions().extensions.map((extension) => extensionId(extension))
@@ -1627,19 +1908,42 @@ export class PiManager {
   }
 
   /**
-   * Rebuild the cached system prompt of every live session. Sessions share one
-   * resource loader per folder, but each caches its own built prompt, so every
-   * session has to reload; one that is mid-run defers to `agent_settled` (see
+   * Rebuild the resources and system prompt of every live session. Each owns
+   * its loader/runtime; one that is mid-run defers to `agent_settled` (see
    * routeEvent), since reloading would swap the extension runner under an
    * in-flight request.
    */
+  private async reloadManagedSession(managed: ManagedSession): Promise<void> {
+    if (this.closing || managed.disposing) return
+    managed.notifications.holdWake()
+    const previous = managed.lifecyclePromise
+    const pending = (async () => {
+      await previous
+      if (this.closing || managed.disposing) return
+      if (!managed.session.isIdle) { managed.reloadPending = true; return }
+      try {
+        await managed.session.reload({ beforeSessionStart: () => {
+          if (this.closing || managed.disposing) throw new Error('Session is shutting down')
+        } })
+      }
+      catch { /* Keep the existing resource-reload error policy. */ }
+      finally { this.catalogCache = null }
+    })()
+    managed.lifecyclePromise = pending
+    try { await pending }
+    finally {
+      if (managed.lifecyclePromise === pending) managed.lifecyclePromise = null
+      managed.notifications.releaseWake()
+    }
+  }
+
   private async reloadLiveSessions(): Promise<void> {
     for (const managed of [...this.sessions.values()]) {
       if (managed.session.isStreaming) {
         managed.reloadPending = true
         continue
       }
-      await managed.session.reload().catch(() => {})
+      await this.reloadManagedSession(managed)
     }
   }
 
@@ -1806,6 +2110,222 @@ export class PiManager {
     return readAttachment(this.fileIndex, path)
   }
 
+  private rewindSession(path: string): ManagedSession {
+    const managed = this.sessions.get(path)
+    if (!managed || managed.disposing || this.closing) throw new RewindFailure('missing')
+    return managed
+  }
+
+  private async rewindResult<T>(operation: () => Promise<T>): Promise<RewindResult<T>> {
+    try { return { value: await operation() } } catch (error) { return { error: rewindFailure(error) } }
+  }
+
+  rewindList(path: string): Promise<RewindResult<RewindListDTO>> {
+    return this.rewindResult(async () => {
+      const managed = this.rewindSession(path)
+      const list = await this.rewindClient.call('list', managed.cwd, managed.session.sessionId)
+      this.checkoutCoordinator.setRecovery(managed.cwd, list.pending[0]?.id)
+      return { ...list, checkpoints: list.checkpoints.filter(cp => cp.trigger === 'before-turn'), enabled: loadSettings().checkpointsEnabled !== false,
+        busy: this.checkoutCoordinator.busy(managed.cwd) || !!managed.session.getSteeringMessages().length || !!managed.session.getFollowUpMessages().length, error: this.checkoutCoordinator.restoreError() ?? managed.rewind?.error }
+    })
+  }
+
+  rewindPreview(path: string, checkpointId: string, action?: 'undo' | 'redo'): Promise<RewindResult<RewindPreviewDTO>> {
+    return this.rewindResult(async () => {
+      const managed = this.rewindSession(path)
+      if (action !== undefined && action !== 'undo' && action !== 'redo') throw new RewindFailure('missing')
+      if (!action) {
+        const list = await this.rewindClient.call('list', managed.cwd, managed.session.sessionId)
+        if (!list.checkpoints.some(cp => cp.id === checkpointId && cp.trigger === 'before-turn')) throw new RewindFailure('unsupported')
+      }
+      const leaf = managed.session.sessionManager.getLeafId()
+      const value = await this.rewindClient.call('preview', managed.cwd, managed.session.sessionId, checkpointId, action)
+      const navigation = await this.rewindClient.call('navigation', managed.cwd, managed.session.sessionId, value.token)
+      if (!action && value.scopeRoot) {
+        value.uncovered = await uncoveredWrites(managed.session.sessionManager.getBranch(), managed.cwd, value.scopeRoot, navigation.after, value.excluded)
+      }
+      if (leaf !== managed.session.sessionManager.getLeafId()) throw new RewindFailure('changed')
+      if (this.rewindPreviews.size >= 100) this.rewindPreviews.delete(this.rewindPreviews.keys().next().value!)
+      this.rewindPreviews.set(value.token, { path, leaf, target: navigation.after, file: value.file, uncovered: value.uncovered })
+      return value
+    })
+  }
+
+  rewindPatch(path: string, token: string, file: string, area: 'worktree' | 'index', stage = 0): Promise<RewindResult<RewindPatchDTO>> {
+    return this.rewindResult(async () => {
+      const managed = this.rewindSession(path)
+      if (!Number.isInteger(stage) || stage < 0 || stage > 3) throw new RewindFailure('missing')
+      if (area !== 'worktree' && area !== 'index') throw new RewindFailure('missing')
+      return this.rewindClient.call('patch', managed.cwd, managed.session.sessionId, token, file, area, stage)
+    })
+  }
+
+  rewindStats(path: string, token: string, file: string, area: 'worktree' | 'index', stage = 0): Promise<RewindResult<RewindStatsDTO>> {
+    return this.rewindResult(async () => {
+      const managed = this.rewindSession(path)
+      if (!Number.isInteger(stage) || stage < 0 || stage > 3 || (area !== 'worktree' && area !== 'index')) throw new RewindFailure('missing')
+      return this.rewindClient.call('stats', managed.cwd, managed.session.sessionId, token, file, area, stage)
+    })
+  }
+
+  rewindPreviewFile(path: string, token: string, file: string): Promise<RewindResult<RewindPreviewDTO>> {
+    return this.rewindResult(async () => {
+      const managed = this.rewindSession(path), known = this.rewindPreviews.get(token)
+      if (!known || known.path !== managed.path) throw new RewindFailure('expired')
+      if (known.leaf !== managed.session.sessionManager.getLeafId()) throw new RewindFailure('changed')
+      const value = await this.rewindClient.call('previewFile', managed.cwd, managed.session.sessionId, token, file)
+      if (known.leaf !== managed.session.sessionManager.getLeafId()) throw new RewindFailure('changed')
+      if (this.rewindPreviews.size >= 100) this.rewindPreviews.delete(this.rewindPreviews.keys().next().value!)
+      // This subset contains only backed-up nodes, regardless of unrelated
+      // uncovered writes in the full checkpoint's conversation branch.
+      this.rewindPreviews.set(value.token, { path, leaf: known.leaf, target: known.target, file })
+      return value
+    })
+  }
+
+  rewindStatsBatch(path: string, token: string, targets: RewindStatsTargetDTO[]): Promise<RewindResult<RewindStatsDTO[]>> {
+    return this.rewindResult(async () => {
+      const managed = this.rewindSession(path)
+      return this.rewindClient.call('statsBatch', managed.cwd, managed.session.sessionId, token, targets)
+    })
+  }
+
+  /** SDK branch()/resetLeaf() only change memory. A minimal hidden entry
+   * persists the chosen branch, then fsync precedes transaction commitment. */
+  private async rewindLeaf(managed: ManagedSession, leaf: string | null, operationId: string): Promise<void> {
+    const { session } = managed
+    const manager = session.sessionManager
+    if (leaf !== null && !manager.getEntry(leaf)) throw new RewindFailure('missing')
+    if (leaf !== null && manager.getLeafId() !== leaf) {
+      const result = await session.navigateTree(leaf, { summarize: false })
+      if (result.cancelled) throw new RewindFailure('cancelled')
+    }
+    if (manager.getLeafId() !== leaf) {
+      if (leaf === null) manager.resetLeaf(); else manager.branch(leaf)
+      session.agent.state.messages = manager.buildSessionContext().messages
+    }
+    manager.appendCustomEntry('pith_rewind_selection', { operationId, target: leaf })
+    const file = await openFile(managed.path, 'r')
+    try { await file.sync() } finally { await file.close() }
+    managed.todos.restore(); managed.changeScopes.restore(); managed.eventSequence += 1
+  }
+
+  rewindRestore(request: RewindRequest): Promise<RewindResult<RewindCommitDTO>> {
+    return this.rewindResult(async () => {
+      const managed = this.rewindSession(request.sessionPath)
+      if (!['files', 'conversation', 'all'].includes(request.mode)) throw new RewindFailure('missing')
+      await managed.lifecyclePromise
+      await managed.rewind?.idle()
+      return this.checkoutCoordinator.withExclusive(managed.cwd, 'restore', async () => {
+        const { session } = managed
+        if (!session.isIdle || managed.disposing || this.closing || session.getSteeringMessages().length || session.getFollowUpMessages().length) throw new RewindFailure('busy')
+        const known = this.rewindPreviews.get(request.token)
+        const list = await this.rewindClient.call('list', managed.cwd, session.sessionId)
+        const prior = list.operations.find(operation => operation.id === request.operationId)
+        if (prior?.status === 'committed') {
+          const verified = await this.rewindClient.call('prepare', managed.cwd, session.sessionId, request.token, request.mode, request.operationId, null, null, managed.path)
+          return { operation: verified, ...(this.activeSession === managed ? { snapshot: this.snapshot() } : {}) }
+        }
+        if (!known || known.path !== managed.path) throw new RewindFailure('expired')
+        if (known.file && request.mode !== 'files') throw new RewindFailure('unsupported')
+        if (request.mode !== 'conversation' && known.uncovered?.length && request.skipUncovered !== true) throw new RewindFailure('uncovered', known.uncovered.map(item => item.path))
+        const before = session.sessionManager.getLeafId()
+        if (before !== known.leaf) throw new RewindFailure('changed')
+        if (known.target !== null && !session.sessionManager.getEntry(known.target)) throw new RewindFailure('missing')
+        managed.notifications.pause()
+        const operation = await this.rewindClient.call('prepare', managed.cwd, session.sessionId, request.token,
+          request.mode, request.operationId, before, request.mode === 'files' ? before : known.target, managed.path,
+          { uncovered: known.uncovered ?? [], confirmed: request.skipUncovered === true })
+        try {
+          if (request.mode !== 'files') await this.rewindLeaf(managed, known.target, operation.id)
+          const committed = await this.rewindClient.call('finish', managed.cwd, session.sessionId, operation.id, true)
+          this.emit('pi:rewind', { sessionPath: managed.path })
+          void this.fileIndex?.refresh(true).catch(() => {})
+          return { operation: committed, ...(this.activeSession === managed ? { snapshot: this.snapshot() } : {}) }
+        } catch (error) {
+          // A worker crash may leave either phase complete. Preserve the journal
+          // and recover through the same operation, never issue another restore.
+          try {
+            const observed = await this.rewindClient.call('list', managed.cwd, session.sessionId)
+            const saved = observed.operations.find(candidate => candidate.id === operation.id)
+            // A committed journal wins over a lost IPC response. Compensating
+            // only the conversation here would split an already committed pair.
+            if (saved?.status === 'committed') {
+              this.emit('pi:rewind', { sessionPath: managed.path })
+              return { operation: saved, ...(this.activeSession === managed ? { snapshot: this.snapshot() } : {}) }
+            }
+            if (request.mode !== 'files') await this.rewindLeaf(managed, before, operation.id)
+            await this.rewindClient.call('finish', managed.cwd, session.sessionId, operation.id, false)
+          } catch { throw new RewindFailure('recovery', [], operation.id) }
+          throw error
+        }
+      })
+    }).then(result => {
+      if ('error' in result && result.error.code === 'recovery') {
+        const managed = this.sessions.get(request.sessionPath)
+        if (managed) this.checkoutCoordinator.setRecovery(managed.cwd, result.error.operationId ?? request.operationId)
+      }
+      return result
+    })
+  }
+
+  rewindRecover(path: string, operationId: string): Promise<RewindResult<RewindCommitDTO>> {
+    return this.rewindResult(async () => {
+      const selected = this.rewindSession(path)
+      const list = await this.rewindClient.call('list', selected.cwd, selected.session.sessionId)
+      const operation = list.pending.find(op => op.id === operationId)
+      if (!operation) throw new RewindFailure('missing')
+      let managed = [...this.sessions.values()].find(m => m.session.sessionId === operation.sessionId)
+      if (!managed && operation.sessionPath) {
+        const saved = SessionManager.open(operation.sessionPath)
+        if (saved.getSessionId() !== operation.sessionId || checkoutRoot(saved.getCwd()) !== checkoutRoot(selected.cwd)) throw new RewindFailure('changed')
+        managed = await this.createManagedSession(saved)
+      }
+      if (!managed) throw new RewindFailure('missing')
+      const owner = managed
+      await owner.lifecyclePromise
+      const restored = await this.checkoutCoordinator.withExclusive(owner.cwd, 'restore', async () => {
+        if (!owner.session.isIdle) throw new RewindFailure('busy')
+        let leaf = owner.session.sessionManager.getLeafId()
+        // SDK construction appends model/thinking metadata after a restored
+        // leaf. These entries do not represent new dialogue or tool execution.
+        while (leaf !== operation.beforeEntryId && leaf !== operation.afterEntryId && leaf) {
+          const candidate = owner.session.sessionManager.getEntry(leaf)
+          if (candidate?.type !== 'model_change' && candidate?.type !== 'thinking_level_change') break
+          leaf = candidate.parentId
+        }
+        const entry = leaf ? owner.session.sessionManager.getEntry(leaf) : undefined
+        const selection = entry?.type === 'custom' && entry.customType === 'pith_rewind_selection' ? entry.data as { operationId?: string; target?: string | null } : undefined
+        const recordedSelection = selection?.operationId === operation.id && selection.target === entry?.parentId && (selection.target === operation.beforeEntryId || selection.target === operation.afterEntryId)
+        if (leaf !== operation.beforeEntryId && leaf !== operation.afterEntryId && !recordedSelection) throw new RewindFailure('changed')
+        owner.notifications.pause()
+        if (operation.mode !== 'files') await this.rewindLeaf(owner, operation.beforeEntryId, operation.id)
+        const restored = await this.rewindClient.call('finish', owner.cwd, owner.session.sessionId, operationId, false)
+        this.checkoutCoordinator.setRecovery(owner.cwd)
+        return restored
+      }, true)
+      // Recovery sessions were intentionally created without external
+      // extensions. Recreate their owned runtime after the transaction resolves.
+      for (const old of [...this.sessions.values()]) {
+        if (!old.recoveryOnly || checkoutRoot(old.cwd) !== checkoutRoot(owner.cwd)) continue
+        const active = this.activeSession === old
+        await this.disposeManaged(old)
+        const fresh = await this.createManagedSession(SessionManager.open(old.path))
+        if (active) this.activateSession(fresh)
+      }
+      this.emit('pi:rewind', { sessionPath: path })
+      return { operation: restored, ...(this.activeSession ? { snapshot: this.snapshot() } : {}) }
+    })
+  }
+
+  setCheckpointsEnabled(enabled: boolean): boolean {
+    saveSettings({ ...loadSettings(), checkpointsEnabled: enabled === true })
+    for (const managed of this.sessions.values()) {
+      this.emit('pi:rewind', { sessionPath: managed.path })
+    }
+    return enabled === true
+  }
+
   readImage(path: string): Promise<ImageContent | null> {
     return this.readFile(path).then((preview) =>
       preview.kind === 'image' && preview.base64 && preview.mimeType
@@ -1814,10 +2334,17 @@ export class PiManager {
     )
   }
 
-  dispose(): void {
+  dispose(): Promise<void> {
+    if (this.disposePromise) return this.disposePromise
+    this.closing = true
+    this.checkoutCoordinator.close()
+    this.navigationEpoch += 1
     this.sessionSearch.dispose()
     if (this.contextUsageTimer) clearInterval(this.contextUsageTimer)
     this.contextUsageTimer = null
-    this.disposeAllSessions()
+    for (const controller of this.sideChats.values()) controller.abort()
+    for (const controller of this.loginAborts.values()) controller.abort()
+    this.disposePromise = Promise.allSettled([this.disposeAllSessions(), this.commandTasksInstance?.dispose()]).then(async () => { await this.rewindClient.dispose() })
+    return this.disposePromise
   }
 }

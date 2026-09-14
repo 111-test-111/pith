@@ -3,11 +3,18 @@ import { RefreshCw } from 'lucide-react'
 import { Button } from '@/components/motion/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/motion/tabs'
 import { useI18n } from '@/i18n'
+import type { MessageKey } from '@/i18n/locales/en'
 import { refreshCatalog, useToolCatalog } from '@/lib/extensions-catalog'
 import { getToolParameterFields } from '@/lib/tool-schema'
 import { ToolIcon } from '@/lib/tool-icons'
 import { cn } from '@/lib/utils'
 import type { ToolInfoDTO } from '../../../../../shared/types'
+
+const BASH_PARAMETERS: Record<string, MessageKey> = {
+  command: 'bashTask.parameterCommand', mode: 'bashTask.parameterMode', waitMs: 'bashTask.parameterWait',
+  timeout: 'bashTask.parameterTimeout', action: 'bashTask.parameterAction', taskId: 'bashTask.parameterId',
+  cursor: 'bashTask.parameterCursor', maxChars: 'bashTask.parameterMaxChars'
+}
 
 /**
  * Settings → Tools: every tool the agent can call — the SDK's built-ins plus
@@ -104,7 +111,10 @@ export function ToolsSection() {
 
 function ToolDetail({ tool }: { tool: ToolInfoDTO }) {
   const { t } = useI18n()
-  const fields = getToolParameterFields(tool.parameters)
+  const managedBash = tool.source.kind === 'builtin' && (tool.name === 'bash' || tool.name === 'bash_task')
+  const description = tool.source.kind === 'builtin' && tool.name === 'todo_write' ? t('todo.toolDescription') : managedBash ? t(tool.name === 'bash' ? 'bashTask.toolDescription' : 'bashTask.controlDescription') : tool.description
+  const fields = getToolParameterFields(tool.parameters).map((field) =>
+    managedBash && BASH_PARAMETERS[field.name] ? { ...field, description: t(BASH_PARAMETERS[field.name]) } : field)
   const sourceLabel =
     tool.source.kind === 'builtin' ? t('settings.toolSourceBuiltin') : tool.source.label
 
@@ -133,8 +143,8 @@ function ToolDetail({ tool }: { tool: ToolInfoDTO }) {
             </span>
           )}
         </div>
-        {tool.description ? (
-          <p className="text-sm leading-5 text-muted-foreground">{tool.description}</p>
+        {description ? (
+          <p className="text-sm leading-5 text-muted-foreground">{description}</p>
         ) : null}
       </div>
 

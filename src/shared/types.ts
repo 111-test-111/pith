@@ -4,6 +4,8 @@
  * neither side imports the other's runtime packages.
  */
 
+export type WindowTheme = 'light' | 'dark' | 'system'
+
 export interface TextContent {
   type: 'text'
   text: string
@@ -30,7 +32,16 @@ export interface ToolCallContent {
 
 export type UserContent = string | (TextContent | ImageContent)[]
 
-export interface UserMsg {
+/** Attached by the main process (never by the SDK): the wall-clock time the
+ * session entry was written, i.e. when the message FINISHED. `timestamp` is
+ * the SDK's creation time, so a turn's elapsed time can only be measured to
+ * this. Absent on in-flight/partial messages. */
+export interface CompletedAt {
+  completedAt?: number
+}
+
+export interface UserMsg extends CompletedAt {
+  sessionEntryId?: string
   role: 'user'
   content: UserContent
   timestamp: number
@@ -45,7 +56,9 @@ export interface UsageDTO {
   cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number }
 }
 
-export interface AssistantMsg {
+export interface AssistantMsg extends CompletedAt {
+  /** App-only cumulative change ownership; independent of user-message folds. */
+  changeScopeId?: string
   role: 'assistant'
   content: (TextContent | ThinkingContent | ToolCallContent)[]
   provider: string
@@ -56,7 +69,7 @@ export interface AssistantMsg {
   timestamp: number
 }
 
-export interface ToolResultMsg {
+export interface ToolResultMsg extends CompletedAt {
   role: 'toolResult'
   toolCallId: string
   toolName: string
@@ -118,6 +131,7 @@ export type ChatMessage =
 /** A pi AgentSessionEvent after IPC serialization, routed to its owning session. */
 export interface PiEvent {
   type: string
+  rewindError?: RewindErrorDTO
   /** Present on session-scoped events. Legacy/global errors may omit routing. */
   sessionId?: string
   sessionPath?: string
@@ -508,6 +522,11 @@ export interface ToolRunDTO {
 }
 
 export interface SessionSnapshotDTO {
+  /** Transcript is available while session_start hooks finish preparing tools. */
+  initializing?: boolean
+  /** Latest successful todo result on the complete selected branch, including compacted entries. */
+  todos?: TodoSnapshotDTO | null
+  activeChangeScopeId?: string | null
   sessionId: string
   sessionPath?: string
   cwd: string
@@ -528,6 +547,22 @@ export interface SessionSnapshotDTO {
   contextUsage?: ContextUsageDTO | null
   /** Last event incorporated into this snapshot. */
   eventSequence?: number
+}
+
+export type TodoStatus = 'pending' | 'in_progress' | 'completed' | 'cancelled'
+
+export interface TodoItemDTO {
+  id: string
+  content: string
+  status: TodoStatus
+  activeForm?: string
+}
+
+export interface TodoSnapshotDTO {
+  toolCallId: string
+  items: TodoItemDTO[]
+  /** Last list retained with original statuses for review after clearing; never active model work. */
+  retainedItems?: TodoItemDTO[]
 }
 
 /**
@@ -560,6 +595,8 @@ export type SideChatEvent =
   | { type: 'aborted'; exchangeId: string }
 
 export interface AppInfoDTO {
+  checkpointsEnabled: boolean
+  bashMaxWaitMs: number
   cwd: string | null
   /** Every folder the user has opened, most recent first (active cwd included). */
   folders: string[]
@@ -567,6 +604,49 @@ export interface AppInfoDTO {
   contextFiles: boolean
   version: string
 }
+
+export type BashTaskStatus = 'running' | 'stopping' | 'succeeded' | 'failed' | 'cancelled' | 'timed_out' | 'interrupted'
+
+/** Command lifetime is independent of its SDK tool call and agent run. */
+export interface BashTaskDTO {
+  id: string
+  sessionId: string
+  sessionPath: string
+  toolCallId: string
+  command: string
+  cwd: string
+  status: BashTaskStatus
+  background: boolean
+  reason?: 'requested' | 'wait_threshold'
+  startedAt: number
+  endedAt?: number
+  lastOutputAt?: number
+  exitCode?: number | null
+  signal?: string | null
+  outputChars: number
+  logPath: string
+  logTruncated: boolean
+  error?: string
+  revision: number
+}
+
+export interface BashTaskOutputDTO {
+  task: BashTaskDTO
+  output: string
+  /** UTF-16 character offset, scoped to this task. */
+  cursor: number
+  truncated: boolean
+}
+
+export interface BashTaskRequest {
+  sessionPath: string
+  taskId: string
+  cursor?: number
+}
+
+export const BASH_DEFAULT_MAX_WAIT_MS = 10_000
+export const BASH_MIN_WAIT_MS = 100
+export const BASH_MAX_WAIT_MS = 60_000
 
 /** Global append system prompt (~/.pi/agent/APPEND_SYSTEM.md). */
 export interface AppendPromptDTO {
@@ -738,3 +818,92 @@ export type TerminalCommand =
   | { type: 'dispose' }
 
 export type TerminalHostEvent = TerminalEvent | { type: 'ready'; terminal: TerminalInfoDTO }
+
+/** Rewind IPC carries data/error codes only; the renderer owns all prose. */
+export type RewindMode = 'files' | 'conversation' | 'all'
+export type RewindErrorCode = 'busy' | 'changed' | 'missing' | 'corrupt' | 'unsupported' | 'storage' | 'recovery' | 'branch' | 'expired' | 'cancelled' | 'terminal' | 'uncovered'
+export interface RewindErrorDTO { code: RewindErrorCode; paths?: string[]; operationId?: string }
+export type RewindResult<T> = { value: T } | { error: RewindErrorDTO }
+export interface RewindCheckpointDTO {
+  messageEntryId?: string
+  messageTimestamp?: number
+  id: string
+  sessionId: string
+  timestamp: number
+  trigger: 'before-turn' | 'after-turn' | 'resume' | 'safety' | 'legacy'
+  entryId: string | null
+  description: string
+  branch: string | null
+  files: number
+  bytes: number
+  excluded: { path: string; reason: 'ignored' | 'large' | 'directory-limit' | 'submodule' | 'special' }[]
+  legacy?: boolean
+  conversationUnavailable?: boolean
+}
+export interface RewindChangeDTO {
+  /** Only leaf worktree changes can be restored independently. */
+  singleFile?: boolean
+  stage?: number
+  path: string
+  area: 'worktree' | 'index'
+  kind: 'added' | 'deleted' | 'modified'
+  binary: boolean
+  beforeMode?: number
+  afterMode?: number
+  bytes: number
+}
+export interface RewindOperationDTO {
+  /** Known missing originals left untouched by this operation and its Undo/Redo. */
+  skipped?: RewindUncoveredPathDTO[]
+  file?: string
+  sessionPath?: string
+  id: string
+  timestamp: number
+  sessionId: string
+  targetId: string
+  mode: RewindMode
+  status: 'prepared' | 'files-applied' | 'committed' | 'rolled-back' | 'conflict'
+  beforeEntryId: string | null
+  afterEntryId: string | null
+  undoOf?: string
+  redoOf?: string
+  canUndo?: boolean
+  canRedo?: boolean
+  conflicts?: string[]
+  recoveryPath?: string
+}
+export interface RewindListDTO {
+  checkpoints: RewindCheckpointDTO[]
+  operations: RewindOperationDTO[]
+  pending: RewindOperationDTO[]
+  enabled: boolean
+  busy: boolean
+  bytes: number
+  error?: RewindErrorDTO
+}
+export interface RewindPatchDTO { patch: string; truncated: boolean; binary?: boolean }
+export interface RewindStatsDTO { added: number; removed: number; binary: boolean }
+export type RewindStatsTargetDTO = Pick<RewindChangeDTO, 'path' | 'area' | 'stage'>
+export interface RewindUncoveredPathDTO { path: string; reason: 'outside-workspace' | 'excluded' }
+export interface RewindPreviewDTO {
+  file?: string
+  scopeRoot?: string
+  uncovered?: RewindUncoveredPathDTO[]
+  conversationUnavailable?: boolean
+  token: string
+  checkpointId: string
+  changes: RewindChangeDTO[]
+  excluded: RewindCheckpointDTO['excluded']
+  blocked?: RewindErrorDTO
+  operationId?: string
+  action?: 'undo' | 'redo'
+}
+export interface RewindRequest {
+  /** Explicit confirmation to leave this preview's uncovered paths untouched. */
+  skipUncovered?: boolean
+  sessionPath: string
+  token: string
+  mode: RewindMode
+  operationId: string
+}
+export interface RewindCommitDTO { operation: RewindOperationDTO; snapshot?: SessionSnapshotDTO }

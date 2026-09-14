@@ -9,6 +9,7 @@ import {
   isValidElement,
   type ReactElement,
   type ReactNode,
+  type RefObject,
   useCallback,
   useContext,
   useEffect,
@@ -21,6 +22,8 @@ import { createPortal } from "react-dom";
 import { EASE_OUT } from "@/lib/ease";
 import { PresenceGate } from "@/lib/presence-gate";
 import { cn } from "@/lib/utils";
+// local patch (pi-app): share scroll ownership with nested beUI modal families.
+import { useModalScrollLock } from "@/lib/hooks/use-modal-scroll-lock";
 
 type CenterMorphModalContextValue = {
   open: boolean;
@@ -142,6 +145,10 @@ export function CenterMorphModalClose({
 }
 
 export interface CenterMorphModalContentProps {
+  // local patch (pi-app): keep a parent panel mounted behind its confirmation
+  // while the child alone owns focus/interaction; allow a safe initial control.
+  suspended?: boolean;
+  initialFocusRef?: RefObject<HTMLElement | null>;
   children: ReactNode;
   /** Accessible name announced by screen readers. */
   ariaLabel: string;
@@ -184,6 +191,8 @@ function getFocusableElements(root: HTMLElement | null) {
 
 export function CenterMorphModalContent({
   children,
+  suspended = false,
+  initialFocusRef,
   ariaLabel,
   ariaDescribedBy,
   dismissible = true,
@@ -196,21 +205,26 @@ export function CenterMorphModalContent({
   const reduce = useReducedMotion() ?? false;
   const [mounted, setMounted] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
+  // local patch (pi-app): suspension must not restart the initial-focus effect
+  // when a child closes and returns focus to the original file/action button.
+  const suspendedRef = useRef(suspended);
+  suspendedRef.current = suspended;
 
   useEffect(() => setMounted(true), []);
+
+  useModalScrollLock(context.open);
 
   useEffect(() => {
     if (!context.open) return;
 
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-
     const focusFrame = requestAnimationFrame(() => {
+      if (suspendedRef.current) return;
       const [firstFocusable] = getFocusableElements(panelRef.current);
-      (firstFocusable ?? panelRef.current)?.focus();
+      (initialFocusRef?.current ?? firstFocusable ?? panelRef.current)?.focus({ preventScroll: true });
     });
 
     const onKeyDown = (event: KeyboardEvent) => {
+      if (suspendedRef.current || event.defaultPrevented) return;
       if (event.key === "Escape" && dismissible) {
         event.preventDefault();
         context.setOpen(false);
@@ -240,10 +254,9 @@ export function CenterMorphModalContent({
     return () => {
       cancelAnimationFrame(focusFrame);
       window.removeEventListener("keydown", onKeyDown);
-      document.body.style.overflow = previousOverflow;
       document.getElementById(context.triggerId)?.focus();
     };
-  }, [context, dismissible]);
+  }, [context, dismissible, initialFocusRef]);
 
   if (!mounted) return null;
 
@@ -257,11 +270,12 @@ export function CenterMorphModalContent({
                 type="button"
                 aria-label="Dismiss modal"
                 tabIndex={-1}
-                disabled={!dismissible}
+                disabled={!dismissible || suspended}
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
                 {...gate}
+                aria-hidden={suspended || !isPresent ? true : undefined}
                 transition={{
                   duration: reduce ? 0.1 : 0.28,
                   ease: EASE_OUT,
@@ -278,7 +292,7 @@ export function CenterMorphModalContent({
                   events, so it carries `inert` alone. See
                   tests/fixed-overlay-edge-sampling.test.tsx. */}
               <div
-                inert={!isPresent}
+                inert={!isPresent || suspended}
                 className="pointer-events-none fixed inset-4 z-[100] flex items-center justify-center overflow-y-auto"
               >
                 {/* local patch (pi-app): the native panel owns its themed shadow;
@@ -289,7 +303,8 @@ export function CenterMorphModalContent({
                     ref={panelRef}
                     id={context.contentId}
                     role="dialog"
-                    aria-modal="true"
+                    aria-modal={!suspended && isPresent ? true : undefined}
+                    aria-hidden={suspended || !isPresent ? true : undefined}
                     aria-label={ariaLabel}
                     aria-describedby={ariaDescribedBy}
                     tabIndex={-1}

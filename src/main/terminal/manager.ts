@@ -4,8 +4,12 @@ import { isAbsolute, join } from 'node:path'
 import { stat } from 'node:fs/promises'
 import { isDefaultWorkspace } from '../pi/default-workspace'
 import type { TerminalCommand, TerminalCreatePayload, TerminalCreateResult, TerminalHostEvent } from '../../shared/types'
+import type { CheckoutCoordinator } from '../rewind/coordinator'
 
 interface OwnedTerminal {
+  release?: () => void
+  sent?: boolean
+  closing?: boolean
   owner: WebContents
   resolve: (result: TerminalCreateResult) => void
   timer: ReturnType<typeof setTimeout>
@@ -18,12 +22,16 @@ export class TerminalManager {
   private host: UtilityProcess | null = null
   private terminals = new Map<string, OwnedTerminal>()
   private watched = new WeakSet<WebContents>()
+  constructor(private coordinator?: CheckoutCoordinator) {}
 
   async create(owner: WebContents, payload: TerminalCreatePayload): Promise<TerminalCreateResult> {
     if (!payload || typeof payload.id !== 'string' || !/^[\w-]{1,80}$/.test(payload.id) || this.terminals.has(payload.id)) return { error: 'spawn' }
     if (payload.cwd != null && typeof payload.cwd !== 'string') return { error: 'directory' }
     const cwd = !payload.cwd || isDefaultWorkspace(payload.cwd) ? homedir() : payload.cwd
     if (typeof cwd !== 'string' || !isAbsolute(cwd)) return { error: 'directory' }
+    let release: (() => void) | undefined
+    try { release = await this.coordinator?.enter(cwd, 'terminal') } catch { return { error: 'spawn' } }
+    if (this.terminals.has(payload.id) || owner.isDestroyed()) { release?.(); return { error: 'closed' } }
     if (!this.watched.has(owner)) {
       this.watched.add(owner)
       const closeAll = (): void => {
@@ -37,7 +45,7 @@ export class TerminalManager {
     }
     return new Promise((resolve) => {
       const entry: OwnedTerminal = {
-        owner, resolve,
+        owner, resolve, release,
         timer: setTimeout(() => this.close(owner, payload.id, 'host'), 15_000)
       }
       this.terminals.set(payload.id, entry)
@@ -45,9 +53,11 @@ export class TerminalManager {
         if (this.terminals.get(payload.id) !== entry) return
         if (!info.isDirectory()) { this.close(owner, payload.id, 'directory'); return }
         try {
-          this.ensureHost().postMessage({ type: 'create', payload: {
+          const host = this.ensureHost()
+          host.postMessage({ type: 'create', payload: {
             ...payload, cwd, cols: dimension(payload.cols, 1000), rows: dimension(payload.rows, 500)
           } } satisfies TerminalCommand)
+          entry.sent = true
         } catch { this.close(owner, payload.id, 'host') }
       }, () => this.close(owner, payload.id, 'directory'))
     })
@@ -65,9 +75,11 @@ export class TerminalManager {
   private close(owner: WebContents, id: string, error: 'closed' | 'host' | 'directory' = 'closed'): void {
     const entry = this.terminals.get(id)
     if (!entry || entry.owner !== owner) return
-    this.terminals.delete(id)
+    if (entry.closing) return
+    entry.closing = true
     clearTimeout(entry.timer)
     entry.resolve({ error })
+    if (!entry.sent) { entry.release?.(); this.terminals.delete(id); return }
     this.host?.postMessage({ type: 'close', id } satisfies TerminalCommand)
   }
 
@@ -82,20 +94,26 @@ export class TerminalManager {
       if (event.type === 'ready') {
         clearTimeout(entry.timer)
         entry.pid = event.terminal.pid
+        if (entry.closing) { host.postMessage({ type: 'close', id } satisfies TerminalCommand); return }
         entry.resolve({ terminal: event.terminal })
       } else {
-        if (!entry.owner.isDestroyed()) entry.owner.send('terminal:event', event)
-        if (event.type === 'exit' || event.type === 'error') {
+        if (!entry.closing && !entry.owner.isDestroyed()) entry.owner.send('terminal:event', event)
+        if (event.type === 'exit' || (event.type === 'error' && event.error === 'spawn')) {
           clearTimeout(entry.timer)
           entry.resolve({ error: event.type === 'error' ? event.error : 'closed' })
           this.terminals.delete(id)
+          entry.release?.()
         }
       }
     })
     host.once('exit', () => {
       if (this.host !== host) return
       this.host = null
+      // The lost IPC channel cannot prove that shell children have exited.
+      // Fence restores for this app lifetime; never infer safety from host exit.
+      if ([...this.terminals.values()].some(entry => entry.sent)) this.coordinator?.markTerminalHostLost()
       for (const [id, entry] of this.terminals) {
+        entry.release?.()
         clearTimeout(entry.timer)
         entry.resolve({ error: 'host' })
         if (!entry.owner.isDestroyed()) entry.owner.send('terminal:event', { type: 'error', id, error: 'host' })
@@ -114,7 +132,7 @@ export class TerminalManager {
     // processes. Killing the host first can leave shell children orphaned.
     return new Promise((resolve) => {
       const timer = setTimeout(() => { host.kill(); resolve() }, 1000)
-      host.once('exit', () => { clearTimeout(timer); resolve() })
+      host.once('exit', () => { clearTimeout(timer); for (const entry of this.terminals.values()) entry.release?.(); this.terminals.clear(); resolve() })
       host.postMessage({ type: 'dispose' } satisfies TerminalCommand)
     })
   }

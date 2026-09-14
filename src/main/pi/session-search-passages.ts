@@ -54,6 +54,9 @@ export function contentPassages(content: unknown, source: SessionSearchSource, t
 
 export function messagePassages(message: any): SearchPassage[] {
   if (!message || (message.role === 'custom' && message.display === false)) return []
+  if (message.role === 'custom' && message.customType === 'bash_task_completion') {
+    return contentPassages(message.content, 'tool', 'bash')
+  }
   if (message.role === 'bashExecution') return [{
     text: `${string(message.command)}\n${string(message.output)}`, source: 'tool', toolName: 'bash'
   }]

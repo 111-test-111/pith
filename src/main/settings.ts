@@ -1,6 +1,7 @@
 import { app } from 'electron'
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
+import { BASH_DEFAULT_MAX_WAIT_MS, BASH_MIN_WAIT_MS, BASH_MAX_WAIT_MS } from '../shared/types'
 
 /** Persisted geometry of the main window. `width`/`height` are the window's
  * normal (restored) size, so maximizing or going full screen does not clobber
@@ -15,6 +16,9 @@ export interface WindowBounds {
 }
 
 export interface AppSettings {
+  checkpointsEnabled: boolean
+  /** Initial blocking ceiling; commands keep running after this wait expires. */
+  bashMaxWaitMs: number
   /** Null means a projectless chat; its internal cwd is never a project. */
   cwd: string | null
   /** Folders opened through the app, most recent first. Sessions of every
@@ -33,6 +37,8 @@ export interface AppSettings {
 }
 
 const defaults: AppSettings = {
+  checkpointsEnabled: true,
+  bashMaxWaitMs: BASH_DEFAULT_MAX_WAIT_MS,
   cwd: null,
   folders: [],
   contextFiles: true,
@@ -47,7 +53,10 @@ function settingsPath(): string {
 export function loadSettings(): AppSettings {
   try {
     const raw = JSON.parse(readFileSync(settingsPath(), 'utf8'))
-    return { ...defaults, ...raw }
+    const wait = raw.bashMaxWaitMs
+    const bashMaxWaitMs = Number.isInteger(wait) && wait >= BASH_MIN_WAIT_MS && wait <= BASH_MAX_WAIT_MS
+      ? wait : BASH_DEFAULT_MAX_WAIT_MS
+    return { ...defaults, ...raw, bashMaxWaitMs }
   } catch {
     return { ...defaults }
   }

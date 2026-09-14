@@ -63,6 +63,8 @@ export interface PromptInputProps extends Omit<
   // steer or follow-up; the button then shows a queue arrow, not stop.
   onQueueSubmit?: (value: string, model?: string) => void | Promise<void>;
   loading?: boolean;
+  // local patch (pi-app): wait for session tools without disabling draft editing.
+  submitDisabled?: boolean;
   onStop?: () => void;
   minRows?: number;
   maxRows?: number;
@@ -87,6 +89,7 @@ export function PromptInput({
   onSubmit,
   onQueueSubmit,
   loading = false,
+  submitDisabled = false,
   onStop,
   minRows = 2,
   maxRows = 8,
@@ -112,9 +115,9 @@ export function PromptInput({
   const currentModel = models.find(
     (option) => option.value === currentModelValue,
   );
-  const canSubmit = Boolean(currentValue.trim()) && !disabled && !loading;
+  const canSubmit = Boolean(currentValue.trim()) && !disabled && !submitDisabled && !loading;
   // local patch (pi-app): a non-empty draft can be queued while streaming.
-  const canQueue = Boolean(onQueueSubmit) && Boolean(currentValue.trim()) && !disabled;
+  const canQueue = Boolean(onQueueSubmit) && Boolean(currentValue.trim()) && !disabled && !submitDisabled;
 
   const resizeTextarea = useCallback(() => {
     const textarea = textareaRef.current;
@@ -166,7 +169,7 @@ export function PromptInput({
   const submit = (event?: FormEvent) => {
     event?.preventDefault();
     const prompt = currentValue.trim();
-    if (!prompt || disabled) return;
+    if (!prompt || disabled || submitDisabled) return;
     if (loading) {
       if (!onQueueSubmit) return;
       onQueueSubmit(prompt, currentModelValue);

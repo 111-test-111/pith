@@ -309,18 +309,18 @@ export function ToolResult({
             </span>
           ) : null}
         </span>
+        {/* local patch (pi-app): the trailing status word was removed — the row
+            now reads from the glyph alone (spinner = running, check = done, x =
+            failed), keeping the header quiet and the title roomy. The word
+            stays for screen readers. */}
         <span
           className={cn(
-            "inline-flex shrink-0 items-center gap-1 text-[11px] font-medium",
+            "inline-flex shrink-0 items-center text-[11px] font-medium",
             getStatusClass(status),
           )}
         >
           <StatusIcon status={status} reduce={reduce} />
-          {animateChanges ? (
-            <ActionSwapRollText value={status}>{statusLabel}</ActionSwapRollText>
-          ) : (
-            statusLabel
-          )}
+          <span className="sr-only">{statusLabel}</span>
         </span>
         <motion.span
           aria-hidden="true"

@@ -205,6 +205,10 @@ app.on('window-all-closed',()=>app.quit());`)
         assert.equal(await style(selector, 'corner-shape'), 'superellipse(1)', selector + ': preserve true circles')
       }
       assert.equal(await evaluate('getComputedStyle(document.getElementById("pseudo"),"::before").cornerShape'), 'superellipse(1)', 'pseudo-element full-round utility')
+      // A control that asks for a circle must not keep a semantic radius that
+      // shares the element (the composer's send button is Button size="icon",
+      // which adds rounded-icon underneath the class name).
+      assert.equal(await evaluate(`(()=>{const e=document.querySelector('[aria-label="Send prompt"]'),s=getComputedStyle(e),r=e.getBoundingClientRect();return s.cornerShape==='superellipse(1)'&&parseFloat(s.borderTopLeftRadius)>=r.height/2&&r.height>0})()`), true, 'composer send control is a true circle')
       // The progressive fallback changes paint, never the controls' layout.
       const bounds = await evaluate(`JSON.stringify([...document.querySelectorAll('#primary,.lab-field,#segment')].map(e=>{const r=e.getBoundingClientRect();return [r.x,r.y,r.width,r.height]}))`)
       await evaluate('document.documentElement.style.setProperty("--app-corner-shape","round")')

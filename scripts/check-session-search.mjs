@@ -34,6 +34,7 @@ let worker
 try {
   const primary = await create('primary', [
     message('user', 'Original title'),
+    { type: 'custom_message', customType: 'bash_task_completion', display: true, content: 'backgroundonlysecret' },
     { type: 'session_info', name: '中文搜索 café ＦＯＯ' },
     message('assistant', 'old history before compaction: yellow submarine'),
     message('toolResult', 'src/foo.ts C++ a*b 100% _underscore_ 单字'),
@@ -107,12 +108,14 @@ try {
   assert.equal(expanded.find((hit) => hit.id === 'inspector').snippetSource, 'tool')
   assert.equal(expanded.find((hit) => hit.id === 'inspector').snippetToolName, 'bash')
   assert.equal(expanded.find((hit) => hit.id === 'late-prose').snippetSource, 'assistant', 'prefer conversation prose to earlier tool echoes')
-  for (const term of ['thoughtonlysecret', 'callonlysecret', 'thinkingunique', 'codeunique', 'outputunique', 'attachmentonlysecret']) {
+  for (const term of ['thoughtonlysecret', 'callonlysecret', 'thinkingunique', 'codeunique', 'outputunique', 'attachmentonlysecret', 'backgroundonlysecret']) {
     assert.equal(conversationQuery(term).total, 0, term)
     assert(query(term).total > 0, term)
   }
   assert.equal(query('thoughtonlysecret').hits[0].snippetSource, 'thinking')
   assert.equal(query('attachmentonlysecret').hits[0].snippetSource, 'attachment')
+  assert.equal(query('backgroundonlysecret').hits[0].snippetSource, 'tool')
+  assert.equal(query('backgroundonlysecret').hits[0].snippetToolName, 'bash')
   assert.equal(query('"alpha beta"').total, 0, 'phrases cannot span content blocks')
   assert.equal(query('"blockunique alpha beta blockunique"').total, 0)
   assert.equal(conversationQuery('" "').total, 0)

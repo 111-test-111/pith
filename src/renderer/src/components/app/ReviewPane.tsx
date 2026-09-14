@@ -1,9 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState, useSyncExternalStore, type RefObject } from 'react'
-import { ChevronDown, ChevronLeft, ChevronRight, ChevronsDownUp, ChevronsUpDown, Diff, ExternalLink } from 'lucide-react'
-import { FileDiff } from '@/components/agents/file-diff'
+import { ChevronLeft, ChevronRight, Diff } from 'lucide-react'
 import { Button } from '@/components/motion/button'
 import { Tooltip } from '@/components/motion/tooltip'
-import { parseUnifiedDiff } from '@/lib/diff'
 import { useNearViewport } from '@/lib/hooks/use-near-viewport'
 import {
   extractReviewTurns,
@@ -11,9 +9,8 @@ import {
   type WrittenFile
 } from '@/lib/turn-written-files'
 import type { PiStore } from '@/state/pi-store'
-import { cn } from '@/lib/utils'
 import { useI18n } from '@/i18n'
-import { LabelTooltip } from './LabelTooltip'
+import { ReviewCollapseButton, ReviewFileHeader, ReviewDiffBody } from './ReviewDiff'
 
 /** Diff row height, matching `FileDiff`'s own 20px line box. */
 const DIFF_LINE_PX = 20
@@ -143,26 +140,11 @@ export const ReviewPane = memo(function ReviewPane({ store, focusTurnId }: Revie
             <ChevronRight aria-hidden="true" className="size-4" />
           </Button>
         </Tooltip>
-        <Tooltip content={allCollapsed ? t('review.expandAll') : t('review.collapseAll')}>
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label={allCollapsed ? t('review.expandAll') : t('review.collapseAll')}
-            onClick={() =>
-              setCollapsed((previous) => {
-                const next = { ...previous }
-                for (const file of turn.files) next[collapseKey(file)] = !allCollapsed
-                return next
-              })
-            }
-          >
-            {allCollapsed ? (
-              <ChevronsDownUp aria-hidden="true" className="size-4" />
-            ) : (
-              <ChevronsUpDown aria-hidden="true" className="size-4" />
-            )}
-          </Button>
-        </Tooltip>
+        <ReviewCollapseButton allCollapsed={allCollapsed} onClick={() => setCollapsed(previous => {
+          const next = { ...previous }
+          for (const file of turn.files) next[collapseKey(file)] = !allCollapsed
+          return next
+        })} />
       </div>
 
       {/* One scroll container for the whole review, vertical only: the file
@@ -204,58 +186,13 @@ function ReviewFile({
 }) {
   const { t } = useI18n()
   const { ref, near } = useNearViewport<HTMLElement>(scrollRootRef)
-  const slash = file.displayPath.lastIndexOf('/')
-  const dir = slash >= 0 ? file.displayPath.slice(0, slash) : ''
-  const name = slash >= 0 ? file.displayPath.slice(slash + 1) : file.displayPath
-
   return (
     <section ref={ref}>
-      <div className="group/file sticky top-0 z-1 flex items-center gap-1 border-b border-border/60 bg-background pr-1.5">
-        {/* beUI Button, like the transcript's changed-files rows: a full-width
-            row must not scale on hover or press. The Tooltip wrapper — not the
-            button — is the row's `flex-1 min-w-0` cell, so a full-width cell
-            can't push the row past the pane's width and turn the review into a
-            horizontal scroller. */}
-        <LabelTooltip content={file.filePath} wrap wrapperClassName="min-w-0 flex-1">
-          <Button
-            variant="ghost"
-            size="sm"
-            whileHover={undefined}
-            pressScale={1}
-            aria-expanded={!collapsed}
-            onClick={onToggle}
-            className="h-8 min-w-0 flex-1 justify-start gap-2 rounded-none px-3 font-normal"
-          >
-            <ChevronDown
-              aria-hidden="true"
-              className={cn(
-                'size-3.5 shrink-0 text-muted-foreground transition-transform',
-                collapsed && '-rotate-90'
-              )}
-            />
-            <span className="min-w-0 flex-1 truncate text-left text-xs">
-              {dir ? <span className="text-muted-foreground/60">{dir}/</span> : null}
-              <span className="text-foreground">{name}</span>
-            </span>
-            <ReviewStats added={file.added ?? 0} removed={file.removed ?? 0} />
-          </Button>
-        </LabelTooltip>
-        <Tooltip content={t('review.openFile', { name })} wrapperClassName="shrink-0">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-6 shrink-0 opacity-0 focus-visible:opacity-100 group-hover/file:opacity-100"
-            aria-label={t('review.openFile', { name })}
-            onClick={() => void window.pi.openPath(file.filePath)}
-          >
-            <ExternalLink aria-hidden="true" className="size-3.5" />
-          </Button>
-        </Tooltip>
-      </div>
+      <ReviewFileHeader displayPath={file.displayPath} fullPath={file.filePath} collapsed={collapsed} onToggle={onToggle} added={file.added} removed={file.removed} />
 
       {collapsed ? null : file.patch ? (
         near ? (
-          <ReviewDiff file={file} />
+          <ReviewDiffBody patch={file.patch} displayPath={file.displayPath} scrollRootRef={scrollRootRef} />
         ) : (
           <div aria-hidden="true" style={{ height: placeholderHeight(file) }} />
         )
@@ -263,37 +200,5 @@ function ReviewFile({
         <p className="px-3 py-2 text-xs text-muted-foreground">{t('tool.noDiff')}</p>
       )}
     </section>
-  )
-}
-
-/** A file's diff, parsed and highlighted only once its row is on screen. */
-function ReviewDiff({ file }: { file: WrittenFile }) {
-  const lines = useMemo(() => (file.patch ? parseUnifiedDiff(file.patch) : []), [file.patch])
-  return (
-    <FileDiff
-      headerless
-      open
-      // `null`: the review scrolls the page, not each body — sticky headers and
-      // one scrollbar, instead of a nested scroll region per file.
-      maxHeightOverride={null}
-      bodyClassName="rounded-none"
-      containRows
-      file={file.displayPath}
-      lines={lines}
-      additions={file.added}
-      deletions={file.removed}
-      status="complete"
-    />
-  )
-}
-
-/** Mirrors the transcript's own +/- counts so every stats pair reads alike. */
-function ReviewStats({ added, removed, className }: { added: number; removed: number; className?: string }) {
-  if (!added && !removed) return null
-  return (
-    <span className={cn('flex shrink-0 items-center gap-1.5 font-mono text-xs tabular-nums', className)}>
-      {added ? <span className="text-emerald-600 dark:text-emerald-400">+{added}</span> : null}
-      {removed ? <span className="text-rose-600 dark:text-rose-400">−{removed}</span> : null}
-    </span>
   )
 }

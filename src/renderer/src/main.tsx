@@ -5,6 +5,8 @@ import App from './App'
 import { initFonts } from './lib/fonts'
 import './styles.css'
 
+document.documentElement.dataset.platform = window.pi.platform
+
 // Apply the persisted accent before first paint to avoid a flash.
 const accent = window.localStorage.getItem('pi-app:accent')
 if (accent) document.documentElement.dataset.accent = accent

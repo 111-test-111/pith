@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useTheme } from 'next-themes'
+import { WindowTitlebar } from './components/app/WindowTitlebar'
 import { ImagePreviewProvider } from './components/app/ImagePreview'
 import { Welcome } from './components/app/Welcome'
 import { Workspace } from './components/app/Workspace'
@@ -16,6 +18,12 @@ function applyAccent(accent: string): void {
 
 function AppInner() {
   const { t } = useI18n()
+  const { theme, resolvedTheme } = useTheme()
+  useEffect(() => {
+    // During renderer HMR the previous preload can stay alive until Electron
+    // restarts. Keep that transition usable while the native frame catches up.
+    if (theme === 'light' || theme === 'dark' || theme === 'system') window.pi.setWindowTheme?.(theme)
+  }, [theme, resolvedTheme])
   const store = useMemo(() => new PiStore(), [])
   const [booted, setBooted] = useState(false)
   const [hasCwd, setHasCwd] = useState(false)
@@ -69,23 +77,27 @@ function AppInner() {
 
   if (!booted) {
     return (
-      <div className="grid h-full place-items-center bg-background text-sm text-muted-foreground">
-        {t('app.starting')}
+      <div className="flex h-full flex-col bg-background text-sm text-muted-foreground">
+        <WindowTitlebar><span>{t('app.name')}</span></WindowTitlebar>
+        <div className="grid flex-1 place-items-center">{t('app.starting')}</div>
       </div>
     )
   }
 
   if (!hasCwd) {
     return (
-      <div className="h-full">
-        {initError ? (
-          <div className="grid h-full place-items-center">
-            <p className="max-w-sm rounded-xl border border-destructive/40 bg-destructive/10 p-4 text-center text-sm text-destructive">
-              {initError}
-            </p>
-          </div>
-        ) : null}
-        {!initError ? <Welcome onPickFolder={pickAndInit} /> : null}
+      <div className="flex h-full flex-col">
+        <WindowTitlebar><span className="text-sm text-muted-foreground">{t('app.name')}</span></WindowTitlebar>
+        <div className="min-h-0 flex-1">
+          {initError ? (
+            <div className="grid h-full place-items-center">
+              <p className="max-w-sm rounded-xl border border-destructive/40 bg-destructive/10 p-4 text-center text-sm text-destructive">
+                {initError}
+              </p>
+            </div>
+          ) : null}
+          {!initError ? <Welcome onPickFolder={pickAndInit} /> : null}
+        </div>
       </div>
     )
   }

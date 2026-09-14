@@ -13,6 +13,7 @@ import { ProvidersSection } from './ProvidersSection'
 import { ToolsSection } from './ToolsSection'
 import { ExtensionsSection } from './ExtensionsSection'
 import { SkillsSection } from './SkillsSection'
+import { WindowTitlebar } from '../WindowTitlebar'
 
 interface SectionProps {
   accent: string
@@ -111,12 +112,12 @@ export function SettingsPage({ open, onBack, ...sectionProps }: SettingsPageProp
           transition={reduce ? { duration: 0 } : { duration: 0.22, ease: EASE_OUT }}
           className="absolute inset-0 z-40 flex flex-col bg-background"
         >
-          <header className="flex h-14 shrink-0 items-center gap-1.5 border-b border-border px-3">
+          <WindowTitlebar className="gap-1.5 border-b border-border/50">
             <Button variant="ghost" size="icon" aria-label={t('settings.back')} onClick={onBack}>
               <ArrowLeft className="size-4" />
             </Button>
             <h1 className="px-1 text-sm font-semibold text-foreground">{t('settings.title')}</h1>
-          </header>
+          </WindowTitlebar>
 
           <Tabs
             value={section}

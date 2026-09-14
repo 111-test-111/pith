@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { AlertCircle, Copy, Loader2, Search } from 'lucide-react'
 import { MorphingModal } from '@/components/motion/morphing-modal'
 import { Button } from '@/components/motion/button'
@@ -82,7 +83,9 @@ export function CopyConfigDialog({
   )
   const shown = ordered.slice(0, SHOWN_LIMIT)
 
-  return (
+  // The editor owns a transformed, clipped surface. Keep it mounted, but place
+  // this beUI child at the viewport level so its backdrop covers the editor.
+  return createPortal(
     <MorphingModal viewId={open ? 'copy-config' : null} onClose={onClose} placement="center" className="max-w-md">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
@@ -167,6 +170,7 @@ export function CopyConfigDialog({
           {t('common.cancel')}
         </Button>
       </div>
-    </MorphingModal>
+    </MorphingModal>,
+    document.body
   )
 }
