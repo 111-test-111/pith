@@ -1,42 +1,37 @@
-import type { ComponentType } from 'react'
-import {
-  AntGroup,
-  Azure,
-  Baseten,
-  Bedrock,
-  Cerebras,
-  Claude,
-  Cloudflare,
-  DeepSeek,
-  Fireworks,
-  Gemini,
-  GithubCopilot,
-  Groq,
-  HuggingFace,
-  Kimi,
-  Minimax,
-  Mistral,
-  Moonshot,
-  Nvidia,
-  OpenAI,
-  OpenCode,
-  OpenRouter,
-  Qwen,
-  Together,
-  Vercel,
-  XAI,
-  XiaomiMiMo,
-  ZAI
-} from '@lobehub/icons'
-
-type LobeIcon = ComponentType<{ size?: string | number; className?: string }>
+import AntGroup from '@lobehub/icons-static-svg/icons/antgroup.svg?url'
+import Azure from '@lobehub/icons-static-svg/icons/azure.svg?url'
+import Baseten from '@lobehub/icons-static-svg/icons/baseten.svg?url'
+import Bedrock from '@lobehub/icons-static-svg/icons/bedrock.svg?url'
+import Cerebras from '@lobehub/icons-static-svg/icons/cerebras.svg?url'
+import Claude from '@lobehub/icons-static-svg/icons/claude.svg?url'
+import Cloudflare from '@lobehub/icons-static-svg/icons/cloudflare.svg?url'
+import DeepSeek from '@lobehub/icons-static-svg/icons/deepseek.svg?url'
+import Fireworks from '@lobehub/icons-static-svg/icons/fireworks.svg?url'
+import Gemini from '@lobehub/icons-static-svg/icons/gemini.svg?url'
+import GithubCopilot from '@lobehub/icons-static-svg/icons/githubcopilot.svg?url'
+import Groq from '@lobehub/icons-static-svg/icons/groq.svg?url'
+import HuggingFace from '@lobehub/icons-static-svg/icons/huggingface.svg?url'
+import Kimi from '@lobehub/icons-static-svg/icons/kimi.svg?url'
+import Minimax from '@lobehub/icons-static-svg/icons/minimax.svg?url'
+import Mistral from '@lobehub/icons-static-svg/icons/mistral.svg?url'
+import Moonshot from '@lobehub/icons-static-svg/icons/moonshot.svg?url'
+import Nvidia from '@lobehub/icons-static-svg/icons/nvidia.svg?url'
+import OpenAI from '@lobehub/icons-static-svg/icons/openai.svg?url'
+import OpenCode from '@lobehub/icons-static-svg/icons/opencode.svg?url'
+import OpenRouter from '@lobehub/icons-static-svg/icons/openrouter.svg?url'
+import Qwen from '@lobehub/icons-static-svg/icons/qwen.svg?url'
+import Together from '@lobehub/icons-static-svg/icons/together.svg?url'
+import Vercel from '@lobehub/icons-static-svg/icons/vercel.svg?url'
+import XAI from '@lobehub/icons-static-svg/icons/xai.svg?url'
+import XiaomiMiMo from '@lobehub/icons-static-svg/icons/xiaomimimo.svg?url'
+import ZAI from '@lobehub/icons-static-svg/icons/zai.svg?url'
 
 /**
  * pi-ai provider ids (see pi-ai/dist/providers/*.models.js) → brand icon from
- * @lobehub/icons. Anything missing falls back to an initial-letter tile, so
+ * the dependency-free static SVG pack. Anything missing falls back to an initial-letter tile, so
  * custom providers stay recognizable.
  */
-const PROVIDER_ICONS: Record<string, LobeIcon> = {
+const PROVIDER_ICONS: Record<string, string> = {
   anthropic: Claude,
   openai: OpenAI,
   'openai-codex': OpenAI,
@@ -88,8 +83,22 @@ export function ProviderIcon({
   name?: string
   size?: number
 }) {
-  const Icon = PROVIDER_ICONS[providerId]
-  if (Icon) return <Icon size={size} />
+  const source = PROVIDER_ICONS[providerId]
+  if (source) return (
+    <span
+      aria-hidden="true"
+      data-provider-icon={providerId}
+      className="inline-block shrink-0 bg-current align-middle"
+      style={{
+        width: size,
+        height: size,
+        maskImage: `url("${source}")`,
+        maskSize: 'contain',
+        maskRepeat: 'no-repeat',
+        maskPosition: 'center'
+      }}
+    />
+  )
   const letter = (name ?? providerId).trim().charAt(0).toUpperCase() || '?'
   return (
     <span

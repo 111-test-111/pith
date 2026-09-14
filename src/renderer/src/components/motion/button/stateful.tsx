@@ -1,6 +1,7 @@
 "use client";
 
-import { Check, Loader2, X } from "lucide-react";
+// local patch (pi-app): use the shared Hugeicons Stroke Rounded icon adapter.
+import { Check, Loader2, X } from "@/lib/icons";
 import {
   AnimatePresence,
   motion,

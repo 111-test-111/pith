@@ -9,6 +9,7 @@ The desktop client for **pi-agent**: the **Pi SDK** kernel ([@earendil-works/pi-
 | Shell | Electron 44 (ESM main/preload, contextIsolation, no nodeIntegration) |
 | Kernel | `@earendil-works/pi-coding-agent` 0.85 — `createAgentSession` + `ModelRuntime` (pi-ai) |
 | UI | beUI components (chat-app bundle: message, message-scroller, prompt-input, tool-result, file-diff, code-block, agent-activity, ai-sidebar, animated-sidebar, morphing-modal, theme-toggle, combobox, …) |
+| Icons | Hugeicons Stroke Rounded through a shared typed adapter; provider brands use bundled static Lobe SVGs |
 | Markdown | `react-markdown` + `remark-gfm` (tables, nested lists, task lists) — code fences render through beUI's `CodeBlock`, all other elements styled with beUI theme tokens |
 | Renderer build | Vite 7 + React 19 + Tailwind CSS 4 |
 | Theming | next-themes (light/dark/system) + 7 accent presets via CSS variables |
@@ -44,6 +45,7 @@ npm install          # deps + electron binary (postinstall)
 npm run dev          # electron-vite dev (HMR)
 npm run typecheck    # tsc for main + renderer
 npm run build        # production build to out/
+node scripts/check-icons.mjs # icon coverage, SVG props, animation, themes and brand assets
 node scripts/check-corners.mjs # native corner geometry, animations, themes and focus
 node scripts/check-window-chrome.mjs # isolated native window, themes, layouts and control hit targets (after build)
 node scripts/check-session-search.mjs # search correctness + 1,000-session benchmark (after build)

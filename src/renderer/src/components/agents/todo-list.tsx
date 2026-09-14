@@ -1,7 +1,8 @@
 "use client";
 // beui.dev/components/agents/chat-app
 
-import { ChevronDown, ListTodo } from "lucide-react";
+// local patch (pi-app): use the shared Hugeicons Stroke Rounded icon adapter.
+import { ChevronDown, ListTodo } from "@/lib/icons";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   type ReactNode,
@@ -20,6 +21,8 @@ import {
   SPRING_SWAP,
 } from "@/lib/ease";
 import { cn } from "@/lib/utils";
+// local patch (pi-app): animate Hugeicons artwork through the shared SVG adapter.
+import { AnimatedIcon, IconPaths } from "@/lib/animated-icons";
 
 export type TodoItemStatus =
   | "pending"
@@ -65,7 +68,13 @@ function TodoHeaderIcon({ complete }: { complete: boolean }) {
     >
       <AnimatePresence initial={false} mode="popLayout">
         {complete ? (
-          <motion.svg
+          <AnimatedIcon
+            icon="complete"
+            draw={{
+              initial: reduce ? { pathLength: 1 } : { pathLength: 0 },
+              animate: { pathLength: 1 },
+              transition: reduce ? { duration: 0 } : { duration: 0.24, ease: EASE_OUT },
+            }}
             key="complete"
             viewBox="0 0 24 24"
             initial={reduce ? { opacity: 1 } : { opacity: 0, scale: 0.72 }}
@@ -73,22 +82,7 @@ function TodoHeaderIcon({ complete }: { complete: boolean }) {
             exit={{ opacity: 0 }}
             transition={reduce ? { duration: 0 } : SPRING_SWAP}
             className="absolute size-5.5 overflow-visible text-emerald-500"
-          >
-            <circle cx="12" cy="12" r="9" fill="currentColor" />
-            <motion.path
-              d="M7.5 12.25 10.5 15.25 16.75 8.75"
-              fill="none"
-              stroke="white"
-              strokeWidth="2.25"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              initial={reduce ? { pathLength: 1 } : { pathLength: 0 }}
-              animate={{ pathLength: 1 }}
-              transition={
-                reduce ? { duration: 0 } : { duration: 0.24, ease: EASE_OUT }
-              }
-            />
-          </motion.svg>
+          />
         ) : (
           <motion.span
             key="todo"
@@ -143,6 +137,7 @@ function TodoStatusIcon({
         className={cn(status === "in-progress" && "opacity-20")}
       />
       <motion.circle
+        data-todo-progress
         cx="12"
         cy="12"
         r="9"
@@ -169,8 +164,9 @@ function TodoStatusIcon({
         }
         style={{ transformOrigin: "12px 12px" }}
       />
-      <motion.path
-        d="M7.5 12.25 10.5 15.25 16.75 8.75"
+      <IconPaths
+        icon="check"
+        transform="translate(3 3) scale(0.75)"
         fill="none"
         stroke="currentColor"
         strokeWidth="2"
@@ -183,8 +179,9 @@ function TodoStatusIcon({
         }}
         transition={reduce ? { duration: 0 } : { duration: 0.24, ease: EASE_OUT }}
       />
-      <motion.path
-        d="M8.5 8.5 15.5 15.5M15.5 8.5 8.5 15.5"
+      <IconPaths
+        icon="cancel"
+        transform="translate(3 3) scale(0.75)"
         fill="none"
         stroke="currentColor"
         strokeWidth="2"

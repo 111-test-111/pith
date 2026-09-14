@@ -12,7 +12,7 @@ import {
   Plus,
   RotateCcw,
   Trash2
-} from 'lucide-react'
+} from '@/lib/icons'
 import { Button } from '@/components/motion/button'
 import { Input } from '@/components/motion/input'
 import {

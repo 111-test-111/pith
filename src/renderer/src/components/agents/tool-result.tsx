@@ -1,6 +1,7 @@
 "use client";
 // beui.dev/components/agents/chat-app
 
+// local patch (pi-app): use the shared Hugeicons Stroke Rounded icon adapter.
 import {
   Ban,
   Braces,
@@ -13,7 +14,7 @@ import {
   RotateCcw,
   SquareTerminal,
   Wrench,
-} from "lucide-react";
+} from "@/lib/icons";
 import { motion, useReducedMotion } from "motion/react";
 import {
   type ReactNode,

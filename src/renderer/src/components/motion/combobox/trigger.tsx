@@ -1,6 +1,7 @@
 "use client";
 
-import { ChevronsUpDown, Search } from "lucide-react";
+// local patch (pi-app): use the shared Hugeicons Stroke Rounded icon adapter.
+import { ChevronsUpDown, Search } from "@/lib/icons";
 import type {
   InputHTMLAttributes,
   KeyboardEvent as ReactKeyboardEvent,

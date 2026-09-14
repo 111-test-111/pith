@@ -8,8 +8,8 @@ import {
   ScanSearch,
   SquareTerminal,
   X,
-  type LucideIcon
-} from 'lucide-react'
+  type IconComponent
+} from '@/lib/icons'
 import { Button } from '@/components/motion/button'
 import { SharedLayoutBg } from '@/components/motion/shared-layout-bg'
 import { Tabs, TabsList, TabsTrigger } from '@/components/motion/tabs'
@@ -35,7 +35,7 @@ interface SidebarTabSpec {
   id: SidebarTabKind
   labelKey: MessageKey
   shortcutKey: MessageKey
-  icon: LucideIcon
+  icon: IconComponent
   /** Content of an opened tab — each pane lands here as it is implemented. */
   render: (props: SidebarPaneProps) => ReactNode
 }

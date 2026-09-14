@@ -1,6 +1,7 @@
 "use client";
 // beui.dev/components/agents/chat-app
 
+// local patch (pi-app): use the shared Hugeicons Stroke Rounded icon adapter.
 import {
   Check,
   ChevronDown,
@@ -8,7 +9,7 @@ import {
   RotateCcw,
   ThumbsDown,
   ThumbsUp,
-} from "lucide-react";
+} from "@/lib/icons";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   type ReactNode,

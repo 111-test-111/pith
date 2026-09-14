@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Plus } from 'lucide-react'
+import { Plus } from '@/lib/icons'
 import { MorphingModal } from '@/components/motion/morphing-modal'
 import { Button } from '@/components/motion/button'
 import { Input } from '@/components/motion/input'

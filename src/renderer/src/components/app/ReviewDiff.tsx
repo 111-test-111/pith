@@ -1,5 +1,5 @@
 import { memo, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
-import { ChevronDown, ChevronsDownUp, ChevronsUpDown, ExternalLink } from 'lucide-react'
+import { ChevronDown, ChevronsDownUp, ChevronsUpDown, ExternalLink } from '@/lib/icons'
 import { FileDiff } from '@/components/agents/file-diff'
 import { Button } from '@/components/motion/button'
 import { Tooltip } from '@/components/motion/tooltip'

@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { Download, Info, Plus, RefreshCw, Trash2, X } from 'lucide-react'
+import { Download, Info, Plus, RefreshCw, Trash2, X } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
 import { Input } from '@/components/motion/input'
 import { MorphingModal } from '@/components/motion/morphing-modal'

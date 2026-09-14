@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { FileText, Image as ImageIcon, Search } from 'lucide-react'
+import { FileText, Image as ImageIcon, Search } from '@/lib/icons'
 import type { FileHitDTO } from '../../../../shared/types'
 import { formatBytes } from '@/lib/format'
 import { useI18n } from '@/i18n'

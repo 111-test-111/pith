@@ -1,6 +1,7 @@
 "use client";
 
-import { Check, ChevronDown } from "lucide-react";
+// local patch (pi-app): use the shared Hugeicons Stroke Rounded icon adapter.
+import { Check, ChevronDown } from "@/lib/icons";
 import {
   motion,
   type Transition,

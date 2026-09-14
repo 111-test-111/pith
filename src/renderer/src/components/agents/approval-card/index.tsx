@@ -2,6 +2,7 @@
 // local patch (pi-app): approval actions and status badges use semantic radii.
 // beui.dev/components/agents/chat-app
 
+// local patch (pi-app): use the shared Hugeicons Stroke Rounded icon adapter.
 import {
   ArrowLeft,
   ArrowRight,
@@ -10,7 +11,7 @@ import {
   LoaderCircle,
   MessageSquareText,
   X,
-} from "lucide-react";
+} from "@/lib/icons";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AgentDisclosure } from "@/components/agents/agent-disclosure";

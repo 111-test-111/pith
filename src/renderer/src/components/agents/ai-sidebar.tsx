@@ -1,6 +1,7 @@
 "use client";
 // beui.dev/components/agents/chat-app
 
+// local patch (pi-app): use the shared Hugeicons Stroke Rounded icon adapter.
 import {
   ArrowDown,
   ArrowUp,
@@ -9,11 +10,11 @@ import {
   Folder,
   FolderInput,
   FolderOpen,
-  type LucideIcon,
+  type IconComponent,
   MoreHorizontal,
   Pencil,
   Undo2,
-} from "lucide-react";
+} from "@/lib/icons";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   type DragEvent,
@@ -326,7 +327,7 @@ function ResourceMenuAction({
   onSelect,
   children,
 }: {
-  icon: LucideIcon;
+  icon: IconComponent;
   onSelect: () => void;
   children: ReactNode;
 }) {

@@ -1,5 +1,8 @@
 "use client";
 
+// local patch (pi-app): animate Hugeicons artwork through the shared SVG adapter.
+import { AnimatedIcon } from "@/lib/animated-icons";
+
 import {
   AnimatePresence,
   animate,
@@ -230,25 +233,20 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
         )}
 
         {success ? (
-          <motion.svg
+          <AnimatedIcon
+            icon="check"
+            draw={{
+              initial: reduce ? { pathLength: 1 } : { pathLength: 0 },
+              animate: { pathLength: 1 },
+              transition: { duration: 0.35, ease: "easeOut" },
+            }}
             viewBox="0 0 24 24"
             fill="none"
             className={cn(
               "absolute right-3.5 top-1/2 h-5 w-5 -translate-y-1/2 text-(--color-success)",
               classNames?.successIcon,
             )}
-          >
-            <motion.path
-              d="M5 12.5l4.5 4.5L19 7.5"
-              stroke="currentColor"
-              strokeWidth={2.5}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              initial={reduce ? { pathLength: 1 } : { pathLength: 0 }}
-              animate={{ pathLength: 1 }}
-              transition={{ duration: 0.35, ease: "easeOut" }}
-            />
-          </motion.svg>
+          />
         ) : rightSlot ? (
           <span
             className={cn(

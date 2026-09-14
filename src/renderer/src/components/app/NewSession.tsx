@@ -1,4 +1,4 @@
-import { ArrowUpRight, Compass, Folder, GitPullRequest, Lightbulb, Shapes, WandSparkles } from 'lucide-react'
+import { ArrowUpRight, Compass, Folder, GitPullRequest, Lightbulb, Shapes, WandSparkles } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
 import { useI18n } from '@/i18n'
 import { PithIcon } from './PithIcon'

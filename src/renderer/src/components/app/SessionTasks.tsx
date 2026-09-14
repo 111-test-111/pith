@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useId, useRef, useState } from 'react'
-import { ChevronDown, ListTodo, Terminal, X } from 'lucide-react'
+import { ChevronDown, ListTodo, Terminal, X } from '@/lib/icons'
 import { AgentDisclosure } from '@/components/agents/agent-disclosure'
 import { TodoList } from '@/components/agents/todo-list'
 import { Button } from '@/components/motion/button'

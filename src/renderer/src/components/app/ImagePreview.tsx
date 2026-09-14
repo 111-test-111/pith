@@ -8,7 +8,7 @@ import {
   type ReactNode
 } from 'react'
 import { motion, useReducedMotion } from 'motion/react'
-import { ExternalLink, ZoomIn, ZoomOut } from 'lucide-react'
+import { ExternalLink, ZoomIn, ZoomOut } from '@/lib/icons'
 import {
   CenterMorphModal,
   CenterMorphModalContent

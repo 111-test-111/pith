@@ -1,4 +1,4 @@
-import { Monitor, Moon, Sun } from 'lucide-react'
+import { Monitor, Moon, Sun } from '@/lib/icons'
 import { useTheme } from 'next-themes'
 import { ActionSwapIcon } from '@/components/motion/action-swap'
 import { Button } from '@/components/motion/button'

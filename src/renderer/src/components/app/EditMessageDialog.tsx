@@ -4,7 +4,7 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent
 } from 'react'
-import { FileText, ImagePlus, Paperclip, X } from 'lucide-react'
+import { FileText, ImagePlus, Paperclip, X } from '@/lib/icons'
 import { MorphingModal } from '@/components/motion/morphing-modal'
 import { Button } from '@/components/motion/button'
 import { Tooltip } from '@/components/motion/tooltip'

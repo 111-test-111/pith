@@ -1,5 +1,5 @@
 import { memo, useMemo, useSyncExternalStore } from 'react'
-import { Link2, MessageCirclePlus } from 'lucide-react'
+import { Link2, MessageCirclePlus } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
 import { Loader } from '@/components/motion/loader'
 import { MessageGroup, Message, MessageBubble, MessageBubbleContent } from '@/components/agents/message'

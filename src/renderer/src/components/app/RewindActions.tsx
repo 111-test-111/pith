@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
-import { AlertTriangle, ChevronDown, Info, RotateCcw } from 'lucide-react'
+import { AlertTriangle, ChevronDown, Info, RotateCcw } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
 import { MorphPopover, MorphPopoverContent, MorphPopoverTrigger } from '@/components/motion/popover-morph'
 import { useI18n } from '@/i18n'

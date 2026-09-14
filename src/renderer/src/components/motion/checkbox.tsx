@@ -5,8 +5,8 @@ import { useId } from "react";
 import { EASE_OUT, SPRING_PRESS } from "@/lib/ease";
 import { cn } from "@/lib/utils";
 
-const CHECK_PATH = "M5 13l4 4L19 7";
-const INDETERMINATE_PATH = "M6 12h12";
+// local patch (pi-app): animate Hugeicons artwork through the shared SVG adapter.
+import { AnimatedIcon } from "@/lib/animated-icons";
 
 export interface CheckboxProps {
   checked: boolean;
@@ -36,7 +36,6 @@ export function Checkbox({
   const id = idProp ?? autoId;
   const reduce = useReducedMotion();
   const showMark = checked || indeterminate;
-  const path = indeterminate ? INDETERMINATE_PATH : CHECK_PATH;
 
   return (
     <label
@@ -72,14 +71,15 @@ export function Checkbox({
       >
         <AnimatePresence initial={false}>
           {showMark ? (
-            <motion.svg
+            <AnimatedIcon
+              icon={indeterminate ? "minus" : "check"}
               key={indeterminate ? "indeterminate" : "checked"}
               width="12"
               height="12"
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
-              strokeWidth={3}
+              strokeWidth={2}
               strokeLinecap="round"
               strokeLinejoin="round"
               initial={reduce ? { opacity: 1 } : { opacity: 0, scale: 0.5 }}
@@ -92,24 +92,15 @@ export function Checkbox({
               transition={
                 reduce ? { duration: 0 } : { duration: 0.16, ease: EASE_OUT }
               }
+              draw={{
+                initial: reduce ? { pathLength: 1 } : { pathLength: 0 },
+                animate: { pathLength: 1 },
+                transition: reduce ? { duration: 0 } : { duration: indeterminate ? 0.2 : 0.3, ease: EASE_OUT, delay: 0.04 },
+              }}
               aria-hidden
             >
               <title>{indeterminate ? "Partially selected" : "Selected"}</title>
-              <motion.path
-                d={path}
-                initial={reduce ? { pathLength: 1 } : { pathLength: 0 }}
-                animate={{ pathLength: 1 }}
-                transition={
-                  reduce
-                    ? { duration: 0 }
-                    : {
-                        duration: indeterminate ? 0.2 : 0.3,
-                        ease: EASE_OUT,
-                        delay: 0.04,
-                      }
-                }
-              />
-            </motion.svg>
+            </AnimatedIcon>
           ) : null}
         </AnimatePresence>
       </motion.button>

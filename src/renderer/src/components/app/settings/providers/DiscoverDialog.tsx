@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { AlertCircle, Download, Loader2 } from 'lucide-react'
+import { AlertCircle, Download, Loader2 } from '@/lib/icons'
 import { MorphingModal } from '@/components/motion/morphing-modal'
 import { Button } from '@/components/motion/button'
 import { Checkbox } from '@/components/motion/checkbox'

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
-import { AlertCircle, ChevronRight, Globe, KeyRound, Loader2, LogOut, Plus, RefreshCw } from 'lucide-react'
+import { AlertCircle, ChevronRight, Globe, KeyRound, Loader2, LogOut, Plus, RefreshCw } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
 import {
   Select,

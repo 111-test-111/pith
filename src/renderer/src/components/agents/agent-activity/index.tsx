@@ -1,7 +1,8 @@
 "use client";
 // beui.dev/components/agents/chat-app
 
-import { ChevronDown } from "lucide-react";
+// local patch (pi-app): use the shared Hugeicons Stroke Rounded icon adapter.
+import { ChevronDown } from "@/lib/icons";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   type ReactNode,

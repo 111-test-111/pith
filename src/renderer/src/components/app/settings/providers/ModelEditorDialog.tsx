@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { AlertCircle, CheckCircle2, Copy, ExternalLink, Loader2, PlugZap, Sparkles } from 'lucide-react'
+import { AlertCircle, CheckCircle2, Copy, ExternalLink, Loader2, PlugZap, Sparkles } from '@/lib/icons'
 import { MorphingModal } from '@/components/motion/morphing-modal'
 import { Button } from '@/components/motion/button'
 import { Checkbox } from '@/components/motion/checkbox'

@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react'
-import { Check, Copy } from 'lucide-react'
+import { Check, Copy } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
 import { Tooltip } from '@/components/motion/tooltip'
 import { cn } from '@/lib/utils'

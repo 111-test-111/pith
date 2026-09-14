@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type RefObject } from 'react'
-import { AlertTriangle, Check, ChevronRight, RotateCcw } from 'lucide-react'
+import { AlertTriangle, Check, ChevronRight, RotateCcw } from '@/lib/icons'
 import { CenterMorphModal, CenterMorphModalContent } from '@/components/motion/center-morph-modal'
 import { Button } from '@/components/motion/button'
 import { AgentDisclosure } from '@/components/agents/agent-disclosure'

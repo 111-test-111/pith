@@ -1,7 +1,8 @@
 "use client";
 // local patch (pi-app): citation counts use item geometry; source avatars stay round.
 
-import { BookOpenText, ChevronDown, ExternalLink, Globe2 } from "lucide-react";
+// local patch (pi-app): use the shared Hugeicons Stroke Rounded icon adapter.
+import { BookOpenText, ChevronDown, ExternalLink, Globe2 } from "@/lib/icons";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   type ReactNode,

@@ -1,7 +1,7 @@
 import { BashTasksProvider } from '@/lib/bash-tasks'
 import { SessionTasks } from './SessionTasks'
 import { memo, useMemo, useSyncExternalStore } from 'react'
-import { AlertTriangle, RotateCcw, X } from 'lucide-react'
+import { AlertTriangle, RotateCcw, X } from '@/lib/icons'
 import { MessageGroup } from '@/components/agents/message'
 import { MessageScroller } from '@/components/agents/message-scroller'
 import type { PreviewRailItem } from '@/components/motion/preview-rail'

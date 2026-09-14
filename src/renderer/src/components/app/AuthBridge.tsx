@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { CheckCircle2, ExternalLink, Loader2, XCircle } from 'lucide-react'
+import { CheckCircle2, ExternalLink, Loader2, XCircle } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
 import { Input } from '@/components/motion/input'
 import type { AuthNotifyDTO, AuthPromptDTO } from '../../../../shared/types'

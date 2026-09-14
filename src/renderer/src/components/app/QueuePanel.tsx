@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'motion/react'
-import { Clock, FastForward, Image as ImageIcon, Paperclip, Undo2, X, Zap } from 'lucide-react'
+import { Clock, FastForward, Image as ImageIcon, Paperclip, Undo2, X, Zap } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
 import { Tooltip } from '@/components/motion/tooltip'
 import { EASE_OUT } from '@/lib/ease'

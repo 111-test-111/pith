@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Brain, ChevronLeft, ChevronRight, Loader2 } from 'lucide-react'
+import { Brain, ChevronLeft, ChevronRight, Loader2 } from '@/lib/icons'
 import {
   Select,
   SelectContent,

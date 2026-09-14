@@ -2,7 +2,8 @@
 // local patch (pi-app): the expand action shares the control radius.
 // beui.dev/components/agents/chat-app
 
-import { ChevronDown } from "lucide-react";
+// local patch (pi-app): use the shared Hugeicons Stroke Rounded icon adapter.
+import { ChevronDown } from "@/lib/icons";
 import {
   type HTMLMotionProps,
   motion,

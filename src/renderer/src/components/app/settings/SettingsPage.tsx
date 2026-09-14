@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
-import { ArrowLeft, GraduationCap, KeyRound, Palette, Puzzle, ScrollText, Settings2, Wrench } from 'lucide-react'
+import { ArrowLeft, GraduationCap, KeyRound, Palette, Puzzle, ScrollText, Settings2, Wrench } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/motion/tabs'
 import { EASE_OUT } from '@/lib/ease'

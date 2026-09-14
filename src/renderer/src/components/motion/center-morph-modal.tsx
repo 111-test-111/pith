@@ -1,7 +1,8 @@
 "use client";
 // beui.dev/components/motion/center-morph-modal
 
-import { X } from "lucide-react";
+// local patch (pi-app): use the shared Hugeicons Stroke Rounded icon adapter.
+import { X } from "@/lib/icons";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   cloneElement,

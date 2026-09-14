@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState, useSyncExternalStore, type RefObject } from 'react'
-import { ChevronLeft, ChevronRight, Diff } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Diff } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
 import { Tooltip } from '@/components/motion/tooltip'
 import { useNearViewport } from '@/lib/hooks/use-near-viewport'

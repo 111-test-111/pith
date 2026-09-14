@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { FolderOpen, Loader2 } from 'lucide-react'
+import { FolderOpen, Loader2 } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
 import { ThemeToggle } from '@/components/motion/theme-toggle'
 import { useI18n } from '@/i18n'

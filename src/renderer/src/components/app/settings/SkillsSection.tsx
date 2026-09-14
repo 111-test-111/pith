@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { FileText, FolderOpen, RefreshCw } from 'lucide-react'
+import { FileText, FolderOpen, RefreshCw } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
 import { Input } from '@/components/motion/input'
 import { Switch } from '@/components/motion/switch'

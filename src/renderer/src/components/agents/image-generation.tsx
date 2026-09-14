@@ -2,7 +2,8 @@
 // local patch (pi-app): resolution badges and retry actions use semantic radii.
 // beui.dev/components/agents/chat-app
 
-import { Check, CircleAlert, RotateCcw } from "lucide-react";
+// local patch (pi-app): use the shared Hugeicons Stroke Rounded icon adapter.
+import { Check, CircleAlert, RotateCcw } from "@/lib/icons";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { CSSProperties, ReactNode } from "react";
 import { useEffect, useRef } from "react";

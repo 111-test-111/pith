@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
-import { ArrowDownWideNarrow, ArrowUpNarrowWide, ChevronLeft, ChevronRight, Folder, Info, LoaderCircle, MessageSquare, Search, SearchX, X } from 'lucide-react'
+import { ArrowDownWideNarrow, ArrowUpNarrowWide, ChevronLeft, ChevronRight, Folder, Info, LoaderCircle, MessageSquare, Search, SearchX, X } from '@/lib/icons'
 import { Input } from '@/components/motion/input'
 import { Button } from '@/components/motion/button'
 import { AgentDisclosure } from '@/components/agents/agent-disclosure'

@@ -1,4 +1,4 @@
-import { Compass, FileDiff, SquareTerminal, type LucideIcon } from 'lucide-react'
+import { Compass, FileDiff, SquareTerminal, type IconComponent } from '@/lib/icons'
 import type { MessageKey } from '@/i18n/locales/en'
 
 /**
@@ -18,7 +18,7 @@ export interface ToolCategory {
   id: ToolCategoryId
   /** i18n key for the collapsed group's label ("Exploration"). */
   labelKey: MessageKey
-  icon: LucideIcon
+  icon: IconComponent
   /** Exact tool names as the agent calls them (SDK built-ins + extensions). */
   tools: readonly string[]
 }

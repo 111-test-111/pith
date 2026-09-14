@@ -1,6 +1,7 @@
 "use client";
 
-import { ChevronRight } from "lucide-react";
+// local patch (pi-app): use the shared Hugeicons Stroke Rounded icon adapter.
+import { ChevronRight } from "@/lib/icons";
 import {
   AnimatePresence,
   type HTMLMotionProps,

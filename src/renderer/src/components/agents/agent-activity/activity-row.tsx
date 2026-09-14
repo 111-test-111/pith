@@ -1,3 +1,4 @@
+// local patch (pi-app): use the shared Hugeicons Stroke Rounded icon adapter.
 import {
   Check,
   Circle,
@@ -10,7 +11,7 @@ import {
   Sparkles,
   SquareTerminal,
   Wrench,
-} from "lucide-react";
+} from "@/lib/icons";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { EASE_OUT, SPRING_LAYOUT } from "@/lib/ease";
 import { cn } from "@/lib/utils";

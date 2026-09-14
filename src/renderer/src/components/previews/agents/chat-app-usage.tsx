@@ -1,5 +1,6 @@
 "use client";
 
+// local patch (pi-app): use the shared Hugeicons Stroke Rounded icon adapter.
 import {
   Bot,
   Clock3,
@@ -10,7 +11,7 @@ import {
   Search,
   User,
   WandSparkles,
-} from "lucide-react";
+} from "@/lib/icons";
 import { useReducedMotion } from "motion/react";
 import {
   type ComponentProps,

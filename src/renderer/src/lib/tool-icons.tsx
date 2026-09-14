@@ -14,8 +14,8 @@ import {
   Terminal,
   TextSearch,
   Wrench,
-  type LucideIcon
-} from 'lucide-react'
+  type IconComponent
+} from '@/lib/icons'
 import { cn } from '@/lib/utils'
 
 /**
@@ -30,7 +30,7 @@ import { cn } from '@/lib/utils'
  * gets an explicit entry here. MCP namespaces are the one exception, handled by
  * prefix below.
  */
-const TOOL_ICONS: Record<string, LucideIcon> = {
+const TOOL_ICONS: Record<string, IconComponent> = {
   // Built-in file + shell tools. The shell rows use the plain `Terminal` glyph;
   // the terminal *category* group keeps the boxed `SquareTerminal` (see
   // lib/tool-categories.ts), so a folded run and its rows are distinguishable.
@@ -69,7 +69,7 @@ const MCP_NAMESPACE_PREFIX = 'mcp__'
  * unmapped tool gets the generic wrench, which is what the SDK itself uses for
  * custom tools.
  */
-export function toolIconComponent(name: string): LucideIcon {
+export function toolIconComponent(name: string): IconComponent {
   if (Object.hasOwn(TOOL_ICONS, name)) return TOOL_ICONS[name]
   if (name.startsWith(MCP_NAMESPACE_PREFIX)) return Plug
   return Wrench

@@ -16,7 +16,7 @@ import {
   FolderInput,
   FolderOpen,
   LoaderCircle,
-  type LucideIcon,
+  type IconComponent,
   MessageSquareDashed,
   MessageSquarePlus,
   PanelLeft,
@@ -26,7 +26,7 @@ import {
   PinOff,
   Settings as SettingsIcon,
   Trash2
-} from 'lucide-react'
+} from '@/lib/icons'
 import { ChatApp } from '@/components/agents/chat-app'
 import { AISidebar, type SidebarResource } from '@/components/agents/ai-sidebar'
 import {
@@ -91,7 +91,7 @@ import {
 import { SideChatStore } from '@/state/side-chat-store'
 import { TerminalStore } from '@/state/terminal-store'
 import { AuthBridge } from './AuthBridge'
-import { AlertTriangle, RotateCcw } from 'lucide-react'
+import { AlertTriangle, RotateCcw } from '@/lib/icons'
 import { RewindDialog } from './RewindDialog'
 import { ConfirmDialog } from './ConfirmDialog'
 import type { AuthNotifyDTO, AuthPromptDTO } from '../../../../shared/types'
@@ -119,7 +119,7 @@ const moreRowId = (cwd: string) => `more:${cwd}`
  * alike; the ghost variant's muted text is overridden by `text-foreground`
  * (`cn` resolves the conflict in the caller's favor). */
 function SidebarRowMenuAction({ icon: Icon, label, tone = 'default', onSelect }: {
-  icon: LucideIcon
+  icon: IconComponent
   label: string
   tone?: 'default' | 'destructive'
   onSelect: () => void

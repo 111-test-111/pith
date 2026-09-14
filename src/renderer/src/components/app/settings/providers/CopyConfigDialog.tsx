@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { AlertCircle, Copy, Loader2, Search } from 'lucide-react'
+import { AlertCircle, Copy, Loader2, Search } from '@/lib/icons'
 import { MorphingModal } from '@/components/motion/morphing-modal'
 import { Button } from '@/components/motion/button'
 import { Input } from '@/components/motion/input'

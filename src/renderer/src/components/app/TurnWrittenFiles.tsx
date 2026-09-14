@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useId, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
-import { ChevronDown, Diff, Undo2 } from 'lucide-react'
+import { ChevronDown, Diff, Undo2 } from '@/lib/icons'
 import { getCachedAgentCodeTokens, prefetchAgentCodeTokens } from '@/components/agents/agent-code'
 import { FileDiff, type FileDiffLine } from '@/components/agents/file-diff'
 import { Button } from '@/components/motion/button'

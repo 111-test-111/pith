@@ -1,6 +1,6 @@
 import { BashTaskRow } from './BashTaskView'
 import { Fragment, memo, useMemo, useState, type ReactNode } from 'react'
-import { Brain, FileText, GitFork, Pencil, RotateCcw } from 'lucide-react'
+import { Brain, FileText, GitFork, Pencil, RotateCcw } from '@/lib/icons'
 import { AgentActivity } from '@/components/agents/agent-activity'
 import { AgentDisclosure } from '@/components/agents/agent-disclosure'
 import {

@@ -7,7 +7,7 @@ import {
   type ClipboardEvent as ReactClipboardEvent,
   type DragEvent as ReactDragEvent
 } from 'react'
-import { FileText, ImagePlus, Loader2, Paperclip, X } from 'lucide-react'
+import { FileText, ImagePlus, Loader2, Paperclip, X } from '@/lib/icons'
 import { PromptInput } from '@/components/agents/prompt-input'
 import { basename, formatBytes } from '@/lib/format'
 import {

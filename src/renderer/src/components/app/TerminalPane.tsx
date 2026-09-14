@@ -1,5 +1,5 @@
 import { useEffect, useRef, useSyncExternalStore } from 'react'
-import { Plus, X } from 'lucide-react'
+import { Plus, X } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
 import { Tabs, TabsList, TabsTrigger } from '@/components/motion/tabs'
 import { Tooltip } from '@/components/motion/tooltip'

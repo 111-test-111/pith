@@ -1,6 +1,7 @@
 "use client";
 
-import { Maximize2, Minimize2 } from "lucide-react";
+// local patch (pi-app): use the shared Hugeicons Stroke Rounded icon adapter.
+import { Maximize2, Minimize2 } from "@/lib/icons";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ChatAppExample } from "@/components/previews/agents/chat-app-usage";
 import { ActionSwapIcon } from "@/components/motion/action-swap";
