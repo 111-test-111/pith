@@ -1,7 +1,7 @@
 "use client";
 // beui.dev/components/agents/chat-app
 
-// local patch (pi-app): use the shared Hugeicons Stroke Rounded icon adapter.
+// local patch (pi-app): use the shared Lucide icon adapter.
 import { Check, Copy, FileCode2, LoaderCircle } from "@/lib/icons";
 import { motion, useReducedMotion } from "motion/react";
 import {

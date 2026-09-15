@@ -889,6 +889,7 @@ const en = {
   "files.copy": "Copy source",
   "files.copied": "Copied",
   "files.actionError": "Could not complete the action. Try again.",
+  "files.savedCopy": "Saved a copy of {name}",
   "files.chooseFile": "Choose a file from the tree or open a file link in the conversation.",
   "files.emptyFile": "This file is empty.",
   "files.noChanges": "No changes from HEAD.",

@@ -1,7 +1,7 @@
 "use client";
 // beui.dev/components/motion/theme-toggle
 
-// local patch (pi-app): use the shared Hugeicons Stroke Rounded icon adapter.
+// local patch (pi-app): use the shared Lucide icon adapter.
 import { Moon, Sun } from "@/lib/icons";
 import { useTheme } from "next-themes";
 import { useReducedMotion } from "motion/react";

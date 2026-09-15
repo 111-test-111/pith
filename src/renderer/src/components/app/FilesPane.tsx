@@ -17,6 +17,7 @@ import { FileDiffPreview } from './FileDiffPreview'
 import { FileFont } from './FileFont'
 import { FileNotebook } from './FileNotebook'
 import { FileSubtitle } from './FileSubtitle'
+import { useToast } from './ToastProvider'
 import { FileMedia } from './FileMedia'
 import { FilePdf } from './FilePdf'
 import { FileTable } from './FileTable'
@@ -119,7 +120,21 @@ export function FilesPane({ files, store, filePath }: { files: FileBrowserStore;
   const [matchIndex, setMatchIndex] = useState(0)
   const [findOptions, setFindOptions] = useState<FileSearchOptions>({ matchCase: false, wholeWord: false, regex: false })
   const [copied, setCopied] = useState(false)
-  const [actionError, setActionError] = useState(false)
+  const toast = useToast()
+  // One action error at a time: retrying replaces the previous failure instead
+  // of stacking stale ones, which is what the inline notice used to do by
+  // clearing on every new attempt.
+  const actionError = useRef<string | null>(null)
+  const clearActionError = () => {
+    if (actionError.current) {
+      toast.dismiss(actionError.current)
+      actionError.current = null
+    }
+  }
+  const reportActionError = () => {
+    clearActionError()
+    actionError.current = toast.error({ title: t('files.actionError') })
+  }
   const findRef = useRef<HTMLInputElement>(null)
   const findButton = useRef<HTMLDivElement>(null)
   const body = useRef<HTMLDivElement>(null), tree = useRef<HTMLDivElement>(null)
@@ -148,7 +163,7 @@ export function FilesPane({ files, store, filePath }: { files: FileBrowserStore;
     wasStreaming.current = shell.isStreaming
   }, [shell.isStreaming, files, root])
   useEffect(() => {
-    setActionError(false); setMatchIndex(0)
+    setMatchIndex(0)
     // Only a text-family path is read; the main process enforces the same rule.
     if (!tab || !readsAsText(kind)) { setDocument(null); return }
     let cancelled = false
@@ -173,18 +188,26 @@ export function FilesPane({ files, store, filePath }: { files: FileBrowserStore;
   }
   const closeFind = () => { setFind(false); setQuery(''); findButton.current?.querySelector('button')?.focus({ preventScroll: true }) }
   const copy = async () => {
-    try { await navigator.clipboard.writeText(ready?.text ?? ''); setCopied(true); setActionError(false) } catch { setActionError(true) }
+    clearActionError()
+    try { await navigator.clipboard.writeText(ready?.text ?? ''); setCopied(true) } catch { reportActionError() }
   }
   // openPath resolves with the OS error message ('' on success); the other two
   // report only whether the action failed, never prose from the main process.
   const openDefault = async () => {
     if (!tab) return
-    try { setActionError(!!(await window.pi.openPath(tab.path))) } catch { setActionError(true) }
+    clearActionError()
+    try { if (await window.pi.openPath(tab.path)) reportActionError() } catch { reportActionError() }
   }
   const showInFolder = () => { if (tab) void window.pi.showInFolder(tab.path) }
   const saveCopy = async () => {
     if (!tab) return
-    try { setActionError((await window.pi.saveFileCopy(tab.path)).status === 'error') } catch { setActionError(true) }
+    clearActionError()
+    try {
+      const { status } = await window.pi.saveFileCopy(tab.path)
+      // A cancelled dialog is a normal outcome, not a failure to report.
+      if (status === 'error') reportActionError()
+      else if (status === 'ok') toast.success({ title: t('files.savedCopy', { name: basename(tab.path) }) })
+    } catch { reportActionError() }
   }
   const view = spreadsheet ? 'preview' : tab?.view === 'diff' && !ready?.gitRoot ? 'source' : tab?.view ?? 'source'
   // The relative path normally comes from the document; a media tab has none.
@@ -230,7 +253,6 @@ export function FilesPane({ files, store, filePath }: { files: FileBrowserStore;
             </div>
           </div>}
           {!inlineOnly && !spreadsheet && find ? <FileFindBar inputRef={findRef} query={query} options={findOptions} result={searchResult} current={selectedMatch} searching={searching} onQuery={value => { setQuery(value); setMatchIndex(0) }} onOptions={value => { setFindOptions(value); setMatchIndex(0) }} onMove={moveMatch} onClose={closeFind} /> : null}
-          {actionError ? <p role="status" className="px-3 py-2 text-xs text-destructive">{t('files.actionError')}</p> : null}
           {mediaKind ? <FileMedia tab={tab} kind={mediaKind} refresh={refresh} /> : kind === 'pdf' ? <FilePdf key={tab.path} tab={tab} onOpenFile={target => files.open(tab.cwd, { path: target })} /> : kind === 'font' ? <FileFont key={`${tab.path}:${refresh}`} tab={tab} /> : kind === 'unplayable' ? <Notice>{t('files.media.unsupported')}</Notice> : table && view === 'preview' ? <FileTable key={tab.path} tab={tab} format={table} store={files} generation={refresh} /> : ready ? <FileContent key={tab.path} tab={tab} kind={kind} document={ready} store={files} search={find ? { result: searchResult, current: selectedMatch } : undefined} refresh={refresh} wrap={state.wrapLines} /> : <Notice loading>{t('files.loading')}</Notice>}
           {/* A table's preview is not the truncated source text, so the source
               notice belongs to the source view only. */}

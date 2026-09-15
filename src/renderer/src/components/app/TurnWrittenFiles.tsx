@@ -4,6 +4,7 @@ import { getCachedAgentCodeTokens, prefetchAgentCodeTokens } from '@/components/
 import { FileDiff, type FileDiffLine } from '@/components/agents/file-diff'
 import { Button } from '@/components/motion/button'
 import { MorphPopover, MorphPopoverContent } from '@/components/motion/popover-morph'
+import { NumberTicker } from '@/components/motion/number-ticker'
 import { parseUnifiedDiff } from '@/lib/diff'
 import { useHoverGesture } from '@/lib/hooks/use-hover-gesture'
 import { sumWrittenFileStats, type WrittenFile } from '@/lib/turn-written-files'
@@ -42,12 +43,32 @@ function previewData(file: WrittenFile): PreviewData {
   return data
 }
 
+/**
+ * A diff stat whose digits roll: file edits stream in one call at a time, so
+ * the turn's +N/−N counts grow while the user watches them.
+ *
+ * `startOnView` stays on — a turn restored from a snapshot or scrolled back
+ * into view reveals its counts instead of appearing pre-settled — and the
+ * stagger is shortened so a live update never reads as lag.
+ */
+function LineStat({ value, sign }: { value: number; sign: '+' | '−' }) {
+  return <NumberTicker value={value} prefix={sign} duration={0.5} stagger={0.02} />
+}
+
 function LineStats({ added, removed, className }: { added: number; removed: number; className?: string }) {
   if (!added && !removed) return null
   return (
     <span className={cn('flex shrink-0 items-center gap-1.5 font-mono text-sm tabular-nums', className)}>
-      {added ? <span className="text-emerald-600 dark:text-emerald-400">+{added}</span> : null}
-      {removed ? <span className="text-rose-600 dark:text-rose-400">−{removed}</span> : null}
+      {added ? (
+        <span className="text-emerald-600 dark:text-emerald-400">
+          <LineStat value={added} sign="+" />
+        </span>
+      ) : null}
+      {removed ? (
+        <span className="text-rose-600 dark:text-rose-400">
+          <LineStat value={removed} sign="−" />
+        </span>
+      ) : null}
     </span>
   )
 }

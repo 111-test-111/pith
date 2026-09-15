@@ -26,6 +26,7 @@ import {createRoot} from 'react-dom/client';
 import {ThemeProvider} from 'next-themes';
 import {Workspace} from '/src/components/app/Workspace.tsx';
 import {ImagePreviewProvider} from '/src/components/app/ImagePreview.tsx';
+import {ToastProvider} from '/src/components/app/ToastProvider.tsx';
 import {I18nProvider} from '/src/i18n/index.tsx';
 import {PiStore} from '/src/state/pi-store.ts';
 import {TerminalStore} from '/src/state/terminal-store.ts';
@@ -41,7 +42,7 @@ window.terminal=id=>tc.sessions.get(id??tc.getSnapshot().active)?.runtime?.termi
 window.buffer=id=>{const b=terminal(id).buffer.active;return Array.from({length:b.length},(_,i)=>(b.getLine(i).isWrapped?'':'\\n')+b.getLine(i).translateToString(true)).join('')};
 window.traffic={};window.pi.onTerminalEvent(e=>{if(e.type==='data'){const s=traffic[e.id]??={chars:0,batches:0,tail:''};s.chars+=e.data.length;s.batches++;s.tail=(s.tail+e.data).slice(-4096)}});
 window.root=createRoot(document.getElementById('root'));
-root.render(React.createElement(React.StrictMode,null,React.createElement(ThemeProvider,{attribute:'class',defaultTheme:'dark'},React.createElement(I18nProvider,null,React.createElement(ImagePreviewProvider,null,React.createElement(Workspace,{store,accent:'indigo',onAccentChange:()=>{}}))))));
+root.render(React.createElement(React.StrictMode,null,React.createElement(ThemeProvider,{attribute:'class',defaultTheme:'dark'},React.createElement(I18nProvider,null,React.createElement(ImagePreviewProvider,null,React.createElement(ToastProvider,null,React.createElement(Workspace,{store,accent:'indigo',onAccentChange:()=>{}})))))));
 window.fixtureReady=true;
 </script></body></html>`
 

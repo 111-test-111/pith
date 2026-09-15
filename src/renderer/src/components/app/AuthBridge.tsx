@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { CheckCircle2, ExternalLink, Loader2, XCircle } from '@/lib/icons'
+import { ExternalLink, Loader2 } from '@/lib/icons'
+import { AnimatedBadge } from '@/components/motion/animated-badge'
 import { Button } from '@/components/motion/button'
 import { Input } from '@/components/motion/input'
 import type { AuthNotifyDTO, AuthPromptDTO } from '../../../../shared/types'
@@ -143,14 +144,10 @@ export function AuthBridge({ prompt, notify, onReply, onCancel }: AuthBridgeProp
 
 export function ProviderStatus({ authenticated }: { authenticated: boolean }) {
   const { t } = useI18n()
-  return authenticated ? (
-    <span className="inline-flex items-center gap-1 text-xs text-emerald-600 dark:text-emerald-400">
-      <CheckCircle2 className="size-3.5" /> {t('auth.connected')}
-    </span>
-  ) : (
-    <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-      <XCircle className="size-3.5" /> {t('auth.notConfigured')}
-    </span>
+  return (
+    <AnimatedBadge size="sm" status={authenticated ? 'success' : 'neutral'}>
+      {authenticated ? t('auth.connected') : t('auth.notConfigured')}
+    </AnimatedBadge>
   )
 }
 

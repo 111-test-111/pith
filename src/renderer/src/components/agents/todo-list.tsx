@@ -1,7 +1,7 @@
 "use client";
 // beui.dev/components/agents/chat-app
 
-// local patch (pi-app): use the shared Hugeicons Stroke Rounded icon adapter.
+// local patch (pi-app): use the shared Lucide icon adapter.
 import { ChevronDown, ListTodo } from "@/lib/icons";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
@@ -21,7 +21,7 @@ import {
   SPRING_SWAP,
 } from "@/lib/ease";
 import { cn } from "@/lib/utils";
-// local patch (pi-app): animate Hugeicons artwork through the shared SVG adapter.
+// local patch (pi-app): animate Lucide artwork through the shared SVG adapter.
 import { AnimatedIcon, IconPaths } from "@/lib/animated-icons";
 
 export type TodoItemStatus =

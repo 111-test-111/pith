@@ -2,7 +2,7 @@
 // local patch (pi-app): approval actions and status badges use semantic radii.
 // beui.dev/components/agents/chat-app
 
-// local patch (pi-app): use the shared Hugeicons Stroke Rounded icon adapter.
+// local patch (pi-app): use the shared Lucide icon adapter.
 import {
   ArrowLeft,
   ArrowRight,

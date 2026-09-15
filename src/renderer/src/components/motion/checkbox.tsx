@@ -5,7 +5,7 @@ import { useId } from "react";
 import { EASE_OUT, SPRING_PRESS } from "@/lib/ease";
 import { cn } from "@/lib/utils";
 
-// local patch (pi-app): animate Hugeicons artwork through the shared SVG adapter.
+// local patch (pi-app): animate Lucide artwork through the shared SVG adapter.
 import { AnimatedIcon } from "@/lib/animated-icons";
 
 export interface CheckboxProps {

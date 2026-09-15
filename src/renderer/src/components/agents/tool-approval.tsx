@@ -2,7 +2,7 @@
 // local patch (pi-app): approval status badges use the semantic item radius.
 // beui.dev/components/agents/chat-app
 
-// local patch (pi-app): use the shared Hugeicons Stroke Rounded icon adapter.
+// local patch (pi-app): use the shared Lucide icon adapter.
 import {
   Check,
   ChevronDown,

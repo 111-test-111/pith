@@ -2,7 +2,7 @@
 // beui.dev/components/motion/file-tree
 
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-// local patch (pi-app): use the shared Hugeicons Stroke Rounded adapter.
+// local patch (pi-app): use the shared Lucide adapter.
 import { ChevronRight, FileText as File, Folder, FolderOpen } from "@/lib/icons";
 import {
   Children,

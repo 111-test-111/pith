@@ -1,6 +1,6 @@
 "use client";
 
-// local patch (pi-app): use the shared Hugeicons Stroke Rounded icon adapter.
+// local patch (pi-app): use the shared Lucide icon adapter.
 import { ChevronsUpDown, Search } from "@/lib/icons";
 import type {
   InputHTMLAttributes,

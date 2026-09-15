@@ -1,9 +1,32 @@
+import type { ReactNode } from 'react'
+
+import { AnimatedNumber } from '@/components/motion/animated-number'
+import { NumberTicker } from '@/components/motion/number-ticker'
 import { Tooltip } from '@/components/motion/tooltip'
 import { useI18n } from '@/i18n'
 import type { ContextUsageDTO } from '../../../../shared/types'
 
 /** Hover-open delay mirrors the reference ring: brief pauses don't flicker. */
 const HOVER_DELAY_MS = 350
+
+/**
+ * Placeholder a translated sentence marks, then has swapped for a live number
+ * node. `t()` interpolates strings only, so the slot is written as a sentinel
+ * and split back out — the sentence stays one i18n key, which keeps word order
+ * (and `%` / `~` placement) the translator's call.
+ */
+const NUMBER_SLOT = '\u0000'
+
+function fillSlot(template: string, node: ReactNode): ReactNode {
+  const [before, after] = template.split(NUMBER_SLOT)
+  return (
+    <>
+      {before}
+      {node}
+      {after ?? ''}
+    </>
+  )
+}
 
 function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
@@ -57,14 +80,22 @@ export function ContextRing({ usage }: { usage: ContextUsageDTO | null }) {
       content={
         <div>
           <p className="text-sm font-medium tabular-nums text-foreground">
-            {percent !== null ? t('context.used', { percent: percent.toFixed(1) }) : '—'}
+            {percent !== null
+              ? fillSlot(
+                  t('context.used', { percent: NUMBER_SLOT }),
+                  <AnimatedNumber value={percent} format={(n) => n.toFixed(1)} duration={0.7} />
+                )
+              : '—'}
           </p>
           <p className="mt-0.5 text-xs tabular-nums text-muted-foreground">
             {usedTokens !== null
-              ? t('context.tokens', {
-                  used: `~${usedTokens.toLocaleString()}`,
-                  total: formatTokens(usage.contextWindow)
-                })
+              ? fillSlot(
+                  t('context.tokens', {
+                    used: NUMBER_SLOT,
+                    total: formatTokens(usage.contextWindow)
+                  }),
+                  <NumberTicker value={usedTokens} prefix="~" locale duration={0.7} />
+                )
               : '—'}
           </p>
           <div className="mt-2.5 grid grid-cols-2 gap-3 border-t border-border pt-2.5">

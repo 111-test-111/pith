@@ -121,7 +121,7 @@ try {
   const fixturePath='/__files_check.html'
   const fixture=`<!doctype html><html lang="en"><body><div id="root"></div><script type="module">
 import React from 'react';import {createRoot} from 'react-dom/client';import {ThemeProvider} from 'next-themes';
-import {Workspace} from '/src/components/app/Workspace.tsx';import {ImagePreviewProvider} from '/src/components/app/ImagePreview.tsx';
+import {Workspace} from '/src/components/app/Workspace.tsx';import {ImagePreviewProvider} from '/src/components/app/ImagePreview.tsx';import {ToastProvider} from '/src/components/app/ToastProvider.tsx';
 import {I18nProvider,useI18n} from '/src/i18n/index.tsx';import {PiStore} from '/src/state/pi-store.ts';
 import {FileBrowserStore} from '/src/state/file-browser-store.ts';import {localFileTarget} from '/src/lib/file-navigation.tsx';
 import {initFonts} from '/src/lib/fonts.ts';import '/src/styles.css';
@@ -131,7 +131,7 @@ window.resolveFile=localFileTarget;window.store=new PiStore();
 const open=FileBrowserStore.prototype.open;FileBrowserStore.prototype.open=function(...args){window.files=this;return open.apply(this,args)};
 window.setSession=cwd=>store.applySnapshot({cwd,sessionId:crypto.randomUUID(),messages:[{role:'user',timestamp:0,content:'<file path="'+cwd+'/file#25%.txt">literal attachment path</file>'},{role:'assistant',timestamp:1,content:[{type:'text',text:'[Deep source](${deepRelative}) · [Open README](README.md) · [Open source](src/App.tsx:2) · [URL file](file://'+cwd+'/README.md)'}]}],model:null,thinkingLevel:'off',availableThinkingLevels:['off'],isStreaming:false});
 setSession(${JSON.stringify(project)});window.root=createRoot(document.getElementById('root'));
-root.render(React.createElement(React.StrictMode,null,React.createElement(ThemeProvider,{attribute:'class',defaultTheme:'light'},React.createElement(I18nProvider,null,React.createElement(LocaleBridge),React.createElement(ImagePreviewProvider,null,React.createElement(Workspace,{store,accent:'indigo',onAccentChange:()=>{}}))))));
+root.render(React.createElement(React.StrictMode,null,React.createElement(ThemeProvider,{attribute:'class',defaultTheme:'light'},React.createElement(I18nProvider,null,React.createElement(LocaleBridge),React.createElement(ImagePreviewProvider,null,React.createElement(ToastProvider,null,React.createElement(Workspace,{store,accent:'indigo',onAccentChange:()=>{}})))))));
 window.fixtureReady=true;</script></body></html>`
   server=await createServer({configFile:false,root:join(repo,'src/renderer'),logLevel:'error',cacheDir:join(temporary,'vite'),resolve:{alias:{'@':join(repo,'src/renderer/src')}},plugins:[react({exclude:/(?:node_modules|\/vite\/deps\/)/}),tailwindcss(),{name:'files-fixture',configureServer(server){server.middlewares.use(async(req,res,next)=>{if(req.url!==fixturePath)return next();try{res.setHeader('Content-Type','text/html');res.end(await server.transformIndexHtml(fixturePath,fixture))}catch(error){next(error)}})}}],server:{host:'127.0.0.1',port:0,fs:{allow:[repo]}}})
   await server.listen()
@@ -215,10 +215,10 @@ const w=new BrowserWindow({show:false,width:1500,height:950,webPreferences:{prel
     await evaluate("document.documentElement.classList.remove('dark')")
   }
   await click('[aria-label="Open in default app"]')
-  await waitFor('document.querySelector("[data-file-preview]").textContent.includes("Could not complete")','open failure localized')
+  await waitFor('document.querySelector(".app-toast-region")?.textContent.includes("Could not complete")','open failure localized as a toast')
   assert.equal((await evaluate('window.pi.appInfo()')).fileIo.opened.at(-1),join(project,'src/App.tsx'),'default open passes the literal file path')
   await click('[aria-label="Open in default app"]')
-  await waitFor('!document.querySelector("[data-file-preview]").textContent.includes("Could not complete")','open retry clears error')
+  await waitFor('!document.querySelector(".app-toast-region")?.textContent.includes("Could not complete")','retry clears the previous failure toast')
   await click('[aria-label="Open enclosing folder"]')
   assert.equal((await evaluate('window.pi.appInfo()')).fileIo.revealed.at(-1),join(project,'src/App.tsx'),'reveal passes the literal file path')
   await click('[aria-label="Save as…"]')

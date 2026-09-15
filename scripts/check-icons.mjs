@@ -24,11 +24,11 @@ async function guard(dir) {
   for (const entry of await readdir(dir, { withFileTypes: true })) {
     const path = join(dir, entry.name)
     if (entry.isDirectory()) { await guard(path); continue }
-    if (/\.(tsx?|json)$/.test(path)) assert.doesNotMatch(await readFile(path, 'utf8'), /lucide/i, path)
+    if (/\.(tsx?|json)$/.test(path)) assert.doesNotMatch(await readFile(path, 'utf8'), /@hugeicons/i, path)
   }
 }
 await guard(join(repo, 'src'))
-assert.doesNotMatch(await readFile(join(repo, 'package-lock.json'), 'utf8'), /lucide/i, 'No direct or transitive dependency')
+assert.doesNotMatch(await readFile(join(repo, 'package-lock.json'), 'utf8'), /@hugeicons/i, 'No transitive icon pack')
 
 const fixture = `<!doctype html><html><head><style>
 body{margin:0!important}main{padding:20px;max-width:1200px;margin:auto}h2{font-size:14px;margin:0 0 12px}
@@ -52,7 +52,7 @@ function Fixture(){
  const ref=React.useRef(null);window.controls={setChecked,setMixed};
  React.useEffect(()=>{window.iconRef=ref;window.fixtureReady=true},[]);
  return h('main',null,
- h('h2',null,'Hugeicons Stroke Rounded · 12 / 16 / 24 px'),
+ h('h2',null,'Lucide · 12 / 16 / 24 px'),
  h('div',{id:'gallery'},Object.entries(icons).map(([name,Icon])=>h('div',{key:name,className:'cell'},
    h('div',{className:'samples'},...[12,16,24].map(size=>h(Icon,{key:size,size,'data-sample':name,'data-size':size}))),h('span',{className:'label'},name)))),
  h('div',{className:'row'},h('div',{id:'checkbox'},h(Checkbox,{checked,indeterminate:mixed,onCheckedChange:setChecked,label:'Checkbox'})),
@@ -109,7 +109,7 @@ try {
   for(const icon of rendered){assert.equal(icon.width,24,icon.name);assert.equal(icon.height,24,icon.name);assert.equal(icon.viewBox,'0 0 24 24',icon.name);assert.equal(icon.hidden,'true',icon.name);assert(icon.paths>0,icon.name);assert.doesNotMatch(icon.box,/NaN|null/,icon.name)}
   assert.equal(await evaluate('window.iconRef.current===document.querySelector("#props-icon")'),true,'Forward SVG ref')
   assert.equal(await evaluate('document.querySelector("#props-icon").getAttribute("aria-hidden")'),null,'Named SVG remains accessible')
-  assert.equal(await evaluate('document.querySelector("#props-icon path").getAttribute("stroke-width")'),'1.5','Absolute stroke scales correctly')
+  assert.equal(await evaluate('document.querySelector("#props-icon").getAttribute("stroke-width") ?? document.querySelector("#props-icon path").getAttribute("stroke-width")'),'1.5','Absolute stroke scales correctly')
   assert.equal(await evaluate('document.querySelector("#css-icon").getBoundingClientRect().width'),16,'Tailwind size overrides SVG size')
   for(const arrow of ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight']){
     assert.equal(await evaluate(`document.querySelectorAll('[data-sample="${arrow}"][data-size="24"] path').length`),2,'Directional arrow has a shaft and head: '+arrow)

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useSyncExternalStore } from 'react'
 import { Plus, X } from '@/lib/icons'
+import { AnimatedBadge } from '@/components/motion/animated-badge'
 import { Button } from '@/components/motion/button'
 import { Tabs, TabsList, TabsTrigger } from '@/components/motion/tabs'
 import { Tooltip } from '@/components/motion/tooltip'
@@ -81,10 +82,24 @@ export function TerminalPane({ terminals, onNew, onEmpty }: {
         </Tooltip>
       </div>
       {tab && tab.status !== 'running' ? (
-        <div role="status" className="shrink-0 px-3 py-2 text-xs text-muted-foreground">
-          <span>{tab.status === 'starting' ? t('terminal.starting') : tab.status === 'exited'
-            ? t('terminal.exited', { code: tab.exitCode ?? 0 })
-            : t(tab.error === 'directory' ? 'terminal.directoryError' : 'terminal.startError')}</span>
+        <div role="status" className="flex shrink-0 items-center gap-2 px-3 py-2 text-xs text-muted-foreground">
+          {/* The status is the whole page for an exited terminal, so it carries the
+              tone: a clean exit is neutral, a failure is destructive. */}
+          <AnimatedBadge
+            size="sm"
+            className="max-w-full"
+            status={
+              tab.status === 'starting'
+                ? 'loading'
+                : tab.status === 'exited' && !tab.exitCode
+                  ? 'neutral'
+                  : 'danger'
+            }
+          >
+            {tab.status === 'starting' ? t('terminal.starting') : tab.status === 'exited'
+              ? t('terminal.exited', { code: tab.exitCode ?? 0 })
+              : t(tab.error === 'directory' ? 'terminal.directoryError' : 'terminal.startError')}
+          </AnimatedBadge>
         </div>
       ) : null}
       {showScreen ? <div className="min-h-0 min-w-0 flex-1 overflow-hidden p-2" role="tabpanel" aria-label={t('sidebar.terminal')}>
