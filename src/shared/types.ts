@@ -808,6 +808,8 @@ export interface AppInfoDTO {
   startup: StartupSessionMode
   /** Whether subagent delegation is enabled. */
   subagentsEnabled: boolean
+  /** Per-parent limit on concurrently running subagent delegations. */
+  subagentMaxConcurrent: number
   version: string
 }
 

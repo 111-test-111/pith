@@ -453,11 +453,11 @@ try {
   await pause(200)
   assert.match(await evaluate(`document.querySelector('#original').innerText`), /后台运行中/)
   assert.match(await evaluate(`document.querySelector('#settings').innerText`), /最大阻塞时长/)
-  await evaluate(`(()=>{const input=document.querySelector('#settings input[type=number]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'2.5');input.dispatchEvent(new Event('input',{bubbles:true}));})()`)
-  await pause(100)
+  await evaluate(`(()=>{const field=[...document.querySelectorAll('#settings fieldset')].find(f=>f.querySelector('legend')?.textContent.includes('最大阻塞时长'));field.querySelectorAll('button')[1].click()})()`)
+  await pause(150)
   await evaluate(`[...document.querySelectorAll('#settings button')].find(b=>b.textContent==='保存').click()`)
   await pause(150)
-  assert.equal(await evaluate('window.savedWait'), 2500)
+  assert.equal(await evaluate('window.savedWait'), 10100)
   if (process.env.PI_BASH_SCREENSHOT_DIR) {
     await mkdir(process.env.PI_BASH_SCREENSHOT_DIR, { recursive: true })
     for (const theme of ['light', 'dark']) {

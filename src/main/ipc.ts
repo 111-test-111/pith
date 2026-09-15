@@ -11,6 +11,7 @@ import { readPdfRange, readPdfStat } from './pdf'
 import { readFontData } from './font'
 import { readTableRange, readTableSlice, readTableStat } from './table'
 import { saveFileCopy } from './file-actions'
+import { MAX_CONCURRENT_SUBAGENTS_DEFAULT } from './pi/subagents/runtime'
 import type {
   AppInfoDTO,
   FileBrowserRequest,
@@ -70,6 +71,7 @@ export function registerIpc(pi: PiManager): () => boolean {
       checkpointsEnabled: settings.checkpointsEnabled !== false,
       startup: settings.startup,
       subagentsEnabled: settings.subagentsEnabled !== false,
+      subagentMaxConcurrent: settings.subagentMaxConcurrent ?? MAX_CONCURRENT_SUBAGENTS_DEFAULT,
       version: app.getVersion()
     }
   })

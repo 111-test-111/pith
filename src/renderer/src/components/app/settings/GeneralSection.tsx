@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Input } from '@/components/motion/input'
+import { AdaptiveStepper, AdaptiveStepperDecrement, AdaptiveStepperIncrement, AdaptiveStepperValue } from '@/components/motion/adaptive-stepper'
 import { BASH_DEFAULT_MAX_WAIT_MS, BASH_MIN_WAIT_MS, BASH_MAX_WAIT_MS, DEFAULT_SANDBOX_MODE, type SandboxMode, type SandboxStatusDTO, type StartupSessionMode } from '../../../../../shared/types'
 import { Button } from '@/components/motion/button'
 import { Switch } from '@/components/motion/switch'
@@ -60,6 +60,19 @@ export function GeneralSection() {
   // Subagent delegation; read from appInfo, applied through the setter IPC.
   const [subagentsEnabled, setSubagentsEnabled] = useState(true)
   const [savingSubagents, setSavingSubagents] = useState(false)
+  /** Per-parent concurrent delegation limit; 1–16 mirrors the main-process guard. */
+  const [subagentConcurrent, setSubagentConcurrent] = useState(4)
+  const [savingConcurrent, setSavingConcurrent] = useState(false)
+  const [concurrentError, setConcurrentError] = useState(false)
+  const saveConcurrent = (value: number) => {
+    setSubagentConcurrent(value)
+    setSavingConcurrent(true)
+    setConcurrentError(false)
+    void window.pi
+      .setSubagentMaxConcurrent(value)
+      .then(setSubagentConcurrent, () => setConcurrentError(true))
+      .finally(() => setSavingConcurrent(false))
+  }
   // Same module store the Composer reads — a change here applies immediately.
   const [behavior, setBehavior] = useStreamingBehavior()
   // Display preference of the transcript, shared with the message rows.
@@ -72,7 +85,7 @@ export function GeneralSection() {
   useEffect(() => {
     void window.pi
       .appInfo()
-      .then((info) => { setVersion(info.version); setCheckpoints(info.checkpointsEnabled); setStartup(info.startup); setSubagentsEnabled(info.subagentsEnabled !== false); setWaitSeconds(String(info.bashMaxWaitMs / 1000)); setSavedWait(info.bashMaxWaitMs); setSandboxMode(info.sandboxMode); setSandbox(info.sandbox) })
+      .then((info) => { setVersion(info.version); setCheckpoints(info.checkpointsEnabled); setStartup(info.startup); setSubagentsEnabled(info.subagentsEnabled !== false); setSubagentConcurrent(info.subagentMaxConcurrent ?? 4); setWaitSeconds(String(info.bashMaxWaitMs / 1000)); setSavedWait(info.bashMaxWaitMs); setSandboxMode(info.sandboxMode); setSandbox(info.sandbox) })
       .catch(() => {})
   }, [])
 
@@ -158,6 +171,25 @@ export function GeneralSection() {
           />
         </SettingsRow>
         <SettingsRow
+          label={t('subagent.concurrency')}
+          description={t('subagent.concurrencyDesc')}
+        >
+          <AdaptiveStepper
+            value={subagentConcurrent}
+            min={1}
+            max={16}
+            step={1}
+            disabled={!subagentsEnabled || savingSubagents || savingConcurrent}
+            aria-label={t('subagent.concurrency')}
+            onValueChange={saveConcurrent}
+          >
+            <AdaptiveStepperDecrement aria-label={t('settings.decreaseValue')} />
+            <AdaptiveStepperValue />
+            <AdaptiveStepperIncrement aria-label={t('settings.increaseValue')} />
+          </AdaptiveStepper>
+        </SettingsRow>
+        {concurrentError ? <p role="alert" className="px-4 text-xs text-destructive">{t('subagent.concurrencyFailed')}</p> : null}
+        <SettingsRow
           label={t('settings.spinnerVerbs')}
           description={t('settings.spinnerVerbsDesc')}
         >
@@ -171,9 +203,22 @@ export function GeneralSection() {
 
       <SettingsGroup title={t('bashTask.settingsGroup')}>
         <SettingsRow label={t('bashTask.maxWait')} description={t('bashTask.maxWaitDesc')}>
-          <Input type="number" min={BASH_MIN_WAIT_MS / 1000} max={BASH_MAX_WAIT_MS / 1000} step="0.1"
-            value={waitSeconds} onChange={setWaitSeconds} className="w-24" aria-label={t('bashTask.waitSeconds')}
-            error={!validWait || waitError} disabled={savingWait} />
+          <AdaptiveStepper
+            value={Number(waitSeconds)}
+            min={BASH_MIN_WAIT_MS / 1000}
+            max={BASH_MAX_WAIT_MS / 1000}
+            step={0.1}
+            disabled={savingWait}
+            aria-label={t('bashTask.waitSeconds')}
+            formatValueText={(value) => t('bashTask.waitSecondsValue', { seconds: value.toFixed(1) })}
+            onValueChange={(value) => setWaitSeconds(Number(value.toFixed(1)).toString())}
+          >
+            <AdaptiveStepperDecrement aria-label={t('settings.decreaseValue')} />
+            <AdaptiveStepperValue>
+              {(value) => t('bashTask.waitSecondsValue', { seconds: value.toFixed(1) })}
+            </AdaptiveStepperValue>
+            <AdaptiveStepperIncrement aria-label={t('settings.increaseValue')} />
+          </AdaptiveStepper>
           <Button variant="ghost" size="sm" disabled={!validWait || waitMs === savedWait || savingWait} onClick={() => void saveWait()}>{t('bashTask.save')}</Button>
         </SettingsRow>
         {waitError ? <p className="px-4 text-xs text-destructive" role="status">{t('bashTask.saveFailed')}</p> : null}
