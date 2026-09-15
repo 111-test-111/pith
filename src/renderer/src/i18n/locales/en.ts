@@ -757,6 +757,10 @@ const en = {
   // model discovery
   'settings.discoverTitle': 'Fetch models from {name}',
   'settings.discoverHint': 'Imports the selected ids as custom models.',
+  'settings.discoverSelectPlaceholder': 'Select models',
+  'settings.discoverSearch': 'Search models',
+  'settings.discoverList': 'Discovered models',
+  'settings.discoverNoMatch': 'No matching models.',
   'settings.discoverLoading': 'Fetching models…',
   'settings.discoverEmpty': 'The provider returned no models.',
   'settings.discoverAlreadyAdded': 'already added',

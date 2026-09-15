@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { AlertCircle, Download, Loader2 } from '@/lib/icons'
 import { MorphingModal } from '@/components/motion/morphing-modal'
 import { Button } from '@/components/motion/button'
-import { Checkbox } from '@/components/motion/checkbox'
+import { MultiSelect, MultiSelectContent, MultiSelectEmpty, MultiSelectInput, MultiSelectItem, MultiSelectList, MultiSelectTrigger, MultiSelectValue } from '@/components/motion/multi-select'
 import { useI18n } from '@/i18n'
 import type { CustomProviderDTO, DiscoveredModelDTO } from '../../../../../../shared/types'
 import type { ModelsConfigMutate } from './use-models-config'
@@ -35,14 +35,14 @@ export function DiscoverDialog({
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [models, setModels] = useState<DiscoveredModelDTO[] | null>(null)
-  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [selected, setSelected] = useState<string[]>([])
 
   useEffect(() => {
     if (!open) return
     setLoading(true)
     setError(null)
     setModels(null)
-    setSelected(new Set())
+    setSelected([])
     void (async () => {
       try {
         await flush()
@@ -65,16 +65,7 @@ export function DiscoverDialog({
       .filter(Boolean)
   )
   const shown = (models ?? []).slice(0, MAX_SHOWN)
-  const importCount = [...selected].filter((id) => !existing.has(id)).length
-
-  const toggle = (id: string) => {
-    setSelected((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-  }
+  const importCount = selected.filter((id) => !existing.has(id)).length
 
   const importSelected = () => {
     if (importCount === 0) return
@@ -120,31 +111,43 @@ export function DiscoverDialog({
           <span className="min-w-0 break-words">{error}</span>
         </div>
       ) : models && models.length > 0 ? (
-        <div className="mt-3 max-h-72 space-y-0.5 overflow-y-auto pr-1">
-          {shown.map((model) => {
-            const added = existing.has(model.id)
-            return (
-              <div
-                key={model.id}
-                className={`flex items-center justify-between gap-3 rounded-lg px-2 py-1.5 ${
-                  added ? 'opacity-50' : 'hover:bg-muted'
-                }`}
-              >
-                <Checkbox
-                  checked={selected.has(model.id)}
-                  onCheckedChange={() => toggle(model.id)}
-                  disabled={added}
-                  label={model.name ?? model.id}
-                  className="min-w-0 flex-1 [&>span:last-child]:truncate"
-                />
-                <span className="shrink-0 truncate font-mono text-[11px] text-muted-foreground">
-                  {added ? t('settings.discoverAlreadyAdded') : model.id}
-                </span>
-              </div>
-            )
-          })}
+        <div className="mt-3">
+          <MultiSelect value={selected} onValueChange={setSelected} className="w-full">
+            <MultiSelectTrigger>
+              <MultiSelectValue placeholder={t('settings.discoverSelectPlaceholder')} />
+              <MultiSelectInput
+                placeholder={t('settings.discoverSearch')}
+                aria-label={t('settings.discoverSearch')}
+                className="h-7 min-w-40 flex-1"
+              />
+            </MultiSelectTrigger>
+            <MultiSelectContent>
+              <MultiSelectList ariaLabel={t('settings.discoverList')}>
+                {shown.map((model) => {
+                  const added = existing.has(model.id)
+                  return (
+                    <MultiSelectItem
+                      key={model.id}
+                      value={model.id}
+                      disabled={added}
+                      textValue={model.name ?? model.id}
+                      keywords={[model.id]}
+                    >
+                      <span className="min-w-0 flex-1 truncate">{model.name ?? model.id}</span>
+                      <span className="shrink-0 truncate font-mono text-[11px] text-muted-foreground">
+                        {added ? t('settings.discoverAlreadyAdded') : model.id}
+                      </span>
+                    </MultiSelectItem>
+                  )
+                })}
+                {shown.length === 0 ? (
+                  <MultiSelectEmpty>{t('settings.discoverNoMatch')}</MultiSelectEmpty>
+                ) : null}
+              </MultiSelectList>
+            </MultiSelectContent>
+          </MultiSelect>
           {models.length > MAX_SHOWN ? (
-            <p className="px-2 pt-1 text-[11px] text-muted-foreground">
+            <p className="px-2 pt-1.5 text-[11px] text-muted-foreground">
               {t('settings.discoverCapped', { shown: MAX_SHOWN, total: models.length })}
             </p>
           ) : null}

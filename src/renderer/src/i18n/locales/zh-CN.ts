@@ -735,6 +735,10 @@ const zhCN: Messages = {
   // model discovery
   'settings.discoverTitle': '从 {name} 拉取模型',
   'settings.discoverHint': '将选中的 ID 导入为自定义模型。',
+  'settings.discoverSelectPlaceholder': '选择模型',
+  'settings.discoverSearch': '搜索模型',
+  'settings.discoverList': '发现的模型',
+  'settings.discoverNoMatch': '没有匹配的模型。',
   'settings.discoverLoading': '正在拉取模型…',
   'settings.discoverEmpty': '提供商未返回任何模型。',
   'settings.discoverAlreadyAdded': '已添加',
