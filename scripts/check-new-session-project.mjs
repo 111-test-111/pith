@@ -26,6 +26,8 @@ try {
 import {contextBridge,ipcRenderer} from 'electron';
 contextBridge.exposeInMainWorld('fixture',{calls:()=>ipcRenderer.invoke('fixture:calls'),resize:(w,h)=>ipcRenderer.invoke('fixture:resize',w,h)});`)
   const main = join(temporary, 'main.cjs')
+  const attachmentFile = join(temporary, 'attachment-sample.txt')
+  await writeFile(attachmentFile, 'attached sample\n')
   await build({ stdin: { contents: `
 import {app,BrowserWindow,ipcMain} from 'electron';
 import {windowChromeOptions,setWindowTheme} from ${JSON.stringify(join(repo, 'src/main/window-chrome.ts'))};
@@ -43,6 +45,7 @@ app.whenReady().then(()=>{
  ipcMain.handle('fixture:calls',()=>calls);
  ipcMain.handle('fixture:resize',(_,width,height)=>w.setBounds({width,height}));
  ipcMain.handle('pi:models',()=>[model]);ipcMain.handle('bash:list',()=>[]);ipcMain.handle('pi:providers',()=>[]);
+ ipcMain.handle('files:read',(_,path)=>({path,relPath:path,kind:'text',size:12}));
  ipcMain.handle('pi:searchSessions',()=>({sessions:[],groups:[],total:0,hasMore:false}));
  const w=new BrowserWindow({...windowChromeOptions(),width:1320,height:880,minWidth:760,minHeight:560,title:'Pith picker check',backgroundColor:'#0b0b0d',webPreferences:{preload:${JSON.stringify(preload)},contextIsolation:true,nodeIntegration:false,sandbox:false,backgroundThrottling:false}});
  ipcMain.on('window:setTheme',(event,theme)=>setWindowTheme(BrowserWindow.fromWebContents(event.sender),theme));
@@ -212,6 +215,28 @@ app.whenReady().then(()=>{
   const shaderFrameA = await shaderShot()
   await pause(700)
   assert.notEqual(await shaderShot(), shaderFrameA, 'the shader animates when motion is allowed')
+
+  // A file attachment is a quiet expandable chip: only its label is on screen
+  // until it is clicked, then the remove action slides out.
+  await send('DOM.enable')
+  const dom = await send('DOM.getDocument', { depth: -1 })
+  const fileInput = (await send('DOM.querySelector', { nodeId: dom.root.nodeId, selector: 'input[type=file]:not([accept])' })).nodeId
+  assert.ok(fileInput, 'the composer exposes the file input')
+  await send('DOM.setFileInputFiles', { files: [attachmentFile], nodeId: fileInput })
+  await waitFor(`document.querySelector('[data-attachment-chip] button[aria-expanded]')`)
+  const chip = () => evaluate(`(()=>{const root=document.querySelector('[data-attachment-chip]');const label=root.querySelector('button[aria-expanded]');const action=root.querySelectorAll('button')[1];return{label:label.textContent.trim(),expanded:label.getAttribute('aria-expanded'),height:label.getBoundingClientRect().height,actionWidth:action?action.parentElement.getBoundingClientRect().width:0}})()`)
+  const chipBefore = await chip()
+  assert.match(chipBefore.label, /attachment-sample/, 'the chip names the attached file')
+  assert.equal(chipBefore.expanded, 'false', 'the chip starts collapsed')
+  assert.equal(chipBefore.actionWidth, 0, 'the remove action is hidden while the chip is quiet')
+  await click('[data-attachment-chip] button[aria-expanded]')
+  const chipOpen = await chip()
+  assert.equal(chipOpen.expanded, 'true', 'clicking the chip reveals its action')
+  assert.ok(chipOpen.actionWidth > 0, 'the remove action becomes reachable')
+  await screenshot('attachment-chip-expanded')
+  await evaluate(`document.querySelector('[data-attachment-chip]').querySelectorAll('button')[1].click()`)
+  await pause(250)
+  assert.equal(await evaluate(`Boolean(document.querySelector('[data-attachment-chip] button[aria-expanded]'))`), false, 'removing drops the chip')
 
   // Reduced motion (and touch) keep the surface still and drop the glare.
   await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: cardPoint.x, y: cardPoint.y - 240 })

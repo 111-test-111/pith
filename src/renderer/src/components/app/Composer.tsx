@@ -9,6 +9,7 @@ import {
 } from 'react'
 import { Bot, FileText, ImagePlus, Loader2, Paperclip, X } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
+import { ExpandableChip } from '@/components/motion/expandable-control'
 import { PromptInput } from '@/components/agents/prompt-input'
 import { basename, formatBytes } from '@/lib/format'
 import {
@@ -533,17 +534,24 @@ export function Composer({
                   content={`${attachment.relPath} · ${formatBytes(attachment.size)}`}
                   wrap
                 >
-                  <span className="group inline-flex max-w-56 items-center gap-1.5 rounded-xl border border-border bg-card px-2 py-1.5 text-xs text-foreground">
-                    <FileText className="size-3.5 shrink-0 text-primary" />
-                    <span className="truncate">{basename(attachment.relPath)}</span>
-                    <button
-                      type="button"
-                      aria-label={t('workspace.removeAttachment', { name: attachment.relPath })}
-                      onClick={() => removeFile(attachment.id)}
-                      className="grid size-4 shrink-0 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                    >
-                      <X className="size-3" />
-                    </button>
+                  {/* The span owns the tooltip's `aria-describedby` (the chip
+                      forwards no unknown props) and the chip stays quiet until
+                      its label is clicked, when the remove action slides out. */}
+                  <span data-attachment-chip="">
+                    <ExpandableChip
+                      className="h-7"
+                      labelClassName="pl-2.5 pr-2 text-xs"
+                      actionClassName="h-full"
+                      label={
+                        <span className="inline-flex items-center gap-1.5">
+                          <FileText className="size-3.5 shrink-0 text-primary" />
+                          <span className="max-w-44 truncate">{basename(attachment.relPath)}</span>
+                        </span>
+                      }
+                      actionIcon={<X className="size-3" />}
+                      actionLabel={t('workspace.removeAttachment', { name: attachment.relPath })}
+                      onAction={() => removeFile(attachment.id)}
+                    />
                   </span>
                 </LabelTooltip>
               ))}

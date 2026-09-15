@@ -122,7 +122,7 @@ export function ExpandableButton({
           "relative inline-flex h-11 min-w-11 items-center overflow-hidden rounded-full border border-border bg-transparent p-1 pr-1 text-sm font-medium text-foreground outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50",
           className,
         )}
-        style={{ borderRadius: 9999 }}
+        style={{ borderRadius: "var(--app-radius-full)" }}
         onClick={handleClick}
         whileTap={reduce || disabled ? undefined : { scale: 0.97 }}
         transition={transition}
@@ -197,7 +197,7 @@ export function ExpandableChip({
           "inline-flex h-10 items-center overflow-hidden rounded-full border border-border bg-transparent text-sm text-foreground has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-inset has-[:focus-visible]:ring-ring",
           className,
         )}
-        style={{ borderRadius: 9999 }}
+        style={{ borderRadius: "var(--app-radius-full)" }}
         transition={transition}
       >
         <motion.button
@@ -219,7 +219,9 @@ export function ExpandableChip({
         <motion.span
           variants={CONTINUITY_LABEL}
           className={cn(
-            "relative inline-flex h-10 shrink-0 items-center overflow-hidden",
+            // local patch (pi-app): follow the caller's height instead of the
+            // vendored fixed h-10, so a compact chip does not clip its action.
+            "relative inline-flex h-full shrink-0 items-center overflow-hidden",
             isExpanded ? "w-8" : "w-0",
           )}
           aria-hidden={!isExpanded}
@@ -238,7 +240,7 @@ export function ExpandableChip({
             aria-label={actionLabel}
             disabled={disabled || !isExpanded}
             className={cn(
-              "flex h-10 w-8 shrink-0 items-center justify-center rounded-full text-muted-foreground outline-none transition-colors hover:text-foreground disabled:pointer-events-none",
+              "flex h-full w-8 shrink-0 items-center justify-center rounded-full text-muted-foreground outline-none transition-colors hover:text-foreground disabled:pointer-events-none",
               disabled && "opacity-50",
               actionClassName,
             )}
