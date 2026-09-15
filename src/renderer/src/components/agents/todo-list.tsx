@@ -39,6 +39,13 @@ export interface TodoItem {
 }
 
 export interface TodoListProps {
+  // local patch (pi-app): the shared task panel owns the list's frame —
+  // viewportClassName replaces the vendored edge padding (its `px-2 pb-2`
+  // would otherwise win over a shorthand `p-1`) and, when given, also takes
+  // over the cap, since a fixed height cannot survive `maxHeight`; listClassName
+  // sets the row gap the vendored card rhythm leaves at zero.
+  viewportClassName?: string;
+  listClassName?: string;
   // local patch (pi-app): the shared task panel owns the heading/disclosure.
   headerless?: boolean;
   items: TodoItem[];
@@ -121,7 +128,10 @@ function TodoStatusIcon({
         viewBox="0 0 24 24"
         data-todo-progress
         className={cn(
-          "mx-0.5 size-5 shrink-0 text-primary",
+          // local patch (pi-app): the shared task panel's rows all lead with a
+          // size-4 box — the same one the bash/subagent rows' `ToolResult`
+          // slot gives their icon — so the three panels line up.
+          "size-4 shrink-0 text-primary",
           spinning && "animate-spin",
         )}
       >
@@ -146,7 +156,9 @@ function TodoStatusIcon({
       viewBox="0 0 24 24"
       initial={false}
       className={cn(
-        "mx-0.5 size-5 shrink-0 overflow-visible text-muted-foreground",
+        // local patch (pi-app): same box as the in-progress ring and the
+        // bash/subagent rows' icon slot (see above).
+        "size-4 shrink-0 overflow-visible text-muted-foreground",
         // local patch (pi-app): every settled status owns a colour — done, dropped.
         status === "completed" && "text-emerald-600 dark:text-emerald-400",
         status === "cancelled" && "text-rose-600 dark:text-rose-400",
@@ -208,6 +220,8 @@ export function TodoList({
   collapseOnComplete = true,
   maxHeight = 248,
   className,
+  viewportClassName,
+  listClassName,
 }: TodoListProps) {
   const reduce = useReducedMotion() ?? false;
   const baseId = useId();
@@ -313,11 +327,15 @@ export function TodoList({
       >
         <div
           ref={viewportRef}
-          className="scrollbar-hide overflow-y-auto px-2 pb-2"
-          style={{ maxHeight }}
+          className={cn(
+            "scrollbar-hide overflow-y-auto",
+            // local patch (pi-app): the app's frame replaces the vendored padding.
+            viewportClassName ?? "px-2 pb-2",
+          )}
+          style={viewportClassName ? undefined : { maxHeight }}
         >
           {items.length ? (
-            <ol aria-live="polite" className="space-y-0">
+            <ol aria-live="polite" className={cn("space-y-0", listClassName)}>
             <AnimatePresence initial={false} mode="popLayout">
               {items.map((item) => {
                 const status = item.status ?? "pending";

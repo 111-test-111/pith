@@ -22,11 +22,13 @@ try {
   await writeFile(join(extensionDir, 'probe.ts'), `import { appendFileSync } from 'node:fs'; export default function(pi) { appendFileSync(${JSON.stringify(startupLog)}, 'loaded\\n'); pi.on('session_start', () => {}); }`)
   const sdk = fileURLToPath(import.meta.resolve('@earendil-works/pi-coding-agent'))
   const outfile = join(temporary, 'modules.mjs')
+  const sessionDir = join(agentDir, 'sessions', '--rewind-fixture-project--')
   await build({ stdin: { contents: `export { PiManager } from './src/main/pi/manager';
 export { RewindFailure } from './src/main/rewind/types';
 export { uncoveredWrites } from './src/main/rewind/coverage';
 export { TodoState, createTodoTool } from './src/main/pi/todo';
 export * from './src/main/pi/todo-protocol';
+export { selectedBranchHasMessages } from './src/main/pi/session-branch';
 export { PiStore } from './src/renderer/src/state/pi-store';
 export { buildToolCatalog } from './src/main/pi/catalog';`, resolveDir: resolve('.') },
     bundle: true, platform: 'node', format: 'esm', outfile,
@@ -37,8 +39,11 @@ export { buildToolCatalog } from './src/main/pi/catalog';`, resolveDir: resolve(
       builder.onLoad({ filter: /^electron$/, namespace: 'fixture' }, () => ({ contents: `export const app={getPath:()=>${JSON.stringify(temporary)}};export const shell={};` }))
       builder.onLoad({ filter: /^sdk$/, namespace: 'fixture' }, () => ({ contents: `
 export * from ${JSON.stringify(sdk)};
-import {createAgentSessionServices as create,SettingsManager} from ${JSON.stringify(sdk)};
+import {createAgentSessionServices as create,SettingsManager,SessionManager as BaseManager} from ${JSON.stringify(sdk)};
 export const getAgentDir=()=>${JSON.stringify(agentDir)};
+// The app lists sessions through the SDK's own session root; point that root at
+// this profile so the sidebar rule is exercised against the fixture sessions.
+export class SessionManager extends BaseManager { static listAll(_dir, onProgress) { return BaseManager.listAll(${JSON.stringify(sessionDir)}, onProgress) } }
 export function createAgentSessionServices(options){return create({...options,agentDir:getAgentDir(),settingsManager:SettingsManager.inMemory({compaction:{enabled:false},retry:{enabled:false}}),
 resourceLoaderOptions:{...options.resourceLoaderOptions,noExtensions:options.resourceLoaderOptions.noExtensions??false,noSkills:true,noPromptTemplates:true,noThemes:true,noContextFiles:true,
 extensionFactories:[...(options.resourceLoaderOptions.extensionFactories??[]),{name:'fixture-transform',hidden:true,factory:pi=>{
@@ -46,7 +51,7 @@ pi.on('tool_result',e=>{if(e.toolName==='todo_write'&&e.input.todos[0]?.content=
 }}]}})};` }))
     } }]
   })
-  const { PiManager, PiStore, RewindFailure, uncoveredWrites } = await import(pathToFileURL(outfile).href)
+  const { PiManager, PiStore, RewindFailure, uncoveredWrites, selectedBranchHasMessages } = await import(pathToFileURL(outfile).href)
   const scope = join(temporary, 'coverage', 'scope'), sibling = join(temporary, 'coverage', 'scope-sibling')
   await mkdir(scope, { recursive: true }); await mkdir(sibling)
   await writeFile(join(scope, 'space name.txt'), 'covered')
@@ -83,7 +88,7 @@ pi.on('tool_result',e=>{if(e.toolName==='todo_write'&&e.input.todos[0]?.content=
   const store = new PiStore()
   const app = new PiManager((channel, event) => { if (channel === 'pi:event') store.dispatch(event) }, (error) => { throw new Error(error) }); apps.push(app)
   app.runtime = async () => runtime
-  const manager = SessionManager.create(project, join(temporary, 'sessions'))
+  const manager = SessionManager.create(project, sessionDir)
   const managed = await app.buildSession(manager)
   const { session } = managed
   store.applySnapshot(app.snapshot())
@@ -142,15 +147,49 @@ pi.on('tool_result',e=>{if(e.toolName==='todo_write'&&e.input.todos[0]?.content=
   assert.equal(managed.todos.snapshot, null)
   assert(!session.messages.some(message => message.role === 'user'))
   assert(!SessionManager.open(managed.path).buildSessionContext().messages.some(message => message.role === 'user'), 'conversation selection survives reopen without another prompt')
+  // The sidebar lists a session from its SELECTED branch: `messageCount` counts
+  // the abandoned history this restore left behind, so the persisted selection
+  // carries the branch fact and the list reads it back.
+  const selectionOf = (path) => SessionManager.open(path).getEntries().filter(entry => entry.customType === 'pith_rewind_selection').at(-1)?.data
+  assert.equal(selectionOf(managed.path).empty, true, 'a selection to before the first turn records an empty branch')
+  assert.equal(await selectedBranchHasMessages(managed.path), false, 'the reader agrees that the branch has nothing to show')
+  assert(!(await app.listSessions()).some(summary => summary.path === managed.path), 'an emptied session leaves the sidebar instead of listing as an unopenable chat')
   const undone = await restore(restored.operation.id, 'undo')
   assert.equal(await readFile(join(project, 'file.txt'), 'utf8'), 'TOOL AFTER\n')
   assert.deepEqual(managed.todos.snapshot, todo)
   assert(SessionManager.open(managed.path).buildSessionContext().messages.some(message => message.role === 'user'))
+  assert.equal(selectionOf(managed.path).empty, false, 'an Undo selection carries the messages it restored')
+  assert.equal(await selectedBranchHasMessages(managed.path), true)
+  assert((await app.listSessions()).some(summary => summary.path === managed.path), 'Undo puts the session back in the sidebar')
   const redone = await restore(undone.operation.id, 'redo')
   assert.equal(await readFile(join(project, 'file.txt'), 'utf8'), 'USER BEFORE\r\n')
   assert.equal(managed.todos.snapshot, null)
   await restore(redone.operation.id, 'undo')
   console.log('PASS: combined restore, persistent conversation selection, Todo, full Undo/Redo')
+  // The sidebar reader: only the newest relevant entry decides, and a message
+  // appended after a selection is on the selected branch.
+  const branchDir = join(temporary, 'branch-files')
+  await mkdir(branchDir, { recursive: true })
+  const at = new Date().toISOString()
+  const userMessage = (id, parentId) => ({ type: 'message', id, parentId, timestamp: at, message: { role: 'user', content: [{ type: 'text', text: 'hello' }], timestamp: 1 } })
+  const selection = (id, parentId, data) => ({ type: 'custom', customType: 'pith_rewind_selection', data, id, parentId, timestamp: at })
+  let branchFiles = 0
+  const branchFile = async (list) => {
+    const file = join(branchDir, `branch-${branchFiles++}.jsonl`)
+    await writeFile(file, [{ type: 'session', version: 3, id: `branch-${branchFiles}`, timestamp: at, cwd: project }, ...list].map(entry => JSON.stringify(entry)).join('\n') + '\n')
+    return file
+  }
+  const assertBranch = async (expected, entries, label) => assert.equal(await selectedBranchHasMessages(await branchFile(entries)), expected, label)
+  await assertBranch(true, [userMessage('m1', null)], 'a branch ending in a message has something to show')
+  await assertBranch(false, [selection('s1', null, { operationId: 'op', target: null, empty: true })], 'a selection that recorded an empty branch hides the session')
+  await assertBranch(true, [userMessage('m1', null), selection('s1', 'm1', { operationId: 'op', target: 'm1', empty: false })], 'a selection that recorded messages keeps it')
+  await assertBranch(false, [userMessage('m1', null), selection('s1', 'm1', { operationId: 'op', target: null })], 'a selection written before the fact is known still decides a reset leaf')
+  await assertBranch(true, [userMessage('m1', null), selection('s1', 'm1', { operationId: 'op', target: 'm1' })], 'an unrecorded selection over messages stays listed')
+  await assertBranch(true, [userMessage('m1', null), selection('s1', null, { operationId: 'op', target: null, empty: true }), userMessage('m2', 's1')], 'a message sent after the restore puts the session back')
+  await assertBranch(false, [selection('s1', null, { operationId: 'op', target: null, empty: true }), ...Array.from({ length: 400 }, (_, index) => ({ type: 'model_change', id: `pad-${index}`, parentId: 's1', timestamp: at, provider: 'fixture', modelId: 'x'.repeat(200) }))], 'the decision survives a tail larger than one read window')
+  await assertBranch(false, [], 'a file with no message entry has an empty branch')
+  assert.equal(await selectedBranchHasMessages(join(branchDir, 'missing.jsonl')), true, 'an unreadable file is listed, never hidden')
+  console.log('PASS: the selected branch decides the sidebar row, without a second full read')
   const preview = value(await app.rewindPreview(managed.path, before.id))
   const id = randomUUID()
   app.rewindClient.call = async (method, ...args) => {
@@ -220,7 +259,7 @@ pi.on('tool_result',e=>{if(e.toolName==='todo_write'&&e.input.todos[0]?.content=
   // write in a different project. A valid empty snapshot is not full coverage.
   const empty = join(temporary, 'empty-workspace')
   await mkdir(empty)
-  const outside = await restarted.buildSession(SessionManager.create(empty, join(temporary, 'sessions')))
+  const outside = await restarted.buildSession(SessionManager.create(empty, sessionDir))
   await outside.lifecyclePromise
   outside.session.agent.streamFunction = session.agent.streamFunction
   let outsideStep = 0
@@ -250,7 +289,7 @@ pi.on('tool_result',e=>{if(e.toolName==='todo_write'&&e.input.todos[0]?.content=
   await writeFile(join(mixedRoot, 'ignored.txt'), 'IGNORED BEFORE\n')
   await writeFile(skippedExternal, 'EXTERNAL BEFORE\n')
   git('add', '.');git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'fixture')
-  const mixed = await restarted.buildSession(SessionManager.create(mixedRoot, join(temporary, 'sessions')))
+  const mixed = await restarted.buildSession(SessionManager.create(mixedRoot, sessionDir))
   await mixed.lifecyclePromise
   mixed.session.agent.streamFunction = session.agent.streamFunction
   let mixedStep = 0

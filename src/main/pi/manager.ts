@@ -43,9 +43,11 @@ import { SubagentNotifications } from './subagents/notifications'
 import { SUBAGENT_TOOL_NAME } from './subagents/protocol'
 import { readDiskSubagentRuns } from './subagents/protocol'
 import type { SubagentRunStartData } from './subagents/protocol'
-import { createSubagentTool } from './subagents/tools'
+import { createSubagentTool, installSubagentResultHook } from './subagents/tools'
+import { subagentModelSpecError } from './subagents/model-spec'
 import { ensureDefaultProfiles, listSubagentProfiles } from './subagents/profiles'
 import { isSubagentSessionFile } from './subagents/session-filter'
+import { SessionListIndex, rowFromSessionManager } from './session-list'
 import { BASH_MIN_WAIT_MS, BASH_MAX_WAIT_MS, type StartupSessionMode } from '../../shared/types'
 import { FileIndex, readAttachment } from './files'
 import { SessionSearch } from './session-search'
@@ -326,6 +328,51 @@ export class PiManager {
   }
 
   /**
+   * One session's transcript for the rail's side view, read WITHOUT making it
+   * the active session: the visible chat keeps its session, and a child's runs
+   * stay owned by its parent's runtime.
+   *
+   * A session that is already managed (a live or viewed child) returns its
+   * live snapshot. One that is not is read straight from its file — building a
+   * whole AgentSession (extensions, task owner, notifications) just to show a
+   * finished transcript would cost seconds and register machinery nobody asked
+   * for. The file path is compaction-aware (`buildContextEntries`) so the pane
+   * shows the same transcript the chat would.
+   */
+  peekSession(path: string): SessionSnapshotDTO {
+    const managed = this.sessions.get(path)
+    if (managed) return this.snapshotOf(managed)
+    const manager = SessionManager.open(path)
+    const messages = serialize(manager.buildContextEntries()
+      .filter((entry) => entry.type === 'message')
+      .map((entry) => entry.message)) as ChatMessage[]
+    const runs = readDiskSubagentRuns(manager.getEntries() as any[])
+    const current = runs[runs.length - 1]
+    const cwd = manager.getCwd()
+    return {
+      sessionId: manager.getSessionId(),
+      sessionPath: path,
+      cwd,
+      projectless: isDefaultWorkspace(cwd),
+      initializing: false,
+      messages,
+      todos: null,
+      streaming: null,
+      toolRuns: {},
+      queue: { steering: [], followUp: [] },
+      model: null,
+      thinkingLevel: 'off',
+      availableThinkingLevels: [],
+      isStreaming: false,
+      contextUsage: null,
+      subagents: [],
+      subagentChild: current !== undefined,
+      ...(current ? { subagentParentPath: current.start.parentSessionPath } : {}),
+      eventSequence: 0
+    }
+  }
+
+  /**
    * Panel actions on a parent's subagent runs. `resume` continues a finished
    * child session under a fresh run, sharing the dispatch admission path.
    */
@@ -368,6 +415,10 @@ export class PiManager {
     return mode
   }
   private sessionSearch = new SessionSearch()
+  /** Sidebar listing index — stat-keyed row cache so refreshes skip unchanged files (see session-list.ts). */
+  private sessionIndex = new SessionListIndex(join(app.getPath('userData'), 'session-list-cache.json'))
+  /** One list refresh at a time; turn-boundary events fire these in bursts. */
+  private sessionListInFlight: Promise<SessionSummaryDTO[]> | null = null
   private usageAggregator = new UsageAggregator()
   private modelRuntime: ModelRuntime | null = null
   /** Lazily created; reads/writes ~/.pi/agent/settings.json (default model). */
@@ -447,7 +498,15 @@ export class PiManager {
           const [providerId, ...rest] = spec.split('/')
           const modelId = rest.join('/')
           if (providerId && modelId && runtime.getModel(providerId, modelId)) return { spec }
-          throw new Error(`Unknown subagent model "${spec}" (expected "provider/modelId")`)
+          // A well-formed spec that is merely not configured is NOT a syntax
+          // error; say which half is missing and what exists instead.
+          throw new Error(subagentModelSpecError(spec, {
+            providers: runtime.getProviders().map((provider) => provider.id),
+            modelsOf: (id) => {
+              const provider = runtime.getProvider(id)
+              return provider ? provider.getModels().map((model) => model.id) : null
+            }
+          }))
         }
         // No override: inherit the parent's live model AS A SPEC, so the child
         // resolves the same model instead of falling back to default selection.
@@ -992,6 +1051,7 @@ export class PiManager {
         })] : [])]
     })
     if (!isChild) parentSessionRef.session = session
+    if (!isChild) installSubagentResultHook(session)
     if (isChild && role!.resource.thinkingLevel) {
       // Thinking levels are model-derived: clamp the frozen request to what
       // the child's actual model supports instead of letting it error.
@@ -1128,15 +1188,30 @@ export class PiManager {
     // Reuse only a settled instance: a live run owns the child right now, and
     // a second driver (resume racing the run, or steering mid-flight) would
     // interleave two runs over one session.
-    if (existing && !existing.disposing && existing.session.isStreaming) {
+    if (existing && !existing.disposing && !existing.session.isIdle) {
       throw new Error('Subagent is already running')
     }
-    const reused = Boolean(existing && !existing.disposing && !this.closing)
-    const managed = reused
-      ? existing!
-      : await this.createManagedSession(sessionManager, await this.resolveSubagentRole(options))
+    let managed = existing && !existing.disposing && !this.closing ? existing : undefined
+    if (!managed) {
+      // Share admission with ordinary openSession: the transcript can be
+      // opened while resume is still resolving the model/loading resources.
+      let pending = this.sessionBuilds.get(path!)
+      if (!pending) {
+        pending = this.resolveSubagentRole(options).then(role => this.createManagedSession(sessionManager, role))
+        this.sessionBuilds.set(path!, pending)
+      }
+      try { managed = await pending }
+      finally { if (this.sessionBuilds.get(path!) === pending) this.sessionBuilds.delete(path!) }
+    }
     await managed.lifecyclePromise
     if (managed.disposing || this.closing) throw new Error('Subagent session was closed during initialization')
+    if (!managed.session.isIdle) throw new Error('Subagent is already running')
+    if (!managed.subagentChild || managed.subagentChild.parentPath !== options.parentSessionPath) {
+      throw new Error('Subagent session does not belong to this parent')
+    }
+    // A stopped child kept open for viewing has paused its own bash owner.
+    // Resume is the sole write admission for that view and reopens this owner.
+    managed.notifications.resume()
     // The handle's manager MUST be the one the live AgentSession writes
     // through: a freshly `open()`ed manager shares the file but not the
     // in-memory tree, and run records written through it land on a different
@@ -1149,6 +1224,7 @@ export class PiManager {
       runId: options.runId,
       parentSessionId: options.parentSessionId,
       resource: options.resource,
+      isSettled: () => managed.session.isIdle && !managed.notifications.hasPendingCompletions,
       halt: async () => {
         // Stop everything the child owns: its wake path first (a completion
         // arriving mid-halt must not re-wake it), then its queues, its
@@ -1158,11 +1234,11 @@ export class PiManager {
         await this.commandTasksInstance?.stopSession(managed.path).catch(() => {})
         await managed.session.abort().catch(() => {})
       },
-      release: () => {
+      release: async () => {
         // A child the user is currently viewing stays alive; it is disposed by
         // its own lifecycle (navigation away is non-destructive in pi-app).
         if (this.sessions.get(managed.path) === managed && this.activeSession !== managed) {
-          void this.disposeManaged(managed)
+          await this.disposeManaged(managed)
         }
       }
     }
@@ -1281,6 +1357,7 @@ export class PiManager {
       contextUsage: this.contextUsageOf(managed),
       subagents: managed.subagents?.snapshot() ?? [],
       subagentChild: Boolean(managed.subagentChild),
+      ...(managed.subagentChild ? { subagentParentPath: managed.subagentChild.parentPath } : {}),
       eventSequence: managed.eventSequence
     }
   }
@@ -1477,7 +1554,18 @@ export class PiManager {
    */
   async listSessions(): Promise<SessionSummaryDTO[]> {
     this.sessionSearch.warm()
-    const infos = await SessionManager.listAll().catch(() => [])
+    this.sessionListInFlight ??= this.listSessionsUncached().finally(() => {
+      this.sessionListInFlight = null
+    })
+    return this.sessionListInFlight
+  }
+
+  private async listSessionsUncached(): Promise<SessionSummaryDTO[]> {
+    await this.sessionIndex.refresh((path) => {
+      const managed = this.sessions.get(path)
+      return (managed ? rowFromSessionManager(managed.session.sessionManager) : null) ?? undefined
+    })
+    const infos = this.sessionIndex.list()
     const byFolder = new Map<string, typeof infos>()
     for (const info of infos) {
       if (!info.cwd) continue
@@ -1486,7 +1574,7 @@ export class PiManager {
       byFolder.set(info.cwd, list)
     }
     const folderRecency = (sessions: typeof infos) =>
-      sessions.reduce((max, s) => Math.max(max, s.modified.getTime()), 0)
+      sessions.reduce((max, s) => Math.max(max, s.modified), 0)
     const orderedFolders = [
       ...(this.cwd ? [this.cwd] : []),
       ...this.folders.filter((f) => f !== this.cwd),
@@ -1502,7 +1590,7 @@ export class PiManager {
     for (const folder of orderedFolders) {
       if (seen.has(folder)) continue
       seen.add(folder)
-      const sessions = (byFolder.get(folder) ?? []).slice().sort((a, b) => b.modified.getTime() - a.modified.getTime())
+      const sessions = (byFolder.get(folder) ?? []).slice().sort((a, b) => b.modified - a.modified)
       for (const s of sessions) {
         // A freshly materialized session has a header but no messages yet; keep
         // it off the sidebar until its first user message exists to name it.
@@ -1510,14 +1598,19 @@ export class PiManager {
         // Subagent children are reachable through their parent's roster, not
         // the sidebar. Only the persisted run marker separates them from
         // forks (which also carry parentSessionPath and do show here).
-        if (s.parentSessionPath && isSubagentSessionFile(s.path)) continue
+        if (s.parentSessionPath && s.subagentChild) continue
+        // `messageCount` counts every branch in the file, so a session whose
+        // conversation was restored to before its first turn still has all its
+        // history in that number while its selected branch is empty. The branch
+        // decides: it would otherwise be listed but open as a new chat.
+        if (!s.branchHasMessages) continue
         summaries.push({
           path: s.path,
-          id: s.id,
+          id: s.id ?? '',
           // No prose here: an empty session carries `null` so the renderer can
           // label it in the active locale.
           label: s.name?.trim() || (s.messageCount > 0 ? s.firstMessage?.trim().slice(0, 80) || null : null),
-          modified: s.modified instanceof Date ? s.modified.toISOString() : String(s.modified),
+          modified: new Date(s.modified).toISOString(),
           messageCount: s.messageCount,
           cwd: folder,
           projectless: isDefaultWorkspace(folder),
@@ -1913,6 +2006,7 @@ export class PiManager {
   async forkFromMessage(timestamp: number): Promise<ForkResultDTO> {
     const managed = this.activeSession
     if (!managed) throw new Error('No active session')
+    if (managed.subagentChild) throw new Error('A subagent session is read-only')
     const entry = this.findMessageEntry(managed, 'assistant', timestamp)
     if (!entry) throw new Error('Message not found')
     const sessionManager = managed.session.sessionManager
@@ -1968,6 +2062,7 @@ export class PiManager {
 
   async setModel(providerId: string, modelId: string): Promise<SessionSnapshotDTO> {
     const managed = this.activeSession
+    if (managed?.subagentChild) throw new Error('A subagent session is read-only')
     const runtime = await this.runtime()
     const model = runtime.getModel(providerId, modelId)
     if (!model) throw new Error(`Unknown model ${providerId}/${modelId}`)
@@ -1979,6 +2074,7 @@ export class PiManager {
   }
 
   async setThinkingLevel(level: ThinkingLevel): Promise<SessionSnapshotDTO> {
+    if (this.activeSession?.subagentChild) throw new Error('A subagent session is read-only')
     if (!this.activeSession) throw new Error('No active session')
     this.activeSession.session.setThinkingLevel(level)
     return this.snapshot()
@@ -2147,15 +2243,23 @@ export class PiManager {
       return { tools: [], extensions: [], skills: [], skillDiagnostics: [] }
     }
     await managed.lifecyclePromise
-    const key = `${managed.path}\u0000${[...this.disabledExtensions].sort().join('\u0000')}`
+    const session = managed.session
+    // Tools can register long after initialization — an extension's MCP bridge
+    // (e.g. context-mode) spawns at the session's first `before_agent_start`,
+    // well after `lifecyclePromise` resolved. Fingerprint the registered tool
+    // names into the cache key so those late registrations (and any later
+    // removal) invalidate the cached catalog instead of serving the pre-bridge
+    // snapshot forever.
+    const sessionTools = session?.getAllTools() ?? []
+    const registeredTools = sessionTools.map((tool) => tool.name).sort().join('\u0001')
+    const key = `${managed.path}\u0000${[...this.disabledExtensions].sort().join('\u0000')}\u0000${registeredTools}`
     if (this.catalogCache?.key === key) return this.catalogCache.value
     const packages = await loadPackageResources(cwd, getAgentDir()).catch(
       () => new Map<string, PackageResources>()
     )
-    const session = managed.session
     const value = buildToolCatalog(
       loader,
-      session?.getAllTools() ?? [],
+      sessionTools,
       session?.getActiveToolNames() ?? [],
       this.disabledExtensions,
       packages,
@@ -2598,7 +2702,11 @@ export class PiManager {
       if (leaf === null) manager.resetLeaf(); else manager.branch(leaf)
       session.agent.state.messages = manager.buildSessionContext().messages
     }
-    manager.appendCustomEntry('pith_rewind_selection', { operationId, target: leaf })
+    manager.appendCustomEntry('pith_rewind_selection', { operationId, target: leaf,
+      // The sidebar lists a session from its SELECTED branch, not from the
+      // file's abandoned history: record whether this selection has anything
+      // to show. `session-branch.ts` reads it back without a second full read.
+      empty: !manager.getBranch().some(entry => entry.type === 'message') })
     const file = await openFile(managed.path, 'r')
     try { await file.sync() } finally { await file.close() }
     managed.todos.restore(); managed.changeScopes.restore(); managed.eventSequence += 1

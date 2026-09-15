@@ -80,7 +80,13 @@ export const SessionTasks = memo(function SessionTasks({ todos, subagents = [], 
             <Button key={panel} ref={(node) => { triggers.current[panel] = node }}
               id={`${baseId}-${panel}`} size="sm" variant={active ? 'secondary' : 'ghost'}
               data-task-trigger={panel} aria-expanded={active} aria-controls={`${baseId}-panel`}
-              onClick={() => setSelected(active ? null : panel)} className="gap-2 text-xs">
+              // A quiet toggle: beUI's press/hover scale made the label pulse
+              // outward on every click, and only the active variant carries a
+              // border — the constant transparent one keeps the pill (and every
+              // trigger after it) from shifting when the panel opens.
+              whileHover={{ scale: 1 }} whileTap={{ scale: 1 }}
+              onClick={() => setSelected(active ? null : panel)}
+              className={cn('gap-2 text-xs', !active && 'border border-transparent')}>
               <Icon aria-hidden="true" className="size-3.5 text-muted-foreground" />
               {label}
               <span className="tabular-nums text-muted-foreground"><ActionSwapRollText value={count}>{count}</ActionSwapRollText></span>
@@ -89,9 +95,9 @@ export const SessionTasks = memo(function SessionTasks({ todos, subagents = [], 
           )
         })}
       </div>
-      <div className={cn('absolute inset-x-4 top-full rounded-card transition-opacity duration-150', open ? 'opacity-100 shadow-overlay' : 'pointer-events-none opacity-0')}>
+      <div className={cn('absolute inset-x-0 top-full transition-opacity duration-150', open ? 'opacity-100' : 'pointer-events-none opacity-0')}>
         <AgentDisclosure id={`${baseId}-panel`} role="region" aria-labelledby={selected ? `${baseId}-${selected}` : undefined}
-          open={open} data-task-panel={selected ?? ''} className="rounded-card border border-border bg-popover">
+          open={open} data-task-panel={selected ?? ''} className="border-b border-border bg-popover">
           <div className="flex min-h-12 items-center gap-3 border-b border-border/60 px-3 py-2">
             <div className="min-w-0 flex-1">
               <div className="text-sm font-medium">{title}</div>
@@ -103,8 +109,10 @@ export const SessionTasks = memo(function SessionTasks({ todos, subagents = [], 
             </Button>
           </div>
           {selected === 'todo' ? (
-            <TodoList headerless collapseOnComplete={false} className="rounded-none border-0 pt-1" title={t('todo.title')}
-              maxHeight={264} items={items.map((item) => ({
+            <TodoList headerless collapseOnComplete={false} className="rounded-none border-0" title={t('todo.title')}
+              // The drawer's list frame: the same 16.5rem cap, 4px edge padding
+              // and 8px row gaps as the bash/subagent lists.
+              viewportClassName="max-h-[16.5rem] p-1" listClassName="space-y-2" items={items.map((item) => ({
                 id: item.id,
                 title: <span className="block whitespace-normal break-words py-1" data-todo-id={item.id} data-todo-status={item.status}>
                   {item.content}

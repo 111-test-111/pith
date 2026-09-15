@@ -84,7 +84,11 @@ export function QueuePanel({
                   transition={{ duration: 0.16, ease: EASE_OUT }}
                   className="overflow-hidden"
                 >
-                  <div className="group flex min-w-0 items-center gap-2 rounded-lg px-2 pb-1 transition-colors hover:bg-muted">
+                  {/* A queued message reads at body size on a row tall enough
+                      to centre it: the text keeps the app's 24px body line
+                      (`text-sm leading-6`) and the symmetric padding puts the
+                      line in the middle of the row on its own. */}
+                  <div data-queue-row className="group flex min-w-0 items-center gap-2 rounded-lg py-1.5 pl-2 pr-1 transition-colors hover:bg-muted">
                     <Tooltip
                       content={t(row.kind === 'steering' ? 'composer.kindSteer' : 'composer.kindFollowUp')}
                       side="bottom"
@@ -97,16 +101,16 @@ export function QueuePanel({
                         )}
                       </span>
                     </Tooltip>
-                    <span className="min-w-0 flex-1 truncate py-1 text-xs text-foreground/80">
+                    <span data-queue-row-text className="min-w-0 flex-1 truncate text-sm leading-6 text-foreground/80">
                       {display.text}
                       {row.imageCount > 0 ? (
-                        <span className="ml-1.5 inline-flex items-center gap-0.5 align-baseline text-muted-foreground">
+                        <span className="ml-1.5 inline-flex items-center gap-0.5 align-baseline leading-4 text-muted-foreground">
                           <ImageIcon aria-hidden="true" className="size-3" />
                           {row.imageCount}
                         </span>
                       ) : null}
                       {row.filePaths.length > 0 ? (
-                        <span className="ml-1.5 inline-flex items-center gap-0.5 align-baseline text-muted-foreground">
+                        <span className="ml-1.5 inline-flex items-center gap-0.5 align-baseline leading-4 text-muted-foreground">
                           <Paperclip aria-hidden="true" className="size-3" />
                           {row.filePaths.length}
                         </span>

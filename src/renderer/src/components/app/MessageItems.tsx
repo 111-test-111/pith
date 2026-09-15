@@ -1,7 +1,16 @@
 import { BashTaskRow } from './BashTaskView'
 import { SubagentCompletionRow } from './SubagentView'
-import { Fragment, memo, useMemo, useState, type ReactNode } from 'react'
-import { Brain, FileText, GitFork, Pencil, RotateCcw } from '@/lib/icons'
+import {
+  Fragment,
+  memo,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode
+} from 'react'
+import { Brain, ChevronDown, FileText, GitFork, Pencil, RotateCcw } from '@/lib/icons'
 import { AgentActivity } from '@/components/agents/agent-activity'
 import { AgentDisclosure } from '@/components/agents/agent-disclosure'
 import {
@@ -73,6 +82,78 @@ type Translate = (key: MessageKey, params?: Record<string, string | number>) => 
 const ACTIONS_HOVER =
   'opacity-0 transition-opacity group-hover/message:opacity-100 focus-within:opacity-100'
 
+/** Collapsed height of a user bubble body: ten 24px body lines
+ * (`text-sm/leading-6`). Long pastes are cut here and offered an expand
+ * toggle instead of pushing the whole transcript down. */
+const USER_BUBBLE_MAX_REM = 10 * 1.5
+
+/**
+ * Clamps a user bubble body to {@link USER_BUBBLE_MAX_REM} and — only when the
+ * body is actually taller than that — offers the expand toggle. The measured
+ * element is the inner one: the clamp caps the wrapper, so the verdict cannot
+ * flip when expanding removes the cap and hide the control the user just used.
+ * A layout effect puts the clamp and its toggle into the first painted frame,
+ * so a long message never flashes at full height.
+ */
+function UserBubbleBody({ children }: { children: ReactNode }) {
+  const { t } = useI18n()
+  const [open, setOpen] = useState(false)
+  const [overflowing, setOverflowing] = useState(false)
+  const bodyRef = useRef<HTMLDivElement>(null)
+  const bodyId = useId()
+
+  useLayoutEffect(() => {
+    const node = bodyRef.current
+    if (!node) return
+    const update = () => {
+      const rootFont = Number.parseFloat(getComputedStyle(document.documentElement).fontSize) || 16
+      setOverflowing(node.getBoundingClientRect().height > USER_BUBBLE_MAX_REM * rootFont + 1)
+    }
+    update()
+    // Watching the inner element (not the clamped wrapper, whose box stops
+    // changing once capped) also catches re-wraps, images decoding and font
+    // swaps, all of which move the natural height only.
+    const observer = new ResizeObserver(update)
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [])
+
+  const collapsed = overflowing && !open
+  return (
+    <>
+      <div
+        id={bodyId}
+        data-user-bubble-body
+        data-collapsed={collapsed ? 'true' : undefined}
+        className={
+          collapsed
+            ? 'overflow-hidden [mask-image:linear-gradient(to_bottom,#000_82%,transparent_100%)]'
+            : undefined
+        }
+        style={collapsed ? { maxHeight: `${USER_BUBBLE_MAX_REM}rem` } : undefined}
+      >
+        <div ref={bodyRef}>{children}</div>
+      </div>
+      {overflowing ? (
+        <Button
+          variant="ghost"
+          size="sm"
+          aria-expanded={open}
+          aria-controls={bodyId}
+          onClick={() => setOpen((value) => !value)}
+          className="mt-1 px-2"
+        >
+          {open ? t('chat.messageCollapse') : t('chat.messageExpand')}
+          <ChevronDown
+            aria-hidden="true"
+            className={cn('size-3.5 transition-transform', open && 'rotate-180')}
+          />
+        </Button>
+      ) : null}
+    </>
+  )
+}
+
 /** `railId` marks this row as a navigation-rail target (MessageScroller
  * resolves app-provided rail items through data-rail-id). */
 export const UserItem = memo(function UserItem({
@@ -115,36 +196,38 @@ export const UserItem = memo(function UserItem({
             text legible (unlike solid's fixed black/white). */}
         <MessageBubble variant="soft">
           <MessageBubbleContent>
-            {text ? <p className={`whitespace-pre-wrap ${WRAP_ANYWHERE}`}>{text}</p> : null}
-            {files.length ? (
-              <div className="mt-2 flex flex-wrap gap-1.5">
-                {files.map((path) => (
-                  <LabelTooltip key={path} content={path} wrap>
-                    <Button
-                      variant="ghost" size="sm"
-                      onClick={() => fileNavigation.openPath(path)}
-                      className="inline-flex max-w-64 items-center gap-1.5 rounded-lg bg-background/60 px-2 py-1 text-xs text-foreground/90 transition-colors hover:bg-background"
-                    >
-                      <FileText className="size-3.5 shrink-0" />
-                      <span className="truncate">{basename(path)}</span>
-                    </Button>
-                  </LabelTooltip>
-                ))}
-              </div>
-            ) : null}
-            {images.length ? (
-              <div className="mt-2 flex flex-wrap gap-2">
-                {images.map((image, index) => (
-                  <PreviewThumb
-                    key={index}
-                    src={`data:${image.mimeType};base64,${image.data}`}
-                    alt={t('imagePreview.attachment', { index: index + 1 })}
-                    className="max-w-64 rounded-lg"
-                    imageClassName="max-h-44 w-auto max-w-full object-cover"
-                  />
-                ))}
-              </div>
-            ) : null}
+            <UserBubbleBody>
+              {text ? <p className={`whitespace-pre-wrap ${WRAP_ANYWHERE}`}>{text}</p> : null}
+              {files.length ? (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {files.map((path) => (
+                    <LabelTooltip key={path} content={path} wrap>
+                      <Button
+                        variant="ghost" size="sm"
+                        onClick={() => fileNavigation.openPath(path)}
+                        className="inline-flex max-w-64 items-center gap-1.5 rounded-lg bg-background/60 px-2 py-1 text-xs text-foreground/90 transition-colors hover:bg-background"
+                      >
+                        <FileText className="size-3.5 shrink-0" />
+                        <span className="truncate">{basename(path)}</span>
+                      </Button>
+                    </LabelTooltip>
+                  ))}
+                </div>
+              ) : null}
+              {images.length ? (
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {images.map((image, index) => (
+                    <PreviewThumb
+                      key={index}
+                      src={`data:${image.mimeType};base64,${image.data}`}
+                      alt={t('imagePreview.attachment', { index: index + 1 })}
+                      className="max-w-64 rounded-lg"
+                      imageClassName="max-h-44 w-auto max-w-full object-cover"
+                    />
+                  ))}
+                </div>
+              ) : null}
+            </UserBubbleBody>
           </MessageBubbleContent>
         </MessageBubble>
         {showActions ? (
@@ -487,32 +570,34 @@ const AssistantParts = memo(function AssistantParts({
         )
       })}
 
-      {ownsTail && message.errorMessage ? (
-        // Reuses the reasoning disclosure (beUI AgentActivity): a collapsed row
-        // that expands to the raw provider/SDK error instead of dumping a red
-        // box into the transcript.
-        <RowReveal animate={streaming} className="w-full">
-          <AgentActivity
-            status="complete"
-            summary={<span className="text-destructive">{t('chat.error')}</span>}
-            defaultOpen={false}
-            collapseOnComplete={false}
-            contentClassName={WRAP_ANYWHERE}
-            items={[
-              {
-                id: 'error',
-                type: 'text' as const,
-                content: (
-                  <span className="text-destructive">
-                    {message.errorMessage}
-                    {message.stopReason === 'aborted' ? t('chat.aborted') : ''}
-                  </span>
-                ),
-              },
-            ]}
-          />
-        </RowReveal>
-      ) : null}
+      {ownsTail && message.errorMessage ? (() => {
+        // A user-stopped round is not a failure: it reads as a neutral
+        // "stopped" row instead of a red error disclosure (the SDK reports the
+        // abort through the same `errorMessage` field).
+        const stopped = message.stopReason === 'aborted'
+        const tone = stopped ? 'text-muted-foreground' : 'text-destructive'
+        return (
+          // Reuses the reasoning disclosure (beUI AgentActivity): a collapsed row
+          // that expands to the raw provider/SDK error instead of dumping a red
+          // box into the transcript.
+          <RowReveal animate={streaming} className="w-full">
+            <AgentActivity
+              status="complete"
+              summary={<span className={tone}>{stopped ? t('subagent.aborted') : t('chat.error')}</span>}
+              defaultOpen={false}
+              collapseOnComplete={false}
+              contentClassName={WRAP_ANYWHERE}
+              items={[
+                {
+                  id: 'error',
+                  type: 'text' as const,
+                  content: <span className={tone}>{message.errorMessage}</span>,
+                },
+              ]}
+            />
+          </RowReveal>
+        )
+      })() : null}
     </>
   )
 }, assistantPartsPropsEqual)
@@ -551,6 +636,7 @@ export interface AssistantGroupProps extends ToolContext {
   notices?: TurnNotice[]
   /** File ownership can span multiple user-steer display groups. */
   writtenMessages?: readonly AssistantMsg[]
+  writtenCompletions?: readonly CustomMsg[]
   writtenReviewId?: number
   showWrittenFiles?: boolean
   /** Consecutive assistant rounds of one turn, oldest first. */
@@ -570,6 +656,11 @@ export interface AssistantGroupProps extends ToolContext {
   /** False while a run streams: retry rewinds the session (SDK requires idle)
    * and fork switches the active session mid-observation. */
   showActions?: boolean
+  /** Terminal failure prose for this turn (auto-retry gave up, or compaction
+   * failed). It is prose about the turn, not status chrome: unframed, at body
+   * size, in the error colour, and directly ABOVE the retry/fork row it
+   * explains. */
+  failure?: string
   /** True only for the transcript's newest turn: its completion-actions row
    * (icons + timestamp) stays visible instead of revealing on hover. */
   actionsAlwaysVisible?: boolean
@@ -591,6 +682,7 @@ function assistantGroupPropsEqual(prev: AssistantGroupProps, next: AssistantGrou
     prev.messages !== next.messages ||
     prev.notices !== next.notices ||
     prev.writtenMessages !== next.writtenMessages ||
+    prev.writtenCompletions !== next.writtenCompletions ||
     prev.writtenReviewId !== next.writtenReviewId ||
     prev.showWrittenFiles !== next.showWrittenFiles ||
     prev.streamingIndex !== next.streamingIndex ||
@@ -602,6 +694,7 @@ function assistantGroupPropsEqual(prev: AssistantGroupProps, next: AssistantGrou
     prev.onResend !== next.onResend ||
     prev.onFork !== next.onFork ||
     prev.showActions !== next.showActions ||
+    prev.failure !== next.failure ||
     prev.actionsAlwaysVisible !== next.actionsAlwaysVisible ||
     prev.spinnerSeed !== next.spinnerSeed ||
     prev.onReview !== next.onReview
@@ -741,6 +834,7 @@ export const AssistantGroup = memo(function AssistantGroup({
   messages,
   notices,
   writtenMessages = messages,
+  writtenCompletions,
   writtenReviewId,
   showWrittenFiles = true,
   streamingIndex,
@@ -750,6 +844,7 @@ export const AssistantGroup = memo(function AssistantGroup({
   onResend,
   onFork,
   showActions = false,
+  failure,
   actionsAlwaysVisible = false,
   cwd,
   spinnerSeed,
@@ -849,11 +944,11 @@ export const AssistantGroup = memo(function AssistantGroup({
       // Background subagent completions land in this display group as turn
       // notices (the wake continues the scope here); their written-file
       // payloads belong in the same cumulative list as direct edit/write calls.
-      const completions = (notices ?? []).map((notice) => notice.message)
+      const completions = writtenCompletions ?? (notices ?? []).map((notice) => notice.message)
         .filter((message) => message.customType === 'subagent_completion')
       return extractTurnWrittenFiles(writtenMessages, toolResults, cwd, completions)
     },
-    [live, showWrittenFiles, writtenMessages, toolResults, cwd, notices]
+    [live, showWrittenFiles, writtenMessages, writtenCompletions, toolResults, cwd, notices]
   )
   /**
    * The list belongs between the answer and the completion-actions row, so it
@@ -996,6 +1091,18 @@ export const AssistantGroup = memo(function AssistantGroup({
         {live ? <TurnStatus step={liveStep} seedKey={spinnerSeed} /> : null}
 
         {writtenFilesNode && !writtenFilesInFooter ? writtenFilesNode : null}
+
+        {/* A failure the run ended on is prose about the turn, not a banner:
+            no frame, body size, error colour — and always above the actions
+            row it belongs to. */}
+        {!live && failure ? (
+          <p
+            data-turn-failure
+            className={cn('text-sm leading-6 text-destructive', WRAP_ANYWHERE)}
+          >
+            {failure}
+          </p>
+        ) : null}
 
         {/* Retry/fork normally live inside the final text round's completion
             actions row (so they share a line with copy/feedback and the

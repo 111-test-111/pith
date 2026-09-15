@@ -84,6 +84,7 @@ export function registerIpc(pi: PiManager): () => boolean {
   ipcMain.handle('bash:output', (_event, request: BashTaskRequest) => pi.bashTaskOutput(request))
   ipcMain.handle('bash:stop', (_event, request: BashTaskRequest) => pi.stopBashTask(request))
   ipcMain.handle('subagents:list', (_event, sessionPath: string) => pi.listSubagents(sessionPath))
+  ipcMain.handle('pi:peekSession', (_event, path: string) => pi.peekSession(path))
   ipcMain.handle('subagents:action', (_event, payload: SubagentActionPayload) => pi.subagentAction(payload))
   ipcMain.handle('subagents:setEnabled', (_event, enabled: boolean) => pi.setSubagentsEnabled(enabled))
   ipcMain.handle('subagents:setMaxConcurrent', (_event, value: number) => pi.setSubagentMaxConcurrent(value))

@@ -33,6 +33,8 @@ export class TaskNotifications {
 
   get canStart(): boolean { return !this.paused && !this.disposed }
 
+  get hasPendingCompletions(): boolean { return this.canStart && this.pending.size > 0 }
+
   /** A queued end-hook continuation must not publish a transient idle frame. */
   get continuesAtSettled(): boolean {
     // prompt() releases its idle-wake hold only after agent_settled returns.

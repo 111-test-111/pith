@@ -93,6 +93,7 @@ export interface ChangeScope {
   reviewId: number
   ownerKey: string
   assistants: AssistantMsg[]
+  completions: CustomMsg[]
   prompt: UserMsg | null
 }
 
@@ -107,12 +108,18 @@ export function collectChangeScopes(turns: readonly ChatTurn[]): Map<string, Cha
       const id = message.changeScopeId ?? turn.key
       let scope = scopes.get(id)
       if (!scope) {
-        scope = { id, reviewId: message.timestamp, ownerKey: turn.key, assistants: [], prompt }
+        scope = { id, reviewId: message.timestamp, ownerKey: turn.key, assistants: [], completions: [], prompt }
         scopes.set(id, scope)
       }
       scope.ownerKey = turn.key
       scope.assistants.push(message)
     }
+    // Completion evidence follows its display group's execution scope even
+    // when a later user steer moves that scope's file list to another group.
+    const scopeId = turn.assistants[0]?.changeScopeId ?? turn.key
+    const scope = scopes.get(scopeId)
+    if (scope) scope.completions.push(...(turn.notices ?? []).map(notice => notice.message)
+      .filter(message => message.customType === 'subagent_completion'))
   }
   return scopes
 }

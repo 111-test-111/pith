@@ -2,8 +2,9 @@ import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { ToolResult } from '@/components/agents/tool-result'
 import { Button } from '@/components/motion/button'
 import { Bot, FileDiff } from '@/lib/icons'
+import { formatTime } from '@/lib/format'
 import { useI18n } from '@/i18n'
-import type { SubagentRunDTO } from '../../../../shared/types'
+import { SUBAGENT_READ_ONLY_TOOLS, type SubagentRunDTO } from '../../../../shared/types'
 
 /**
  * The in-turn completion row for a background subagent, mirroring how a
@@ -21,7 +22,7 @@ export const SubagentCompletionRow = memo(function SubagentCompletionRow({ run }
         title={t('subagent.completedTitle', { description: run.description })}
         status={status}
         icon={<Bot aria-hidden="true" className="size-4" />}
-        meta={[run.profile, run.model, t(`subagent.${run.status}`), ...(run.writtenFiles?.length ? [t('subagent.filesCount', { count: run.writtenFiles.length })] : [])].filter(Boolean).join(' · ')}
+        meta={[run.profile, run.model, ...(run.runInBackground ? [t('subagent.background')] : []), ...(run.status === 'interrupted' ? [t('subagent.interrupted')] : []), ...(run.limitReached ? [t('subagent.turnLimit')] : []), ...(run.writtenFiles?.length ? [t('subagent.filesCount', { count: run.writtenFiles.length })] : [])].filter(Boolean).join(' · ')}
         copyText={run.result ?? run.error ?? run.task}
         collapseOnComplete={false}>
         {open ? (
@@ -92,17 +93,34 @@ function SubagentRow({ run, sessionPath, onOpenSession }: {
     }
   }
 
+  // The frozen ceiling tells the card whether this run could write at all —
+  // the difference between a research delegation and an implementation one.
+  const readOnly = Boolean(run.tools?.length) && run.tools!.every((tool) => SUBAGENT_READ_ONLY_TOOLS.includes(tool))
   const meta = [
     run.profile,
     run.model,
+    ...(readOnly ? [t('subagent.readOnlyTag')] : []),
+    ...(run.runInBackground ? [t('subagent.background')] : []),
+    // `interrupted` has no equivalent in the vendored status vocabulary (it
+    // renders as "Cancelled"), so it keeps an explicit localized label; the
+    // other statuses come from the row's own glyph/word and must not be
+    // repeated here — `已完成Completed` was exactly that duplication.
+    ...(run.status === 'interrupted' ? [t('subagent.interrupted')] : []),
+    ...(run.limitReached ? [t('subagent.turnLimit')] : []),
     formatElapsed(elapsedOf(run, now), t),
     ...(run.tokens !== undefined ? [t('subagent.tokens', { count: Math.round(run.tokens) })] : []),
-    ...(run.toolUses !== undefined ? [t('subagent.toolUses', { count: run.toolUses })] : [])
+    ...(run.toolUses !== undefined ? [t('subagent.toolUses', { count: run.toolUses })] : []),
+    ...(Number.isFinite(Date.parse(run.createdAt)) ? [formatTime(Date.parse(run.createdAt))] : [])
   ].filter(Boolean).join(' · ')
 
   return (
-    <div data-subagent-id={run.sessionId} data-subagent-status={run.status}>
-      <ToolResult animateChanges={false} lazyContent open={open} onOpenChange={setOpen}
+    // Same row inset as the bash task rows: 4px list padding + 6px here puts
+    // the leading icon box on the todo list's own 10px. The row is a flex line
+    // so the open-session link can sit beside the entry instead of inside the
+    // disclosure: `flex-1` (and the `w-auto` that replaces the disclosure's own
+    // `w-full`) leaves the entry the free space and the link its text width.
+    <div className="flex items-start gap-2 px-1.5" data-subagent-id={run.sessionId} data-subagent-status={run.status}>
+      <ToolResult className="w-auto min-w-0 flex-1" animateChanges={false} lazyContent open={open} onOpenChange={setOpen}
         title={`agent · ${run.description}`}
         status={run.status === 'running' ? 'running' : run.status === 'completed' ? 'success' : run.status === 'aborted' || run.status === 'interrupted' ? 'cancelled' : 'error'}
         icon={<Bot aria-hidden="true" className="size-4" />}
@@ -111,15 +129,19 @@ function SubagentRow({ run, sessionPath, onOpenSession }: {
         collapseOnComplete={false}>
         {open ? (
           <div className="space-y-2">
-            <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-              <span>{t(`subagent.${run.status}`)}</span>
-              {live ? (
-                <Button variant="ghost" size="sm" disabled={stopping} onClick={() => void stop()}>{t('subagent.stop')}</Button>
-              ) : null}
-              {onOpenSession ? (
-                <Button variant="ghost" size="sm" onClick={() => onOpenSession(run.sessionPath)}>{t('subagent.openSession')}</Button>
-              ) : null}
-            </div>
+            {/* Only a live run (Stop) or an interrupted one (the word) has a
+                footer: open-session moved up to the row, so an empty flex line
+                would otherwise leave a stray 8px gap above the result. */}
+            {live || run.status === 'interrupted' ? (
+              <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                {/* The vendored row's own footer already names the status in
+                    English; only `interrupted` needs a localized word here. */}
+                {run.status === 'interrupted' ? <span>{t('subagent.interrupted')}</span> : null}
+                {live ? (
+                  <Button variant="ghost" size="sm" disabled={stopping} onClick={() => void stop()}>{t('subagent.stop')}</Button>
+                ) : null}
+              </div>
+            ) : null}
             {error ? <p className="text-xs text-destructive" role="status">{t('subagent.operationFailed')}</p> : null}
             {run.writtenFiles?.length ? (
               <div className="space-y-1 text-xs">
@@ -142,6 +164,18 @@ function SubagentRow({ run, sessionPath, onOpenSession }: {
           </div>
         ) : null}
       </ToolResult>
+      {/* A child is a real session, so opening it is a link, not a panel
+          control: it stays beside the entry whatever the disclosure does,
+          keeps the header's own 36px line (so the row never grows), and draws
+          no surface of its own — no box, no press animation, no transition,
+          only the hover underline. */}
+      {onOpenSession ? (
+        <button type="button" data-subagent-open={run.sessionId}
+          className="flex min-h-9 shrink-0 items-center whitespace-nowrap text-xs text-primary transition-none hover:underline focus-visible:text-foreground focus-visible:underline focus-visible:outline-none"
+          onClick={() => onOpenSession(run.sessionPath)}>
+          {t('subagent.openSession')}
+        </button>
+      ) : null}
     </div>
   )
 }
@@ -202,8 +236,8 @@ export function SubagentList({ runs, sessionPath, onOpenSession }: {
     <div
       ref={list}
       data-subagents-list=""
-      // Whole rows only (same pitch math as the bash task list): the resting
-      // list never cuts a row in half.
+      // The drawer's list frame (see the bash list): the same 16.5rem cap,
+      // 4px edge padding and 8px row gaps, so all three panels match.
       className="max-h-[16.5rem] space-y-2 overflow-y-auto p-1"
       style={{ maskImage: mask, WebkitMaskImage: mask }}
     >

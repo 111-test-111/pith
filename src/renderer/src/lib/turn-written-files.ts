@@ -1,4 +1,4 @@
-import type { AssistantMsg, ChatMessage, CustomMsg, ToolCallContent, ToolResultMsg } from '../../../shared/types'
+import type { AssistantMsg, ChatMessage, CustomMsg, SubagentRunDTO, ToolCallContent, ToolResultMsg } from '../../../shared/types'
 import { countDiffChanges, synthesizeWritePatch } from './diff'
 import { relativize, resolveFromCwd } from './tool-path'
 import { extractUserDisplay } from './user-message'
@@ -133,64 +133,50 @@ export function extractTurnWrittenFiles(
   completions?: readonly CustomMsg[]
 ): WrittenFile[] {
   const byPath = new Map<string, WrittenFile>()
-  // A resumed background child emits a second completion whose writtenFiles
-  // are CUMULATIVE (extracted from the child's whole branch); only the latest
-  // completion per child may contribute or every earlier run double-counts.
-  const latestByChild = new Map<string, CustomMsg>()
+  // Current payloads describe one run. Legacy payloads describe the whole
+  // child: keep only their latest cumulative record. Both delivery paths use
+  // the same map so a tool result and a completion cannot count twice.
+  const runs = new Map<string, { run: Partial<SubagentRunDTO>; timestamp: number }>()
+  const collectRun = (details: unknown, timestamp: number, fallback: string): void => {
+    const run = (details as { subagent?: Partial<SubagentRunDTO> } | undefined)?.subagent
+    if (!Array.isArray(run?.writtenFiles)) return
+    const key = run.writtenFilesScope === 'run' ? `run:${run.runId ?? fallback}` : `child:${run.sessionId ?? fallback}`
+    const previous = runs.get(key)
+    if (!previous || timestamp >= previous.timestamp) runs.set(key, { run, timestamp })
+  }
   for (const message of completions ?? []) {
     if (message.customType !== 'subagent_completion') continue
-    const child = (message.details as { subagent?: { sessionId?: string; completedAt?: string } } | undefined)?.subagent
-    if (!child?.sessionId) continue
-    const previous = latestByChild.get(child.sessionId)
-    if (!previous || (message.timestamp ?? 0) >= (previous.timestamp ?? 0)) latestByChild.set(child.sessionId, message)
-  }
-  for (const message of latestByChild.values()) {
-    const written = (message.details as { subagent?: { writtenFiles?: Array<{ filePath: string; patch?: string; added?: number; removed?: number }> } } | undefined)?.subagent?.writtenFiles
-    if (!Array.isArray(written)) continue
-    for (const file of written) {
-      if (typeof file?.filePath !== 'string' || !file.filePath) continue
-      mergeChange(
-        byPath,
-        file.filePath,
-        typeof file.patch === 'string' && file.patch.length > 0
-          ? { patch: file.patch, added: file.added ?? countDiffChanges(file.patch).added, removed: file.removed ?? countDiffChanges(file.patch).removed }
-          : null,
-        cwd
-      )
-    }
+    collectRun(message.details, message.timestamp, `notice:${message.timestamp}`)
   }
   for (const message of assistants) {
     for (const part of message.content) {
       if (part.type !== 'toolCall') continue
       const result = toolResults.get(part.id)
-      if (!result || result.isError) continue
+      if (!result) continue
       // A subagent's own writes ride its `agent` tool result: the runtime
       // extracts them from the child session's successful edit/write calls
       // (bounded patch budget), so the parent turn's changed-files list folds
       // them in like direct calls. Foreground results and the final roster
       // entry carry the same payload.
       if (part.name === 'agent') {
-        const written = (result.details as { subagent?: { writtenFiles?: Array<{ filePath: string; patch?: string; added?: number; removed?: number }> } } | undefined)?.subagent?.writtenFiles
-        if (Array.isArray(written)) {
-          for (const file of written) {
-            if (typeof file?.filePath !== 'string' || !file.filePath) continue
-            mergeChange(
-              byPath,
-              file.filePath,
-              typeof file.patch === 'string' && file.patch.length > 0
-                ? { patch: file.patch, added: file.added ?? countDiffChanges(file.patch).added, removed: file.removed ?? countDiffChanges(file.patch).removed }
-                : null,
-              cwd
-            )
-          }
-        }
+        collectRun(result.details, result.timestamp, part.id)
         continue
       }
+      if (result.isError) continue
       if (!WRITE_TOOL_NAMES.has(part.name)) continue
       const rawPath = part.arguments?.path
       if (typeof rawPath !== 'string' || rawPath.length === 0) continue
       const change = patchOfResult(result, part, rawPath)
       mergeChange(byPath, rawPath, change, cwd)
+    }
+  }
+  for (const { run } of runs.values()) {
+    for (const file of run.writtenFiles ?? []) {
+      if (typeof file?.filePath !== 'string' || !file.filePath) continue
+      mergeChange(byPath, file.filePath,
+        typeof file.patch === 'string' && file.patch.length > 0
+          ? { patch: file.patch, added: file.added ?? countDiffChanges(file.patch).added, removed: file.removed ?? countDiffChanges(file.patch).removed }
+          : null, cwd)
     }
   }
   return [...byPath.values()]
@@ -253,7 +239,7 @@ export function extractReviewTurns(
   const turns: ReviewTurn[] = []
   for (const scope of collectChangeScopes(buildTurns([...messages])).values()) {
     const rounds = scope.assistants
-    const files = extractTurnWrittenFiles(rounds, toolResults, cwd)
+    const files = extractTurnWrittenFiles(rounds, toolResults, cwd, scope.completions)
     if (files.length > 0) {
       turns.push({
         id: scope.reviewId,

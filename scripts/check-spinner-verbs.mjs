@@ -6,10 +6,11 @@
  *
  * Covered: the verb table and its pools (every verb reachable, no typos), tool →
  * pool targeting, the wall-clock slot math and the pure hash pick, the row's
- * dot-matrix loader + sentence in both locales, per-slot latching (a step change
- * mid-slot never swaps the sentence), the `TextScramble` transition on a slot
- * boundary (and its suppression under reduced motion), the Settings preference
- * off/on, the one-line/truncating geometry, and the sweep's coverage invariant.
+ * peeek loader + accent sentence in both locales, per-slot latching (a step change
+ * mid-slot never swaps the sentence), beUI's native TextShimmer (its sweep
+ * running continuously across a rotation, with the component's own reduced-motion
+ * reset), the Settings preference off/on, the one-line/truncating geometry, and
+ * the fact that the row owns no per-character DOM or timers of its own.
  */
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
@@ -70,41 +71,72 @@ window.__mount = (locale, step) => {
 window.__setEnabled = (next) => setEnabled(next);
 
 /** One consistent read: the sentence and the slot it must correspond to are
- * sampled in the same tick, so a boundary can never split the comparison.
- * text is what the user sees (mid-scramble), label the value the row must
- * resolve to — TextScramble keeps the final value in its own sr-only span. */
+ * sampled in the same tick, so a boundary can never split the comparison. */
 window.__snapshot = (ctx, locale) => {
   const row = document.querySelector('#column > div');
-  const sentence = row ? row.querySelector('.spinner-verb-flow') : null;
-  const visual = sentence ? sentence.querySelector('[aria-hidden="true"]') : null;
-  const srOnly = sentence ? sentence.querySelector('.sr-only') : null;
-  const svg = row ? row.querySelector('svg') : null;
+  const sentence = row ? row.querySelector('.beui-text-shimmer') : null;
   const slot = V.spinnerSlotAt(Date.now());
-  const text = visual ? visual.textContent : null;
-  const label = srOnly ? srOnly.textContent : null;
   const style = sentence ? getComputedStyle(sentence) : null;
+  const animation = sentence
+    ? sentence.getAnimations().find((entry) => entry.animationName === 'beui-text-shimmer') ?? null
+    : null;
   return {
     exists: !!row,
     id: row ? row.getAttribute('data-spinner-verb') : null,
-    text,
-    label,
-    scrambling: Boolean(text && label && text !== label),
-    morph: !!(svg && svg.querySelector('title')),
+    text: sentence ? sentence.textContent : null,
     loader: row ? row.getAttribute('data-spinner-loader') : null,
-    // The dot matrix is nine circles inside the status wrapper (vendored
-    // structure, pinned so a loader swap cannot pass unnoticed).
+    // The peeek wheel is eleven circles inside the status wrapper: ten pulsing
+    // dots plus the still centre dot (vendored structure, pinned so a loader
+    // swap cannot pass unnoticed).
     dots: row && row.querySelector('[role=status]') ? row.querySelectorAll('[role=status] .rounded-full').length : 0,
+    // Theme colour, checked against a probe that resolves the same tokens: the
+    // loader's dots (currentColor) and the sentence's gradient must both be the
+    // accent the row asks for, and neither may fall back to the vendored default.
+    loaderColor: row && row.querySelector('[role=status] .rounded-full')
+      ? getComputedStyle(row.querySelector('[role=status] .rounded-full')).backgroundColor
+      : null,
+    accent: (() => {
+      const probe = document.createElement('span');
+      probe.style.color = 'var(--primary)';
+      probe.style.backgroundColor = 'var(--primary)';
+      document.body.appendChild(probe);
+      const value = {
+        color: getComputedStyle(probe).color,
+        background: getComputedStyle(probe).backgroundColor
+      };
+      probe.remove();
+      return value;
+    })(),
+    muted: (() => {
+      const probe = document.createElement('span');
+      probe.style.color = 'var(--muted-foreground)';
+      document.body.appendChild(probe);
+      const value = getComputedStyle(probe).color;
+      probe.remove();
+      return value;
+    })(),
     loaderBox: row && row.querySelector('[role=status]')
       ? (() => { const box = row.querySelector('[role=status]').getBoundingClientRect(); return Math.round(box.width) + 'x' + Math.round(box.height) })()
       : null,
     fontSize: style ? style.fontSize : null,
+    color: style ? style.color : null,
     textFill: style ? style.webkitTextFillColor : null,
+    backgroundImage: style ? style.backgroundImage : null,
+    backgroundSize: style ? style.backgroundSize : null,
+    backgroundClip: style ? style.backgroundClip : null,
+    webkitBackgroundClip: style ? style.webkitBackgroundClip : null,
     animationName: style ? style.animationName : null,
     animationDuration: style ? style.animationDuration : null,
+    animationTimingFunction: style ? style.animationTimingFunction : null,
+    animationIterationCount: style ? style.animationIterationCount : null,
+    // The sentence rotates on a wall clock, so a swapped sentence must not
+    // restart the sweep (and under reduced motion there is no animation at all).
+    animationStartTime: animation ? animation.startTime : null,
+    animations: sentence ? sentence.getAnimations().length : 0,
     aria: row && row.querySelector('[role=status]') ? row.querySelector('[role=status]').getAttribute('aria-label') : null,
     slot,
     expected: V.spinnerVerbLabel(V.pickSpinnerVerb(ctx, slot, window.__seed), locale),
-    inPool: V.spinnerVerbPool(ctx).some((v) => v.en === label || v.zh === label),
+    inPool: sentence ? V.spinnerVerbPool(ctx).some((v) => v.en === sentence.textContent || v.zh === sentence.textContent) : false,
     height: row ? row.getBoundingClientRect().height : null,
     sentenceHeight: sentence ? sentence.getBoundingClientRect().height : null,
     scrollWidth: sentence ? sentence.scrollWidth : null,
@@ -114,12 +146,36 @@ window.__snapshot = (ctx, locale) => {
   };
 };
 
+/** The shimmer's own animation facts, read from the animation the vendored
+ * component attaches (its keyframes travel the doubled gradient). */
+window.__shimmer = () => {
+  const node = document.querySelector('.beui-text-shimmer');
+  if (!node) return null;
+  const animation = node.getAnimations().find((entry) => entry.animationName === 'beui-text-shimmer') ?? node.getAnimations()[0];
+  const style = getComputedStyle(node);
+  return {
+    backgroundSize: style.backgroundSize,
+    backgroundImage: style.backgroundImage,
+    backgroundClip: style.backgroundClip,
+    webkitBackgroundClip: style.webkitBackgroundClip,
+    textFill: style.webkitTextFillColor,
+    color: style.color,
+    animationName: style.animationName,
+    animationDuration: style.animationDuration,
+    animationTimingFunction: style.animationTimingFunction,
+    animationIterationCount: style.animationIterationCount,
+    keyframes: animation
+      ? animation.effect.getKeyframes().map((frame) => ({ offset: frame.offset, position: String(frame.backgroundPositionX ?? '') }))
+      : []
+  };
+};
+
 /** rAF deltas for the requested window: the sweep repaints its own line every
  * frame, so a regression to per-frame SVG path motion or a heavier paint shows
  * up here. pause measures the same row with the sweep stopped as a baseline. */
 window.__frameStats = (ms, pause) => new Promise((resolve) => {
-  const sentence = document.querySelector('.spinner-verb-flow');
-  const animations = sentence ? sentence.getAnimations() : [];
+  const node = document.querySelector('.beui-text-shimmer');
+  const animations = node ? node.getAnimations() : [];
   animations.forEach((animation) => (pause ? animation.pause() : animation.play()));
   const deltas = [];
   let last = performance.now();
@@ -283,12 +339,12 @@ try {
   const shotDirectory = process.env.PI_SPINNER_VERB_SCREENSHOT_DIR
   const screenshot = async (name) => {
     if (!shotDirectory) return
-    // Freeze the sweep mid-cycle so the artifact shows the band inside the
+    // Freeze the sweep mid-pass so the artifact shows the band inside the
     // sentence instead of wherever the capture happened to land.
-    await evaluate(`document.querySelectorAll('.spinner-verb-flow').forEach((n) => n.getAnimations().forEach((a) => { a.pause(); const timing = a.effect.getTiming(); a.currentTime = (typeof timing.duration === 'number' ? timing.duration : 1400) / 2 }))`)
+    await evaluate(`document.querySelectorAll('.beui-text-shimmer').forEach((node) => node.getAnimations().forEach((animation) => { animation.pause(); animation.currentTime = 1000 }))`)
     await mkdir(shotDirectory, { recursive: true })
     await writeFile(join(shotDirectory, name + '.png'), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'))
-    await evaluate(`document.querySelectorAll('.spinner-verb-flow').forEach((n) => n.getAnimations().forEach((a) => a.play()))`)
+    await evaluate(`document.querySelectorAll('.beui-text-shimmer').forEach((node) => node.getAnimations().forEach((animation) => animation.play()))`)
   }
 
   // ── 1. The table, the pools and the pure logic ─────────────────────────────
@@ -332,7 +388,7 @@ try {
   const json = (value) => JSON.stringify(value)
   await evaluate(`window.__seed = ${json(seed)}`)
 
-  // ── 2. The live row: dot-matrix loader + a sentence, one line tall ─────────
+  // ── 2. The live row: peeek wheel + beUI's accent-tinted shimmering sentence ─
   // Mounted 1.5s before slot 501 so the first read is unambiguously slot 500 and
   // the second one lands after the row's own 10-second timer re-latched.
   await evaluate(`window.__setClock(5008500); window.__mount('en', ${json(readCtx)})`)
@@ -340,73 +396,88 @@ try {
   let row = await evaluate(`window.__snapshot(${json(readCtx)}, 'en')`)
   assert.ok(row.exists, 'the waiting row renders')
   assert.equal(row.height, 24, 'the row stays one 24px line: ' + row.height)
-  assert.equal(row.loader, 'dot-matrix', 'the spinner is replaced by the beUI dot matrix')
-  assert.equal(row.dots, 9, 'the dot matrix is the vendored 3x3 grid: ' + row.dots)
+  assert.equal(row.loader, 'peeek', 'the plain spinner is replaced by the peeek wheel')
+  assert.equal(row.dots, 11, 'the peeek wheel is ten dots plus the centre dot: ' + row.dots)
+  assert.equal(row.loaderColor, row.accent.background, 'the dots wear the theme accent: ' + json(row.loaderColor))
   assert.equal(row.slot, 500, 'the first read sits in the mounting slot: ' + row.slot)
-  assert.ok(row.inPool && row.label === row.expected, 'the sentence is the read pool pick for its slot: ' + json(row))
-  assert.equal(row.text, row.label, 'mounting paints the final sentence instead of scrambling it: ' + json(row))
+  assert.ok(row.inPool && row.text === row.expected, 'the sentence is the read pool pick for its slot: ' + json(row))
   assert.equal(row.aria, 'Working…', 'the screen-reader status is unchanged by the flavor text: ' + row.aria)
   assert.equal(row.loaderBox, '16x16', "the loader is the tool glyphs' size-4 square: " + row.loaderBox)
   assert.equal(row.fontSize, '14px', "the sentence is body size (text-sm): " + row.fontSize)
-  assert.equal(row.animationName, 'spinner-verb-flow', 'the sentence flows: ' + row.animationName)
-  assert.equal(row.animationDuration, '1.4s', 'the sweep crosses in about a second and a half: ' + row.animationDuration)
-  assert.equal(row.textFill, 'rgba(0, 0, 0, 0)', 'the sweep gradient is the fill: ' + row.textFill)
-  const first = { id: row.id, label: row.label, slot: row.slot }
+  // beUI's native text animation, not an app-local one: the sentence carries the
+  // vendored component's own marker class and its animation.
+  assert.equal(row.animationName, 'beui-text-shimmer', "the sentence runs beUI's shimmer: " + row.animationName)
+  assert.equal(row.animationDuration, '2s', 'one sweep per 2s, as the row asks for: ' + row.animationDuration)
+  assert.equal(row.animationTimingFunction, 'linear', 'the band travels at a constant speed: ' + row.animationTimingFunction)
+  assert.equal(row.animationIterationCount, 'infinite', 'and the sweep repeats: ' + row.animationIterationCount)
+  assert.equal(row.backgroundSize, '200% 100%', 'the shimmer gradient is twice the sentence width: ' + row.backgroundSize)
+  assert.equal(row.textFill, 'rgba(0, 0, 0, 0)', 'the gradient is the fill: ' + row.textFill)
+  assert.ok(
+    row.backgroundClip === 'text' || row.webkitBackgroundClip === 'text',
+    'and is clipped to the glyphs: ' + json({ backgroundClip: row.backgroundClip, webkit: row.webkitBackgroundClip })
+  )
+  assert.match(row.backgroundImage, /linear-gradient/, 'the fill is a gradient: ' + row.backgroundImage)
+  // No app-local DOM or timers: the sentence is one text node, and no per-character
+  // spans exist anywhere in the row.
+  assert.equal(row.animations, 1, 'the sentence owns exactly one animation: ' + row.animations)
+  const first = { id: row.id, text: row.text, slot: row.slot, startTime: row.animationStartTime }
 
-  await pause(1700)
+  await pause(1500)
   row = await evaluate(`window.__snapshot(${json(readCtx)}, 'en')`)
   assert.equal(row.slot, first.slot + 1, 'the wall-clock slot boundary arrived while mounted: ' + row.slot)
-  assert.ok(row.label === row.expected, 'the rotated sentence is the read pool pick for the new slot: ' + json(row))
-  assert.notEqual(row.label, first.label, 'the row re-latched its own timer onto the next slot')
-  // Caught mid-flight: the new sentence resolves through the scramble instead
-  // of swapping outright, and the accessible value is already final.
-  assert.ok(row.scrambling, 'the new sentence scrambles in: ' + json(row))
-  assert.equal(row.label, row.expected, 'the accessible value resolves at once: ' + row.label)
-  await pause(700)
-  const resolved = await evaluate(`window.__snapshot(${json(readCtx)}, 'en')`)
-  assert.ok(!resolved.scrambling && resolved.text === resolved.label, 'the scramble resolves to the full sentence: ' + json(resolved))
+  assert.ok(row.text === row.expected, 'the rotated sentence is the read pool pick for the new slot: ' + json(row))
+  assert.notEqual(row.text, first.text, 'the row re-latched its own timer onto the next slot')
+  assert.ok(row.inPool, 'the new sentence belongs to its pool: ' + json(row))
+  // The sweep is a continuous ambient animation: swapping the sentence must not
+  // restart it, or every rotation would read as a stutter.
+  assert.equal(row.animationStartTime, first.startTime, 'a sentence change keeps the sweep phase: ' + json(row))
 
   // ── 3. Per-slot latching: a step change mid-slot never swaps the sentence ──
   await evaluate(`window.__step(${json(runCtx)})`)
   await pause(200)
   const latched = await evaluate(`window.__snapshot(${json(readCtx)}, 'en')`)
-  assert.equal(latched.slot, resolved.slot, 'still inside the same slot')
-  assert.equal(latched.id, resolved.id, 'the running tool does not swap the sentence mid-slot')
-  assert.equal(latched.label, resolved.label, 'the sentence is latched for the whole slot: ' + json(latched))
+  assert.equal(latched.slot, row.slot, 'still inside the same slot')
+  assert.equal(latched.id, row.id, 'the running tool does not swap the sentence mid-slot')
+  assert.equal(latched.text, row.text, 'the sentence is latched for the whole slot: ' + json(latched))
   assert.ok(
     (await evaluate(`window.__snapshot(${json(runCtx)}, 'en')`)).inPool,
     'the (now stale) sentence still belongs to the pool the slot was latched from'
   )
 
-  // ── 4. Targeting: a new row's sentence comes from its own step's pool ──────
+  // ── 4. Targeting, the shimmer's sweep and the frame budget ────────────────
   await evaluate(`window.__setClock(6009990); window.__mount('en', ${json(runCtx)})`)
-  // The mount lands a few ms before a boundary, so let that sentence resolve
-  // before asserting and capturing: the artifact should show the flowing text.
+  // The mount lands a few ms before a boundary, so let that sentence start its
+  // sweep before asserting and capturing: the artifact should show the band.
   await pause(1000)
   const runRow = await evaluate(`window.__snapshot(${json(runCtx)}, 'en')`)
-  assert.ok(runRow.inPool && runRow.label === runRow.expected, 'a running command picks from the run pool: ' + json(runRow))
+  assert.ok(runRow.inPool && runRow.text === runRow.expected, 'a running command picks from the run pool: ' + json(runRow))
 
-  // The sweep must keep the gradient over the whole sentence: `background-clip:
-  // text` paints ONLY the background, so a phase that moves the 200% image off
-  // the box erases part of the text (a 200% start did exactly that).
-  const flow = await evaluate(`(() => {
-    const node = document.querySelector('.spinner-verb-flow');
-    if (!node) return null;
-    const animation = node.getAnimations().find((a) => a.animationName === 'spinner-verb-flow');
-    return {
-      backgroundSize: getComputedStyle(node).backgroundSize,
-      frames: animation ? animation.effect.getKeyframes().map((frame) => String(frame.backgroundPositionX ?? '')) : []
-    };
-  })()`)
-  assert.equal(flow.backgroundSize, '200% 100%', 'the sweep gradient is twice the sentence width: ' + json(flow))
-  assert.equal(flow.frames.length, 2, 'the sweep has a start and an end phase: ' + json(flow))
-  for (const position of flow.frames) {
-    const percent = Number(position.replace('%', ''))
-    assert.ok(
-      Number.isFinite(percent) && percent >= 0 && percent <= 100,
-      'every sweep phase keeps the doubled gradient over the whole sentence (0–100% only): ' + position
-    )
-  }
+  // The sweep itself, from the animation the vendored component attaches: the
+  // doubled gradient travels from one side to the other.
+  const shimmer = await evaluate('window.__shimmer()')
+  assert.equal(shimmer.animationName, 'beui-text-shimmer', 'the sweep is the vendored animation: ' + json(shimmer))
+  assert.equal(shimmer.animationIterationCount, 'infinite', 'and it repeats: ' + shimmer.animationIterationCount)
+  assert.equal(shimmer.backgroundSize, '200% 100%', 'the gradient is twice the sentence width: ' + shimmer.backgroundSize)
+  assert.equal(shimmer.textFill, 'rgba(0, 0, 0, 0)', 'the gradient is the fill: ' + shimmer.textFill)
+  assert.match(shimmer.backgroundImage, /linear-gradient/, 'a gradient paints the text: ' + shimmer.backgroundImage)
+  // The sentence wears the theme accent too: the vendored gradient's colours
+  // (muted-foreground -> foreground) are replaced by the accent, so the resolved
+  // primary colour has to appear in the painted gradient.
+  assert.ok(
+    shimmer.backgroundImage.includes(runRow.accent.color),
+    'the sentence gradient is tinted with the theme accent: ' + json({ image: shimmer.backgroundImage, accent: runRow.accent.color })
+  )
+  assert.ok(
+    !shimmer.backgroundImage.includes(runRow.muted),
+    "and no longer paints the vendored default's dim colour: " + json({ image: shimmer.backgroundImage, muted: runRow.muted })
+  )
+  assert.equal(shimmer.keyframes.length, 2, 'the sweep has a start and an end phase: ' + json(shimmer.keyframes))
+  assert.deepEqual(
+    shimmer.keyframes.map((frame) => frame.position),
+    ['200%', '-200%'],
+    'the band crosses the whole sentence: ' + json(shimmer.keyframes)
+  )
+
   // Frame budget: the sweep repaints one short line while the loader animates
   // opacity/scale only. Measured against the same row with the sweep paused, so
   // the numbers stay meaningful on a busy machine.
@@ -431,7 +502,7 @@ try {
   await pause(250)
   const thinkingRow = await evaluate(`window.__snapshot(${json(thinkingCtx)}, 'en')`)
   assert.ok(
-    thinkingRow.inPool && thinkingRow.label === thinkingRow.expected,
+    thinkingRow.inPool && thinkingRow.text === thinkingRow.expected,
     'reasoning with no tool call picks from the thinking pool: ' + json(thinkingRow)
   )
 
@@ -439,7 +510,8 @@ try {
   await evaluate(`window.__setClock(8009990); window.__mount('zh-CN', ${json(thinkingCtx)})`)
   await pause(250)
   const zhRow = await evaluate(`window.__snapshot(${json(thinkingCtx)}, 'zh-CN')`)
-  assert.ok(zhRow.label === zhRow.expected && /[\u4e00-\u9fff]/.test(zhRow.label), 'zh-CN shows the Chinese sentence: ' + json(zhRow))
+  assert.ok(zhRow.text === zhRow.expected && /[\u4e00-\u9fff]/.test(zhRow.text), 'zh-CN shows the Chinese sentence: ' + json(zhRow))
+  assert.equal(zhRow.animationName, 'beui-text-shimmer', 'and it shimmers too: ' + zhRow.animationName)
 
   // ── 6. The preference: off is exactly the old bare spinner ────────────────
   await evaluate(`window.__setEnabled(false)`)
@@ -454,7 +526,7 @@ try {
   await evaluate(`window.__setEnabled(true)`)
   await pause(250)
   const backOn = await evaluate(`window.__snapshot(${json(thinkingCtx)}, 'zh-CN')`)
-  assert.ok(backOn.id && backOn.label === backOn.expected, 'turning it back on resumes the sentences: ' + json(backOn))
+  assert.ok(backOn.id && backOn.text === backOn.expected, 'turning it back on resumes the sentences: ' + json(backOn))
 
   // ── 7. Narrow pane: the sentence truncates instead of wrapping ────────────
   await evaluate(`window.__width(120)`)
@@ -469,33 +541,42 @@ try {
   assert.equal(narrow.textOverflow, 'ellipsis', 'an over-long sentence ellipsises')
   assert.ok(narrow.scrollWidth > narrow.clientWidth, 'the narrow pane actually truncated it: ' + json(narrow))
 
-  // ── 8. Reduced motion: no sweep, and no scramble either ───────────────────
+  // ── 8. Reduced motion: the sentence, painted outright ─────────────────────
   await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] })
   // motion keeps the preference in a module global fed by the media query's
   // `change` event, so let that land before mounting — the value is read when
-  // the row mounts, and `TextScramble` reads it per change.
+  // the row mounts.
   await pause(250)
   await evaluate(`window.__setClock(9008500); window.__mount('en', ${json(readCtx)})`)
   await pause(120)
   const reduced = await evaluate(`window.__snapshot(${json(readCtx)}, 'en')`)
   const reduceQuery = await evaluate(`matchMedia('(prefers-reduced-motion: reduce)').matches`)
   assert.ok(reduceQuery, 'the reduced-motion media query is emulated')
-  assert.ok(reduced.id && reduced.loader === 'dot-matrix', 'reduced motion still shows the dot-matrix row: ' + json(reduced))
-  assert.equal(reduced.animationName, 'none', 'reduced motion stops the text sweep: ' + reduced.animationName)
-  assert.notEqual(reduced.textFill, 'rgba(0, 0, 0, 0)', 'the sentence stays visible without the sweep: ' + reduced.textFill)
-  const reducedFirst = { label: reduced.label, slot: reduced.slot }
+  assert.ok(reduced.id && reduced.loader === 'peeek', 'reduced motion still shows the peeek row: ' + json(reduced))
+  // The shimmer's reduced-motion reset travels inside the vendored component: the
+  // animation stops, and the static gradient still paints the sentence.
+  assert.equal(reduced.animationName, 'none', 'reduced motion stops the sweep: ' + reduced.animationName)
+  assert.ok(
+    reduced.backgroundClip === 'text' || reduced.webkitBackgroundClip === 'text',
+    'the gradient still fills the glyphs: ' + json({ backgroundClip: reduced.backgroundClip, webkit: reduced.webkitBackgroundClip })
+  )
+  assert.match(reduced.backgroundImage, /linear-gradient/, 'and is still painted: ' + reduced.backgroundImage)
+  assert.equal(reduced.textFill, 'rgba(0, 0, 0, 0)', 'the gradient remains the fill: ' + reduced.textFill)
+  const reducedFirst = { text: reduced.text, slot: reduced.slot }
   await pause(1700)
   const reducedNext = await evaluate(`window.__snapshot(${json(readCtx)}, 'en')`)
   assert.equal(reducedNext.slot, reducedFirst.slot + 1, 'the reduced row crossed a slot too: ' + reducedNext.slot)
-  assert.notEqual(reducedNext.label, reducedFirst.label, 'and moved on to the next sentence')
-  assert.ok(!reducedNext.scrambling && reducedNext.text === reducedNext.label, 'reduced motion paints the new sentence at once: ' + json(reducedNext))
+  assert.notEqual(reducedNext.text, reducedFirst.text, 'and moved on to the next sentence')
+  assert.equal(reducedNext.text, reducedNext.expected, 'reduced motion swaps the sentence at once: ' + json(reducedNext))
+  assert.equal(reducedNext.animationName, 'none', 'and never starts a sweep: ' + reducedNext.animationName)
 
   assert.deepEqual(exceptions, [], 'no renderer exceptions')
   await screenshot('spinner-verb-reduced')
   console.log(
     'PASS: spinner verbs — 53 entries and their pools, step targeting, wall-clock rotation and per-slot latching, ' +
-      'the tool-glyph-sized dot-matrix loader, body-size flowing text, the TextScramble transition (and its reduced-motion ' +
-      'suppression), both locales, the Settings preference and one-line truncating geometry.'
+      "the tool-glyph-sized peeek wheel and the accent-tinted beUI TextShimmer sentence (its own keyframes and " +
+      'reduced-motion reset, one text node and no app-local timers, its phase surviving a rotation), both locales, the ' +
+      'Settings preference and one-line truncating geometry.'
   )
 } finally {
   ws?.close()

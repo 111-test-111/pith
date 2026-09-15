@@ -1,5 +1,5 @@
 import { Loader } from '@/components/motion/loader'
-import { TextScramble } from '@/components/motion/text-scramble'
+import { TextShimmer } from '@/components/motion/text-shimmer'
 import { useI18n } from '@/i18n'
 import { cn } from '@/lib/utils'
 import {
@@ -34,51 +34,55 @@ export interface TurnStatusProps {
  * emitted.
  *
  * With spinner verbs on (Settings → General, default) the row plays a Claude
- * Code style status sentence matched to the step that is running; the dot-matrix
- * loader marks the accent while it does, the sentence's gradient flows, and a
- * new sentence resolves through beUI's `TextScramble`. Off, the row is exactly
- * what it always was: the plain spinner with only a screen-reader label.
+ * Code style status sentence matched to the step that is running; loader and
+ * sentence both wear the theme accent — the `peeek` dots are drawn in
+ * `currentColor` (the row passes `text-primary`) and the sentence's beUI
+ * `TextShimmer` is tinted to the same accent — and the sentence keeps the
+ * component's own reduced-motion reset. Off, the row is exactly what it always
+ * was: the plain spinner with only a screen-reader label.
  *
- * The loader is deliberately `dot-matrix` rather than `morph`: the morph
- * variant animates an SVG path's `d` every frame (uncacheable, non-composited
- * raster work), which showed up as dropped frames next to the sweep, while the
- * dot matrix is nine tiny circles animating `opacity`/`scale` only.
+ * The loader is deliberately not `morph` (an SVG path's `d` every frame is
+ * uncacheable, non-composited raster work) and not app-local art: `peeek` is the
+ * reference ten-dot pulse ported into the vendored Loader, so the row keeps one
+ * loader component with its `role=status` wiring and reduced-motion contract.
  */
 export function TurnStatus({ className, step = THINKING_STEP, seedKey = 'live' }: TurnStatusProps) {
   const { t, locale } = useI18n()
   const [verbsEnabled] = useSpinnerVerbs()
   const verb = useLiveSpinnerVerb(verbsEnabled, step, seedKey)
+  const label = verb ? spinnerVerbLabel(verb, locale) : null
 
   return (
     // `data-spinner-verb` names the sentence this row is playing and
     // `data-spinner-loader` the loader drawing it: the stable hooks
     // `scripts/check-spinner-verbs.mjs` reads, like `data-todo-progress` for the
-    // task list (the vendored `TextScramble` takes no extra props).
+    // task list.
     <div
       className={cn('flex h-6 items-center gap-2', className)}
       data-spinner-verb={verb?.id}
-      data-spinner-loader={verb ? 'dot-matrix' : 'spinner'}
+      data-spinner-loader={verb ? 'peeek' : 'spinner'}
     >
       <Loader
-        variant={verb ? 'dot-matrix' : 'spinner'}
+        variant={verb ? 'peeek' : 'spinner'}
         // `size-4` — the same square as the transcript's tool glyphs.
         size={16}
         label={t('chat.working')}
         className="shrink-0 text-primary"
       />
-      {verb ? (
-        // Deliberately NOT keyed by verb id: `TextScramble` animates on a `text`
-        // change itself, and a remount would take its first-render path and
-        // paint the new sentence outright. It also carries the final value in
-        // its own `sr-only` span, so the scrambled glyphs never reach the
-        // accessibility tree — the row still announces the sentence it is
-        // playing, not the noise it is transitioning through.
-        <TextScramble
-          text={spinnerVerbLabel(verb, locale)}
-          // Body text size (`text-sm leading-6`, exactly the transcript's own
-          // body copy) and the flow sweep defined in styles.css.
-          className="spinner-verb-flow min-w-0 truncate text-sm leading-6"
-        />
+      {label ? (
+        // beUI's own text animation: a gradient sweep across the sentence, 2s a
+        // pass and infinite, with the keyframes and the reduced-motion reset
+        // travelling inside the component. App glue adds the waiting row's
+        // geometry (one line, ellipsised in a narrow pane, body size) and
+        // re-tints the one thing that is not the theme's: the vendored default
+        // runs `muted-foreground` → `foreground`, and this row wears the accent.
+        // tailwind-merge drops the vendored gradient for this arbitrary value.
+        <TextShimmer
+          duration={2}
+          className="min-w-0 truncate whitespace-pre text-sm leading-6 bg-[linear-gradient(110deg,color-mix(in_oklch,var(--primary)_40%,transparent)_25%,var(--primary)_50%,color-mix(in_oklch,var(--primary)_40%,transparent)_75%)]"
+        >
+          {label}
+        </TextShimmer>
       ) : null}
     </div>
   )

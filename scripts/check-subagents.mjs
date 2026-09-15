@@ -197,6 +197,205 @@ const entriesOf = (...records) => records.map((record, index) => ({
   }
 }
 
+// --- pi-web interop: `tool_preset` resolution and the conservative default.
+//     pi-web writes `~/.pi/agent/agents/*.md` that declare their tools ONLY as
+//     a preset; reading those as "no tools: → all" made a profile named
+//     `explore` perfectly able to write files. ---
+{
+  const agentDir = await mkdtemp(join(tmpdir(), 'pith-subagent-agentdir-'))
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR
+  process.env.PI_CODING_AGENT_DIR = agentDir
+  try {
+    const { mkdirSync } = await import('node:fs')
+    const agentsDir = join(agentDir, 'agents')
+    mkdirSync(agentsDir, { recursive: true })
+    const { SUBAGENT_READ_ONLY_TOOLS } = await import('../src/shared/types.ts')
+    const { subagentToolDescription } = await import('../src/main/pi/subagents/tools.ts')
+    // pi-web's own preset file lives beside the profiles it feeds.
+    await writeFile(join(agentDir, 'pi-web-tool-presets.json'), JSON.stringify([
+      { id: 'piweb-agent-explore', name: 'Agent · Explore', selection: { mode: 'allow', names: ['find', 'grep', 'ls', 'read'] } },
+      { id: 'piweb-agent-deny', name: 'Deny preset', selection: { mode: 'deny', names: ['bash'] } },
+      { id: 'incomplete', name: 'No selection' }
+    ]), 'utf8')
+    const files = {
+      'piweb-explore.md': '---\ndescription: pi-web explorer\ntool_preset: piweb-agent-explore\n---\n\nBody.',
+      'piweb-deny.md': '---\ndescription: deny preset\ntool_preset: piweb-agent-deny\n---\n\nBody.',
+      'piweb-unknown.md': '---\ndescription: unknown preset\ntool_preset: nope\n---\n\nBody.',
+      'bare.md': '---\ndescription: no tools field\n---\n\nBody.',
+      'explicit-all.md': '---\ndescription: explicit full access\ntools: all\n---\n\nBody.'
+    }
+    for (const [name, content] of Object.entries(files)) await writeFile(join(agentsDir, name), content, 'utf8')
+    const byName = new Map(profiles.listSubagentProfiles(null).map((profile) => [profile.name, profile]))
+    const explore = byName.get('piweb-explore')
+    assert.deepEqual(explore.tools, ['find', 'grep', 'ls', 'read'], 'a resolvable tool_preset becomes the real ceiling')
+    assert.equal(explore.toolsSource, 'preset')
+    assert.equal(explore.toolPreset, 'piweb-agent-explore')
+    const deny = byName.get('piweb-deny')
+    assert.equal(deny.toolsSource, 'unresolved-preset', 'a deny selection cannot be expressed here')
+    assert.deepEqual(deny.tools, [...SUBAGENT_READ_ONLY_TOOLS], 'and must never widen to full access')
+    assert.equal(byName.get('piweb-unknown').toolsSource, 'unresolved-preset')
+    const bare = byName.get('bare')
+    assert.equal(bare.toolsSource, 'default', 'no tools: at all is least privilege, not full access')
+    assert.deepEqual(bare.tools, [...SUBAGENT_READ_ONLY_TOOLS])
+    assert.deepEqual(byName.get('explicit-all').tools, 'all', 'an explicit tools: still wins')
+    const described = subagentToolDescription([...byName.values()])
+    assert.match(described, /read-only default: no tools:/, 'the model is told why a set is read-only')
+    assert.match(described, /unresolved tool_preset "nope"/)
+  } finally {
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir
+    await rm(agentDir, { recursive: true, force: true })
+  }
+}
+
+// --- starter profiles: the marker beside the files heals a drifted agent dir
+//     and still respects a deliberate removal ---
+{
+  const root = await mkdtemp(join(tmpdir(), 'pith-subagent-defaults-'))
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR
+  process.env.PI_CODING_AGENT_DIR = join(root, 'agent')
+  try {
+    const { existsSync, readdirSync } = await import('node:fs')
+    const agentsDir = join(root, 'agent', 'agents')
+    const stateDir = join(root, 'state')
+    const marker = join(agentsDir, '.pi-app-defaults-v1.json')
+    const names = () => { try { return readdirSync(agentsDir).filter((file) => file.endsWith('.md')).sort() } catch { return [] } }
+    // 1) First run: the starters plus both markers.
+    profiles.ensureDefaultProfiles(stateDir)
+    assert.equal(names().length, 4)
+    assert.ok(existsSync(marker) && existsSync(join(stateDir, 'subagent-defaults-v1.json')))
+    // 2) Pruning one starter does not resurrect it.
+    await rm(join(agentsDir, 'reviewer.md'), { force: true })
+    profiles.ensureDefaultProfiles(stateDir)
+    assert.equal(names().includes('reviewer.md'), false, 'a deleted starter stays deleted')
+    // 3) Drift: the files are gone but the LEGACY userData marker remains —
+    //    the old marker-only guard left the app with ZERO profiles here.
+    for (const file of names()) await rm(join(agentsDir, file), { force: true })
+    await rm(marker, { force: true })
+    profiles.ensureDefaultProfiles(stateDir)
+    assert.equal(names().length, 4, 'an empty agent dir with only the legacy marker heals')
+    // 4) Deleting EVERY profile on purpose (marker beside the files) is respected.
+    for (const file of names()) await rm(join(agentsDir, file), { force: true })
+    profiles.ensureDefaultProfiles(stateDir)
+    assert.equal(names().length, 0, 'a deliberate full removal is not undone')
+  } finally {
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir
+    await rm(root, { recursive: true, force: true })
+  }
+}
+
+// --- model spec errors: "not configured" must never read as "wrong syntax".
+//     A real parent model was told `Unknown subagent model "x/y" (expected
+//     "provider/modelId")` for a perfectly well-formed spec — the parenthetical
+//     sent it chasing its own syntax instead of the real cause. ---
+{
+  const { subagentModelSpecError } = await import('../src/main/pi/subagents/model-spec.ts')
+  const lookup = {
+    providers: ['deepseek', 'openai-codex'],
+    modelsOf: (id) => (id === 'deepseek' ? ['deepseek-flash', 'deepseek-pro'] : null)
+  }
+  assert.match(subagentModelSpecError('nope', lookup), /Invalid subagent model "nope": expected "provider\/modelId"/)
+  assert.match(subagentModelSpecError('deepseek/', lookup), /Invalid subagent model/)
+  assert.match(subagentModelSpecError('/flash', lookup), /Invalid subagent model/)
+  const unknownProvider = subagentModelSpecError('totally-fake-provider/does-not-exist-model-xyz', lookup)
+  assert.match(unknownProvider, /Unknown subagent model provider "totally-fake-provider"/)
+  assert.match(unknownProvider, /well-formed/, 'the message says the spec itself was fine')
+  assert.match(unknownProvider, /Configured providers: deepseek, openai-codex/)
+  assert.match(unknownProvider, /Omit "model"/, 'and offers the way out')
+  assert.ok(!/expected "provider\/modelId"/.test(unknownProvider), 'a well-formed spec is never reported as a syntax error')
+  const unknownModel = subagentModelSpecError('deepseek/nope', lookup)
+  assert.match(unknownModel, /Provider "deepseek" has no model "nope"/)
+  assert.match(unknownModel, /deepseek-flash, deepseek-pro/)
+  // A large catalog is capped so the message cannot flood the model's context.
+  const many = Array.from({ length: 40 }, (_, index) => `m${index}`)
+  const capped = subagentModelSpecError('big/missing', { providers: ['big'], modelsOf: () => many })
+  assert.match(capped, /has no model "missing"/)
+  assert.match(capped, /m0, m1/)
+  assert.match(capped, /…/)
+  assert.ok(!capped.includes('m30'), 'available models are truncated')
+}
+
+// --- terminal status rules: only a STOP is aborted; a turn limit and an
+//     unpersisted result are reported, never masked ---
+{
+  const { deriveRunOutcome } = await import('../src/main/pi/subagents/runtime.ts')
+  const base = { userAborted: false, turnLimitReached: false }
+  assert.deepEqual(deriveRunOutcome({ ...base, stopReason: 'stop' }), { status: 'completed' })
+  assert.deepEqual(deriveRunOutcome({ ...base, stopReason: 'aborted' }), { status: 'aborted' })
+  // The runtime's own turn-limit abort is a designed end: the run reports the
+  // answer it produced (and a marker) instead of masquerading as a user stop —
+  // which would also suppress the parent's completion notification.
+  assert.deepEqual(deriveRunOutcome({ ...base, turnLimitReached: true, stopReason: 'aborted' }),
+    { status: 'completed', limitReached: true })
+  assert.deepEqual(deriveRunOutcome({ ...base, stopReason: 'error', errorMessage: 'provider 500' }),
+    { status: 'failed', error: 'provider 500' })
+  assert.deepEqual(deriveRunOutcome({ ...base, promptError: 'model unavailable' }),
+    { status: 'failed', error: 'model unavailable' })
+  const unpersisted = deriveRunOutcome({ ...base, persistenceError: 'The run result could not be persisted (disk full)' })
+  assert.equal(unpersisted.status, 'failed', 'a terminal record that cannot be written is never a silent success')
+  assert.match(unpersisted.error, /could not be persisted/)
+  // A user stop outranks everything; the limit marker survives a failure.
+  assert.deepEqual(deriveRunOutcome({ ...base, userAborted: true, persistenceError: 'x' }), { status: 'aborted' })
+  const limitedUnpersisted = deriveRunOutcome({ ...base, turnLimitReached: true, persistenceError: 'x' })
+  assert.equal(limitedUnpersisted.status, 'failed')
+  assert.equal(limitedUnpersisted.limitReached, true)
+}
+
+// --- roster rows are panel metadata: patch bodies never ride them ---
+{
+  const withPatch = { sessionId: 'c1', runId: 'r1', seq: 1, status: 'completed', createdAt: '2026-01-01T00:00:00Z',
+    writtenFiles: [{ filePath: '/w/a.ts', displayPath: 'a.ts', added: 1, removed: 2, patch: '+++ a diff body' }] }
+  const slim = protocol.slimRunForRoster(withPatch)
+  assert.equal(slim.writtenFiles[0].patch, undefined, 'the roster payload carries no patch body')
+  assert.equal(slim.writtenFiles[0].displayPath, 'a.ts')
+  assert.equal(slim.writtenFiles[0].added, 1)
+  assert.equal(slim.writtenFiles[0].removed, 2)
+  assert.equal(protocol.slimRunForRoster(slim), slim, 'slimming an already-slim row is a no-op')
+  const withoutFiles = { ...withPatch, writtenFiles: undefined }
+  assert.equal(protocol.slimRunForRoster(withoutFiles), withoutFiles, 'a row without files is untouched')
+  assert.equal(withPatch.writtenFiles[0].patch, '+++ a diff body', 'the caller\'s full row is not mutated')
+}
+
+// --- a turn-limit marker persists and reads back; junk markers are ignored ---
+{
+  const limited = entriesOf(
+    { customType: protocol.SUBAGENT_RUN_TYPE, data: run() },
+    { customType: protocol.SUBAGENT_RESULT_TYPE, data: result({ limitReached: true }) }
+  )
+  const dto = protocol.currentDiskRun(limited, 'child', '/p/child.jsonl')
+  assert.equal(dto.status, 'completed')
+  assert.equal(dto.limitReached, true)
+  assert.equal(protocol.readDiskSubagentRuns(limited)[0].result.limitReached, true)
+  const junk = protocol.readDiskSubagentRuns(entriesOf(
+    { customType: protocol.SUBAGENT_RUN_TYPE, data: run() },
+    { customType: protocol.SUBAGENT_RESULT_TYPE, data: result({ limitReached: 'yes' }) }
+  ))
+  assert.equal(junk[0].result.limitReached, undefined, 'non-boolean markers are dropped')
+}
+
+// --- subagent session marker: children only, and only from the bounded head ---
+{
+  const { isSubagentSessionFile } = await import('../src/main/pi/subagents/session-filter.ts')
+  const markerDir = await mkdtemp(join(tmpdir(), 'pith-subagent-marker-'))
+  try {
+    const header = JSON.stringify({ type: 'session', id: 'c', parentSession: '/p/parent.jsonl' })
+    const childFile = join(markerDir, 'child.jsonl')
+    await writeFile(childFile, `${header}\n${JSON.stringify({ type: 'custom', customType: 'pith_subagent_run', data: {} })}\n`)
+    assert.equal(isSubagentSessionFile(childFile), true)
+    // Forks carry the same parentSession header and MUST stay visible.
+    const forkFile = join(markerDir, 'fork.jsonl')
+    await writeFile(forkFile, `${header}\n`)
+    assert.equal(isSubagentSessionFile(forkFile), false)
+    const lateFile = join(markerDir, 'late.jsonl')
+    await writeFile(lateFile, `${'x'.repeat(129 * 1024)}\n${JSON.stringify({ type: 'custom', customType: 'pith_subagent_run' })}\n`)
+    assert.equal(isSubagentSessionFile(lateFile), false, 'the marker must sit inside the bounded head read')
+    assert.equal(isSubagentSessionFile(join(markerDir, 'missing.jsonl')), false)
+  } finally {
+    await rm(markerDir, { recursive: true, force: true })
+  }
+}
+
 console.log('check-subagents: all assertions passed')
 
 // ===========================================================================
@@ -225,27 +424,31 @@ console.log('check-subagents: all assertions passed')
     const parent = SessionManager.create(dir, sessionsDir)
     materialize(parent)
 
-    /** Minimal fake AgentSession whose prompt behaviour each test controls. */
-    const fakeSession = (over = {}) => ({
-      sessionId: 'child-session',
-      subscribe: () => () => {},
-      prompt: async () => {},
-      abort: async () => {},
-      steer: () => {},
-      isIdle: true,
-      messages: [],
-      getLastAssistantText: () => undefined,
-      getActiveToolNames: () => ['read', 'grep', 'edit', 'write', 'bash', 'todo_write'],
-      sessionManager: parent,
-      ...over
-    })
+    /** Minimal fake AgentSession whose prompt behaviour each test controls.
+     * `emit` drives the runtime's own event subscription (turn limits, progress). */
+    const fakeSession = (over = {}) => {
+      const listeners = new Set()
+      return {
+        sessionId: 'child-session',
+        subscribe: (listener) => { listeners.add(listener); return () => listeners.delete(listener) },
+        emit: (event) => { for (const listener of [...listeners]) listener(event) },
+        prompt: async () => {},
+        abort: async () => {},
+        steer: () => {},
+        isIdle: true,
+        messages: [],
+        getLastAssistantText: () => undefined,
+        getActiveToolNames: () => ['read', 'grep', 'edit', 'write', 'bash', 'todo_write'],
+        sessionManager: parent,
+        ...over
+      }
+    }
     const parentSession = fakeSession({ sessionId: 'parent-session', getActiveToolNames: () => ['read', 'grep', 'edit', 'write', 'bash', 'todo_write'] })
 
     const leases = new Set()
     const emits = []
     const completionsDelivered = []
-    let runtimeRef = null
-    let stateRef = null
+    const childPaths = []
     const makeHost = (childSession) => ({
       isClosing: () => false,
       maxConcurrentSubagents: () => 4,
@@ -259,7 +462,11 @@ console.log('check-subagents: all assertions passed')
         // The fake session's scripted messages live in the REAL branch too —
         // the runtime extracts written files (and status) from the persisted
         // branch, exactly like a real AgentSession would.
-        for (const message of childSession.messages ?? []) manager.appendMessage(message)
+        const prompt = childSession.prompt
+        childSession.prompt = async (...args) => {
+          for (const message of childSession.messages ?? []) manager.appendMessage(message)
+          return prompt(...args)
+        }
         childSession.sessionManager = manager
         return {
           session: childSession, sessionManager: manager, path: manager.getSessionFile(), cwd: options.cwd,
@@ -316,7 +523,7 @@ console.log('check-subagents: all assertions passed')
 
     // --- 3) Errored final round resolves prompt normally: status must fail ---
     {
-      const session = fakeSession({ messages: [{ role: 'assistant', timestamp: 1, stopReason: 'error', error: 'provider 500' }] })
+      const session = fakeSession({ messages: [{ role: 'assistant', content: [], timestamp: 1, stopReason: 'error', error: 'provider 500' }] })
       const runtime = new SubagentRuntime(makeHost(session))
       const state = new SubagentParentState('parent-session')
       const finished = await (await runtime.start(state, baseRequest())).completion
@@ -361,34 +568,42 @@ console.log('check-subagents: all assertions passed')
 
     // --- 5b) Cancellation DURING creation: no prompt may ever start ---
     {
-      let releaseCreate
+      let releaseCreate, enteredCreate
+      const entered = new Promise(resolve => { enteredCreate = resolve })
+      const creationGate = new Promise(resolve => { releaseCreate = resolve })
       let prompted = 0
       const session = fakeSession({ prompt: async () => { prompted++ } })
       const host = makeHost(session)
       const originalCreate = host.createChildSession
       host.createChildSession = async (options) => {
         const handle = await originalCreate(options)
-        // The stop lands while the launch is between creation and prompt.
-        await runtimeRef.stopAll(stateRef)
+        enteredCreate()
+        await creationGate
         return handle
       }
       const runtime = new SubagentRuntime(host)
-      runtimeRef = runtime
       const state = new SubagentParentState('parent-session')
-      stateRef = state
       const controller = new AbortController()
       const startPromise = runtime.start(state, baseRequest(), controller.signal)
-      // stopAll already ran inside creation: the launch resolves into an
+      await entered
+      let stopped = false
+      const stop = runtime.stopAll(state).then(() => { stopped = true })
+      await new Promise(resolve => setImmediate(resolve))
+      assert.equal(stopped, false, 'stop waits for in-flight creation')
+      releaseCreate()
+      // The cancelled launch resolves into an
       // ABORTED run instead of a rejection — no prompt may ever start, and
       // the run's own cleanup (lease, release) settles it.
       const { completion } = await startPromise
       const finished = await completion
+      await stop
       assert.equal(finished.status, 'aborted')
       assert.equal(prompted, 0, 'a launch cancelled during creation never prompts')
       assert.equal(leases.size, 0)
       assert.equal(state.countActive(), 0, 'the aborted run leaves no active roster card')
-      runtimeRef = null
-      stateRef = null
+      assert.equal(state.runs.size, 0, 'cancelled-before-prompt runs release registry ownership')
+      assert.equal(state.launching.size, 0)
+      assert.equal(state.starting.size, 0)
     }
 
     // --- 5c) Foreground tool signal abort MID-RUN halts the whole run ---
@@ -460,12 +675,106 @@ console.log('check-subagents: all assertions passed')
       const finished = await completion
       assert.equal(finished.writtenFiles?.length, 1)
       assert.equal(finished.status, 'completed', 'fixture sanity: the run itself finished')
+      // The full payload keeps the patch (this is what the changed-files list
+      // and rewind coverage read) while the ROSTER row — re-serialized on
+      // every progress tick — carries only paths and counts.
+      assert.ok(finished.writtenFiles[0].patch, 'the tool-result payload keeps the patch')
+      const rosterRow = emits.at(-1).find((row) => row.runId === finished.runId)
+      assert.equal(rosterRow.writtenFiles[0].patch, undefined, 'roster rows never carry patch bodies')
+      assert.equal(rosterRow.writtenFiles[0].displayPath, 'src/a.ts')
+      childPaths.push(finished.sessionPath)
       // A FAILED delegation (the parent toolResult above isError: true) must
       // still surface the files its child committed before failing.
       const paths = await runtime.collectSubagentWritePaths(parent, dir, null, sessionsDir)
       assert.deepEqual(paths, [join(dir, 'src', 'a.ts')])
       // A named anchor that is not on the branch fails loudly instead of
       // silently widening the scan to the whole history.
+      await assert.rejects(() => runtime.collectSubagentWritePaths(parent, dir, 'missing-entry', sessionsDir), /lost its checkpoint anchor/)
+    }
+
+    // --- 7) A terminal record that cannot be written is a FAILED run ---
+    {
+      const session = fakeSession({ getLastAssistantText: () => 'All mapped.' })
+      const host = makeHost(session)
+      const originalCreate = host.createChildSession
+      host.createChildSession = async (options) => {
+        const handle = await originalCreate(options)
+        const real = handle.sessionManager.appendCustomEntry.bind(handle.sessionManager)
+        // Only the TERMINAL record fails: the start entry still lands, which is
+        // what makes the run exist at all.
+        handle.sessionManager.appendCustomEntry = (type, data) => {
+          if (type === 'pith_subagent_result') throw new Error('result disk full')
+          return real(type, data)
+        }
+        return handle
+      }
+      const runtime = new SubagentRuntime(host)
+      const state = new SubagentParentState('parent-session')
+      const delivered = []
+      state.notifications = { complete: (finished) => delivered.push(finished), drop: () => {}, canStart: true }
+      const { completion } = await runtime.start(state, baseRequest({ runInBackground: true }))
+      const finished = await completion
+      childPaths.push(finished.sessionPath)
+      assert.equal(finished.status, 'failed', 'an unpersisted result is never reported as success')
+      assert.match(finished.error, /could not be persisted/)
+      assert.equal(finished.result, 'All mapped.', 'the answer still rides the DTO for triage')
+      assert.equal(delivered.length, 1, 'a failed-to-persist background run still reports to the parent')
+      assert.equal(delivered[0].status, 'failed')
+      const reread = runtime.readChildRuns(finished.sessionPath)
+      assert.equal(reread.length, 1, 'only the start entry survived')
+      assert.equal(reread[0].result, null, 'a reopened child reads the run as interrupted, not completed')
+      assert.equal(leases.size, 0)
+    }
+
+    // --- 7b) Turn limit: a designed end reports its answer and still notifies ---
+    {
+      let steers = 0
+      let aborts = 0
+      const session = fakeSession({
+        isIdle: false,
+        getLastAssistantText: () => 'wrapped up within the limit',
+        steer: () => { steers++ },
+        abort: async () => { aborts++ },
+        prompt: async () => {
+          session.emit({ type: 'message_end', message: { role: 'assistant', content: [], timestamp: 1, stopReason: 'stop' } })
+          session.emit({ type: 'message_end', message: { role: 'assistant', content: [], timestamp: 2, stopReason: 'aborted' } })
+          // The runtime keeps the child alive until it is idle again.
+          session.isIdle = true
+          session.messages = [{ role: 'assistant', content: [], timestamp: 2, stopReason: 'aborted' }]
+        }
+      })
+      const runtime = new SubagentRuntime(makeHost(session))
+      const state = new SubagentParentState('parent-session')
+      const delivered = []
+      state.notifications = { complete: (finished) => delivered.push(finished), drop: () => {}, canStart: true }
+      const { completion } = await runtime.start(state, baseRequest({ maxTurns: 1, runInBackground: true }))
+      const finished = await completion
+      childPaths.push(finished.sessionPath)
+      assert.equal(steers, 1, 'the child is told to wrap up at the limit')
+      assert.equal(aborts, 1, 'the runtime ends the run one round later')
+      assert.equal(finished.status, 'completed', 'a limit-ended run is not a user stop')
+      assert.equal(finished.limitReached, true)
+      assert.equal(finished.result, 'wrapped up within the limit')
+      assert.equal(delivered.length, 1, 'a limit-ended background run still wakes its parent')
+      assert.equal(delivered[0].limitReached, true)
+      assert.equal(leases.size, 0)
+    }
+
+    // --- 8) A missing child file degrades to the parent's own evidence ---
+    {
+      const runtime = new SubagentRuntime(makeHost(fakeSession()))
+      parent.appendMessage({ role: 'assistant', content: [{ type: 'toolCall', id: 'agent-call-2', name: 'agent', arguments: { subagent_type: 'explore' } }], timestamp: 20 })
+      parent.appendMessage({ role: 'toolResult', toolCallId: 'agent-call-2', toolName: 'agent', isError: false, content: [{ type: 'text', text: 'ok' }], timestamp: 21,
+        details: { kind: 'pi-app-subagent', subagent: { writtenFiles: [{ filePath: join(dir, 'from-parent.ts'), displayPath: 'from-parent.ts' }] } } })
+      const readable = await runtime.collectSubagentWritePaths(parent, dir, null, sessionsDir)
+      assert.ok(readable.includes(join(dir, 'src', 'a.ts')), 'readable children still contribute their branch writes')
+      for (const path of childPaths) await rm(path, { force: true })
+      // Deleting a child file must not make the whole rewind scan fail (it used
+      // to throw): the parent's own records are the surviving evidence.
+      const degraded = await runtime.collectSubagentWritePaths(parent, dir, null, sessionsDir)
+      assert.ok(degraded.includes(join(dir, 'from-parent.ts')), 'parent-branch evidence survives a deleted child file')
+      assert.ok(!degraded.includes(join(dir, 'src', 'a.ts')), 'the unreadable child no longer contributes')
+      // The integrity check is unaffected by the degraded child scan.
       await assert.rejects(() => runtime.collectSubagentWritePaths(parent, dir, 'missing-entry', sessionsDir), /lost its checkpoint anchor/)
     }
   } finally {

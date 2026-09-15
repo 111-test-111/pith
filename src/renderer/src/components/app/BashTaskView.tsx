@@ -61,7 +61,7 @@ function BashOutput({ task }: { task: BashTaskDTO }) {
   )
 }
 
-export function BashTaskRow({ task: fallback, completion = false }: { task: BashTaskDTO; completion?: boolean }) {
+export function BashTaskRow({ task: fallback, completion = false, inset = false }: { task: BashTaskDTO; completion?: boolean; /** Task-panel rows only: see below. */ inset?: boolean }) {
   const task = useBashTask(undefined, fallback) ?? fallback
   const available = useBashTaskAvailable(task.id)
   const expired = !available && bashTaskLive(task)
@@ -69,7 +69,11 @@ export function BashTaskRow({ task: fallback, completion = false }: { task: Bash
   const [open, setOpen] = useState(false)
   const firstLine = task.command.split('\n')[0]
   return (
-    <div className="" data-bash-task-id={task.id} data-bash-task-status={expired ? 'unavailable' : task.status}>
+    // The task panel's rows inset their content 6px on both sides — on top of
+    // the list's own 4px that is the todo list's 10px, so the three panels lead
+    // with an icon on the same line. A transcript row keeps the shared
+    // `ToolResult` inset it has beside every other tool row.
+    <div className={inset ? 'px-1.5' : ''} data-bash-task-id={task.id} data-bash-task-status={expired ? 'unavailable' : task.status}>
       <ToolResult animateChanges={false} lazyContent open={open} onOpenChange={setOpen}
         title={completion ? t('bashTask.completedCommand', { command: firstLine }) : `bash · ${firstLine}`}
         status={expired ? 'cancelled' : bashTaskStatus(task)} icon={<ToolIcon name="bash" />}
@@ -135,14 +139,14 @@ export function BashTaskList({ tasks }: { tasks: readonly BashTaskDTO[] }) {
     <div
       ref={list}
       data-bash-tasks-list=""
-      // Whole rows only: the cap is the list's 4px padding plus six collapsed
-      // rows (ToolResult's `min-h-9`) and the `space-y-2` gaps between them —
-      // 4 + 6*36 + 5*8 + 4 = 264px, six row pitches, so the bottom edge of the
-      // resting list lands on a row boundary and never cuts one in half.
+      // The drawer's list frame, shared with the todo and subagent panels: a
+      // 4 + 6*36 + 5*8 + 4 = 264px (16.5rem) cap — six collapsed rows
+      // (`ToolResult`'s `min-h-9`) with 4px edge padding and 8px gaps — so a
+      // short list grows row by row and the three panels stop at one height.
       className="max-h-[16.5rem] space-y-2 overflow-y-auto p-1"
       style={{ maskImage: mask, WebkitMaskImage: mask }}
     >
-      {tasks.slice().reverse().map((task) => <BashTaskRow key={task.id} task={task} />)}
+      {tasks.slice().reverse().map((task) => <BashTaskRow key={task.id} task={task} inset />)}
     </div>
   )
 }

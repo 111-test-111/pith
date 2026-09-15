@@ -1,10 +1,13 @@
-import { useEffect, useState } from 'react'
-import { RefreshCw } from '@/lib/icons'
+import { useEffect, useMemo, useState } from 'react'
+import { ChevronRight, RefreshCw } from '@/lib/icons'
+import { AgentDisclosure } from '@/components/agents/agent-disclosure'
 import { Button } from '@/components/motion/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/motion/tabs'
+import { FadeScroll } from '@/components/app/FadeScroll'
 import { useI18n } from '@/i18n'
 import type { MessageKey } from '@/i18n/locales/en'
 import { refreshCatalog, useToolCatalog } from '@/lib/extensions-catalog'
+import { buildToolList, groupPrefixOf } from '@/lib/tool-groups'
 import { getToolParameterFields } from '@/lib/tool-schema'
 import { ToolIcon } from '@/lib/tool-icons'
 import { cn } from '@/lib/utils'
@@ -22,17 +25,36 @@ const BASH_PARAMETERS: Record<string, MessageKey> = {
  * description, source and JSON-Schema parameters. Tools whose owning extension
  * is switched off in Settings → Extensions stay listed, marked inactive.
  *
+ * Namespaced families (`ctx_*`, `web_*`) collapse into one group row so a large
+ * extension cannot bury the built-ins; the group holding the selected tool is
+ * the one left open, and an explicit toggle always wins over that default.
+ *
  * beUI-native: the list/detail split is a `Tabs` (list on the left, detail on
- * the right), with the app's own token-styled markup for the schema body.
+ * the right), the group headers are `Button`s with `AgentDisclosure` reveals,
+ * and the app's `FadeScroll` bounds a long description with a gradient edge.
  */
 export function ToolsSection() {
   const { t } = useI18n()
   const { status, data, error } = useToolCatalog()
   const [selected, setSelected] = useState<string | null>(null)
+  const [openOverrides, setOpenOverrides] = useState<Record<string, boolean>>({})
 
   useEffect(() => {
     void refreshCatalog()
   }, [])
+
+  // Active tools first; disabled-extension tools sink to the bottom. Grouping
+  // then lifts every family to the head of the list.
+  const ordered = useMemo(
+    () =>
+      [...data.tools].sort(
+        (a, b) => Number(a.disabledByExtension) - Number(b.disabledByExtension)
+      ),
+    [data.tools]
+  )
+  const entries = useMemo(() => buildToolList(ordered), [ordered])
+  const current = ordered.find((tool) => tool.name === selected) ?? ordered[0]
+  const openPrefix = groupPrefixOf(entries, current?.name)
 
   if (status === 'loading' && data.tools.length === 0) {
     return <p className="text-sm text-muted-foreground">{t('settings.toolsLoading')}</p>
@@ -53,49 +75,62 @@ export function ToolsSection() {
     return <p className="text-sm text-muted-foreground">{t('settings.toolsEmpty')}</p>
   }
 
-  // Active tools first; disabled-extension tools sink to the bottom.
-  const ordered = [...data.tools].sort(
-    (a, b) => Number(a.disabledByExtension) - Number(b.disabledByExtension)
-  )
-  const current = ordered.find((tool) => tool.name === selected) ?? ordered[0]
-
   return (
     <Tabs
       value={current.name}
       onValueChange={setSelected}
       variant="pill"
-      className="grid gap-4 sm:grid-cols-[11rem_minmax(0,1fr)] sm:items-start"
+      className="grid gap-4 sm:grid-cols-[14rem_minmax(0,1fr)] sm:items-start"
     >
       <TabsList className="flex h-max flex-col items-stretch gap-1 rounded-2xl p-1.5 sm:sticky sm:top-0">
-        {ordered.map((tool) => (
-          <TabsTrigger
-            key={tool.name}
-            value={tool.name}
-            className="w-full justify-between gap-2 rounded-control px-3 py-2"
-          >
-            <span className="flex min-w-0 items-center gap-2">
-              <ToolIcon
-                name={tool.name}
-                className={cn('size-3.5', tool.disabledByExtension && 'opacity-50')}
-              />
-              <span
-                className={cn(
-                  'truncate font-mono text-xs',
-                  tool.disabledByExtension && 'line-through decoration-muted-foreground/60'
-                )}
+        {entries.map((entry) => {
+          if (entry.kind === 'tool') return <ToolTab key={entry.tool.name} tool={entry.tool} />
+
+          const open = openOverrides[entry.prefix] ?? entry.prefix === openPrefix
+          const allDisabled = entry.tools.every((tool) => tool.disabledByExtension)
+          const panelId = `tool-group-${entry.prefix}`
+          return (
+            <div key={`group:${entry.prefix}`} className="flex flex-col gap-1">
+              <Button
+                variant="ghost"
+                size="sm"
+                aria-expanded={open}
+                aria-controls={panelId}
+                aria-label={t('settings.toolGroupAria', {
+                  prefix: entry.prefix,
+                  count: entry.tools.length
+                })}
+                onClick={() =>
+                  setOpenOverrides((prev) => ({ ...prev, [entry.prefix]: !open }))
+                }
+                className="w-full justify-start gap-1.5 px-2"
               >
-                {tool.name}
-              </span>
-            </span>
-            <span
-              aria-hidden
-              className={cn(
-                'size-1.5 shrink-0 rounded-full',
-                tool.active ? 'bg-primary' : 'bg-muted-foreground/40'
-              )}
-            />
-          </TabsTrigger>
-        ))}
+                <ChevronRight
+                  className={cn(
+                    'size-3.5 shrink-0 text-muted-foreground/70 transition-transform duration-150',
+                    open && 'rotate-90'
+                  )}
+                />
+                <span
+                  className={cn(
+                    'min-w-0 truncate font-mono text-xs',
+                    allDisabled && 'line-through opacity-50'
+                  )}
+                >
+                  {entry.prefix}
+                </span>
+                <span className="ml-auto shrink-0 rounded-item bg-muted px-1.5 text-[10px] font-medium tabular-nums text-muted-foreground" data-tool-group-count>
+                  {entry.tools.length}
+                </span>
+              </Button>
+              <AgentDisclosure id={panelId} open={open} className="flex flex-col gap-1 pl-2">
+                {entry.tools.map((tool) => (
+                  <ToolTab key={tool.name} tool={tool} />
+                ))}
+              </AgentDisclosure>
+            </div>
+          )
+        })}
       </TabsList>
 
       {ordered.map((tool) =>
@@ -106,6 +141,40 @@ export function ToolsSection() {
         ) : null
       )}
     </Tabs>
+  )
+}
+
+/** One tool row: standalone, or indented by its group's disclosure wrapper. */
+function ToolTab({ tool }: { tool: ToolInfoDTO }) {
+  return (
+    <div data-tool={tool.name}>
+      <TabsTrigger
+        value={tool.name}
+        className="w-full justify-between gap-2 rounded-control py-2 pl-3 pr-3"
+      >
+        <span className="flex min-w-0 items-center gap-2">
+          <ToolIcon
+            name={tool.name}
+            className={cn('size-3.5 shrink-0', tool.disabledByExtension && 'opacity-50')}
+          />
+          <span
+            className={cn(
+              'truncate font-mono text-xs',
+              tool.disabledByExtension && 'line-through decoration-muted-foreground/60'
+            )}
+          >
+            {tool.name}
+          </span>
+        </span>
+        <span
+          aria-hidden
+          className={cn(
+            'size-1.5 shrink-0 rounded-full',
+            tool.active ? 'bg-primary' : 'bg-muted-foreground/40'
+          )}
+        />
+      </TabsTrigger>
+    </div>
   )
 }
 
@@ -120,33 +189,50 @@ function ToolDetail({ tool }: { tool: ToolInfoDTO }) {
 
   return (
     <div className="min-w-0 space-y-5">
-      <div className="space-y-2">
-        <div className="flex flex-wrap items-center gap-1.5">
-          <code className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-xs font-semibold text-foreground">
-            {tool.name}
-          </code>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <code
+          data-tool-detail-name
+          className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-xs font-semibold text-foreground"
+        >
+          {tool.name}
+        </code>
+        <span className="rounded-control bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+          {sourceLabel}
+        </span>
+        {tool.disabledByExtension ? (
           <span className="rounded-control bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
-            {sourceLabel}
+            {t('settings.toolInactive')}
           </span>
-          {tool.disabledByExtension ? (
-            <span className="rounded-control bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
-              {t('settings.toolInactive')}
-            </span>
-          ) : (
-            <span
-              className={cn(
-                'rounded-control px-2 py-0.5 text-[11px] font-medium',
-                tool.active ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'
-              )}
-            >
-              {tool.active ? t('settings.toolActive') : t('settings.toolInactive')}
-            </span>
-          )}
-        </div>
-        {description ? (
-          <p className="text-sm leading-5 text-muted-foreground">{description}</p>
-        ) : null}
+        ) : (
+          <span
+            className={cn(
+              'rounded-control px-2 py-0.5 text-[11px] font-medium',
+              tool.active ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'
+            )}
+          >
+            {tool.active ? t('settings.toolActive') : t('settings.toolInactive')}
+          </span>
+        )}
       </div>
+
+      {description ? (
+        <section>
+          <p
+            data-tool-description-label
+            className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground"
+          >
+            {t('settings.toolDescription')}
+          </p>
+          <div
+            data-tool-description
+            className="rounded-xl border border-border/70 bg-card px-3 py-2.5"
+          >
+            <FadeScroll className="max-h-44">
+              <p className="text-sm leading-5 text-muted-foreground">{description}</p>
+            </FadeScroll>
+          </div>
+        </section>
+      ) : null}
 
       <section>
         <div className="mb-2 flex items-center justify-between gap-2">

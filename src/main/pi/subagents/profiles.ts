@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { getAgentDir } from '@earendil-works/pi-coding-agent'
 import { join } from 'node:path'
-import type { ThinkingLevel } from '../../../shared/types'
+import { SUBAGENT_READ_ONLY_TOOLS, type ThinkingLevel } from '../../../shared/types.ts'
 
 /**
  * Subagent profiles: Markdown files with a flat YAML-ish frontmatter, body is
@@ -9,9 +9,13 @@ import type { ThinkingLevel } from '../../../shared/types'
  *   builtin < global `${agentDir}/agents` < project `<cwd>/.pi/agents`
  * Same-name profiles in a later scope override earlier ones wholesale.
  *
- * v1 keeps pi-web/main's direct `tools:` CSV (the worktree's tool-preset
- * indirection has no pi-app counterpart); children never load extensions, so
- * the CSV only addresses built-in + app tools.
+ * Tool sets come from one of three sources, in order: an explicit `tools:` CSV,
+ * a `tool_preset` resolved through the preset file pi-web shares from the same
+ * agent dir (`pi-web-tool-presets.json`), or — when neither resolves — the
+ * conservative read-only default. An unknown restriction must never silently
+ * become full access: the `piweb-agent-*` profiles on a machine that also has
+ * pi-web installed declare their tools only as a preset, and defaulting those
+ * to `all` made a profile named `explore` perfectly able to write files.
  */
 
 export type SubagentProfileScope = 'builtin' | 'global' | 'project'
@@ -23,6 +27,11 @@ export interface SubagentProfile {
   systemPrompt: string
   /** 'all' resolves against the parent's active tools at dispatch time. */
   tools: 'all' | string[]
+  /** Where `tools` came from — an unresolved preset is flagged so the tool
+   * description can say why the set is only read-only. */
+  toolsSource?: 'explicit' | 'preset' | 'unresolved-preset' | 'default'
+  /** The `tool_preset` id when the profile declared one (diagnostics). */
+  toolPreset?: string
   model?: string
   thinking?: ThinkingLevel
   maxTurns?: number
@@ -67,6 +76,9 @@ const DEFAULT_PROFILES: Array<Pick<SubagentProfile, 'name' | 'displayName' | 'de
 ]
 
 const PROFILE_NAME_PATTERN = /^[a-z0-9][a-z0-9-_]*$/
+/** Marker written NEXT TO the starter files it guards (the legacy one lives in
+ * app userData and cannot see a drifted agent directory). */
+const DIR_MARKER = '.pi-app-defaults-v1.json'
 
 function profileDirectories(cwd: string | null): Array<{ dir: string; scope: SubagentProfileScope }> {
   return [
@@ -93,6 +105,36 @@ function parseFrontmatter(raw: string): { data: Record<string, string | boolean 
   return { data, body: match[2] }
 }
 
+/** Frontmatter scalars lose their quotes, so `description: 42` parses as the
+ * NUMBER 42 — which used to silently drop an otherwise usable profile. Text
+ * fields therefore accept numeric values as their text form. */
+function asText(value: string | boolean | number | undefined): string {
+  if (typeof value === 'string') return value.trim()
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value)
+  return ''
+}
+
+/** pi-web's shared preset file, read from the same agent dir: a list of
+ * `{ id, name, selection: { mode: 'allow', names } }`. Only an `allow` list can
+ * be expressed as this app's tool ceiling; anything else stays unresolved and
+ * therefore read-only. */
+function readPresetTools(): Map<string, string[]> {
+  const presets = new Map<string, string[]>()
+  let raw: string
+  try { raw = readFileSync(join(getAgentDir(), 'pi-web-tool-presets.json'), 'utf8') } catch { return presets }
+  let parsed: unknown
+  try { parsed = JSON.parse(raw) } catch { return presets }
+  if (!Array.isArray(parsed)) return presets
+  for (const entry of parsed as Array<{ id?: unknown; selection?: { mode?: unknown; names?: unknown } }>) {
+    const id = typeof entry?.id === 'string' ? entry.id.trim() : ''
+    const names = entry?.selection?.names
+    if (!id || entry?.selection?.mode !== 'allow' || !Array.isArray(names)) continue
+    const tools = names.filter((name): name is string => typeof name === 'string' && name.trim().length > 0)
+    if (tools.length) presets.set(id, tools)
+  }
+  return presets
+}
+
 function parseTools(value: string | undefined): 'all' | string[] | undefined {
   const raw = value?.trim().toLowerCase()
   if (!raw) return undefined
@@ -112,20 +154,38 @@ function parseProfileFile(filePath: string, scope: SubagentProfileScope): Subage
     return null
   }
   const { data, body } = parsed
-  const description = typeof data.description === 'string' && data.description.trim() ? data.description.trim() : null
+  const description = asText(data.description) || null
   if (!description) return null // A profile without a description cannot be chosen by the model.
-  const tools = parseTools(typeof data.tools === 'string' ? data.tools : undefined)
+  const explicitTools = parseTools(typeof data.tools === 'string' ? data.tools : undefined)
+  const toolPreset = asText(data.tool_preset) || undefined
+  const presetTools = toolPreset ? readPresetTools().get(toolPreset) : undefined
+  let tools: 'all' | string[]
+  let toolsSource: NonNullable<SubagentProfile['toolsSource']>
+  if (explicitTools !== undefined) { tools = explicitTools; toolsSource = 'explicit' }
+  else if (presetTools) { tools = presetTools; toolsSource = 'preset' }
+  else if (toolPreset) {
+    // A preset this app cannot resolve (unknown id, a `deny` selection, a
+    // missing preset file) must not silently grant write/bash.
+    console.warn(`[subagents] profile "${name}" declares tool_preset "${toolPreset}", which cannot be resolved; falling back to read-only tools`)
+    tools = [...SUBAGENT_READ_ONLY_TOOLS]; toolsSource = 'unresolved-preset'
+  } else {
+    // No explicit tool set at all: least privilege, and the tool description
+    // says so. Profiles that want more must say so in frontmatter.
+    tools = [...SUBAGENT_READ_ONLY_TOOLS]; toolsSource = 'default'
+  }
   const maxTurns = typeof data.max_turns === 'number' ? data.max_turns : undefined
   const thinking = typeof data.thinking === 'string'
     ? (['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].includes(data.thinking) ? data.thinking as ThinkingLevel : undefined)
     : undefined
   return {
     name,
-    displayName: typeof data.display_name === 'string' && data.display_name.trim() ? data.display_name.trim() : name,
+    displayName: asText(data.display_name) || name,
     description,
     systemPrompt: body.trim(),
-    tools: tools ?? 'all',
-    model: typeof data.model === 'string' && data.model.trim() ? data.model.trim() : undefined,
+    tools,
+    toolsSource,
+    ...(toolPreset ? { toolPreset } : {}),
+    model: asText(data.model) || undefined,
     thinking,
     ...(maxTurns !== undefined && Number.isInteger(maxTurns) && maxTurns >= 0 ? { maxTurns } : {}),
     inheritContext: data.inherit_context !== false,
@@ -171,11 +231,35 @@ export function serializeProfile(profile: SubagentProfile): string {
 }
 
 /** Write the starter profiles once. Never overwrites same-named user files and
- * never re-adds files the user deleted (marker in app userData). */
+ * never re-adds files the user deleted (marker beside the files, plus the
+ * legacy userData marker). A marker WITHOUT its files — a fresh HOME, a moved
+ * agent dir, files removed outside the app — heals instead: the old
+ * marker-only guard returned early and left the app with zero profiles, so the
+ * `agent` tool stayed enabled while every dispatch failed. */
 export function ensureDefaultProfiles(stateDir: string): void {
-  const marker = join(stateDir, 'subagent-defaults-v1.json')
-  if (existsSync(marker)) return
   const globalDir = join(getAgentDir(), 'agents')
+  const legacyMarker = join(stateDir, 'subagent-defaults-v1.json')
+  const marker = join(globalDir, DIR_MARKER)
+  const profileFiles = (): string[] => {
+    try { return readdirSync(globalDir).filter((file) => file.toLowerCase().endsWith('.md')) } catch { return [] }
+  }
+  const writeMarkers = (): void => {
+    mkdirSync(globalDir, { recursive: true })
+    writeFileSync(marker, JSON.stringify({ writtenAt: new Date().toISOString() }), 'utf8')
+    mkdirSync(stateDir, { recursive: true })
+    writeFileSync(legacyMarker, JSON.stringify({ writtenAt: new Date().toISOString() }), 'utf8')
+  }
+  const existing = profileFiles()
+  if (existing.length === 0) {
+    // A marker BESIDE an empty directory is a deliberate removal (the user
+    // deleted every profile); a legacy marker alone means the files and the
+    // marker drifted apart, which must heal.
+    if (existsSync(marker)) return
+  } else if (existsSync(marker) || existsSync(legacyMarker)) {
+    // Keep the marker beside the files for the next start's decision.
+    if (!existsSync(marker)) writeMarkers()
+    return
+  }
   mkdirSync(globalDir, { recursive: true })
   for (const template of DEFAULT_PROFILES) {
     const filePath = join(globalDir, `${template.name}.md`)
@@ -188,6 +272,5 @@ export function ensureDefaultProfiles(stateDir: string): void {
       scope: 'builtin'
     }), 'utf8')
   }
-  mkdirSync(stateDir, { recursive: true })
-  writeFileSync(marker, JSON.stringify({ writtenAt: new Date().toISOString() }), 'utf8')
+  writeMarkers()
 }

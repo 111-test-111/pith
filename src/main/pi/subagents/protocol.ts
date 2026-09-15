@@ -11,6 +11,8 @@ import type { SubagentRunDTO, SubagentRunStatus, SubagentWrittenFileDTO } from '
 export const SUBAGENT_RUN_TYPE = 'pith_subagent_run'
 /** Child-session custom entry with a run's terminal record, keyed by runId. */
 export const SUBAGENT_RESULT_TYPE = 'pith_subagent_result'
+/** Owned parent-branch evidence of dispatch, including each explicit resume. */
+export const SUBAGENT_DISPATCH_TYPE = 'pith_subagent_dispatch'
 /** Custom message type the parent receives when a background run completes. */
 export const SUBAGENT_COMPLETION_TYPE = 'subagent_completion'
 
@@ -21,6 +23,7 @@ export const SUBAGENT_EXCLUDED_TOOLS = [SUBAGENT_TOOL_NAME] as const
 /** Data persisted with a `pith_subagent_run` entry. */
 export interface SubagentRunStartData {
   version: 1
+  parentDispatch?: true
   runId: string
   parentSessionId: string
   parentSessionPath: string
@@ -50,7 +53,10 @@ export interface SubagentRunResultData {
   completedAt: string
   result?: string
   error?: string
+  /** The runtime itself ended the run at its dispatched turn limit. */
+  limitReached?: true
   writtenFiles?: SubagentWrittenFileDTO[]
+  writtenFilesScope?: 'run'
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -76,6 +82,7 @@ function parseStart(data: unknown): SubagentRunStartData | null {
   if (!tools) return null
   return {
     version: 1,
+    ...(record.parentDispatch === true ? { parentDispatch: true as const } : {}),
     runId,
     parentSessionId,
     parentSessionPath,
@@ -128,7 +135,9 @@ function parseResult(data: unknown): SubagentRunResultData | null {
     completedAt,
     result: asString(record.result),
     error: asString(record.error),
-    writtenFiles: parseWrittenFiles(record.writtenFiles)
+    ...(record.limitReached === true ? { limitReached: true as const } : {}),
+    writtenFiles: parseWrittenFiles(record.writtenFiles),
+    ...(record.writtenFilesScope === 'run' ? { writtenFilesScope: 'run' as const } : {})
   }
 }
 
@@ -136,6 +145,8 @@ function parseResult(data: unknown): SubagentRunResultData | null {
 export interface DiskSubagentRun {
   start: SubagentRunStartData
   result: SubagentRunResultData | null
+  startEntryId?: string
+  resultEntryId?: string
 }
 
 /**
@@ -155,13 +166,13 @@ export function readDiskSubagentRuns(entries: readonly SessionEntry[]): DiskSuba
     if (entry.customType === SUBAGENT_RUN_TYPE) {
       const start = parseStart(entry.data)
       if (!start || runs.has(start.runId)) continue
-      runs.set(start.runId, { start, result: null })
+      runs.set(start.runId, { start, result: null, startEntryId: entry.id })
       order.push(start.runId)
     } else if (entry.customType === SUBAGENT_RESULT_TYPE) {
       const result = parseResult(entry.data)
       if (!result) continue
       const run = runs.get(result.runId)
-      if (run && !run.result) run.result = result
+      if (run && !run.result) { run.result = result; run.resultEntryId = entry.id }
     }
   }
   return order.map((runId) => runs.get(runId)!)
@@ -190,9 +201,34 @@ export function diskRunToDTO(run: DiskSubagentRun, sessionId: string, sessionPat
     ...(run.result ? { completedAt: run.result.completedAt } : {}),
     ...(run.result?.result ? { result: run.result.result } : {}),
     ...(run.result?.error ? { error: run.result.error } : {}),
+    ...(run.result?.limitReached ? { limitReached: true } : {}),
     ...(run.result?.writtenFiles ? { writtenFiles: run.result.writtenFiles } : {}),
+    ...(run.result?.writtenFilesScope ? { writtenFilesScope: run.result.writtenFilesScope } : {}),
     model: run.start.resource.model,
+    tools: [...run.start.resource.tools],
     seq: 0
+  }
+}
+
+/**
+ * Roster rows are panel metadata: they are re-serialized on every progress
+ * tick and inside every session snapshot, so file patches (up to 64 KiB each)
+ * stay out of them. The patches ride the `agent` tool result and the
+ * `subagent_completion` notice instead — the two payloads the changed-files
+ * list and rewind coverage actually read. `result` is kept: the card shows the
+ * child's final answer. Called on both the publish and the recover path, so no
+ * roster row can leak a patch back into the wire shape.
+ */
+export function slimRunForRoster(run: SubagentRunDTO): SubagentRunDTO {
+  if (!run.writtenFiles?.some((file) => file.patch !== undefined)) return run
+  return {
+    ...run,
+    writtenFiles: run.writtenFiles.map((file) => ({
+      filePath: file.filePath,
+      displayPath: file.displayPath,
+      ...(file.added !== undefined ? { added: file.added } : {}),
+      ...(file.removed !== undefined ? { removed: file.removed } : {})
+    }))
   }
 }
 

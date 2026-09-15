@@ -12,9 +12,13 @@ import {
   applyRunToRoster,
   currentDiskRun,
   readDiskSubagentRuns,
+  slimRunForRoster,
+  SUBAGENT_COMPLETION_TYPE,
   SUBAGENT_EXCLUDED_TOOLS,
   SUBAGENT_RESULT_TYPE,
   SUBAGENT_RUN_TYPE,
+  SUBAGENT_DISPATCH_TYPE,
+  SUBAGENT_TOOL_NAME,
   type DiskSubagentRun,
   type SubagentRunResultData,
   type SubagentRunStartData
@@ -29,6 +33,9 @@ const STOP_SETTLE_MS = 5000
 /** How many extra child wake cycles the drain loop tolerates before giving
  * up on the child's own background commands. */
 const DRAIN_MAX_CYCLES = 100
+// Monotonic across parent reloads in this process, including cached renderer
+// snapshots from a previously disposed ManagedSession.
+let rosterSequence = 0
 
 /** Everything a start needs, resolved by the tool layer. */
 export interface StartSubagentRequest {
@@ -61,7 +68,9 @@ export interface ChildSessionHandle {
    * its background bash processes and its SDK run. Awaitable. */
   halt: () => Promise<void>
   /** Dispose the child (abort + shutdown) unless the user is viewing it. */
-  release: () => void
+  release: () => void | Promise<void>
+  /** Includes the child's pending background-completion handoff. */
+  isSettled?: () => boolean
 }
 
 /** Host capabilities the runtime needs from PiManager; keeps this module free
@@ -103,6 +112,7 @@ interface LiveRun {
   suppressNotify: boolean
   userAborted: boolean
   completion: Promise<SubagentRunDTO>
+  halting?: Promise<void>
 }
 
 /**
@@ -114,7 +124,6 @@ interface LiveRun {
  */
 export class SubagentParentState {
   readonly roster = new Map<string, SubagentRunDTO>()
-  private seqCounter = 0
   private startingCount = 0
   readonly runs = new Map<string, LiveRun>()
   readonly starting = new Set<AbortController>()
@@ -122,13 +131,14 @@ export class SubagentParentState {
    * awaits these so a cancelled launch cannot still be mid-creation after
    * the stop returned. */
   readonly launching = new Set<Promise<void>>()
+  readonly resuming = new Set<string>()
   notifications: SubagentNotifications | null = null
 
   readonly sessionId: string
 
   constructor(sessionId: string) { this.sessionId = sessionId }
 
-  nextSeq(): number { return ++this.seqCounter }
+  nextSeq(): number { return ++rosterSequence }
 
   /** Reserve one concurrency slot (starting + active are both counted). */
   reserve(max: number): () => void {
@@ -141,15 +151,15 @@ export class SubagentParentState {
   }
 
   countActive(): number {
-    let active = 0
-    for (const run of this.roster.values()) if (run.status === 'running') active++
-    return active
+    return this.runs.size
   }
 
+  /** Roster payload for the renderer: newest first, patch-free (roster rows
+   * re-serialize on every progress tick; see slimRunForRoster). */
   snapshot(): SubagentRunDTO[] {
     return [...this.roster.values()].sort(
       (a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt) || b.seq - a.seq
-    )
+    ).map(slimRunForRoster)
   }
 
   apply(run: SubagentRunDTO): boolean {
@@ -158,6 +168,53 @@ export class SubagentParentState {
 }
 
 function sleep(ms: number): Promise<void> { return new Promise((resolve) => setTimeout(resolve, ms)) }
+
+/**
+ * Terminal status rules, pure so they can be checked without an app instance.
+ * Two decisions are load-bearing:
+ *
+ * - Only a USER stop (Stop/Esc, rewind/resend/delete, quit) yields `aborted`.
+ *   The runtime's own turn-limit abort is a designed end, so that run reports
+ *   the answer it produced plus `limitReached` instead of masquerading as a
+ *   stop — a stop also suppresses the parent's completion notification.
+ * - A terminal record that could not be persisted is a FAILED run, never a
+ *   silent success: the answer text still rides the DTO for triage, but a
+ *   caller (or the parent model) must not believe the outcome was recorded.
+ */
+export interface RunOutcomeInput {
+  userAborted: boolean
+  turnLimitReached: boolean
+  stopReason?: string
+  errorMessage?: string
+  promptError?: string
+  persistenceError?: string
+}
+
+export function deriveRunOutcome(input: RunOutcomeInput): { status: SubagentRunStatus; error?: string; limitReached?: true } {
+  if (input.userAborted) return { status: 'aborted' }
+  if (input.persistenceError) {
+    return { status: 'failed', error: input.persistenceError, ...(input.turnLimitReached ? { limitReached: true as const } : {}) }
+  }
+  if (input.turnLimitReached) return { status: 'completed', limitReached: true }
+  if (input.stopReason === 'error') {
+    return { status: 'failed', error: input.errorMessage ?? 'The subagent ended with an error' }
+  }
+  if (input.stopReason === 'aborted') return { status: 'aborted' }
+  if (input.promptError !== undefined) return { status: 'failed', error: input.promptError }
+  return { status: 'completed' }
+}
+
+function runMessages(manager: SessionManagerType, startEntryId: string | undefined, resultEntryId?: string): ChatMessage[] {
+  const branch = manager.getBranch(resultEntryId)
+  const anchor = startEntryId ? branch.findIndex(entry => entry.id === startEntryId) : -1
+  if (startEntryId && anchor < 0) throw new SubagentError('Subagent run is missing its persisted branch anchor')
+  const messages: ChatMessage[] = []
+  for (const entry of branch.slice(anchor + 1)) {
+    if (entry.type === 'custom' && entry.customType === SUBAGENT_RUN_TYPE) break
+    if (entry.type === 'message') messages.push(entry.message as ChatMessage)
+  }
+  return messages
+}
 
 /** The single subagent engine. One instance per app, held by PiManager. */
 export class SubagentRuntime {
@@ -171,6 +228,7 @@ export class SubagentRuntime {
     if (!this.host.subagentsEnabled()) throw new SubagentError('Subagents are disabled in Settings')
     if (!request.profile.enabled) throw new SubagentError(`Profile "${request.profile.name}" is disabled`)
     if (!existsSync(request.parentSessionPath)) throw new SubagentError('The parent session has not been saved yet')
+    const releaseSlot = state.reserve(this.host.maxConcurrentSubagents())
     // Register for cancellation BEFORE any await: a Stop issued while the
     // model/session is still being resolved must abort the launch, not race it.
     const controller = new AbortController()
@@ -180,7 +238,6 @@ export class SubagentRuntime {
     state.launching.add(launchDone)
     const onSignalAbort = () => controller.abort()
     signal?.addEventListener('abort', onSignalAbort, { once: true })
-    const releaseSlot = state.reserve(this.host.maxConcurrentSubagents())
     let releaseCreationLease: (() => void) | null = null
     try {
       if (signal?.aborted || controller.signal.aborted) throw new SubagentError('Subagent cancelled before launch')
@@ -223,17 +280,17 @@ export class SubagentRuntime {
       // Swap the creation lease for a child-keyed run lease: it now covers the
       // whole run (model work, background drain, cleanup) and additionally
       // fences the parent's own checkpoint snapshots against live child writes.
-      const releaseRunLease = this.host.acquireRunLease(cwd, child.path)
+      const releaseRunLease = await this.leaseChild(child)
       releaseCreationLease()
       releaseCreationLease = null
-      return this.trackRun(state, child, {
+      return await this.trackRun(state, child, {
         parentToolCallId: request.parentToolCallId,
         profile: request.profile.name,
         description: request.description,
         task,
         runInBackground: request.runInBackground || request.profile.runInBackground,
         maxTurns
-      }, releaseRunLease, controller.signal, signal)
+      }, releaseRunLease, controller.signal, request.runInBackground || request.profile.runInBackground ? undefined : signal, undefined, request.parentSession.sessionManager)
     } finally {
       state.starting.delete(controller)
       state.launching.delete(launchDone)
@@ -256,16 +313,23 @@ export class SubagentRuntime {
     if (!text) throw new SubagentError('Resume message is required')
     const rosterEntry = state.roster.get(sessionId)
     if (!rosterEntry) throw new SubagentError(`Subagent session not found: ${sessionId}`)
-    if (rosterEntry.status === 'running') throw new SubagentError('Subagent is already running')
+    if (rosterEntry.status === 'running' || state.resuming.has(sessionId) || this.liveRunOf(state, sessionId)) throw new SubagentError('Subagent is already running')
     const cwd = parentSession.sessionManager.getCwd()
     const current = this.readChildRuns(rosterEntry.sessionPath)[0]
     if (!current) throw new SubagentError(`Subagent session not found: ${sessionId}`)
+    // B1: the child's latest run is only continuable while the parent's
+    // SELECTED branch still owns its dispatch — a resume after a rewind past
+    // the dispatch would continue a branch the conversation abandoned.
+    if (!this.dispatchOwnedByBranch(parentSession.sessionManager.getBranch(), current)) {
+      throw new SubagentError('This subagent run is no longer part of the current conversation branch')
+    }
+    const releaseSlot = state.reserve(this.host.maxConcurrentSubagents())
+    state.resuming.add(sessionId)
     const controller = new AbortController()
     state.starting.add(controller)
     let launchSettled: () => void
     const launchDone = new Promise<void>((resolve) => { launchSettled = resolve })
     state.launching.add(launchDone)
-    const releaseSlot = state.reserve(this.host.maxConcurrentSubagents())
     let releaseCreationLease: (() => void) | null = null
     try {
       releaseCreationLease = this.host.acquireRunLease(cwd, current.start.parentSessionPath)
@@ -279,10 +343,10 @@ export class SubagentRuntime {
         resource: current.start.resource,
         sessionPath: rosterEntry.sessionPath
       })
-      const releaseRunLease = this.host.acquireRunLease(cwd, child.path)
+      const releaseRunLease = await this.leaseChild(child)
       releaseCreationLease()
       releaseCreationLease = null
-      const { completion } = this.trackRun(state, child, {
+      const { completion } = await this.trackRun(state, child, {
         parentToolCallId: current.start.parentToolCallId,
         profile: current.start.profile,
         description: current.start.description,
@@ -290,14 +354,42 @@ export class SubagentRuntime {
         runInBackground: current.start.runInBackground,
         maxTurns: current.start.resource.maxTurns,
         createdAt: current.start.createdAt
-      }, releaseRunLease, controller.signal, undefined, text)
+      }, releaseRunLease, controller.signal, undefined, text, parentSession.sessionManager)
       return completion
     } finally {
+      state.resuming.delete(sessionId)
       state.starting.delete(controller)
       state.launching.delete(launchDone)
       launchSettled!()
       releaseCreationLease?.()
       releaseSlot()
+    }
+  }
+
+  /** Whether a child run's dispatch is still owned by the parent's selected
+   * branch: an explicit `pith_subagent_dispatch` entry for the runId, or —
+   * for legacy records written before dispatch entries existed — a visible
+   * `agent` tool result carrying its parent tool call id. */
+  private dispatchOwnedByBranch(branch: readonly unknown[], run: DiskSubagentRun): boolean {
+    if (run.start.parentDispatch === true) {
+      return branch.some((entry) => {
+        if ((entry as any).type !== 'custom' || (entry as any).customType !== SUBAGENT_DISPATCH_TYPE) return false
+        const data = (entry as any).data as { runId?: unknown } | undefined
+        return data?.runId === run.start.runId
+      })
+    }
+    return branch.some((entry) => {
+      if ((entry as any).type !== 'message') return false
+      const message = (entry as any).message as ChatMessage
+      return message.role === 'toolResult' && message.toolCallId === run.start.parentToolCallId
+    })
+  }
+
+  private async leaseChild(child: ChildSessionHandle): Promise<() => void> {
+    try { return this.host.acquireRunLease(child.cwd, child.path) }
+    catch (error) {
+      try { await child.halt() } finally { await child.release() }
+      throw error
     }
   }
 
@@ -322,13 +414,12 @@ export class SubagentRuntime {
    * {@link stopAll} when the caller must wait for the halt to settle. */
   abort(state: SubagentParentState, sessionId: string): void {
     const live = this.liveRunOf(state, sessionId)
-    if (live) void this.haltLiveRun(state, live)
-    this.abortStarting(state)
+    if (live) void this.haltLiveRun(state, live).catch(() => {})
   }
 
   abortAll(state: SubagentParentState | null): void {
     if (!state) return
-    for (const live of [...state.runs.values()]) void this.haltLiveRun(state, live)
+    for (const live of [...state.runs.values()]) void this.haltLiveRun(state, live).catch(() => {})
     this.abortStarting(state)
   }
 
@@ -350,10 +441,19 @@ export class SubagentRuntime {
     // leases and controllers) before declaring the stop settled — a launch
     // that is still creating would otherwise start its prompt right after.
     const launches = [...state.launching]
-    if (launches.length) await Promise.race([Promise.all(launches), sleep(STOP_SETTLE_MS)])
+    if (launches.length) await this.awaitStop(Promise.all(launches))
     this.abortStarting(state)
     const halts = [...state.runs.values()].map((live) => this.haltLiveRun(state, live))
-    if (halts.length) await Promise.race([Promise.all(halts), sleep(STOP_SETTLE_MS)])
+    if (halts.length) await this.awaitStop(Promise.all(halts))
+  }
+
+  private async awaitStop(operation: Promise<unknown>): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      await Promise.race([operation, new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new SubagentError('Subagent is still stopping; retry after it settles')), STOP_SETTLE_MS)
+      })])
+    } finally { clearTimeout(timer) }
   }
 
   /**
@@ -366,8 +466,9 @@ export class SubagentRuntime {
     live.suppressNotify = true
     live.userAborted = true
     state.notifications?.drop(live.run.runId)
-    try { await live.child.halt() } catch { /* the completion below still settles */ }
-    await Promise.race([live.completion.catch(() => {}), sleep(STOP_SETTLE_MS)])
+    live.halting ??= Promise.resolve().then(() => live.child.halt())
+    await live.halting
+    await live.completion
   }
 
   liveRunOf(state: SubagentParentState, sessionId: string): LiveRun | undefined {
@@ -380,23 +481,27 @@ export class SubagentRuntime {
   recover(state: SubagentParentState, cwd: string, parentSessionPath: string, sessionDir?: string): void {
     let infos
     try { infos = SessionManager.list(cwd, sessionDir) } catch { return }
-    void Promise.resolve(infos).then((list) => {
+    void Promise.resolve(infos).then(async (list) => {
       for (const info of list) {
         if (info.parentSessionPath !== parentSessionPath) continue
+        // Opening a session file and reading all of its entries is synchronous
+        // IO: yield between children so a large roster cannot stall the main
+        // process for the whole scan.
+        await new Promise<void>((resolve) => setImmediate(resolve))
         try {
           const child = SessionManager.open(info.path)
           const dto = currentDiskRun(child.getEntries() as any[], child.getSessionId(), info.path)
           // A live seq (not 0): the renderer merges roster state by seq, and a
           // disk row must outrank any stale cached card it replaces.
-          if (dto) {
+          if (dto && !state.roster.has(dto.sessionId)) {
             dto.seq = state.nextSeq()
-            if (state.apply(dto)) {
+            if (state.apply(slimRunForRoster(dto))) {
               this.host.emitSubagents(state.sessionId, parentSessionPath, state.snapshot())
             }
           }
         } catch { /* unreadable child stays off the roster */ }
       }
-    })
+    }).catch(() => { /* a failed scan must not surface as an unhandled rejection */ })
   }
 
   /**
@@ -427,29 +532,52 @@ export class SubagentRuntime {
         if (part.type === 'toolCall' && part.name === 'agent') agentCallIds.add(part.id)
       }
     }
-    if (!agentCallIds.size) return []
+    const dispatches = new Map<string, string>()
+    for (const entry of branch.slice(anchor + 1)) {
+      if (entry.type !== 'custom' || entry.customType !== SUBAGENT_DISPATCH_TYPE) continue
+      const data = entry.data as { runId?: string; sessionPath?: string } | undefined
+      if (typeof data?.runId === 'string' && typeof data.sessionPath === 'string') dispatches.set(data.runId, data.sessionPath)
+    }
+    if (!agentCallIds.size && !dispatches.size) return []
     const parentFile = parentSessionManager.getSessionFile()
     if (!parentFile) return []
     const paths = new Set<string>()
-    let infos
-    try { infos = await SessionManager.list(cwd, sessionDir) } catch { return [] }
-    for (const info of infos) {
-      if (info.parentSessionPath !== parentFile) continue
-      for (const run of this.readChildRuns(info.path)) {
-        if (!agentCallIds.has(run.start.parentToolCallId)) continue
-        if (run.result?.writtenFiles?.length) {
-          for (const file of run.result.writtenFiles) paths.add(file.filePath)
-        } else {
-          // No terminal record (interrupted/crashed): the writes live in the
-          // child's own committed branch — extract them there.
-          try {
-            const child = SessionManager.open(info.path)
-            const messages = child.getBranch()
-              .map((entry) => (entry.type === 'message' ? entry.message as ChatMessage : null))
-              .filter((message): message is ChatMessage => message !== null)
-            for (const file of extractSubagentWrittenFiles(messages, child.getCwd())) paths.add(file.filePath)
-          } catch { /* unreadable child contributes nothing */ }
+    // 1) Evidence persisted on the PARENT branch: the `agent` tool result
+    // (foreground runs — a failed delegation keeps its details through the
+    // error hook) and the `subagent_completion` notice (background runs) both
+    // carry the run's writtenFiles. This survives a child file that was
+    // deleted or is unreadable, and it is what keeps one missing file from
+    // making the whole rewind preview fail.
+    for (const entry of branch.slice(anchor + 1)) {
+      if (entry.type !== 'message') continue
+      const message = entry.message as ChatMessage & { details?: unknown }
+      const completion = message.role === 'custom' && message.customType === SUBAGENT_COMPLETION_TYPE
+      if (!completion && !(message.role === 'toolResult' && message.toolName === SUBAGENT_TOOL_NAME)) continue
+      const run = (message.details as { subagent?: SubagentRunDTO } | undefined)?.subagent
+      for (const written of run?.writtenFiles ?? []) if (written?.filePath) paths.add(written.filePath)
+    }
+    // 2) The children's own branches: the only source for runs the parent never
+    // recorded a terminal payload for (interrupted/crashed, or a background run
+    // whose notice never arrived). A missing file is SKIPPED, never fatal: the
+    // parent's CAS never covered child writes, so an unreadable child degrades
+    // this diagnostic to the parent's own record instead of blocking every
+    // rewind of the session.
+    const infos = await SessionManager.list(cwd, sessionDir)
+    const files = new Set([...dispatches.values(), ...infos.filter(info => info.parentSessionPath === parentFile).map(info => info.path)])
+    for (const file of files) {
+      if (!existsSync(file)) continue
+      let child: SessionManagerType
+      try { child = SessionManager.open(file) } catch { continue }
+      if (child.getHeader()?.parentSession !== parentFile) continue
+      for (const run of readDiskSubagentRuns(child.getEntries())) {
+        if (run.start.parentDispatch ? dispatches.get(run.start.runId) !== file : !agentCallIds.has(run.start.parentToolCallId)) continue
+        // Read committed operation evidence, including failures and interrupted
+        // runs, from this run's own branch interval. Never borrow later resumes.
+        for (const written of extractSubagentWrittenFiles(runMessages(child, run.startEntryId, run.resultEntryId), child.getCwd())) {
+          paths.add(written.filePath)
         }
+        // A terminal record that survived the branch read also names its files.
+        for (const written of run.result?.writtenFiles ?? []) if (written?.filePath) paths.add(written.filePath)
       }
     }
     return [...paths]
@@ -464,7 +592,7 @@ export class SubagentRuntime {
    * `releaseRunLease` is held for the ENTIRE run — model work, background
    * drain and cleanup — and released only in the completion's finally.
    */
-  private trackRun(
+  private async trackRun(
     state: SubagentParentState,
     child: ChildSessionHandle,
     identity: {
@@ -484,13 +612,15 @@ export class SubagentRuntime {
     /** The tool call's abort signal (foreground runs): wired for the run's
      * WHOLE lifetime, not just the launch. */
     externalSignal?: AbortSignal,
-    promptOverride?: string
-  ): { run: SubagentRunDTO; completion: Promise<SubagentRunDTO> } {
+    promptOverride?: string,
+    parentManager?: SessionManagerType
+  ): Promise<{ run: SubagentRunDTO; completion: Promise<SubagentRunDTO> }> {
     const runId = child.runId
     const createdAt = identity.createdAt ?? new Date().toISOString()
     const parentSessionPath = this.parentPathOf(child)
     const startData: SubagentRunStartData = {
       version: 1,
+      ...(parentManager ? { parentDispatch: true as const } : {}),
       runId,
       parentSessionId: child.parentSessionId,
       parentSessionPath,
@@ -506,12 +636,15 @@ export class SubagentRuntime {
     // fail the dispatch instead of running untracked. Until the completion
     // below takes ownership, THIS scope owns the lease and the child — a
     // throw here must release both or every later restore stays blocked.
+    let startEntryId: string
     try {
-      child.sessionManager.appendCustomEntry(SUBAGENT_RUN_TYPE, startData)
+      startEntryId = child.sessionManager.appendCustomEntry(SUBAGENT_RUN_TYPE, startData)
+      parentManager?.appendCustomEntry(SUBAGENT_DISPATCH_TYPE, { version: 1, runId,
+        sessionId: child.session.sessionId, sessionPath: child.path, parentToolCallId: identity.parentToolCallId })
     } catch (error) {
-      releaseRunLease()
-      void child.halt().catch(() => {})
-      child.release()
+      try { await child.halt() } finally {
+        try { await child.release() } finally { releaseRunLease() }
+      }
       throw error
     }
 
@@ -527,11 +660,15 @@ export class SubagentRuntime {
       status: 'running',
       createdAt,
       model: child.resource.model,
+      tools: [...child.resource.tools],
       seq: 0
     }
     const publish = (patch: Partial<SubagentRunDTO>): SubagentRunDTO => {
       const run = { ...base, ...patch, seq: state.nextSeq() }
-      if (state.apply(run)) this.host.emitSubagents(state.sessionId, parentSessionPath, state.snapshot())
+      // The full row goes back to the caller (the `agent` tool result and the
+      // subagent_completion notice carry the patches); the roster keeps only
+      // the panel metadata that every tick re-serializes.
+      if (state.apply(slimRunForRoster(run))) this.host.emitSubagents(state.sessionId, parentSessionPath, state.snapshot())
       return run
     }
     publish({})
@@ -539,7 +676,9 @@ export class SubagentRuntime {
     let tokens = 0
     let toolUses = 0
     let assistantRounds = 0
-    let maxTurnsReached = false
+    // The runtime ended the run at the dispatched turn limit: a designed end,
+    // distinct from a user stop (see deriveRunOutcome).
+    let turnLimitReached = false
     let progressTimer: ReturnType<typeof setTimeout> | null = null
     let lastPublish = 0
     const publishProgress = (): void => {
@@ -557,13 +696,13 @@ export class SubagentRuntime {
       if (event.type === 'message_end' && message?.role === 'assistant') {
         assistantRounds++
         const usage = (message as any).usage
-        if (usage && typeof usage.totalTokens === 'number') tokens = usage.totalTokens
-        else if (usage && typeof usage.tokens === 'number') tokens = usage.tokens
+        if (usage && typeof usage.totalTokens === 'number') tokens += usage.totalTokens
+        else if (usage && typeof usage.tokens === 'number') tokens += usage.tokens
         if (identity.maxTurns !== undefined && identity.maxTurns > 0) {
           if (assistantRounds === identity.maxTurns && !child.session.isIdle) {
-            maxTurnsReached = true
             void child.session.steer('You have reached your turn limit. Wrap up immediately with your best current answer; do not start new work.')
           } else if (assistantRounds > identity.maxTurns) {
+            turnLimitReached = true
             void child.session.abort().catch(() => {})
           }
         }
@@ -577,22 +716,23 @@ export class SubagentRuntime {
     const live: LiveRun = { run: base, child, suppressNotify: false, userAborted: false, completion: null as any }
     // The tool call's abort is live for the WHOLE run (a foreground parent
     // round aborted mid-run must halt its subagent, not just its launch).
-    const onExternalAbort = () => { void this.haltLiveRun(state, live) }
+    const onExternalAbort = () => { void this.haltLiveRun(state, live).catch(() => {}) }
     externalSignal?.addEventListener('abort', onExternalAbort, { once: true })
-    const completion = (async (): Promise<SubagentRunDTO> => {
+    // Register ownership before even a cancelled/empty prompt can complete.
+    const completion = Promise.resolve().then(async (): Promise<SubagentRunDTO> => {
       let promptError: string | undefined
-      if (launchSignal?.aborted) {
+      if (launchSignal?.aborted || externalSignal?.aborted || live.userAborted) {
         // The stop raced the launch: never prompt, settle as aborted.
         live.userAborted = true
+        live.suppressNotify = true
+        await child.halt()
       } else {
         try {
           await child.session.prompt(promptOverride ?? identity.task, { source: 'rpc' })
           await this.drainChildBackgroundTasks(child)
         } catch (error) {
           promptError = error instanceof Error ? error.message : String(error)
-        } finally {
-          unsubscribe()
-          if (progressTimer) clearTimeout(progressTimer)
+          await child.halt()
         }
       }
 
@@ -602,55 +742,70 @@ export class SubagentRuntime {
       const messages = child.session.messages as ChatMessage[]
       const last = [...messages].reverse().find((message) => message.role === 'assistant')
       const stopReason = (last as any)?.stopReason
-      let status: SubagentRunStatus
-      let error: string | undefined
-      if (live.userAborted || stopReason === 'aborted') status = 'aborted'
-      else if (maxTurnsReached) status = 'completed'
-      else if (stopReason === 'error') {
-        status = 'failed'
-        error = String((last as any)?.error ?? (last as any)?.errorMessage ?? 'The subagent ended with an error')
-      } else if (promptError !== undefined) {
-        status = 'failed'
-        error = promptError
-      } else status = 'completed'
+      const outcomeInput = {
+        userAborted: live.userAborted,
+        turnLimitReached,
+        stopReason,
+        errorMessage: String((last as any)?.error ?? (last as any)?.errorMessage ?? '') || undefined,
+        promptError
+      }
+      const outcome = deriveRunOutcome(outcomeInput)
       const text = child.session.getLastAssistantText()?.trim()
       let writtenFiles: SubagentWrittenFileDTO[] | undefined
       try {
         // The full message list (not the live context) so compaction of the
         // child's context cannot lose earlier writes.
-        writtenFiles = extractSubagentWrittenFiles(child.session.sessionManager.getBranch().map((entry) => (entry.type === 'message' ? entry.message as ChatMessage : null)).filter((message): message is ChatMessage => message !== null), child.cwd) || undefined
+        writtenFiles = extractSubagentWrittenFiles(runMessages(child.sessionManager, startEntryId), child.cwd) || undefined
         if (writtenFiles?.length) this.host.notifySubagentChildWrite(child.cwd)
       } catch { writtenFiles = undefined }
 
       const resultData: SubagentRunResultData = {
         version: 1,
         runId,
-        status,
+        writtenFilesScope: 'run',
+        status: outcome.status,
         completedAt: new Date().toISOString(),
         ...(text ? { result: text } : {}),
-        ...(error ? { error } : {}),
+        ...(outcome.error ? { error: outcome.error } : {}),
+        ...(outcome.limitReached ? { limitReached: true as const } : {}),
         ...(writtenFiles ? { writtenFiles } : {})
       }
-      try { child.sessionManager.appendCustomEntry(SUBAGENT_RESULT_TYPE, resultData) } catch { /* best-effort; reads back as interrupted */ }
+      // A terminal record that cannot be written is NOT a silent success: the
+      // run reports `failed` with the reason and keeps its answer for triage.
+      let persistenceError: string | undefined
+      try {
+        child.sessionManager.appendCustomEntry(SUBAGENT_RESULT_TYPE, resultData)
+      } catch (cause) {
+        persistenceError = `The run result could not be persisted (${cause instanceof Error ? cause.message : String(cause)}); reopening this child reads it as interrupted.`
+      }
+      const finalOutcome = persistenceError ? deriveRunOutcome({ ...outcomeInput, persistenceError }) : outcome
 
       const finished = publish({
-        status,
+        status: finalOutcome.status,
         completedAt: resultData.completedAt,
+        writtenFilesScope: 'run',
         ...(text ? { result: text } : {}),
-        ...(error ? { error } : {}),
+        ...(finalOutcome.error ? { error: finalOutcome.error } : {}),
+        ...(finalOutcome.limitReached ? { limitReached: true } : {}),
         ...(writtenFiles ? { writtenFiles } : {}),
         tokens,
         toolUses
       })
-      state.runs.delete(runId)
-      if (!live.suppressNotify && identity.runInBackground && status !== 'aborted') {
+      // Only a USER stop (or a branch operation) suppresses delivery; a run the
+      // runtime itself ended — including one whose record could not be written
+      // — still reports to the parent.
+      if (!live.suppressNotify && !live.userAborted && identity.runInBackground) {
         state.notifications?.complete(finished)
       }
-      child.release()
       return finished
-    })().finally(() => {
+    }).finally(async () => {
+      unsubscribe()
+      if (progressTimer) clearTimeout(progressTimer)
       externalSignal?.removeEventListener('abort', onExternalAbort)
-      releaseRunLease()
+      try { await child.release() } finally {
+        state.runs.delete(runId)
+        releaseRunLease()
+      }
     })
     live.completion = completion
     state.runs.set(runId, live)
@@ -671,27 +826,30 @@ export class SubagentRuntime {
    */
   private async drainChildBackgroundTasks(child: ChildSessionHandle): Promise<void> {
     const tasks = this.host.commandTasks()
-    if (!tasks) return
+    const deadline = Date.now() + 5 * 60_000
     for (let cycle = 0; cycle < DRAIN_MAX_CYCLES; cycle++) {
-      const live = tasks.list(child.path).filter((task) => task.background && taskIsLive(task))
-      if (!live.length) return
-      await Promise.race([tasks.wait(child.path, live[0].id).catch(() => {}), sleep(60_000)])
-      await this.waitForChildSettle(child)
+      // Process completion and its notification are separate handoffs. Give
+      // queued delivery a turn before deciding that an empty task list is done.
+      await sleep(0)
+      const live = tasks?.list(child.path).filter((task) => task.background && taskIsLive(task)) ?? []
+      if (!live.length && (child.isSettled?.() ?? child.session.isIdle)) return
+      if (live.length && tasks) {
+        let timer: ReturnType<typeof setTimeout> | undefined
+        try {
+          await Promise.race([tasks.wait(child.path, live[0].id), new Promise<never>((_resolve, reject) => {
+            timer = setTimeout(() => reject(new SubagentError('Subagent background work did not settle')), Math.max(0, deadline - Date.now()))
+          })])
+        } finally { clearTimeout(timer) }
+      }
+      await this.waitForChildSettle(child, deadline)
     }
+    throw new SubagentError('Subagent background work exceeded its continuation limit')
   }
 
-  private waitForChildSettle(child: ChildSessionHandle): Promise<void> {
-    if (child.session.isIdle) return Promise.resolve()
-    return new Promise<void>((resolve) => {
-      const timer = setTimeout(done, 120_000)
-      const unsubscribe = child.session.subscribe((event: AgentSessionEvent) => {
-        if (event.type === 'agent_settled') done()
-      })
-      function done(): void {
-        clearTimeout(timer)
-        unsubscribe()
-        resolve()
-      }
-    })
+  private async waitForChildSettle(child: ChildSessionHandle, deadline: number): Promise<void> {
+    while (!(child.isSettled?.() ?? child.session.isIdle)) {
+      if (Date.now() >= deadline) throw new SubagentError('Subagent completion delivery did not settle')
+      await sleep(25)
+    }
   }
 }

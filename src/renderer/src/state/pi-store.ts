@@ -52,6 +52,8 @@ export interface PiState {
   isStreaming: boolean
   /** True while the visible session is itself a subagent child (read-only). */
   subagentChild: boolean
+  /** Parent session file for a child view (the composer's "open parent"). */
+  subagentParentPath: string | null
   activeChangeScopeId?: string | null
   /** SDK context usage for the composer ring; refreshed by the main process'
    * 2s poll (`context_usage`) and by every turn boundary. */
@@ -90,6 +92,11 @@ export interface PiShellState {
   queue: { steering: QueuedItemDTO[]; followUp: QueuedItemDTO[] }
   /** True while the visible session is a subagent child (composer disabled). */
   subagentChild: boolean
+  /** Parent session file for a child view, when known. */
+  subagentParentPath: string | null
+  /** This session's subagent roster: the rail names its agent tabs from it and
+   * the pane header reads live status/tokens from it. */
+  subagents: SubagentRunDTO[]
 }
 
 /** Fallback while no session/model is known (SDK returns all levels then). */
@@ -157,6 +164,7 @@ const initialState: PiState = {
   todos: null,
   subagents: [],
   subagentChild: false,
+  subagentParentPath: null,
   ready: false,
   cwd: null,
   projectless: false,
@@ -188,7 +196,9 @@ function shellOf(state: PiState, availableThinkingLevels: ThinkingLevel[]): PiSh
     isStreaming: state.isStreaming,
     contextUsage: state.contextUsage,
     queue: state.queue,
-    subagentChild: state.subagentChild
+    subagentChild: state.subagentChild,
+    subagentParentPath: state.subagentParentPath,
+    subagents: state.subagents
   }
 }
 
@@ -251,7 +261,9 @@ export class PiStore {
       prev.model !== this.state.model ||
       prev.thinkingLevel !== this.state.thinkingLevel ||
       prev.isStreaming !== this.state.isStreaming ||
-    prev.subagentChild !== this.state.subagentChild ||
+      prev.subagentChild !== this.state.subagentChild ||
+      prev.subagentParentPath !== this.state.subagentParentPath ||
+      prev.subagents !== this.state.subagents ||
       prev.contextUsage !== this.state.contextUsage ||
       prev.queue !== this.state.queue
     ) {
@@ -271,8 +283,13 @@ export class PiStore {
 
   applySnapshot(snapshot: SessionSnapshotDTO): void {
     const sessionPath = snapshot.sessionPath ?? null
-    const cached = sessionPath ? this.sessionStates.get(sessionPath) : undefined
+    const previousCached = sessionPath ? this.sessionStates.get(sessionPath) : undefined
     const snapshotSequence = snapshot.eventSequence ?? 0
+    // Roster revisions are independent of transcript revisions, and belong
+    // only to this session. Never merge the outgoing chat into an incoming one.
+    const subagents = mergeRoster(previousCached?.subagents ?? [], snapshot.subagents ?? [])
+    const cached = previousCached ? { ...previousCached, subagents } : undefined
+    if (cached) this.sessionStates.set(sessionPath!, cached)
     // A readiness/event push can overtake an IPC snapshot of a cached session.
     // Keep the newer projection (including its sequence), then replay any
     // background events instead of reverting to an initialization that ended.
@@ -297,15 +314,13 @@ export class PiStore {
       thinkingLevel: snapshot.thinkingLevel,
       isStreaming: snapshot.isStreaming,
       subagentChild: snapshot.subagentChild === true,
+      subagentParentPath: snapshot.subagentParentPath ?? null,
       activeChangeScopeId: snapshot.activeChangeScopeId ?? null,
       contextUsage: unchanged ? cached.contextUsage : (snapshot.contextUsage ?? null),
       eventSequence: snapshotSequence,
       messages: unchanged ? cached.messages : snapshot.messages,
       todos: unchanged ? cached.todos : (snapshot.todos ?? null),
-      subagents: mergeRoster(
-        unchanged ? cached.subagents : this.state.subagents,
-        snapshot.subagents ?? []
-      ),
+      subagents,
       streaming: unchanged ? cached.streaming : (snapshot.streaming ?? null),
       toolRuns: unchanged ? cached.toolRuns : (snapshot.toolRuns ?? {}),
       queue: unchanged ? cached.queue : (snapshot.queue ?? { steering: [], followUp: [] }),
@@ -320,7 +335,7 @@ export class PiStore {
     const pending = this.pendingEvents.get(sessionPath) ?? []
     this.pendingEvents.delete(sessionPath)
     for (const event of pending) {
-      if ((event.eventSequence ?? 0) > snapshotSequence) this.dispatch(event)
+      if (event.type === 'subagents_update' || (event.eventSequence ?? 0) > snapshotSequence) this.dispatch(event)
     }
   }
 
@@ -408,7 +423,7 @@ export class PiStore {
     const pending = this.pendingEvents.get(sessionPath) ?? []
     this.pendingEvents.delete(sessionPath)
     for (const event of pending) {
-      if ((event.eventSequence ?? 0) > this.state.eventSequence) this.dispatch(event)
+      if (event.type === 'subagents_update' || (event.eventSequence ?? 0) > this.state.eventSequence) this.dispatch(event)
     }
     return prev !== cached
   }

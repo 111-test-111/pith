@@ -69,7 +69,7 @@ import { Composer } from './Composer'
 import type { NewSessionContext } from './NewSession'
 import { EditMessageDialog, type EditMessagePayload } from './EditMessageDialog'
 import { SettingsPage } from './settings/SettingsPage'
-import { SidebarPanel, fileTabId, filePathForTab, type SidebarTabKind, type SidebarTabId } from './SidebarPanel'
+import { SidebarPanel, agentTabId, fileTabId, filePathForTab, type SidebarTabKind, type SidebarTabId } from './SidebarPanel'
 import { SessionSearch, SessionSearchTrigger } from './SessionSearch'
 import {
   CHATS_GROUP, PINNED_GROUP, canReorderSession, forgetSidebarSessions,
@@ -599,15 +599,38 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
   }, [closeSideChat, openSideChat, store])
 
   /** Open a pane in the right rail (idempotent) and make it the active tab. */
+  const openSidePanelTabId = useCallback((id: SidebarTabId) => {
+    setSidePanelTabs((current) => (current.includes(id) ? current : [...current, id]))
+    setSidePanelTab(id)
+    // A tab opened from the chat (a subagent session) must reveal the rail; the
+    // picker path is already inside it, where this is a no-op.
+    setSidePanelOpen(true)
+  }, [])
+
   const openSidePanelTab = useCallback(
     (kind: SidebarTabKind) => {
-      setSidePanelTabs((current) => (current.includes(kind) ? current : [...current, kind]))
-      setSidePanelTab(kind)
+      openSidePanelTabId(kind)
       // A side chat is born with its tab.
       if (kind === 'chat') openSideChat()
       if (kind === 'terminal' && terminals.getSnapshot().tabs.length === 0) newTerminal()
     },
-    [openSideChat, terminals, newTerminal]
+    [openSidePanelTabId, openSideChat, terminals, newTerminal]
+  )
+
+  /**
+   * A delegation's "open session" shows the child BESIDE the chat. Navigating
+   * the visible conversation to a read-only child used to lose the user's place
+   * in the parent for what is usually a glance; the pane's own action still
+   * offers the full view when that is what they want.
+   */
+  const openAgentPane = useCallback((path: string) => {
+    openSidePanelTabId(agentTabId(path))
+  }, [openSidePanelTabId])
+
+  /** The rail's agent tabs are keyed by the CHILD session file. */
+  const agentRuns = useMemo(
+    () => new Map((shell.subagents ?? []).map((run) => [run.sessionPath, run])),
+    [shell.subagents]
   )
 
   /** Local conversation links reveal the files pane and preserve other tabs. */
@@ -1272,7 +1295,7 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
                 onRewindMessage={rewindMessage}
                 onFork={handleFork}
                 onReview={openReview}
-                onOpenSession={openSession}
+                onOpenSession={openAgentPane}
               />
             ) : null}
 
@@ -1285,6 +1308,8 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
               busy={shell.isStreaming}
               initializing={shell.initializing}
               readOnly={shell.subagentChild}
+              readOnlyParentPath={shell.subagentParentPath}
+              onOpenSession={(path) => void openSession(path)}
               escapeStopsRun={!settingsOpen && !authPrompt}
               contextUsage={shell.contextUsage}
               queued={shell.queue}
@@ -1336,7 +1361,9 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
               onSideChatDraftChange: setSideChatDraft,
               sideChatOnCurrentSession:
                 sideChat != null && sideChat.boundSessionPath === shell.sessionPath,
-              onSideChatRebind: rebindSideChat
+              onSideChatRebind: rebindSideChat,
+              agentRuns,
+              onOpenSessionInChat: (path) => void openSession(path)
             }}
           />
         </div>
@@ -1353,6 +1380,12 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
       <RewindDialog sessionPath={rewindTarget?.path ?? null} messageTimestamp={rewindTarget?.messageTimestamp} messageEntryId={rewindTarget?.messageEntryId} onClose={closeRewind} onCommitted={value => {
         if (value.snapshot?.sessionPath === store.getShell().sessionPath) store.applySnapshot(value.snapshot)
         setScrollResetKey(previous => previous + 1)
+        // A conversation restore re-decides what the sidebar shows for this
+        // session: restoring to before its first turn leaves the selected
+        // branch empty (it must not stay listed as an openable chat), and an
+        // Undo brings the history back. `messageCount` observes that change
+        // only through a fresh list.
+        void refreshSessions()
       }} />
       <ConfirmDialog
         open={pendingDelete !== null}

@@ -608,6 +608,8 @@ export interface SessionSnapshotDTO {
   /** True when THIS session is itself a subagent child: a read-only view —
    * the composer is disabled and main refuses direct prompts. */
   subagentChild?: boolean
+  /** Parent session file for a child view (the "open parent" action). */
+  subagentParentPath?: string
   /** Last event incorporated into this snapshot. */
   eventSequence?: number
 }
@@ -629,6 +631,12 @@ export interface SubagentWrittenFileDTO {
 
 export type SubagentRunStatus = 'running' | 'completed' | 'failed' | 'aborted' | 'interrupted'
 
+/** Tools a profile may hold and still count as read-only. Also the
+ * conservative fallback for a profile whose tool set cannot be resolved (a
+ * `tool_preset` this app does not know, or a missing `tools:` field): an
+ * unknown restriction must never widen to write/bash access. */
+export const SUBAGENT_READ_ONLY_TOOLS: readonly string[] = ['read', 'grep', 'find', 'ls']
+
 /** One subagent run as the renderer sees it (roster card + tool-row details). */
 export interface SubagentRunDTO {
   runId: string
@@ -646,12 +654,19 @@ export interface SubagentRunDTO {
   completedAt?: string
   result?: string
   error?: string
+  /** The runtime ended the run at its dispatched turn limit (the child was told
+   * to wrap up and its answer is the final one). Never set on a user stop. */
+  limitReached?: boolean
   /** `provider/modelId`, resolved at dispatch. */
   model?: string
+  /** The frozen tool ceiling this run dispatched with. */
+  tools?: string[]
   /** Cumulative usage of the child session's assistant messages (progress). */
   tokens?: number
   toolUses?: number
   writtenFiles?: SubagentWrittenFileDTO[]
+  /** Absent on legacy results whose file list covered the entire child. */
+  writtenFilesScope?: 'run'
   /**
    * Per-parent monotonic revision. Roster updates with a seq lower than the
    * entry they target are stale (a late event from an aborted run) and must

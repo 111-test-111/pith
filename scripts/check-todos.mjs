@@ -89,7 +89,8 @@ pi.on('tool_result',e=>{if(e.toolName==='todo_write'&&e.input.todos[0]?.content=
     if (order === 'activity-first') { local.activityOccurred(); todoEnd() } else { todoEnd(); local.activityOccurred() }
     const input = [{ role: 'custom', customType: 'bash_task_completion', content: 'finished', display: true, timestamp: 1 }]
     const context = handlers.get('context')({ messages: input })
-    assert.match(context.messages.at(-1).content, /Compare this list/)
+    assert.match(context.messages.at(-1).content, /changed a task's status or scope/)
+    assert.match(context.messages.at(-1).content, /Never restate, summarize or acknowledge this list/)
     assert.equal(input.length, 1, 'reminder never changes the original context')
     assert.equal(handlers.get('context')({ messages: input }), undefined, 'no duplicate reminder without activity')
     assert.equal(handlers.has('agent_settled'), false, 'no automatic todo wakeups')
@@ -126,6 +127,7 @@ pi.on('tool_result',e=>{if(e.toolName==='todo_write'&&e.input.todos[0]?.content=
   assert.deepEqual(store.getState().todos, app.snapshot().todos, 'committed events and snapshot agree')
   assert(contexts[0].tools.some((t) => t.name === 'todo_write'))
   assert.match(contexts[0].systemPrompt, /Keep at most one todo_write item/)
+  assert.match(contexts[0].systemPrompt, /Never restate, summarize or acknowledge the task list/)
   const original = structuredClone(managed.todos.snapshot)
   const catalog = buildToolCatalog(managed.resourceLoader, session.getAllTools(), session.getActiveToolNames(), new Set(), new Map(), new Map())
   assert.equal(catalog.tools.find((t) => t.name === 'todo_write')?.source.kind, 'builtin')

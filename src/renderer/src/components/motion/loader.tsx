@@ -25,6 +25,7 @@ export type LoaderVariant =
   | "metaballs"
   | "newton"
   | "helix"
+  | "peeek"
   | "percent";
 
 // Terminal-style frame sets — the loaders CLI AI agents cycle through.
@@ -92,6 +93,7 @@ export function Loader({
       )}
       {variant === "newton" && <Newton size={size} speed={speed} reduce={reduce} />}
       {variant === "helix" && <Helix size={size} speed={speed} reduce={reduce} />}
+      {variant === "peeek" && <Peeek size={size} speed={speed} reduce={reduce} />}
       {variant === "percent" && (
         <Percent size={size} speed={speed} reduce={reduce} />
       )}
@@ -457,6 +459,62 @@ function Helix({ size, speed, reduce }: PartProps) {
           </span>
         );
       })}
+    </span>
+  );
+}
+
+// local patch (pi-app): the owner's "Peeek" loader — ten accent dots pulsing
+// around a still centre dot. Ported from css3-loader-animationpeeek
+// (src/style.scss): dot 1.4em, outward radius 2.8em, inward 1.4em, dot scale and
+// opacity 1 -> 0.5, ten dots 36deg apart, 0.125s stagger inside a 2.5s cycle,
+// infinite. Scaled so the 7em wheel is the `size` square, and painted with
+// `bg-current` — the caller's text colour, which is the theme accent in the
+// waiting row — instead of the reference's green background and white dots.
+function Peeek({ size, speed, reduce }: PartProps) {
+  const dots = 10;
+  const cycle = speed * 2.5;
+  const dot = size * 0.2;
+  const outer = size * 0.4;
+  const inner = size * 0.2;
+  const centre = size / 2 - dot / 2;
+  return (
+    <span className="relative" style={{ width: size, height: size }}>
+      <span
+        className="absolute rounded-full bg-current"
+        style={{ width: dot, height: dot, left: centre, top: centre }}
+      />
+      {Array.from({ length: dots }, (_, index) => (
+        // The rotated frame carries the dot's own radial axis, so the animated
+        // translation below always runs outward from the wheel's centre.
+        <span
+          key={`peeek-${index}`}
+          className="absolute"
+          style={{
+            width: dot,
+            height: dot,
+            left: centre,
+            top: centre,
+            transform: `rotate(${(360 / dots) * index}deg)`,
+          }}
+        >
+          <motion.span
+            className="block rounded-full bg-current"
+            style={{ width: dot, height: dot }}
+            animate={
+              reduce
+                ? { opacity: [1, 0.45, 1] }
+                : { y: [-outer, -inner, -outer], scale: [1, 0.5, 1], opacity: [1, 0.5, 1] }
+            }
+            transition={{
+              duration: cycle,
+              ease: EASE_IN_OUT,
+              repeat: Infinity,
+              // Reference: animation-delay = cycle * i / dots / 2.
+              delay: ((index + 1) * cycle) / (dots * 2),
+            }}
+          />
+        </span>
+      ))}
     </span>
   );
 }

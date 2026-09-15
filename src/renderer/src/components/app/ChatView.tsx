@@ -98,20 +98,23 @@ export const ChatView = memo(function ChatView({
   /** Changes when a resend/retry lands, forcing the transcript back to the
    * live edge so the retried user message is visible. */
   scrollResetKey?: number
-  onDismissError: () => void
+  /** Session-level actions are OPTIONAL so a read-only view (an opened subagent
+   * child, or the rail's peeked transcript) can omit them instead of passing
+   * no-ops that look live but do nothing. */
+  onDismissError?: () => void
   /** Retry a turn's response — rewinds the session to the user message that
    * opened it and re-prompts. The assistant turn's retry cell and the error
    * banner funnel here. */
-  onResend: (message: UserMsg) => void
+  onResend?: (message: UserMsg) => void
   /** Open the edit-and-resend dialog for a user message (does not resend by
    * itself — the dialog's Resend press does). */
-  onEditMessage: (message: UserMsg) => void
+  onEditMessage?: (message: UserMsg) => void
   onRewindMessage?: (message: UserMsg) => void
   /** Fork the session at an assistant message; opens the fork. */
-  onFork: (message: AssistantMsg) => void
+  onFork?: (message: AssistantMsg) => void
   /** Open the review tab on a turn — the changed-files card's Review action.
    * The id is the turn's first assistant message timestamp. */
-  onReview: (turnId: number) => void
+  onReview?: (turnId: number) => void
   /** Open another session file (a subagent child) as the visible chat. */
   onOpenSession?: (path: string, cwd?: string) => void
 }) {
@@ -173,6 +176,18 @@ export const ChatView = memo(function ChatView({
     }
     return undefined
   })()
+  /**
+   * A run that ENDED on a failure (`auto_retry_end` without success, or a
+   * failed compaction) is not status chrome: the turn's own group renders it as
+   * unframed error prose, directly above the retry/fork row it explains. The
+   * in-flight notices (retrying/compacting) stay in the framed status row
+   * below, and so does a failure that has no settled assistant turn to host it.
+   */
+  const failureNotice =
+    state.notice && (state.notice.key === 'retryFailed' || state.notice.key === 'compactFailed')
+      ? noticeText(state.notice, t)
+      : null
+  const failureHosted = Boolean(failureNotice && lastTurn?.role === 'assistant')
   // A fresh streaming round either joins the trailing assistant turn or
   // (first round of a new turn) opens one.
   const lastScopeId = lastTurn?.role === 'assistant' ? lastTurn.assistants[0]?.changeScopeId : undefined
@@ -216,8 +231,8 @@ export const ChatView = memo(function ChatView({
           // Only the transcript's newest row keeps its actions on screen; every
           // older one reveals them on hover.
           actionsAlwaysVisible={turn === lastTurn}
-          onEdit={onEditMessage}
-          onRewind={onRewindMessage}
+          onEdit={state.subagentChild ? undefined : onEditMessage}
+          onRewind={state.subagentChild ? undefined : onRewindMessage}
         />
       )
     if (turn.role === 'info')
@@ -267,14 +282,16 @@ export const ChatView = memo(function ChatView({
         messages={messages}
         notices={turn.notices}
         writtenMessages={changes?.assistants}
+        writtenCompletions={changes?.completions}
         writtenReviewId={changes?.reviewId}
         showWrittenFiles={changes?.ownerKey === turn.key && !(busy && scopeId === state.activeChangeScopeId)}
         streamingIndex={live ? 0 : isLast && streamingJoinsLastTurn ? turn.assistants.length : -1}
         pending={!live && isLast && waitingInLastTurn}
         retryFrom={retryFrom}
         forkAt={turn.assistants[turn.assistants.length - 1]}
-        onResend={onResend}
-        onFork={onFork}
+        failure={turn === lastTurn ? failureNotice ?? undefined : undefined}
+        onResend={state.subagentChild ? undefined : onResend}
+        onFork={state.subagentChild ? undefined : onFork}
         showActions={!busy}
         actionsAlwaysVisible={isLast && !live}
         cwd={state.cwd}
@@ -313,9 +330,12 @@ export const ChatView = memo(function ChatView({
           <TurnStatus seedKey={spinnerSeed} />
         ) : null}
 
-        {state.notice ? (
+        {state.notice && !failureHosted ? (
           <RowReveal animate>
-            <div className="rounded-xl bg-muted/60 px-3 py-2 text-xs text-muted-foreground">
+            <div
+              data-turn-notice
+              className="rounded-xl bg-muted/60 px-3 py-2 text-xs text-muted-foreground"
+            >
               {noticeText(state.notice, t)}
             </div>
           </RowReveal>
@@ -329,18 +349,18 @@ export const ChatView = memo(function ChatView({
                 {typeof state.error === 'string' ? state.error : t(`rewind.error.${state.error.code}`)}
               </span>
               <span className="flex items-center gap-0.5">
-                {lastUserTurn && !busy ? (
+                {lastUserTurn && !busy && !state.subagentChild ? (
                   <Button
                     variant="ghost"
                     size="icon"
                     className="size-6 text-destructive hover:text-destructive"
                     aria-label={t('chat.errorRetry')}
-                    onClick={() => onResend(lastUserTurn)}
+                    onClick={() => onResend?.(lastUserTurn)}
                   >
                     <RotateCcw className="size-3.5" />
                   </Button>
                 ) : null}
-                <Button variant="ghost" size="icon" className="size-6" aria-label={t('chat.dismissError')} onClick={onDismissError}>
+                <Button variant="ghost" size="icon" className="size-6" aria-label={t('chat.dismissError')} onClick={() => onDismissError?.()}>
                   <X className="size-3.5" />
                 </Button>
               </span>

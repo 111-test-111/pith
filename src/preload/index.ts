@@ -92,6 +92,9 @@ const api = {
   onBashTask: (listener: (task: BashTaskDTO) => void) => subscribe('pi:bash-task', listener),
   setBashMaxWaitMs: (value: number): Promise<number> => ipcRenderer.invoke('app:setBashMaxWaitMs', value),
   listSubagents: (sessionPath: string): Promise<SubagentRunDTO[]> => ipcRenderer.invoke('subagents:list', sessionPath),
+  /** One session's transcript without making it the active session (the rail's
+   * read-only subagent view). */
+  peekSession: (path: string): Promise<SessionSnapshotDTO> => ipcRenderer.invoke('pi:peekSession', path),
   subagentAction: (payload: SubagentActionPayload): Promise<void> => ipcRenderer.invoke('subagents:action', payload),
   setSubagentsEnabled: (enabled: boolean): Promise<boolean> => ipcRenderer.invoke('subagents:setEnabled', enabled),
   appInfo: (): Promise<AppInfoDTO> => ipcRenderer.invoke('app:info'),

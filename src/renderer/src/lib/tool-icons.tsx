@@ -1,6 +1,13 @@
 import {
   Bot,
+  BookDownload,
+  BookSearch,
+  Chart,
   CloudDownload,
+  CommandLine,
+  Dashboard,
+  Database,
+  FileCode2,
   FilePen,
   FilePlus2,
   FileSearch,
@@ -8,12 +15,16 @@ import {
   FileText,
   FolderTree,
   Globe,
+  InstallingUpdates,
   ListTodo,
   Plug,
   ScanSearch,
   Search,
+  SourceCode,
+  Stethoscope,
   Terminal,
   TextSearch,
+  Trash2,
   Wrench,
   type IconComponent
 } from '@/lib/icons'
@@ -26,10 +37,10 @@ import { cn } from '@/lib/utils'
  *
  * The mapping is exhaustive for the tools that exist today: the SDK's built-ins
  * plus what the bundled extensions register (`@tavily/pi-extension`,
- * `pi-mcp-adapter`, `@ff-labs/pi-fff`). Everything else — a tool a new extension
- * registers after this list was written — falls back to the wrench, until it
- * gets an explicit entry here. MCP namespaces are the one exception, handled by
- * prefix below.
+ * `pi-mcp-adapter`, `@ff-labs/pi-fff`, `context-mode`). Everything else — a tool
+ * a new extension registers after this list was written — falls back to the
+ * wrench, until it gets an explicit entry here. MCP namespaces are the one
+ * exception, handled by prefix below.
  */
 const TOOL_ICONS: Record<string, IconComponent> = {
   // Built-in file + shell tools. The shell rows use the plain `Terminal` glyph;
@@ -56,6 +67,22 @@ const TOOL_ICONS: Record<string, IconComponent> = {
   // Tavily web tools.
   web_search: Globe,
   web_fetch: CloudDownload,
+  // context-mode: the sandbox-execution + knowledge-base family. The two
+  // executors run code (`</>` glyphs — the batch one is the boxed `>_`, so it
+  // stays distinguishable from the plain `Terminal` of `bash`), the knowledge
+  // base owns the database/book glyphs, and the maintenance tools keep their
+  // own verbs (diagnose / delete / dashboard / install).
+  ctx_execute: SourceCode,
+  ctx_execute_file: FileCode2,
+  ctx_batch_execute: CommandLine,
+  ctx_index: Database,
+  ctx_fetch_and_index: BookDownload,
+  ctx_search: BookSearch,
+  ctx_stats: Chart,
+  ctx_doctor: Stethoscope,
+  ctx_purge: Trash2,
+  ctx_insight: Dashboard,
+  ctx_upgrade: InstallingUpdates,
   // MCP adapter — `mcp`, the batch script tool `mcpScript` and every per-server
   // namespace proxy (`mcp__context7`, …) share one MCP glyph; the proxies are
   // matched by prefix in `toolIconComponent` rather than listed here.

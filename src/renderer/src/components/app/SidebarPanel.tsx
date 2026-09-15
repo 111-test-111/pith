@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import {
+  Bot,
   Folder,
   Globe,
   MessageCirclePlus,
@@ -26,19 +27,26 @@ import { SideChatPane } from './SideChatPane'
 import { ReviewPane } from './ReviewPane'
 import { TerminalPane } from './TerminalPane'
 import { FilesPane } from './FilesPane'
+import { SubagentSessionPane } from './SubagentSessionPane'
 import type { FileBrowserStore } from '@/state/file-browser-store'
 import type { TerminalStore } from '@/state/terminal-store'
 import type { SideChatStore } from '@/state/side-chat-store'
 import type { PiStore } from '@/state/pi-store'
+import type { SubagentRunDTO } from '../../../../shared/types'
 
 /** Fallback width before the workspace has applied the user's panel layout. */
 export const SIDEBAR_PANEL_WIDTH = 400
 
-/** The panes the right rail can host. */
+/** The panes the right rail can host. Besides the fixed kinds, the rail hosts
+ * one tab per open FILE and per open SUBAGENT SESSION (both keyed by path). */
 export type SidebarTabKind = 'review' | 'terminal' | 'browser' | 'files' | 'chat'
-export type SidebarTabId = SidebarTabKind | `file:${string}`
+export type SidebarTabId = SidebarTabKind | `file:${string}` | `agent:${string}`
 export const fileTabId = (path: string): SidebarTabId => `file:${path}`
 export const filePathForTab = (id: SidebarTabId | null): string | null => id?.startsWith('file:') ? id.slice(5) : null
+/** A subagent child session shown READ-ONLY beside the chat: opening it here
+ * keeps the visible conversation in place instead of navigating away from it. */
+export const agentTabId = (path: string): SidebarTabId => `agent:${path}`
+export const agentPathForTab = (id: SidebarTabId | null): string | null => id?.startsWith('agent:') ? id.slice(6) : null
 
 interface SidebarTabSpec {
   id: SidebarTabKind
@@ -70,6 +78,11 @@ export interface SidebarPaneProps {
   sideChatOnCurrentSession: boolean
   /** Rebind the side chat to the current session, clearing its thread. */
   onSideChatRebind: () => void
+  /** This session's subagent runs, keyed by the CHILD session file: it names
+   * the rail's agent tabs and feeds the pane's status header. */
+  agentRuns: ReadonlyMap<string, SubagentRunDTO>
+  /** Send a rail-opened child to the main chat (its read-only session view). */
+  onOpenSessionInChat: (path: string) => void
 }
 
 /**
@@ -198,6 +211,7 @@ function SidebarTabStrip({
   tabs,
   active,
   pickerOpen,
+  agentRuns,
   onSelect,
   onClose,
   onTogglePicker
@@ -205,6 +219,7 @@ function SidebarTabStrip({
   tabs: SidebarTabId[]
   active: SidebarTabId | null
   pickerOpen: boolean
+  agentRuns: ReadonlyMap<string, SubagentRunDTO>
   onSelect: (kind: SidebarTabId) => void
   onClose: (kind: SidebarTabId) => void
   onTogglePicker: () => void
@@ -236,13 +251,22 @@ function SidebarTabStrip({
           <TabsList className="h-9 border-b-0 gap-0.5">
             {tabs.map((kind) => {
               const path = filePathForTab(kind)
-              const spec = specFor(path ? 'files' : kind as SidebarTabKind)
-              const label = path ? basename(path) : t(spec.labelKey)
+              const agentPath = agentPathForTab(kind)
+              // `specFor` only knows the fixed kinds: an agent tab (like a file
+              // tab) takes its own label and icon, and must NOT be resolved
+              // through the registry.
+              const spec = agentPath ? null : specFor(path ? 'files' : kind as SidebarTabKind)
+              const label = agentPath
+                ? agentRuns.get(agentPath)?.description ?? t('subagent.sessionTab')
+                : path ? basename(path) : t(spec!.labelKey)
+              // A JSX tag name cannot carry a non-null assertion, so the icon
+              // component is bound here where the union still narrows.
+              const TabIcon = spec?.icon
               const isActive = active === kind
               return (
                 <div key={kind} className="group/tab relative flex items-center">
-                  <LabelTooltip content={path}><TabsTrigger value={kind} className="h-9 min-h-0 gap-2 pl-2.5 pr-8">
-                    {path ? <FileTypeIcon path={path} className="size-4 shrink-0" /> : <spec.icon aria-hidden="true" className="size-3.5 shrink-0" />}
+                  <LabelTooltip content={path ?? (agentPath ? label : '')}><TabsTrigger value={kind} className="h-9 min-h-0 gap-2 pl-2.5 pr-8">
+                    {agentPath ? <Bot aria-hidden="true" className="size-3.5 shrink-0" /> : path ? <FileTypeIcon path={path} className="size-4 shrink-0" /> : TabIcon ? <TabIcon aria-hidden="true" className="size-3.5 shrink-0" /> : null}
                     <MiddleEllipsis name={label} className="max-w-32 text-xs" />
                   </TabsTrigger></LabelTooltip>
                   <Tooltip
@@ -368,6 +392,7 @@ export function SidebarPanel({
                 tabs={tabs}
                 active={activeTab}
                 pickerOpen={pickerOpen}
+                agentRuns={pane.agentRuns}
                 onSelect={(kind) => {
                   setPickerOpen(false)
                   onSelectTab(kind)
@@ -381,7 +406,22 @@ export function SidebarPanel({
               {!hasTabs || pickerOpen ? (
                 <SidebarPicker onOpen={openTab} />
               ) : (
-                activeTab && (filePathForTab(activeTab) ? <FilesPane files={pane.files} store={pane.store} filePath={filePathForTab(activeTab)} /> : specFor(activeTab as SidebarTabKind).render(pane))
+                activeTab && (() => {
+                  const agentPath = agentPathForTab(activeTab)
+                  if (agentPath) {
+                    return (
+                      <SubagentSessionPane
+                        sessionPath={agentPath}
+                        run={pane.agentRuns.get(agentPath) ?? null}
+                        onOpenInChat={pane.onOpenSessionInChat}
+                      />
+                    )
+                  }
+                  const path = filePathForTab(activeTab)
+                  return path
+                    ? <FilesPane files={pane.files} store={pane.store} filePath={path} />
+                    : specFor(activeTab as SidebarTabKind).render(pane)
+                })()
               )}
             </div>
           </div>

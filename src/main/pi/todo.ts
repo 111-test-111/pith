@@ -60,10 +60,14 @@ export class TodoState {
         // The SDK gives extensions a clone before convertToLlm. An ephemeral
         // user message also works after custom/summary/assistant tails without
         // mutating their content or separating calls from pending tool results.
+        // The wording is directive and never asks for a verdict: a comparison
+        // request used to be answered in visible prose ("the list is
+        // accurate, continuing…") on every round. The list still ships so a
+        // full update stays exact, and the pressure to update stays on.
         const instruction = this.stale
-          ? 'Compare this list with the latest results. Correct changed status or scope with todo_write; do not rewrite an already accurate list.'
-          : 'Keep this list accurate. Update it after meaningful changes and before the final response if it changed.'
-        const reminder = `<system-reminder>\nCurrent task list:\n${todoText(this.snapshot.items)}\n${instruction}\nA background command is unfinished until its result is known and verified. Preserve IDs when updating tasks. Mark abandoned work cancelled, never completed. Do not mention this reminder to the user.\n</system-reminder>`
+          ? 'If the latest results changed a task\'s status or scope, call todo_write with the full corrected list; if nothing changed, leave the list untouched.'
+          : 'Mark an item in_progress when you start it and completed only after verification.'
+        const reminder = `<system-reminder>\nCurrent task list:\n${todoText(this.snapshot.items)}\n${instruction}\nTask state is written only through todo_write and is already shown in the UI. Never restate, summarize or acknowledge this list or its statuses in your reply; do not announce that it is accurate, unchanged or up to date. Talk about the work itself.\nA background command is unfinished until its result is known and verified. Preserve IDs when updating tasks. Mark abandoned work cancelled, never completed. Do not mention this reminder to the user.\n</system-reminder>`
         this.due = false
         return { messages: [...event.messages, { role: 'user', content: reminder, timestamp: Date.now() }] }
       })
@@ -88,6 +92,7 @@ export function createTodoTool(state: TodoState, canStart: () => boolean): ToolD
       'Keep at most one todo_write item in_progress. Mark it when starting, completed as soon as verified, and cancelled when abandoned. Never batch-complete unfinished work.',
       'A background bash tool returning a task ID is not completion. Keep the related todo unfinished until the result is known and verified; update after its completion notification.',
       'Before your final response, call todo_write if status or scope changed. Keep stable task IDs when renaming or reordering. Do not make redundant updates.',
+      'Never restate, summarize or acknowledge the task list or its statuses in your reply. todo_write and the task UI are the only place task state appears; do not report that the list is accurate or unchanged.',
       'Keep completed and cancelled tasks in the final todo_write list so the user can review them. Finishing work does not require clearing the list.'
     ],
     async execute(_id, args, signal) {

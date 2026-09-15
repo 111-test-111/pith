@@ -32,7 +32,7 @@ import {GeneralSection} from '/src/components/app/settings/GeneralSection.tsx';
 import {TOOL_CATEGORIES} from '/src/lib/tool-categories.ts';
 import '/src/styles.css';
 localStorage.setItem('pi-app:locale','en');
-let listener;window.outputReads=0;window.stops=0;window.savedWait=10000;
+let listener;window.outputReads=0;window.stops=0;window.savedWait=10000;window.openedSessions=[];
 window.task={id:'ui-task',sessionId:'ui-session',sessionPath:'/ui/session',toolCallId:'ui-call',command:'npm run build',cwd:'/ui',status:'running',background:true,reason:'wait_threshold',startedAt:Date.now()-1000,lastOutputAt:Date.now(),outputChars:11,logPath:'/ui/task.log',logTruncated:false,revision:1};
 window.pi={onBashTask:fn=>{listener=fn;return()=>{listener=undefined}},listBashTasks:async path=>path==='/ui/session'?[window.task]:[],
  bashTaskOutput:async request=>{window.outputReads++;const output='build 中文😀';return{task:window.task,output:request.cursor===undefined?output:'',cursor:output.length,truncated:false}},
@@ -42,9 +42,9 @@ const call={type:'toolCall',id:'ui-call',name:'bash',arguments:{command:'npm run
 const result={role:'toolResult',toolCallId:'ui-call',toolName:'bash',content:[],details:{bashTask:window.task},isError:false,timestamp:1};
 const second={type:'toolCall',id:'read-call',name:'bash',arguments:{command:'pwd'}};
 const secondResult={role:'toolResult',toolCallId:'read-call',toolName:'bash',content:[{type:'text',text:'/ui'}],isError:false,timestamp:2};
-function Fixture(){const [todos,setTodos]=React.useState(null),[busy,setBusy]=React.useState(false),[taskSession,setTaskSession]=React.useState("a");window.setTodos=setTodos;window.setBusy=setBusy;window.setTaskSession=setTaskSession;const {setLocale}=useI18n();window.setLocale=setLocale;return React.createElement('div',{style:{width:800,margin:'20px auto'}},
+function Fixture(){const [todos,setTodos]=React.useState(null),[busy,setBusy]=React.useState(false),[taskSession,setTaskSession]=React.useState("a"),[subagents,setSubagents]=React.useState([]);window.setTodos=setTodos;window.setBusy=setBusy;window.setTaskSession=setTaskSession;window.setSubagents=setSubagents;const {setLocale}=useI18n();window.setLocale=setLocale;return React.createElement('div',{style:{width:800,margin:'20px auto'}},
  React.createElement('div',{id:'tasks'},React.createElement(BashTasksProvider,{sessionPath:'/ui/session'},
- React.createElement(SessionTasks,{key:taskSession,todos,busy}),React.createElement('div',{id:'original'},React.createElement(ToolCallView,{call,result})),
+ React.createElement(SessionTasks,{key:taskSession,todos,busy,subagents,sessionPath:'/ui/session',onOpenSession:path=>window.openedSessions.push(path)}),React.createElement('div',{id:'original'},React.createElement(ToolCallView,{call,result})),
  React.createElement('div',{id:'group'},React.createElement(ToolGroupView,{category:TOOL_CATEGORIES[1],calls:[call,second],toolResults:new Map([['ui-call',result],['read-call',secondResult]]),toolRuns:{}})),
  React.createElement('div',{id:'notice'},React.createElement(CustomItem,{message:{role:'custom',customType:'bash_task_completion',content:'INTERNAL_MODEL_INSTRUCTIONS',display:true,details:{bashTask:{...window.task,id:'completed-ui-task',toolCallId:'completed-call',status:'succeeded'}},timestamp:3}})))),
  React.createElement('div',{id:'settings',style:{marginTop:24}},React.createElement(GeneralSection)));}
@@ -165,14 +165,17 @@ try {
   await pause(400)
   assert.equal(await evaluate(pageGeometry), beforeExpand, 'opening the task panel pushes no content down')
   assert.equal(await evaluate(`document.querySelector('#tasks').getBoundingClientRect().height`), rowHeight, 'the open panel adds no height to its container')
-  const panel = await evaluate(`(()=>{const p=document.querySelector('[data-task-panel]'),r=p.getBoundingClientRect(),root=document.querySelector('[data-session-tasks]').getBoundingClientRect(),o=document.querySelector('#original').getBoundingClientRect();return {top:Math.round(r.top),rootBottom:Math.round(root.bottom),left:Math.round(r.left),rootLeft:Math.round(root.left),right:Math.round(r.right),rootRight:Math.round(root.right),overlapsTranscript:r.top<o.bottom&&r.bottom>o.top,shadow:getComputedStyle(p.parentElement).boxShadow!=='none'}})()`)
+  const panel = await evaluate(`(()=>{const p=document.querySelector('[data-task-panel]'),r=p.getBoundingClientRect(),root=document.querySelector('[data-session-tasks]').getBoundingClientRect(),o=document.querySelector('#original').getBoundingClientRect();return {top:Math.round(r.top),rootBottom:Math.round(root.bottom),left:Math.round(r.left),rootLeft:Math.round(root.left),right:Math.round(r.right),rootRight:Math.round(root.right),overlapsTranscript:r.top<o.bottom&&r.bottom>o.top,shadow:getComputedStyle(p.parentElement).boxShadow}})()`)
   assert.equal(panel.top, panel.rootBottom, 'the panel hangs from the summary row')
   assert.ok(panel.overlapsTranscript, 'the panel covers the transcript instead of displacing it: ' + JSON.stringify(panel))
-  assert.ok(panel.shadow, 'the floating panel carries the overlay elevation')
-  // The elevation must ride on an unclipped wrapper: AgentDisclosure's rest
-  // clip-path squares a shadow drawn on the element it clips.
+  // No elevation either: any shadow the drawer cast would spill a soft band
+  // over the neighbouring sidebar/rail, past the very lines its box coincides
+  // with. Its own surface colour and bottom rule are what separate it.
+  assert.equal(panel.shadow, 'none', 'the drawer casts nothing past the column lines')
+  // AgentDisclosure still owns its reveal clip, and the wrapper that positions
+  // the drawer clips nothing of it.
   assert.match(await evaluate(`getComputedStyle(document.querySelector('[data-task-panel]')).clipPath`), /^inset\(0px 0px 0%\)/, 'the disclosure still owns its reveal clip')
-  assert.equal(await evaluate(`getComputedStyle(document.querySelector('[data-task-panel]').parentElement).overflow`), 'visible', 'the shadowed wrapper clips nothing')
+  assert.equal(await evaluate(`getComputedStyle(document.querySelector('[data-task-panel]').parentElement).overflow`), 'visible', 'the positioning wrapper clips nothing')
   const list = `(()=>{const l=document.querySelector('[data-bash-tasks-list]'),box=l.getBoundingClientRect(),pad=parseFloat(getComputedStyle(l).paddingTop),rows=[...l.children].map(r=>r.getBoundingClientRect());const cut=e=>rows.filter(r=>r.top<e-0.5&&r.bottom>e+0.5).length;const style=getComputedStyle(l);return {limit:Math.round(box.height),scrollHeight:l.scrollHeight,rows:rows.length,pitch:rows.length>1?Math.round(rows[1].top-rows[0].top):0,rowHeight:rows.length?Math.round(rows[0].height):0,pad,cutTop:cut(box.top+pad),cutBottom:cut(box.bottom-pad),overflow:style.overflowY,mask:style.maskImage==='none'?null:'mask'}})()`
   assert.equal((await evaluate(list)).cutBottom, 0, 'one task fits whole: ' + JSON.stringify(await evaluate(list)))
   // Whole rows at any count: the cap lands on a row boundary, never mid-row.
@@ -204,8 +207,13 @@ try {
   const back = await evaluate(list)
   assert.equal(back.cutTop + back.cutBottom, 0, 'returning to a boundary restores whole rows: ' + JSON.stringify(back))
   assert.equal(back.mask, null, 'the fade clears with the cut')
-  assert.equal(panel.left, panel.rootLeft + 16, 'the panel insets mirror the summary row padding')
-  assert.equal(panel.right, panel.rootRight - 16, 'the panel insets mirror the summary row padding')
+  // Full-bleed: the panel's own box coincides with the chat column, so its
+  // left/right edges ARE the column's side lines (the sidebar's right rule and
+  // the rail's left rule) — it draws no side border of its own, squares every
+  // corner and leaves the top rule to the strip.
+  assert.equal(panel.left, panel.rootLeft, 'the panel is flush with the column left edge')
+  assert.equal(panel.right, panel.rootRight, 'the panel is flush with the column right edge')
+  assert.deepEqual(await evaluate(`(()=>{const s=getComputedStyle(document.querySelector('[data-task-panel]'));return [s.borderTopWidth,s.borderLeftWidth,s.borderBottomWidth,s.borderRightWidth,s.borderTopLeftRadius,s.borderTopRightRadius,s.borderBottomLeftRadius,s.borderBottomRightRadius]})()`), ['0px', '0px', '1px', '0px', '0px', '0px', '0px', '0px'], 'only the strip rules above and below the drawer; it never draws a side line or a rounded corner')
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'}))`)
   await pause(300)
   assert.equal(await evaluate(`document.querySelector('[data-session-tasks] button[aria-expanded]').getAttribute('aria-expanded')`), 'false', 'Escape dismisses the floating panel')
@@ -223,6 +231,22 @@ try {
     {id:'d',content:'Discard the previous approach',status:'cancelled'}]})`)
   await pause(120)
   assert.equal(await evaluate(`document.querySelectorAll('[data-task-trigger]').length`),2)
+  // A trigger is a quiet toggle: pressing one must not scale its label, and
+  // activating it must not resize the pill. Only the active variant carries a
+  // border, so the transparent one keeps every pill exactly where it was.
+  const triggers = `[...document.querySelectorAll('[data-task-trigger]')].map(b=>{const r=b.getBoundingClientRect();return [b.dataset.taskTrigger,Math.round(r.x*100)/100,Math.round(r.width*100)/100]})`
+  const beforePress = await evaluate(triggers)
+  const bashPoint = await evaluate(`(()=>{const r=document.querySelector('[data-task-trigger=bash]').getBoundingClientRect();return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)}})()`)
+  const sampleTrigger = `new Promise(resolve=>{const el=document.querySelector('[data-task-trigger=bash]');const seen=new Set();let n=0;const frame=()=>{seen.add(getComputedStyle(el).transform);if(++n<12)requestAnimationFrame(frame);else resolve([...seen])};requestAnimationFrame(frame)})`
+  await send('Input.dispatchMouseEvent',{type:'mouseMoved',x:bashPoint.x,y:bashPoint.y})
+  const hoverFrames = await evaluate(sampleTrigger)
+  await send('Input.dispatchMouseEvent',{type:'mousePressed',button:'left',clickCount:1,x:bashPoint.x,y:bashPoint.y})
+  const pressFrames = await evaluate(sampleTrigger)
+  await send('Input.dispatchMouseEvent',{type:'mouseReleased',button:'left',clickCount:1,x:bashPoint.x,y:bashPoint.y})
+  const releaseFrames = await evaluate(sampleTrigger)
+  await pause(250)
+  assert.deepEqual([...new Set([...hoverFrames,...pressFrames,...releaseFrames])],['none'],'hovering or pressing a trigger never animates it')
+  assert.deepEqual(await evaluate(triggers),beforePress,'activating a trigger moves no pill: ' + JSON.stringify(await evaluate(triggers)))
   await evaluate(`document.querySelector('[data-task-trigger=todo]').click()`)
   await pause(350)
   assert.match(await evaluate(`document.querySelector('[data-task-panel]').innerText`),/1 of 4 completed.*1 cancelled/s)
@@ -239,6 +263,73 @@ try {
   assert.ok(tones.done.greenGlyph && tones.done.greenLabel, 'a completed task paints its glyph and label green: ' + JSON.stringify(tones))
   assert.ok(!tones.waiting.greenGlyph && !tones.waiting.greenLabel, 'a waiting task stays neutral: ' + JSON.stringify(tones))
   assert.ok(tones.cancelled.roseGlyph && tones.cancelled.roseLabel, 'a cancelled task paints its glyph and label rose: ' + JSON.stringify(tones))
+  // One drawer, one rhythm: every panel carries the bash list's fixed 16.5rem
+  // height, 4px edge padding, 8px row gaps and 44px row pitch.
+  const rhythm = `(()=>{const p=document.querySelector('[data-task-panel]');const list=p.querySelector('[data-bash-tasks-list]')||p.querySelector('[data-subagents-list]');const container=list??p.querySelector('ol');const rows=[...container.children],box=(list??container.parentElement).getBoundingClientRect(),rects=rows.map(r=>r.getBoundingClientRect()),icon=rows[0].querySelector('svg').getBoundingClientRect();return {panel:Math.round(p.getBoundingClientRect().height),list:Math.round(box.height),pad:Math.round(rects[0].top-box.top),side:Math.round(rects[0].left-box.left),pitch:Math.round(rects[1].top-rects[0].top),row:Math.round(rects[0].height),iconLeft:Math.round(icon.left-box.left),iconSize:Math.round(icon.width)}})()`
+  const todoRhythm = await evaluate(rhythm)
+  await evaluate(`document.querySelector('[data-task-trigger=bash]').click()`)
+  await pause(250)
+  const bashRhythm = await evaluate(rhythm)
+  await evaluate(`window.setSubagents([
+    {runId:'run-a',sessionId:'child-a',sessionPath:'/ui/children/a.jsonl',parentSessionPath:'/ui/session',profile:'explore',model:'gpt-mini',description:'Summarize module A',task:'Summarize module A',status:'completed',runInBackground:true,createdAt:'2025-01-01T00:00:05.000Z',completedAt:'2025-01-01T00:00:09.000Z',tokens:1200,toolUses:3},
+    {runId:'run-b',sessionId:'child-b',sessionPath:'/ui/children/b.jsonl',parentSessionPath:'/ui/session',profile:'explore',model:'gpt-mini',description:'Summarize module B',task:'Summarize module B',status:'running',runInBackground:true,createdAt:'2025-01-01T00:00:05.000Z',tokens:300,toolUses:1},
+    {runId:'run-c',sessionId:'child-c',sessionPath:'/ui/children/c.jsonl',parentSessionPath:'/ui/session',profile:'explore',model:'gpt-mini',description:'Summarize module C',task:'Summarize module C',status:'interrupted',runInBackground:true,createdAt:'2025-01-01T00:00:05.000Z',completedAt:'2025-01-01T00:00:07.000Z'}])`)
+  await pause(250)
+  await evaluate(`document.querySelector('[data-task-trigger=agents]').click()`)
+  await pause(300)
+  const agentRhythm = await evaluate(rhythm)
+  const shared = ({ iconLeft, iconSize, pad, side, pitch, row }) => ({ iconLeft, iconSize, pad, side, pitch, row })
+  assert.deepEqual([shared(todoRhythm),shared(agentRhythm)],[shared(bashRhythm),shared(bashRhythm)],'every panel shares the row rhythm and icon geometry: ' + JSON.stringify({todoRhythm,bashRhythm,agentRhythm}))
+  assert.deepEqual([todoRhythm.iconLeft,bashRhythm.iconLeft,todoRhythm.iconSize,bashRhythm.iconSize],[10,10,16,16],'all three panels put one size-4 icon on the todo panel’s 10px inset')
+  assert.equal(bashRhythm.list,264,'a long list stops at the shared 16.5rem cap')
+  assert.ok(todoRhythm.list < bashRhythm.list,'a short list grows row by row instead of holding the cap: ' + JSON.stringify(todoRhythm))
+  assert.deepEqual([todoRhythm.panel-todoRhythm.list,agentRhythm.panel-agentRhythm.list],[bashRhythm.panel-bashRhythm.list,bashRhythm.panel-bashRhythm.list],'one header height across the three panels')
+  // Open-session is an entry-level link, not a disclosure control: every
+  // collapsed row shows it, it draws no surface of its own, it never animates,
+  // and it holds the header's own 36px line — which is what keeps the shared
+  // row pitch the rhythm check above just pinned down.
+  const collapsed = await evaluate(`[...document.querySelectorAll('[data-subagents-list] [data-subagent-id]')].map(row=>row.querySelector('button[aria-expanded]').getAttribute('aria-expanded'))`)
+  assert.deepEqual(collapsed, ['false', 'false', 'false'], 'the roster starts collapsed: ' + JSON.stringify(collapsed))
+  const links = await evaluate(`[...document.querySelectorAll('[data-subagents-list] [data-subagent-open]')].map(node=>{const r=node.getBoundingClientRect(),row=node.closest('[data-subagent-id]'),rr=row.getBoundingClientRect(),head=row.querySelector('button[aria-expanded]').getBoundingClientRect(),s=getComputedStyle(node);return {id:node.dataset.subagentOpen,text:node.innerText.trim(),box:[Math.round(r.width),Math.round(r.height)],headLine:[Math.round(head.top),Math.round(head.bottom)],line:[Math.round(r.top),Math.round(r.bottom)],right:Math.round(rr.right-r.right),background:s.backgroundColor,borderWidth:[s.borderTopWidth,s.borderRightWidth,s.borderBottomWidth,s.borderLeftWidth].join('/'),shadow:s.boxShadow,transition:s.transitionProperty,duration:s.transitionDuration,radius:s.borderTopLeftRadius,decoration:s.textDecorationLine,weight:s.fontWeight}})`)
+  assert.equal(links.length, 3, 'every entry carries its own open-session link: ' + JSON.stringify(links))
+  assert.deepEqual(links.map((link) => link.id), ['child-a', 'child-b', 'child-c'])
+  assert.deepEqual([...new Set(links.map((link) => link.text))], ['Open session'], 'the link keeps the localized label')
+  for (const link of links) {
+    assert.ok(link.box[0] > 0 && link.box[1] > 0, 'the link is laid out without expanding anything: ' + JSON.stringify(link))
+    assert.deepEqual(link.line, link.headLine, 'the link rides its entry’s own 36px header line: ' + JSON.stringify(link))
+    assert.ok(link.right >= 0, 'the link stays inside its entry: ' + JSON.stringify(link))
+    assert.equal(link.background, 'rgba(0, 0, 0, 0)', 'the link paints no surface: ' + JSON.stringify(link))
+    assert.equal(link.borderWidth, '0px/0px/0px/0px', 'the link draws no frame: ' + JSON.stringify(link))
+    assert.equal(link.shadow, 'none', 'the link casts no box: ' + JSON.stringify(link))
+    assert.equal(link.transition, 'none', 'the link declares no transition at all (not even the CSS default `all`): ' + JSON.stringify(link))
+    assert.equal(link.duration, '0s', 'the link animates nothing: ' + JSON.stringify(link))
+    assert.equal(link.decoration, 'none', 'the underline is a hover affordance, never the resting state: ' + JSON.stringify(link))
+  }
+  // Hovering underlines it (the link affordance), and a press opens that row's
+  // own child session without touching the disclosure.
+  const linkPoint = await evaluate(`(()=>{const r=document.querySelector('[data-subagent-open=child-a]').getBoundingClientRect();return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)}})()`)
+  await send('Input.dispatchMouseEvent',{type:'mouseMoved',x:linkPoint.x,y:linkPoint.y})
+  await pause(150)
+  assert.equal(await evaluate(`getComputedStyle(document.querySelector('[data-subagent-open=child-a]')).textDecorationLine`), 'underline', 'hovering the entry link underlines it')
+  await send('Input.dispatchMouseEvent',{type:'mousePressed',button:'left',clickCount:1,x:linkPoint.x,y:linkPoint.y})
+  await send('Input.dispatchMouseEvent',{type:'mouseReleased',button:'left',clickCount:1,x:linkPoint.x,y:linkPoint.y})
+  await pause(150)
+  assert.deepEqual(await evaluate('window.openedSessions'), ['/ui/children/a.jsonl'], 'the link opens its own child session')
+  assert.equal(await evaluate(`document.querySelector('[data-subagent-id=child-a] button[aria-expanded]').getAttribute('aria-expanded')`), 'false', 'opening a session never expands the roster row')
+  // Expanding a row grows it below the link: the link stays on the first line.
+  await evaluate(`document.querySelector('[data-subagent-id=child-b] button[aria-expanded]').click()`)
+  await pause(300)
+  const openedRow = await evaluate(`(()=>{const n=document.querySelector('[data-subagent-open=child-b]'),row=n.closest('[data-subagent-id]'),r=n.getBoundingClientRect(),rr=row.getBoundingClientRect();return {top:Math.round(r.top),headTop:Math.round(row.querySelector('button[aria-expanded]').getBoundingClientRect().top),rowTop:Math.round(rr.top),rowBottom:Math.round(rr.bottom)}})()`)
+  assert.equal(openedRow.top, openedRow.headTop, 'the link keeps to the first line with the row open: ' + JSON.stringify(openedRow))
+  assert.equal(openedRow.top, openedRow.rowTop, 'the link never drifts to the row foot: ' + JSON.stringify(openedRow))
+  assert.ok(openedRow.rowBottom > openedRow.top + 40, 'the open row really grew below the link: ' + JSON.stringify(openedRow))
+  await evaluate(`document.querySelector('[data-subagent-id=child-b] button[aria-expanded]').click()`)
+  await pause(200)
+  // The panel's inset is the panel's alone: a background bash row in the
+  // transcript keeps the shared `ToolResult` inset beside every other tool row.
+  assert.equal(await evaluate(`(()=>{const w=document.querySelector('#original [data-bash-task-id]'),i=w.querySelector('button svg');return Math.round(i.getBoundingClientRect().left-w.getBoundingClientRect().left)})()`),0,'a transcript bash row is never inset like a task panel row')
+  await evaluate(`document.querySelector('[data-task-trigger=todo]').click()`)
+  await pause(250)
   assert.equal(await evaluate(pageGeometry),beforeExpand)
   await evaluate(`window.setTodos(previous=>{window.unfinishedTodoFixture=previous;window.finishedTodoItems=previous.items.map(item=>({...item,status:'completed'}));return{toolCallId:'finished',items:window.finishedTodoItems}});window.setBusy(false)`)
   await pause(350)
@@ -485,6 +576,82 @@ try {
   await step(`{type:'message_end',message:window.round(80,window.prose('new reply'),'scope-new')}`, 1)
   await step(`{type:'agent_settled'}`, 1)
   assert.deepEqual((await evaluate('window.turnRead()')).reviews, turnState.reviews, 'an unrelated turn leaves the previous card intact')
+
+  // A run that ENDED on a failure is prose about the turn, not a status banner:
+  // the text renders inside the turn, unframed, at body size in the error
+  // colour, directly ABOVE the retry/fork row it explains. In-flight notices
+  // keep the framed status row below the transcript.
+  await evaluate('window.resetTurn()')
+  await step(`{type:'agent_start',changeScopeId:'scope-a'}`)
+  await step(`{type:'message_end',message:{role:'user',timestamp:100,content:'rate limited request'}}`)
+  await step(`{type:'message_start',message:window.round(110,[],'scope-a')}`)
+  await step(`{type:'message_end',message:{...window.round(110,[],'scope-a'),stopReason:'error',errorMessage:'429 rate limited'}}`)
+  await step(`{type:'agent_end'}`)
+  await step(`{type:'agent_settled'}`, 1)
+  await step(`{type:'auto_retry_end',success:false,finalError:'429 rate limited'}`, 1)
+  const failure = await evaluate(`(() => {
+    const node = document.querySelector('#turn-fixture [data-turn-failure]');
+    if (!node) return null;
+    const retry = node.closest('[data-assistant-group]').querySelector('button[aria-label="Retry response"]');
+    const style = getComputedStyle(node);
+    const boxes = [];
+    for (let el = node; el && !el.hasAttribute('data-assistant-group'); el = el.parentElement) {
+      const s = getComputedStyle(el);
+      boxes.push({ tag: el.tagName, bg: s.backgroundColor, border: s.borderTopWidth, pad: s.paddingTop });
+    }
+    return { tag: node.tagName, text: node.innerText, color: style.color, size: style.fontSize, leading: style.lineHeight,
+      shadow: style.boxShadow, top: Math.round(node.getBoundingClientRect().top),
+      retryTop: retry ? Math.round(retry.getBoundingClientRect().top) : null,
+      count: document.querySelectorAll('#turn-fixture [data-turn-failure]').length, boxes };
+  })()`)
+  const failureTone = await evaluate(`(() => {
+    const canvas = document.createElement('canvas'); canvas.width = canvas.height = 1;
+    const ctx = canvas.getContext('2d'); ctx.fillStyle = ${JSON.stringify(failure.color)}; ctx.fillRect(0, 0, 1, 1);
+    const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data;
+    return { r, g, b };
+  })()`)
+  assert.ok(failure, 'the failed turn renders its failure text')
+  assert.equal(failure.tag, 'P', 'the failure is plain prose, not a banner element')
+  assert.equal(failure.count, 1, 'the failure text is rendered once, by the turn itself')
+  assert.match(failure.text, /Request failed after retries · 429 rate limited/)
+  assert.ok(failureTone.r > failureTone.g + 24 && failureTone.r > failureTone.b + 24, 'the failure text wears the error colour: ' + JSON.stringify({ color: failure.color, tone: failureTone }))
+  assert.equal(failure.size, '14px', 'the failure uses body size')
+  assert.equal(failure.leading, '24px', 'the failure uses the body line height')
+  assert.equal(failure.shadow, 'none')
+  assert.notEqual(failure.retryTop, null, 'the failed turn keeps its retry row')
+  assert.ok(failure.top < failure.retryTop, `the failure sits above the retry row (${failure.top} < ${failure.retryTop})`)
+  for (const box of failure.boxes) {
+    assert.equal(box.border, '0px', 'no frame around the failure text: ' + JSON.stringify(box))
+    assert.equal(box.bg, 'rgba(0, 0, 0, 0)', 'no surface behind the failure text: ' + JSON.stringify(box))
+  }
+  if (process.env.PI_BASH_SCREENSHOT_DIR) {
+    await mkdir(process.env.PI_BASH_SCREENSHOT_DIR, { recursive: true })
+    await writeFile(join(process.env.PI_BASH_SCREENSHOT_DIR, 'turn-failure.png'), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'))
+  }
+  await step(`{type:'auto_retry_start',attempt:1,maxAttempts:3}`, 1)
+  assert.equal(await evaluate(`document.querySelectorAll('#turn-fixture [data-turn-failure]').length`), 0, 'an in-flight retry is not turn prose')
+  const retrying = await evaluate(`(() => {
+    const node = document.querySelector('#turn-fixture [data-turn-notice]');
+    if (!node) return { found: false, text: document.querySelector('#turn-fixture').innerText };
+    const style = getComputedStyle(node);
+    return { found: true, text: node.innerText, bg: style.backgroundColor, radius: style.borderTopLeftRadius };
+  })()`)
+  assert.ok(retrying.found, 'an in-flight notice renders: ' + JSON.stringify(retrying))
+  assert.match(retrying.text, /retrying \(attempt 1 of 3\)/, 'the in-flight sentence is the retrying one')
+  assert.notEqual(retrying.bg, 'rgba(0, 0, 0, 0)', 'an in-flight notice keeps its framed status row: ' + JSON.stringify(retrying))
+  assert.notEqual(retrying.radius, '0px', 'the status row keeps its corner')
+  await step(`{type:'auto_retry_end',success:true}`, 1)
+  // A failed compaction is the same shape of terminal failure.
+  await step(`{type:'compaction_end',errorMessage:'context window exhausted'}`, 1)
+  assert.equal(
+    await evaluate(`document.querySelector('#turn-fixture [data-turn-failure]').innerText`),
+    'Context compaction failed · context window exhausted',
+    'a failed compaction renders as the same unframed turn prose'
+  )
+  assert.equal(await evaluate(`document.querySelectorAll('#turn-fixture [data-turn-notice]').length`), 0, 'a terminal failure never doubles as the status row')
+  await step(`{type:'compaction_end'}`, 1)
+  assert.equal(await evaluate(`document.querySelectorAll('#turn-fixture [data-turn-failure]').length`), 0, 'a successful compaction clears the failure text')
+
   assert((await evaluate('window.frameCount')) > 20)
   assert.deepEqual(await evaluate('window.frameFailures'), [], 'no painted frame may expose an intermediate file list')
   assert.equal(exceptions.length, 0, JSON.stringify(exceptions))

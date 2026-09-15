@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { createPiManager, registerIpc } from './ipc'
 import { installMediaProtocol, registerMediaScheme } from './media-protocol'
+import { guardExternalNavigation } from './navigation'
 import { loadSettings, saveSettings, type WindowBounds } from './settings'
 import { registerQuitShortcut } from './shutdown'
 import { windowChromeOptions } from './window-chrome'
@@ -128,17 +129,10 @@ function createWindow(): BrowserWindow {
     return { action: 'deny' }
   })
 
-  // The window is an application shell, never a document viewer. A link that
-  // points at something the app cannot render in place — a PDF, a web page, a
-  // file on disk — must not replace it: Chromium would navigate the whole window
-  // and the only way back would be a restart. Anything that is not our own
-  // document goes to the system browser, exactly like a window-open request.
+  // The window is an application shell, never a document viewer; see
+  // `navigation.ts` for the document comparison and why it is not a string one.
   const appDocument = process.env.ELECTRON_RENDERER_URL ?? pathToFileURL(join(__dirname, '../renderer/index.html')).toString()
-  win.webContents.on('will-navigate', (event, url) => {
-    if (url.split('#')[0] === appDocument.split('#')[0]) return
-    event.preventDefault()
-    void shell.openExternal(url)
-  })
+  guardExternalNavigation(win.webContents, appDocument)
 
   if (process.env.ELECTRON_RENDERER_URL) {
     void win.loadURL(process.env.ELECTRON_RENDERER_URL)

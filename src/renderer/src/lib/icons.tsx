@@ -13,8 +13,10 @@ import {
   ArrowUpNarrowWideIcon,
   ArrowUpRight01Icon,
   BanIcon,
+  BookDownloadIcon,
   BookOpenTextIcon,
   Bookmark01Icon,
+  BookSearchIcon,
   BotIcon,
   BracesIcon,
   BrainIcon,
@@ -32,8 +34,11 @@ import {
   Clock01Icon,
   Clock03Icon,
   CloudDownloadIcon,
+  CommandLineIcon,
   CompassIcon,
   CopyIcon,
+  DashboardSquare01Icon,
+  Database02Icon,
   Delete02Icon,
   DiffIcon,
   Download01Icon,
@@ -63,6 +68,7 @@ import {
   Image01Icon,
   ImagePlusIcon,
   InfoIcon,
+  InstallingUpdates01Icon,
   KeyRoundIcon,
   LightbulbIcon,
   Link02Icon,
@@ -100,8 +106,10 @@ import {
   Settings02Icon,
   ShieldCheckIcon,
   SparklesIcon,
+  SourceCodeIcon,
   SquareIcon,
   SquareTerminalIcon,
+  StethoscopeIcon,
   SubtitleIcon,
   Sun01Icon,
   TerminalIcon,
@@ -153,8 +161,10 @@ export const ArrowUp = /* @__PURE__ */ createIcon('ArrowUp', ArrowUp02Icon)
 export const ArrowUpNarrowWide = /* @__PURE__ */ createIcon('ArrowUpNarrowWide', ArrowUpNarrowWideIcon)
 export const ArrowUpRight = /* @__PURE__ */ createIcon('ArrowUpRight', ArrowUpRight01Icon)
 export const Ban = /* @__PURE__ */ createIcon('Ban', BanIcon)
+export const BookDownload = /* @__PURE__ */ createIcon('BookDownload', BookDownloadIcon)
 export const BookOpenText = /* @__PURE__ */ createIcon('BookOpenText', BookOpenTextIcon)
 export const Bookmark = /* @__PURE__ */ createIcon('Bookmark', Bookmark01Icon)
+export const BookSearch = /* @__PURE__ */ createIcon('BookSearch', BookSearchIcon)
 export const Bot = /* @__PURE__ */ createIcon('Bot', BotIcon)
 export const Braces = /* @__PURE__ */ createIcon('Braces', BracesIcon)
 export const Brain = /* @__PURE__ */ createIcon('Brain', BrainIcon)
@@ -175,8 +185,11 @@ export const CircleX = /* @__PURE__ */ createIcon('CircleX', CircleXIcon)
 export const Clock = /* @__PURE__ */ createIcon('Clock', Clock01Icon)
 export const Clock3 = /* @__PURE__ */ createIcon('Clock3', Clock03Icon)
 export const CloudDownload = /* @__PURE__ */ createIcon('CloudDownload', CloudDownloadIcon)
+export const CommandLine = /* @__PURE__ */ createIcon('CommandLine', CommandLineIcon)
 export const Compass = /* @__PURE__ */ createIcon('Compass', CompassIcon)
 export const Copy = /* @__PURE__ */ createIcon('Copy', CopyIcon)
+export const Dashboard = /* @__PURE__ */ createIcon('Dashboard', DashboardSquare01Icon)
+export const Database = /* @__PURE__ */ createIcon('Database', Database02Icon)
 export const Diff = /* @__PURE__ */ createIcon('Diff', DiffIcon)
 export const Download = /* @__PURE__ */ createIcon('Download', Download01Icon)
 export const ExternalLink = /* @__PURE__ */ createIcon('ExternalLink', ExternalLinkIcon)
@@ -204,6 +217,7 @@ export const Image = /* @__PURE__ */ createIcon('Image', Image01Icon)
 export const ImageIcon = /* @__PURE__ */ createIcon('ImageIcon', Image01Icon)
 export const ImagePlus = /* @__PURE__ */ createIcon('ImagePlus', ImagePlusIcon)
 export const Info = /* @__PURE__ */ createIcon('Info', InfoIcon)
+export const InstallingUpdates = /* @__PURE__ */ createIcon('InstallingUpdates', InstallingUpdates01Icon)
 export const KeyRound = /* @__PURE__ */ createIcon('KeyRound', KeyRoundIcon)
 export const Lightbulb = /* @__PURE__ */ createIcon('Lightbulb', LightbulbIcon)
 export const Link2 = /* @__PURE__ */ createIcon('Link2', Link02Icon)
@@ -245,8 +259,10 @@ export const Settings2 = /* @__PURE__ */ createIcon('Settings2', Settings02Icon)
 export const Shapes = /* @__PURE__ */ createIcon('Shapes', GeometricShapes01Icon)
 export const ShieldCheck = /* @__PURE__ */ createIcon('ShieldCheck', ShieldCheckIcon)
 export const Sparkles = /* @__PURE__ */ createIcon('Sparkles', SparklesIcon)
+export const SourceCode = /* @__PURE__ */ createIcon('SourceCode', SourceCodeIcon)
 export const Square = /* @__PURE__ */ createIcon('Square', SquareIcon)
 export const SquareTerminal = /* @__PURE__ */ createIcon('SquareTerminal', SquareTerminalIcon)
+export const Stethoscope = /* @__PURE__ */ createIcon('Stethoscope', StethoscopeIcon)
 export const Subtitle = /* @__PURE__ */ createIcon('Subtitle', SubtitleIcon)
 export const Sun = /* @__PURE__ */ createIcon('Sun', Sun01Icon)
 export const Terminal = /* @__PURE__ */ createIcon('Terminal', TerminalIcon)

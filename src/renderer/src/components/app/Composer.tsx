@@ -7,7 +7,8 @@ import {
   type ClipboardEvent as ReactClipboardEvent,
   type DragEvent as ReactDragEvent
 } from 'react'
-import { FileText, ImagePlus, Loader2, Paperclip, X } from '@/lib/icons'
+import { Bot, FileText, ImagePlus, Loader2, Paperclip, X } from '@/lib/icons'
+import { Button } from '@/components/motion/button'
 import { PromptInput } from '@/components/agents/prompt-input'
 import { basename, formatBytes } from '@/lib/format'
 import {
@@ -61,6 +62,10 @@ interface ComposerProps {
   /** A read-only session view (an opened subagent child): typing and submit
    * are disabled — the child's runs are driven by its parent's runtime. */
   readOnly?: boolean
+  /** Parent session file of a read-only child view, for the banner's action. */
+  readOnlyParentPath?: string | null
+  /** Open another session (the child banner's "open parent"). */
+  onOpenSession?: (path: string) => void
   /** Escape stops the running turn. False while a full-page Settings or auth
    * overlay owns the surface, so Esc there does not abort a background run. */
   escapeStopsRun?: boolean
@@ -96,6 +101,8 @@ export function Composer({
   busy,
   initializing = false,
   readOnly = false,
+  readOnlyParentPath = null,
+  onOpenSession,
   escapeStopsRun = true,
   contextUsage,
   queued,
@@ -122,6 +129,9 @@ export function Composer({
   const debounceRef = useRef<number>(0)
 
   const addImageFile = useCallback((file: globalThis.File) => {
+    // A read-only (subagent child) view never accepts new attachments; only
+    // the send path is otherwise reachable, which the disabled field blocks.
+    if (readOnly) return
     const reader = new FileReader()
     reader.onload = () => {
       const dataUrl = String(reader.result)
@@ -137,20 +147,22 @@ export function Composer({
       ])
     }
     reader.readAsDataURL(file)
-  }, [])
+  }, [readOnly])
 
   const addFileHit = useCallback((hit: FileHitDTO) => {
+    if (readOnly) return
     setFiles((current) =>
       current.some((f) => f.path === hit.path)
         ? current
         : [...current, { id: nextId(), path: hit.path, relPath: hit.relPath, kind: hit.kind, size: hit.size }]
     )
-  }, [])
+  }, [readOnly])
 
   /** Add a chip for a real path, stat'ing it through the main process so the
    * chip carries a usable relPath/kind/size — inside OR outside the workspace.
    * The main process resolves relative to the active cwd either way. */
   const addFilePath = useCallback(async (path: string) => {
+    if (readOnly) return
     try {
       const preview = await window.pi.readFile(path)
       setFiles((current) =>
@@ -170,7 +182,7 @@ export function Composer({
     } catch {
       /* unreadable / deleted — drop it silently, like a failed mention */
     }
-  }, [])
+  }, [readOnly])
 
   /**
    * Attach a File from a picker, paste or drop. Electron removed `File.path`
@@ -191,7 +203,6 @@ export function Composer({
     },
     [addFilePath, addFileHit]
   )
-
   const removeImage = (id: string) => setImages((c) => c.filter((a) => a.id !== id))
   const removeFile = (id: string) => {
     const target = files.find((f) => f.id === id)
@@ -465,6 +476,23 @@ export function Composer({
             onRecall={() => void handleRecall()}
           />
 
+          {/* A disabled composer with no explanation reads as a bug: an opened
+              subagent child says why, and where the work actually continues. */}
+          {readOnly ? (
+            <div
+              data-composer-readonly=""
+              className="mb-2 flex items-center gap-2 rounded-control border border-border bg-muted/40 px-2.5 py-1.5 text-xs text-muted-foreground"
+            >
+              <Bot aria-hidden="true" className="size-3.5 shrink-0" />
+              <span className="min-w-0 flex-1">{t('subagent.readOnlyNotice')}</span>
+              {readOnlyParentPath && onOpenSession ? (
+                <Button variant="ghost" size="sm" onClick={() => onOpenSession(readOnlyParentPath)}>
+                  {t('subagent.openParent')}
+                </Button>
+              ) : null}
+            </div>
+          ) : null}
+
           {images.length || files.length ? (
             <div className="mb-2 flex flex-wrap items-center gap-2">
               {images.map((attachment) => (
@@ -542,7 +570,7 @@ export function Composer({
                   availableThinkingLevels={availableThinkingLevels}
                   onChange={onModelChange}
                   onThinkingLevelChange={onThinkingLevelChange}
-                  disabled={busy || initializing}
+                  disabled={busy || initializing || readOnly}
                 />
               }
               contextIndicator={initializing ? (

@@ -237,6 +237,23 @@ export const ToolCallView = memo(function ToolCallView({ call, result, run, cwd 
           {renderOutput(output || placeholder(t('tool.noOutput')))}
         </ToolResult>
       )
+    case 'agent': {
+      // A delegation row names the profile and the task instead of the bare
+      // tool name: `agent · explore · summarize two modules` is what the user
+      // needs to tell concurrent runs apart (the panel card carries the rest).
+      const profile = typeof args.subagent_type === 'string' ? args.subagent_type : ''
+      const description = typeof args.description === 'string' ? args.description.trim() : ''
+      const background = args.run_in_background === true
+      const label = [t('subagent.delegation'), profile, description].filter(Boolean).join(' · ')
+      const rowMeta = [background ? t('subagent.background') : undefined, meta].filter(Boolean).join(' · ')
+      return (
+        <ToolResult animateChanges={false} lazyContent open={open} onOpenChange={setOpen}
+          title={label} status={status} icon={<ToolIcon name="agent" />} meta={rowMeta || undefined}
+          collapseOnComplete={false} contentClassName={WRAP_OUTPUT}>
+          {renderOutput(output || placeholder(t('tool.noOutput')))}
+        </ToolResult>
+      )
+    }
     case 'bash': {
       if (backgroundTask) return <BashTaskRow task={backgroundTask} />
       const command = typeof args.command === 'string' ? args.command : JSON.stringify(args)
