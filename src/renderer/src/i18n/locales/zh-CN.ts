@@ -171,6 +171,8 @@ const zhCN: Messages = {
   'palette.current': '当前',
   'palette.compact': '压缩上下文',
   'palette.compactBusy': '请先停止当前运行再压缩',
+  'chat.compacted': '上下文已压缩',
+  'chat.compactedTokens': '{before} → {after} Token',
   'sandbox.group': '文件沙箱',
   'sandbox.modeLabel': '沙箱模式',
   'sandbox.modeDesc': '新会话启动时使用的模式。每个会话各自保存自己的模式，在输入框底部切换。',

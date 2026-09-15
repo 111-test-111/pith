@@ -652,6 +652,20 @@ try {
   await step(`{type:'compaction_end'}`, 1)
   assert.equal(await evaluate(`document.querySelectorAll('#turn-fixture [data-turn-failure]').length`), 0, 'a successful compaction clears the failure text')
 
+  // A settled compaction acknowledges itself in the flow, the way a background
+  // task completion does: the transcript it just replaced must not read as
+  // having changed by itself. It is feedback, not session content, so it is a
+  // quiet row — never a conversation card.
+  const compactionRows = () => evaluate(`document.querySelectorAll('#turn-fixture [data-compaction-notice]').length`)
+  assert.equal(await compactionRows(), 0, 'a compaction with no result adds no row')
+  await step(`{type:'compaction_end',result:{tokensBefore:120000,estimatedTokensAfter:18000}}`, 1)
+  assert.equal(await compactionRows(), 1, 'a settled compaction adds one notice row')
+  const compacted = await evaluate(`document.querySelector('#turn-fixture [data-compaction-notice]').textContent`)
+  assert.match(compacted, /Context compacted/, `the row names the outcome: ${compacted}`)
+  assert.match(compacted, /→/, `the row carries the token change: ${compacted}`)
+  await step(`{type:'compaction_end',aborted:true,result:{tokensBefore:90000,estimatedTokensAfter:10000}}`, 1)
+  assert.equal(await compactionRows(), 1, 'an aborted compaction is not a completion and adds nothing')
+
   assert((await evaluate('window.frameCount')) > 20)
   assert.deepEqual(await evaluate('window.frameFailures'), [], 'no painted frame may expose an intermediate file list')
   assert.equal(exceptions.length, 0, JSON.stringify(exceptions))

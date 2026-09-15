@@ -2,10 +2,9 @@
  * App-owned `edit` and `write`, replacing the SDK built-ins so every file
  * mutation passes the DSH sandbox policy on its way to disk.
  *
- * Ported from pi-web's `lib/sandbox/file-tools-extension.ts`, minus the
- * one-shot escalation: this build has no approval gate, so the mode is the
- * whole policy and a denial is final — the model is told to ask the user to
- * change the mode rather than to retry with wider permissions.
+ * Ported from pi-web's `lib/sandbox/file-tools-extension.ts`. On a denial the
+ * model is told the escalation exists and how to ask; the answer comes from the
+ * user through the approval channel, and it is valid for exactly one call.
  *
  * Reads are deliberately unrestricted, exactly as in DSH: only mutation
  * targets are checked, and they are checked immediately before each side
@@ -19,24 +18,43 @@ import {
   type ToolDefinition,
   type WriteOperations
 } from '@earendil-works/pi-coding-agent'
+import { Type } from 'typebox'
 import { constants } from 'node:fs'
 import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { buildSandboxPolicy, writableRoots } from '../sandbox/policy'
 import { isSandboxPathWithin, resolveSandboxPath } from '../sandbox/paths'
+import { escalationHintMarker, SANDBOX_ESCALATION_PROPERTIES, sandboxDenialMarker } from '../sandbox/escalation'
 import { SandboxFileDeniedError, type SandboxMode } from '../sandbox/types'
 
 export const APP_FILE_TOOL_NAMES = ['edit', 'write'] as const
 
-/** Take the SDK's own definition types: they bind the parameter schema, so a
- * narrowed `ToolDefinition` here would widen `params` to `unknown`. */
+/** Take the SDK's own definition types: they bind the parameter schema. */
 type EditToolDefinition = ReturnType<typeof createEditToolDefinition>
 type WriteToolDefinition = ReturnType<typeof createWriteToolDefinition>
 
-const DENIAL_HINT =
-  'Ask the user to change the sandbox mode in Settings → General (read-only refuses every file write; workspace-write allows the workspace and temp directories only). Do not retry the same path in a loop.'
+export interface SandboxFileToolOptions {
+  cwd: string
+  getMode: () => SandboxMode
+  /**
+   * Ask for a strictly wider mode for this one call. Omitted means this app has
+   * no approval channel: the call then runs under the session's mode and a
+   * denial is final.
+   */
+  escalate?: (input: {
+    toolCallId: string
+    toolName: 'edit' | 'write'
+    sandboxPermissions: unknown
+    justification: unknown
+    signal?: AbortSignal
+  }) => Promise<SandboxMode>
+}
 
-function denied(mode: SandboxMode, path: string): SandboxFileDeniedError {
+/** Flat object schema: `Type.Intersect` serializes as allOf, which some model
+ * adapters discard, leaving the tool looking parameterless. */
+type EscalationInput = { sandbox_permissions?: unknown; justification?: unknown }
+
+function denial(mode: SandboxMode, path: string): SandboxFileDeniedError {
   return new SandboxFileDeniedError(mode, path)
 }
 
@@ -48,83 +66,115 @@ function writablePath(path: string, cwd: string, mode: SandboxMode): string {
   if (mode === 'danger-full-access') return path
   // read-only denies mutation outright: DSH's read-only is a filesystem
   // effect, not a read-only workspace.
-  if (mode === 'read-only') throw denied(mode, path)
+  if (mode === 'read-only') throw denial(mode, path)
 
   const canonical = resolveSandboxPath(path, { cwd, homeDir: homedir() })
-  if (canonical === null) throw denied(mode, path)
+  if (canonical === null) throw denial(mode, path)
   const roots = writableRoots(buildSandboxPolicy(mode, cwd))
-  if (!roots.some((root) => isSandboxPathWithin(canonical, root))) throw denied(mode, path)
+  if (!roots.some((root) => isSandboxPathWithin(canonical, root))) throw denial(mode, path)
   return canonical
 }
 
-function editOperations(cwd: string, getMode: () => SandboxMode): EditOperations {
+function editOperations(cwd: string, mode: SandboxMode): EditOperations {
   return {
     // The before-image is a read; it stays unrestricted.
     readFile: (path) => readFile(path),
     access: async (path) => {
-      await access(writablePath(path, cwd, getMode()), constants.R_OK | constants.W_OK)
+      await access(writablePath(path, cwd, mode), constants.R_OK | constants.W_OK)
     },
     writeFile: async (path, content) => {
-      await writeFile(writablePath(path, cwd, getMode()), content, 'utf8')
+      await writeFile(writablePath(path, cwd, mode), content, 'utf8')
     }
   }
 }
 
-function writeOperations(cwd: string, getMode: () => SandboxMode): WriteOperations {
+function writeOperations(cwd: string, mode: SandboxMode): WriteOperations {
   return {
     mkdir: async (path) => {
-      await mkdir(writablePath(path, cwd, getMode()), { recursive: true })
+      await mkdir(writablePath(path, cwd, mode), { recursive: true })
     },
     writeFile: async (path, content) => {
-      await writeFile(writablePath(path, cwd, getMode()), content, 'utf8')
+      await writeFile(writablePath(path, cwd, mode), content, 'utf8')
     }
   }
 }
 
 /**
- * Wrap a sandbox denial so the model reads the mode and the fix, instead of a
- * bare path error it will simply retry.
+ * A sandbox denial must read as a policy outcome with a way forward, not as a
+ * bare path error the model simply retries.
  */
-function withHint(error: unknown): never {
+function withHint(error: unknown, mode: SandboxMode): never {
   if (error instanceof SandboxFileDeniedError) {
-    throw new Error(`${error.message}\n${DENIAL_HINT}`)
+    throw new Error(`${sandboxDenialMarker(mode)}\n${error.message}\n${escalationHintMarker('operation')}`)
   }
   throw error
 }
 
-export function createSandboxFileTools(options: {
-  cwd: string
-  getMode: () => SandboxMode
-}): ToolDefinition<any, any, any>[] {
-  const { cwd, getMode } = options
+export function createSandboxFileTools(options: SandboxFileToolOptions): ToolDefinition<any, any, any>[] {
+  const { cwd, getMode, escalate } = options
 
-  const edit: EditToolDefinition = {
-    ...createEditToolDefinition(cwd),
-    executionMode: 'sequential',
-    async execute(toolCallId, params, signal, onUpdate, context) {
-      try {
-        return await createEditToolDefinition(cwd, {
-          operations: editOperations(cwd, getMode)
-        }).execute(toolCallId, params, signal, onUpdate, context)
-      } catch (error) {
-        withHint(error)
-      }
-    }
+  /** One answer per call: the approval is for this call, not for the session. */
+  const modeForCall = async (
+    toolName: 'edit' | 'write',
+    toolCallId: string,
+    input: EscalationInput,
+    signal?: AbortSignal
+  ): Promise<SandboxMode> => {
+    if (!escalate) return getMode()
+    return escalate({
+      toolCallId,
+      toolName,
+      sandboxPermissions: input.sandbox_permissions,
+      justification: input.justification,
+      ...(signal ? { signal } : {})
+    })
   }
 
-  const write: WriteToolDefinition = {
-    ...createWriteToolDefinition(cwd),
-    executionMode: 'sequential',
-    async execute(toolCallId, params, signal, onUpdate, context) {
+  const editBase = createEditToolDefinition(cwd)
+  const edit = {
+    ...editBase,
+    description: `${editBase.description} If a file-effect denial says escalation is available, retry that exact operation once with sandbox_permissions and justification.`,
+    parameters: Type.Object({ ...editBase.parameters.properties, ...SANDBOX_ESCALATION_PROPERTIES }),
+    executionMode: 'sequential' as const,
+    async execute(toolCallId: string, params: unknown, signal?: AbortSignal, onUpdate?: unknown, context?: unknown) {
+      const input = params as EscalationInput
+      const mode = await modeForCall('edit', toolCallId, input, signal)
       try {
-        return await createWriteToolDefinition(cwd, {
-          operations: writeOperations(cwd, getMode)
-        }).execute(toolCallId, params, signal, onUpdate, context)
+        return await createEditToolDefinition(cwd, { operations: editOperations(cwd, mode) }).execute(
+          toolCallId,
+          params as never,
+          signal,
+          onUpdate as never,
+          context as never
+        )
       } catch (error) {
-        withHint(error)
+        withHint(error, mode)
       }
     }
-  }
+  } as unknown as EditToolDefinition
+
+  const writeBase = createWriteToolDefinition(cwd)
+  const write = {
+    ...writeBase,
+    description: `${writeBase.description} If a file-effect denial says escalation is available, retry that exact operation once with sandbox_permissions and justification.`,
+    parameters: Type.Object({ ...writeBase.parameters.properties, ...SANDBOX_ESCALATION_PROPERTIES }),
+    executionMode: 'sequential' as const,
+    async execute(toolCallId: string, params: unknown, signal?: AbortSignal, onUpdate?: unknown, context?: unknown) {
+      const input = params as EscalationInput
+      const mode = await modeForCall('write', toolCallId, input, signal)
+      try {
+        return await createWriteToolDefinition(cwd, { operations: writeOperations(cwd, mode) }).execute(
+          toolCallId,
+          params as never,
+          signal,
+          onUpdate as never,
+          context as never
+        )
+      } catch (error) {
+        withHint(error, mode)
+      }
+    }
+  } as unknown as WriteToolDefinition
 
   return [edit, write]
 }

@@ -173,6 +173,8 @@ const en = {
   'palette.current': 'Current',
   'palette.compact': 'Compact conversation',
   'palette.compactBusy': 'Stop the running turn before compacting',
+  'chat.compacted': 'Context compacted',
+  'chat.compactedTokens': '{before} → {after} tokens',
   'sandbox.group': 'File sandbox',
   'sandbox.modeLabel': 'Sandbox mode',
   'sandbox.modeDesc': 'The mode a new chat starts in. Each session keeps its own mode and switches it from the composer.',

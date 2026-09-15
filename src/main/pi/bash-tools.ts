@@ -2,6 +2,7 @@ import { getAgentDir, getShellConfig, type AgentSessionServices, type ToolDefini
 import { Type } from 'typebox'
 import { delimiter, join } from 'node:path'
 import { BashTaskManager, taskIsLive } from '../bash/manager'
+import { escalationHintMarker, SANDBOX_ESCALATION_PROPERTIES, sandboxDenialMarker } from '../sandbox/escalation'
 import type { SandboxMode } from '../sandbox/types'
 import type { BashTaskDTO } from '../../shared/types'
 
@@ -13,7 +14,8 @@ const bashParameters = Type.Object({
   command: Type.String({ description: 'Shell command to run directly. Use mode="background" to return immediately; do not prepend sleep to delay execution or force background promotion. Keep the shell process in the foreground instead of using &, nohup, disown or daemonizing.' }),
   mode: Type.Optional(Type.Union([Type.Literal('blocking'), Type.Literal('background')], { description: 'Default blocking: wait up to the app threshold. Background: return a task ID immediately after spawning.' })),
   waitMs: Type.Optional(Type.Number({ minimum: 0, maximum: 60_000, description: 'Maximum initial wait in milliseconds. Clamped to the app maximum; 0 returns immediately. Does not terminate the command.' })),
-  timeout: Type.Optional(Type.Number({ exclusiveMinimum: 0, maximum: 2_147_483.647, description: 'Optional TOTAL runtime limit in seconds, including time in background. Kills the process tree when reached. Omit for a long-lived server.' }))
+  timeout: Type.Optional(Type.Number({ exclusiveMinimum: 0, maximum: 2_147_483.647, description: 'Optional TOTAL runtime limit in seconds, including time in background. Kills the process tree when reached. Omit for a long-lived server.' })),
+  ...SANDBOX_ESCALATION_PROPERTIES
 })
 
 const taskParameters = Type.Object({
@@ -42,13 +44,22 @@ export function createManagedBashTools(options: {
   maxWaitMs: () => number
   /** Read live: the user can change the mode between two calls. */
   sandboxMode: () => SandboxMode
+  /** Ask for a strictly wider mode for this one command; absent means no
+   * approval channel, so a denial is final. */
+  escalate?: (input: {
+    toolCallId: string
+    toolName: 'bash'
+    sandboxPermissions: unknown
+    justification: unknown
+    signal?: AbortSignal
+  }) => Promise<SandboxMode>
   canStart: () => boolean
 }): ToolDefinition[] {
   const { tasks, services, sessionId, sessionPath } = options
   const details = (task: BashTaskDTO) => ({ bashTask: task })
   return [{
     name: 'bash', label: 'bash', parameters: bashParameters,
-    description: 'Execute a managed bash command directly. Choose blocking or background execution. Blocking waits are capped by the app threshold (default 10 seconds); on expiry returns a task ID while the SAME command continues. Returns recent stdout/stderr, status and exit code. Background completion automatically steers its status/output into the session or wakes an idle session. Continue independent work, or end this response with a pending status and resume on notification. Never launch sleep or delayed tail commands just to await a managed task. Use bash_task for a specific progress check or to stop a task. This tool has no interactive stdin.',
+    description: 'Execute a managed bash command directly. Choose blocking or background execution. Blocking waits are capped by the app threshold (default 10 seconds); on expiry returns a task ID while the SAME command continues. Returns recent stdout/stderr, status and exit code. Background completion automatically steers its status/output into the session or wakes an idle session. Continue independent work, or end this response with a pending status and resume on notification. Never launch sleep or delayed tail commands just to await a managed task. Use bash_task for a specific progress check or to stop a task. This tool has no interactive stdin. If a file-effect denial says escalation is available, retry that exact command once with sandbox_permissions and justification.',
     promptSnippet: 'Run shell commands with bounded waiting, automatic background execution and completion steering.',
     promptGuidelines: BASH_GUIDELINES,
     executionMode: 'sequential',
@@ -66,11 +77,22 @@ export function createManagedBashTools(options: {
       env.PI_SESSION_FILE = sessionPath
       if (ctx.model) { env.PI_PROVIDER = ctx.model.provider; env.PI_MODEL = ctx.model.id }
       if (ctx.thinkingLevel) env.PI_REASONING_LEVEL = ctx.thinkingLevel
+      // The mode is resolved per call, so a one-shot escalation covers exactly
+      // this command — never the ones queued behind it.
+      const mode = options.escalate
+        ? await options.escalate({
+            toolCallId,
+            toolName: 'bash',
+            sandboxPermissions: args.sandbox_permissions,
+            justification: args.justification,
+            ...(signal ? { signal } : {})
+          })
+        : options.sandboxMode()
       const task = await tasks.start({
         canStart: options.canStart,
         sessionId, sessionPath, toolCallId, cwd: ctx.cwd || services.cwd,
         command: prefix ? `${prefix}\n${args.command}` : args.command,
-        ...shell, env, timeout: args.timeout, sandboxMode: options.sandboxMode()
+        ...shell, env, timeout: args.timeout, sandboxMode: mode
       })
       const abort = () => { void tasks.stop(sessionPath, task.id) }
       signal?.addEventListener('abort', abort, { once: true })
@@ -93,7 +115,10 @@ export function createManagedBashTools(options: {
         if (taskIsLive(current)) current = tasks.detach(sessionPath, task.id, args.mode === 'background' ? 'requested' : 'wait_threshold')
         const output = tasks.output(sessionPath, task.id)
         const content = [{ type: 'text' as const, text: JSON.stringify({ ...current, output: output.output, cursor: output.cursor, truncated: output.truncated,
-          ...(current.background && taskIsLive(current) ? { guidance: PENDING_GUIDANCE } : {}) }) }]
+          ...(current.background && taskIsLive(current) ? { guidance: PENDING_GUIDANCE } : {}),
+          // A denial is a policy outcome with a way forward; say so, or the model
+          // just retries the same command.
+          ...(current.denied ? { sandbox: `${sandboxDenialMarker(mode)}\n${escalationHintMarker('command')}` } : {}) }) }]
         update()
         if (!taskIsLive(current) && current.status !== 'succeeded') throw new Error(content[0].text)
         return { content, details: details(current) }

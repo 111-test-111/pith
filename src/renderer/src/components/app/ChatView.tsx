@@ -1,7 +1,7 @@
 import { BashTasksProvider } from '@/lib/bash-tasks'
 import { SessionTasks } from './SessionTasks'
 import { memo, useMemo, useSyncExternalStore } from 'react'
-import { AlertTriangle, RotateCcw, X } from '@/lib/icons'
+import { AlertTriangle, Minimize2, RotateCcw, X } from '@/lib/icons'
 import { MessageGroup } from '@/components/agents/message'
 import { MessageScroller } from '@/components/agents/message-scroller'
 import type { PreviewRailItem } from '@/components/motion/preview-rail'
@@ -13,6 +13,7 @@ import type {
 } from '../../../../shared/types'
 import type { Notice, PiStore, PiState } from '@/state/pi-store'
 import { useI18n } from '@/i18n'
+import { formatTokenCount } from '@/lib/format'
 import { buildTurns, collectChangeScopes, type ChatTurn } from '@/lib/chat-turns'
 import { extractUserDisplay } from '@/lib/user-message'
 import { AssistantGroup, BashItem, CustomItem, SummaryItem, UserItem } from './MessageItems'
@@ -329,6 +330,27 @@ export const ChatView = memo(function ChatView({
         {state.isStreaming && !streaming && !waitingInLastTurn ? (
           <TurnStatus seedKey={spinnerSeed} />
         ) : null}
+
+        {state.compactionNotices.map((notice) => (
+          <RowReveal animate key={notice.id}>
+            {/* A compaction swaps the whole transcript, so it acknowledges
+                itself where the swap happened — the same quiet row a
+                background-task completion uses, never a conversation card. */}
+            <div
+              data-compaction-notice
+              className="flex items-center gap-2 rounded-xl border border-border/60 bg-muted/30 px-3 py-2 text-xs text-muted-foreground"
+            >
+              <Minimize2 aria-hidden="true" className="size-3.5 shrink-0" />
+              <span className="font-medium text-foreground">{t('chat.compacted')}</span>
+              <span className="tabular-nums">
+                {t('chat.compactedTokens', {
+                  before: formatTokenCount(notice.tokensBefore),
+                  after: notice.tokensAfter === null ? '—' : formatTokenCount(notice.tokensAfter)
+                })}
+              </span>
+            </div>
+          </RowReveal>
+        ))}
 
         {state.notice && !failureHosted ? (
           <RowReveal animate>

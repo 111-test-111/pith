@@ -760,6 +760,24 @@ export function isSandboxMode(value: unknown): value is SandboxMode {
 
 export type SandboxBackend = 'bubblewrap' | 'landlock' | 'seatbelt' | 'windows-acl'
 export type SandboxSupport = 'ready' | 'partial' | 'dependencies-missing' | 'host'
+export type SandboxEscalationDecision = 'approve' | 'deny'
+
+/**
+ * One pending one-shot escalation: this call wants a strictly wider mode, and
+ * only the user's answer decides. Data only — the renderer composes the prose.
+ */
+export interface SandboxEscalationRequestDTO {
+  requestId: string
+  sessionId: string
+  sessionPath: string
+  toolCallId: string
+  toolName: string
+  currentMode: SandboxMode
+  requestedMode: SandboxMode
+  /** The model's reason for wanting the wider mode. */
+  justification: string
+  createdAt: number
+}
 
 /**
  * Capability readout, not prose: the renderer composes whatever sentence the
