@@ -399,6 +399,9 @@ export function FileTree({
                 }}
                 type="button"
                 role="treeitem"
+                // local patch (pi-app): the app resolves a right-clicked row to
+                // its path from the DOM, so the row must carry its value.
+                data-tree-value={row.item.value}
                 // local patch (pi-app): elided labels retain their full name.
                 aria-label={row.item.name}
                 aria-level={row.depth + 1}

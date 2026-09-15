@@ -253,6 +253,46 @@ const w=new BrowserWindow({show:false,width:1500,height:950,webPreferences:{prel
   assert.equal(ellipsis.height,32);assert.equal(ellipsis.name,'AuthenticationProviderWithAVeryLongName.tsx');assert.equal(ellipsis.tail,'.tsx');assert.ok(ellipsis.clipped&&ellipsis.tailFits&&ellipsis.headWidth>20);assert.equal(ellipsis.ellipsis,'ellipsis')
   await evaluate('files.setTreeWidth(208)')
 
+  // Context menu on a tree row: the app renders one menu for the whole tree and
+  // resolves the row under the pointer. The vendored menu keeps its portal
+  // mounted and dismisses by hiding it (`aria-hidden` + `inert` +
+  // `pointer-events: none`), so "closed" means exactly that — and reading the
+  // items requires the portal that is actually open. Assertions use the mock's
+  // reveal record so they prove the right-clicked row was passed, not merely
+  // that a panel opened.
+  const menuState = () => evaluate(`(()=>{const portal=document.querySelector('[data-context-menu-portal]');if(!portal)return {open:false,items:[]};return {open:portal.getAttribute('aria-hidden')!=='true'&&!portal.hasAttribute('inert')&&getComputedStyle(portal).pointerEvents!=='none',items:Array.from(portal.querySelectorAll('[role=menuitem]')).map(node=>node.textContent.trim())}})()`)
+  const settleMenu = async (wantOpen, label) => {
+    for (let i = 0; i < 60; i++) { if ((await menuState()).open === wantOpen) return; await pause(50) }
+    assert.fail(`${label}: the context menu did not ${wantOpen ? 'open' : 'close'}`)
+  }
+  const openRowMenu = async (label) => {
+    await evaluate(`(()=>{const row=[...document.querySelectorAll('[data-file-tree] [role=treeitem]')].find(node=>node.getAttribute('aria-label')===${JSON.stringify(label)});if(!row)throw new Error('no tree row: '+${JSON.stringify(label)});const box=row.getBoundingClientRect();row.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:box.x+8,clientY:box.y+6}))})()`)
+    await settleMenu(true, `the menu for ${label}`)
+  }
+  const clickMenuItem = async (text) => {
+    const clicked = await evaluate(`(()=>{const portal=document.querySelector('[data-context-menu-portal]');const item=[...portal.querySelectorAll('[role=menuitem]')].find(node=>node.textContent.trim()===${JSON.stringify(text)});if(!item)return false;item.click();return true})()`)
+    assert.ok(clicked, `menu item "${text}" exists`)
+  }
+
+  await openRowMenu('package.json')
+  const fileMenu = (await menuState()).items
+  for (const label of ['Open in default app', 'Open enclosing folder', 'Save as…', 'Copy path']) {
+    assert.ok(fileMenu.includes(label), `a file row offers "${label}": ${JSON.stringify(fileMenu)}`)
+  }
+  await clickMenuItem('Open enclosing folder')
+  assert.equal((await evaluate('window.pi.appInfo()')).fileIo.revealed.at(-1), join(project, 'package.json'), 'the menu acted on the right-clicked row, not on the open tab')
+  await settleMenu(false, 'choosing an item')
+
+  // A folder row is not a file, and Escape dismisses without acting.
+  await openRowMenu('src')
+  const folderMenu = (await menuState()).items
+  assert.ok(folderMenu.includes('Copy path'), `a folder row offers its path: ${JSON.stringify(folderMenu)}`)
+  assert.equal(folderMenu.includes('Save as…'), false, `a folder row does not offer save-as: ${JSON.stringify(folderMenu)}`)
+  // Escape is handled by the menu's own container, so it must be dispatched
+  // from inside it — which is also how a keyboard user dismisses it.
+  await evaluate(`(()=>{const portal=document.querySelector('[data-context-menu-portal]');const item=portal.querySelector('[role=menuitem]:not([disabled])');const target=item??portal;target.focus();target.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))})()`)
+  await settleMenu(false, 'Escape')
+
   await click('[aria-label="Hide file tree"]');assert.equal(await evaluate('!!document.querySelector("[data-file-tree]")'),false)
   await click('[aria-label="Show file tree"]');await waitFor('document.querySelector("[role=treeitem][aria-selected=true]")','selection')
   assert.ok(await evaluate('document.querySelector("[role=treeitem][aria-selected=true]").querySelector("[data-file-icon]").dataset.fileIcon.endsWith("App.tsx")'))

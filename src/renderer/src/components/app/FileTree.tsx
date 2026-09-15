@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, memo, type ReactNode } from 'react'
 import { FileTree as BeUIFileTree, FileTreeFile, FileTreeFolder } from '@/components/motion/file-tree'
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from '@/components/motion/context-menu'
 import { ChevronDown, LoaderCircle, RefreshCw } from '@/lib/icons'
 import { basename } from '@/lib/format'
 import { useI18n } from '@/i18n'
 import type { FileBrowserStore } from '@/state/file-browser-store'
 import { FileTypeIcon } from './FileTypeIcon'
 import { MiddleEllipsis } from './MiddleEllipsis'
+import { useToast } from './ToastProvider'
 
 const treeClasses = { item: 'h-8 gap-1.5 rounded-item text-xs font-normal aria-selected:bg-primary/10 aria-selected:text-primary [&>span.absolute]:hidden', pillContainer: 'h-8', label: 'flex' }
 
@@ -16,6 +18,28 @@ export const FileTree = memo(function FileTree({ root, projectless, expanded, se
 }) {
   const { t } = useI18n()
   const ref = useRef<HTMLElement>(null)
+  // One menu for the whole tree: the row under the pointer is resolved from the
+  // DOM, so the collection stays untouched (and no per-row wrapper is needed).
+  const [menuPath, setMenuPath] = useState<string | null>(null)
+  const [menuFolder, setMenuFolder] = useState(false)
+  const toast = useToast()
+  const menuFailed = () => toast.error({ title: t('files.actionError') })
+  const openRow = async () => {
+    if (!menuPath) return
+    try { if (await window.pi.openPath(menuPath)) menuFailed() } catch { menuFailed() }
+  }
+  const revealRow = () => { if (menuPath) void window.pi.showInFolder(menuPath) }
+  const saveRow = async () => {
+    if (!menuPath) return
+    try {
+      const { status } = await window.pi.saveFileCopy(menuPath)
+      if (status === 'error') menuFailed()
+    } catch { menuFailed() }
+  }
+  const copyRowPath = async () => {
+    if (!menuPath) return
+    try { await navigator.clipboard.writeText(menuPath) } catch { menuFailed() }
+  }
   const cache = store.cache
   const [snapshot, setSnapshot] = useState(() => ({ root, selected, refresh, prepared: false, values: cache.directorySnapshot(root) }))
   const directories = snapshot.root === root ? snapshot.values : cache.directorySnapshot(root)
@@ -94,7 +118,17 @@ export const FileTree = memo(function FileTree({ root, projectless, expanded, se
     if (top < element.scrollTop || top + row.offsetHeight > element.scrollTop + element.clientHeight) element.scrollTop = top - (element.clientHeight - row.offsetHeight) / 2
     revealPending.current = false
   }, [directories, preparing, selected, root, refresh])
-  return <nav ref={ref} aria-label={t('files.tree')} data-file-tree className="relative min-h-0 min-w-0 overflow-auto p-1">
+  return <ContextMenu>
+    <ContextMenuTrigger>
+    <nav ref={ref} aria-label={t('files.tree')} data-file-tree className="relative min-h-0 min-w-0 overflow-auto p-1"
+      onContextMenu={(event) => {
+        const row = (event.target as HTMLElement).closest<HTMLElement>('[role="treeitem"]')
+        const value = row?.getAttribute('data-tree-value') ?? null
+        // Loading / retry / empty / load-more rows are affordances, not paths.
+        const usable = !!value && !/^(loading|retry|empty|more):/.test(value) && !row?.hasAttribute('aria-disabled')
+        setMenuPath(usable ? value : null)
+        setMenuFolder(!!row?.hasAttribute('aria-expanded'))
+      }}>
     <BeUIFileTree instant value={selected} expandedIds={expanded} onExpandedChange={next => store.setExpanded(next)} ariaLabel={t('files.tree')} indent={12}
       classNames={treeClasses}
       onValueChange={value => {
@@ -105,5 +139,14 @@ export const FileTree = memo(function FileTree({ root, projectless, expanded, se
       }}>
       {children}
     </BeUIFileTree>
-  </nav>
+    </nav>
+    </ContextMenuTrigger>
+    <ContextMenuContent ariaLabel={t('files.treeMenu')}>
+      {menuPath && !menuFolder ? <ContextMenuItem onSelect={() => void openRow()}>{t('files.openDefault')}</ContextMenuItem> : null}
+      <ContextMenuItem disabled={!menuPath} onSelect={revealRow}>{t('files.showInFolder')}</ContextMenuItem>
+      {menuPath && !menuFolder ? <ContextMenuItem onSelect={() => void saveRow()}>{t('files.saveAs')}</ContextMenuItem> : null}
+      <ContextMenuSeparator />
+      <ContextMenuItem disabled={!menuPath} onSelect={() => void copyRowPath()}>{t('files.copyPath')}</ContextMenuItem>
+    </ContextMenuContent>
+  </ContextMenu>
 })

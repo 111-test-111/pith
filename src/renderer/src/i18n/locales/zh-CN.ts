@@ -890,6 +890,8 @@ const zhCN: Messages = {
   "files.copied": "已复制",
   "files.actionError": "操作未完成，请重试。",
   "files.savedCopy": "已保存 {name} 的副本",
+  "files.copyPath": "复制路径",
+  "files.treeMenu": "文件操作",
   "files.chooseFile": "从文件树选择文件，或点击会话中的文件链接。",
   "files.emptyFile": "此文件为空。",
   "files.noChanges": "相较于 HEAD 没有改动。",
