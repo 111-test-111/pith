@@ -739,9 +739,44 @@ export type SideChatEvent =
  */
 export type StartupSessionMode = 'resume' | 'new'
 
+/**
+ * DSH file-sandbox vocabulary, shared by both processes. It describes exactly
+ * one thing: which file effects the first-party `bash`, `edit` and `write` may
+ * perform. Reads, network access, MCP tools and extensions are outside it, and
+ * there is no approval gate — the mode is the whole policy.
+ */
+export type SandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access'
+export const SANDBOX_MODES = ['read-only', 'workspace-write', 'danger-full-access'] as const
+/** Same default as DSH: writes inside the workspace, nothing outside it. */
+export const DEFAULT_SANDBOX_MODE: SandboxMode = 'workspace-write'
+
+export function isSandboxMode(value: unknown): value is SandboxMode {
+  return typeof value === 'string' && (SANDBOX_MODES as readonly string[]).includes(value)
+}
+
+export type SandboxBackend = 'bubblewrap' | 'landlock' | 'seatbelt' | 'windows-acl'
+export type SandboxSupport = 'ready' | 'partial' | 'dependencies-missing' | 'host'
+
+/**
+ * Capability readout, not prose: the renderer composes whatever sentence the
+ * user reads from these facts.
+ */
+export interface SandboxStatusDTO {
+  mode: SandboxMode
+  backend: SandboxBackend | null
+  enforcement: 'full' | 'partial' | null
+  support: SandboxSupport
+  /** True only for `danger-full-access`: commands run on the host. */
+  unsandboxed: boolean
+}
+
 export interface AppInfoDTO {
   checkpointsEnabled: boolean
   bashMaxWaitMs: number
+  /** DSH file-sandbox mode: which file effects bash/edit/write may perform. */
+  sandboxMode: SandboxMode
+  /** What that mode can actually enforce on this host, right now. */
+  sandbox: SandboxStatusDTO
   cwd: string | null
   /** Every folder the user has opened, most recent first (active cwd included). */
   folders: string[]
@@ -775,6 +810,9 @@ export interface BashTaskDTO {
   outputChars: number
   logPath: string
   logTruncated: boolean
+  /** Set when the sandbox runner refused this command: the file policy, not
+   * the command, is what failed. The user changes it in Settings. */
+  denied?: boolean
   error?: string
   revision: number
 }

@@ -22,6 +22,9 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { BashTaskManager } from '../bash/manager'
 import { createManagedBashTools, APP_BASH_TOOL_NAMES } from './bash-tools'
+import { createSandboxFileTools, APP_FILE_TOOL_NAMES } from './file-tools'
+import { isSandboxMode } from '../sandbox/mode'
+import type { SandboxMode } from '../sandbox/types'
 import { TaskNotifications } from './task-notifications'
 import { RewindClient } from '../rewind/client'
 import { checkoutRoot, CheckoutCoordinator } from '../rewind/coordinator'
@@ -290,6 +293,8 @@ export class PiManager {
   private disposePromise: Promise<void> | null = null
   private closing = false
   private bashMaxWaitMs = loadSettings().bashMaxWaitMs
+  /** DSH file-sandbox mode; read live by bash and the file tools. */
+  private sandboxMode = loadSettings().sandboxMode
   private subagentsEnabledFlag = loadSettings().subagentsEnabled !== false
   private subagentMaxConcurrentSetting = loadSettings().subagentMaxConcurrent ?? MAX_CONCURRENT_SUBAGENTS_DEFAULT
 
@@ -317,6 +322,12 @@ export class PiManager {
     if (!Number.isInteger(value) || value < BASH_MIN_WAIT_MS || value > BASH_MAX_WAIT_MS) throw new Error('Invalid bash wait threshold')
     saveSettings({ ...loadSettings(), bashMaxWaitMs: value })
     this.bashMaxWaitMs = value
+    return value
+  }
+  setSandboxMode(value: SandboxMode): SandboxMode {
+    if (!isSandboxMode(value)) throw new Error('Invalid sandbox mode')
+    saveSettings({ ...loadSettings(), sandboxMode: value })
+    this.sandboxMode = value
     return value
   }
 
@@ -1039,7 +1050,11 @@ export class PiManager {
       } : {}),
       customTools: [...createManagedBashTools({ tasks: this.commandTasks, services,
         sessionId: sessionManager.getSessionId(), sessionPath: sessionManager.getSessionFile()!,
-        maxWaitMs: () => this.bashMaxWaitMs, canStart: () => notifications?.canStart ?? false }),
+        maxWaitMs: () => this.bashMaxWaitMs, sandboxMode: () => this.sandboxMode,
+        canStart: () => notifications?.canStart ?? false }),
+        // The file sandbox replaces the SDK's own edit/write so every mutation
+        // passes the DSH path policy; reads are untouched.
+        ...createSandboxFileTools({ cwd: services.cwd, getMode: () => this.sandboxMode }),
         createTodoTool(todos, () => notifications?.canStart ?? false),
         // Children never see the delegation tool — recursion is excluded at
         // both the ceiling (allowlist) and the customTools layer.
@@ -1291,7 +1306,7 @@ export class PiManager {
         // The delegation tool is gated by its setting here (its customTool is
         // registered at build; the runtime re-checks dispatch live).
         managed.session.setActiveToolsByName([...new Set([
-          ...BUILTIN_TOOL_NAMES, ...APP_BASH_TOOL_NAMES, TODO_TOOL_NAME,
+          ...BUILTIN_TOOL_NAMES, ...APP_BASH_TOOL_NAMES, ...APP_FILE_TOOL_NAMES, TODO_TOOL_NAME,
           ...(managed.subagents ? [SUBAGENT_TOOL_NAME] : []),
           ...loader.getExtensions().extensions.flatMap((extension) => [...extension.tools.keys()])
         ])])

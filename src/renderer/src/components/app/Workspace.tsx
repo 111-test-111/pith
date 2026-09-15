@@ -71,6 +71,7 @@ import { EditMessageDialog, type EditMessagePayload } from './EditMessageDialog'
 import { SettingsPage } from './settings/SettingsPage'
 import { SidebarPanel, agentTabId, fileTabId, filePathForTab, type SidebarTabKind, type SidebarTabId } from './SidebarPanel'
 import { SessionSearch, SessionSearchTrigger } from './SessionSearch'
+import { AppCommandPalette } from './CommandPalette'
 import {
   CHATS_GROUP, PINNED_GROUP, canReorderSession, forgetSidebarSessions,
   loadSidebarPreferences, orderSessions, reorderSession, saveSidebarPreferences,
@@ -1433,6 +1434,20 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
       />
     </ChatApp>
     </SessionSearch>
+    {/* ⌘K. The surface portals, so its place in this tree costs no layout. */}
+    <AppCommandPalette
+      sessions={sessions}
+      activePath={shell.sessionPath ?? null}
+      folders={folders}
+      sidebarOpen={sidebarOpen}
+      sidePanelOpen={sidePanelOpen}
+      onOpenSession={(path, cwd) => void openSession(path, cwd)}
+      onNewSession={(cwd) => void newSession(cwd)}
+      onOpenSettings={() => setSettingsOpen(true)}
+      onNewTerminal={newTerminal}
+      onToggleSidebar={() => setSidebarOpen((open) => !open)}
+      onToggleRail={() => setSidePanelOpen((open) => !open)}
+    />
     </FileNavigationProvider>
   )
 }

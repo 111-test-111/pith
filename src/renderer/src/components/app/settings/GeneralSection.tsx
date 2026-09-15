@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Input } from '@/components/motion/input'
-import { BASH_DEFAULT_MAX_WAIT_MS, BASH_MIN_WAIT_MS, BASH_MAX_WAIT_MS, type StartupSessionMode } from '../../../../../shared/types'
+import { BASH_DEFAULT_MAX_WAIT_MS, BASH_MIN_WAIT_MS, BASH_MAX_WAIT_MS, DEFAULT_SANDBOX_MODE, type SandboxMode, type SandboxStatusDTO, type StartupSessionMode } from '../../../../../shared/types'
 import { Button } from '@/components/motion/button'
 import { Switch } from '@/components/motion/switch'
 import { RadioGroup, RadioGroupItem } from '@/components/motion/radio'
@@ -39,6 +39,24 @@ export function GeneralSection() {
   const [savingStartup, setSavingStartup] = useState(false)
   const [startupError, setStartupError] = useState(false)
   const [version, setVersion] = useState<string | null>(null)
+  // DSH file sandbox: the mode is read from appInfo and applied through the
+  // setter; the status below it says what this host can actually enforce.
+  const [sandboxMode, setSandboxMode] = useState<SandboxMode>(DEFAULT_SANDBOX_MODE)
+  const [sandbox, setSandbox] = useState<SandboxStatusDTO | null>(null)
+  const [savingSandbox, setSavingSandbox] = useState(false)
+  const [sandboxError, setSandboxError] = useState(false)
+  const applySandboxMode = (mode: SandboxMode) => {
+    setSavingSandbox(true)
+    setSandboxError(false)
+    void window.pi
+      .setSandboxMode(mode)
+      .then(async (saved) => {
+        setSandboxMode(saved)
+        // The capability readout depends on the mode, so re-read it with it.
+        setSandbox((await window.pi.appInfo()).sandbox)
+      }, () => setSandboxError(true))
+      .finally(() => setSavingSandbox(false))
+  }
   // Subagent delegation; read from appInfo, applied through the setter IPC.
   const [subagentsEnabled, setSubagentsEnabled] = useState(true)
   const [savingSubagents, setSavingSubagents] = useState(false)
@@ -54,7 +72,7 @@ export function GeneralSection() {
   useEffect(() => {
     void window.pi
       .appInfo()
-      .then((info) => { setVersion(info.version); setCheckpoints(info.checkpointsEnabled); setStartup(info.startup); setSubagentsEnabled(info.subagentsEnabled !== false); setWaitSeconds(String(info.bashMaxWaitMs / 1000)); setSavedWait(info.bashMaxWaitMs) })
+      .then((info) => { setVersion(info.version); setCheckpoints(info.checkpointsEnabled); setStartup(info.startup); setSubagentsEnabled(info.subagentsEnabled !== false); setWaitSeconds(String(info.bashMaxWaitMs / 1000)); setSavedWait(info.bashMaxWaitMs); setSandboxMode(info.sandboxMode); setSandbox(info.sandbox) })
       .catch(() => {})
   }, [])
 
@@ -159,6 +177,25 @@ export function GeneralSection() {
           <Button variant="ghost" size="sm" disabled={!validWait || waitMs === savedWait || savingWait} onClick={() => void saveWait()}>{t('bashTask.save')}</Button>
         </SettingsRow>
         {waitError ? <p className="px-4 text-xs text-destructive" role="status">{t('bashTask.saveFailed')}</p> : null}
+      </SettingsGroup>
+
+      <SettingsGroup title={t('sandbox.group')}>
+        <SettingsRow label={t('sandbox.modeLabel')} description={t('sandbox.modeDesc')}>
+          <RadioGroup
+            orientation="horizontal"
+            value={sandboxMode}
+            onValueChange={(next) => applySandboxMode(next as SandboxMode)}
+            className="gap-4"
+          >
+            <RadioGroupItem value="read-only" disabled={savingSandbox} label={t('sandbox.readOnly')} />
+            <RadioGroupItem value="workspace-write" disabled={savingSandbox} label={t('sandbox.workspaceWrite')} />
+            <RadioGroupItem value="danger-full-access" disabled={savingSandbox} label={t('sandbox.fullAccess')} />
+          </RadioGroup>
+        </SettingsRow>
+        <div className={sandbox?.support === 'dependencies-missing' ? 'px-4 pb-1 text-xs text-destructive' : 'px-4 pb-1 text-xs text-muted-foreground'} role="status">
+          {sandbox ? t(`sandbox.status.${sandbox.support}`, { backend: sandbox.backend ?? '' }) : null}
+        </div>
+        {sandboxError ? <p className="px-4 text-xs text-destructive" role="alert">{t('sandbox.saveFailed')}</p> : null}
       </SettingsGroup>
 
       <SettingsGroup title={t('settings.storage')}>

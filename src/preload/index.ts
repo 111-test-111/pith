@@ -52,6 +52,7 @@ import type {
   SubagentRunDTO,
   TestModelResultDTO,
   ThinkingLevel,
+  SandboxMode,
   TerminalCreatePayload,
   TerminalCreateResult,
   TerminalEvent,
@@ -91,6 +92,7 @@ const api = {
   stopBashTask: (request: BashTaskRequest): Promise<BashTaskDTO> => ipcRenderer.invoke('bash:stop', request),
   onBashTask: (listener: (task: BashTaskDTO) => void) => subscribe('pi:bash-task', listener),
   setBashMaxWaitMs: (value: number): Promise<number> => ipcRenderer.invoke('app:setBashMaxWaitMs', value),
+  setSandboxMode: (mode: SandboxMode): Promise<SandboxMode> => ipcRenderer.invoke('app:setSandboxMode', mode),
   listSubagents: (sessionPath: string): Promise<SubagentRunDTO[]> => ipcRenderer.invoke('subagents:list', sessionPath),
   /** One session's transcript without making it the active session (the rail's
    * read-only subagent view). */

@@ -2,6 +2,7 @@ import { getAgentDir, getShellConfig, type AgentSessionServices, type ToolDefini
 import { Type } from 'typebox'
 import { delimiter, join } from 'node:path'
 import { BashTaskManager, taskIsLive } from '../bash/manager'
+import type { SandboxMode } from '../sandbox/types'
 import type { BashTaskDTO } from '../../shared/types'
 
 export const APP_BASH_TOOL_NAMES = ['bash', 'bash_task'] as const
@@ -29,7 +30,8 @@ export const BASH_GUIDELINES = [
   'When a background task is the only remaining dependency, briefly state that its result is pending and END the current response. This yields control while the task keeps running; its completion automatically resumes the session so you can finish the original request. Do not claim that pending work is complete, and do not create a waiting command to keep the turn alive.',
   'Never launch bash solely to wait for a managed task: this includes a single sleep N, sleep N; tail <task-log>, tail -f, and polling loops. Such a wait can itself become another background task and generate redundant completion notifications. To background real work, run that work directly with mode="background" or waitMs=0. A delay inside a requested program or timing test is still allowed.',
   'Use bash_task list/status/output for a specific progress question or readiness decision; output reads immediately and supports incremental reads with its cursor. Use it instead of tailing the task logPath. Do not repeatedly check unchanged status/output just to wait for completion. Use bash_task stop to terminate a task and its child processes when no longer needed; a model-requested stop does not automatically wake another turn. A user stopping an individual task in the UI sends a completion notification; do not restart it without a user request.',
-  'Do not use shell &, nohup, disown, setsid or self-daemonization to escape managed task tracking. Commands are non-interactive (no terminal/stdin). Use the app terminal for interactive programs. Background tasks live with this application and are terminated when their session is stopped/deleted or the app quits.'
+  'Do not use shell &, nohup, disown, setsid or self-daemonization to escape managed task tracking. Commands are non-interactive (no terminal/stdin). Use the app terminal for interactive programs. Background tasks live with this application and are terminated when their session is stopped/deleted or the app quits.',
+  'Commands run under the session\'s DSH file-sandbox mode: read-only refuses every file write, workspace-write allows the workspace and the temp directories, and danger-full-access removes the fence. A denial is the file policy refusing the path, not a broken command — report it and ask the user to change the mode in Settings → General instead of retrying the same write or looking for another way to reach that path.'
 ]
 
 export function createManagedBashTools(options: {
@@ -38,6 +40,8 @@ export function createManagedBashTools(options: {
   sessionId: string
   sessionPath: string
   maxWaitMs: () => number
+  /** Read live: the user can change the mode between two calls. */
+  sandboxMode: () => SandboxMode
   canStart: () => boolean
 }): ToolDefinition[] {
   const { tasks, services, sessionId, sessionPath } = options
@@ -66,7 +70,7 @@ export function createManagedBashTools(options: {
         canStart: options.canStart,
         sessionId, sessionPath, toolCallId, cwd: ctx.cwd || services.cwd,
         command: prefix ? `${prefix}\n${args.command}` : args.command,
-        ...shell, env, timeout: args.timeout
+        ...shell, env, timeout: args.timeout, sandboxMode: options.sandboxMode()
       })
       const abort = () => { void tasks.stop(sessionPath, task.id) }
       signal?.addEventListener('abort', abort, { once: true })

@@ -264,7 +264,7 @@ export { extractTurnWrittenFiles, extractReviewTurns } from './src/renderer/src/
     const { session: drainSession } = await createAgentSessionFromServices({ services: bashServices, sessionManager: drainChild,
       tools: ['bash'], customTools: [...createManagedBashTools({ tasks, services: bashServices,
         sessionId: drainChild.getSessionId(), sessionPath: drainChild.getSessionFile(),
-        maxWaitMs: () => 0, canStart: () => notifications?.canStart ?? false })] })
+        maxWaitMs: () => 0, sandboxMode: () => 'danger-full-access', canStart: () => notifications?.canStart ?? false })] })
     sessions.push(drainSession)
     notifications = new TaskNotifications(drainSession, tasks)
     notifications.onWake = () => {}

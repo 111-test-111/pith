@@ -2,6 +2,8 @@ import { app } from 'electron'
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { BASH_DEFAULT_MAX_WAIT_MS, BASH_MIN_WAIT_MS, BASH_MAX_WAIT_MS, type StartupSessionMode } from '../shared/types'
+import { DEFAULT_SANDBOX_MODE, isSandboxMode } from './sandbox/mode'
+import type { SandboxMode } from './sandbox/types'
 
 /** Persisted geometry of the main window. `width`/`height` are the window's
  * normal (restored) size, so maximizing or going full screen does not clobber
@@ -46,6 +48,10 @@ export interface AppSettings {
   subagentsEnabled: boolean
   /** Max simultaneous subagent runs per parent session (starting + active). */
   subagentMaxConcurrent: number
+  /** DSH file-sandbox mode for this app: which file effects the first-party
+   * `bash`, `edit` and `write` may perform. Reads, network, MCP and extensions
+   * are outside it, and there is no approval gate — the mode is the policy. */
+  sandboxMode: SandboxMode
 }
 
 const defaults: AppSettings = {
@@ -59,7 +65,8 @@ const defaults: AppSettings = {
   disabledExtensions: [],
   windowBounds: null,
   subagentsEnabled: true,
-  subagentMaxConcurrent: 4
+  subagentMaxConcurrent: 4,
+  sandboxMode: DEFAULT_SANDBOX_MODE
 }
 
 function settingsPath(): string {
@@ -78,7 +85,8 @@ export function loadSettings(): AppSettings {
     const startupSession = typeof raw.startupSession === 'string' ? raw.startupSession : null
     const concurrent = raw.subagentMaxConcurrent
     const subagentMaxConcurrent = Number.isInteger(concurrent) && concurrent >= 1 && concurrent <= 16 ? concurrent : 4
-    return { ...defaults, ...raw, bashMaxWaitMs, startup, startupSession, subagentMaxConcurrent }
+    return { ...defaults, ...raw, bashMaxWaitMs, startup, startupSession, subagentMaxConcurrent,
+      sandboxMode: isSandboxMode(raw.sandboxMode) ? raw.sandboxMode : DEFAULT_SANDBOX_MODE }
   } catch {
     return { ...defaults }
   }

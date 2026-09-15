@@ -45,7 +45,9 @@ export { CheckoutCoordinator } from './src/main/rewind/coordinator';`, resolveDi
   const settings = SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false } })
   const services = { cwd: temporary, settingsManager: settings }
   const owner = { sessionId: 'session-a', sessionPath: '/fixture/a' }
-  const tools = createManagedBashTools({ tasks, services, ...owner, maxWaitMs: () => 120, canStart: () => true })
+  // Sandboxing is its own check (scripts/check-sandbox.mjs); this fixture is
+  // about task lifecycle, so it runs unconfined on purpose.
+  const tools = createManagedBashTools({ tasks, services, ...owner, maxWaitMs: () => 120, sandboxMode: () => 'danger-full-access', canStart: () => true })
   const context = { cwd: temporary, thinkingLevel: 'off', model: { provider: 'fixture', id: 'fixture' } }
   const run = (id, args, signal) => tools[0].execute(id, args, signal, () => {}, context)
   const fast = await run('fast', { command: 'printf fast' })

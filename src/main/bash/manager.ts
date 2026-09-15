@@ -5,6 +5,8 @@ import { join } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import type { BashTaskDTO, BashTaskOutputDTO, BashTaskStatus } from '../../shared/types'
 import type { CheckoutCoordinator } from '../rewind/coordinator'
+import { confineShellArgv, runnerFailureMessage, sandboxDenied, sandboxPolicyFor, scrubbedParentEnv } from '../sandbox/broker'
+import type { SandboxMode } from '../sandbox/types'
 
 const TAIL_CHARS = 64 * 1024
 const LOG_BYTES = 8 * 1024 * 1024
@@ -45,6 +47,8 @@ export interface BashLaunch {
   commandTransport?: 'argv' | 'stdin'
   env: NodeJS.ProcessEnv
   timeout?: number
+  /** DSH file-sandbox mode for this launch; omitted means unconfined. */
+  sandboxMode?: SandboxMode
 }
 
 /** Owns processes, bounded output and durable task records; never owns a model run. */
@@ -129,6 +133,19 @@ export class BashTaskManager {
     const releaseCheckout = await this.coordinator?.enter(options.cwd, 'process', options.sessionPath)
     if (this.closing || options.canStart?.() === false) { releaseCheckout?.(); throw new Error('Command cancelled before launch') }
     if ([...this.tasks.values()].filter(task => taskIsLive(task.dto)).length >= RUNNING_LIMIT) { releaseCheckout?.(); throw new Error('Command concurrency limit reached') }
+    // Fail closed before a task record exists: a confined mode with no usable
+    // runner must not become a "running" task whose command actually ran on the
+    // host. The same argv the shell would have received is what gets wrapped.
+    const innerArgv = options.commandTransport === 'stdin'
+      ? [options.shell, ...options.args]
+      : [options.shell, ...options.args, options.command]
+    const confined = options.sandboxMode
+      ? confineShellArgv(innerArgv, sandboxPolicyFor(options.sandboxMode, options.cwd))
+      : null
+    const argv = confined?.argv ?? innerArgv
+    // A confined shell still inherits an environment; ambient credentials are
+    // not part of what the file policy granted.
+    const env = confined ? scrubbedParentEnv(options.env) : options.env
     let resolve!: () => void
     const task: Task = {
       releaseCheckout,
@@ -148,15 +165,22 @@ export class BashTaskManager {
         task.child?.stdout?.resume()
         task.child?.stderr?.resume()
       })
-      const child = spawn(options.shell, options.commandTransport === 'stdin' ? options.args : [...options.args, options.command], {
-        cwd: options.cwd, env: options.env, detached: process.platform !== 'win32', windowsHide: true,
+      const child = spawn(argv[0] as string, argv.slice(1), {
+        cwd: options.cwd, env, detached: process.platform !== 'win32', windowsHide: true,
         stdio: [options.commandTransport === 'stdin' ? 'pipe' : 'ignore', 'pipe', 'pipe']
       })
       task.child = child
       const stdout = new StringDecoder('utf8')
       const stderr = new StringDecoder('utf8')
+      // Bounded stderr copy: the exit is read against the runner's own
+      // signatures, which are emitted on stderr and nowhere else.
+      let stderrText = ''
       child.stdout?.on('data', (data: Buffer) => this.append(task, stdout.write(data), data))
-      child.stderr?.on('data', (data: Buffer) => this.append(task, stderr.write(data), data))
+      child.stderr?.on('data', (data: Buffer) => {
+        const text = stderr.write(data)
+        if (stderrText.length < 32_768) stderrText += text.slice(0, 32_768 - stderrText.length)
+        this.append(task, text, data)
+      })
       log.on('drain', () => { child.stdout?.resume(); child.stderr?.resume() })
       child.once('error', (error) => {
         task.dto.error = error.message
@@ -176,6 +200,17 @@ export class BashTaskManager {
       })
       child.once('close', (code, signal) => {
         this.append(task, stdout.end() + stderr.end())
+        if (confined) {
+          const failure = runnerFailureMessage(code, stderrText, confined.runnerFailureRules)
+          if (failure) {
+            // The runner broke, so this exit code says nothing about the
+            // command — and re-running it on the host is what fail-closed
+            // forbids. Report it as an environment failure, not a policy denial.
+            task.dto.error = `sandbox runner failed: ${failure}`
+          } else if (sandboxDenied(code, stderrText, confined)) {
+            task.dto.denied = true
+          }
+        }
         void this.finish(task, task.stopReason ?? (code === 0 ? 'succeeded' : 'failed'), code, signal)
       })
       if (options.commandTransport === 'stdin') {

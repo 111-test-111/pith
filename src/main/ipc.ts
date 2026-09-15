@@ -4,6 +4,7 @@ import { TerminalManager } from './terminal/manager'
 import { registerQuitHandler } from './shutdown'
 import { isDefaultWorkspace } from './pi/default-workspace'
 import { loadSettings, saveSettings } from './settings'
+import { sandboxStatus } from './sandbox/broker'
 import { setWindowTheme } from './window-chrome'
 import { listFileDirectory, readFileDocument, readFileGitDiff } from './file-browser'
 import { readPdfRange, readPdfStat } from './pdf'
@@ -24,6 +25,7 @@ import type {
   ResendPayload,
   SessionSnapshotDTO,
   SessionSearchRequest,
+  SandboxMode,
   SideChatAskPayload,
   StartupSessionMode,
   ThinkingLevel,
@@ -62,6 +64,8 @@ export function registerIpc(pi: PiManager): () => boolean {
       folders: settings.folders.filter((f) => typeof f === 'string' && !isDefaultWorkspace(f)),
       contextFiles: settings.contextFiles !== false,
       bashMaxWaitMs: settings.bashMaxWaitMs,
+      sandboxMode: settings.sandboxMode,
+      sandbox: sandboxStatus(settings.sandboxMode),
       checkpointsEnabled: settings.checkpointsEnabled !== false,
       startup: settings.startup,
       subagentsEnabled: settings.subagentsEnabled !== false,
@@ -80,6 +84,7 @@ export function registerIpc(pi: PiManager): () => boolean {
   ipcMain.handle('app:setCheckpointsEnabled', (_event, enabled: boolean) => pi.setCheckpointsEnabled(enabled))
   ipcMain.handle('app:setStartup', (_event, mode: StartupSessionMode) => pi.setStartupMode(mode))
   ipcMain.handle('app:setBashMaxWaitMs', (_event, value: number) => pi.setBashMaxWaitMs(value))
+  ipcMain.handle('app:setSandboxMode', (_event, mode: SandboxMode) => pi.setSandboxMode(mode))
   ipcMain.handle('bash:list', (_event, sessionPath: string) => pi.listBashTasks(sessionPath))
   ipcMain.handle('bash:output', (_event, request: BashTaskRequest) => pi.bashTaskOutput(request))
   ipcMain.handle('bash:stop', (_event, request: BashTaskRequest) => pi.stopBashTask(request))
