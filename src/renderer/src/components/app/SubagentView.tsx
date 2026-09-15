@@ -1,9 +1,55 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { ToolResult } from '@/components/agents/tool-result'
 import { Button } from '@/components/motion/button'
 import { Bot, FileDiff } from '@/lib/icons'
 import { useI18n } from '@/i18n'
 import type { SubagentRunDTO } from '../../../../shared/types'
+
+/**
+ * The in-turn completion row for a background subagent, mirroring how a
+ * finished background bash command reads: a quiet tool row attached to the
+ * running turn (a notice), never a conversation card — the parent model
+ * consumed the same payload as steering data.
+ */
+export const SubagentCompletionRow = memo(function SubagentCompletionRow({ run }: { run: SubagentRunDTO }) {
+  const { t } = useI18n()
+  const [open, setOpen] = useState(false)
+  const status = run.status === 'completed' ? 'success' : run.status === 'failed' ? 'error' : 'cancelled'
+  return (
+    <div data-subagent-completion={run.runId} data-subagent-status={run.status}>
+      <ToolResult animateChanges={false} lazyContent open={open} onOpenChange={setOpen}
+        title={t('subagent.completedTitle', { description: run.description })}
+        status={status}
+        icon={<Bot aria-hidden="true" className="size-4" />}
+        meta={[run.profile, run.model, t(`subagent.${run.status}`), ...(run.writtenFiles?.length ? [t('subagent.filesCount', { count: run.writtenFiles.length })] : [])].filter(Boolean).join(' · ')}
+        copyText={run.result ?? run.error ?? run.task}
+        collapseOnComplete={false}>
+        {open ? (
+          <div className="space-y-2">
+            {run.error ? <p className="whitespace-pre-wrap break-words text-xs text-destructive">{run.error}</p> : null}
+            {run.writtenFiles?.length ? (
+              <div className="space-y-1 text-xs">
+                {run.writtenFiles.map((file) => (
+                  <div key={file.filePath} className="flex items-center gap-1.5 text-muted-foreground">
+                    <FileDiff aria-hidden="true" className="size-3.5 shrink-0" />
+                    <span className="truncate" title={file.filePath}>{file.displayPath}</span>
+                    {file.added !== undefined || file.removed !== undefined ? (
+                      <span className="ml-auto shrink-0 tabular-nums">
+                        <span className="text-emerald-600 dark:text-emerald-400">+{file.added ?? 0}</span>{' '}
+                        <span className="text-rose-600 dark:text-rose-400">-{file.removed ?? 0}</span>
+                      </span>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            {run.result ? <p className="whitespace-pre-wrap break-words text-xs">{run.result}</p> : null}
+          </div>
+        ) : null}
+      </ToolResult>
+    </div>
+  )
+})
 
 /** Elapsed seconds while a run is live; frozen at its completion time. */
 function elapsedOf(run: SubagentRunDTO, now: number): number {

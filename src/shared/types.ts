@@ -605,6 +605,9 @@ export interface SessionSnapshotDTO {
   contextUsage?: ContextUsageDTO | null
   /** Subagent runs belonging to this session (roster cards). */
   subagents?: SubagentRunDTO[]
+  /** True when THIS session is itself a subagent child: a read-only view —
+   * the composer is disabled and main refuses direct prompts. */
+  subagentChild?: boolean
   /** Last event incorporated into this snapshot. */
   eventSequence?: number
 }

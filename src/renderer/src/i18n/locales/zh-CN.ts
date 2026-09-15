@@ -792,6 +792,8 @@ const zhCN: Messages = {
   "subagent.tokens": "{count} tokens",
   "subagent.toolUses": "{count} 次工具调用",
   "subagent.settingsTitle": "子代理",
+  "subagent.completedTitle": "子代理已完成 · {description}",
+  "subagent.filesCount": "改动 {count} 个文件",
   "subagent.settingsDesc": "允许模型将独立子任务委派给拥有独立上下文的子代理会话。",
   "todo.updated": "更新任务清单",
   "todo.toolDescription": "跟踪当前会话的多步骤工作。每次替换完整清单并保留任务 ID，在压缩、分叉和重新打开会话后恢复进度。",

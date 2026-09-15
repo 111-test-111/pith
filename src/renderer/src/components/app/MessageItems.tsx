@@ -1,4 +1,5 @@
 import { BashTaskRow } from './BashTaskView'
+import { SubagentCompletionRow } from './SubagentView'
 import { Fragment, memo, useMemo, useState, type ReactNode } from 'react'
 import { Brain, FileText, GitFork, Pencil, RotateCcw } from '@/lib/icons'
 import { AgentActivity } from '@/components/agents/agent-activity'
@@ -26,6 +27,7 @@ import type {
   BranchSummaryMsg,
   CompactionSummaryMsg,
   CustomMsg,
+  SubagentRunDTO,
   ToolResultMsg,
   UserMsg
 } from '../../../../shared/types'
@@ -252,6 +254,8 @@ export const CustomItem = memo(function CustomItem({ message }: { message: Custo
   const { text, images } = extractUserDisplay(message.content)
   const task = (message.details as { bashTask?: BashTaskDTO } | undefined)?.bashTask
   if (message.customType === 'bash_task_completion' && task) return <BashTaskRow task={task} completion />
+  const subagent = (message.details as { subagent?: SubagentRunDTO } | undefined)?.subagent
+  if (message.customType === 'subagent_completion' && subagent) return <SubagentCompletionRow run={subagent} />
   return (
     <div className="rounded-xl border border-border bg-card px-3 py-2">
       <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">

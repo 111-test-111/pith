@@ -244,6 +244,8 @@ console.log('check-subagents: all assertions passed')
     const leases = new Set()
     const emits = []
     const completionsDelivered = []
+    let runtimeRef = null
+    let stateRef = null
     const makeHost = (childSession) => ({
       isClosing: () => false,
       maxConcurrentSubagents: () => 4,
@@ -357,12 +359,93 @@ console.log('check-subagents: all assertions passed')
       void halted
     }
 
+    // --- 5b) Cancellation DURING creation: no prompt may ever start ---
+    {
+      let releaseCreate
+      let prompted = 0
+      const session = fakeSession({ prompt: async () => { prompted++ } })
+      const host = makeHost(session)
+      const originalCreate = host.createChildSession
+      host.createChildSession = async (options) => {
+        const handle = await originalCreate(options)
+        // The stop lands while the launch is between creation and prompt.
+        await runtimeRef.stopAll(stateRef)
+        return handle
+      }
+      const runtime = new SubagentRuntime(host)
+      runtimeRef = runtime
+      const state = new SubagentParentState('parent-session')
+      stateRef = state
+      const controller = new AbortController()
+      const startPromise = runtime.start(state, baseRequest(), controller.signal)
+      // stopAll already ran inside creation: the launch resolves into an
+      // ABORTED run instead of a rejection — no prompt may ever start, and
+      // the run's own cleanup (lease, release) settles it.
+      const { completion } = await startPromise
+      const finished = await completion
+      assert.equal(finished.status, 'aborted')
+      assert.equal(prompted, 0, 'a launch cancelled during creation never prompts')
+      assert.equal(leases.size, 0)
+      assert.equal(state.countActive(), 0, 'the aborted run leaves no active roster card')
+      runtimeRef = null
+      stateRef = null
+    }
+
+    // --- 5c) Foreground tool signal abort MID-RUN halts the whole run ---
+    {
+      let haltCount = 0
+      const controller = new AbortController()
+      let rejectPrompt
+      const session = fakeSession({
+        prompt: () => new Promise((_resolve, reject) => { rejectPrompt = reject }),
+        abort: async () => { rejectPrompt?.(new Error('aborted by signal')); rejectPrompt = undefined }
+      })
+      const host = makeHost(session)
+      const originalHalt = host.createChildSession
+      host.createChildSession = async (options) => {
+        const handle = await originalHalt(options)
+        const innerHalt = handle.halt
+        handle.halt = async () => { haltCount++; await innerHalt() }
+        return handle
+      }
+      const runtime = new SubagentRuntime(host)
+      const state = new SubagentParentState('parent-session')
+      const { completion } = await runtime.start(state, baseRequest(), controller.signal)
+      controller.abort()
+      const finished = await completion
+      assert.equal(finished.status, 'aborted')
+      assert.ok(haltCount >= 1, 'the tool signal halts the run, not just the launch')
+      assert.equal(leases.size, 0)
+    }
+
+    // --- 5d) Start-entry write failure: lease, halt and release all unwind ---
+    {
+      const session = fakeSession()
+      const host = makeHost(session)
+      const originalCreate = host.createChildSession
+      let halted = 0, released = 0
+      host.createChildSession = async (options) => {
+        const handle = await originalCreate(options)
+        handle.sessionManager.appendCustomEntry = (type) => { if (type === 'pith_subagent_run') throw new Error('disk full') }
+        handle.halt = async () => { halted++ }
+        handle.release = () => { released++ }
+        return handle
+      }
+      const runtime = new SubagentRuntime(host)
+      const state = new SubagentParentState('parent-session')
+      await assert.rejects(() => runtime.start(state, baseRequest()), /disk full/)
+      assert.equal(leases.size, 0, 'a failed start entry must not leak the run lease')
+      assert.equal(halted, 1, 'the child is halted')
+      assert.equal(released, 1, 'the child is released')
+      assert.equal(state.countActive(), 0)
+    }
+
     // --- 6) collectSubagentWritePaths: child writes from disk, parent branch anchored ---
     {
       // Parent branch: an agent toolCall + successful result.
       parent.appendMessage({ role: 'user', content: 'delegate', timestamp: 1 })
       parent.appendMessage({ role: 'assistant', content: [{ type: 'toolCall', id: 'agent-call-1', name: 'agent', arguments: { subagent_type: 'explore' } }], timestamp: 2 })
-      parent.appendMessage({ role: 'toolResult', toolCallId: 'agent-call-1', toolName: 'agent', isError: false, content: [{ type: 'text', text: 'ok' }], timestamp: 3 })
+      parent.appendMessage({ role: 'toolResult', toolCallId: 'agent-call-1', toolName: 'agent', isError: true, content: [{ type: 'text', text: 'final round errored' }], timestamp: 3 })
       // The fake child performs a real (fake-session) write so the run's own
       // result record carries its writtenFiles naturally.
       const session = fakeSession({
@@ -376,8 +459,14 @@ console.log('check-subagents: all assertions passed')
       const { completion } = await runtime.start(state, baseRequest({ parentToolCallId: 'agent-call-1' }))
       const finished = await completion
       assert.equal(finished.writtenFiles?.length, 1)
+      assert.equal(finished.status, 'completed', 'fixture sanity: the run itself finished')
+      // A FAILED delegation (the parent toolResult above isError: true) must
+      // still surface the files its child committed before failing.
       const paths = await runtime.collectSubagentWritePaths(parent, dir, null, sessionsDir)
       assert.deepEqual(paths, [join(dir, 'src', 'a.ts')])
+      // A named anchor that is not on the branch fails loudly instead of
+      // silently widening the scan to the whole history.
+      await assert.rejects(() => runtime.collectSubagentWritePaths(parent, dir, 'missing-entry', sessionsDir), /lost its checkpoint anchor/)
     }
   } finally {
     await rm(dir, { recursive: true, force: true })

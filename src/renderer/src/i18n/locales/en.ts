@@ -817,6 +817,8 @@ const en = {
   "subagent.tokens": "{count} tokens",
   "subagent.toolUses": "{count} tool calls",
   "subagent.settingsTitle": "Subagents",
+  "subagent.completedTitle": "Subagent finished · {description}",
+  "subagent.filesCount": "{count} files changed",
   "subagent.settingsDesc": "Let the model delegate self-contained subtasks to independent subagent sessions with their own context.",
   "bashTask.settingsGroup": "Shell tasks",
   "bashTask.maxWait": "Maximum blocking time",

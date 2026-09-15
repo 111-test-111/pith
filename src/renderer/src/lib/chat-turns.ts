@@ -68,7 +68,10 @@ export function buildTurns(messages: ChatMessage[]): ChatTurn[] {
         turns.push({ key: `b${message.timestamp}-${turns.length}`, role: 'bash', message })
         break
       case 'custom':
-        if (message.display && message.customType === 'bash_task_completion') {
+        // Completion deliveries are tool data, not conversation turns: they
+        // attach to the running turn as notices (the same treatment a
+        // background bash completion gets) instead of opening a new card.
+        if (message.display && (message.customType === 'bash_task_completion' || message.customType === 'subagent_completion')) {
           if (last?.role === 'assistant') {
             ;(last.notices ??= []).push({ beforeRound: last.assistants.length, message })
           } else {

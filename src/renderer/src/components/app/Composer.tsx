@@ -58,6 +58,9 @@ interface ComposerProps {
   availableThinkingLevels: ThinkingLevel[]
   busy: boolean
   initializing?: boolean
+  /** A read-only session view (an opened subagent child): typing and submit
+   * are disabled — the child's runs are driven by its parent's runtime. */
+  readOnly?: boolean
   /** Escape stops the running turn. False while a full-page Settings or auth
    * overlay owns the surface, so Esc there does not abort a background run. */
   escapeStopsRun?: boolean
@@ -92,6 +95,7 @@ export function Composer({
   availableThinkingLevels,
   busy,
   initializing = false,
+  readOnly = false,
   escapeStopsRun = true,
   contextUsage,
   queued,
@@ -244,7 +248,7 @@ export function Composer({
   /** Send when idle; queue against the running turn when busy. The behavior
    * override is how Cmd/Ctrl+Enter submits the inverse of the preference. */
   const dispatch = (sendBehavior: StreamingBehavior) => {
-    if (initializing) return
+    if (initializing || readOnly) return
     const text = value.trim()
     if (!text && !images.length && !files.length) return
     const payload = {
@@ -517,7 +521,8 @@ export function Composer({
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
               loading={busy}
-              submitDisabled={initializing}
+              submitDisabled={initializing || readOnly}
+              disabled={readOnly}
               onStop={() => void handleStop()}
               onSubmit={() => dispatch(behavior)}
               onQueueSubmit={() => dispatch(behavior)}

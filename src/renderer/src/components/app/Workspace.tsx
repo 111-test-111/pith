@@ -1284,6 +1284,7 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
               availableThinkingLevels={shell.availableThinkingLevels}
               busy={shell.isStreaming}
               initializing={shell.initializing}
+              readOnly={shell.subagentChild}
               escapeStopsRun={!settingsOpen && !authPrompt}
               contextUsage={shell.contextUsage}
               queued={shell.queue}

@@ -50,6 +50,8 @@ export interface PiState {
   model: ModelRefDTO | null
   thinkingLevel: ThinkingLevel
   isStreaming: boolean
+  /** True while the visible session is itself a subagent child (read-only). */
+  subagentChild: boolean
   activeChangeScopeId?: string | null
   /** SDK context usage for the composer ring; refreshed by the main process'
    * 2s poll (`context_usage`) and by every turn boundary. */
@@ -86,6 +88,8 @@ export interface PiShellState {
   contextUsage: ContextUsageDTO | null
   /** Pending steering/follow-up messages (SDK queue state) for the composer. */
   queue: { steering: QueuedItemDTO[]; followUp: QueuedItemDTO[] }
+  /** True while the visible session is a subagent child (composer disabled). */
+  subagentChild: boolean
 }
 
 /** Fallback while no session/model is known (SDK returns all levels then). */
@@ -123,6 +127,25 @@ function userProse(content: UserMsg['content']): string {
  *
  * The array is always a fresh copy: callers pass `[...this.state.messages]`.
  */
+/**
+ * Merge two roster snapshots by per-session seq. Neither side is universally
+ * newer: a completion EVENT can overtake the snapshot that was serialized
+ * before it, and a fresh snapshot can carry disk-recovered rows a parked
+ * event never saw. Max-seq per session resolves both directions; equal seq
+ * prefers the incoming row (idempotent refreshes).
+ */
+function mergeRoster(current: readonly SubagentRunDTO[], incoming: readonly SubagentRunDTO[]): SubagentRunDTO[] {
+  if (!current.length) return [...incoming]
+  const bySession = new Map(current.map((run) => [run.sessionId, run]))
+  for (const run of incoming) {
+    const existing = bySession.get(run.sessionId)
+    if (!existing || run.seq >= existing.seq) bySession.set(run.sessionId, run)
+  }
+  return [...bySession.values()].sort(
+    (a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt) || b.seq - a.seq
+  )
+}
+
 function insertByTimestamp(messages: ChatMessage[], incoming: ChatMessage): void {
   let index = messages.length
   while (index > 0 && messages[index - 1].timestamp > incoming.timestamp) index -= 1
@@ -133,6 +156,7 @@ const initialState: PiState = {
   initializing: false,
   todos: null,
   subagents: [],
+  subagentChild: false,
   ready: false,
   cwd: null,
   projectless: false,
@@ -163,7 +187,8 @@ function shellOf(state: PiState, availableThinkingLevels: ThinkingLevel[]): PiSh
     availableThinkingLevels,
     isStreaming: state.isStreaming,
     contextUsage: state.contextUsage,
-    queue: state.queue
+    queue: state.queue,
+    subagentChild: state.subagentChild
   }
 }
 
@@ -226,6 +251,7 @@ export class PiStore {
       prev.model !== this.state.model ||
       prev.thinkingLevel !== this.state.thinkingLevel ||
       prev.isStreaming !== this.state.isStreaming ||
+    prev.subagentChild !== this.state.subagentChild ||
       prev.contextUsage !== this.state.contextUsage ||
       prev.queue !== this.state.queue
     ) {
@@ -270,15 +296,16 @@ export class PiStore {
       model: snapshot.model,
       thinkingLevel: snapshot.thinkingLevel,
       isStreaming: snapshot.isStreaming,
+      subagentChild: snapshot.subagentChild === true,
       activeChangeScopeId: snapshot.activeChangeScopeId ?? null,
       contextUsage: unchanged ? cached.contextUsage : (snapshot.contextUsage ?? null),
       eventSequence: snapshotSequence,
       messages: unchanged ? cached.messages : snapshot.messages,
       todos: unchanged ? cached.todos : (snapshot.todos ?? null),
-      // Always take the snapshot's roster: it has no event sequence, so the
-      // unchanged-cached shortcut would keep a stale card (e.g. a run that
-      // finished while its parent was in the background) over the fresh state.
-      subagents: snapshot.subagents ?? [],
+      subagents: mergeRoster(
+        unchanged ? cached.subagents : this.state.subagents,
+        snapshot.subagents ?? []
+      ),
       streaming: unchanged ? cached.streaming : (snapshot.streaming ?? null),
       toolRuns: unchanged ? cached.toolRuns : (snapshot.toolRuns ?? {}),
       queue: unchanged ? cached.queue : (snapshot.queue ?? { steering: [], followUp: [] }),
@@ -570,7 +597,7 @@ export class PiStore {
       // background parent's updates are parked and the snapshot reconciles on
       // switch-back.
       case 'subagents_update':
-        this.set({ subagents: event.subagents ?? [] })
+        this.set({ subagents: mergeRoster(this.state.subagents, event.subagents ?? []) })
         break
 
       case 'agent_end':

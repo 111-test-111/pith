@@ -133,8 +133,18 @@ export function extractTurnWrittenFiles(
   completions?: readonly CustomMsg[]
 ): WrittenFile[] {
   const byPath = new Map<string, WrittenFile>()
+  // A resumed background child emits a second completion whose writtenFiles
+  // are CUMULATIVE (extracted from the child's whole branch); only the latest
+  // completion per child may contribute or every earlier run double-counts.
+  const latestByChild = new Map<string, CustomMsg>()
   for (const message of completions ?? []) {
     if (message.customType !== 'subagent_completion') continue
+    const child = (message.details as { subagent?: { sessionId?: string; completedAt?: string } } | undefined)?.subagent
+    if (!child?.sessionId) continue
+    const previous = latestByChild.get(child.sessionId)
+    if (!previous || (message.timestamp ?? 0) >= (previous.timestamp ?? 0)) latestByChild.set(child.sessionId, message)
+  }
+  for (const message of latestByChild.values()) {
     const written = (message.details as { subagent?: { writtenFiles?: Array<{ filePath: string; patch?: string; added?: number; removed?: number }> } } | undefined)?.subagent?.writtenFiles
     if (!Array.isArray(written)) continue
     for (const file of written) {

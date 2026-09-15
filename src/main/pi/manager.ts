@@ -1125,14 +1125,25 @@ export class PiManager {
     if (options.mode === 'new') this.materializeSession(sessionManager)
     const path = sessionManager.getSessionFile()
     const existing = path ? this.sessions.get(path) : undefined
-    const managed = existing && !existing.disposing && !this.closing
-      ? existing
+    // Reuse only a settled instance: a live run owns the child right now, and
+    // a second driver (resume racing the run, or steering mid-flight) would
+    // interleave two runs over one session.
+    if (existing && !existing.disposing && existing.session.isStreaming) {
+      throw new Error('Subagent is already running')
+    }
+    const reused = Boolean(existing && !existing.disposing && !this.closing)
+    const managed = reused
+      ? existing!
       : await this.createManagedSession(sessionManager, await this.resolveSubagentRole(options))
     await managed.lifecyclePromise
     if (managed.disposing || this.closing) throw new Error('Subagent session was closed during initialization')
+    // The handle's manager MUST be the one the live AgentSession writes
+    // through: a freshly `open()`ed manager shares the file but not the
+    // in-memory tree, and run records written through it land on a different
+    // branch than the conversation.
     return {
       session: managed.session,
-      sessionManager,
+      sessionManager: managed.session.sessionManager,
       path: managed.path,
       cwd: managed.cwd,
       runId: options.runId,
@@ -1142,7 +1153,7 @@ export class PiManager {
         // Stop everything the child owns: its wake path first (a completion
         // arriving mid-halt must not re-wake it), then its queues, its
         // background processes and finally the SDK run itself.
-        managed.notifications.pause()
+        managed.notifications?.pause()
         managed.session.clearQueue()
         await this.commandTasksInstance?.stopSession(managed.path).catch(() => {})
         await managed.session.abort().catch(() => {})
@@ -1269,6 +1280,7 @@ export class PiManager {
       isStreaming: managed.session.isStreaming || managed.notifications.continuesAtSettled,
       contextUsage: this.contextUsageOf(managed),
       subagents: managed.subagents?.snapshot() ?? [],
+      subagentChild: Boolean(managed.subagentChild),
       eventSequence: managed.eventSequence
     }
   }
@@ -1618,6 +1630,13 @@ export class PiManager {
     const managed = this.activeSession
     const session = managed?.session
     if (this.closing || managed?.disposing) return
+    // An opened subagent child is a READ-ONLY view: it carries no checkpoint
+    // recorder and its runs are owned by the parent's runtime, so a direct
+    // user prompt would bypass every execution protection.
+    if (managed?.subagentChild) {
+      this.notifyError('This subagent session is read-only. Open its parent session to continue work.')
+      return
+    }
     managed?.notifications.resume()
     managed?.subagents?.notifications?.resume()
     if (!managed || !session) {
@@ -1743,6 +1762,7 @@ export class PiManager {
   queueAction(payload: QueueActionPayload): void {
     const managed = this.activeSession
     if (!managed) return
+    if (managed.subagentChild) return // read-only view: nothing to rebuild
     this.rebuildQueues(managed, payload)
   }
 
@@ -1815,6 +1835,7 @@ export class PiManager {
     const managed = this.activeSession
     const session = managed?.session
     if (!managed || !session) throw new Error('No active session')
+    if (managed.subagentChild) throw new Error('A subagent session is read-only')
     await managed.lifecyclePromise
     const release = await this.checkoutCoordinator.enter(managed.cwd, 'run', managed.path)
     try {
@@ -2512,7 +2533,7 @@ export class PiManager {
         // only sees the `agent` tool call): collect their successful written
         // records and classify them under the same scope/excluded rules.
         const subagentPaths = await this.subagentRuntime.collectSubagentWritePaths(
-          managed.session.sessionManager, managed.cwd, value.scopeRoot)
+          managed.session.sessionManager, managed.cwd, navigation.after)
         const subagentUncovered = await classifyUncoveredWrites(subagentPaths, value.scopeRoot, value.excluded)
         const seen = new Set(direct.map((item) => item.path))
         value.uncovered = [...direct, ...subagentUncovered.filter((item) => !seen.has(item.path))]

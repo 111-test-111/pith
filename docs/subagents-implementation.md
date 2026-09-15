@@ -71,6 +71,21 @@ A external review of `5dca68d` found eight defects; all are fixed on this branch
 
 Also fixed: `subagentRuntime` became a lazy getter (regression-check mocks via `Object.create(PiManager.prototype)` work again), `taskIsLive` moved to a pure module so the runtime is node-loadable, and the check-bash-task-ui startup fixture was completed for the NewSession context contract (broken on the base WIP, unrelated to subagents).
 
+## Round 3 — second review fixes
+
+Four more P1s and four P2s from the second external review, plus a UX request, all fixed:
+
+1. **Opened children were still promptable** — an opened subagent child is now a genuine read-only view: `prompt`/`resendMessage`/`queueAction` refuse it in main, the snapshot carries `subagentChild`, and the renderer's Composer disables typing and submit for it. (The deeper "separate execution protection" refactor stays future work; the read-only fence closes the bypass today.)
+2. **Resume wrote through two session managers** — `createSubagentChildSession` now returns the LIVE AgentSession's own `sessionManager` (a fresh `SessionManager.open` shares the file but not the in-memory tree, splitting the branch), and a live child is reused only while idle (`isStreaming` ⇒ "already running"), serializing resumes.
+3. **Failed runs' writes were invisible to coverage** — `collectSubagentWritePaths` now takes EVERY `agent` call after the anchor (the run's outcome never erases file side effects): persisted `writtenFiles` when a terminal record exists, otherwise extraction from the child's committed branch (interrupted/crashed runs included). A named anchor missing from the branch throws instead of silently scanning all history.
+4. **Cancellation gaps** — the launch gate re-checks the abort signal inside the completion, immediately before `child.session.prompt` (a stop landing during creation yields an aborted run, never a prompt); the foreground tool signal is wired for the run's WHOLE lifetime (`haltLiveRun` on abort, unwired in the completion's finally); `stopAll` first awaits in-flight launches' cleanup before halting registered runs.
+5. **Start-entry write failure leaked the lease** — `trackRun` owns the lease and child until the completion exists; a failed start-entry append releases the lease, halts and releases the child, then rethrows (regression-tested: lease count 0, halt+release each 1).
+6. **Coverage passed the wrong checkpoint argument** — `navigation.after` (the entry anchor), not the scope root; combined with #3's anchor-throw this can no longer widen the scan.
+7. **Background completions never reached the file pipeline** — `buildTurns` now attaches `subagent_completion` to the running turn as a notice (exactly like `bash_task_completion`), which simultaneously (a) renders it as a quiet tool row (`SubagentCompletionRow`) instead of a conversation card — the requested UX — and (b) feeds `extractTurnWrittenFiles`' completions input (chat list and Review share that single derivation). Resumed children dedupe: only the LATEST completion per child session contributes files (its writtenFiles are cumulative).
+8. **Roster snapshot-vs-event race** — the renderer merges rosters by per-session `seq` in BOTH directions (event over snapshot and snapshot over stale event); disk-recovered rows are stamped with a live seq in `recover()` so they rank correctly.
+
+New regression tests: mid-creation cancellation (no prompt ever, aborted run, clean leases), whole-run signal abort (halt invoked), start-entry write failure cleanup, failed-delegation write diagnosis (isError parent result still yields child paths), and anchor-miss rejection.
+
 ## Not implemented (honest gaps)
 
 1. **Model-facing companion tools**: no `get_subagent_result` / `steer_subagent`. The parent model's only paths are the foreground wait, the background completion notification, and the user's panel. (Both pi-web versions ship these.)
