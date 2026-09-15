@@ -298,6 +298,8 @@ const en = {
   'chat.customMessage': 'Message from {type}',
   'chat.imageAlt': 'Image {index}',
   'chat.messageCopy': 'Copy message',
+  'chat.copyReply': 'Copy reply',
+  'chat.messageMenu': 'Message menu',
   'chat.messageCopied': 'Copied',
   'chat.messageResend': 'Edit and resend',
   'chat.messageRetry': 'Retry response',

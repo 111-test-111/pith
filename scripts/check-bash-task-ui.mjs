@@ -109,7 +109,8 @@ window.startTurnFixture=()=>{
  window.resetTurn=()=>{window.expectedCards=0;flushSync(()=>window.turnStore.applySnapshot(window.turnSnapshot(window.initialTurnMessages.map(m=>({...m})))))};
  window.resetTurn();
  flushSync(()=>window.checkRoot.render(React.createElement(I18nProvider,{key:'turn-fixture'},React.createElement(ImagePreviewProvider,null,
-  React.createElement('div',{id:'turn-fixture',style:{height:900,display:'flex',flexDirection:'column'}},React.createElement(ChatView,{store:window.turnStore,onDismissError:()=>{},onResend:()=>{},onEditMessage:()=>{},onFork:()=>{},onReview:()=>{}}))))));
+  React.createElement('div',{id:'turn-fixture',style:{height:900,display:'flex',flexDirection:'column'}},React.createElement(ChatView,{store:window.turnStore,onDismissError:()=>{},onResend:m=>window.menuResends.push(m),onEditMessage:m=>window.menuEdits.push(m),onRewindMessage:m=>window.menuRewinds.push(m),onFork:m=>window.menuForks.push(m),onReview:()=>{}}))))));
+ window.menuResends=[];window.menuEdits=[];window.menuRewinds=[];window.menuForks=[];
  window.turnStep=(event,count=0)=>{window.expectedCards=count;flushSync(()=>window.turnStore.dispatch({...event,sessionPath:'/ui/session',eventSequence:++window.turnSequence}));};
  window.turnRead=()=>({cards:document.querySelectorAll('#turn-fixture ul[data-plain-list]').length,
   paths:[...document.querySelectorAll('#turn-fixture ul[data-plain-list]')].map(list=>list.textContent),
@@ -539,6 +540,45 @@ try {
   assert.equal(turnState.groups, 1, 'task steer stays inside one fold')
   assert.equal(turnState.notices, 1, 'task completion belongs inside folded process')
   assert.match(turnState.paths[0], /a.ts/)
+
+  // Transcript context menu: one menu for the whole surface, its target
+  // resolved from the row marker under the pointer, so no row owns a trigger.
+  const openRowMenu = async (selector) => {
+    await evaluate(`(()=>{const node=document.querySelector(${JSON.stringify(selector)});const r=node.getBoundingClientRect();node.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:Math.round(r.x+12),clientY:Math.round(r.y+12)}))})()`)
+    await pause(150)
+  }
+  const menuItems = () => evaluate(`Array.from(document.querySelectorAll('[data-context-menu-portal]')).filter(p=>p.getAttribute('aria-hidden')==='false').flatMap(p=>Array.from(p.querySelectorAll('[role=menuitem]'))).map(i=>({label:i.textContent.trim(),disabled:i.disabled}))`)
+  const menuOpen = () => evaluate(`Array.from(document.querySelectorAll('[data-context-menu-portal]')).some(p=>p.getAttribute('aria-hidden')==='false')`)
+  await openRowMenu('#turn-fixture [data-rail-id]')
+  assert.deepEqual(await menuItems(), [
+    { label: 'Copy message', disabled: false },
+    { label: 'Edit and resend', disabled: false },
+    { label: 'Rewind', disabled: false }
+  ], 'a user row opens the message menu')
+  await evaluate(`(()=>{const p=Array.from(document.querySelectorAll('[data-context-menu-portal]')).find(p=>p.getAttribute('aria-hidden')==='false');Array.from(p.querySelectorAll('[role=menuitem]')).find(i=>i.textContent.trim()==='Copy message').click()})()`)
+  await pause(80)
+  assert.equal(await evaluate('navigator.clipboard.readText()'), 'original request', 'Copy message writes the user text')
+  assert.equal(await evaluate(`document.querySelectorAll('#turn-fixture [data-context-menu-portal]').length`), 0, 'the transcript menu is portalled outside the transcript container')
+  await openRowMenu('#turn-fixture [data-assistant-group]')
+  assert.deepEqual(await menuItems(), [
+    { label: 'Copy reply', disabled: false },
+    { label: 'Retry response', disabled: false },
+    { label: 'Fork from here', disabled: false }
+  ], 'an assistant row opens the reply menu')
+  await evaluate(`(()=>{const p=Array.from(document.querySelectorAll('[data-context-menu-portal]')).find(p=>p.getAttribute('aria-hidden')==='false');Array.from(p.querySelectorAll('[role=menuitem]')).find(i=>i.textContent.trim()==='Retry response').click()})()`)
+  await pause(80)
+  assert.equal(await evaluate('window.menuResends.length'), 1, 'Retry targets the turn-opening user message')
+  assert.equal(await evaluate('window.menuResends[0].timestamp'), 10)
+  // A right-click that resolves no message row must not open an empty panel.
+  await openRowMenu('#turn-fixture [data-slot="message-group"]')
+  assert.equal(await menuOpen(), false, 'a row with no actions opens no menu')
+  // Escape closes and the menu bubble is gone even since the row it named.
+  await openRowMenu('#turn-fixture [data-rail-id]')
+  assert.equal(await menuOpen(), true)
+  await evaluate(`(()=>{const p=Array.from(document.querySelectorAll('[data-context-menu-portal]')).find(p=>p.getAttribute('aria-hidden')==='false');p.querySelector('[role=menu]').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))})()`)
+  await pause(80)
+  assert.equal(await menuOpen(), false, 'Escape closes the transcript menu')
+  console.log('PASS: transcript context menu — row-resolved target, copy/retry/fork, no empty panel, Escape.')
   // A still-running server does not block the card. A later wake removes it
   // at agent_start, before the notice, then restores all prior changes even
   // though the new reply never calls write/edit.

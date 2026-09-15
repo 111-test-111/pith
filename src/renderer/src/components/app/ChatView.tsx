@@ -1,9 +1,10 @@
 import { BashTasksProvider } from '@/lib/bash-tasks'
 import { SessionTasks } from './SessionTasks'
-import { memo, useMemo, useSyncExternalStore } from 'react'
+import { memo, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, useSyncExternalStore } from 'react'
 import { AlertTriangle, Minimize2, RotateCcw, X } from '@/lib/icons'
 import { MessageGroup } from '@/components/agents/message'
 import { MessageScroller } from '@/components/agents/message-scroller'
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from '@/components/motion/context-menu'
 import type { PreviewRailItem } from '@/components/motion/preview-rail'
 import { Button } from '@/components/motion/button'
 import type {
@@ -54,6 +55,76 @@ function excerpt(text: string, limit: number): string {
   const cut = normalized.slice(0, limit)
   const boundary = cut.lastIndexOf(' ')
   return `${cut.slice(0, boundary > limit * 0.65 ? boundary : limit).trim()}…`
+}
+
+/** Which transcript row a menu request belongs to. The app already renders
+ * these markers (`UserItem`'s rail id, `AssistantGroup`'s turn timestamp), so
+ * one handler on the transcript surface resolves the target from the DOM
+ * without a trigger per row. */
+type TranscriptMenuRow =
+  | { kind: 'user'; key: string }
+  | { kind: 'assistant'; stamp: string }
+
+type TranscriptMenuTarget =
+  | { kind: 'user'; message: UserMsg; text: string }
+  | { kind: 'assistant'; copyText: string; retryFrom?: UserMsg; forkAt?: AssistantMsg }
+
+/** Resolve which transcript row a menu request belongs to, from markers the
+ * app already renders: user rows carry `data-rail-id` (the turn key),
+ * assistant rows `data-assistant-group` (the turn's first timestamp). */
+function transcriptMenuRow(element: HTMLElement): TranscriptMenuRow | null {
+  const assistantRow = element.closest<HTMLElement>('[data-assistant-group]')
+  if (assistantRow) {
+    return {
+      kind: 'assistant',
+      stamp: assistantRow.getAttribute('data-assistant-group') ?? ''
+    }
+  }
+  const userRow = element.closest<HTMLElement>('[data-rail-id]')
+  return userRow ? { kind: 'user', key: userRow.getAttribute('data-rail-id') ?? '' } : null
+}
+
+/** The user message that opened a turn: retry/fork targets. Scanning stops at a
+ * summary, whose user message may have been compacted away. */
+function retryFromFor(displayTurns: ChatTurn[], turn: ChatTurn): UserMsg | undefined {
+  for (let i = displayTurns.indexOf(turn) - 1; i >= 0; i--) {
+    const candidate = displayTurns[i]
+    if (candidate.role === 'user') return candidate.user
+    if (candidate.role === 'info') break
+  }
+  return undefined
+}
+
+/** Resolve the marker target back to the turn it names. Assistant rows key on
+ * the same timestamp `AssistantGroup` puts on its DOM node (`messages[0]`, or
+ * the first notice for a turn that only carries notices). */
+function resolveTranscriptMenu(
+  row: TranscriptMenuRow | null,
+  displayTurns: ChatTurn[]
+): TranscriptMenuTarget | null {
+  if (!row) return null
+  if (row.kind === 'user') {
+    const turn = displayTurns.find(
+      (candidate) => candidate.role === 'user' && candidate.key === row.key
+    )
+    return turn?.role === 'user'
+      ? { kind: 'user', message: turn.user, text: extractUserDisplay(turn.user.content).text }
+      : null
+  }
+  const turn = displayTurns.find(
+    (candidate) =>
+      candidate.role === 'assistant' &&
+      String(
+        candidate.assistants[0]?.timestamp ?? candidate.notices?.[0]?.message.timestamp ?? 0
+      ) === row.stamp
+  )
+  if (turn?.role !== 'assistant') return null
+  return {
+    kind: 'assistant',
+    copyText: finalReplyText(turn.assistants),
+    retryFrom: retryFromFor(displayTurns, turn),
+    forkAt: turn.assistants[turn.assistants.length - 1]
+  }
 }
 
 const RAIL_TITLE_LIMIT = 56
@@ -120,6 +191,11 @@ export const ChatView = memo(function ChatView({
   onOpenSession?: (path: string, cwd?: string) => void
 }) {
   const { t } = useI18n()
+  // One menu for the whole transcript. The target row is resolved in a capture
+  // handler (the vendored trigger opens on the bubble pass), so every message
+  // row shares it and no row needs its own wrapper.
+  const menuRow = useRef<TranscriptMenuRow | null>(null)
+  const [menuOpen, setMenuOpen] = useState(false)
   const state: PiState = useSyncExternalStore(store.subscribe, store.getState)
   const toolResults = useMemo(() => {
     const map = new Map<string, ToolResultMsg>()
@@ -216,6 +292,41 @@ export const ChatView = memo(function ChatView({
   const displayTurns = liveTurn ? [...turns, liveTurn] : turns
   const lastDisplayTurn = displayTurns[displayTurns.length - 1]
 
+  /** Right-click: resolve the row, then let the surface trigger open. A row the
+   * menu has no actions for (a summary, a bash/custom notice, status chrome)
+   * must not open an empty panel, so its default is prevented and the vendored
+   * trigger skips its own open. */
+  const captureMenuRow = (event: ReactMouseEvent<HTMLElement>) => {
+    const row = transcriptMenuRow(event.target as HTMLElement)
+    menuRow.current = row
+    if (!row) event.preventDefault()
+  }
+  /** Touch/pen long-press opens through the trigger without a `contextmenu`
+   * event, so the press records the row too. A press on a row with no actions
+   * is gated the same way — unless it landed on a control, whose tap must
+   * still work. */
+  const trackMenuRow = (event: ReactPointerEvent<HTMLElement>) => {
+    const row = transcriptMenuRow(event.target as HTMLElement)
+    menuRow.current = row
+    if (
+      !row &&
+      (event.pointerType === 'touch' || event.pointerType === 'pen') &&
+      !(event.target as HTMLElement).closest('button, a, input, textarea, [role="button"]')
+    ) {
+      event.preventDefault()
+    }
+  }
+  const menuTarget = menuOpen ? resolveTranscriptMenu(menuRow.current, displayTurns) : null
+  const copyMenuText = (text: string) => {
+    if (text) void navigator.clipboard?.writeText(text).catch(() => {})
+  }
+  // An opened subagent child is read-only: the same suppression `renderTurn`
+  // applies to the hover rows applies to the menu.
+  const menuEdit = state.subagentChild ? undefined : onEditMessage
+  const menuRewind = state.subagentChild ? undefined : onRewindMessage
+  const menuResend = state.subagentChild ? undefined : onResend
+  const menuFork = state.subagentChild ? undefined : onFork
+
   /** One transcript row. Assistant rounds are folded by the group itself —
    * only when a turn has many steps — so every user prompt and every turn's
    * final reply stay visible. `previous` lets a user row sit a little further
@@ -267,16 +378,7 @@ export const ChatView = memo(function ChatView({
     // Retry rewinds to the user message that opened this turn's exchange;
     // scanning stops at a summary (its user message may be compacted away).
     // Fork keeps everything up to the turn's last round.
-    const index = displayTurns.indexOf(turn)
-    let retryFrom: UserMsg | undefined
-    for (let i = index - 1; i >= 0; i--) {
-      const candidate = displayTurns[i]
-      if (candidate.role === 'user') {
-        retryFrom = candidate.user
-        break
-      }
-      if (candidate.role === 'info') break
-    }
+    const retryFrom = retryFromFor(displayTurns, turn)
     return (
       <AssistantGroup
         key={turn.key}
@@ -307,8 +409,12 @@ export const ChatView = memo(function ChatView({
   return (
     <BashTasksProvider sessionPath={state.sessionPath}>
       <SessionTasks key={state.sessionPath} todos={state.todos} subagents={state.subagents} busy={busy} sessionPath={state.sessionPath} onOpenSession={onOpenSession} />
+      <ContextMenu open={menuOpen} onOpenChange={setMenuOpen}>
+      <ContextMenuTrigger>
       <MessageScroller
       busy={busy}
+      onContextMenuCapture={captureMenuRow}
+      onPointerDownCapture={trackMenuRow}
       navigation="rail"
       railItems={railItems}
       // local patch (pi-app): bumping the reset key on resend/retry re-runs the
@@ -391,6 +497,54 @@ export const ChatView = memo(function ChatView({
         ) : null}
       </MessageGroup>
     </MessageScroller>
+    </ContextMenuTrigger>
+    {/* One menu for the whole transcript; the row comes from the DOM marker
+        resolved on the way in, so message rows stay untouched. */}
+    <ContextMenuContent ariaLabel={t('chat.messageMenu')}>
+      {menuTarget?.kind === 'user' ? (
+        <>
+          <ContextMenuItem
+            disabled={!menuTarget.text}
+            onSelect={() => copyMenuText(menuTarget.text)}
+          >
+            {t('chat.messageCopy')}
+          </ContextMenuItem>
+          {menuEdit ? (
+            <ContextMenuItem onSelect={() => menuEdit(menuTarget.message)}>
+              {t('chat.messageResend')}
+            </ContextMenuItem>
+          ) : null}
+          {menuRewind ? (
+            <ContextMenuItem onSelect={() => menuRewind(menuTarget.message)}>
+              {t('rewind.title')}
+            </ContextMenuItem>
+          ) : null}
+        </>
+      ) : menuTarget?.kind === 'assistant' ? (
+        <>
+          <ContextMenuItem
+            disabled={!menuTarget.copyText}
+            onSelect={() => copyMenuText(menuTarget.copyText)}
+          >
+            {t('chat.copyReply')}
+          </ContextMenuItem>
+          {(menuTarget.retryFrom && menuResend) || (menuTarget.forkAt && menuFork) ? (
+            <ContextMenuSeparator />
+          ) : null}
+          {menuTarget.retryFrom && menuResend ? (
+            <ContextMenuItem onSelect={() => menuResend(menuTarget.retryFrom!)}>
+              {t('chat.messageRetry')}
+            </ContextMenuItem>
+          ) : null}
+          {menuTarget.forkAt && menuFork ? (
+            <ContextMenuItem onSelect={() => menuFork(menuTarget.forkAt!)}>
+              {t('chat.messageFork')}
+            </ContextMenuItem>
+          ) : null}
+        </>
+      ) : null}
+    </ContextMenuContent>
+    </ContextMenu>
     </BashTasksProvider>
   )
 })

@@ -295,6 +295,8 @@ const zhCN: Messages = {
   'chat.customMessage': '来自 {type} 的消息',
   'chat.imageAlt': '图片 {index}',
   'chat.messageCopy': '复制消息',
+  'chat.copyReply': '复制回复',
+  'chat.messageMenu': '消息菜单',
   'chat.messageCopied': '已复制',
   'chat.messageResend': '编辑并重新发送',
   'chat.messageRetry': '重试此回答',
