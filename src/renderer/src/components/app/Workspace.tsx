@@ -1312,6 +1312,10 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
               readOnlyParentPath={shell.subagentParentPath}
               onOpenSession={(path) => void openSession(path)}
               escapeStopsRun={!settingsOpen && !authPrompt}
+              sandboxMode={shell.sandboxMode}
+              sandbox={shell.sandbox}
+              sessionPath={shell.sessionPath}
+              onSandboxSnapshot={(snapshot) => store.applySnapshot(snapshot)}
               contextUsage={shell.contextUsage}
               queued={shell.queue}
               onSend={handleSend}

@@ -23,7 +23,8 @@ import { dirname, join } from 'node:path'
 import { BashTaskManager } from '../bash/manager'
 import { createManagedBashTools, APP_BASH_TOOL_NAMES } from './bash-tools'
 import { createSandboxFileTools, APP_FILE_TOOL_NAMES } from './file-tools'
-import { isSandboxMode } from '../sandbox/mode'
+import { isSandboxMode, sandboxModeFromBranch, SANDBOX_MODE_ENTRY_TYPE } from '../sandbox/mode'
+import { sandboxStatus } from '../sandbox/broker'
 import type { SandboxMode } from '../sandbox/types'
 import { TaskNotifications } from './task-notifications'
 import { RewindClient } from '../rewind/client'
@@ -238,6 +239,8 @@ interface PendingQueuePayload {
 
 interface ManagedSession {
   recoveryOnly?: boolean
+  /** This session's DSH mode, folded from its branch; read live by the tools. */
+  sandboxMode: SandboxMode
   rewind?: RewindRecorder
   todos: TodoState
   /** One real loader/runtime per session; the SDK receives its filtered proxy. */
@@ -293,8 +296,10 @@ export class PiManager {
   private disposePromise: Promise<void> | null = null
   private closing = false
   private bashMaxWaitMs = loadSettings().bashMaxWaitMs
-  /** DSH file-sandbox mode; read live by bash and the file tools. */
-  private sandboxMode = loadSettings().sandboxMode
+  /** App-wide default for sessions that never recorded a mode of their own. */
+  private get defaultSandboxMode(): SandboxMode {
+    return loadSettings().sandboxMode
+  }
   private subagentsEnabledFlag = loadSettings().subagentsEnabled !== false
   private subagentMaxConcurrentSetting = loadSettings().subagentMaxConcurrent ?? MAX_CONCURRENT_SUBAGENTS_DEFAULT
 
@@ -324,11 +329,30 @@ export class PiManager {
     this.bashMaxWaitMs = value
     return value
   }
+  /** Settings → General: the default a session starts from, not a live mode. */
   setSandboxMode(value: SandboxMode): SandboxMode {
     if (!isSandboxMode(value)) throw new Error('Invalid sandbox mode')
     saveSettings({ ...loadSettings(), sandboxMode: value })
-    this.sandboxMode = value
     return value
+  }
+
+  /**
+   * Change one session's mode. The mode is a fact about the session's branch,
+   * so it is recorded there — reopening the session, or forking it, restores
+   * what it was left in. The tools read the live value, so the change applies to
+   * the very next tool call, including on a steered turn that is already
+   * running.
+   */
+  setSessionSandboxMode(sessionPath: string, mode: SandboxMode): SessionSnapshotDTO {
+    if (!isSandboxMode(mode)) throw new Error('Invalid sandbox mode')
+    const managed = this.sessions.get(sessionPath)
+    if (!managed) throw new Error('No such session')
+    if (managed.subagentChild) throw new Error('A subagent session follows its parent session')
+    if (managed.sandboxMode !== mode) {
+      managed.session.sessionManager.appendCustomEntry(SANDBOX_MODE_ENTRY_TYPE, { mode })
+      managed.sandboxMode = mode
+    }
+    return this.snapshotOf(managed)
   }
 
   // ---- subagents (delegated child sessions) ----
@@ -1050,11 +1074,11 @@ export class PiManager {
       } : {}),
       customTools: [...createManagedBashTools({ tasks: this.commandTasks, services,
         sessionId: sessionManager.getSessionId(), sessionPath: sessionManager.getSessionFile()!,
-        maxWaitMs: () => this.bashMaxWaitMs, sandboxMode: () => this.sandboxMode,
+        maxWaitMs: () => this.bashMaxWaitMs, sandboxMode: () => managed.sandboxMode,
         canStart: () => notifications?.canStart ?? false }),
         // The file sandbox replaces the SDK's own edit/write so every mutation
         // passes the DSH path policy; reads are untouched.
-        ...createSandboxFileTools({ cwd: services.cwd, getMode: () => this.sandboxMode }),
+        ...createSandboxFileTools({ cwd: services.cwd, getMode: () => managed.sandboxMode }),
         createTodoTool(todos, () => notifications?.canStart ?? false),
         // Children never see the delegation tool — recursion is excluded at
         // both the ceiling (allowlist) and the customTools layer.
@@ -1089,6 +1113,8 @@ export class PiManager {
       disposePromise: null,
       disposing: false,
       changeScopes: new ChangeScopes(sessionManager),
+      // Fold this session's own mode before anything can call a tool.
+      sandboxMode: sandboxModeFromBranch(sessionManager.getBranch(), this.defaultSandboxMode),
       notifications,
       session,
       path,
@@ -1356,6 +1382,8 @@ export class PiManager {
       cwd: managed.cwd,
       projectless: isDefaultWorkspace(managed.cwd),
       initializing: managed.initializing,
+      sandboxMode: managed.sandboxMode,
+      sandbox: sandboxStatus(managed.sandboxMode),
       messages,
       todos: managed.todos.snapshot,
       activeChangeScopeId: managed.changeScopes.current,

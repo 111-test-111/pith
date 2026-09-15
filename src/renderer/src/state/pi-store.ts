@@ -14,6 +14,7 @@ import type {
   TodoSnapshotDTO,
   UserMsg
 } from '../../../shared/types'
+import { DEFAULT_SANDBOX_MODE, type SandboxMode, type SandboxStatusDTO } from '../../../shared/types'
 
 export interface ToolRun {
   toolCallId: string
@@ -49,6 +50,10 @@ export interface PiState {
   sessionPath: string | null
   model: ModelRefDTO | null
   thinkingLevel: ThinkingLevel
+  /** This session's DSH file-sandbox mode, folded from its own branch. */
+  sandboxMode: SandboxMode
+  /** What the host can enforce for that mode right now. */
+  sandbox: SandboxStatusDTO | null
   isStreaming: boolean
   /** True while the visible session is itself a subagent child (read-only). */
   subagentChild: boolean
@@ -86,6 +91,9 @@ export interface PiShellState {
   thinkingLevel: ThinkingLevel
   /** Levels the current model supports; cycles through these only. */
   availableThinkingLevels: ThinkingLevel[]
+  /** This session's DSH file-sandbox mode and what the host can enforce. */
+  sandboxMode: SandboxMode
+  sandbox: SandboxStatusDTO | null
   isStreaming: boolean
   contextUsage: ContextUsageDTO | null
   /** Pending steering/follow-up messages (SDK queue state) for the composer. */
@@ -172,6 +180,8 @@ const initialState: PiState = {
   sessionPath: null,
   model: null,
   thinkingLevel: 'medium',
+  sandboxMode: DEFAULT_SANDBOX_MODE,
+  sandbox: null,
   isStreaming: false,
   contextUsage: null,
   eventSequence: 0,
@@ -193,6 +203,8 @@ function shellOf(state: PiState, availableThinkingLevels: ThinkingLevel[]): PiSh
     model: state.model,
     thinkingLevel: state.thinkingLevel,
     availableThinkingLevels,
+    sandboxMode: state.sandboxMode,
+    sandbox: state.sandbox,
     isStreaming: state.isStreaming,
     contextUsage: state.contextUsage,
     queue: state.queue,
@@ -312,6 +324,11 @@ export class PiStore {
       sessionPath,
       model: snapshot.model,
       thinkingLevel: snapshot.thinkingLevel,
+      // The mode is a fact about the session, not about this render: an
+      // unchanged snapshot still carries the newest value, and a session that
+      // never recorded one keeps what we last saw.
+      sandboxMode: snapshot.sandboxMode ?? cached?.sandboxMode ?? DEFAULT_SANDBOX_MODE,
+      sandbox: snapshot.sandbox ?? cached?.sandbox ?? null,
       isStreaming: snapshot.isStreaming,
       subagentChild: snapshot.subagentChild === true,
       subagentParentPath: snapshot.subagentParentPath ?? null,

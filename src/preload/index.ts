@@ -93,6 +93,9 @@ const api = {
   onBashTask: (listener: (task: BashTaskDTO) => void) => subscribe('pi:bash-task', listener),
   setBashMaxWaitMs: (value: number): Promise<number> => ipcRenderer.invoke('app:setBashMaxWaitMs', value),
   setSandboxMode: (mode: SandboxMode): Promise<SandboxMode> => ipcRenderer.invoke('app:setSandboxMode', mode),
+  /** Change one session's mode; resolves with that session's fresh snapshot. */
+  setSessionSandboxMode: (sessionPath: string, mode: SandboxMode): Promise<SessionSnapshotDTO> =>
+    ipcRenderer.invoke('sandbox:setMode', sessionPath, mode),
   listSubagents: (sessionPath: string): Promise<SubagentRunDTO[]> => ipcRenderer.invoke('subagents:list', sessionPath),
   /** One session's transcript without making it the active session (the rail's
    * read-only subagent view). */

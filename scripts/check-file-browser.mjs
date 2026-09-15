@@ -209,6 +209,12 @@ const w=new BrowserWindow({show:false,width:1500,height:950,webPreferences:{prel
   await waitFor('document.querySelector(\'[aria-label="Open in default app"]\')','default-open toolbar button')
   assert.equal(await evaluate(`!!document.querySelector('[data-file-open-menu]')`),false,'open-with menu removed')
   assert.ok(await evaluate(`document.querySelector('[aria-label="Refresh files"]').getBoundingClientRect().right<=document.querySelector('[aria-label="Open in default app"]').getBoundingClientRect().left`),'Refresh precedes open control')
+  // The composer carries the session-scoped sandbox switcher next to the model
+  // picker. This fixture's snapshot records no mode, so the store's default
+  // (workspace-write) is what the control must show.
+  const modeTrigger = await evaluate(`(()=>{const node=document.querySelector('[aria-label="Sandbox mode"]');return node?node.textContent.trim():null})()`)
+  assert.ok(modeTrigger, 'the composer offers a sandbox mode switcher')
+  assert.match(modeTrigger, /Workspace write/, `the switcher shows the session's mode: ${modeTrigger}`)
   if(process.env.PI_FILES_SCREENSHOT_DIR){
     await mkdir(process.env.PI_FILES_SCREENSHOT_DIR,{recursive:true})
     for(const dark of [false,true]){await evaluate(`document.documentElement.classList.toggle('dark',${dark})`);await pause(300);const shot=await send('Page.captureScreenshot',{format:'png'});await writeFile(join(process.env.PI_FILES_SCREENSHOT_DIR,`files-toolbar-${dark?'dark':'light'}.png`),Buffer.from(shot.data,'base64'))}

@@ -25,9 +25,11 @@ import type {
   RecalledItemDTO,
   ThinkingLevel
 } from '../../../../shared/types'
+import { DEFAULT_SANDBOX_MODE, type SandboxMode, type SandboxStatusDTO, type SessionSnapshotDTO } from '../../../../shared/types'
 import { FileMention, type MentionState } from './FileMention'
 import { PreviewThumb } from './ImagePreview'
 import { ModelPicker } from './ModelPicker'
+import { SandboxModePicker } from './SandboxModePicker'
 import { ContextRing } from './ContextRing'
 import { QueuePanel } from './QueuePanel'
 import { LabelTooltip } from './LabelTooltip'
@@ -70,6 +72,12 @@ interface ComposerProps {
    * overlay owns the surface, so Esc there does not abort a background run. */
   escapeStopsRun?: boolean
   contextUsage?: ContextUsageDTO | null
+  /** This session's DSH file-sandbox mode, and what the host can enforce. */
+  sandboxMode?: SandboxMode
+  sandbox?: SandboxStatusDTO | null
+  sessionPath?: string | null
+  /** Apply the snapshot a mode switch returns; the store owns that state. */
+  onSandboxSnapshot?: (snapshot: SessionSnapshotDTO) => void
   queued: { steering: QueuedItemDTO[]; followUp: QueuedItemDTO[] }
   onSend: (payload: { text: string; images: ImageContent[]; files: string[] }) => void
   /** Queue the draft against the running turn — steer interrupts before the
@@ -105,6 +113,10 @@ export function Composer({
   onOpenSession,
   escapeStopsRun = true,
   contextUsage,
+  sandboxMode = DEFAULT_SANDBOX_MODE,
+  sandbox = null,
+  sessionPath = null,
+  onSandboxSnapshot,
   queued,
   onSend,
   onQueue,
@@ -563,15 +575,26 @@ export function Composer({
                   : t(start ? 'newSession.placeholder' : 'composer.placeholder')
               }
               leadingAction={
-                <ModelPicker
-                  models={models}
-                  value={model ? `${model.providerId}/${model.id}` : null}
-                  thinkingLevel={thinkingLevel}
-                  availableThinkingLevels={availableThinkingLevels}
-                  onChange={onModelChange}
-                  onThinkingLevelChange={onThinkingLevelChange}
-                  disabled={busy || initializing || readOnly}
-                />
+                <span className="flex items-center gap-1">
+                  <ModelPicker
+                    models={models}
+                    value={model ? `${model.providerId}/${model.id}` : null}
+                    thinkingLevel={thinkingLevel}
+                    availableThinkingLevels={availableThinkingLevels}
+                    onChange={onModelChange}
+                    onThinkingLevelChange={onThinkingLevelChange}
+                    disabled={busy || initializing || readOnly}
+                  />
+                  {/* The sandbox mode sits with the model because both are
+                      session-scoped choices the next tool call obeys. */}
+                  <SandboxModePicker
+                    mode={sandboxMode}
+                    status={sandbox}
+                    sessionPath={sessionPath}
+                    disabled={busy || initializing || readOnly}
+                    onSnapshot={(snapshot) => onSandboxSnapshot?.(snapshot)}
+                  />
+                </span>
               }
               contextIndicator={initializing ? (
                 <LabelTooltip content={t('composer.initializing')}>

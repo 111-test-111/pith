@@ -85,6 +85,10 @@ export function registerIpc(pi: PiManager): () => boolean {
   ipcMain.handle('app:setStartup', (_event, mode: StartupSessionMode) => pi.setStartupMode(mode))
   ipcMain.handle('app:setBashMaxWaitMs', (_event, value: number) => pi.setBashMaxWaitMs(value))
   ipcMain.handle('app:setSandboxMode', (_event, mode: SandboxMode) => pi.setSandboxMode(mode))
+  // The live mode belongs to a session, not to the app: the composer switches
+  // this session's mode and gets the refreshed snapshot back.
+  ipcMain.handle('sandbox:setMode', (_event, sessionPath: string, mode: SandboxMode) =>
+    pi.setSessionSandboxMode(sessionPath, mode))
   ipcMain.handle('bash:list', (_event, sessionPath: string) => pi.listBashTasks(sessionPath))
   ipcMain.handle('bash:output', (_event, request: BashTaskRequest) => pi.bashTaskOutput(request))
   ipcMain.handle('bash:stop', (_event, request: BashTaskRequest) => pi.stopBashTask(request))

@@ -9,10 +9,10 @@
  */
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { build } from 'esbuild'
 
 const temporary = await mkdtemp(join(tmpdir(), 'pith-sandbox-check-'))
@@ -25,6 +25,8 @@ await build({
 export { confineShellArgv, sandboxDenied, sandboxPolicyFor, sandboxStatus, scrubbedParentEnv, runnerFailureMessage } from './src/main/sandbox/broker';
 export { buildSandboxPolicy, writableRoots } from './src/main/sandbox/policy';
 export { resolveSandboxPath, isSandboxPathWithin } from './src/main/sandbox/paths';
+export { sandboxModeFromBranch, SANDBOX_MODE_ENTRY_TYPE } from './src/main/sandbox/mode';
+export { createSandboxFileTools } from './src/main/pi/file-tools';
 export { localSandboxProvider, resetLocalSandboxProvider } from './src/main/sandbox/local';
 export { SandboxUnavailableError } from './src/main/sandbox/types';`,
     resolveDir: resolve('.')
@@ -32,7 +34,17 @@ export { SandboxUnavailableError } from './src/main/sandbox/types';`,
   bundle: true,
   platform: 'node',
   format: 'esm',
-  outfile
+  outfile,
+  // The SDK stays external: its own sources are not ours to bundle, and the
+  // file tools are only exercised through the seams they expose.
+  plugins: [{
+    name: 'sdk-external',
+    setup(builder) {
+      builder.onResolve({ filter: /^@earendil-works\/pi-coding-agent$/ }, () => ({
+        path: fileURLToPath(import.meta.resolve('@earendil-works/pi-coding-agent')), external: true
+      }))
+    }
+  }]
 })
 
 const sandbox = await import(pathToFileURL(outfile).href)
@@ -50,7 +62,10 @@ const {
   isSandboxPathWithin,
   localSandboxProvider,
   resetLocalSandboxProvider,
-  SandboxUnavailableError
+  SandboxUnavailableError,
+  sandboxModeFromBranch,
+  SANDBOX_MODE_ENTRY_TYPE,
+  createSandboxFileTools
 } = sandbox
 
 const workspace = join(temporary, 'workspace')
@@ -122,6 +137,43 @@ const canonicalWorkspace = await realpath(workspace)
   const rules = [{ fatalSignatures: ['sandbox-exec: '], allowedExitCodes: [125] }]
   assert.equal(runnerFailureMessage(125, 'sandbox-exec: bogus profile', rules), 'sandbox-exec: bogus profile', 'a broken runner is not a denial')
   assert.equal(runnerFailureMessage(0, 'sandbox-exec: x', rules), null, 'a clean exit has no runner failure')
+}
+
+// ------------------------------------------------------- per-session mode fold
+{
+  const entry = (mode) => ({ type: 'custom', customType: SANDBOX_MODE_ENTRY_TYPE, data: { mode } })
+  const foreign = { type: 'custom', customType: 'something_else', data: { mode: 'read-only' } }
+
+  assert.equal(sandboxModeFromBranch([], 'workspace-write'), 'workspace-write', 'a branch with no entry falls back to the default')
+  assert.equal(sandboxModeFromBranch([entry('read-only')]), 'read-only', 'a recorded mode is read back')
+  // The newest entry wins, so a second switch is what stays in force, and
+  // reopening the session restores exactly that.
+  assert.equal(sandboxModeFromBranch([entry('read-only'), entry('danger-full-access')]), 'danger-full-access', 'the newest entry wins')
+  assert.equal(sandboxModeFromBranch([entry('danger-full-access'), foreign]), 'danger-full-access', 'another feature\'s entries are ignored')
+  assert.equal(sandboxModeFromBranch([{ type: 'message' }], 'read-only'), 'read-only', 'a branch without our entries keeps the fallback')
+}
+
+// ------------------------------------------ the switch reaches the next call
+{
+  // The tools must read the mode per call rather than once at build: that is
+  // what makes a switch apply to the very next tool call, a steered turn
+  // included.
+  const cwd = join(temporary, 'live-mode')
+  await mkdir(cwd, { recursive: true })
+  const target = join(cwd, 'inside.txt')
+  await writeFile(target, 'hello\nworld\n', 'utf8')
+
+  let mode = 'read-only'
+  const [edit] = createSandboxFileTools({ cwd, getMode: () => mode })
+  const context = { cwd }
+  const call = () => edit.execute('call', { path: target, edits: [{ oldText: 'world', newText: 'there' }] }, undefined, undefined, context)
+
+  await assert.rejects(call, /denied/i, 'read-only refuses the edit')
+  assert.match(await readFile(target, 'utf8'), /world/, 'the refused edit changed nothing')
+
+  mode = 'workspace-write'
+  await call()
+  assert.match(await readFile(target, 'utf8'), /there/, 'the same tool instance applies the newly switched mode on its next call')
 }
 
 // ------------------------------------------------------------- real enforcement

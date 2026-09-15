@@ -582,6 +582,10 @@ export interface ToolRunDTO {
 export interface SessionSnapshotDTO {
   /** Transcript is available while session_start hooks finish preparing tools. */
   initializing?: boolean
+  /** This session's DSH file-sandbox mode, folded from its own branch. */
+  sandboxMode?: SandboxMode
+  /** What that mode can actually enforce on this host, right now. */
+  sandbox?: SandboxStatusDTO
   /** Latest successful todo result on the complete selected branch, including compacted entries. */
   todos?: TodoSnapshotDTO | null
   activeChangeScopeId?: string | null
