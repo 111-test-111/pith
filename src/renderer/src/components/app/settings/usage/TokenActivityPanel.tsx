@@ -1,6 +1,7 @@
 import { useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Tooltip } from '@/components/motion/tooltip'
 import { Tabs, TabsList, TabsTrigger } from '@/components/motion/tabs'
+import { HeatCalendar, HeatCalendarGrid, HeatCalendarTooltip } from '@/components/charts/heat-calendar'
 import { useI18n } from '@/i18n'
 import {
   buildTokenActivity,
@@ -38,6 +39,11 @@ function monthName(day: string, locale: string): string {
 
 function formatTooltipDay(day: string, locale: string): string {
   return parseDay(day).toLocaleDateString(locale, { month: 'short', day: 'numeric' })
+}
+
+/** Same shape as {@link formatTooltipDay}, for the calendar's UTC cell dates. */
+function formatTooltipDate(date: Date, locale: string): string {
+  return date.toLocaleDateString(locale, { timeZone: 'UTC', month: 'short', day: 'numeric' })
 }
 
 function formatExactTokens(tokens: number, locale: string): string {
@@ -129,74 +135,76 @@ function DayCell({
   )
 }
 
+const DAY_MS = 86_400_000
+
+/** Monday-first week start in UTC, matching `heat-calendar`'s own geometry. */
+function utcMonday(date: Date): Date {
+  return new Date(
+    Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate() - ((date.getUTCDay() + 6) % 7))
+  )
+}
+
+/**
+ * Fold the usage pipeline's Sunday-first, 365-day series into the Monday-first
+ * week grid and 0..1 intensities `heat-calendar` expects. The window is the
+ * same 364 days back from today, widened to whole weeks; intensities divide by
+ * the visible peak, so the calendar's `maxCount` turns them back into tokens.
+ */
+function buildDailyGrid(activity: TokenActivity, today: string) {
+  const byDay = new Map<string, number>()
+  for (const week of activity.calendarWeeks) {
+    for (const point of week) if (point) byDay.set(point.day, point.tokens)
+  }
+  const endDate = new Date(`${today}T00:00:00Z`)
+  const monday = utcMonday(endDate)
+  const start = utcMonday(new Date(endDate.getTime() - 364 * DAY_MS))
+  const weeks = Math.round((monday.getTime() - start.getTime()) / (7 * DAY_MS)) + 1
+  const peak = Math.max(1, activity.maxVisibleDailyTokens)
+  const values: number[][] = []
+  for (let week = 0; week < weeks; week++) {
+    const column: number[] = []
+    for (let day = 0; day < 7; day++) {
+      const date = new Date(start.getTime() + (week * 7 + day) * DAY_MS)
+      column.push((byDay.get(date.toISOString().slice(0, 10)) ?? 0) / peak)
+    }
+    values.push(column)
+  }
+  return { weeks, values, endDate }
+}
+
 function DailyActivity({
   activity,
   locale,
-  ariaLabel,
+  today,
   tooltipUsed
 }: {
   activity: TokenActivity
   locale: string
-  ariaLabel: string
+  today: string
   tooltipUsed: (date: string, tokens: string) => string
 }) {
-  const labels = monthLabels(activity.calendarWeeks, locale)
-  const columns = activity.calendarWeeks.length
+  const grid = useMemo(() => buildDailyGrid(activity, today), [activity, today])
   return (
-    <ActivityScroll viewKey="daily" columns={columns}>
-      <div
-        className="min-w-full w-max"
-        style={{
-          '--activity-columns': columns,
-          '--activity-cell-size': `max(${CELL_MIN_PX}px, calc((100cqw - ${(columns - 1) * CELL_GAP_PX}px) / ${columns}))`
-        } as React.CSSProperties}
+    <div className="mt-4">
+      <HeatCalendar
+        weeks={grid.weeks}
+        // Intensities are peak-relative, so this turns them back into tokens and
+        // the tooltip reads the exact count the app used to show.
+        maxCount={Math.max(1, activity.maxVisibleDailyTokens)}
+        values={grid.values}
+        endDate={grid.endDate}
+        color="var(--primary)"
+        // Read-only usage: a pinned span would have no meaning here.
+        selection={null}
+        onSelectionChange={() => {}}
       >
-        <div
-          aria-hidden="true"
-          className="grid h-[18px] text-[11px] leading-[12px] text-muted-foreground"
-          style={{
-            gridTemplateColumns: `repeat(${columns}, var(--activity-cell-size))`,
-            columnGap: `${CELL_GAP_PX}px`
-          }}
-        >
-          {labels.map((label, index) => (
-            <span key={index} className="min-w-0 whitespace-nowrap">{label}</span>
-          ))}
-        </div>
-        <div
-          role="list"
-          aria-label={ariaLabel}
-          className="mt-1 grid w-max"
-          style={{
-            gridTemplateRows: 'repeat(7, var(--activity-cell-size))',
-            gridAutoFlow: 'column',
-            gridAutoColumns: 'var(--activity-cell-size)',
-            gap: `${CELL_GAP_PX}px`
-          }}
-        >
-          {activity.calendarWeeks.flat().map((point, index) => {
-            if (!point) {
-              return <DayCell key={`future-${index}`} day="" level={0} hidden weekHover={false} />
-            }
-            const exact = formatExactTokens(point.tokens, locale)
-            return (
-              <DayCell
-                key={point.day}
-                day={point.day}
-                level={tokenActivityLevel(point.tokens, activity.maxVisibleDailyTokens)}
-                tooltip={tooltipUsed(
-                  formatTooltipDay(point.day, locale),
-                  formatCompactTokens(point.tokens, locale)
-                )}
-                ariaLabel={point.tokens > 0 ? `${formatDay(point.day, locale)}: ${exact}` : undefined}
-                hidden={point.tokens === 0}
-                weekHover={false}
-              />
-            )
-          })}
-        </div>
-      </div>
-    </ActivityScroll>
+        <HeatCalendarGrid>
+          <HeatCalendarTooltip>
+            {(data) => tooltipUsed(formatTooltipDate(data.date, locale), formatCompactTokens(data.count, locale))}
+          </HeatCalendarTooltip>
+        </HeatCalendarGrid>
+      </HeatCalendar>
+    </div>
   )
 }
 
@@ -355,7 +363,7 @@ export function TokenActivityPanel({ stats, today }: { stats: UsageStatsDTO; tod
         <DailyActivity
           activity={activity}
           locale={locale}
-          ariaLabel={t('settings.tokenActivity.tokens')}
+          today={today}
           tooltipUsed={tooltipUsed}
         />
       ) : (
