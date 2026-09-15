@@ -417,6 +417,7 @@ const en = {
   // model picker
   'model.searchAria': 'Search models',
   'model.choose': 'Choose model',
+  'model.search': 'Search models',
   'model.listAria': 'Models',
   'model.noneFound': 'No models found.',
   'model.reasoning': 'reasoning',

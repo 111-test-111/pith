@@ -412,6 +412,7 @@ const zhCN: Messages = {
   // model picker
   'model.searchAria': '搜索模型',
   'model.choose': '选择模型',
+  'model.search': '搜索模型',
   'model.listAria': '模型',
   'model.noneFound': '未找到模型。',
   'model.reasoning': '推理',
