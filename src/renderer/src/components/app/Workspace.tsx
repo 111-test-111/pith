@@ -680,6 +680,27 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
     [sidePanelTabs, closeSideChat, terminals, files]
   )
 
+  /**
+   * Close every tab but one. Each tab keeps its own teardown (the side chat is
+   * destroyed, the terminal disposed, the file closed), so this loops through
+   * the same path rather than dropping the list.
+   */
+  const closeOtherSidePanelTabs = useCallback(
+    (keep: SidebarTabId) => {
+      for (const tab of sidePanelTabs) if (tab !== keep) closeSidePanelTab(tab)
+      setSidePanelTabs([keep])
+      setSidePanelTab(keep)
+    },
+    [sidePanelTabs, closeSidePanelTab]
+  )
+
+  const closeAllSidePanelTabs = useCallback(() => {
+    for (const tab of sidePanelTabs) closeSidePanelTab(tab)
+    setSidePanelTabs([])
+    setSidePanelTab(null)
+    setSidePanelOpen(false)
+  }, [sidePanelTabs, closeSidePanelTab])
+
   useEffect(() => {
     const onResize = () => setViewportWidth(window.innerWidth)
     window.addEventListener('resize', onResize)
@@ -1369,6 +1390,8 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
             onSelectTab={selectSidePanelTab}
             onOpenTab={openSidePanelTab}
             onCloseTab={closeSidePanelTab}
+            onCloseOtherTabs={closeOtherSidePanelTabs}
+            onCloseAllTabs={closeAllSidePanelTabs}
             pane={{
               files,
               terminals,

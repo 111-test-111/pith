@@ -300,7 +300,11 @@ const w=new BrowserWindow({show:false,width:1500,height:950,webPreferences:{prel
   // items requires the portal that is actually open. Assertions use the mock's
   // reveal record so they prove the right-clicked row was passed, not merely
   // that a panel opened.
-  const menuState = () => evaluate(`(()=>{const portal=document.querySelector('[data-context-menu-portal]');if(!portal)return {open:false,items:[]};return {open:portal.getAttribute('aria-hidden')!=='true'&&!portal.hasAttribute('inert')&&getComputedStyle(portal).pointerEvents!=='none',items:Array.from(portal.querySelectorAll('[role=menuitem]')).map(node=>node.textContent.trim())}})()`)
+  // Two menus can be mounted at once (the rail strip and the file tree), and
+  // the vendored menu keeps every portal in the document. "The menu" therefore
+  // means the one that is not hidden — a bare querySelector returns whichever
+  // renders first, which is how this check silently read the wrong portal.
+  const menuState = () => evaluate(`(()=>{const portals=[...document.querySelectorAll('[data-context-menu-portal]')];const shown=portals.find(p=>p.getAttribute('aria-hidden')!=='true'&&!p.hasAttribute('inert')&&getComputedStyle(p).pointerEvents!=='none');const portal=shown??portals[0];if(!portal)return {open:false,items:[]};return {open:Boolean(shown),items:Array.from(portal.querySelectorAll('[role=menuitem]')).map(node=>node.textContent.trim())}})()`)
   const settleMenu = async (wantOpen, label) => {
     for (let i = 0; i < 60; i++) { if ((await menuState()).open === wantOpen) return; await pause(50) }
     assert.fail(`${label}: the context menu did not ${wantOpen ? 'open' : 'close'}`)
@@ -310,7 +314,7 @@ const w=new BrowserWindow({show:false,width:1500,height:950,webPreferences:{prel
     await settleMenu(true, `the menu for ${label}`)
   }
   const clickMenuItem = async (text) => {
-    const clicked = await evaluate(`(()=>{const portal=document.querySelector('[data-context-menu-portal]');const item=[...portal.querySelectorAll('[role=menuitem]')].find(node=>node.textContent.trim()===${JSON.stringify(text)});if(!item)return false;item.click();return true})()`)
+    const clicked = await evaluate(`(()=>{const portals=[...document.querySelectorAll('[data-context-menu-portal]')];const portal=portals.find(p=>p.getAttribute('aria-hidden')!=='true'&&!p.hasAttribute('inert'))??portals[0];const item=[...portal.querySelectorAll('[role=menuitem]')].find(node=>node.textContent.trim()===${JSON.stringify(text)});if(!item)return false;item.click();return true})()`)
     assert.ok(clicked, `menu item "${text}" exists`)
   }
 
@@ -330,7 +334,10 @@ const w=new BrowserWindow({show:false,width:1500,height:950,webPreferences:{prel
   assert.equal(folderMenu.includes('Save as…'), false, `a folder row does not offer save-as: ${JSON.stringify(folderMenu)}`)
   // Escape is handled by the menu's own container, so it must be dispatched
   // from inside it — which is also how a keyboard user dismisses it.
-  await evaluate(`(()=>{const portal=document.querySelector('[data-context-menu-portal]');const item=portal.querySelector('[role=menuitem]:not([disabled])');const target=item??portal;target.focus();target.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))})()`)
+  // Escape must reach the menu that is actually open — with two menus mounted
+  // the first portal in the document is the rail strip's, so dispatching there
+  // dismissed the wrong one and left this one on screen.
+  await evaluate(`(()=>{const portals=[...document.querySelectorAll('[data-context-menu-portal]')];const portal=portals.find(p=>p.getAttribute('aria-hidden')!=='true'&&!p.hasAttribute('inert'));if(!portal)return;const item=portal.querySelector('[role=menuitem]:not([disabled])');const target=item??portal;target.focus();target.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))})()`)
   await settleMenu(false, 'Escape')
 
   await click('[aria-label="Hide file tree"]');assert.equal(await evaluate('!!document.querySelector("[data-file-tree]")'),false)
@@ -549,6 +556,28 @@ const w=new BrowserWindow({show:false,width:1500,height:950,webPreferences:{prel
   await waitFor('document.querySelector("[data-file-markdown]")','first chooser file opens preview')
   assert.deepEqual(await evaluate('Array.from(document.querySelectorAll("[data-sidebar-tabs] [role=tab]")).map(tab=>tab.textContent)'),['README.md'],'chosen file replaces Files chooser without nesting')
   assert.equal(exceptions.length,0,JSON.stringify(exceptions))
+
+  // Right-rail tab menu: one menu for the strip, resolved from the tab under the
+  // pointer. "Close other tabs" is the action the strip never had, so that is
+  // what this pins — each tab keeps its own teardown (a side chat destroyed, a
+  // terminal disposed, a file closed), which a list replacement would skip.
+  // Kept at the end of the Workspace section: closing other tabs destroys rail
+  // state, and the packaged-worker section below navigates the page away.
+  await evaluate(`files.open(${JSON.stringify(project)},{path:${JSON.stringify(join(project,'src/App.tsx'))}})`)
+  await evaluate(`files.open(${JSON.stringify(project)},{path:${JSON.stringify(join(project,'package.json'))}})`)
+  await pause(150)
+  const railTabCount = () => evaluate(`document.querySelectorAll('[data-sidebar-tabs] [role=tab]').length`)
+  assert.ok((await railTabCount()) >= 2, `the rail has several tabs to work with: ${await railTabCount()}`)
+  await evaluate(`(()=>{const tab=document.querySelector('[data-sidebar-tabs] [role=tab]');const box=tab.getBoundingClientRect();tab.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:box.x+8,clientY:box.y+6}))})()`)
+  await settleMenu(true, 'the rail tab context menu')
+  const railTabMenu = (await menuState()).items
+  for (const label of ['Close tab', 'Close other tabs', 'Close all tabs']) {
+    assert.ok(railTabMenu.includes(label), `the tab menu offers "${label}": ${JSON.stringify(railTabMenu)}`)
+  }
+  await clickMenuItem('Close other tabs')
+  await settleMenu(false, 'choosing a tab action')
+  assert.equal(await railTabCount(), 1, 'close-others leaves exactly the tab that was right-clicked')
+  console.log('PASS: rail tab context menu — resolved from the right-clicked tab, offers close/close-others/close-all, and close-others leaves one tab')
   // Validate Vite's emitted worker and grammar chunks from packaged file://,
   // since a dev-server-only worker check misses origin and output-format bugs.
   const workerAsset=(await readdir(join(repo,'out/renderer/assets'))).find(name=>/^file-highlight-worker-.*\.js$/.test(name))
@@ -562,6 +591,7 @@ const w=new BrowserWindow({show:false,width:1500,height:950,webPreferences:{prel
   await evaluate(`new Promise((resolve,reject)=>{const worker=new Worker(${JSON.stringify(pathToFileURL(join(repo,'out/renderer/assets',searchAsset)).href)},{type:'module'});worker.onmessage=e=>{worker.terminate();window.packagedSearch=e.data;resolve(true)};worker.onerror=reject;worker.postMessage({text:'SDK SDK sdk',query:'SDK',options:{matchCase:false,wholeWord:true,regex:false}})})`)
   assert.equal(await evaluate('window.packagedSearch.matches.length'),3,'packaged file:// search worker')
   console.log('PASS: actual Workspace links, Markdown/source/diff, highlighting, relative links, top-level file tab/chooser lifecycle, native tree keyboard/selection/reveal, Symbols file types, 14k-line virtualization, find/Escape, session/rail persistence, themes and narrow geometry')
+
   }
 } finally {
   ws?.close();child?.kill('SIGKILL');await server?.close();await rm(temporary,{recursive:true,force:true})

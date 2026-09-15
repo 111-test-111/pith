@@ -14,6 +14,13 @@ import {
 import { Button } from '@/components/motion/button'
 import { SharedLayoutBg } from '@/components/motion/shared-layout-bg'
 import { Tabs, TabsList, TabsTrigger } from '@/components/motion/tabs'
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger
+} from '@/components/motion/context-menu'
 import { Tooltip } from '@/components/motion/tooltip'
 import { DURATION, EASE_OUT, motionTransition } from '@/lib/ease'
 import { useI18n } from '@/i18n'
@@ -214,6 +221,8 @@ function SidebarTabStrip({
   agentRuns,
   onSelect,
   onClose,
+  onCloseOthers,
+  onCloseAll,
   onTogglePicker
 }: {
   tabs: SidebarTabId[]
@@ -222,10 +231,16 @@ function SidebarTabStrip({
   agentRuns: ReadonlyMap<string, SubagentRunDTO>
   onSelect: (kind: SidebarTabId) => void
   onClose: (kind: SidebarTabId) => void
+  onCloseOthers: (kind: SidebarTabId) => void
+  onCloseAll: () => void
   onTogglePicker: () => void
 }) {
   const { t } = useI18n()
   const scroll = useRef<HTMLDivElement>(null)
+  // The tab under the pointer, resolved from the DOM: the strip renders one
+  // menu for every tab, so the row identity has to be read at the moment of the
+  // right-click (a ref cannot race the trigger's own open).
+  const menuTab = useRef<SidebarTabId | null>(null)
   useLayoutEffect(() => {
     const viewport = scroll.current
     const selected = viewport?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
@@ -240,7 +255,13 @@ function SidebarTabStrip({
     // (`px-4 py-1.5` + its 32px buttons). A fixed `h-11` would make this rule
     // 1px higher than that one, because the height would then be border-box —
     // 44 including the border the other strip adds on top.
-    <div data-sidebar-tabs className="flex shrink-0 items-center gap-1 border-b border-border bg-background pr-1.5">
+    <ContextMenu>
+      <ContextMenuTrigger>
+        <div data-sidebar-tabs className="flex shrink-0 items-center gap-1 border-b border-border bg-background pr-1.5"
+          onContextMenu={(event) => {
+            const wrapper = (event.target as HTMLElement).closest<HTMLElement>('[data-sidebar-tab]')
+            menuTab.current = (wrapper?.getAttribute('data-sidebar-tab') as SidebarTabId | null) ?? null
+          }}>
       <div ref={scroll} className="min-w-0 flex-1 overflow-x-auto p-1">
         <Tabs
           value={active ?? ''}
@@ -264,7 +285,7 @@ function SidebarTabStrip({
               const TabIcon = spec?.icon
               const isActive = active === kind
               return (
-                <div key={kind} className="group/tab relative flex items-center">
+                <div key={kind} data-sidebar-tab={kind} className="group/tab relative flex items-center">
                   <LabelTooltip content={path ?? (agentPath ? label : '')}><TabsTrigger value={kind} className="h-9 min-h-0 gap-2 pl-2.5 pr-8">
                     {agentPath ? <Bot aria-hidden="true" className="size-3.5 shrink-0" /> : path ? <FileTypeIcon path={path} className="size-4 shrink-0" /> : TabIcon ? <TabIcon aria-hidden="true" className="size-3.5 shrink-0" /> : null}
                     <MiddleEllipsis name={label} className="max-w-32 text-xs" />
@@ -306,7 +327,24 @@ function SidebarTabStrip({
           <Plus aria-hidden="true" className="size-4" />
         </Button>
       </Tooltip>
-    </div>
+        </div>
+      </ContextMenuTrigger>
+      {/* One menu for the whole strip; the tab comes from the row under the
+          pointer, so no per-tab wrapper is needed. */}
+      <ContextMenuContent ariaLabel={t('sidebar.tabMenu')}>
+        <ContextMenuItem onSelect={() => menuTab.current && onClose(menuTab.current)}>
+          {t('sidebar.tabClose')}
+        </ContextMenuItem>
+        <ContextMenuItem
+          disabled={tabs.length < 2}
+          onSelect={() => menuTab.current && onCloseOthers(menuTab.current)}
+        >
+          {t('sidebar.tabCloseOthers')}
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem onSelect={onCloseAll}>{t('sidebar.tabCloseAll')}</ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   )
 }
 
@@ -329,6 +367,8 @@ interface SidebarPanelProps {
   onSelectTab: (kind: SidebarTabId) => void
   onOpenTab: (kind: SidebarTabKind) => void
   onCloseTab: (kind: SidebarTabId) => void
+  onCloseOtherTabs: (keep: SidebarTabId) => void
+  onCloseAllTabs: () => void
   /** Pane payloads, owned by the workspace (see SidebarPaneProps). */
   pane: SidebarPaneProps
 }
@@ -349,6 +389,8 @@ export function SidebarPanel({
   onSelectTab,
   onOpenTab,
   onCloseTab,
+  onCloseOtherTabs,
+  onCloseAllTabs,
   pane
 }: SidebarPanelProps) {
   const { t } = useI18n()
@@ -398,6 +440,8 @@ export function SidebarPanel({
                   onSelectTab(kind)
                 }}
                 onClose={onCloseTab}
+                onCloseOthers={onCloseOtherTabs}
+                onCloseAll={onCloseAllTabs}
                 onTogglePicker={() => setPickerOpen((current) => !current)}
               />
             ) : null}
