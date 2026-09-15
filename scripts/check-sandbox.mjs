@@ -27,6 +27,8 @@ export { buildSandboxPolicy, writableRoots } from './src/main/sandbox/policy';
 export { resolveSandboxPath, isSandboxPathWithin } from './src/main/sandbox/paths';
 export { sandboxModeFromBranch, SANDBOX_MODE_ENTRY_TYPE } from './src/main/sandbox/mode';
 export { createSandboxFileTools } from './src/main/pi/file-tools';
+export { listPendingEscalations, respondToEscalation } from './src/main/sandbox/pending';
+export { resolveEscalatedMode } from './src/main/sandbox/escalation';
 export { localSandboxProvider, resetLocalSandboxProvider } from './src/main/sandbox/local';
 export { SandboxUnavailableError } from './src/main/sandbox/types';`,
     resolveDir: resolve('.')
@@ -65,7 +67,10 @@ const {
   SandboxUnavailableError,
   sandboxModeFromBranch,
   SANDBOX_MODE_ENTRY_TYPE,
-  createSandboxFileTools
+  createSandboxFileTools,
+  listPendingEscalations,
+  respondToEscalation,
+  resolveEscalatedMode
 } = sandbox
 
 const workspace = join(temporary, 'workspace')
@@ -174,6 +179,110 @@ const canonicalWorkspace = await realpath(workspace)
   mode = 'workspace-write'
   await call()
   assert.match(await readFile(target, 'utf8'), /there/, 'the same tool instance applies the newly switched mode on its next call')
+}
+
+// --------------------------------------------------------- one-shot escalation
+{
+  const cwd = join(temporary, 'escalation')
+  await mkdir(cwd, { recursive: true })
+  const inside = join(cwd, 'file.txt')
+  await writeFile(inside, 'one\ntwo\n', 'utf8')
+  const outside = join(await realpath(tmpdir()), 'pith-escalation-outside.txt')
+  await writeFile(outside, 'one\ntwo\n', 'utf8')
+
+  // The session's mode never moves: only the answered call runs wider.
+  let mode = 'read-only'
+  const sessionPath = 'escalation.jsonl'
+  const tools = createSandboxFileTools({
+    cwd,
+    getMode: () => mode,
+    escalate: (input) =>
+      resolveEscalatedMode({
+        sessionId: 'escalation',
+        sessionPath,
+        currentMode: mode,
+        onChanged: () => {},
+        ...input
+      })
+  })
+  const [edit] = tools
+  const context = { cwd }
+  const ask = (path, sandboxPermissions, justification = 'needs to touch this file') =>
+    edit.execute(
+      'call',
+      { path, edits: [{ oldText: 'one', newText: 'edited' }], sandbox_permissions: sandboxPermissions, justification },
+      undefined,
+      undefined,
+      context
+    )
+
+  // 1. Approving runs exactly this call wider — and leaves the session's mode
+  //    alone, which is what makes the next call narrow again.
+  const approving = ask(outside, 'danger-full-access').then(() => 'ok', (error) => error)
+  await delay(30)
+  const queued = listPendingEscalations(sessionPath)
+  assert.equal(queued.length, 1, 'the call registered exactly one question')
+  assert.equal(queued[0].requestedMode, 'danger-full-access', 'the question names the requested mode')
+  assert.equal(queued[0].currentMode, 'read-only', 'the question names the mode it is wider than')
+  assert.equal(queued[0].toolName, 'edit', 'the question names the tool asking')
+  assert.equal(respondToEscalation(queued[0].requestId, sessionPath, 'approve'), true, 'the question is answered')
+  assert.equal(await approving, 'ok', 'the approved call ran')
+  assert.match(await readFile(outside, 'utf8'), /edited/, 'the approved call wrote the file')
+  assert.equal(mode, 'read-only', 'approving one call did not change the session mode')
+  assert.deepEqual(listPendingEscalations(sessionPath), [], 'an answered question leaves the queue')
+  assert.equal(
+    await ask(outside, undefined).then(() => 'ok', () => 'denied'),
+    'denied',
+    'the next call is narrow again — escalation was for one call'
+  )
+
+  // 2. Denying fails the call and writes nothing.
+  await writeFile(inside, 'one\ntwo\n', 'utf8')
+  const rejecting = ask(inside, 'danger-full-access').then(() => 'ok', (error) => error)
+  await delay(30)
+  const [denied] = listPendingEscalations(sessionPath)
+  assert.ok(denied, 'the second call registered its question')
+  respondToEscalation(denied.requestId, sessionPath, 'deny')
+  const rejection = await rejecting
+  assert.match(String(rejection?.message ?? rejection), /rejected/, 'a denied escalation fails the call')
+  assert.match(await readFile(inside, 'utf8'), /one\ntwo/, 'nothing was written')
+
+  // 3. A cancelled question (the turn was aborted) fails closed too.
+  const controller = new AbortController()
+  const cancelled = edit
+    .execute(
+      'call',
+      { path: inside, edits: [{ oldText: 'one', newText: 'edited' }], sandbox_permissions: 'workspace-write', justification: 'x' },
+      controller.signal,
+      undefined,
+      context
+    )
+    .then(() => 'ok', (error) => error)
+  await delay(30)
+  assert.equal(listPendingEscalations(sessionPath).length, 1, 'the aborted call asked before aborting')
+  controller.abort()
+  assert.match(String((await cancelled)?.message ?? ''), /cancelled/, 'an aborted question is cancelled, not approved')
+  assert.deepEqual(listPendingEscalations(sessionPath), [], 'a cancelled question leaves the queue')
+
+  // 4. The arguments are validated: a malformed or non-wider request is an
+  //    error, never a silently narrower call.
+  assert.equal(
+    await ask(inside, undefined, 'why not').then(() => 'ok', () => 'invalid'),
+    'invalid',
+    'a justification without a mode is invalid'
+  )
+  mode = 'danger-full-access'
+  assert.equal(
+    await ask(inside, 'workspace-write').then(() => 'ok', () => 'not-wider'),
+    'not-wider',
+    'escalating from full access is not a wider move'
+  )
+  assert.equal(
+    await ask(inside, 'read-only').then(() => 'ok', () => 'invalid'),
+    'invalid',
+    'read-only is never a valid escalation target'
+  )
+  mode = 'read-only'
 }
 
 // ------------------------------------------------------------- real enforcement

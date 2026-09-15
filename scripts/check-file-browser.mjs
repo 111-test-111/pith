@@ -130,6 +130,7 @@ const LocaleBridge=()=>{window.setLocale=useI18n().setLocale;return null};
 window.resolveFile=localFileTarget;window.store=new PiStore();
 const open=FileBrowserStore.prototype.open;FileBrowserStore.prototype.open=function(...args){window.files=this;return open.apply(this,args)};
 window.setSession=cwd=>store.applySnapshot({cwd,sessionId:crypto.randomUUID(),messages:[{role:'user',timestamp:0,content:'<file path="'+cwd+'/file#25%.txt">literal attachment path</file>'},{role:'assistant',timestamp:1,content:[{type:'text',text:'[Deep source](${deepRelative}) · [Open README](README.md) · [Open source](src/App.tsx:2) · [URL file](file://'+cwd+'/README.md)'}]}],model:null,thinkingLevel:'off',availableThinkingLevels:['off'],isStreaming:false});
+window.escalate=(requests)=>store.dispatch({type:'sandbox_escalation',requests});
 setSession(${JSON.stringify(project)});window.root=createRoot(document.getElementById('root'));
 root.render(React.createElement(React.StrictMode,null,React.createElement(ThemeProvider,{attribute:'class',defaultTheme:'light'},React.createElement(I18nProvider,null,React.createElement(LocaleBridge),React.createElement(ImagePreviewProvider,null,React.createElement(ToastProvider,null,React.createElement(Workspace,{store,accent:'indigo',onAccentChange:()=>{}})))))));
 window.fixtureReady=true;</script></body></html>`
@@ -139,9 +140,10 @@ window.fixtureReady=true;</script></body></html>`
   const main=join(temporary,'main.cjs')
   await build({stdin:{contents:`import {app,BrowserWindow,ipcMain} from 'electron';import {listFileDirectory,readFileDocument,readFileGitDiff} from ${JSON.stringify(join(repo,'src/main/file-browser.ts'))};
 app.setPath('userData',${JSON.stringify(join(temporary,'profile'))});app.commandLine.appendSwitch('remote-debugging-port','0');
-const io={directories:[],documents:[],opened:[],saved:[],revealed:[]};app.whenReady().then(async()=>{ipcMain.handle('app:info',()=>({fileIo:io,cwd:${JSON.stringify(project)},folders:[${JSON.stringify(project)}],contextFiles:true,version:'test'}));ipcMain.handle('pi:models',()=>[]);ipcMain.handle('pi:listSessions',()=>[]);
+const io={directories:[],documents:[],opened:[],saved:[],revealed:[],escalationAnswers:[]};app.whenReady().then(async()=>{ipcMain.handle('app:info',()=>({fileIo:io,cwd:${JSON.stringify(project)},folders:[${JSON.stringify(project)}],contextFiles:true,version:'test'}));ipcMain.handle('pi:models',()=>[]);ipcMain.handle('pi:listSessions',()=>[]);
 ipcMain.handle('files:directory',async(_,r,offset)=>{io.directories.push({path:r.path,offset,time:Date.now()});if(${perfOnly})await new Promise(r=>setTimeout(r,30));return listFileDirectory(r,offset)});ipcMain.handle('files:document',(_,r)=>{io.documents.push({path:r.path,time:Date.now()});return readFileDocument(r)});ipcMain.handle('files:gitDiff',(_,r)=>readFileGitDiff(r));
 ipcMain.handle('files:saveCopy',(_,path)=>{io.saved.push(path);return {status:'cancelled'}});ipcMain.handle('shell:showInFolder',(_,path)=>{io.revealed.push(path)});ipcMain.handle('shell:openPath',(_,path)=>{io.opened.push(path);return io.opened.length===1?'failed to open':''});ipcMain.handle('shell:openExternal',()=>{});
+ipcMain.handle('sandbox:respondEscalation',(_,requestId,sessionPath,decision)=>{io.escalationAnswers.push({requestId,sessionPath,decision});return true});
 const w=new BrowserWindow({show:false,width:1500,height:950,webPreferences:{preload:${JSON.stringify(join(repo,'out/preload/index.mjs'))},contextIsolation:true,nodeIntegration:false,sandbox:false,backgroundThrottling:false}});w.loadURL(${JSON.stringify(`http://127.0.0.1:${server.httpServer.address().port}${fixturePath}`)});});app.on('window-all-closed',()=>app.quit());`,resolveDir:repo,loader:'ts'},bundle:true,platform:'node',format:'cjs',packages:'external',outfile:main})
   child=spawn(electron,[main],{stdio:['ignore','ignore','pipe']})
   let stderr=''
@@ -215,6 +217,38 @@ const w=new BrowserWindow({show:false,width:1500,height:950,webPreferences:{prel
   const modeTrigger = await evaluate(`(()=>{const node=document.querySelector('[aria-label="Sandbox mode"]');return node?node.textContent.trim():null})()`)
   assert.ok(modeTrigger, 'the composer offers a sandbox mode switcher')
   assert.match(modeTrigger, /Workspace write/, `the switcher shows the session's mode: ${modeTrigger}`)
+
+  // A pending escalation renders as beUI's approval card right above the
+  // composer, and answering it goes back through IPC carrying the question's own
+  // identity — never a bare "approve" anyone could replay.
+  await evaluate(`window.escalate([{requestId:'req-1',sessionId:'fixture',sessionPath:'/ui/fixture',toolCallId:'call',toolName:'edit',currentMode:'workspace-write',requestedMode:'danger-full-access',justification:'needs to write outside the workspace',createdAt:Date.now()}])`)
+  await waitFor('!!document.querySelector("[data-sandbox-escalation]")','the escalation card appears')
+  const escalationText = await evaluate(`document.querySelector('[data-sandbox-escalation]').textContent`)
+  assert.match(escalationText, /Sandbox escalation/, `the card names the request: ${escalationText}`)
+  assert.match(escalationText, /needs to write outside the workspace/, 'the model\'s own reason is shown, not a paraphrase')
+  assert.match(escalationText, /Full access/, 'the card names the mode being requested')
+  const escalationButtons = await evaluate(`[...document.querySelectorAll('[data-sandbox-escalation] button')].map(node=>node.textContent.trim())`)
+  assert.ok(
+    escalationButtons.some((label) => /Allow once/i.test(label)),
+    `the card offers a one-shot approval: ${JSON.stringify(escalationButtons)}`
+  )
+  // DSH's escalation is one call at a time: there is no standing grant to click,
+  // and offering one would outlive the question the user is answering.
+  assert.equal(
+    escalationButtons.some((label) => /always/i.test(label)),
+    false,
+    `no standing grant is offered: ${JSON.stringify(escalationButtons)}`
+  )
+  const approved = await evaluate(`(()=>{const button=[...document.querySelectorAll('[data-sandbox-escalation] button')].find(node=>/Allow once/i.test(node.textContent));if(!button)return false;button.click();return true})()`)
+  assert.ok(approved, 'the one-shot approval is clickable')
+  await waitFor('window.pi.appInfo().then(info=>info.fileIo.escalationAnswers.length===1)','the answer reaches main')
+  assert.deepEqual(
+    (await evaluate('window.pi.appInfo()')).fileIo.escalationAnswers,
+    [{ requestId: 'req-1', sessionPath: '/ui/fixture', decision: 'approve' }],
+    'the answer carries the question identity and the decision'
+  )
+  await evaluate(`window.escalate([])`)
+  await waitFor('!document.querySelector("[data-sandbox-escalation]")','answering clears the card')
   if(process.env.PI_FILES_SCREENSHOT_DIR){
     await mkdir(process.env.PI_FILES_SCREENSHOT_DIR,{recursive:true})
     for(const dark of [false,true]){await evaluate(`document.documentElement.classList.toggle('dark',${dark})`);await pause(300);const shot=await send('Page.captureScreenshot',{format:'png'});await writeFile(join(process.env.PI_FILES_SCREENSHOT_DIR,`files-toolbar-${dark?'dark':'light'}.png`),Buffer.from(shot.data,'base64'))}

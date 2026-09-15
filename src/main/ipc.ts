@@ -25,6 +25,7 @@ import type {
   ResendPayload,
   SessionSnapshotDTO,
   SessionSearchRequest,
+  SandboxEscalationDecision,
   SandboxMode,
   SideChatAskPayload,
   StartupSessionMode,
@@ -91,6 +92,13 @@ export function registerIpc(pi: PiManager): () => boolean {
     pi.setSessionSandboxMode(sessionPath, mode))
   // Manual compaction, the app's equivalent of `/compact`.
   ipcMain.handle('pi:compact', (_event, sessionPath: string) => pi.compactSession(sessionPath))
+  // Answer one pending sandbox escalation. The session path travels with the id
+  // so an answer cannot settle another session's question.
+  ipcMain.handle(
+    'sandbox:respondEscalation',
+    (_event, requestId: string, sessionPath: string, decision: SandboxEscalationDecision) =>
+      pi.respondEscalation(requestId, sessionPath, decision)
+  )
   ipcMain.handle('bash:list', (_event, sessionPath: string) => pi.listBashTasks(sessionPath))
   ipcMain.handle('bash:output', (_event, request: BashTaskRequest) => pi.bashTaskOutput(request))
   ipcMain.handle('bash:stop', (_event, request: BashTaskRequest) => pi.stopBashTask(request))

@@ -52,6 +52,7 @@ import type {
   SubagentRunDTO,
   TestModelResultDTO,
   ThinkingLevel,
+  SandboxEscalationDecision,
   SandboxMode,
   TerminalCreatePayload,
   TerminalCreateResult,
@@ -99,6 +100,9 @@ const api = {
   /** Compact one session's context on demand (the CLI's `/compact`). */
   compactSession: (sessionPath: string): Promise<SessionSnapshotDTO> =>
     ipcRenderer.invoke('pi:compact', sessionPath),
+  /** Answer one pending sandbox escalation for a session. */
+  respondEscalation: (requestId: string, sessionPath: string, decision: SandboxEscalationDecision): Promise<boolean> =>
+    ipcRenderer.invoke('sandbox:respondEscalation', requestId, sessionPath, decision),
   listSubagents: (sessionPath: string): Promise<SubagentRunDTO[]> => ipcRenderer.invoke('subagents:list', sessionPath),
   /** One session's transcript without making it the active session (the rail's
    * read-only subagent view). */

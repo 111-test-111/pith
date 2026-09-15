@@ -44,6 +44,7 @@ import {
 } from '@/components/motion/animated-sidebar'
 import { ThemeButton } from './ThemeButton'
 import { useToast } from './ToastProvider'
+import { SandboxEscalationPanel } from './SandboxEscalationPanel'
 import { WindowTitlebar } from './WindowTitlebar'
 import { useOverflowFade } from '@/lib/hooks/use-overflow-fade'
 import { Button } from '@/components/motion/button'
@@ -1299,6 +1300,18 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
                 onFork={handleFork}
                 onReview={openReview}
                 onOpenSession={openAgentPane}
+              />
+            ) : null}
+
+            {/* A pending escalation blocks one tool call in the running turn, so
+                it sits where the user's next action lives: above the composer. */}
+            {shell.escalations[0] ? (
+              <SandboxEscalationPanel
+                request={shell.escalations[0]}
+                onAnswer={(decision) => {
+                  const request = shell.escalations[0]
+                  if (request) void window.pi.respondEscalation(request.requestId, request.sessionPath, decision)
+                }}
               />
             ) : null}
 

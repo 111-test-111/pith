@@ -25,7 +25,10 @@ import { createManagedBashTools, APP_BASH_TOOL_NAMES } from './bash-tools'
 import { createSandboxFileTools, APP_FILE_TOOL_NAMES } from './file-tools'
 import { isSandboxMode, sandboxModeFromBranch, SANDBOX_MODE_ENTRY_TYPE } from '../sandbox/mode'
 import { sandboxStatus } from '../sandbox/broker'
+import { resolveEscalatedMode } from '../sandbox/escalation'
+import { clearSessionEscalations, listPendingEscalations, respondToEscalation } from '../sandbox/pending'
 import type { SandboxMode } from '../sandbox/types'
+import type { SandboxEscalationDecision } from '../../shared/types'
 import { TaskNotifications } from './task-notifications'
 import { RewindClient } from '../rewind/client'
 import { checkoutRoot, CheckoutCoordinator } from '../rewind/coordinator'
@@ -353,6 +356,64 @@ export class PiManager {
       managed.sandboxMode = mode
     }
     return this.snapshotOf(managed)
+  }
+
+  /**
+   * Publish this session's pending escalation questions. Called whenever the
+   * set changes (asked, answered, cancelled), so the renderer never has to poll
+   * for a question it must answer.
+   */
+  private publishEscalations(managed: ManagedSession): void {
+    // Sequence-free metadata ping (the same rule context_usage and
+    // subagents_update follow): a pending question is state the renderer has to
+    // answer, not a step of the transcript's event log.
+    this.emit(
+      'pi:event',
+      serialize({
+        type: 'sandbox_escalation',
+        sessionId: managed.session.sessionId,
+        sessionPath: managed.path,
+        requests: listPendingEscalations(managed.path)
+      })
+    )
+  }
+
+  /**
+   * The approval channel handed to bash/edit/write. A call asks; the user's
+   * answer decides; the session's own mode never changes.
+   */
+  private escalateFor(
+    managed: ManagedSession,
+    input: {
+      toolCallId: string
+      toolName: 'bash' | 'edit' | 'write'
+      sandboxPermissions: unknown
+      justification: unknown
+      signal?: AbortSignal
+    }
+  ): Promise<SandboxMode> {
+    return resolveEscalatedMode({
+      sessionId: managed.session.sessionId,
+      sessionPath: managed.path,
+      toolCallId: input.toolCallId,
+      toolName: input.toolName,
+      currentMode: managed.sandboxMode,
+      sandboxPermissions: input.sandboxPermissions,
+      justification: input.justification,
+      ...(input.signal ? { signal: input.signal } : {}),
+      onChanged: () => this.publishEscalations(managed)
+    })
+  }
+
+  /**
+   * Answer one escalation. The session path travels with the id so an answer
+   * cannot settle a question belonging to another session.
+   */
+  respondEscalation(requestId: string, sessionPath: string, decision: SandboxEscalationDecision): boolean {
+    const accepted = respondToEscalation(requestId, sessionPath, decision)
+    const managed = this.sessions.get(sessionPath)
+    if (managed) this.publishEscalations(managed)
+    return accepted
   }
 
   /**
@@ -685,6 +746,9 @@ export class PiManager {
   }
 
   private disposeManaged(managed: ManagedSession): Promise<void> {
+    // A question whose session is going away has no answerer: settle it as
+    // cancelled so nothing is left waiting on a closed session.
+    clearSessionEscalations(managed.path)
     if (managed.disposePromise) return managed.disposePromise
     managed.disposing = true
     managed.rewind?.dispose()
@@ -1091,10 +1155,15 @@ export class PiManager {
       customTools: [...createManagedBashTools({ tasks: this.commandTasks, services,
         sessionId: sessionManager.getSessionId(), sessionPath: sessionManager.getSessionFile()!,
         maxWaitMs: () => this.bashMaxWaitMs, sandboxMode: () => managed.sandboxMode,
+        escalate: (input) => this.escalateFor(managed, input),
         canStart: () => notifications?.canStart ?? false }),
         // The file sandbox replaces the SDK's own edit/write so every mutation
         // passes the DSH path policy; reads are untouched.
-        ...createSandboxFileTools({ cwd: services.cwd, getMode: () => managed.sandboxMode }),
+        ...createSandboxFileTools({
+          cwd: services.cwd,
+          getMode: () => managed.sandboxMode,
+          escalate: (input) => this.escalateFor(managed, input)
+        }),
         createTodoTool(todos, () => notifications?.canStart ?? false),
         // Children never see the delegation tool — recursion is excluded at
         // both the ceiling (allowlist) and the customTools layer.

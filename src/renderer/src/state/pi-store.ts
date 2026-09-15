@@ -14,7 +14,7 @@ import type {
   TodoSnapshotDTO,
   UserMsg
 } from '../../../shared/types'
-import { DEFAULT_SANDBOX_MODE, type SandboxMode, type SandboxStatusDTO } from '../../../shared/types'
+import { DEFAULT_SANDBOX_MODE, type SandboxEscalationRequestDTO, type SandboxMode, type SandboxStatusDTO } from '../../../shared/types'
 
 export interface ToolRun {
   toolCallId: string
@@ -69,6 +69,8 @@ export interface PiState {
   sandbox: SandboxStatusDTO | null
   /** Compactions that settled while this session was on screen. */
   compactionNotices: CompactionNotice[]
+  /** Pending one-shot escalation questions the user has to answer. */
+  escalations: SandboxEscalationRequestDTO[]
   isStreaming: boolean
   /** True while the visible session is itself a subagent child (read-only). */
   subagentChild: boolean
@@ -109,6 +111,8 @@ export interface PiShellState {
   /** This session's DSH file-sandbox mode and what the host can enforce. */
   sandboxMode: SandboxMode
   sandbox: SandboxStatusDTO | null
+  /** Pending escalation questions for this session, oldest first. */
+  escalations: SandboxEscalationRequestDTO[]
   isStreaming: boolean
   contextUsage: ContextUsageDTO | null
   /** Pending steering/follow-up messages (SDK queue state) for the composer. */
@@ -198,6 +202,7 @@ const initialState: PiState = {
   sandboxMode: DEFAULT_SANDBOX_MODE,
   sandbox: null,
   compactionNotices: [],
+  escalations: [],
   isStreaming: false,
   contextUsage: null,
   eventSequence: 0,
@@ -209,8 +214,7 @@ const initialState: PiState = {
   error: null
 }
 
-function shellOf(state: PiState, availableThinkingLevels: ThinkingLevel[]): PiShellState {
-  return {
+function shellOf(state: PiState, availableThinkingLevels: ThinkingLevel[]): PiShellState {  return {
     initializing: state.initializing,
     ready: state.ready,
     cwd: state.cwd,
@@ -221,6 +225,7 @@ function shellOf(state: PiState, availableThinkingLevels: ThinkingLevel[]): PiSh
     availableThinkingLevels,
     sandboxMode: state.sandboxMode,
     sandbox: state.sandbox,
+    escalations: state.escalations,
     isStreaming: state.isStreaming,
     contextUsage: state.contextUsage,
     queue: state.queue,
@@ -228,6 +233,14 @@ function shellOf(state: PiState, availableThinkingLevels: ThinkingLevel[]): PiSh
     subagentParentPath: state.subagentParentPath,
     subagents: state.subagents
   }
+}
+
+/** Shallow compare of two shell slices; `shellOf` replaces changed values. */
+function sameShell(a: PiShellState, b: PiShellState): boolean {
+  for (const key of Object.keys(a) as (keyof PiShellState)[]) {
+    if (a[key] !== b[key]) return false
+  }
+  return true
 }
 
 type Listener = () => void
@@ -280,23 +293,11 @@ export class PiStore {
     const prev = this.state
     this.state = { ...prev, ...patch }
     if (this.state.sessionPath) this.sessionStates.set(this.state.sessionPath, this.state)
-    if (
-      prev.ready !== this.state.ready ||
-      prev.initializing !== this.state.initializing ||
-      prev.cwd !== this.state.cwd ||
-      prev.projectless !== this.state.projectless ||
-      prev.sessionPath !== this.state.sessionPath ||
-      prev.model !== this.state.model ||
-      prev.thinkingLevel !== this.state.thinkingLevel ||
-      prev.isStreaming !== this.state.isStreaming ||
-      prev.subagentChild !== this.state.subagentChild ||
-      prev.subagentParentPath !== this.state.subagentParentPath ||
-      prev.subagents !== this.state.subagents ||
-      prev.contextUsage !== this.state.contextUsage ||
-      prev.queue !== this.state.queue
-    ) {
-      this.shellState = shellOf(this.state, this.availableThinkingLevels)
-    }
+    // Compare the slice itself rather than a hand-maintained field list: a new
+    // shell field must not be able to silently stop reaching the UI (a pending
+    // escalation that never arrives is a question nobody can answer).
+    const nextShell = shellOf(this.state, this.availableThinkingLevels)
+    if (!sameShell(nextShell, this.shellState)) this.shellState = nextShell
     for (const listener of this.listeners) listener()
   }
 
@@ -337,6 +338,8 @@ export class PiStore {
       // Switching sessions drops the previous session's compaction feedback
       // along with its transcript.
       compactionNotices: unchanged ? (cached?.compactionNotices ?? []) : [],
+      // An unanswered question belongs to the session it was asked in.
+      escalations: unchanged ? (cached?.escalations ?? []) : [],
       cwd: snapshot.cwd,
       projectless: snapshot.projectless,
       sessionId: snapshot.sessionId,
@@ -695,6 +698,18 @@ export class PiStore {
       case 'context_usage':
         this.setContextUsage(event.contextUsage ?? null)
         break
+
+      // Main publishes the whole pending set for one session whenever it
+      // changes; only the visible session's questions belong in this store.
+      case 'sandbox_escalation': {
+        if (event.sessionPath && event.sessionPath !== this.state.sessionPath) break
+        this.set({
+          escalations: Array.isArray(event.requests)
+            ? (event.requests as SandboxEscalationRequestDTO[])
+            : []
+        })
+        break
+      }
 
       case 'compaction_end': {
         // Main ships the rewritten (compaction-aware) message list with the
