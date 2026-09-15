@@ -102,11 +102,12 @@ export function HeatCalendarGrid({ children, className }: { children?: ReactNode
                 onKeyDown={(e) => {
                   if (e.key === "Escape") clear();
                 }}
-                className="absolute -inset-0.5 block rounded-[5px] outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                // local patch (pi-app): theme detail radii instead of literal px.
+                className="absolute -inset-0.5 block rounded-detail outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 whileTap={reduce ? undefined : { scale: 0.9, transition: SPRING_PRESS }}
               >
                 <motion.span
-                  className="pointer-events-none absolute inset-0.5 block rounded-[4px]"
+                  className="pointer-events-none absolute inset-0.5 block rounded-detail"
                   style={{
                     background: fill(b),
                     boxShadow: isEnd ? "0 0 0 2px var(--background), 0 0 0 3.5px var(--foreground)" : "none",

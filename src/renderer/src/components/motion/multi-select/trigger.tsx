@@ -90,30 +90,26 @@ export function MultiSelectValue({
             <motion.span
               layout={context.reduce ? false : "position"}
               key={`multi-select-value-${value}`}
+              // local patch (pi-app): the chip is a continuous surface, so it
+              // animates opacity + transform only. The vendored circular clip
+              // reveal cut the squircle off and is banned by the corner policy;
+              // the chip's own `rounded-lg` carries the corner.
               initial={{
                 opacity: 0,
-                clipPath: "inset(0 0 0 0% round 0.5rem)",
                 transform: context.reduce
                   ? "translateY(0px) scale(1)"
                   : "translateY(6px) scale(0.92)",
               }}
               animate={{
                 opacity: 1,
-                clipPath: "inset(0 0 0 0% round 0.5rem)",
                 transform: "translateY(0px) scale(1)",
               }}
               exit={{
-                opacity: 1,
-                clipPath: context.reduce
-                  ? "inset(0 0 0 0% round 0.5rem)"
-                  : "inset(0 0 0 100% round 0.5rem)",
-                transform: "translateY(0px) scale(1)",
-                transition: {
-                  clipPath: context.reduce
-                    ? { duration: 0 }
-                    : { duration: 0.16, ease: EASE_OUT },
-                  transform: { duration: 0 },
-                },
+                opacity: 0,
+                transform: context.reduce
+                  ? "translateY(0px) scale(1)"
+                  : "translateY(-4px) scale(0.96)",
+                transition: { duration: 0.14, ease: EASE_OUT },
               }}
               transition={
                 context.reduce

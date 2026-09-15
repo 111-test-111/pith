@@ -26,7 +26,8 @@ export function HeatCalendarLegend({ className }: { className?: string }) {
             onFocus={() => setStep(i)}
             onBlur={() => setStep(null)}
             onClick={() => setStep(step === i ? null : i)}
-            className="size-3 rounded-[3px] transition-transform duration-150"
+            // local patch (pi-app): the theme's detail radius instead of a literal px.
+            className="size-3 rounded-detail transition-transform duration-150"
             style={{ background: fill(i), transform: !reduce && step === i ? "scale(1.25)" : undefined }}
           />
         ))}

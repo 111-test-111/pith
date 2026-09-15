@@ -89,18 +89,6 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
 
-function collapsedClip(
-  origin: MenuPoint,
-  size: { width: number; height: number },
-) {
-  const half = 8;
-  const top = clamp(origin.y - half, 0, size.height);
-  const right = clamp(size.width - origin.x - half, 0, size.width);
-  const bottom = clamp(size.height - origin.y - half, 0, size.height);
-  const left = clamp(origin.x - half, 0, size.width);
-  return `inset(${top}px ${right}px ${bottom}px ${left}px round 10px)`;
-}
-
 export interface ContextMenuProps {
   children: ReactNode;
   open?: boolean;
@@ -345,7 +333,6 @@ export function ContextMenuContent({
   const [mounted, setMounted] = useState(false);
   const [position, setPosition] = useState<MenuPoint>(context.point);
   const [origin, setOrigin] = useState<MenuPoint>({ x: 0, y: 0 });
-  const [size, setSize] = useState({ width: 0, height: 0 });
   const [morphReady, setMorphReady] = useState(false);
   const typeahead = useRef("");
   const typeaheadTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -378,7 +365,6 @@ export function ContextMenuContent({
     );
 
     setPosition({ x: left, y: top });
-    setSize({ width: rect.width, height: rect.height });
     setOrigin({
       x: clamp(context.point.x - left, 12, Math.max(12, rect.width - 12)),
       y: clamp(context.point.y - top, 12, Math.max(12, rect.height - 12)),
@@ -480,8 +466,6 @@ export function ContextMenuContent({
   if (!mounted) return null;
 
   const visualOpen = context.open && morphReady;
-  const clipHidden = collapsedClip(origin, size);
-  const clipShown = "inset(0px 0px 0px 0px round 12px)";
 
   return createPortal(
     <div
@@ -502,28 +486,20 @@ export function ContextMenuContent({
         data-morph-ready={morphReady ? "true" : "false"}
         tabIndex={-1}
         initial={false}
+        // local patch (pi-app): a scale/opacity reveal anchored at the
+        // invocation point, not a circular clip mask — the mask cut the menu's
+        // squircle off, which the corner policy forbids.
         animate={{
           opacity: visualOpen ? 1 : 0,
-          clipPath:
-            context.reduce || context.modality === "keyboard" || visualOpen
-              ? clipShown
-              : clipHidden,
+          scale: visualOpen ? 1 : 0.94,
         }}
+        style={{ transformOrigin: `${origin.x}px ${origin.y}px` }}
         transition={
           context.modality === "keyboard"
             ? { duration: 0 }
             : context.reduce
               ? { duration: 0.1, ease: EASE_OUT }
-              : {
-                  clipPath: {
-                    duration: MORPH_DURATION,
-                    ease: EASE_OUT,
-                  },
-                  opacity: {
-                    duration: MORPH_DURATION,
-                    ease: EASE_OUT,
-                  },
-                }
+              : { duration: MORPH_DURATION, ease: EASE_OUT }
         }
         onKeyDown={onKeyDown}
         onContextMenu={(event) => event.preventDefault()}

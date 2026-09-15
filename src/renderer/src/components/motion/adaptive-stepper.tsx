@@ -38,6 +38,12 @@ const STEPPER_LIQUID_TRANSITION = {
   ease: [0.22, 1.3, 0.71, 1],
 } as const satisfies LiquidTransition;
 
+/** The stepper's circular geometry: every item is this tall, and its corner is
+ * a true half-height circle (`rounded-full`'s shape, expressed as the liquid
+ * blob's numeric radius). */
+const STEPPER_ITEM_SIZE = 48;
+const STEPPER_ITEM_RADIUS = STEPPER_ITEM_SIZE / 2;
+
 type StepDirection = -1 | 0 | 1;
 
 type AdaptiveStepperContextValue = {
@@ -289,9 +295,9 @@ function StepperAction({
     <LiquidItem
       x={x}
       y={0}
-      width={48}
-      height={48}
-      radius={24}
+      width={STEPPER_ITEM_SIZE}
+      height={STEPPER_ITEM_SIZE}
+      radius={STEPPER_ITEM_RADIUS}
       transition={STEPPER_LIQUID_TRANSITION}
     >
       <motion.button
@@ -382,8 +388,8 @@ export function AdaptiveStepperValue({
       x={geometry.x}
       y={0}
       width={geometry.width}
-      height={48}
-      radius={24}
+      height={STEPPER_ITEM_SIZE}
+      radius={STEPPER_ITEM_RADIUS}
       transition={STEPPER_LIQUID_TRANSITION}
     >
       <motion.output
