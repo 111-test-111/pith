@@ -153,6 +153,57 @@ app.whenReady().then(()=>{
   await input('\x03')
   console.log('PASS: multiple terminals, home fallback, Unicode, background output and collapse persistence')
 
+  // Right-click menu: one surface menu, resolved through the active emulator,
+  // with paste returning through the same `terminal:*` IPC path.
+  const openMenuAt=async(x,y)=>{
+    await send('Input.dispatchMouseEvent',{type:'mousePressed',x,y,button:'right',clickCount:1})
+    await send('Input.dispatchMouseEvent',{type:'mouseReleased',x,y,button:'right',clickCount:1})
+    await waitFor(`Array.from(document.querySelectorAll('[data-context-menu-portal]')).some(p=>p.getAttribute('aria-hidden')==='false')`,'terminal context menu')
+  }
+  const openMenu=async()=>{
+    const rect=await evaluate(`(()=>{const r=document.querySelector('[data-terminal-surface]').getBoundingClientRect();return {x:Math.round(r.x+30),y:Math.round(r.y+30)}})()`)
+    await openMenuAt(rect.x,rect.y)
+  }
+  // "The menu" is the portal that is not hidden — the app keeps every portal in
+  // the document.
+  const menuItems=()=>evaluate(`Array.from(document.querySelectorAll('[data-context-menu-portal]')).filter(p=>p.getAttribute('aria-hidden')==='false').flatMap(p=>Array.from(p.querySelectorAll('[role=menuitem]'))).map(i=>({label:i.textContent.trim(),disabled:i.disabled}))`)
+  const clickMenuItem=async label=>{
+    await evaluate(`(()=>{const portal=Array.from(document.querySelectorAll('[data-context-menu-portal]')).find(p=>p.getAttribute('aria-hidden')==='false');const item=Array.from(portal.querySelectorAll('[role=menuitem]')).find(i=>i.textContent.trim()===${JSON.stringify(label)});item.click()})()`)
+    await pause(120)
+  }
+  const menuClosed=()=>evaluate(`Array.from(document.querySelectorAll('[data-context-menu-portal]')).every(p=>p.getAttribute('aria-hidden')==='true')`)
+
+  await input('printf "__MENU_SEED_A__\\n"\r')
+  await waitFor('buffer().includes("__MENU_SEED_A__")','menu seed')
+  await evaluate('terminal().selectAll()')
+  await openMenu()
+  assert.deepEqual(await menuItems(),[
+    {label:'Copy',disabled:false},{label:'Paste',disabled:false},{label:'Clear',disabled:false},{label:'Select all',disabled:false}
+  ],'terminal menu offers copy/paste/clear/select-all')
+  // Captured while the menu is open: the platform's own right-click handling
+  // (macOS word select) has already run by now.
+  const selected=await evaluate('terminal().getSelection()')
+  assert.ok(selected.includes('__MENU_SEED_A__'),'a selection survives the right click')
+  await clickMenuItem('Copy')
+  assert.equal(await menuClosed(),true,'choosing Copy closes the menu')
+  assert.equal(await evaluate('navigator.clipboard.readText()'),selected,'Copy writes the emulator selection')
+  assert.equal(await evaluate(`document.querySelector('[data-terminal-surface]').contains(document.activeElement)`),true,'the emulator takes focus back after the menu closes')
+
+  await evaluate(`navigator.clipboard.writeText('__PASTED__')`)
+  await openMenu();await clickMenuItem('Paste')
+  await waitFor('buffer().includes("__PASTED__")','paste reaches the PTY')
+  await input('\x03')
+  await input('printf "__CLEAR_SEED__\\n"\r')
+  await waitFor('buffer().includes("__CLEAR_SEED__")','clear seed')
+  await openMenu();await clickMenuItem('Clear')
+  assert.equal(await evaluate('buffer().includes("__CLEAR_SEED__")'),false,'Clear drops the viewport and scrollback')
+  await input('printf "__SELECT_ALL__\\n"\r')
+  await waitFor('buffer().includes("__SELECT_ALL__")','select-all seed')
+  await openMenu();await clickMenuItem('Select all')
+  assert.equal(await evaluate('terminal().getSelection().includes("__SELECT_ALL__")'),true,'Select all selects the buffer')
+  await evaluate('terminal().clearSelection()')
+  console.log('PASS: terminal context menu — copy, paste over terminal:* IPC, clear, select all, focus return')
+
   const oldCols=await evaluate('terminal().cols')
   const originalFont=await evaluate('terminal().options.fontFamily')
   await evaluate(`document.documentElement.style.setProperty('--app-font-mono','"Courier New", monospace')`)

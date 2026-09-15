@@ -1,7 +1,8 @@
-import { useEffect, useRef, useSyncExternalStore } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { Plus, X } from '@/lib/icons'
 import { AnimatedBadge } from '@/components/motion/animated-badge'
 import { Button } from '@/components/motion/button'
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from '@/components/motion/context-menu'
 import { Tabs, TabsList, TabsTrigger } from '@/components/motion/tabs'
 import { Tooltip } from '@/components/motion/tooltip'
 import { LabelTooltip } from './LabelTooltip'
@@ -18,6 +19,13 @@ export function TerminalPane({ terminals, onNew, onEmpty }: {
   const { tabs, active } = useSyncExternalStore(terminals.subscribe, terminals.getSnapshot)
   const host = useRef<HTMLDivElement>(null)
   const strip = useRef<HTMLDivElement>(null)
+  // One menu for the pane: the target is the active emulator, resolved through
+  // the store, so no per-row wrapper touches the xterm host element.
+  const [menuOpen, setMenuOpen] = useState(false)
+  const refocus = useRef(false)
+  // Read the live selection while open (xterm's macOS right-click selects the
+  // word before React dispatches), so Copy reflects what is actually selected.
+  const canCopy = menuOpen && !!active && terminals.hasSelection(active)
   const tab = tabs.find((item) => item.id === active)
   const showScreen = tab?.status === 'starting' || tab?.status === 'running'
   const promptLabel = t('terminal.input')
@@ -29,6 +37,14 @@ export function TerminalPane({ terminals, onNew, onEmpty }: {
   useEffect(() => {
     strip.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
   }, [active])
+  // The menu takes focus to its first item; hand it back to the active emulator
+  // on close so the keyboard keeps working without a click.
+  useEffect(() => {
+    if (menuOpen || !refocus.current) return
+    refocus.current = false
+    const frame = requestAnimationFrame(() => { if (active) terminals.focus(active) })
+    return () => cancelAnimationFrame(frame)
+  }, [menuOpen, active, terminals])
 
   const close = (id: string): void => {
     terminals.close(id)
@@ -103,7 +119,27 @@ export function TerminalPane({ terminals, onNew, onEmpty }: {
         </div>
       ) : null}
       {showScreen ? <div className="min-h-0 min-w-0 flex-1 overflow-hidden p-2" role="tabpanel" aria-label={t('sidebar.terminal')}>
-        <div ref={host} className="h-full w-full" data-terminal-surface />
+        <ContextMenu open={menuOpen} onOpenChange={next => { setMenuOpen(next); if (!next) refocus.current = true }}>
+          <ContextMenuTrigger>
+            <div ref={host} className="h-full w-full" data-terminal-surface />
+          </ContextMenuTrigger>
+          <ContextMenuContent ariaLabel={t('terminal.menu')}>
+            <ContextMenuItem disabled={!canCopy} onSelect={() => {
+              if (active) void navigator.clipboard?.writeText(terminals.selection(active)).catch(() => {})
+            }}>{t('terminal.copy')}</ContextMenuItem>
+            <ContextMenuItem onSelect={() => {
+              if (!active) return
+              const id = active
+              void navigator.clipboard?.readText().then(text => { if (text) terminals.paste(id, text) }).catch(() => {})
+            }}>{t('terminal.paste')}</ContextMenuItem>
+            <ContextMenuSeparator />
+            <ContextMenuItem onSelect={() => { if (active) terminals.clear(active) }}>{t('terminal.clear')}</ContextMenuItem>
+            <ContextMenuItem onSelect={() => {
+              if (!active) return
+              terminals.selectAll(active)
+            }}>{t('terminal.selectAll')}</ContextMenuItem>
+          </ContextMenuContent>
+        </ContextMenu>
       </div> : null}
     </div>
   )

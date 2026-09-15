@@ -92,6 +92,15 @@ export class TerminalStore {
     })
   }
 
+  /** Context-menu plumbing for the active pane. Everything routes through the
+   * emulator (and therefore `terminal:*` IPC for paste), never React state. */
+  hasSelection(id: string): boolean { return Boolean(this.sessions.get(id)?.runtime?.terminal.hasSelection()) }
+  selection(id: string): string { return this.sessions.get(id)?.runtime?.terminal.getSelection() ?? '' }
+  paste(id: string, text: string): void { this.sessions.get(id)?.runtime?.terminal.paste(text) }
+  clear(id: string): void { this.sessions.get(id)?.runtime?.terminal.clear() }
+  selectAll(id: string): void { this.sessions.get(id)?.runtime?.terminal.selectAll() }
+  focus(id: string): void { this.sessions.get(id)?.runtime?.focus() }
+
   attach(id: string, host: HTMLElement, promptLabel: string, tooMuchOutput: string): () => void {
     const session = this.sessions.get(id)
     if (!session) return () => {}

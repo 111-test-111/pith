@@ -369,6 +369,11 @@ const en = {
   'terminal.exited': 'Process exited with code {code}',
   'terminal.directoryError': 'The working directory is unavailable. Choose another session and open a new terminal.',
   'terminal.startError': 'Could not start the terminal. Open a new terminal to retry.',
+  'terminal.menu': 'Terminal menu',
+  'terminal.copy': 'Copy',
+  'terminal.paste': 'Paste',
+  'terminal.clear': 'Clear',
+  'terminal.selectAll': 'Select all',
 
   'review.emptyTitle': 'Nothing to review yet',
   'review.emptyBody':
