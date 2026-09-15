@@ -4,6 +4,7 @@ import { Button } from '@/components/motion/button'
 import { ThemeToggle } from '@/components/motion/theme-toggle'
 import { useI18n } from '@/i18n'
 import { PithIcon } from './PithIcon'
+import { ShaderBackdrop } from './ShaderBackdrop'
 
 interface WelcomeProps {
   onPickFolder: () => Promise<void>
@@ -14,7 +15,8 @@ export function Welcome({ onPickFolder }: WelcomeProps) {
   const [opening, setOpening] = useState(false)
 
   return (
-    <div className="relative grid h-full place-items-center bg-background px-6">
+    <div className="relative isolate grid h-full place-items-center bg-background px-6">
+      <ShaderBackdrop />
       <div className="absolute right-4 top-4">
         <ThemeToggle />
       </div>

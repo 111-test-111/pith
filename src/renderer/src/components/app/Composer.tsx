@@ -36,6 +36,7 @@ import { LabelTooltip } from './LabelTooltip'
 import { useI18n } from '@/i18n'
 import { cn } from '@/lib/utils'
 import { NewSessionHeader, NewSessionSuggestions, type NewSessionContext } from './NewSession'
+import { ShaderBackdrop } from './ShaderBackdrop'
 
 export interface ImageAttachment {
   id: string
@@ -463,7 +464,8 @@ export function Composer({
   // ---- queued messages ----------------------------------------------------
 
   return (
-    <div className={cn('shrink-0 bg-background px-3 pb-3', start && '@container flex min-h-0 flex-1 flex-col overflow-y-auto px-6')}>
+    <div className={cn('relative isolate shrink-0 bg-background px-3 pb-3', start && '@container flex min-h-0 flex-1 flex-col overflow-y-auto px-6')}>
+      {start ? <ShaderBackdrop /> : null}
       {/* Keep the composer in one tree position when the first turn begins;
           moving it between landing/transcript branches discards draft state. */}
       <div className={cn('mx-auto w-full max-w-3xl', start && 'my-auto max-w-2xl py-8')}>

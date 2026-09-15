@@ -195,6 +195,24 @@ app.whenReady().then(()=>{
   assert.equal(await evaluate(`getComputedStyle(${card}.parentElement.querySelector('div[aria-hidden]')).backgroundImage.includes('radial-gradient')`), true, 'the cursor-tracked glare follows the pointer')
   await screenshot('starter-cards-hover')
 
+  // The landing wears the shader backdrop: present, behind the content,
+  // pointer-transparent, and actually animating. A clip over an empty corner
+  // isolates the shader from the (static) landing content.
+  assert.equal(await evaluate(`Boolean(document.querySelector('[data-shader-backdrop][aria-hidden="true"]'))`), true, 'the landing shader backdrop is mounted and hidden from assistive tech')
+  assert.equal(await evaluate(`document.querySelectorAll('[data-shader-backdrop] canvas').length > 0`), true, 'the shader canvas renders')
+  const shaderShot = async () => {
+    const clip = await evaluate(`(()=>{const b=document.querySelector('[data-shader-backdrop]').getBoundingClientRect();return{x:Math.round(b.x+b.width*0.08),y:Math.round(b.y+12),width:280,height:180,scale:1}})()`)
+    return (await send('Page.captureScreenshot', { format: 'png', clip })).data
+  }
+  const shaderHit = await evaluate(`(()=>{const b=document.querySelector('[data-shader-backdrop]').getBoundingClientRect();const el=document.elementFromPoint(b.x+b.width/2,b.y+b.height/2);return el?.closest('[data-shader-backdrop]')?'backdrop':'content'})()`)
+  assert.equal(shaderHit, 'content', 'the backdrop is pointer-transparent and sits behind the landing content')
+  const shaderInfo = await evaluate(`(()=>{const b=document.querySelector('[data-shader-backdrop]');const c=b.querySelector('canvas');return{colors:b.getAttribute('data-shader-colors'),canvas:c?[c.width,c.height]:null}})()`)
+  assert.equal(new Set(shaderInfo.colors.split(' ')).size >= 2, true, 'the palette resolves to distinct theme colors: ' + shaderInfo.colors)
+  assert.ok(shaderInfo.canvas && shaderInfo.canvas[0] > 0, 'the shader canvas is sized')
+  const shaderFrameA = await shaderShot()
+  await pause(700)
+  assert.notEqual(await shaderShot(), shaderFrameA, 'the shader animates when motion is allowed')
+
   // Reduced motion (and touch) keep the surface still and drop the glare.
   await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: cardPoint.x, y: cardPoint.y - 240 })
   await pause(900)
@@ -209,6 +227,9 @@ app.whenReady().then(()=>{
   await pause(600)
   assert.ok(await rotationOf() < 0.001, 'reduced motion keeps the card still')
   assert.equal(await evaluate(`Boolean(${card}.parentElement.querySelector('div[aria-hidden]'))`), false, 'reduced motion drops the glare')
+  const shaderFrameRestA = await shaderShot()
+  await pause(700)
+  assert.equal(await shaderShot(), shaderFrameRestA, 'reduced motion freezes the shader')
   await send('Emulation.setEmulatedMedia', { features: [] })
   await send('Page.reload'); await pause(500); await ready()
   assert.equal(await evaluate(`matchMedia('(prefers-reduced-motion: reduce)').matches`), false, 'the emulated preference is cleared')
