@@ -131,9 +131,32 @@ export function extractTurnWrittenFiles(
   const byPath = new Map<string, WrittenFile>()
   for (const message of assistants) {
     for (const part of message.content) {
-      if (part.type !== 'toolCall' || !WRITE_TOOL_NAMES.has(part.name)) continue
+      if (part.type !== 'toolCall') continue
       const result = toolResults.get(part.id)
       if (!result || result.isError) continue
+      // A subagent's own writes ride its `agent` tool result: the runtime
+      // extracts them from the child session's successful edit/write calls
+      // (bounded patch budget), so the parent turn's changed-files list folds
+      // them in like direct calls. Foreground results and the final roster
+      // entry carry the same payload.
+      if (part.name === 'agent') {
+        const written = (result.details as { subagent?: { writtenFiles?: Array<{ filePath: string; patch?: string; added?: number; removed?: number }> } } | undefined)?.subagent?.writtenFiles
+        if (Array.isArray(written)) {
+          for (const file of written) {
+            if (typeof file?.filePath !== 'string' || !file.filePath) continue
+            mergeChange(
+              byPath,
+              file.filePath,
+              typeof file.patch === 'string' && file.patch.length > 0
+                ? { patch: file.patch, added: file.added ?? countDiffChanges(file.patch).added, removed: file.removed ?? countDiffChanges(file.patch).removed }
+                : null,
+              cwd
+            )
+          }
+        }
+        continue
+      }
+      if (!WRITE_TOOL_NAMES.has(part.name)) continue
       const rawPath = part.arguments?.path
       if (typeof rawPath !== 'string' || rawPath.length === 0) continue
       const change = patchOfResult(result, part, rawPath)

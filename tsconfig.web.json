@@ -13,6 +13,7 @@
     "resolveJsonModule": true,
     "useDefineForClassFields": true,
     "noEmit": true,
+    "allowImportingTsExtensions": true,
     "paths": {
       "@/*": ["./src/renderer/src/*"]
     }

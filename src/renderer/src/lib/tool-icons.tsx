@@ -1,4 +1,5 @@
 import {
+  Bot,
   CloudDownload,
   FilePen,
   FilePlus2,
@@ -37,6 +38,7 @@ const TOOL_ICONS: Record<string, IconComponent> = {
   bash: Terminal,
   bash_task: Terminal,
   todo_write: ListTodo,
+  agent: Bot,
   powershell: Terminal,
   read: FileText,
   edit: FilePen,

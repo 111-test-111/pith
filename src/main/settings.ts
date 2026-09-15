@@ -41,6 +41,11 @@ export interface AppSettings {
   /** Last window size/position plus its maximized/full-screen state; null until
    * the first window has ever been sized. */
   windowBounds: WindowBounds | null
+  /** Subagent delegation enabled; the `agent` tool is registered at session
+   * build and dispatch is re-checked live. */
+  subagentsEnabled: boolean
+  /** Max simultaneous subagent runs per parent session (starting + active). */
+  subagentMaxConcurrent: number
 }
 
 const defaults: AppSettings = {
@@ -52,7 +57,9 @@ const defaults: AppSettings = {
   startup: 'resume',
   startupSession: null,
   disabledExtensions: [],
-  windowBounds: null
+  windowBounds: null,
+  subagentsEnabled: true,
+  subagentMaxConcurrent: 4
 }
 
 function settingsPath(): string {
@@ -69,7 +76,9 @@ export function loadSettings(): AppSettings {
     // settings written before this preference existed.
     const startup: StartupSessionMode = raw.startup === 'new' ? 'new' : 'resume'
     const startupSession = typeof raw.startupSession === 'string' ? raw.startupSession : null
-    return { ...defaults, ...raw, bashMaxWaitMs, startup, startupSession }
+    const concurrent = raw.subagentMaxConcurrent
+    const subagentMaxConcurrent = Number.isInteger(concurrent) && concurrent >= 1 && concurrent <= 16 ? concurrent : 4
+    return { ...defaults, ...raw, bashMaxWaitMs, startup, startupSession, subagentMaxConcurrent }
   } catch {
     return { ...defaults }
   }

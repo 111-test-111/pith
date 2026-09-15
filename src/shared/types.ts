@@ -603,8 +603,69 @@ export interface SessionSnapshotDTO {
   isStreaming: boolean
   /** Live context usage for the composer ring; null before a model resolves. */
   contextUsage?: ContextUsageDTO | null
+  /** Subagent runs belonging to this session (roster cards). */
+  subagents?: SubagentRunDTO[]
   /** Last event incorporated into this snapshot. */
   eventSequence?: number
+}
+
+// ---- subagents (delegated child sessions) ----
+
+/** A file a subagent run wrote, extracted from the child session's successful
+ * edit/write results. `patch` is a real unified diff (synthesized for `write`),
+ * bounded in total size by the runtime. */
+export interface SubagentWrittenFileDTO {
+  /** Absolute path resolved against the shared session cwd. */
+  filePath: string
+  /** Path to render: relative to the cwd when it lies inside it. */
+  displayPath: string
+  added?: number
+  removed?: number
+  patch?: string
+}
+
+export type SubagentRunStatus = 'running' | 'completed' | 'failed' | 'aborted' | 'interrupted'
+
+/** One subagent run as the renderer sees it (roster card + tool-row details). */
+export interface SubagentRunDTO {
+  runId: string
+  /** Child session identity — its file is a real, openable pi session. */
+  sessionId: string
+  sessionPath: string
+  /** The parent's `agent` tool call this run belongs to. */
+  parentToolCallId: string
+  profile: string
+  description: string
+  task: string
+  runInBackground: boolean
+  status: SubagentRunStatus
+  createdAt: string
+  completedAt?: string
+  result?: string
+  error?: string
+  /** `provider/modelId`, resolved at dispatch. */
+  model?: string
+  /** Cumulative usage of the child session's assistant messages (progress). */
+  tokens?: number
+  toolUses?: number
+  writtenFiles?: SubagentWrittenFileDTO[]
+  /**
+   * Per-parent monotonic revision. Roster updates with a seq lower than the
+   * entry they target are stale (a late event from an aborted run) and must
+   * be dropped; 0 marks a record reconstructed from disk.
+   */
+  seq: number
+}
+
+/** Renderer-initiated action on a parent's subagent run. */
+export interface SubagentActionPayload {
+  /** Parent session file whose roster owns the run. */
+  sessionPath: string
+  /** Child session id the action targets. */
+  sessionId: string
+  action: 'steer' | 'abort' | 'resume'
+  /** Steer/resume message; required for steer. */
+  message?: string
 }
 
 export type TodoStatus = 'pending' | 'in_progress' | 'completed' | 'cancelled'
@@ -670,6 +731,8 @@ export interface AppInfoDTO {
   contextFiles: boolean
   /** What the next launch opens. */
   startup: StartupSessionMode
+  /** Whether subagent delegation is enabled. */
+  subagentsEnabled: boolean
   version: string
 }
 

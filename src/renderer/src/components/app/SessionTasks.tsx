@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useId, useRef, useState } from 'react'
-import { ChevronDown, ListTodo, Terminal, X } from '@/lib/icons'
+import { Bot, ChevronDown, ListTodo, Terminal, X } from '@/lib/icons'
 import { AgentDisclosure } from '@/components/agents/agent-disclosure'
 import { TodoList } from '@/components/agents/todo-list'
 import { Button } from '@/components/motion/button'
@@ -9,12 +9,22 @@ import { bashTaskLive, useBashTasks } from '@/lib/bash-tasks'
 import { useDismiss } from '@/lib/hooks/use-dismiss'
 import { cn } from '@/lib/utils'
 import { BashTaskList } from './BashTaskView'
-import type { TodoSnapshotDTO } from '../../../../shared/types'
+import { SubagentList } from './SubagentView'
+import type { SubagentRunDTO, TodoSnapshotDTO } from '../../../../shared/types'
 
-type Panel = 'todo' | 'bash'
+type Panel = 'todo' | 'bash' | 'agents'
 
-/** One stable overlay owner for both task views. Switching tabs never moves the transcript. */
-export const SessionTasks = memo(function SessionTasks({ todos, busy }: { todos: TodoSnapshotDTO | null; busy: boolean }) {
+/** One stable overlay owner for all three task views. Switching tabs never moves the transcript. */
+export const SessionTasks = memo(function SessionTasks({ todos, subagents, busy, sessionPath, onOpenSession }: {
+  todos: TodoSnapshotDTO | null
+  /** Roster of this session's subagent runs (store-fed). */
+  subagents: readonly SubagentRunDTO[]
+  busy: boolean
+  /** This session's file — the parent path roster actions address. */
+  sessionPath: string | null
+  /** Open a subagent child session as the visible chat. */
+  onOpenSession?: (path: string) => void
+}) {
   const { t } = useI18n()
   const tasks = useBashTasks().filter((task) => task.background)
   const [selected, setSelected] = useState<Panel | null>(null)
@@ -29,7 +39,8 @@ export const SessionTasks = memo(function SessionTasks({ todos, busy }: { todos:
   const cancelled = items.filter((item) => item.status === 'cancelled').length
   const unfinished = items.some((item) => item.status === 'pending' || item.status === 'in_progress')
   const running = tasks.filter(bashTaskLive).length
-  const open = selected !== null && (selected === 'todo' ? items.length > 0 : tasks.length > 0)
+  const agentsRunning = subagents.filter((run) => run.status === 'running').length
+  const open = selected !== null && (selected === 'todo' ? items.length > 0 : selected === 'bash' ? tasks.length > 0 : subagents.length > 0)
   const close = useCallback(() => setSelected(null), [])
   useDismiss(open, close, root, { escape: false })
   useEffect(() => { if (selected && !open) setSelected(null) }, [selected, open])
@@ -44,21 +55,27 @@ export const SessionTasks = memo(function SessionTasks({ todos, busy }: { todos:
     window.addEventListener('keydown', keydown, true)
     return () => window.removeEventListener('keydown', keydown, true)
   }, [open, selected, close])
-  if (!items.length && !tasks.length) return null
-  const title = selected === 'todo' ? t('todo.title') : t('taskPanel.background')
+  if (!items.length && !tasks.length && !subagents.length) return null
+  const title = selected === 'todo' ? t('todo.title') : selected === 'bash' ? t('taskPanel.background') : t('taskPanel.agents')
   const summary = selected === 'todo'
     ? t('todo.progress', { done, total: items.length })
-    : t('bashTask.summary', { count: tasks.length, running })
+    : selected === 'bash'
+      ? t('bashTask.summary', { count: tasks.length, running })
+      : t('subagent.summary', { count: subagents.length, running: agentsRunning })
 
   return (
     <div ref={root} className="relative z-20 shrink-0" data-session-tasks>
       <div role="group" aria-label={t('taskPanel.label')} className="flex flex-wrap items-center gap-1 border-b border-border px-4 py-1.5">
-        {(['todo', 'bash'] as const).map((panel) => {
-          if (panel === 'todo' ? !items.length : !tasks.length) return null
+        {(['todo', 'bash', 'agents'] as const).map((panel) => {
+          if (panel === 'todo' ? !items.length : panel === 'bash' ? !tasks.length : !subagents.length) return null
           const active = open && selected === panel
-          const Icon = panel === 'todo' ? ListTodo : Terminal
-          const label = panel === 'todo' ? t('todo.title') : t('taskPanel.background')
-          const count = panel === 'todo' ? `${done}/${items.length}` : String(running || tasks.length)
+          const Icon = panel === 'todo' ? ListTodo : panel === 'bash' ? Terminal : Bot
+          const label = panel === 'todo' ? t('todo.title') : panel === 'bash' ? t('taskPanel.background') : t('taskPanel.agents')
+          const count = panel === 'todo'
+            ? `${done}/${items.length}`
+            : panel === 'bash'
+              ? String(running || tasks.length)
+              : String(agentsRunning || subagents.length)
           return (
             <Button key={panel} ref={(node) => { triggers.current[panel] = node }}
               id={`${baseId}-${panel}`} size="sm" variant={active ? 'secondary' : 'ghost'}
@@ -99,6 +116,9 @@ export const SessionTasks = memo(function SessionTasks({ todos, busy }: { todos:
                 detail: t(item.status === 'in_progress' && !busy && !retained ? 'todo.paused' : `todo.${item.status}`)
               }))} />
           ) : selected === 'bash' ? <BashTaskList tasks={tasks} /> : null}
+          {selected === 'agents' && sessionPath ? (
+            <SubagentList runs={subagents} sessionPath={sessionPath} onOpenSession={onOpenSession} />
+          ) : null}
         </AgentDisclosure>
       </div>
     </div>

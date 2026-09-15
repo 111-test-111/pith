@@ -91,7 +91,8 @@ export const ChatView = memo(function ChatView({
   onEditMessage,
   onRewindMessage,
   onFork,
-  onReview
+  onReview,
+  onOpenSession
 }: {
   store: PiStore
   /** Changes when a resend/retry lands, forcing the transcript back to the
@@ -111,6 +112,8 @@ export const ChatView = memo(function ChatView({
   /** Open the review tab on a turn — the changed-files card's Review action.
    * The id is the turn's first assistant message timestamp. */
   onReview: (turnId: number) => void
+  /** Open another session file (a subagent child) as the visible chat. */
+  onOpenSession?: (path: string, cwd?: string) => void
 }) {
   const { t } = useI18n()
   const state: PiState = useSyncExternalStore(store.subscribe, store.getState)
@@ -285,7 +288,7 @@ export const ChatView = memo(function ChatView({
 
   return (
     <BashTasksProvider sessionPath={state.sessionPath}>
-      <SessionTasks key={state.sessionPath} todos={state.todos} busy={busy} />
+      <SessionTasks key={state.sessionPath} todos={state.todos} subagents={state.subagents} busy={busy} sessionPath={state.sessionPath} onOpenSession={onOpenSession} />
       <MessageScroller
       busy={busy}
       navigation="rail"

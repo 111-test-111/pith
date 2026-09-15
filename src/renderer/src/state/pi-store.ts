@@ -7,6 +7,7 @@ import type {
   RewindErrorDTO,
   QueuedItemDTO,
   SessionSnapshotDTO,
+  SubagentRunDTO,
   ThinkingLevel,
   ToolCallContent,
   ToolResultMsg,
@@ -38,6 +39,8 @@ export interface Notice {
 export interface PiState {
   initializing: boolean
   todos: TodoSnapshotDTO | null
+  /** Subagent roster of this session (roster cards + tool-row details). */
+  subagents: SubagentRunDTO[]
   ready: boolean
   cwd: string | null
   projectless: boolean
@@ -129,6 +132,7 @@ function insertByTimestamp(messages: ChatMessage[], incoming: ChatMessage): void
 const initialState: PiState = {
   initializing: false,
   todos: null,
+  subagents: [],
   ready: false,
   cwd: null,
   projectless: false,
@@ -271,6 +275,7 @@ export class PiStore {
       eventSequence: snapshotSequence,
       messages: unchanged ? cached.messages : snapshot.messages,
       todos: unchanged ? cached.todos : (snapshot.todos ?? null),
+      subagents: unchanged ? cached.subagents : (snapshot.subagents ?? []),
       streaming: unchanged ? cached.streaming : (snapshot.streaming ?? null),
       toolRuns: unchanged ? cached.toolRuns : (snapshot.toolRuns ?? {}),
       queue: unchanged ? cached.queue : (snapshot.queue ?? { steering: [], followUp: [] }),
@@ -556,6 +561,14 @@ export class PiStore {
         this.set({ toolRuns })
         break
       }
+
+      // Sequence-free roster ping (same rule as context_usage): the roster is
+      // task-panel metadata, not a step of the transcript's event log. A
+      // background parent's updates are parked and the snapshot reconciles on
+      // switch-back.
+      case 'subagents_update':
+        this.set({ subagents: event.subagents ?? [] })
+        break
 
       case 'agent_end':
         // Post-run continuations (auto-retry, compaction, queued messages) keep

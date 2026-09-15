@@ -16,6 +16,7 @@ import type {
   RewindRequest,
   RewindStatsTargetDTO,
   BashTaskRequest,
+  SubagentActionPayload,
   CustomModelDTO,
   ModelsConfigDTO,
   PromptPayload,
@@ -63,6 +64,7 @@ export function registerIpc(pi: PiManager): () => boolean {
       bashMaxWaitMs: settings.bashMaxWaitMs,
       checkpointsEnabled: settings.checkpointsEnabled !== false,
       startup: settings.startup,
+      subagentsEnabled: settings.subagentsEnabled !== false,
       version: app.getVersion()
     }
   })
@@ -81,6 +83,10 @@ export function registerIpc(pi: PiManager): () => boolean {
   ipcMain.handle('bash:list', (_event, sessionPath: string) => pi.listBashTasks(sessionPath))
   ipcMain.handle('bash:output', (_event, request: BashTaskRequest) => pi.bashTaskOutput(request))
   ipcMain.handle('bash:stop', (_event, request: BashTaskRequest) => pi.stopBashTask(request))
+  ipcMain.handle('subagents:list', (_event, sessionPath: string) => pi.listSubagents(sessionPath))
+  ipcMain.handle('subagents:action', (_event, payload: SubagentActionPayload) => pi.subagentAction(payload))
+  ipcMain.handle('subagents:setEnabled', (_event, enabled: boolean) => pi.setSubagentsEnabled(enabled))
+  ipcMain.handle('subagents:setMaxConcurrent', (_event, value: number) => pi.setSubagentMaxConcurrent(value))
 
   ipcMain.handle('app:setContextFiles', (_event, enabled: boolean): Promise<boolean> =>
     pi.setContextFilesEnabled(enabled)

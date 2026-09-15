@@ -1272,6 +1272,7 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
                 onRewindMessage={rewindMessage}
                 onFork={handleFork}
                 onReview={openReview}
+                onOpenSession={openSession}
               />
             ) : null}
 

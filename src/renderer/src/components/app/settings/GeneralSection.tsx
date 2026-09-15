@@ -39,6 +39,9 @@ export function GeneralSection() {
   const [savingStartup, setSavingStartup] = useState(false)
   const [startupError, setStartupError] = useState(false)
   const [version, setVersion] = useState<string | null>(null)
+  // Subagent delegation; read from appInfo, applied through the setter IPC.
+  const [subagentsEnabled, setSubagentsEnabled] = useState(true)
+  const [savingSubagents, setSavingSubagents] = useState(false)
   // Same module store the Composer reads — a change here applies immediately.
   const [behavior, setBehavior] = useStreamingBehavior()
   // Display preference of the transcript, shared with the message rows.
@@ -51,7 +54,7 @@ export function GeneralSection() {
   useEffect(() => {
     void window.pi
       .appInfo()
-      .then((info) => { setVersion(info.version); setCheckpoints(info.checkpointsEnabled); setStartup(info.startup); setWaitSeconds(String(info.bashMaxWaitMs / 1000)); setSavedWait(info.bashMaxWaitMs) })
+      .then((info) => { setVersion(info.version); setCheckpoints(info.checkpointsEnabled); setStartup(info.startup); setSubagentsEnabled(info.subagentsEnabled !== false); setWaitSeconds(String(info.bashMaxWaitMs / 1000)); setSavedWait(info.bashMaxWaitMs) })
       .catch(() => {})
   }, [])
 
@@ -117,6 +120,23 @@ export function GeneralSection() {
             checked={toolGrouping}
             onCheckedChange={setToolGrouping}
             ariaLabel={t('settings.toolGrouping')}
+          />
+        </SettingsRow>
+        <SettingsRow
+          label={t('subagent.settingsTitle')}
+          description={t('subagent.settingsDesc')}
+        >
+          <Switch
+            checked={subagentsEnabled}
+            disabled={savingSubagents}
+            onCheckedChange={(value) => {
+              setSavingSubagents(true)
+              void window.pi
+                .setSubagentsEnabled(value)
+                .then(setSubagentsEnabled, () => {})
+                .finally(() => setSavingSubagents(false))
+            }}
+            ariaLabel={t('subagent.settingsTitle')}
           />
         </SettingsRow>
         <SettingsRow

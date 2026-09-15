@@ -48,6 +48,8 @@ import type {
   SideChatEvent,
   SkillContentDTO,
   StartupSessionMode,
+  SubagentActionPayload,
+  SubagentRunDTO,
   TestModelResultDTO,
   ThinkingLevel,
   TerminalCreatePayload,
@@ -89,6 +91,9 @@ const api = {
   stopBashTask: (request: BashTaskRequest): Promise<BashTaskDTO> => ipcRenderer.invoke('bash:stop', request),
   onBashTask: (listener: (task: BashTaskDTO) => void) => subscribe('pi:bash-task', listener),
   setBashMaxWaitMs: (value: number): Promise<number> => ipcRenderer.invoke('app:setBashMaxWaitMs', value),
+  listSubagents: (sessionPath: string): Promise<SubagentRunDTO[]> => ipcRenderer.invoke('subagents:list', sessionPath),
+  subagentAction: (payload: SubagentActionPayload): Promise<void> => ipcRenderer.invoke('subagents:action', payload),
+  setSubagentsEnabled: (enabled: boolean): Promise<boolean> => ipcRenderer.invoke('subagents:setEnabled', enabled),
   appInfo: (): Promise<AppInfoDTO> => ipcRenderer.invoke('app:info'),
   setContextFiles: (enabled: boolean): Promise<boolean> =>
     ipcRenderer.invoke('app:setContextFiles', enabled),

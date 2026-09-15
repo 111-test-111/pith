@@ -31,6 +31,20 @@ import { RewindFailure, failure as rewindFailure } from '../rewind/types'
 import { ChangeScopes } from './change-scopes'
 import { TodoState, createTodoTool } from './todo'
 import { TODO_TOOL_NAME } from './todo-protocol'
+import {
+  MAX_CONCURRENT_SUBAGENTS_DEFAULT,
+  MAX_CONCURRENT_SUBAGENTS_LIMIT,
+  SubagentParentState,
+  SubagentRuntime,
+  type ChildSessionHandle,
+  type SubagentHost
+} from './subagents/runtime'
+import { SubagentNotifications } from './subagents/notifications'
+import { SUBAGENT_TOOL_NAME } from './subagents/protocol'
+import type { SubagentRunStartData } from './subagents/protocol'
+import { createSubagentTool } from './subagents/tools'
+import { ensureDefaultProfiles, listSubagentProfiles } from './subagents/profiles'
+import { isSubagentSessionFile } from './subagents/session-filter'
 import { BASH_MIN_WAIT_MS, BASH_MAX_WAIT_MS, type StartupSessionMode } from '../../shared/types'
 import { FileIndex, readAttachment } from './files'
 import { SessionSearch } from './session-search'
@@ -103,7 +117,9 @@ import type {
   ToolCatalogDTO,
   ToolInfoDTO,
   ToolRunDTO,
-  SkillContentDTO
+  SkillContentDTO,
+  SubagentActionPayload,
+  SubagentRunDTO
 } from '../../shared/types'
 
 /** How many opened folders to keep in the sidebar/settings list. */
@@ -220,6 +236,11 @@ interface ManagedSession {
   todos: TodoState
   /** One real loader/runtime per session; the SDK receives its filtered proxy. */
   resourceLoader: ResourceLoader
+  /** Subagent roster/runs for normal sessions; null on children. */
+  subagents: SubagentParentState | null
+  /** Present on subagent child sessions: linkage + frozen tool ceiling. The
+   * child's initialization activates only the ceiling, never the full set. */
+  subagentChild?: { parentPath: string; toolCeiling: readonly string[] }
   initializing: boolean
   lifecyclePromise: Promise<void> | null
   disposePromise: Promise<void> | null
@@ -266,6 +287,8 @@ export class PiManager {
   private disposePromise: Promise<void> | null = null
   private closing = false
   private bashMaxWaitMs = loadSettings().bashMaxWaitMs
+  private subagentsEnabledFlag = loadSettings().subagentsEnabled !== false
+  private subagentMaxConcurrentSetting = loadSettings().subagentMaxConcurrent ?? MAX_CONCURRENT_SUBAGENTS_DEFAULT
 
   private get commandTasks(): BashTaskManager {
     return this.commandTasksInstance ??= new BashTaskManager(join(app.getPath('userData'), 'bash-tasks'),
@@ -293,6 +316,49 @@ export class PiManager {
     this.bashMaxWaitMs = value
     return value
   }
+
+  // ---- subagents (delegated child sessions) ----
+
+  /** Current roster of a parent session (renderer panel refresh). */
+  listSubagents(sessionPath: string): SubagentRunDTO[] {
+    return this.sessions.get(sessionPath)?.subagents?.snapshot() ?? []
+  }
+
+  /**
+   * Panel actions on a parent's subagent runs. `resume` continues a finished
+   * child session under a fresh run, sharing the dispatch admission path.
+   */
+  async subagentAction(payload: SubagentActionPayload): Promise<void> {
+    const managed = this.sessions.get(payload.sessionPath)
+    const state = managed?.subagents
+    if (!managed || !state) throw new Error('Subagents are only available on an open session')
+    if (payload.action === 'steer') {
+      if (!payload.message?.trim()) throw new Error('Steering message is required')
+      this.subagentRuntime.steer(state, payload.sessionId, payload.message)
+      return
+    }
+    if (payload.action === 'abort') {
+      this.subagentRuntime.abort(state, payload.sessionId)
+      return
+    }
+    await this.subagentRuntime.resume(state, managed.session, payload.sessionId, payload.message ?? '')
+  }
+
+  /** Toggle subagents; applies to sessions created afterwards (the tool is
+   * registered at session build) and blocks new dispatches immediately. */
+  setSubagentsEnabled(enabled: boolean): boolean {
+    this.subagentsEnabledFlag = enabled === true
+    saveSettings({ ...loadSettings(), subagentsEnabled: this.subagentsEnabledFlag })
+    return this.subagentsEnabledFlag
+  }
+
+  setSubagentMaxConcurrent(value: number): number {
+    if (!Number.isInteger(value) || value < 1 || value > MAX_CONCURRENT_SUBAGENTS_LIMIT) throw new Error('Invalid subagent concurrency limit')
+    saveSettings({ ...loadSettings(), subagentMaxConcurrent: value })
+    this.subagentMaxConcurrentSetting = value
+    return value
+  }
+
   /** Persist which session the next launch opens. */
   setStartupMode(mode: StartupSessionMode): StartupSessionMode {
     if (mode !== 'resume' && mode !== 'new') throw new Error('Invalid startup preference')
@@ -347,10 +413,47 @@ export class PiManager {
     private notifyError: (message: string) => void
   ) {
     this.checkoutCoordinator.initialize(() => this.rewindClient.recoveryMarkers())
+    ensureDefaultProfiles(join(app.getPath('userData'), 'subagents'))
     // The ring refreshes on a timer rather than only when the SDK reports a
     // boundary, so it tracks the context while a turn is in flight.
     this.contextUsageTimer = setInterval(() => this.pollContextUsage(), CONTEXT_USAGE_POLL_MS)
   }
+
+  /**
+   * The subagent engine, wired to this manager's own facilities. Children are
+   * real ManagedSessions (disposal, event routing, bash ownership), created
+   * through the same registry as user sessions — never an unmanaged
+   * AgentSession the shutdown paths cannot see.
+   */
+  readonly subagentRuntime = new SubagentRuntime({
+    isClosing: () => this.closing,
+    maxConcurrentSubagents: () => this.subagentMaxConcurrentSetting,
+    subagentsEnabled: () => this.subagentsEnabledFlag && !this.closing,
+    commandTasks: () => this.commandTasks,
+    acquireRunLease: (cwd, sessionPath) => this.checkoutCoordinator.acquire(cwd, 'run', sessionPath),
+    createChildSession: (options) => this.createSubagentChildSession(options),
+    emitSubagents: (sessionId, sessionPath, runs) => {
+      // Sequence-free metadata ping (same rule as context_usage): roster
+      // updates are not steps of the transcript's event log.
+      this.emit('pi:event', serialize({ type: 'subagents_update', sessionId, sessionPath, subagents: runs }))
+    },
+    resolveModelSpec: async (spec, fallback) => {
+      const runtime = await this.runtime()
+      if (spec) {
+        const [providerId, ...rest] = spec.split('/')
+        const modelId = rest.join('/')
+        if (providerId && modelId) {
+          const model = runtime.getModel(providerId, modelId)
+          if (model) return { model, spec }
+        }
+        throw new Error(`Unknown subagent model "${spec}" (expected "provider/modelId")`)
+      }
+      return { model: fallback.model, spec: undefined }
+    },
+    notifySubagentChildWrite: (cwd) => {
+      if (this.cwd === cwd) void this.fileIndex?.refresh(true).catch(() => {})
+    }
+  } satisfies SubagentHost)
 
   /**
    * Push context usage for every live session whose value moved, so the composer
@@ -365,6 +468,9 @@ export class PiManager {
    */
   private pollContextUsage(): void {
     for (const managed of this.sessions.values()) {
+      // A subagent child the user is not viewing has no visible ring; its
+      // progress reaches the renderer through throttled roster events instead.
+      if (managed.subagentChild && managed !== this.activeSession) continue
       const usage = this.contextUsageOf(managed)
       const key = JSON.stringify(usage)
       if (key === managed.contextUsageKey) continue
@@ -417,7 +523,7 @@ export class PiManager {
     return this.modelRuntime
   }
 
-  private async servicesFor(cwd: string, todos: TodoState, recoveryOnly = false): Promise<AgentSessionServices> {
+  private async servicesFor(cwd: string, todos: TodoState, recoveryOnly = false, subagent?: { appendSystemPrompt?: string }): Promise<AgentSessionServices> {
     // A loader owns mutable extension closures and an ExtensionRuntime whose
     // actions bind to ONE session. Sharing it by cwd lets another session's
     // bind/reload/dispose overwrite or invalidate a still-live MCP context.
@@ -425,9 +531,13 @@ export class PiManager {
       cwd,
       modelRuntime: await this.runtime(),
       resourceLoaderOptions: {
-        noExtensions: recoveryOnly,
+        // v1 subagent children never load extensions: N children with
+        // extension runtimes would multiply MCP hosts per workspace.
+        noExtensions: recoveryOnly || subagent !== undefined,
         extensionFactories: [todos.extension()],
-        // Read live so session.reload() applies context-file settings.
+        ...(subagent?.appendSystemPrompt ? { appendSystemPrompt: [subagent.appendSystemPrompt] } : {}),
+        // Children inherit AGENTS.md per the same live app setting — a
+        // delegated implementer must still know the project's rules.
         agentsFilesOverride: (base) => (this.includeContextFiles ? base : { agentsFiles: [] })
       }
     })
@@ -463,6 +573,11 @@ export class PiManager {
     managed.disposing = true
     managed.rewind?.dispose()
     managed.reloadPending = false
+    // Disposal owns the whole subtree: a parent being deleted or the app
+    // quitting aborts its subagent runs (suppressed — they must not wake) and
+    // tears down their child sessions through the same registry.
+    if (managed.subagents) this.subagentRuntime.abortAll(managed.subagents)
+    managed.subagents?.notifications?.dispose()
     managed.notifications?.dispose()
     managed.disposePromise = (async () => {
       const abort = Promise.resolve().then(() => { managed.session.clearQueue(); return managed.session.abort() })
@@ -818,29 +933,55 @@ export class PiManager {
     }
   }
 
-  private async createManagedSession(sessionManager: SessionManager): Promise<ManagedSession> {
+  private async createManagedSession(sessionManager: SessionManager, subagentRole?: {
+    parentPath: string
+    resource: SubagentRunStartData['resource']
+    model?: any
+  }): Promise<ManagedSession> {
     await this.checkoutCoordinator.ready()
     if (this.checkoutCoordinator.needsRecovery(sessionManager.getCwd())) {
       const status = await this.rewindClient.call('list', sessionManager.getCwd(), sessionManager.getSessionId())
       this.checkoutCoordinator.setRecovery(sessionManager.getCwd(), status.pending[0]?.id)
     }
     const recoveryOnly = this.checkoutCoordinator.needsRecovery(sessionManager.getCwd())
+    const isChild = subagentRole !== undefined
     const todos = new TodoState(sessionManager)
-    const fullServices = await this.servicesFor(sessionManager.getCwd(), todos, recoveryOnly)
+    const fullServices = await this.servicesFor(
+      sessionManager.getCwd(), todos, recoveryOnly,
+      isChild ? { appendSystemPrompt: subagentRole.resource.appendSystemPrompt } : undefined
+    )
     const services = { ...fullServices, resourceLoader: this.filterExtensions(fullServices.resourceLoader) }
     let notifications: TaskNotifications | undefined
+    const parentSessionRef: { session: import('@earendil-works/pi-coding-agent').AgentSession | null } = { session: null }
+    const subagentState = isChild ? null : new SubagentParentState(sessionManager.getSessionId())
     const { session } = await createAgentSessionFromServices({ services, sessionManager,
+      ...(isChild ? {
+        tools: subagentRole.resource.tools,
+        ...(subagentRole.model ? { model: subagentRole.model } : {}),
+        ...(subagentRole.resource.thinkingLevel ? { thinkingLevel: subagentRole.resource.thinkingLevel as any } : {})
+      } : {}),
       customTools: [...createManagedBashTools({ tasks: this.commandTasks, services,
         sessionId: sessionManager.getSessionId(), sessionPath: sessionManager.getSessionFile()!,
         maxWaitMs: () => this.bashMaxWaitMs, canStart: () => notifications?.canStart ?? false }),
-        createTodoTool(todos, () => notifications?.canStart ?? false)]
+        createTodoTool(todos, () => notifications?.canStart ?? false),
+        // Children never see the delegation tool — recursion is excluded at
+        // both the ceiling (allowlist) and the customTools layer.
+        ...(subagentState && this.subagentsEnabledFlag ? [createSubagentTool({
+          runtime: this.subagentRuntime, state: subagentState, parentSessionRef,
+          parentSessionPath: sessionManager.getSessionFile()!,
+          profiles: listSubagentProfiles(sessionManager.getCwd()),
+          canStart: () => (notifications?.canStart ?? false) && subagentState.notifications!.canStart
+        })] : [])]
     })
+    if (!isChild) parentSessionRef.session = session
     notifications = new TaskNotifications(session, this.commandTasks)
     const path = session.sessionFile ?? `memory:${session.sessionId}`
     const managed: ManagedSession = {
       recoveryOnly,
       todos,
       resourceLoader: fullServices.resourceLoader,
+      subagents: subagentState,
+      ...(isChild ? { subagentChild: { parentPath: subagentRole.parentPath, toolCeiling: subagentRole.resource.tools } } : {}),
       initializing: true,
       lifecyclePromise: null,
       disposePromise: null,
@@ -874,10 +1015,28 @@ export class PiManager {
       this.rebuildQueues(managed)
     })
     notifications.onWake = () => managed.changeScopes.continue()
-    managed.rewind = new RewindRecorder({ session, sessionPath: managed.path, cwd: managed.cwd,
-      client: this.rewindClient, coordinator: this.checkoutCoordinator,
-      enabled: () => loadSettings().checkpointsEnabled !== false,
-      changed: () => this.emit('pi:rewind', { sessionPath: managed.path }) })
+    // Subagent children own no rewind recorder: they must never record
+    // checkpoints (rewind points exist only before user turns), and their
+    // writes reach coverage diagnostics through the parent's consent flow.
+    if (!isChild) {
+      managed.rewind = new RewindRecorder({ session, sessionPath: managed.path, cwd: managed.cwd,
+        client: this.rewindClient, coordinator: this.checkoutCoordinator,
+        enabled: () => loadSettings().checkpointsEnabled !== false,
+        changed: () => this.emit('pi:rewind', { sessionPath: managed.path }) })
+    }
+    if (subagentState) {
+      const subagentNotifications = new SubagentNotifications(session, (run) => {
+        // Roster completions ride the notifications' own delivery; nothing
+        // extra to emit here beyond keeping the state reference alive.
+        void run
+      })
+      subagentState.notifications = subagentNotifications
+      subagentNotifications.onSettledWithQueued = () => queueMicrotask(() => {
+        if (!subagentNotifications.canStart || !session.isIdle) return
+        this.rebuildQueues(managed)
+      })
+      subagentNotifications.onWake = () => managed.changeScopes.continue()
+    }
     const observeEvent = (event: AgentSessionEvent): void => {
       managed.rewind?.observe(event)
       const previousTodos = managed.todos.snapshot
@@ -889,10 +1048,11 @@ export class PiManager {
         ...(event.type === 'agent_start' || previousTodos !== managed.todos.snapshot ? { todos: managed.todos.snapshot } : {}),
         ...('message' in event ? { message: { ...managed.changeScopes.stamp(event.message as ChatMessage), ...(userEntryId ? { sessionEntryId: userEntryId } : {}) } } : {}),
         ...(event.type === 'agent_start' ? { changeScopeId: managed.changeScopes.active } : {}),
-        ...(event.type === 'agent_settled' ? { continuing: notifications!.continuesAtSettled } : {})
+        ...(event.type === 'agent_settled' ? { continuing: notifications!.continuesAtSettled || subagentState?.notifications?.continuesAtSettled } : {})
       }
       this.routeEvent(managed, routed as AgentSessionEvent)
       notifications!.observe(event)
+      subagentState?.notifications?.observe(event)
     }
     managed.unsubscribe = session.subscribe(event => {
       // User message persistence immediately follows SDK session listeners.
@@ -910,7 +1070,57 @@ export class PiManager {
     void startup.finally(() => {
       if (managed.lifecyclePromise === startup) managed.lifecyclePromise = null
     }).catch(() => {})
+    // Restore this session's subagent roster from disk (interrupted runs show
+    // as cards; v1 never wakes them automatically).
+    if (subagentState && existsSync(managed.path)) {
+      this.subagentRuntime.recover(subagentState, managed.cwd, managed.path)
+    }
     return managed
+  }
+
+  /** Create (or reopen) a subagent child through the same managed-session
+   * machinery the app uses for user sessions — one registry, one shutdown
+   * path, one bash/task owner. Returns a release handle the runtime drives. */
+  private async createSubagentChildSession(options: {
+    mode: 'new' | 'reopen'
+    cwd: string
+    parentSessionPath: string
+    parentSessionId: string
+    runId: string
+    resource: SubagentRunStartData['resource']
+    sessionPath?: string
+  }): Promise<ChildSessionHandle> {
+    const sessionManager = options.mode === 'new'
+      ? SessionManager.create(options.cwd, undefined, { parentSession: options.parentSessionPath })
+      : SessionManager.open(options.sessionPath!)
+    if (options.mode === 'new') this.materializeSession(sessionManager)
+    let model: any
+    if (options.resource.model) {
+      const runtime = await this.runtime()
+      const [providerId, ...rest] = options.resource.model.split('/')
+      model = providerId && rest.length ? runtime.getModel(providerId, rest.join('/')) : undefined
+    }
+    const managed = await this.createManagedSession(sessionManager, {
+      parentPath: options.parentSessionPath,
+      resource: options.resource,
+      model
+    })
+    await managed.lifecyclePromise
+    if (managed.disposing || this.closing) throw new Error('Subagent session was closed during initialization')
+    return {
+      session: managed.session,
+      sessionManager,
+      path: managed.path,
+      cwd: managed.cwd,
+      resource: options.resource,
+      release: () => {
+        // A child the user is currently viewing stays alive; it is disposed by
+        // its own lifecycle (navigation away is non-destructive in pi-app).
+        if (this.sessions.get(managed.path) === managed && this.activeSession !== managed) {
+          void this.disposeManaged(managed)
+        }
+      }
+    }
   }
 
   private async initializeSession(managed: ManagedSession, loader: ResourceLoader): Promise<void> {
@@ -925,12 +1135,22 @@ export class PiManager {
         console.error(`Extension error (${error.extensionPath}): ${error.error}`)
       } })
       if (this.closing || managed.disposing) return
-      // An SDK tools allowlist would also hide extension tools. Activate the
-      // complete set after lazy registration, deduplicating app overrides.
-      managed.session.setActiveToolsByName([...new Set([
-        ...BUILTIN_TOOL_NAMES, ...APP_BASH_TOOL_NAMES, TODO_TOOL_NAME,
-        ...loader.getExtensions().extensions.flatMap((extension) => [...extension.tools.keys()])
-      ])])
+      if (managed.subagentChild) {
+        // Children activate ONLY their frozen ceiling: the normal path below
+        // re-activates every built-in + extension tool, which would silently
+        // widen a profile's tool restriction.
+        managed.session.setActiveToolsByName([...managed.subagentChild.toolCeiling])
+      } else {
+        // An SDK tools allowlist would also hide extension tools. Activate the
+        // complete set after lazy registration, deduplicating app overrides.
+        // The delegation tool is gated by its setting here (its customTool is
+        // registered at build; the runtime re-checks dispatch live).
+        managed.session.setActiveToolsByName([...new Set([
+          ...BUILTIN_TOOL_NAMES, ...APP_BASH_TOOL_NAMES, TODO_TOOL_NAME,
+          ...(managed.subagents ? [SUBAGENT_TOOL_NAME] : []),
+          ...loader.getExtensions().extensions.flatMap((extension) => [...extension.tools.keys()])
+        ])])
+      }
     } catch (error) {
       if (!this.closing && !managed.disposing) {
         this.emitSessionError(managed, error)
@@ -990,6 +1210,7 @@ export class PiManager {
       availableThinkingLevels: managed.session.getAvailableThinkingLevels() as ThinkingLevel[],
       isStreaming: managed.session.isStreaming || managed.notifications.continuesAtSettled,
       contextUsage: this.contextUsageOf(managed),
+      subagents: managed.subagents?.snapshot() ?? [],
       eventSequence: managed.eventSequence
     }
   }
@@ -1216,6 +1437,10 @@ export class PiManager {
         // A freshly materialized session has a header but no messages yet; keep
         // it off the sidebar until its first user message exists to name it.
         if (s.messageCount === 0) continue
+        // Subagent children are reachable through their parent's roster, not
+        // the sidebar. Only the persisted run marker separates them from
+        // forks (which also carry parentSessionPath and do show here).
+        if (s.parentSessionPath && isSubagentSessionFile(s.path)) continue
         summaries.push({
           path: s.path,
           id: s.id,
@@ -1324,11 +1549,13 @@ export class PiManager {
     const session = managed?.session
     if (this.closing || managed?.disposing) return
     managed?.notifications.resume()
+    managed?.subagents?.notifications?.resume()
     if (!managed || !session) {
       this.notifyError('Pi session is not initialized. Pick a working directory first.')
       return
     }
     managed.notifications.holdWake()
+    managed.subagents?.notifications?.holdWake()
     void (async () => {
       try {
         // A replacement session kept after project deletion intentionally has
@@ -1370,6 +1597,7 @@ export class PiManager {
         this.emitSessionError(managed, error)
       } finally {
         managed.notifications.releaseWake()
+        managed.subagents?.notifications?.releaseWake()
       }
     })()
   }
@@ -1418,6 +1646,8 @@ export class PiManager {
     }
     if (stopping) {
       managed.notifications.pause()
+      managed.subagents?.notifications?.pause()
+      if (managed.subagents) this.subagentRuntime.abortAll(managed.subagents)
       void this.commandTasksInstance?.stopSession(managed.path)
     }
     managed.session.clearQueue()
@@ -1452,6 +1682,7 @@ export class PiManager {
     try {
       session.clearQueue()
       managed.notifications.queuesCleared()
+      managed.subagents?.notifications?.queuesCleared()
       const nextSteering: QueuedItem[] = []
       const nextFollowUp: QueuedItem[] = []
       managed.queueMirror.steering.forEach((item, index) => {
@@ -1479,6 +1710,7 @@ export class PiManager {
     }
     this.emitQueueState(managed)
     managed.notifications.flush()
+    managed.subagents?.notifications?.flush()
   }
 
   /**
@@ -1518,8 +1750,12 @@ export class PiManager {
     try {
       if (this.closing || managed.disposing) throw new Error('Session is shutting down')
       if (session.isStreaming) throw new Error('Wait for the current response to finish')
-      // Rewinding a branch invalidates every old task notification.
+      // Rewinding a branch invalidates every old task notification — and every
+      // subagent run of the discarded branch: abort it, suppressed, so a late
+      // completion cannot wake the branch the user rewound to.
       managed.notifications?.pause()
+      managed.subagents?.notifications?.pause()
+      if (managed.subagents) this.subagentRuntime.abortAll(managed.subagents)
       await this.commandTasksInstance?.stopSession(managed.path)
       session.clearQueue?.()
 
@@ -1565,10 +1801,12 @@ export class PiManager {
       if (!text && !images.length) throw new Error('Nothing to resend')
 
       managed.notifications?.resume()
+      managed.subagents?.notifications?.resume()
       managed.notifications?.holdWake()
+      managed.subagents?.notifications?.holdWake()
       void session.prompt(text, { images }).catch((error) =>
         this.emitSessionError(managed, error)
-      ).finally(() => managed.notifications?.releaseWake())
+      ).finally(() => { managed.notifications?.releaseWake(); managed.subagents?.notifications?.releaseWake() })
       return this.snapshot()
     } finally { release() }
   }
@@ -1627,6 +1865,10 @@ export class PiManager {
     const managed = this.activeSession
     if (!managed) return
     managed.notifications.pause()
+    // Stop closes the wake path BEFORE aborting: a subagent completing during
+    // or after the stop must not restart the conversation.
+    managed.subagents?.notifications?.pause()
+    if (managed.subagents) this.subagentRuntime.abortAll(managed.subagents)
     managed.session.clearQueue()
     void this.commandTasksInstance?.stopSession(managed.path)
     void managed.session.abort().catch(() => {})
@@ -1966,6 +2208,7 @@ export class PiManager {
   private async reloadManagedSession(managed: ManagedSession): Promise<void> {
     if (this.closing || managed.disposing) return
     managed.notifications.holdWake()
+    managed.subagents?.notifications?.holdWake()
     const previous = managed.lifecyclePromise
     const pending = (async () => {
       await previous
@@ -1984,6 +2227,7 @@ export class PiManager {
     finally {
       if (managed.lifecyclePromise === pending) managed.lifecyclePromise = null
       managed.notifications.releaseWake()
+      managed.subagents?.notifications?.releaseWake()
     }
   }
 
@@ -2283,6 +2527,8 @@ export class PiManager {
         if (before !== known.leaf) throw new RewindFailure('changed')
         if (known.target !== null && !session.sessionManager.getEntry(known.target)) throw new RewindFailure('missing')
         managed.notifications.pause()
+        managed.subagents?.notifications?.pause()
+        if (managed.subagents) this.subagentRuntime.abortAll(managed.subagents)
         const operation = await this.rewindClient.call('prepare', managed.cwd, session.sessionId, request.token,
           request.mode, request.operationId, before, request.mode === 'files' ? before : known.target, managed.path,
           { uncovered: known.uncovered ?? [], confirmed: request.skipUncovered === true })
