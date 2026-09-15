@@ -17,7 +17,7 @@ try {
   const preload = join(temporary, 'preload.mjs')
   await writeFile(preload, `import ${JSON.stringify(join(repo, 'out/preload/index.mjs'))};
 import {contextBridge,ipcRenderer} from 'electron';
-contextBridge.exposeInMainWorld('fixture',{window:()=>ipcRenderer.invoke('fixture:window'),resize:(width,height)=>ipcRenderer.invoke('fixture:resize',width,height),fullscreen:value=>ipcRenderer.invoke('fixture:fullscreen',value),scenario:value=>ipcRenderer.invoke('fixture:scenario',value)});`)
+contextBridge.exposeInMainWorld('fixture',{window:()=>ipcRenderer.invoke('fixture:window'),resize:(width,height)=>ipcRenderer.invoke('fixture:resize',width,height),fullscreen:value=>ipcRenderer.invoke('fixture:fullscreen',value),scenario:value=>ipcRenderer.invoke('fixture:scenario',value),startupChoices:()=>ipcRenderer.invoke('fixture:startupChoices')});`)
   const main = join(temporary, 'main.cjs')
   await build({ stdin: { contents: `
 import {app,BrowserWindow,ipcMain,nativeTheme} from 'electron';
@@ -26,11 +26,14 @@ app.setPath('userData',${JSON.stringify(join(temporary, 'profile'))});
 app.commandLine.appendSwitch('remote-debugging-port','0');
 app.whenReady().then(()=>{
  let scenario='project';
+ let startupChoice='resume';
+ const startupChoices=[];
  const model={providerId:'deepseek',providerName:'DeepSeek',id:'fixture',name:'DeepSeek V4.1 Flash',reasoning:true,input:['text'],contextWindow:128000,maxTokens:8192,available:true,costInputPerM:0,costOutputPerM:0};
  const labels=['统一窗口标题栏与页面布局','梳理项目结构与入口','实现一个新的工具面板','检查最近的界面改动'];
  const sessions=labels.map((label,i)=>({id:'chat-'+i,path:'/fixture/chat-'+i,cwd:'/workspace/pi-app',projectless:false,label,created:new Date().toISOString(),modified:new Date().toISOString(),messageCount:2}));
  const snapshot=(cwd='/workspace/pi-app')=>({sessionId:'fixture',sessionPath:'/fixture/chat-0',cwd,projectless:scenario==='projectless',messages:scenario==='long'?[{role:'user',content:'Please review the layout.',timestamp:1},{role:'assistant',content:[{type:'text',text:'The window controls and workspace now share one title row.'}],timestamp:2,stopReason:'stop'}]:[],model,thinkingLevel:'high',availableThinkingLevels:['off','high'],isStreaming:false});
- ipcMain.handle('app:info',()=>({cwd:'/workspace/pi-app',folders:['/workspace/pi-app','/workspace/piws'],version:'fixture',contextFiles:true,bashMaxWaitMs:10000}));
+ ipcMain.handle('app:info',()=>({cwd:'/workspace/pi-app',folders:['/workspace/pi-app','/workspace/piws'],version:'fixture',contextFiles:true,bashMaxWaitMs:10000,startup:startupChoice}));
+ ipcMain.handle('app:setStartup',(_,mode)=>{startupChoices.push(mode);startupChoice=mode;return mode});
  ipcMain.handle('pi:init',()=>snapshot(scenario==='projectless'?'/internal/private-workspace':'/workspace/pi-app'));
  ipcMain.handle('pi:newSession',(_,cwd)=>{scenario=cwd?'project':'projectless';return snapshot(cwd??'/internal/private-workspace')});
  ipcMain.handle('pi:listSessions',()=>scenario==='long'?[{...sessions[0],label:'A very long session title / 很长的会话标题 '.repeat(12)},...sessions.slice(1)]:sessions);
@@ -42,6 +45,7 @@ app.whenReady().then(()=>{
  ipcMain.handle('fixture:resize',(_,width,height)=>w.setBounds({width,height}));
  ipcMain.handle('fixture:fullscreen',(_,value)=>w.setFullScreen(value));
  ipcMain.handle('fixture:scenario',(_,value)=>{scenario=value});
+ ipcMain.handle('fixture:startupChoices',()=>startupChoices);
  w.loadFile(${JSON.stringify(join(repo, 'out/renderer/index.html'))});
 });app.on('window-all-closed',()=>app.quit());`, resolveDir: repo, loader: 'ts' },
     bundle: true, platform: 'node', format: 'cjs', packages: 'external', outfile: main })
@@ -122,6 +126,16 @@ app.whenReady().then(()=>{
   await send('Input.insertText', { text: '保留这份草稿 / keep this draft' })
   await click('button[aria-label="设置"]')
   assert.ok(await evaluate(`document.querySelector('button[aria-label="返回对话"]').getBoundingClientRect().left>=${process.platform === 'darwin' ? 92 : 12}`))
+  // Startup preference: the saved choice is the selected radio, and picking the
+  // other one writes it back through the bridge.
+  const startupRadio = label => `(()=>{const l=[...document.querySelectorAll('label')].find(n=>n.innerText.trim()===${JSON.stringify(label)});return l?l.querySelector('[role="radio"]'):null})()`
+  assert.equal(await evaluate(`${startupRadio('打开上次的会话')}.getAttribute('aria-checked')`), 'true', 'the persisted choice is selected')
+  const startupPoint = await evaluate(`(()=>{const r=${startupRadio('总是新建会话')}.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`)
+  await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...startupPoint, button: 'left', clickCount: 1 })
+  await send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...startupPoint, button: 'left', clickCount: 1 })
+  await pause(400)
+  assert.equal(await evaluate(`${startupRadio('总是新建会话')}.getAttribute('aria-checked')`), 'true')
+  assert.deepEqual(await evaluate('fixture.startupChoices()'), ['new'])
   await screenshot('settings')
   await click('button[aria-label="返回对话"]')
   assert.equal(await evaluate(`document.querySelector('textarea').value`), '保留这份草稿 / keep this draft')
@@ -151,6 +165,10 @@ app.whenReady().then(()=>{
   await evaluate(`fixture.scenario('long');localStorage.setItem('pi-app:locale','en');localStorage.setItem('theme','light')`)
   await reload()
   assert.equal((await evaluate('fixture.window()')).dark, false)
+  // The fade mark arrives from a ResizeObserver, so this needs one rendered
+  // frame: a screenshot is what guarantees one while the window is not
+  // frontmost (a bare evaluate leaves it unset on an occluded window).
+  await screenshot('light-long-title')
   assert.ok(await evaluate(`Boolean(document.querySelector('[data-window-titlebar] [data-overflow]'))`))
   assert.ok(await evaluate(`document.querySelector('[aria-label="Toggle sidebar"][aria-pressed]').getBoundingClientRect().right<=innerWidth`))
   await screenshot('light-long-title')

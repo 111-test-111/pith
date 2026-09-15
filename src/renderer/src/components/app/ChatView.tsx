@@ -123,6 +123,10 @@ export const ChatView = memo(function ChatView({
   }, [state.messages])
 
   const busy = state.isStreaming || Boolean(state.streaming)
+  /** Seed for the waiting row's spinner verb: the session, not the turn, so the
+   * sentence a user is mid-read never flips when the row moves from the
+   * transcript's pending slot into the live turn. */
+  const spinnerSeed = state.sessionPath ?? 'live'
   const turns = useMemo(() => buildTurns(state.messages), [state.messages])
   const changeScopes = useMemo(() => collectChangeScopes(turns), [turns])
   /**
@@ -273,6 +277,7 @@ export const ChatView = memo(function ChatView({
         cwd={state.cwd}
         toolResults={toolResults}
         toolRuns={state.toolRuns}
+        spinnerSeed={spinnerSeed}
         onReview={onReview}
       />
     )
@@ -301,7 +306,9 @@ export const ChatView = memo(function ChatView({
       <MessageGroup spacing="default">
         {displayTurns.map((turn, index) => renderTurn(turn, displayTurns[index - 1]))}
 
-        {state.isStreaming && !streaming && !waitingInLastTurn ? <TurnStatus /> : null}
+        {state.isStreaming && !streaming && !waitingInLastTurn ? (
+          <TurnStatus seedKey={spinnerSeed} />
+        ) : null}
 
         {state.notice ? (
           <RowReveal animate>

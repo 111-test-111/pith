@@ -15,6 +15,10 @@ export interface SwitchProps {
   label?: string;
   ariaLabel?: string;
   className?: string;
+  // local patch (pi-app): let a call site own the id so its own label element
+  // can sit somewhere else in the row (the search filter orders info · text ·
+  // switch) while still toggling the track on click.
+  id?: string;
 }
 
 export function Switch({
@@ -24,8 +28,10 @@ export function Switch({
   label,
   ariaLabel,
   className,
+  id: idProp,
 }: SwitchProps) {
-  const id = useId();
+  const autoId = useId();
+  const id = idProp ?? autoId;
   const thumbRef = useRef<HTMLDivElement>(null);
   const reduce = useReducedMotion();
   const [isPressed, setIsPressed] = useState(false);
@@ -65,7 +71,13 @@ export function Switch({
           initial={false}
           data-state={checked ? "checked" : "unchecked"}
           className={cn(
-            "group peer inline-flex h-7 w-12 shrink-0 cursor-pointer items-center px-1 rounded-full outline-none transition-colors duration-200",
+            // local patch (pi-app): compact track. The vendored 28×48 pill was
+            // oversized for the app — it replaced a 20×20 checkbox in Settings
+            // and sits in rows whose tallest control is that size. 20×32 with a
+            // 16px thumb keeps the 2px inset and a 12px travel (~0.75 of the
+            // thumb, iOS' proportion), and leaves only 12px of straight line
+            // between the two 10px arcs instead of the vendored 28px.
+            "group peer inline-flex h-5 w-8 shrink-0 cursor-pointer items-center px-0.5 rounded-full outline-none transition-colors duration-200",
             "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
             "disabled:cursor-not-allowed disabled:opacity-60",
             checked ? "justify-end bg-primary" : "justify-start bg-muted-foreground/60",
@@ -75,12 +87,12 @@ export function Switch({
             ref={thumbRef}
             layout
             animate={{ scale: squish ? 0.9 : 1 }}
-            className="pointer-events-none block h-5 w-5 rounded-full bg-background shadow-md"
+            className="pointer-events-none block size-4 rounded-full bg-background shadow-md"
           >
             {/* Stretch toward the destination while active. */}
             <div
               className={cn(
-                "size-5",
+                "size-4",
                 squish && (checked ? "ml-1" : "mr-1"),
               )}
             />

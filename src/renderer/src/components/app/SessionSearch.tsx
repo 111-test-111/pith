@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
-import { ArrowDownWideNarrow, ArrowUpNarrowWide, ChevronLeft, ChevronRight, Folder, Info, LoaderCircle, MessageSquare, Search, SearchX, X } from '@/lib/icons'
+import { ArrowDownWideNarrow, ArrowUpNarrowWide, Chat01, ChevronLeft, ChevronRight, Folder, Info, LoaderCircle, MessageSquare, Search, SearchX, X } from '@/lib/icons'
 import { Input } from '@/components/motion/input'
 import { Button } from '@/components/motion/button'
 import { AgentDisclosure } from '@/components/agents/agent-disclosure'
-import { Checkbox } from '@/components/motion/checkbox'
 import { CenterMorphModal, CenterMorphModalContent, CenterMorphModalTrigger } from '@/components/motion/center-morph-modal'
+import { Switch } from '@/components/motion/switch'
 import { Tooltip } from '@/components/motion/tooltip'
 import { LabelTooltip } from './LabelTooltip'
 import { useI18n } from '@/i18n'
@@ -116,6 +116,8 @@ export function SessionSearch({ sessions, activePath, runningPaths, onOpen, chil
   const [isOpen, setIsOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [includeDetails, setIncludeDetails] = useState(false)
+  /** The switch's own track carries this id; its label sits before it. */
+  const detailsSwitchId = useId()
   const [sort, setSort] = useState<SessionSearchSort>('newest')
   const [offset, setOffset] = useState(0)
   const [response, setResponse] = useState<{ key: string; value: SessionSearchResultDTO } | null>(null)
@@ -270,13 +272,13 @@ export function SessionSearch({ sessions, activePath, runningPaths, onOpen, chil
             </div>
           </div>
           <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-border px-4 pb-2">
-            <div className="flex items-center gap-1">
-              <Checkbox checked={includeDetails} label={t('sessionSearch.includeDetails')}
-                className="gap-2 [&>span]:text-xs [&>span]:text-muted-foreground" onCheckedChange={(checked) => {
-                  setIncludeDetails(checked)
-                  setOffset(0)
-                  results.current?.scrollTo(0, 0)
-                }} />
+            {/* Info, its text, then the switch — three equal gaps. The text is
+                its own label (not the switch's `label` slot) so it can sit
+                between the two controls; the switch's optional `id` is what
+                keeps the click-to-toggle association. The icon button's `-mr`
+                cancels its own 7px inset so the gap the eye sees (glyph → text)
+                equals the layout gap (text → track). */}
+            <div className="flex items-center gap-2">
               {/* The vendored tooltip is whitespace-nowrap, and app classes
                   cannot override it (Tailwind emits whitespace-nowrap after
                   whitespace-normal), so the wrapping declaration lives on the
@@ -284,10 +286,19 @@ export function SessionSearch({ sessions, activePath, runningPaths, onOpen, chil
               <Tooltip side="bottom" className="px-3 py-2 text-xs" content={
                 <span className="block w-72 whitespace-normal text-left leading-relaxed">{t('sessionSearch.hint')}</span>
               }>
-                <Button variant="ghost" size="icon" className="size-7" aria-label={t('sessionSearch.help')}>
+                <Button variant="ghost" size="icon" className="size-7 -mr-1.75" aria-label={t('sessionSearch.help')}>
                   <Info aria-hidden="true" className="size-3.5" />
                 </Button>
               </Tooltip>
+              <label htmlFor={detailsSwitchId} className="cursor-pointer text-xs text-muted-foreground">
+                {t('sessionSearch.includeDetails')}
+              </label>
+              <Switch id={detailsSwitchId} checked={includeDetails} ariaLabel={t('sessionSearch.includeDetails')}
+                onCheckedChange={(checked) => {
+                  setIncludeDetails(checked)
+                  setOffset(0)
+                  results.current?.scrollTo(0, 0)
+                }} />
             </div>
             <LabelTooltip content={t('sessionSearch.sortHint')} wrap wrapperClassName="shrink-0">
               <Button variant="ghost" size="sm" className="h-7 shrink-0 rounded-lg px-2 text-xs font-normal"
@@ -339,7 +350,7 @@ export function SessionSearch({ sessions, activePath, runningPaths, onOpen, chil
                       className={cn('group h-auto min-h-9 w-full items-start justify-start gap-2 rounded-lg px-2 py-2 text-left font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset [content-visibility:auto] [contain-intrinsic-size:auto_20px]', active && '[contain-intrinsic-size:auto_62px]', current && 'bg-primary/5')}
                     >
                       <span className={cn('mt-0.5 grid size-4 shrink-0 place-items-center text-muted-foreground/70', current && 'text-primary')}>
-                        {pending || runningPaths.has(hit.path) ? <LoaderCircle aria-hidden="true" className="size-3.5 animate-spin" /> : <MessageSquare aria-hidden="true" className="size-3.5" />}
+                        {pending || runningPaths.has(hit.path) ? <LoaderCircle aria-hidden="true" className="size-3.5 animate-spin" /> : <Chat01 aria-hidden="true" className="size-3.5" />}
                       </span>
                       <span className="min-w-0 flex-1">
                         <span className="flex items-center gap-2">

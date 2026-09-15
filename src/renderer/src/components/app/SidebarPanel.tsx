@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import {
   Folder,
@@ -18,9 +18,15 @@ import { DURATION, EASE_OUT, motionTransition } from '@/lib/ease'
 import { useI18n } from '@/i18n'
 import type { MessageKey } from '@/i18n/locales/en'
 import { cn } from '@/lib/utils'
+import { basename } from '@/lib/format'
+import { LabelTooltip } from './LabelTooltip'
+import { FileTypeIcon } from './FileTypeIcon'
+import { MiddleEllipsis } from './MiddleEllipsis'
 import { SideChatPane } from './SideChatPane'
 import { ReviewPane } from './ReviewPane'
 import { TerminalPane } from './TerminalPane'
+import { FilesPane } from './FilesPane'
+import type { FileBrowserStore } from '@/state/file-browser-store'
 import type { TerminalStore } from '@/state/terminal-store'
 import type { SideChatStore } from '@/state/side-chat-store'
 import type { PiStore } from '@/state/pi-store'
@@ -30,6 +36,9 @@ export const SIDEBAR_PANEL_WIDTH = 400
 
 /** The panes the right rail can host. */
 export type SidebarTabKind = 'review' | 'terminal' | 'browser' | 'files' | 'chat'
+export type SidebarTabId = SidebarTabKind | `file:${string}`
+export const fileTabId = (path: string): SidebarTabId => `file:${path}`
+export const filePathForTab = (id: SidebarTabId | null): string | null => id?.startsWith('file:') ? id.slice(5) : null
 
 interface SidebarTabSpec {
   id: SidebarTabKind
@@ -45,6 +54,7 @@ interface SidebarTabSpec {
  * don't need it ignore the argument (only the side chat does today).
  */
 export interface SidebarPaneProps {
+  files: FileBrowserStore
   terminals: TerminalStore
   onNewTerminal: () => void
   onTerminalsEmpty: () => void
@@ -93,7 +103,7 @@ export const SIDEBAR_TABS: SidebarTabSpec[] = [
     labelKey: 'sidebar.files',
     shortcutKey: 'sidebar.shortcutFiles',
     icon: Folder,
-    render: () => <SidebarPanePlaceholder kind="files" />
+    render: (props) => <FilesPane files={props.files} store={props.store} filePath={null} />
   },
   {
     id: 'chat',
@@ -192,34 +202,49 @@ function SidebarTabStrip({
   onClose,
   onTogglePicker
 }: {
-  tabs: SidebarTabKind[]
-  active: SidebarTabKind | null
+  tabs: SidebarTabId[]
+  active: SidebarTabId | null
   pickerOpen: boolean
-  onSelect: (kind: SidebarTabKind) => void
-  onClose: (kind: SidebarTabKind) => void
+  onSelect: (kind: SidebarTabId) => void
+  onClose: (kind: SidebarTabId) => void
   onTogglePicker: () => void
 }) {
   const { t } = useI18n()
+  const scroll = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    const viewport = scroll.current
+    const selected = viewport?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
+    if (!viewport || !selected) return
+    const tab = selected.getBoundingClientRect(), bounds = viewport.getBoundingClientRect()
+    if (tab.left < bounds.left) viewport.scrollLeft += tab.left - bounds.left - 4
+    else if (tab.right > bounds.right) viewport.scrollLeft += tab.right - bounds.right + 4
+  }, [active, tabs])
   return (
-    <div className="flex h-11 shrink-0 items-center gap-1 border-b border-border bg-background pr-1.5">
-      <div className="min-w-0 flex-1 overflow-x-auto p-1">
+    // Height is content-driven (4px + its 36px tab list + 4px = 44px) plus the
+    // 1px rule, i.e. exactly the recipe of the transcript's task strip above
+    // (`px-4 py-1.5` + its 32px buttons). A fixed `h-11` would make this rule
+    // 1px higher than that one, because the height would then be border-box —
+    // 44 including the border the other strip adds on top.
+    <div data-sidebar-tabs className="flex shrink-0 items-center gap-1 border-b border-border bg-background pr-1.5">
+      <div ref={scroll} className="min-w-0 flex-1 overflow-x-auto p-1">
         <Tabs
           value={active ?? ''}
-          onValueChange={(value) => onSelect(value as SidebarTabKind)}
+          onValueChange={(value) => onSelect(value as SidebarTabId)}
           variant="underline"
           className="w-max"
         >
           <TabsList className="h-9 border-b-0 gap-0.5">
             {tabs.map((kind) => {
-              const spec = specFor(kind)
-              const label = t(spec.labelKey)
+              const path = filePathForTab(kind)
+              const spec = specFor(path ? 'files' : kind as SidebarTabKind)
+              const label = path ? basename(path) : t(spec.labelKey)
               const isActive = active === kind
               return (
                 <div key={kind} className="group/tab relative flex items-center">
-                  <TabsTrigger value={kind} className="h-9 min-h-0 gap-2 pl-2.5 pr-8">
-                    <spec.icon aria-hidden="true" className="size-3.5 shrink-0" />
-                    <span className="max-w-32 truncate text-xs">{label}</span>
-                  </TabsTrigger>
+                  <LabelTooltip content={path}><TabsTrigger value={kind} className="h-9 min-h-0 gap-2 pl-2.5 pr-8">
+                    {path ? <FileTypeIcon path={path} className="size-4 shrink-0" /> : <spec.icon aria-hidden="true" className="size-3.5 shrink-0" />}
+                    <MiddleEllipsis name={label} className="max-w-32 text-xs" />
+                  </TabsTrigger></LabelTooltip>
                   <Tooltip
                     content={t('sidebar.closeTab', { label })}
                     wrapperClassName="absolute right-1 z-10"
@@ -266,18 +291,20 @@ interface SidebarPanelProps {
   /** Panel width in px, owned by the workspace (it shares one budget with the
    * sidebar and the transcript, and persists what the user dragged). */
   width: number
-  /** True while the user is dragging the panel edge: the width is then read
+  /** True while either panel edge is being dragged: the pair is then read
    * straight from `--panel-right` (the drag writes it to the DOM), so a drag
-   * costs no React render at all and the panel tracks the pointer exactly. */
+   * costs no React render at all and the panel tracks the pointer exactly —
+   * including while the OTHER panel's strip is the one being pulled, which
+   * shrinks this one live. */
   resizing?: boolean
   /** True while the resize strip is hovered or dragging: light up the panel's
    * own border line instead of drawing a second one. */
   edgeActive?: boolean
-  tabs: SidebarTabKind[]
-  activeTab: SidebarTabKind | null
-  onSelectTab: (kind: SidebarTabKind) => void
+  tabs: SidebarTabId[]
+  activeTab: SidebarTabId | null
+  onSelectTab: (kind: SidebarTabId) => void
   onOpenTab: (kind: SidebarTabKind) => void
-  onCloseTab: (kind: SidebarTabKind) => void
+  onCloseTab: (kind: SidebarTabId) => void
   /** Pane payloads, owned by the workspace (see SidebarPaneProps). */
   pane: SidebarPaneProps
 }
@@ -304,6 +331,9 @@ export function SidebarPanel({
   const reduce = useReducedMotion()
   /** The add button's picker, shown over the pane area (never over the strip). */
   const [pickerOpen, setPickerOpen] = useState(false)
+  // A conversation link also reveals an already-active file while the + picker
+  // is open; activeTab alone does not change in that case.
+  useEffect(() => pane.files.subscribeOpen(() => setPickerOpen(false)), [pane.files])
   const hasTabs = tabs.length > 0
 
   const openTab = (kind: SidebarTabKind) => {
@@ -351,7 +381,7 @@ export function SidebarPanel({
               {!hasTabs || pickerOpen ? (
                 <SidebarPicker onOpen={openTab} />
               ) : (
-                activeTab && specFor(activeTab).render(pane)
+                activeTab && (filePathForTab(activeTab) ? <FilesPane files={pane.files} store={pane.store} filePath={filePathForTab(activeTab)} /> : specFor(activeTab as SidebarTabKind).render(pane))
               )}
             </div>
           </div>

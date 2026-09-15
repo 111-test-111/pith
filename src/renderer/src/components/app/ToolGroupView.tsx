@@ -49,12 +49,13 @@ export const ToolGroupView = memo(function ToolGroupView({
   const statuses = calls.map((call) => {
     const task = call.name === 'bash' ? tasks.slice().reverse().find((item) => item.toolCallId === call.id) : undefined
     const saved = toolResults.get(call.id)?.details?.bashTask
-    if (!task && saved?.background && (saved.status === 'running' || saved.status === 'stopping')) return 'unavailable'
+    if (call.name === 'bash' && !task && saved?.background && (saved.status === 'running' || saved.status === 'stopping')) return 'unavailable'
     return task?.background ? bashTaskStatus(task) : statusOf(toolResults.get(call.id), toolRuns[call.id])
   })
   const settled = statuses.every((status) => status !== 'running')
   const completed = statuses.filter((status) => status === 'success').length
   const failed = statuses.filter((status) => status === 'error').length
+  const cancelled = statuses.filter((status) => status === 'cancelled').length
   const unavailable = statuses.filter((status) => status === 'unavailable').length
 
   const summary = (
@@ -75,6 +76,7 @@ export const ToolGroupView = memo(function ToolGroupView({
         {settled ? (
           <span className="shrink-0 text-xs text-muted-foreground/60">
             · {t('tool.groupStats', { completed, failed })}
+            {cancelled ? ` · ${t('tool.groupCancelled', { count: cancelled })}` : ''}
             {unavailable ? ` · ${t('bashTask.groupUnavailable', { count: unavailable })}` : ''}
           </span>
         ) : null}

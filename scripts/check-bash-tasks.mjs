@@ -77,6 +77,8 @@ export { CheckoutCoordinator } from './src/main/rewind/coordinator';`, resolveDi
 
   const explicit = await run('background', { command: nodeCommand('setTimeout(()=>{},400)'), mode: 'background' })
   assert.equal(explicit.details.bashTask.reason, 'requested')
+  await tasks.wait(owner.sessionPath, explicit.details.bashTask.id)
+  assert.equal(tasks.get(owner.sessionPath, explicit.details.bashTask.id).lastOutputAt, undefined, 'silent completion is not an output event')
   const control = new AbortController()
   const independent = await run('signal-ownership', { command: nodeCommand('setTimeout(()=>console.log("survived"),250)'), mode: 'background' }, control.signal)
   control.abort()
@@ -93,6 +95,7 @@ export { CheckoutCoordinator } from './src/main/rewind/coordinator';`, resolveDi
   const childPid = Number(await readFile(childFile, 'utf8'))
   await tasks.stop(owner.sessionPath, parent.details.bashTask.id)
   assert.equal(tasks.get(owner.sessionPath, parent.details.bashTask.id).status, 'cancelled')
+  assert.equal(tasks.get(owner.sessionPath, parent.details.bashTask.id).lastOutputAt, undefined, 'stopping a silent process must not invent output')
   await until(() => { try { process.kill(childPid, 0); return false } catch { return true } }, 'grandchild killed', 3000)
 
   const huge = await run('bounded', { command: nodeCommand('process.stdout.write("x".repeat(10*1024*1024));console.log("END中文😀")'), mode: 'background' })

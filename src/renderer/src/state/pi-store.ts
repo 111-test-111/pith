@@ -104,6 +104,28 @@ function userProse(content: UserMsg['content']): string {
   return text.split('\n\n<file path=')[0].trim()
 }
 
+/**
+ * Append a message to the transcript by its creation time instead of pushing
+ * it onto the end.
+ *
+ * A round can reach the renderer after rounds it chronologically precedes. The
+ * SDK's auto-retry strips the errored assistant round from the live agent state
+ * (`_prepareRetry`: "Remove error message from agent state (keep in session for
+ * history)"), so every snapshot this store rebuilds from (session switch,
+ * model/thinking change, resend/fork/rewind) has no slot for it; it re-enters
+ * later as a plain event. Appending it put that round's rows — its error
+ * disclosure in particular — at the live edge, below content it belongs above,
+ * so the row appeared to drift as the retry kept streaming. Ordering by
+ * `timestamp` gives it back its own slot; equal timestamps keep arrival order.
+ *
+ * The array is always a fresh copy: callers pass `[...this.state.messages]`.
+ */
+function insertByTimestamp(messages: ChatMessage[], incoming: ChatMessage): void {
+  let index = messages.length
+  while (index > 0 && messages[index - 1].timestamp > incoming.timestamp) index -= 1
+  messages.splice(index, 0, incoming)
+}
+
 const initialState: PiState = {
   initializing: false,
   todos: null,
@@ -452,7 +474,7 @@ export class PiStore {
             (m) => m.role === 'assistant' && m.timestamp === incoming.timestamp
           )
           if (index >= 0) messages[index] = incoming
-          else messages.push(incoming)
+          else insertByTimestamp(messages, incoming)
           this.set({
             messages,
             streaming:
@@ -472,10 +494,9 @@ export class PiStore {
             run.status = incoming.isError ? 'error' : 'success'
             run.endedAt = Date.now()
           }
-          this.set({
-            messages: [...this.state.messages, incoming],
-            toolRuns
-          })
+          const messages = [...this.state.messages]
+          insertByTimestamp(messages, incoming)
+          this.set({ messages, toolRuns })
         } else if (message.role === 'custom' && !(message as any).display) {
           // Hidden extension messages stay in the transcript data only.
           break
@@ -484,7 +505,9 @@ export class PiStore {
           // summary messages) belong in the visible history too.
           const last = this.state.messages[this.state.messages.length - 1]
           if (!last || last.timestamp !== message.timestamp) {
-            this.set({ messages: [...this.state.messages, message] })
+            const messages = [...this.state.messages]
+            insertByTimestamp(messages, message)
+            this.set({ messages })
           }
         }
         break

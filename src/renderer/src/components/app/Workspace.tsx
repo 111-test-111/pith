@@ -10,6 +10,7 @@ import {
 import {
   ArrowDown,
   ArrowUp,
+  Chat01,
   ChevronDown,
   ChevronRight,
   Folder,
@@ -65,9 +66,10 @@ import { PiStore } from '@/state/pi-store'
 import type { StreamingBehavior } from '@/lib/streaming-behavior'
 import { ChatView } from './ChatView'
 import { Composer } from './Composer'
+import type { NewSessionContext } from './NewSession'
 import { EditMessageDialog, type EditMessagePayload } from './EditMessageDialog'
 import { SettingsPage } from './settings/SettingsPage'
-import { SidebarPanel, type SidebarTabKind } from './SidebarPanel'
+import { SidebarPanel, fileTabId, filePathForTab, type SidebarTabKind, type SidebarTabId } from './SidebarPanel'
 import { SessionSearch, SessionSearchTrigger } from './SessionSearch'
 import {
   CHATS_GROUP, PINNED_GROUP, canReorderSession, forgetSidebarSessions,
@@ -90,6 +92,8 @@ import {
 } from '@/lib/panel-layout'
 import { SideChatStore } from '@/state/side-chat-store'
 import { TerminalStore } from '@/state/terminal-store'
+import { FileBrowserStore } from '@/state/file-browser-store'
+import { FileNavigationProvider, type FileTarget } from '@/lib/file-navigation'
 import { AuthBridge } from './AuthBridge'
 import { AlertTriangle, RotateCcw } from '@/lib/icons'
 import { RewindDialog } from './RewindDialog'
@@ -197,9 +201,10 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
   const rightPanelRef = useRef<HTMLElement | null>(null)
   /** Panes hosted by the right rail; state lives here so closing and
    * re-opening the rail restores the same tabs. */
-  const [sidePanelTabs, setSidePanelTabs] = useState<SidebarTabKind[]>([])
-  const [sidePanelTab, setSidePanelTab] = useState<SidebarTabKind | null>(null)
+  const [sidePanelTabs, setSidePanelTabs] = useState<SidebarTabId[]>([])
+  const [sidePanelTab, setSidePanelTab] = useState<SidebarTabId | null>(null)
   const [terminals] = useState(() => new TerminalStore())
+  const [files] = useState(() => new FileBrowserStore())
   useEffect(() => () => terminals.dispose(), [terminals])
   const newTerminal = useCallback(() => {
     const current = store.getShell()
@@ -605,9 +610,30 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
     [openSideChat, terminals, newTerminal]
   )
 
+  /** Local conversation links reveal the files pane and preserve other tabs. */
+  const openFile = useCallback((target: FileTarget) => {
+    files.open(store.getShell().cwd ?? '', target)
+  }, [files, store])
+
+  useEffect(() => files.subscribeOpen(path => {
+    const id = fileTabId(path)
+    setSidePanelTabs(current => {
+      if (current.includes(id)) return current.filter(tab => tab !== 'files')
+      return current.includes('files') ? current.map(tab => tab === 'files' ? id : tab) : [...current, id]
+    })
+    setSidePanelTab(id)
+    setSidePanelOpen(true)
+  }), [files])
+
+  const selectSidePanelTab = useCallback((id: SidebarTabId) => {
+    const path = filePathForTab(id)
+    if (path) files.select(path)
+    setSidePanelTab(id)
+  }, [files])
+
   /** Close a pane; the neighbour to its left takes over as the active tab. */
   const closeSidePanelTab = useCallback(
-    (kind: SidebarTabKind) => {
+    (kind: SidebarTabId) => {
       const index = sidePanelTabs.indexOf(kind)
       if (index < 0) return
       const next = sidePanelTabs.filter((tab) => tab !== kind)
@@ -618,11 +644,13 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
       // Closing the side-chat tab destroys the thread — nothing outlives it.
       if (kind === 'chat') closeSideChat()
       if (kind === 'terminal') terminals.dispose()
+      const filePath = filePathForTab(kind)
+      if (filePath) files.close(filePath)
       // An empty rail has nothing to show (and its picker is one button away in
       // the header), so closing the last tab folds it away.
       if (next.length === 0) setSidePanelOpen(false)
     },
-    [sidePanelTabs, closeSideChat, terminals]
+    [sidePanelTabs, closeSideChat, terminals, files]
   )
 
   useEffect(() => {
@@ -703,20 +731,28 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
   const resizePanels = useCallback(
     (side: 'left' | 'right', delta: number) => {
       const base = panelLayout
-      const budget = Math.max(0, viewportWidth - CHAT_MIN)
       const min = side === 'left' ? LEFT_PANEL_MIN : RIGHT_PANEL_MIN
       const max = side === 'left' ? LEFT_PANEL_MAX : RIGHT_PANEL_MAX
-      const value = Math.round(Math.min(Math.max(dragStartWidth.current + delta, min), max))
+      // The other panel gives way only while both are on screen, and it can
+      // always give way down to its own floor — so the dragged panel's ceiling
+      // is what is left once that floor and the transcript's `CHAT_MIN` are
+      // reserved. Without it a drag past the sibling's floor crushes the
+      // transcript, which is the one column that must never be the one to give.
+      const siblingVisible = side === 'left' ? sidePanelOpen : sidebarOpen
+      const siblingMin = side === 'left' ? RIGHT_PANEL_MIN : LEFT_PANEL_MIN
+      const value = clampPanelWidth(
+        dragStartWidth.current + delta,
+        min,
+        max,
+        siblingVisible ? siblingMin : 0,
+        viewportWidth
+      )
       const next: PanelLayout = { ...base, [side]: value }
 
-      // The other panel gives way only while both are on screen.
-      const siblingVisible = side === 'left' ? sidePanelOpen : sidebarOpen
       if (siblingVisible) {
-        const siblingMin = side === 'left' ? RIGHT_PANEL_MIN : LEFT_PANEL_MIN
-        const room = budget - value
-        const sibling = Math.max(siblingMin, Math.min(base[side === 'left' ? 'right' : 'left'], room))
-        if (side === 'left') next.right = Math.round(sibling)
-        else next.left = Math.round(sibling)
+        const room = Math.max(0, viewportWidth - CHAT_MIN) - value
+        const sibling = side === 'left' ? 'right' : 'left'
+        next[sibling] = Math.round(Math.max(siblingMin, Math.min(base[sibling], room)))
       }
 
       dragPair.current = next
@@ -861,6 +897,33 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
   }, [sessions, folders, shell.cwd])
 
   const sessionsByPath = useMemo(() => new Map(sessions.map((session) => [session.path, session])), [sessions])
+
+  /** Projects a new chat can be started in: the sidebar's own folder order,
+   * with the active cwd kept in front even before the list catches up. The
+   * projectless workspace is never offered as a path — only as "no project". */
+  const newSessionProjects = useMemo(() => {
+    const options = folderGroups.map((group) => ({ cwd: group.cwd, label: basename(group.cwd) }))
+    if (shell.cwd && !shell.projectless && !options.some((option) => option.cwd === shell.cwd)) {
+      options.unshift({ cwd: shell.cwd, label: basename(shell.cwd) })
+    }
+    return options
+  }, [folderGroups, shell.cwd, shell.projectless])
+
+  /** Landing-page context: which project the new chat runs in, and how to move
+   * it. Changing it creates a fresh session there (the SDK fixes a session's
+   * cwd at creation); an unanswered session is only written once an assistant
+   * reply lands, so switching back and forth leaves no stray file behind. */
+  const newSessionStart = useMemo<NewSessionContext | undefined>(() => {
+    if (!isNewSession) return undefined
+    const active = shell.cwd && !shell.projectless ? shell.cwd : null
+    return {
+      projectName: active ? basename(active) : null,
+      cwd: active,
+      projects: newSessionProjects,
+      onProjectChange: (cwd) => newSession(cwd ?? undefined)
+    }
+  }, [isNewSession, shell.cwd, shell.projectless, newSessionProjects, newSession])
+
   const pinnedPaths = useMemo(() => new Set(sidebarPreferences.pinned), [sidebarPreferences.pinned])
   const sidebarGroups = useMemo(() => {
     const ranks = new Map(sidebarPreferences.order.map((path, index) => [path, index]))
@@ -901,6 +964,7 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
   }, [liveSessionPaths, sessions, shell.isStreaming, shell.sessionPath])
 
   return (
+    <FileNavigationProvider cwd={shell.cwd ?? ''} openFile={openFile}>
     <SessionSearch sessions={sessions} activePath={shell.sessionPath ?? null} runningPaths={runningPaths} onOpen={openSession}>
     <ChatApp
       className="relative h-full flex-col rounded-none border-0"
@@ -957,7 +1021,9 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
       <AnimatedSidebar
         ariaLabel={t('workspace.sessions')}
         collapsible="offcanvas"
-        resizing={resizing === 'left'}
+        // ANY panel drag writes both width variables straight to the DOM, so
+        // both panels read them — not just the one whose own strip is pulled.
+        resizing={resizing !== null}
         className="min-h-0 data-[mobile=true]:pt-[var(--app-titlebar-height)]"
         panelClassName={cn('h-full border-border/50 bg-background', activeEdge.left && 'border-primary')}
       >
@@ -1077,7 +1143,7 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
                         />
                       )
                     }
-                    return <MessageSquareDashed aria-hidden="true" className="size-4" />
+                    return <Chat01 aria-hidden="true" className="size-4" />
                   }}
                   renderActions={(item) => {
                     // Only project (folder) rows get the shortcut; a session row
@@ -1210,9 +1276,7 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
             ) : null}
 
             <Composer
-              start={isNewSession
-                ? { projectName: shell.cwd && !shell.projectless ? basename(shell.cwd) : null }
-                : undefined}
+              start={newSessionStart}
               models={models}
               model={currentModel}
               thinkingLevel={shell.thinkingLevel}
@@ -1247,14 +1311,19 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
           <SidebarPanel
             open={sidePanelOpen}
             width={panelLayout.right}
-            resizing={resizing === 'right'}
+            // Any drag, not just this panel's own: a left-panel drag shrinks
+            // this one live (the pair gives way immediately), and a panel that
+            // kept reading its committed React width would only follow on
+            // release — after the transcript had already been squeezed.
+            resizing={resizing !== null}
             edgeActive={activeEdge.right}
             tabs={sidePanelTabs}
             activeTab={sidePanelTab}
-            onSelectTab={setSidePanelTab}
+            onSelectTab={selectSidePanelTab}
             onOpenTab={openSidePanelTab}
             onCloseTab={closeSidePanelTab}
             pane={{
+              files,
               terminals,
               onNewTerminal: newTerminal,
               onTerminalsEmpty: () => closeSidePanelTab('terminal'),
@@ -1329,5 +1398,6 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
       />
     </ChatApp>
     </SessionSearch>
+    </FileNavigationProvider>
   )
 }

@@ -16,6 +16,7 @@ export default defineConfig({
         input: {
           index: resolve('src/main/index.ts'),
           'session-search-worker': resolve('src/main/pi/session-search-worker.ts'),
+          'usage-worker': resolve('src/main/pi/usage-worker.ts'),
           'rewind-worker': resolve('src/main/rewind/worker.ts'),
           'terminal-host': resolve('src/main/terminal/host.ts')
         },
@@ -34,6 +35,7 @@ export default defineConfig({
   },
   renderer: {
     plugins: [react(), tailwindcss()],
+    worker: { format: 'es' },
     resolve: {
       alias: {
         '@': resolve('src/renderer/src')

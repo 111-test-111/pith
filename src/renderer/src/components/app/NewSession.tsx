@@ -1,35 +1,95 @@
-import { ArrowUpRight, Compass, Folder, GitPullRequest, Lightbulb, Shapes, WandSparkles } from '@/lib/icons'
+import { useState } from 'react'
+import { ArrowUpRight, Chat01, Compass, Folder, GitPullRequest, Lightbulb, Shapes, WandSparkles } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
+import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/motion/select'
+import { TiltCard } from '@/components/motion/tilt-card'
 import { useI18n } from '@/i18n'
 import { PithIcon } from './PithIcon'
+
+/** Sentinel Select value for a projectless chat — project values are always
+ * absolute paths, so this can never collide with a real folder. */
+const NO_PROJECT = '__no_project__'
+
+export interface NewSessionProject {
+  /** Absolute project directory. */
+  cwd: string
+  /** Directory name, shown in the trigger and the option row. */
+  label: string
+}
 
 export interface NewSessionContext {
   /** Display name only; the internal projectless workspace must stay hidden. */
   projectName: string | null
+  /** Active working directory, or null for a projectless chat. */
+  cwd: string | null
+  /** Known projects this new chat can be started in. */
+  projects: NewSessionProject[]
+  /** Re-bind the new chat to another project; null means no project. */
+  onProjectChange: (cwd: string | null) => void | Promise<void>
 }
 
-export function NewSessionHeader({ projectName }: NewSessionContext) {
+export function NewSessionHeader({ projectName, cwd, projects, onProjectChange }: NewSessionContext) {
   const { t } = useI18n()
+  const [switching, setSwitching] = useState(false)
+
+  const handleProjectChange = (next: string) => {
+    const target = next === NO_PROJECT ? null : next
+    if (target === cwd) return
+    // Switching creates a fresh session in that folder; hold the control until
+    // it lands so two switches cannot race each other.
+    setSwitching(true)
+    void Promise.resolve(onProjectChange(target)).finally(() => setSwitching(false))
+  }
 
   return (
     <div className="mb-6 flex flex-col items-start text-left">
       <div className="mb-5 flex max-w-full items-center gap-2 text-xs text-muted-foreground">
         <PithIcon className="mr-1 size-9" />
         <span className="shrink-0">{t('newSession.label')}</span>
-        {projectName ? (
-          <>
-            <span aria-hidden="true" className="h-3 w-px shrink-0 bg-border" />
-            <Folder aria-hidden="true" className="size-3 shrink-0" />
-            <span className="min-w-0 truncate">{projectName}</span>
-          </>
-        ) : null}
+        <span aria-hidden="true" className="h-3 w-px shrink-0 bg-border" />
+        <Select
+          value={cwd ?? NO_PROJECT}
+          onValueChange={handleProjectChange}
+          disabled={switching}
+          className="w-auto"
+        >
+          <SelectTrigger
+            aria-label={t('newSession.projectAria')}
+            className="h-7 w-auto gap-1.5 rounded-control border-0 bg-transparent px-1.5 text-xs font-normal text-muted-foreground hover:bg-muted hover:text-foreground"
+          >
+            <span className="flex min-w-0 items-center gap-1.5">
+              <Folder aria-hidden="true" className="size-3 shrink-0" />
+              <span className="max-w-56 truncate">{projectName ?? t('newSession.noProject')}</span>
+            </span>
+          </SelectTrigger>
+          <SelectContent className="left-0 right-auto w-72">
+            <div className="max-h-72 overflow-y-auto">
+              <SelectItem value={NO_PROJECT} className="py-1.5">
+                <span className="flex min-w-0 flex-1 items-center gap-2">
+                  <Chat01 aria-hidden="true" className="size-3.5 shrink-0" />
+                  <span className="truncate text-sm text-foreground">
+                    {t('newSession.noProject')}
+                  </span>
+                </span>
+              </SelectItem>
+              {projects.length ? <div aria-hidden className="mx-1 my-1 h-px bg-border" /> : null}
+              {projects.map((project) => (
+                <SelectItem key={project.cwd} value={project.cwd} className="py-1.5">
+                  <span className="flex min-w-0 flex-1 flex-col">
+                    <span className="truncate text-sm text-foreground">{project.label}</span>
+                    <span dir="ltr" className="truncate text-[11px] text-muted-foreground">
+                      {project.cwd}
+                    </span>
+                  </span>
+                </SelectItem>
+              ))}
+            </div>
+          </SelectContent>
+        </Select>
       </div>
       <h1 className="text-2xl font-medium tracking-tight text-foreground @lg:text-[32px] @lg:leading-tight">
         {t('newSession.title')}
       </h1>
-      <p className="mt-2 max-w-md text-sm leading-6 text-muted-foreground">
-        {t('newSession.description')}
-      </p>
     </div>
   )
 }
@@ -54,34 +114,42 @@ export function NewSessionSuggestions({ projectName, onSelect }: NewSessionConte
 
   return (
     <div className="mt-5">
-      <p className="mb-3 px-1 text-xs text-muted-foreground">{t('newSession.suggestions')}</p>
       <div className="grid grid-cols-1 gap-2 @xl:grid-cols-3">
         {starters.map(({ key, icon: Icon }) => (
-          <Button
+          <TiltCard
             key={key}
-            type="button"
-            variant="ghost"
-            pressScale={0.99}
-            onClick={() => onSelect(t(`newSession.${key}.prompt`))}
-            className="group h-auto min-w-0 flex-col items-start justify-start gap-1.5 rounded-control border border-border/50 bg-card/30 px-3.5 py-3 text-left hover:border-border"
+            max={8}
+            glareOpacity={0.07}
+            glareColor="var(--primary)"
+            className="group border border-border/50 bg-card/30 transition-colors hover:border-border"
           >
-            <span className="flex w-full items-center gap-2.5">
-              <Icon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground transition-colors group-hover:text-primary" />
-              <span className="text-sm font-medium text-foreground">{t(`newSession.${key}.title`)}</span>
-              <ArrowUpRight aria-hidden="true" className="ml-auto size-3.5 shrink-0 text-muted-foreground/50" />
-            </span>
-            <span className="text-xs font-normal leading-5 text-muted-foreground">
-              {t(`newSession.${key}.description`)}
-            </span>
-          </Button>
+            {/* The card surface carries the frame, so the tilt moves it with
+                the content; the button only owns focus, hover and the press.
+                Its own 2% hover scale is cancelled — growing the content
+                inside a frame that stays put pushed the text out of the card. */}
+            <Button
+              type="button"
+              variant="ghost"
+              whileHover={{ scale: 1 }}
+              pressScale={0.99}
+              onClick={() => onSelect(t(`newSession.${key}.prompt`))}
+              className="h-full w-full min-w-0 flex-col items-start justify-start gap-1 rounded-none bg-transparent px-3 py-2.5 text-left hover:bg-transparent"
+            >
+              <span className="flex w-full items-center gap-2.5">
+                <Icon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground transition-colors group-hover:text-primary" />
+                <span className="min-w-0 truncate text-sm font-medium text-foreground">{t(`newSession.${key}.title`)}</span>
+                <ArrowUpRight aria-hidden="true" className="ml-auto size-3.5 shrink-0 text-muted-foreground/50" />
+              </span>
+              {/* One line, always: the landing block is centred on its own
+                  height, so a description that wrapped here (another UI font,
+                  a longer translation) grew this row and sank the whole page
+                  — including the title and the input box — by half the delta. */}
+              <span className="w-full truncate text-xs font-normal leading-4 text-muted-foreground">
+                {t(`newSession.${key}.description`)}
+              </span>
+            </Button>
+          </TiltCard>
         ))}
-      </div>
-      <div className="mt-5 flex flex-wrap items-center gap-x-5 gap-y-2 px-1 text-xs text-muted-foreground/80">
-        <span className="inline-flex items-center gap-1.5">
-          <span className="font-mono">@</span>
-          {t('newSession.hintMention')}
-        </span>
-        <span>{t('newSession.hintDrop')}</span>
       </div>
     </div>
   )

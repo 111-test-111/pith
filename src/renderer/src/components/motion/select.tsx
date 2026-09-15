@@ -201,10 +201,17 @@ export function Select({
 
 export interface SelectTriggerProps {
   className?: string;
+  /**
+   * local patch (pi-app): forwarded as the button's accessible name. The
+   * registry version rendered the button from `className`/`children` alone, so
+   * every call site's `aria-label` (the model picker's, the new-chat project
+   * picker's) was silently dropped and a trigger was announced as its value.
+   */
+  "aria-label"?: string;
   children: ReactNode;
 }
 
-export function SelectTrigger({ className, children }: SelectTriggerProps) {
+export function SelectTrigger({ className, "aria-label": ariaLabel, children }: SelectTriggerProps) {
   const ctx = useSelectContext("SelectTrigger");
   const isTop = ctx.placement === "top";
   // edge facing the panel flattens then rounds; the far edge stays rounded.
@@ -225,6 +232,7 @@ export function SelectTrigger({ className, children }: SelectTriggerProps) {
       type="button"
       id={ctx.triggerId}
       disabled={ctx.disabled}
+      aria-label={ariaLabel}
       aria-haspopup="listbox"
       aria-expanded={ctx.open}
       aria-controls={ctx.listId}

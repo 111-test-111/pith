@@ -108,8 +108,37 @@ function TodoStatusIcon({
   progress?: number;
 }) {
   const reduce = useReducedMotion() ?? false;
-  const normalizedProgress =
-    progress === undefined ? 0.68 : Math.min(100, Math.max(0, progress)) / 100;
+  const running = status === "in-progress";
+  // local patch (pi-app): in-progress uses the sidebar's live-session spin + theme
+  // colour, but the same r=9 / 1.5 stroke circle as completed/pending rows.
+  // progress === 0 and reduced motion keep paused/retained rows still.
+  const spinning = running && progress === undefined && !reduce;
+
+  if (running) {
+    return (
+      <svg
+        aria-hidden="true"
+        viewBox="0 0 24 24"
+        data-todo-progress
+        className={cn(
+          "mx-0.5 size-5 shrink-0 text-primary",
+          spinning && "animate-spin",
+        )}
+      >
+        <circle
+          cx="12"
+          cy="12"
+          r="9"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+          pathLength="1"
+          strokeDasharray="0.75 0.25"
+        />
+      </svg>
+    );
+  }
 
   return (
     <motion.svg
@@ -118,7 +147,8 @@ function TodoStatusIcon({
       initial={false}
       className={cn(
         "mx-0.5 size-5 shrink-0 overflow-visible text-muted-foreground",
-        status === "in-progress" && "text-foreground",
+        // local patch (pi-app): every settled status owns a colour — done, dropped.
+        status === "completed" && "text-emerald-600 dark:text-emerald-400",
         status === "cancelled" && "text-rose-600 dark:text-rose-400",
       )}
     >
@@ -134,35 +164,6 @@ function TodoStatusIcon({
         initial={false}
         animate={{ fillOpacity: status === "completed" ? 0.06 : 0 }}
         transition={reduce ? { duration: 0 } : { duration: 0.18, ease: EASE_OUT }}
-        className={cn(status === "in-progress" && "opacity-20")}
-      />
-      <motion.circle
-        data-todo-progress
-        cx="12"
-        cy="12"
-        r="9"
-        pathLength="1"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        initial={false}
-        animate={{
-          pathLength: status === "in-progress" ? normalizedProgress : 0,
-          opacity: status === "in-progress" ? 1 : 0,
-          rotate:
-            status === "in-progress" && progress === undefined && !reduce
-              ? 360
-              : -90,
-        }}
-        transition={
-          status === "in-progress" && progress === undefined && !reduce
-            ? { rotate: { duration: 1.1, repeat: Infinity, ease: "linear" } }
-            : reduce
-              ? { duration: 0 }
-              : SPRING_LAYOUT
-        }
-        style={{ transformOrigin: "12px 12px" }}
       />
       <IconPaths
         icon="check"
@@ -368,7 +369,17 @@ export function TodoList({
                       </span>
                     </span>
                     {item.detail ? (
-                      <span className="shrink-0 text-sm text-muted-foreground/55">
+                      <span
+                        className={cn(
+                          "shrink-0 text-sm text-muted-foreground/55",
+                          // local patch (pi-app): the label carries the same status colour.
+                          status === "in-progress" && "text-foreground/70",
+                          status === "completed" &&
+                            "text-emerald-600 dark:text-emerald-400",
+                          status === "cancelled" &&
+                            "text-rose-600 dark:text-rose-400",
+                        )}
+                      >
                         {item.detail}
                       </span>
                     ) : null}

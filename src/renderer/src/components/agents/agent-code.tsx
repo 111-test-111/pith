@@ -6,16 +6,12 @@ import {
   useEffect,
   useState,
 } from "react";
-import { createHighlighter, type Highlighter } from "shiki";
+import { createHighlighter, type Highlighter, type BundledLanguage } from "shiki";
 import { cn } from "@/lib/utils";
 
-export type AgentCodeLanguage =
-  | "bash"
-  | "diff"
-  | "json"
-  | "text"
-  | "tsx"
-  | "typescript";
+// local patch (pi-app): file previews use Shiki's full language set, loaded on
+// demand. Existing transcript consumers retain the same initial grammars.
+export type AgentCodeLanguage = BundledLanguage | "text";
 
 export interface AgentCodeToken {
   content: string;
@@ -83,9 +79,13 @@ function ensureAgentCodeTokens(
   if (pending) return pending;
 
   const promise = getAgentCodeHighlighter()
-    .then((highlighter) => {
+    .then(async (highlighter) => {
       const already = tokenCache.get(key);
       if (already) return already;
+      // local patch (pi-app): markdown/source files need their own grammars.
+      if (language !== "text" && !highlighter.getLoadedLanguages().includes(language)) {
+        await highlighter.loadLanguage(language);
+      }
       const lines = highlighter
         .codeToTokensWithThemes(code, {
           lang: language,
@@ -106,6 +106,9 @@ function ensureAgentCodeTokens(
       tokenCache.set(key, lines);
       return lines;
     })
+    // local patch (pi-app): a missing grammar/chunk must leave readable text,
+    // never an unhandled rejection in a file or transcript preview.
+    .catch(() => [] as AgentCodeTokenLines)
     .finally(() => {
       tokenPending.delete(key);
     });

@@ -31,9 +31,10 @@ import { RewindFailure, failure as rewindFailure } from '../rewind/types'
 import { ChangeScopes } from './change-scopes'
 import { TodoState, createTodoTool } from './todo'
 import { TODO_TOOL_NAME } from './todo-protocol'
-import { BASH_MIN_WAIT_MS, BASH_MAX_WAIT_MS } from '../../shared/types'
+import { BASH_MIN_WAIT_MS, BASH_MAX_WAIT_MS, type StartupSessionMode } from '../../shared/types'
 import { FileIndex, readAttachment } from './files'
 import { SessionSearch } from './session-search'
+import { UsageAggregator } from './usage'
 import { ensureDefaultWorkspace, isDefaultWorkspace } from './default-workspace'
 import { appendPromptPath, readAppendPrompt, writeAppendPrompt } from './append-prompt'
 import {
@@ -97,6 +98,7 @@ import type {
   SideChatAskPayload,
   SideChatHistoryEntry,
   TestModelResultDTO,
+  UsageStatsDTO,
   ThinkingLevel,
   ToolCatalogDTO,
   ToolInfoDTO,
@@ -291,7 +293,15 @@ export class PiManager {
     this.bashMaxWaitMs = value
     return value
   }
+  /** Persist which session the next launch opens. */
+  setStartupMode(mode: StartupSessionMode): StartupSessionMode {
+    if (mode !== 'resume' && mode !== 'new') throw new Error('Invalid startup preference')
+    saveSettings({ ...loadSettings(), startup: mode })
+    this.startup = mode
+    return mode
+  }
   private sessionSearch = new SessionSearch()
+  private usageAggregator = new UsageAggregator()
   private modelRuntime: ModelRuntime | null = null
   /** Lazily created; reads/writes ~/.pi/agent/settings.json (default model). */
   private settingsManagerInstance: SettingsManager | null = null
@@ -321,6 +331,8 @@ export class PiManager {
   /** Whether context files (AGENTS.md/CLAUDE.md) are injected into the system
    * prompt. Read live by the resource-loader override, so a reload applies it. */
   private includeContextFiles = loadSettings().contextFiles !== false
+  /** What a boot opens (Settings → General → Startup). */
+  private startup: StartupSessionMode = loadSettings().startup
   /** Extensions switched off in Settings. Read live by the loader wrapper, so
    * `session.reload()` applies a toggle without rebuilding services. */
   private disabledExtensions = new Set(loadSettings().disabledExtensions ?? [])
@@ -375,7 +387,14 @@ export class PiManager {
     if (!isDefaultWorkspace(cwd)) {
       this.folders = [cwd, ...this.folders.filter((f) => f !== cwd)].slice(0, MAX_FOLDERS)
     }
-    saveSettings({ ...loadSettings(), cwd: this.cwd && !isDefaultWorkspace(this.cwd) ? this.cwd : null, folders: this.folders })
+    saveSettings({
+      ...loadSettings(),
+      cwd: this.cwd && !isDefaultWorkspace(this.cwd) ? this.cwd : null,
+      folders: this.folders,
+      // The session the user is actually in, so the `resume` startup reopens
+      // this one instead of guessing from file mtimes.
+      startupSession: this.activeSession?.path ?? null
+    })
   }
 
   /** Switch the active workspace folder (file index, session dir context). */
@@ -1039,17 +1058,43 @@ export class PiManager {
     }
   }
 
-  /** Initialize (or re-initialize for a new cwd) with the most recent session. */
+  /** Initialize (or re-initialize for a new cwd) with the startup session. */
   async init(cwd?: string): Promise<SessionSnapshotDTO> {
     const navigationEpoch = ++this.navigationEpoch
     cwd = cwd && !isDefaultWorkspace(cwd) ? cwd : await ensureDefaultWorkspace()
-    const sessions = await SessionManager.list(cwd).catch(() => [])
-    const latest = sessions[0]
-    const sessionManager = latest
-      ? SessionManager.open(latest.path)
-      : SessionManager.create(cwd)
-    await this.buildSession(sessionManager, true, navigationEpoch)
+    await this.buildSession(await this.startupSession(cwd), true, navigationEpoch)
     return this.snapshot()
+  }
+
+  /**
+   * The session a boot lands in, per the persisted startup preference.
+   *
+   * `resume` reopens exactly the session that was active at quit — the one
+   * saved by `rememberFolder` — but only while it still exists and still
+   * belongs to the folder being opened; a deleted or trashed session starts a
+   * fresh one instead of resurrecting an older file. `new` always starts a new
+   * session. Only a first launch (or a fallback) picks the newest session of
+   * the folder, which is what used to make a launch unpredictable.
+   */
+  private async startupSession(cwd: string): Promise<SessionManager> {
+    if (this.startup === 'new') return SessionManager.create(cwd)
+    const saved = this.startupSessionPath()
+    if (saved && existsSync(saved)) {
+      try {
+        const reopened = SessionManager.open(saved)
+        if (reopened.getHeader()?.cwd === cwd) return reopened
+      } catch {
+        /* unreadable file — fall through to the folder's newest session */
+      }
+    }
+    const sessions = await SessionManager.list(cwd).catch(() => [])
+    return sessions[0] ? SessionManager.open(sessions[0].path) : SessionManager.create(cwd)
+  }
+
+  /** Session file the last activation persisted, if any. */
+  private startupSessionPath(): string | null {
+    const saved = loadSettings().startupSession
+    return typeof saved === 'string' && saved.length > 0 ? saved : null
   }
 
   /** New chat without a project, or inside an explicitly selected project. */
@@ -1191,6 +1236,11 @@ export class PiManager {
   async searchSessions(request: SessionSearchRequest): Promise<SessionSearchResultDTO> {
     const result = await this.sessionSearch.search(request)
     return { ...result, hits: result.hits.map((hit) => ({ ...hit, projectless: isDefaultWorkspace(hit.cwd) })) }
+  }
+
+  /** Cross-session usage stats for Settings → Usage (worker-aggregated, TTL-cached). */
+  usageStats(): Promise<UsageStatsDTO> {
+    return this.usageAggregator.stats()
   }
 
   /** Drop a folder from the known list (and stop treating it as active). */
@@ -2340,6 +2390,7 @@ export class PiManager {
     this.checkoutCoordinator.close()
     this.navigationEpoch += 1
     this.sessionSearch.dispose()
+    this.usageAggregator.dispose()
     if (this.contextUsageTimer) clearInterval(this.contextUsageTimer)
     this.contextUsageTimer = null
     for (const controller of this.sideChats.values()) controller.abort()

@@ -2,7 +2,7 @@ import { useBashTask, bashTaskStatus } from '@/lib/bash-tasks'
 import { BashTaskRow } from './BashTaskView'
 import { memo, useMemo, useState } from 'react'
 import { FileDiff } from '@/components/agents/file-diff'
-import { ToolResult, ToolResultOutput } from '@/components/agents/tool-result'
+import { ToolResult, ToolResultOutput, type ToolResultStatus } from '@/components/agents/tool-result'
 import { parseUnifiedDiff, countDiffChanges, synthesizeWritePatch } from '@/lib/diff'
 import { basename } from '@/lib/format'
 import { displayToolDir } from '@/lib/tool-path'
@@ -86,7 +86,7 @@ export function statusOf(result: ToolResultMsg | undefined, run: ToolRun | undef
  * carries no start time (PiStore.settleToolRuns), so it has no output and no
  * diff, and the row must not fall back to a success placeholder like "Wrote x".
  */
-function neverRan(status: ReturnType<typeof statusOf>, run: ToolRun | undefined): boolean {
+function neverRan(status: ToolResultStatus, run: ToolRun | undefined): boolean {
   return status === 'error' && run?.startedAt === 0
 }
 
@@ -117,7 +117,7 @@ function patchOf(
  * word as a command. Render all of it as plain text; failures get the
  * destructive color.
  */
-function outputProps(status: ReturnType<typeof statusOf>) {
+function outputProps(status: ToolResultStatus) {
   return {
     language: 'text' as const,
     highlight: false,
@@ -363,8 +363,13 @@ export const ToolCallView = memo(function ToolCallView({ call, result, run, cwd 
     }
 
     default: {
+      const controlAction = call.name === 'bash_task' &&
+        (args.action === 'list' || args.action === 'status' || args.action === 'output' || args.action === 'stop')
+        ? args.action as 'list' | 'status' | 'output' | 'stop' : undefined
       const label =
-        call.name === 'grep'
+        controlAction
+          ? `bash_task · ${t(`bashTask.action.${controlAction}`)}`
+          : call.name === 'grep'
           ? `grep · ${String(args.pattern ?? '')}`
           : call.name === 'find'
             ? `find · ${String(args.pattern ?? '')}`

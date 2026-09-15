@@ -47,7 +47,7 @@ function BashOutput({ task }: { task: BashTaskDTO }) {
       <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
         <span>{t('bashTask.id', { id: task.id })}</span>
         <span>{t('bashTask.elapsed', { seconds: Math.max(0, ((task.endedAt ?? now) - task.startedAt) / 1000).toFixed(1) })}</span>
-        {task.lastOutputAt ? <span>{t('bashTask.lastOutput', { seconds: Math.max(0, (now - task.lastOutputAt) / 1000).toFixed(0) })}</span> : null}
+        {task.lastOutputAt && task.outputChars > 0 ? <span>{t('bashTask.lastOutput', { seconds: Math.max(0, (now - task.lastOutputAt) / 1000).toFixed(0) })}</span> : null}
         {task.exitCode != null ? <span>{t('bashTask.exitCode', { code: task.exitCode })}</span> : null}
         {bashTaskLive(task) ? <Button variant="ghost" size="sm" disabled={stopping || task.status === 'stopping'} onClick={() => void stop()}>{t('bashTask.stop')}</Button> : null}
         <Button variant="ghost" size="sm" onClick={() => void window.pi.openPath(task.logPath).then((message) => { if (message) setError(true) }).catch(() => setError(true))}>{t('bashTask.openLog')}</Button>
@@ -146,4 +146,3 @@ export function BashTaskList({ tasks }: { tasks: readonly BashTaskDTO[] }) {
     </div>
   )
 }
-

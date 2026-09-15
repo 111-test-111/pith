@@ -195,7 +195,9 @@ export class BashTaskManager {
   }
 
   private append(task: Task, text: string, bytes?: Buffer): void {
-    if (task.finishing) return
+    // Decoder end() commonly returns an empty string. Process exit is not an
+    // output event, especially for a silent command stopped by the model.
+    if (task.finishing || (!text && !bytes?.length)) return
     task.tail = (task.tail + text).slice(-TAIL_CHARS)
     task.dto.outputChars += text.length
     task.dto.lastOutputAt = Date.now()

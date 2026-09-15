@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
-import { ArrowLeft, GraduationCap, KeyRound, Palette, Puzzle, ScrollText, Settings2, Wrench } from '@/lib/icons'
+import { ArrowLeft, Chart, GraduationCap, KeyRound, Palette, Puzzle, ScrollText, Settings2, Wrench } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/motion/tabs'
 import { EASE_OUT } from '@/lib/ease'
@@ -13,6 +13,7 @@ import { ProvidersSection } from './ProvidersSection'
 import { ToolsSection } from './ToolsSection'
 import { ExtensionsSection } from './ExtensionsSection'
 import { SkillsSection } from './SkillsSection'
+import { UsageSection } from './UsageSection'
 import { WindowTitlebar } from '../WindowTitlebar'
 
 interface SectionProps {
@@ -83,6 +84,13 @@ const SECTIONS: {
     descriptionKey: 'settings.skillsDesc',
     icon: <GraduationCap className="size-4" />,
     render: () => <SkillsSection />
+  },
+  {
+    id: 'usage',
+    labelKey: 'settings.usage',
+    descriptionKey: 'settings.usageDesc',
+    icon: <Chart className="size-4" />,
+    render: () => <UsageSection />
   }
 ]
 
@@ -140,7 +148,7 @@ export function SettingsPage({ open, onBack, ...sectionProps }: SettingsPageProp
             {SECTIONS.map((entry) => (
               <TabsContent key={entry.id} value={entry.id} className="mt-0 min-h-0 flex-1">
                 <div className="h-full overflow-y-auto overscroll-contain px-6 py-7 md:px-10">
-                  <div className="mx-auto w-full max-w-2xl">
+                  <div className="mx-auto w-full max-w-3xl">
                     <h2 className="text-lg font-semibold tracking-tight text-foreground">
                       {t(entry.labelKey)}
                     </h2>

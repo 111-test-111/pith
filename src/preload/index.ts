@@ -19,6 +19,15 @@ import type {
   DiscoveredModelDTO,
   FileHitDTO,
   FilePreviewDTO,
+  FileBrowserRequest,
+  FileActionResultDTO,
+  FileDirectoryDTO,
+  FileDocumentDTO,
+  FileGitDiffDTO,
+  FontDataDTO,
+  PdfStatDTO,
+  TableSliceDTO,
+  TableStatDTO,
   ForkResultDTO,
   ImageContent,
   ModelConfigSourceDTO,
@@ -38,12 +47,14 @@ import type {
   SideChatAskPayload,
   SideChatEvent,
   SkillContentDTO,
+  StartupSessionMode,
   TestModelResultDTO,
   ThinkingLevel,
   TerminalCreatePayload,
   TerminalCreateResult,
   TerminalEvent,
   ToolCatalogDTO,
+  UsageStatsDTO,
   WindowTheme
 } from '../shared/types'
 
@@ -59,6 +70,8 @@ const api = {
   rewindRecover: (path: string, operationId: string): Promise<RewindResult<RewindCommitDTO>> => ipcRenderer.invoke('rewind:recover', path, operationId),
   onRewind: (listener: (event: { sessionPath: string }) => void) => subscribe('pi:rewind', listener),
   setCheckpointsEnabled: (enabled: boolean): Promise<boolean> => ipcRenderer.invoke('app:setCheckpointsEnabled', enabled),
+  setStartup: (mode: StartupSessionMode): Promise<StartupSessionMode> =>
+    ipcRenderer.invoke('app:setStartup', mode),
   setWindowTheme: (theme: WindowTheme): void => ipcRenderer.send('window:setTheme', theme),
   terminalCreate: (payload: TerminalCreatePayload): Promise<TerminalCreateResult> =>
     ipcRenderer.invoke('terminal:create', payload),
@@ -89,6 +102,7 @@ const api = {
   listSessions: (): Promise<SessionSummaryDTO[]> => ipcRenderer.invoke('pi:listSessions'),
   searchSessions: (request: SessionSearchRequest): Promise<SessionSearchResultDTO> =>
     ipcRenderer.invoke('pi:searchSessions', request),
+  usageStats: (): Promise<UsageStatsDTO> => ipcRenderer.invoke('pi:usageStats'),
   deleteSession: (path: string): Promise<SessionSnapshotDTO | null> =>
     ipcRenderer.invoke('pi:deleteSession', path),
   renameSession: (path: string, name: string): Promise<void> =>
@@ -165,6 +179,22 @@ const api = {
   searchFiles: (query: string): Promise<FileHitDTO[]> =>
     ipcRenderer.invoke('files:search', query),
   readFile: (path: string): Promise<FilePreviewDTO> => ipcRenderer.invoke('files:read', path),
+  listFileDirectory: (request: FileBrowserRequest, offset?: number): Promise<FileDirectoryDTO> => ipcRenderer.invoke('files:directory', request, offset),
+  readFileDocument: (request: FileBrowserRequest): Promise<FileDocumentDTO> => ipcRenderer.invoke('files:document', request),
+  readFileGitDiff: (request: FileBrowserRequest): Promise<FileGitDiffDTO> => ipcRenderer.invoke('files:gitDiff', request),
+  /** PDF preview reads: the size, then exactly the byte ranges pdf.js asks for
+   * (`end` exclusive, see shared/pdf.ts). */
+  pdfStat: (request: FileBrowserRequest): Promise<PdfStatDTO> => ipcRenderer.invoke('files:pdfStat', request),
+  pdfRange: (request: FileBrowserRequest, begin: number, end: number): Promise<Uint8Array> => ipcRenderer.invoke('files:pdfRange', request, begin, end),
+  /** The bytes of a font file, for `new FontFace(family, buffer)`. A font is
+   * deliberately not served over `pith-media` (see main/font.ts). */
+  fontData: (request: FileBrowserRequest): Promise<FontDataDTO> => ipcRenderer.invoke('files:fontData', request),
+  /** Table preview reads: the format/delimiter, record-aligned text slices of a
+   * delimited file, and raw byte ranges of a spreadsheet's ZIP (shared/table.ts). */
+  tableStat: (request: FileBrowserRequest): Promise<TableStatDTO> => ipcRenderer.invoke('files:tableStat', request),
+  tableSlice: (request: FileBrowserRequest, offset: number, maxBytes?: number): Promise<TableSliceDTO> => ipcRenderer.invoke('files:tableSlice', request, offset, maxBytes),
+  tableRange: (request: FileBrowserRequest, begin: number, end: number): Promise<Uint8Array> => ipcRenderer.invoke('files:tableRange', request, begin, end),
+  saveFileCopy: (path: string): Promise<FileActionResultDTO> => ipcRenderer.invoke('files:saveCopy', path),
   readImage: (path: string): Promise<ImageContent | null> =>
     ipcRenderer.invoke('files:readImage', path),
   /**

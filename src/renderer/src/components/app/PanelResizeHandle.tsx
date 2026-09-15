@@ -18,6 +18,10 @@ interface PanelResizeHandleProps {
   /** True while the strip is hovered or dragging, so the panel can light up the
    * border line it already has instead of drawing a second one. */
   onActiveChange?: (active: boolean) => void
+  className?: string
+  /** Optional keyboard support for a nested split. */
+  value?: number
+  onStep?: (delta: number) => void
 }
 
 /**
@@ -38,7 +42,10 @@ export function PanelResizeHandle({
   onResizeStart,
   onResizeEnd,
   onToggle,
-  onActiveChange
+  onActiveChange,
+  className,
+  value,
+  onStep
 }: PanelResizeHandleProps) {
   const drag = useDragResize<HTMLDivElement>({
     grow,
@@ -80,7 +87,13 @@ export function PanelResizeHandle({
       aria-orientation="vertical"
       aria-label={label}
       data-panel-handle={grow}
-      tabIndex={-1}
+      tabIndex={onStep ? 0 : -1}
+      aria-valuenow={value === undefined ? undefined : Math.round(value)}
+      onKeyDown={event => {
+        if (!onStep || !['ArrowLeft', 'ArrowRight'].includes(event.key)) return
+        event.preventDefault()
+        onStep((event.key === 'ArrowRight' ? 1 : -1) * (event.shiftKey ? 40 : 10))
+      }}
       onPointerDown={drag.onPointerDown}
       onPointerEnter={handleEnter}
       onPointerLeave={handleLeave}
@@ -93,10 +106,16 @@ export function PanelResizeHandle({
         'relative z-10 hidden w-1.5 shrink-0 cursor-col-resize touch-none select-none outline-none md:block',
         // Straddle the line the panel itself draws: the strip's six pixels
         // otherwise begin where that border ends, so a pointer sitting exactly
-        // ON the line lands on the panel and the drag never starts. Half the
-        // strip overlaps the panel (above it, hence `z-10`), which costs the
-        // transcript three pixels of width and nothing else.
-        grow === 'right' ? '-ml-[3px]' : '-mr-[3px]'
+        // ON the line lands on the panel and the drag never starts. On the left
+        // the strip overlaps the sidebar (`-ml`, and the inset pulls the
+        // transcript back by the same 3px). On the right it must straddle BOTH
+        // columns instead (`-mx`): pulling the rail left is not an option — it
+        // has to keep its own edge on the window — and the strip is what
+        // decides where the boundary sits, so the transcript's own rules (the
+        // task strip's bottom border) end exactly on the rail's left border
+        // instead of stopping three pixels short of it.
+        grow === 'right' ? '-ml-[3px]' : '-mx-[3px]',
+        className
       )}
       />
     </>

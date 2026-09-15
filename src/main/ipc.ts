@@ -5,8 +5,14 @@ import { registerQuitHandler } from './shutdown'
 import { isDefaultWorkspace } from './pi/default-workspace'
 import { loadSettings, saveSettings } from './settings'
 import { setWindowTheme } from './window-chrome'
+import { listFileDirectory, readFileDocument, readFileGitDiff } from './file-browser'
+import { readPdfRange, readPdfStat } from './pdf'
+import { readFontData } from './font'
+import { readTableRange, readTableSlice, readTableStat } from './table'
+import { saveFileCopy } from './file-actions'
 import type {
   AppInfoDTO,
+  FileBrowserRequest,
   RewindRequest,
   RewindStatsTargetDTO,
   BashTaskRequest,
@@ -18,7 +24,9 @@ import type {
   SessionSnapshotDTO,
   SessionSearchRequest,
   SideChatAskPayload,
+  StartupSessionMode,
   ThinkingLevel,
+  UsageStatsDTO,
   WindowTheme
 } from '../shared/types'
 
@@ -33,6 +41,10 @@ export function createPiManager(): PiManager {
 }
 
 export function registerIpc(pi: PiManager): () => boolean {
+  ipcMain.handle('files:saveCopy', (event, path: string) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    return win ? saveFileCopy(win, path) : { status: 'error' }
+  })
   ipcMain.on('window:setTheme', (event, theme: WindowTheme) => {
     const win = BrowserWindow.fromWebContents(event.sender)
     if (win && !win.isDestroyed()) setWindowTheme(win, theme)
@@ -50,6 +62,7 @@ export function registerIpc(pi: PiManager): () => boolean {
       contextFiles: settings.contextFiles !== false,
       bashMaxWaitMs: settings.bashMaxWaitMs,
       checkpointsEnabled: settings.checkpointsEnabled !== false,
+      startup: settings.startup,
       version: app.getVersion()
     }
   })
@@ -63,6 +76,7 @@ export function registerIpc(pi: PiManager): () => boolean {
   ipcMain.handle('rewind:restore', (_event, request: RewindRequest) => pi.rewindRestore(request))
   ipcMain.handle('rewind:recover', (_event, path: string, operationId: string) => pi.rewindRecover(path, operationId))
   ipcMain.handle('app:setCheckpointsEnabled', (_event, enabled: boolean) => pi.setCheckpointsEnabled(enabled))
+  ipcMain.handle('app:setStartup', (_event, mode: StartupSessionMode) => pi.setStartupMode(mode))
   ipcMain.handle('app:setBashMaxWaitMs', (_event, value: number) => pi.setBashMaxWaitMs(value))
   ipcMain.handle('bash:list', (_event, sessionPath: string) => pi.listBashTasks(sessionPath))
   ipcMain.handle('bash:output', (_event, request: BashTaskRequest) => pi.bashTaskOutput(request))
@@ -88,6 +102,7 @@ export function registerIpc(pi: PiManager): () => boolean {
   ipcMain.handle('pi:openSession', (_event, path: string, cwd?: string) => pi.openSession(path, cwd))
   ipcMain.handle('pi:listSessions', () => pi.listSessions())
   ipcMain.handle('pi:searchSessions', (_event, request: SessionSearchRequest) => pi.searchSessions(request))
+  ipcMain.handle('pi:usageStats', (): Promise<UsageStatsDTO> => pi.usageStats())
   ipcMain.handle('pi:deleteSession', (_event, path: string) => pi.deleteSession(path))
   ipcMain.handle('pi:renameSession', (_event, path: string, name: string) =>
     pi.renameSession(path, name)
@@ -166,6 +181,15 @@ export function registerIpc(pi: PiManager): () => boolean {
 
   ipcMain.handle('files:search', (_event, query: string) => pi.searchFiles(query))
   ipcMain.handle('files:read', (_event, path: string) => pi.readFile(path))
+  ipcMain.handle('files:directory', (_event, request: FileBrowserRequest, offset?: number) => listFileDirectory(request, offset))
+  ipcMain.handle('files:document', (_event, request: FileBrowserRequest) => readFileDocument(request))
+  ipcMain.handle('files:gitDiff', (_event, request: FileBrowserRequest) => readFileGitDiff(request))
+  ipcMain.handle('files:pdfStat', (_event, request: FileBrowserRequest) => readPdfStat(request))
+  ipcMain.handle('files:pdfRange', (_event, request: FileBrowserRequest, begin: number, end: number) => readPdfRange(request, begin, end))
+  ipcMain.handle('files:fontData', (_event, request: FileBrowserRequest) => readFontData(request))
+  ipcMain.handle('files:tableStat', (_event, request: FileBrowserRequest) => readTableStat(request))
+  ipcMain.handle('files:tableSlice', (_event, request: FileBrowserRequest, offset: number, maxBytes?: number) => readTableSlice(request, offset, maxBytes))
+  ipcMain.handle('files:tableRange', (_event, request: FileBrowserRequest, begin: number, end: number) => readTableRange(request, begin, end))
   ipcMain.handle('files:readImage', (_event, path: string) => pi.readImage(path))
 
   ipcMain.handle('shell:openPath', (_event, path: string) => shell.openPath(path))

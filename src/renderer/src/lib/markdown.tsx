@@ -7,10 +7,12 @@ import {
   type ComponentPropsWithoutRef,
   type ReactNode
 } from 'react'
-import ReactMarkdown from 'react-markdown'
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import { CodeBlock } from '@/components/agents/code-block'
 import { PreviewThumb } from '@/components/app/ImagePreview'
 import { REMARK_PLUGINS } from '@/lib/markdown-plugins'
+import { localFileTarget, useFileNavigation } from '@/lib/file-navigation'
+import { codeLanguage } from '@/lib/file-language'
 
 /**
  * Assistant markdown renderer: react-markdown + GFM (tables, task lists,
@@ -101,6 +103,8 @@ function resolveImage(src: string): Promise<ResolvedImage | null> {
 }
 
 function MarkdownImage({ src, alt }: ComponentPropsWithoutRef<'img'>) {
+  const navigation = useFileNavigation()
+  const source = typeof src === 'string' && !inlineImageSrc(src) && navigation.cwd ? localFileTarget(src, navigation.cwd)?.path ?? src : src
   const streaming = useContext(StreamingMarkdownContext)
   const direct = typeof src === 'string' ? inlineImageSrc(src) : null
   const [resolved, setResolved] = useState<ResolvedImage | null>(direct ? { url: direct } : null)
@@ -119,7 +123,7 @@ function MarkdownImage({ src, alt }: ComponentPropsWithoutRef<'img'>) {
       return
     }
     let cancelled = false
-    void resolveImage(src).then((image) => {
+    void resolveImage(typeof source === 'string' ? source : src).then((image) => {
       if (cancelled) return
       setResolved(image)
       setFailed(!image)
@@ -130,7 +134,7 @@ function MarkdownImage({ src, alt }: ComponentPropsWithoutRef<'img'>) {
     // `streaming` is a dependency on purpose: a reference that cannot be read
     // mid-turn (the file appears later in the same turn) is retried once the
     // completed message re-renders with `streaming: false`.
-  }, [src, streaming])
+  }, [src, source, streaming])
 
   if (resolved) {
     return (
@@ -148,35 +152,7 @@ function MarkdownImage({ src, alt }: ComponentPropsWithoutRef<'img'>) {
   return failed && alt ? <span className="text-muted-foreground">{alt}</span> : null
 }
 
-const LANGUAGE_ALIASES: Record<string, string> = {
-  js: 'typescript',
-  javascript: 'typescript',
-  jsx: 'tsx',
-  ts: 'typescript',
-  sh: 'bash',
-  shell: 'bash',
-  zsh: 'bash',
-  console: 'bash',
-  py: 'text',
-  python: 'text',
-  rust: 'text',
-  go: 'text',
-  css: 'text',
-  html: 'text',
-  yaml: 'text',
-  toml: 'text'
-}
-
-export function normalizeLanguage(
-  lang?: string
-): 'bash' | 'diff' | 'json' | 'text' | 'tsx' | 'typescript' {
-  const base = (lang ?? '').toLowerCase().split(/[\s:,]/)[0]
-  if (!base) return 'text'
-  if (['bash', 'diff', 'json', 'text', 'tsx', 'typescript'].includes(base)) {
-    return base as 'bash' | 'diff' | 'json' | 'text' | 'tsx' | 'typescript'
-  }
-  return (LANGUAGE_ALIASES[base] as 'text') ?? 'text'
-}
+export const normalizeLanguage = codeLanguage
 
 function extractCodeBlock(children: ReactNode): { code: string; language?: string } {
   const child = (Array.isArray(children) ? children[0] : children) as
@@ -251,13 +227,21 @@ const components: MarkdownComponents = {
     )
   },
   a({ href, children }) {
+    const navigation = useFileNavigation()
     return (
       <a
         href={href}
         onClick={(event) => {
           if (!href) return
           event.preventDefault()
-          void window.pi.openExternal(href)
+          if (href.startsWith('#')) {
+            const page = event.currentTarget.closest<HTMLElement>('[data-file-markdown]')
+            let anchor = href.slice(1)
+            try { anchor = decodeURIComponent(anchor) } catch { /* literal fragment */ }
+            const heading = [...(page?.querySelectorAll<HTMLElement>('h1,h2,h3,h4,h5,h6') ?? [])].find(element =>
+              element.textContent?.toLowerCase().replace(/[^\p{L}\p{N}\p{M}_\-\s]/gu, '').replace(/\s/g, '-') === anchor)
+            if (page && heading) page.scrollTop += heading.getBoundingClientRect().top - page.getBoundingClientRect().top
+          } else navigation.open(href)
         }}
         className="font-medium text-primary underline underline-offset-2 hover:opacity-80"
       >
@@ -322,11 +306,15 @@ const components: MarkdownComponents = {
   img: MarkdownImage
 }
 
+function markdownUrlTransform(url: string): string {
+  return /^file:/i.test(url) || /^[a-z]:[\\/]/i.test(url) || /^[^?#:]+\.[\w-]+:\d+(?::\d+)?(?:-\d+)?$/.test(url) ? url : defaultUrlTransform(url)
+}
+
 /** One already-final markdown block — memoized so stable blocks never
  * re-parse while the tail streams. */
 const MarkdownBlock = memo(function MarkdownBlock({ children }: { children: string }) {
   return (
-    <ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={components}>
+    <ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={components} urlTransform={markdownUrlTransform}>
       {children}
     </ReactMarkdown>
   )
@@ -355,7 +343,7 @@ export const Markdown = memo(function Markdown({
             {blocks.tail ? <MarkdownBlock>{blocks.tail}</MarkdownBlock> : null}
           </>
         ) : (
-          <ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={components}>
+          <ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={components} urlTransform={markdownUrlTransform}>
             {children}
           </ReactMarkdown>
         )}

@@ -1,9 +1,14 @@
 import { app, BrowserWindow, screen, shell } from 'electron'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { createPiManager, registerIpc } from './ipc'
+import { installMediaProtocol, registerMediaScheme } from './media-protocol'
 import { loadSettings, saveSettings, type WindowBounds } from './settings'
 import { registerQuitShortcut } from './shutdown'
 import { windowChromeOptions } from './window-chrome'
+
+// A privileged scheme has to be declared before the app is ready.
+registerMediaScheme()
 
 // Keep existing settings and Chromium storage through the product rename.
 app.setPath('userData', join(app.getPath('appData'), 'pi-app'))
@@ -123,6 +128,18 @@ function createWindow(): BrowserWindow {
     return { action: 'deny' }
   })
 
+  // The window is an application shell, never a document viewer. A link that
+  // points at something the app cannot render in place — a PDF, a web page, a
+  // file on disk — must not replace it: Chromium would navigate the whole window
+  // and the only way back would be a restart. Anything that is not our own
+  // document goes to the system browser, exactly like a window-open request.
+  const appDocument = process.env.ELECTRON_RENDERER_URL ?? pathToFileURL(join(__dirname, '../renderer/index.html')).toString()
+  win.webContents.on('will-navigate', (event, url) => {
+    if (url.split('#')[0] === appDocument.split('#')[0]) return
+    event.preventDefault()
+    void shell.openExternal(url)
+  })
+
   if (process.env.ELECTRON_RENDERER_URL) {
     void win.loadURL(process.env.ELECTRON_RENDERER_URL)
   } else {
@@ -137,6 +154,7 @@ app.whenReady().then(() => {
   if (process.platform === 'darwin') app.dock?.setIcon(join(iconDirectory, '512x512.png'))
   const pi = createPiManager()
   const isQuitting = registerIpc(pi)
+  installMediaProtocol()
   createWindow()
 
   app.on('activate', () => {

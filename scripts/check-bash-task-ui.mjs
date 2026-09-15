@@ -23,6 +23,7 @@ import {PiStore} from '/src/state/pi-store.ts';
 import {extractReviewTurns} from '/src/lib/turn-written-files.ts';
 import {I18nProvider,useI18n} from '/src/i18n/index.tsx';
 import {BashTasksProvider} from '/src/lib/bash-tasks.tsx';
+import {BashTaskRow} from '/src/components/app/BashTaskView.tsx';
 import {SessionTasks} from '/src/components/app/SessionTasks.tsx';
 import {ToolCallView} from '/src/components/app/ToolCallView.tsx';
 import {ToolGroupView} from '/src/components/app/ToolGroupView.tsx';
@@ -58,6 +59,19 @@ window.startStartupFixture=()=>{
  flushSync(()=>window.checkRoot.render(React.createElement(I18nProvider,{key:'startup'},React.createElement(ImagePreviewProvider,null,React.createElement('div',{id:'startup-fixture',style:{width:800,margin:'20px auto'}},React.createElement(Startup))))));
 };
 window.addTasks=(count)=>{for(let i=0;i<count;i++)listener?.({...window.task,id:'bulk-'+i,toolCallId:'bulk-call-'+i,command:'echo bulk task '+i,status:'succeeded',background:true,exitCode:0,endedAt:Date.now(),revision:1})};
+window.startControlFixture=()=>{
+ localStorage.setItem('pi-app:locale','en');
+ window.task={...window.task,id:'silent-stopped',toolCallId:'silent-call',status:'cancelled',outputChars:0,startedAt:1000,endedAt:66500,lastOutputAt:66500};
+ window.pi.bashTaskOutput=async()=>({task:window.task,output:'',cursor:0,truncated:false});
+ const calls=['list','status','output','stop'].map(action=>({type:'toolCall',id:'control-'+action,name:'bash_task',arguments:{action,taskId:window.task.id}}));
+ const results=new Map(calls.map(call=>[call.id,{role:'toolResult',toolName:'bash_task',toolCallId:call.id,timestamp:2,isError:false,content:[{type:'text',text:'snapshot'}],details:{bashTask:{...window.task,status:call.arguments.action==='stop'?'cancelled':'running'}}}]));
+ const runs=Object.fromEntries(calls.map(call=>[call.id,{toolCallId:call.id,toolName:'bash_task',status:'success',startedAt:1000,endedAt:1001}]));
+ function Controls(){const {setLocale}=useI18n();window.setLocale=setLocale;return React.createElement(BashTasksProvider,{sessionPath:'/ui/session'},
+  React.createElement('div',{id:'silent-task'},React.createElement(BashTaskRow,{task:window.task})),
+  React.createElement('div',{id:'controls-group'},React.createElement(ToolGroupView,{category:TOOL_CATEGORIES[1],calls,toolResults:results,toolRuns:runs})),
+  ...calls.map(call=>React.createElement('div',{id:call.id,key:call.id},React.createElement(ToolCallView,{call,result:results.get(call.id),run:runs[call.id]}))));}
+ flushSync(()=>window.checkRoot.render(React.createElement(I18nProvider,{key:'control-fixture'},React.createElement('div',{style:{width:800,margin:'20px auto'}},React.createElement(Controls)))));
+};
 window.startForegroundFixture=()=>{
  localStorage.setItem('pi-app:locale','en');
  const task={...window.task,id:'foreground-task',toolCallId:'foreground-call',background:false,status:'succeeded',exitCode:0,command:'printf foreground'};
@@ -213,6 +227,18 @@ try {
   await pause(350)
   assert.match(await evaluate(`document.querySelector('[data-task-panel]').innerText`),/1 of 4 completed.*1 cancelled/s)
   assert.match(await evaluate(`document.querySelector('[data-task-panel]').innerText`),/Paused/)
+  // Each status owns a colour: done is green, cancelled is rose, waiting stays neutral.
+  const tones = await evaluate(`(()=>{
+    const canvas=document.createElement('canvas');canvas.width=canvas.height=1;const ctx=canvas.getContext('2d');
+    const rgb=value=>{ctx.fillStyle=value;ctx.fillRect(0,0,1,1);const [r,g,b]=ctx.getImageData(0,0,1,1).data;return{r,g,b}};
+    const green=c=>c.g>c.r+24&&c.g>c.b+24, rose=c=>c.r>c.g+24&&c.r>c.b+24;
+    const read=id=>{const li=document.querySelector('[data-todo-id='+JSON.stringify(id)+']').closest('li');
+      const glyph=rgb(getComputedStyle(li.querySelector('svg')).color), label=rgb(getComputedStyle(li.lastElementChild).color);
+      return {glyph,label,greenGlyph:green(glyph),greenLabel:green(label),roseGlyph:rose(glyph),roseLabel:rose(label)}};
+    return {done:read('a'),waiting:read('c'),cancelled:read('d')}})()`)
+  assert.ok(tones.done.greenGlyph && tones.done.greenLabel, 'a completed task paints its glyph and label green: ' + JSON.stringify(tones))
+  assert.ok(!tones.waiting.greenGlyph && !tones.waiting.greenLabel, 'a waiting task stays neutral: ' + JSON.stringify(tones))
+  assert.ok(tones.cancelled.roseGlyph && tones.cancelled.roseLabel, 'a cancelled task paints its glyph and label rose: ' + JSON.stringify(tones))
   assert.equal(await evaluate(pageGeometry),beforeExpand)
   await evaluate(`window.setTodos(previous=>{window.unfinishedTodoFixture=previous;window.finishedTodoItems=previous.items.map(item=>({...item,status:'completed'}));return{toolCallId:'finished',items:window.finishedTodoItems}});window.setBusy(false)`)
   await pause(350)
@@ -257,6 +283,8 @@ try {
   await pause(250)
   assert.equal(await evaluate(`window.todoNode===document.querySelector('[data-todo-id=b]').closest('li')`),true,'task rename/reorder keeps the native row')
   assert.match(await evaluate(`document.querySelector('[data-task-panel]').innerText`),/Working/)
+  const spinningAngles = await evaluate(`new Promise(resolve=>{const arc=document.querySelector('[data-todo-id=b]').closest('li').querySelector('[data-todo-progress]');const seen=new Set();let n=0;const frame=()=>{seen.add(getComputedStyle(arc).transform);if(++n<12)requestAnimationFrame(frame);else resolve(Array.from(seen))};requestAnimationFrame(frame)})`)
+  assert.ok(spinningAngles.length > 1, 'a running task ring really turns: ' + JSON.stringify(spinningAngles))
   const swapFrames = await evaluate(`new Promise(resolve=>{const baseline=${pageGeometry};const failures=[];let n=0;const frame=()=>{if(${pageGeometry}!==baseline)failures.push(n);if(++n<30)requestAnimationFrame(frame);else resolve(failures)};requestAnimationFrame(frame);document.querySelector('[data-task-trigger=bash]').click()})`)
   assert.deepEqual(swapFrames,[],'switching panels moves no transcript frame')
   assert.equal(await evaluate(`window.taskPanelNode===document.querySelector('[data-task-panel]')`),true,'switching reuses the overlay')
@@ -289,9 +317,15 @@ try {
     }
   }
   await send('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-motion',value:'reduce'}]})
+  // The emulated preference reaches the page's media listeners asynchronously; a row
+  // mounted before that would keep the preference it read at mount.
+  await pause(200)
   await evaluate(`window.setBusy(true);window.setTodos({toolCallId:'long',items:Array.from({length:40},(_,i)=>({id:'long-'+i,content:i===0?'长任务说明'.repeat(24):'检查任务 '+i,status:i===0?'in_progress':'pending'}))});document.querySelector('#tasks').parentElement.style.width='340px'`)
   await pause(250)
   for(let i=0;i<40;i++){if(await evaluate(`document.querySelectorAll('[data-task-panel] [data-todo-id]').length===40`))break;await pause(50)}
+  const reduceAngle = await evaluate(`getComputedStyle(document.querySelector('[data-task-panel] [data-todo-id]').closest('li').querySelector('[data-todo-progress]')).transform`)
+  await pause(300)
+  assert.equal(await evaluate(`getComputedStyle(document.querySelector('[data-task-panel] [data-todo-id]').closest('li').querySelector('[data-todo-progress]')).transform`),reduceAngle,'reduced motion keeps a running ring still')
   const narrow = await evaluate(`(()=>{const panel=document.querySelector('[data-task-panel]');const list=panel.querySelector('ol').parentElement;return{overflow:panel.scrollWidth>panel.clientWidth,height:list.clientHeight,scrollHeight:list.scrollHeight,scrollbar:getComputedStyle(list).scrollbarWidth,items:panel.querySelectorAll('[data-todo-id]').length}})()`)
   assert.equal(narrow.overflow,false,'long task titles fit narrow conversation panes')
   assert(narrow.height<=264&&narrow.scrollHeight>narrow.height)
@@ -343,11 +377,34 @@ try {
   await pause(300)
   assert.equal(await evaluate('window.stops'), 1)
   assert.equal(await evaluate(`document.querySelector('#original [data-bash-task-id]').dataset.bashTaskStatus`), 'cancelled')
-  assert.match(await evaluate(`document.querySelector('#group').innerText`), /1 已完成，1 失败/)
+  assert.match(await evaluate(`document.querySelector('#group').innerText`), /1 已完成，0 失败.*1 个已取消/s)
+  assert.match(await evaluate(`document.querySelector('#original').innerText`), /Cancelled/)
+  assert.doesNotMatch(await evaluate(`document.querySelector('#original').innerText`), /Failed/)
   await evaluate(`document.querySelector('#original button[aria-expanded]').click()`)
   const stoppedReads = await evaluate('window.outputReads')
   await pause(1200)
   assert.equal(await evaluate('window.outputReads'), stoppedReads)
+  await evaluate('window.startControlFixture()')
+  await pause(150)
+  await evaluate(`document.querySelector('#silent-task button[aria-expanded]').click()`)
+  await pause(150)
+  assert.match(await evaluate(`document.querySelector('#silent-task').innerText`),/65.5s elapsed/)
+  assert.match(await evaluate(`document.querySelector('#silent-task').innerText`),/Cancelled/)
+  assert.doesNotMatch(await evaluate(`document.querySelector('#silent-task').innerText`),/Failed|Output .* ago/,'legacy empty decoder timestamps are not displayed as output')
+  assert.match(await evaluate(`document.querySelector('#controls-group').innerText`),/4 completed, 0 failed/)
+  assert.doesNotMatch(await evaluate(`document.querySelector('#controls-group').innerText`),/unavailable/,'successful control queries remain available even when their snapshots refer to a running process')
+  for(const [action,label] of [['list','List tasks'],['status','Check status'],['output','Read output'],['stop','Stop task']]){
+    assert.match(await evaluate(`document.querySelector('#control-${action}').innerText`),new RegExp(label))
+    assert.match(await evaluate(`document.querySelector('#control-${action}').innerText`),/0.1s|0.1 s/,'control duration is independent of the process lifetime')
+  }
+  await evaluate(`window.setLocale('zh-CN')`)
+  await pause(100)
+  assert.match(await evaluate(`document.querySelector('#control-status').innerText`),/查看状态/)
+  assert.match(await evaluate(`document.querySelector('#control-output').innerText`),/读取输出/)
+  assert.match(await evaluate(`document.querySelector('#control-stop').innerText`),/停止任务/)
+  assert.match(await evaluate(`document.querySelector('#silent-task').innerText`),/已运行 65.5 秒/)
+  assert.doesNotMatch(await evaluate(`document.querySelector('#silent-task').innerText`),/秒前有输出/)
+  console.log('PASS: stopped tasks remain cancelled with their full runtime, empty output has no invented timestamp, and successful control calls retain their own action/status/duration.')
   await evaluate('window.startForegroundFixture()')
   await pause(100)
   const foregroundReads = await evaluate('window.outputReads')

@@ -496,9 +496,11 @@ export interface AnimatedSidebarProps
   collapsible?: SidebarCollapsible;
   ariaLabel?: string;
   panelClassName?: string;
-  // local patch (pi-app): the rail is dragged to resize the sidebar, and the
-  // width must follow the pointer exactly. The morph spring would otherwise
-  // trail the cursor by a frame or two and keep springing after the release.
+  // local patch (pi-app): a panel edge is being dragged to resize the sidebar,
+  // and the width must follow the pointer exactly. The morph spring would
+  // otherwise trail the cursor by a frame or two and keep springing after the
+  // release. Set for EITHER panel's drag — the pair gives way to each other,
+  // and both widths are written straight to the DOM for as long as one runs.
   resizing?: boolean;
 }
 

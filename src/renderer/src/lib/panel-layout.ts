@@ -18,8 +18,19 @@ export const RIGHT_PANEL_MAX = 720
  * Width the transcript keeps at any window size. It is also the drag ceiling:
  * pulling a panel past it does nothing, which is what stops a drag from
  * crushing the conversation.
+ *
+ * Sized from the widest fixed furniture in the column, the changed-files card
+ * header (TurnWrittenFiles): 24px of header padding + a 36px glyph tile + a
+ * 12px gap + the title/stats column + a 12px gap + the trailing button cluster
+ * (`Show more` / `Undo` / `Review` with their icons, 260px in English).
+ * Measured against the real component, the header needs 480px of card width in
+ * English (440px in zh-CN) before its title/stats column has room: below that
+ * the column collapses, the `+N −M` stats spill across the buttons, and the
+ * composer's controls row (model picker, context ring, send) runs past the
+ * panel edge. The card sits inside the transcript's `sm:px-5` viewport, which
+ * is where the extra 40px comes from.
  */
-export const CHAT_MIN = 320
+export const CHAT_MIN = 560
 
 export const DEFAULT_PANEL_LAYOUT: PanelLayout = { left: 256, right: 400 }
 

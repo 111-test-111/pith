@@ -2,8 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { AlertCircle, CheckCircle2, Copy, ExternalLink, Loader2, PlugZap, Sparkles } from '@/lib/icons'
 import { MorphingModal } from '@/components/motion/morphing-modal'
 import { Button } from '@/components/motion/button'
-import { Checkbox } from '@/components/motion/checkbox'
 import { Input } from '@/components/motion/input'
+import { Switch } from '@/components/motion/switch'
 import { useI18n } from '@/i18n'
 import type {
   CatalogRecommendationDTO,
@@ -545,8 +545,8 @@ export function ModelEditorDialog({
         ) : null}
 
         <div className="flex flex-wrap gap-x-6 gap-y-2 px-1">
-          <Checkbox checked={reasoning} onCheckedChange={setReasoning} label={t('settings.reasoning')} />
-          <Checkbox checked={image} onCheckedChange={setImage} label={t('settings.imageInput')} />
+          <Switch checked={reasoning} onCheckedChange={setReasoning} label={t('settings.reasoning')} />
+          <Switch checked={image} onCheckedChange={setImage} label={t('settings.imageInput')} />
         </div>
 
         <div className="grid grid-cols-2 gap-3">

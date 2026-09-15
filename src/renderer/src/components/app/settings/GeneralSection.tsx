@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
 import { Input } from '@/components/motion/input'
-import { BASH_DEFAULT_MAX_WAIT_MS, BASH_MIN_WAIT_MS, BASH_MAX_WAIT_MS } from '../../../../../shared/types'
+import { BASH_DEFAULT_MAX_WAIT_MS, BASH_MIN_WAIT_MS, BASH_MAX_WAIT_MS, type StartupSessionMode } from '../../../../../shared/types'
 import { Button } from '@/components/motion/button'
-import { Checkbox } from '@/components/motion/checkbox'
+import { Switch } from '@/components/motion/switch'
 import { RadioGroup, RadioGroupItem } from '@/components/motion/radio'
 import { useI18n } from '@/i18n'
 import { useShowReasoning } from '@/lib/show-reasoning'
+import { useSpinnerVerbs } from '@/lib/spinner-verbs'
 import { useToolGrouping } from '@/lib/tool-grouping'
 import { useStreamingBehavior, type StreamingBehavior } from '@/lib/streaming-behavior'
 import { SettingsGroup, SettingsRow } from './SettingsRow'
@@ -33,6 +34,10 @@ export function GeneralSection() {
   const [checkpoints, setCheckpoints] = useState(true)
   const [checkpointError, setCheckpointError] = useState(false)
   const [savingCheckpoints, setSavingCheckpoints] = useState(false)
+  /** What the next launch opens (Settings → General → Startup). */
+  const [startup, setStartup] = useState<StartupSessionMode>('resume')
+  const [savingStartup, setSavingStartup] = useState(false)
+  const [startupError, setStartupError] = useState(false)
   const [version, setVersion] = useState<string | null>(null)
   // Same module store the Composer reads — a change here applies immediately.
   const [behavior, setBehavior] = useStreamingBehavior()
@@ -40,16 +45,48 @@ export function GeneralSection() {
   const [showReasoning, setShowReasoning] = useShowReasoning()
   // Folds consecutive same-category tool calls into one group row when on.
   const [toolGrouping, setToolGrouping] = useToolGrouping()
+  // Plays a status sentence on the turn-in-progress row instead of a bare spinner.
+  const [spinnerVerbs, setSpinnerVerbs] = useSpinnerVerbs()
 
   useEffect(() => {
     void window.pi
       .appInfo()
-      .then((info) => { setVersion(info.version); setCheckpoints(info.checkpointsEnabled); setWaitSeconds(String(info.bashMaxWaitMs / 1000)); setSavedWait(info.bashMaxWaitMs) })
+      .then((info) => { setVersion(info.version); setCheckpoints(info.checkpointsEnabled); setStartup(info.startup); setWaitSeconds(String(info.bashMaxWaitMs / 1000)); setSavedWait(info.bashMaxWaitMs) })
       .catch(() => {})
   }, [])
 
   return (
     <div className="space-y-6">
+      <SettingsGroup title={t('settings.startupGroup')}>
+        <SettingsRow
+          label={t('settings.startupSession')}
+          description={t('settings.startupSessionDesc')}
+        >
+          <RadioGroup
+            orientation="horizontal"
+            value={startup}
+            onValueChange={(next) => {
+              const mode = next as StartupSessionMode
+              setSavingStartup(true)
+              setStartupError(false)
+              void window.pi
+                .setStartup(mode)
+                .then(setStartup, () => setStartupError(true))
+                .finally(() => setSavingStartup(false))
+            }}
+            className="gap-4"
+          >
+            <RadioGroupItem value="resume" disabled={savingStartup} label={t('settings.startupResume')} />
+            <RadioGroupItem value="new" disabled={savingStartup} label={t('settings.startupNew')} />
+          </RadioGroup>
+        </SettingsRow>
+        {startupError ? (
+          <p role="alert" className="px-4 text-xs text-destructive">
+            {t('settings.startupFailed')}
+          </p>
+        ) : null}
+      </SettingsGroup>
+
       <SettingsGroup title={t('settings.behaviorGroup')}>
         <SettingsRow label={t('settings.behavior')} description={t('settings.behaviorDesc')}>
           <RadioGroup
@@ -66,20 +103,30 @@ export function GeneralSection() {
           label={t('settings.showReasoning')}
           description={t('settings.showReasoningDesc')}
         >
-          <Checkbox
+          <Switch
             checked={showReasoning}
             onCheckedChange={setShowReasoning}
-            aria-label={t('settings.showReasoning')}
+            ariaLabel={t('settings.showReasoning')}
           />
         </SettingsRow>
         <SettingsRow
           label={t('settings.toolGrouping')}
           description={t('settings.toolGroupingDesc')}
         >
-          <Checkbox
+          <Switch
             checked={toolGrouping}
             onCheckedChange={setToolGrouping}
-            aria-label={t('settings.toolGrouping')}
+            ariaLabel={t('settings.toolGrouping')}
+          />
+        </SettingsRow>
+        <SettingsRow
+          label={t('settings.spinnerVerbs')}
+          description={t('settings.spinnerVerbsDesc')}
+        >
+          <Switch
+            checked={spinnerVerbs}
+            onCheckedChange={setSpinnerVerbs}
+            ariaLabel={t('settings.spinnerVerbs')}
           />
         </SettingsRow>
       </SettingsGroup>
@@ -96,7 +143,7 @@ export function GeneralSection() {
 
       <SettingsGroup title={t('settings.storage')}>
         <SettingsRow label={t('rewind.setting')} description={t('rewind.settingDescription')}>
-          <Checkbox checked={checkpoints} disabled={savingCheckpoints} aria-label={t('rewind.setting')} onCheckedChange={value => {
+          <Switch checked={checkpoints} disabled={savingCheckpoints} ariaLabel={t('rewind.setting')} onCheckedChange={value => {
             setSavingCheckpoints(true); setCheckpointError(false)
             void window.pi.setCheckpointsEnabled(value === true).then(setCheckpoints, () => setCheckpointError(true)).finally(() => setSavingCheckpoints(false))
           }} />

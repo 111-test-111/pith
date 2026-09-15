@@ -1,7 +1,7 @@
 import { app } from 'electron'
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { BASH_DEFAULT_MAX_WAIT_MS, BASH_MIN_WAIT_MS, BASH_MAX_WAIT_MS } from '../shared/types'
+import { BASH_DEFAULT_MAX_WAIT_MS, BASH_MIN_WAIT_MS, BASH_MAX_WAIT_MS, type StartupSessionMode } from '../shared/types'
 
 /** Persisted geometry of the main window. `width`/`height` are the window's
  * normal (restored) size, so maximizing or going full screen does not clobber
@@ -27,6 +27,13 @@ export interface AppSettings {
   /** Inject AGENTS.md / CLAUDE.md context files into the system prompt
    * (global agent dir + ancestor directories). Default true. */
   contextFiles: boolean
+  /** What a boot opens: the session that was active at quit, or always a new
+   * one. Persisted so the choice holds across launches. */
+  startup: StartupSessionMode
+  /** File of the session that was active at quit; the `resume` startup opens
+   * it. Kept apart from `cwd` because the newest file on disk is not always
+   * the session the user was in. */
+  startupSession: string | null
   /** Extensions the user switched off in Settings. Identified by the
    * extension's resolved path so the preference survives a package update.
    * Kept app-local — the pi CLI's own package config is left untouched. */
@@ -42,6 +49,8 @@ const defaults: AppSettings = {
   cwd: null,
   folders: [],
   contextFiles: true,
+  startup: 'resume',
+  startupSession: null,
   disabledExtensions: [],
   windowBounds: null
 }
@@ -56,7 +65,11 @@ export function loadSettings(): AppSettings {
     const wait = raw.bashMaxWaitMs
     const bashMaxWaitMs = Number.isInteger(wait) && wait >= BASH_MIN_WAIT_MS && wait <= BASH_MAX_WAIT_MS
       ? wait : BASH_DEFAULT_MAX_WAIT_MS
-    return { ...defaults, ...raw, bashMaxWaitMs }
+    // Anything that is not the explicit "always new" choice resumes, including
+    // settings written before this preference existed.
+    const startup: StartupSessionMode = raw.startup === 'new' ? 'new' : 'resume'
+    const startupSession = typeof raw.startupSession === 'string' ? raw.startupSession : null
+    return { ...defaults, ...raw, bashMaxWaitMs, startup, startupSession }
   } catch {
     return { ...defaults }
   }

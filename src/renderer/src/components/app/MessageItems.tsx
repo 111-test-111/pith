@@ -12,6 +12,7 @@ import {
 import { ToolResult, ToolResultOutput } from '@/components/agents/tool-result'
 import { StreamingResponse } from '@/components/agents/streaming-response'
 import { Markdown } from '@/lib/markdown'
+import { useFileNavigation } from '@/lib/file-navigation'
 import { cn } from '@/lib/utils'
 import { ToolIcon } from '@/lib/tool-icons'
 import { formatTime, formatTokenCount, basename } from '@/lib/format'
@@ -43,6 +44,7 @@ import { useI18n } from '@/i18n'
 import type { MessageKey } from '@/i18n/locales/en'
 import { useShowReasoning } from '@/lib/show-reasoning'
 import { useToolGrouping } from '@/lib/tool-grouping'
+import { frontierStepContext } from '@/lib/spinner-verbs'
 import { ToolCallView } from './ToolCallView'
 import { ToolGroupView } from './ToolGroupView'
 import { Button } from '@/components/motion/button'
@@ -97,6 +99,7 @@ export const UserItem = memo(function UserItem({
 }) {
   const { t } = useI18n()
   const { text, files, images } = extractUserDisplay(message.content)
+  const fileNavigation = useFileNavigation()
   return (
     <Message
       from="user"
@@ -115,14 +118,14 @@ export const UserItem = memo(function UserItem({
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {files.map((path) => (
                   <LabelTooltip key={path} content={path} wrap>
-                    <button
-                      type="button"
-                      onClick={() => void window.pi.openPath(path)}
+                    <Button
+                      variant="ghost" size="sm"
+                      onClick={() => fileNavigation.openPath(path)}
                       className="inline-flex max-w-64 items-center gap-1.5 rounded-lg bg-background/60 px-2 py-1 text-xs text-foreground/90 transition-colors hover:bg-background"
                     >
                       <FileText className="size-3.5 shrink-0" />
                       <span className="truncate">{basename(path)}</span>
-                    </button>
+                    </Button>
                   </LabelTooltip>
                 ))}
               </div>
@@ -568,6 +571,8 @@ export interface AssistantGroupProps extends ToolContext {
   actionsAlwaysVisible?: boolean
   /** Session working directory, used to resolve the turn's written files. */
   cwd?: string | null
+  /** Stable identity for the live turn's spinner-verb pick (the session). */
+  spinnerSeed?: string
   /** Opens the review tab on this turn (its first assistant message id). */
   onReview?: (turnId: number) => void
 }
@@ -594,6 +599,7 @@ function assistantGroupPropsEqual(prev: AssistantGroupProps, next: AssistantGrou
     prev.onFork !== next.onFork ||
     prev.showActions !== next.showActions ||
     prev.actionsAlwaysVisible !== next.actionsAlwaysVisible ||
+    prev.spinnerSeed !== next.spinnerSeed ||
     prev.onReview !== next.onReview
   ) {
     return false
@@ -742,6 +748,7 @@ export const AssistantGroup = memo(function AssistantGroup({
   showActions = false,
   actionsAlwaysVisible = false,
   cwd,
+  spinnerSeed,
   onReview,
   toolResults,
   toolRuns
@@ -755,6 +762,10 @@ export const AssistantGroup = memo(function AssistantGroup({
   const [toolGrouping] = useToolGrouping()
   const [processOpen, setProcessOpen] = useState(false)
   const live = streamingIndex >= 0 || pending
+  // Frontier step of the live turn, for the waiting row's spinner verb: the
+  // newest content part of the newest round — the tool call that is running, or
+  // the reasoning/prose the model is writing now. Only the live turn needs it.
+  const liveStep = live ? frontierStepContext(messages) : undefined
   // Nothing folds while the turn runs — the rows the user is watching stay put,
   // and the fold appears in the same frame the turn settles. Settled, the
   // boundary is the turn's own final reply block, so every block before it is
@@ -970,7 +981,7 @@ export const AssistantGroup = memo(function AssistantGroup({
         ))}
         {tailMessages.length > 0 || foldedRowCount === 0 ? noticeRows(messages.length) : null}
 
-        {live ? <TurnStatus /> : null}
+        {live ? <TurnStatus step={liveStep} seedKey={spinnerSeed} /> : null}
 
         {writtenFilesNode && !writtenFilesInFooter ? writtenFilesNode : null}
 

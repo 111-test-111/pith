@@ -4,6 +4,8 @@
  * neither side imports the other's runtime packages.
  */
 
+import type { TableFormat } from './table'
+
 export type WindowTheme = 'light' | 'dark' | 'system'
 
 export interface TextContent {
@@ -382,6 +384,62 @@ export interface SessionSearchResultDTO {
   incomplete: number
 }
 
+// ---------------------------------------------------------------------------
+// Cross-session usage aggregation (Settings → Usage). Distinct from the
+// per-message `UsageDTO` above: these are day × model buckets folded from
+// every session file in the shared ~/.pi/agent/sessions tree.
+// ---------------------------------------------------------------------------
+
+export interface UsageDayPointDTO {
+  tokens: number
+  /** USD; 0 when the provider has no pricing configured. */
+  cost: number
+  requests: number
+}
+
+export interface UsageModelSeriesDTO {
+  /** "provider/model" — the grouping key. */
+  key: string
+  provider: string
+  model: string
+  /** Sparse per-day points keyed by local YYYY-MM-DD. */
+  days: Record<string, UsageDayPointDTO>
+  totalTokens: number
+  totalCost: number
+  totalRequests: number
+}
+
+/** One conversation turn — everything the model ran between two user
+ * messages (or file boundaries), merged across requests and models. */
+export interface UsageTurnRecordDTO {
+  /** Turn start (the user message), epoch ms; falls back to the first request. */
+  startTs: number
+  /** Last request end in the turn, epoch ms. */
+  endTs: number
+  /** Distinct provider/model buckets hit by the turn, most tokens first. */
+  models: Array<{ provider: string; model: string; tokens: number }>
+  tokens: number
+  /** USD; 0 when the provider has no pricing configured. */
+  cost: number
+  requests: number
+}
+
+export interface UsageStatsDTO {
+  generatedAt: number
+  /** Local YYYY-MM-DD of the earliest/latest day with usage; null when empty. */
+  firstDay: string | null
+  lastDay: string | null
+  /** Sorted by totalTokens desc. */
+  models: UsageModelSeriesDTO[]
+  totalTokens: number
+  totalCost: number
+  totalRequests: number
+  /** Conversation turns, newest first, capped by the aggregator. */
+  records: UsageTurnRecordDTO[]
+  /** True when older turns were dropped by the cap. */
+  recordsTruncated: boolean
+}
+
 export type ThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
 /**
@@ -594,6 +652,14 @@ export type SideChatEvent =
   | { type: 'error'; exchangeId: string; message: string }
   | { type: 'aborted'; exchangeId: string }
 
+/**
+ * Which session a boot opens (Settings → General → Startup). `resume` reopens
+ * exactly the session that was active when the app last quit; `new` always
+ * lands on the new-session page. Both are deterministic — the app never picks
+ * "whichever session file happens to be newest".
+ */
+export type StartupSessionMode = 'resume' | 'new'
+
 export interface AppInfoDTO {
   checkpointsEnabled: boolean
   bashMaxWaitMs: number
@@ -602,6 +668,8 @@ export interface AppInfoDTO {
   folders: string[]
   /** Whether AGENTS.md/CLAUDE.md context files are injected into the prompt. */
   contextFiles: boolean
+  /** What the next launch opens. */
+  startup: StartupSessionMode
   version: string
 }
 
@@ -675,6 +743,83 @@ export interface FilePreviewDTO {
   text?: string
   truncated: boolean
   size: number
+}
+
+/** Read-only file browser. Requests carry their original workspace so switching
+ * sessions cannot repoint an in-flight read at another project. */
+export interface FileBrowserRequest {
+  cwd: string
+  path: string
+}
+export interface FileActionResultDTO { status: 'ok' | 'cancelled' | 'error' }
+export type FileBrowserError = 'missing' | 'directory' | 'binary' | 'unreadable' | 'tooLarge' | 'git'
+export interface FileDirectoryEntryDTO {
+  name: string
+  path: string
+  directory: boolean
+  symlink: boolean
+}
+export interface FileDirectoryDTO {
+  path: string
+  entries: FileDirectoryEntryDTO[]
+  nextOffset?: number
+  error?: FileBrowserError
+}
+export interface FileDocumentDTO {
+  path: string
+  relativePath: string
+  gitRoot: string | null
+  text?: string
+  size: number
+  truncated: boolean
+  error?: FileBrowserError
+}
+export interface FileGitDiffDTO {
+  gitRoot: string | null
+  patch: string
+  binary: boolean
+  error?: FileBrowserError
+}
+
+/** Size of a PDF the preview will stream. Byte ranges are read on demand through
+ * `files:pdfRange`; `end` is exclusive (see `shared/pdf.ts`). */
+export interface PdfStatDTO {
+  path: string
+  size: number
+  error?: FileBrowserError
+}
+
+/** Bytes of a previewable font file (`shared/preview.ts` kind `font`). Fonts
+ * ride IPC instead of the `pith-media` scheme: a `FontFace` URL source is a
+ * cross-origin font request and that scheme deliberately has no CORS headers,
+ * while `new FontFace(family, buffer)` needs none. Bounded by the reader. */
+export interface FontDataDTO {
+  path: string
+  data?: Uint8Array
+  size: number
+  error?: FileBrowserError
+}
+
+/** Table preview (`shared/table.ts`). The stat decides the format and the
+ * delimiter; delimited files then arrive as record-aligned slices, and a
+ * spreadsheet is a ZIP the renderer's worker reads through `files:tableRange`. */
+export interface TableStatDTO {
+  path: string
+  format: TableFormat | null
+  /** The sniffed field separator of a delimited file. */
+  delimiter?: string
+  size: number
+  error?: FileBrowserError
+}
+
+export interface TableSliceDTO {
+  path: string
+  offset: number
+  /** Byte offset after the last complete record in `text`. */
+  nextOffset: number
+  eof: boolean
+  text: string
+  error?: FileBrowserError
 }
 
 export type AuthPromptKind = 'text' | 'secret' | 'select' | 'manual_code'

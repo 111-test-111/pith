@@ -8,16 +8,18 @@ export function useDiffWindow(
   viewportRef: RefObject<HTMLDivElement | null>,
   count: number,
   enabled: boolean,
-  maxHeight: number
+  maxHeight: number,
+  // The table grid shares this window with its own (zoom-dependent) row height.
+  rowHeight: number = DIFF_ROW_HEIGHT
 ) {
-  const [range, setRange] = useState({ first: 0, size: Math.ceil(maxHeight / DIFF_ROW_HEIGHT) })
+  const [range, setRange] = useState({ first: 0, size: Math.ceil(maxHeight / rowHeight) })
   const onScroll = useCallback(() => {
     const viewport = viewportRef.current
     if (!enabled || !viewport) return
-    const first = Math.floor(viewport.scrollTop / DIFF_ROW_HEIGHT)
-    const size = Math.ceil(viewport.clientHeight / DIFF_ROW_HEIGHT)
+    const first = Math.floor(viewport.scrollTop / rowHeight)
+    const size = Math.ceil(viewport.clientHeight / rowHeight)
     setRange((previous) => previous.first === first && previous.size === size ? previous : { first, size })
-  }, [enabled, viewportRef])
+  }, [enabled, viewportRef, rowHeight])
 
   useLayoutEffect(() => {
     if (!enabled) return

@@ -19,6 +19,8 @@ import {
   BracesIcon,
   BrainIcon,
   CancelCircleIcon,
+  Chart01Icon,
+  Chat01Icon,
   CheckIcon,
   CheckmarkCircle02Icon,
   ChevronDownIcon,
@@ -75,6 +77,7 @@ import {
   MonitorIcon,
   Moon02Icon,
   MoreHorizontalIcon,
+  MusicNote01Icon,
   PaletteIcon,
   PanelLeftIcon,
   PanelRightIcon,
@@ -99,9 +102,12 @@ import {
   SparklesIcon,
   SquareIcon,
   SquareTerminalIcon,
+  SubtitleIcon,
   Sun01Icon,
   TerminalIcon,
+  TextFontIcon,
   TextSearchIcon,
+  TextWrapIcon,
   ThumbsDownIcon,
   ThumbsUpIcon,
   Undo02Icon,
@@ -152,6 +158,8 @@ export const Bookmark = /* @__PURE__ */ createIcon('Bookmark', Bookmark01Icon)
 export const Bot = /* @__PURE__ */ createIcon('Bot', BotIcon)
 export const Braces = /* @__PURE__ */ createIcon('Braces', BracesIcon)
 export const Brain = /* @__PURE__ */ createIcon('Brain', BrainIcon)
+export const Chart = /* @__PURE__ */ createIcon('Chart', Chart01Icon)
+export const Chat01 = /* @__PURE__ */ createIcon('Chat01', Chat01Icon)
 export const Check = /* @__PURE__ */ createIcon('Check', CheckIcon)
 export const CheckCircle2 = /* @__PURE__ */ createIcon('CheckCircle2', CheckmarkCircle02Icon)
 export const ChevronDown = /* @__PURE__ */ createIcon('ChevronDown', ChevronDownIcon)
@@ -213,6 +221,7 @@ export const Minimize2 = /* @__PURE__ */ createIcon('Minimize2', ArrowShrink01Ic
 export const Monitor = /* @__PURE__ */ createIcon('Monitor', MonitorIcon)
 export const Moon = /* @__PURE__ */ createIcon('Moon', Moon02Icon)
 export const MoreHorizontal = /* @__PURE__ */ createIcon('MoreHorizontal', MoreHorizontalIcon)
+export const MusicNote = /* @__PURE__ */ createIcon('MusicNote', MusicNote01Icon)
 export const Palette = /* @__PURE__ */ createIcon('Palette', PaletteIcon)
 export const PanelLeft = /* @__PURE__ */ createIcon('PanelLeft', PanelLeftIcon)
 export const PanelRight = /* @__PURE__ */ createIcon('PanelRight', PanelRightIcon)
@@ -238,9 +247,12 @@ export const ShieldCheck = /* @__PURE__ */ createIcon('ShieldCheck', ShieldCheck
 export const Sparkles = /* @__PURE__ */ createIcon('Sparkles', SparklesIcon)
 export const Square = /* @__PURE__ */ createIcon('Square', SquareIcon)
 export const SquareTerminal = /* @__PURE__ */ createIcon('SquareTerminal', SquareTerminalIcon)
+export const Subtitle = /* @__PURE__ */ createIcon('Subtitle', SubtitleIcon)
 export const Sun = /* @__PURE__ */ createIcon('Sun', Sun01Icon)
 export const Terminal = /* @__PURE__ */ createIcon('Terminal', TerminalIcon)
+export const TextFont = /* @__PURE__ */ createIcon('TextFont', TextFontIcon)
 export const TextSearch = /* @__PURE__ */ createIcon('TextSearch', TextSearchIcon)
+export const WrapText = /* @__PURE__ */ createIcon('WrapText', TextWrapIcon)
 export const ThumbsDown = /* @__PURE__ */ createIcon('ThumbsDown', ThumbsDownIcon)
 export const ThumbsUp = /* @__PURE__ */ createIcon('ThumbsUp', ThumbsUpIcon)
 export const Trash2 = /* @__PURE__ */ createIcon('Trash2', Delete02Icon)

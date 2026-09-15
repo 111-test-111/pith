@@ -11,7 +11,8 @@ let owners = 0
 
 export const bashTaskLive = (task: BashTaskDTO) => task.status === 'running' || task.status === 'stopping'
 export const bashTaskStatus = (task: BashTaskDTO) => bashTaskLive(task) ? 'running' as const
-  : task.status === 'succeeded' ? 'success' as const : 'error' as const
+  : task.status === 'succeeded' ? 'success' as const
+    : task.status === 'cancelled' || task.status === 'interrupted' ? 'cancelled' as const : 'error' as const
 
 function update(task: BashTaskDTO): void {
   const current = sessions.get(task.sessionPath) ?? EMPTY
