@@ -56,6 +56,17 @@ export async function uncoveredWrites(branch: readonly SessionEntry[], cwd: stri
       if (call && call.position > anchor) paths.add(call.path)
     }
   }
+  return classifyUncoveredWrites([...paths], root, excluded)
+}
+
+/**
+ * Classify already-collected write paths under the checkpoint's scope and
+ * exclusion rules. Exported for callers that collect their writes elsewhere
+ * (subagent child sessions): same evidence bar — only known successful writes
+ * may be classified, never reconstructed or guessed paths.
+ */
+export async function classifyUncoveredWrites(paths: readonly string[], root: string,
+  excluded: RewindCheckpointDTO['excluded']): Promise<RewindUncoveredPathDTO[]> {
   const omitted = new PathIndex(excluded.map(item => item.path))
   const scope = await canonical(root)
   const result: RewindUncoveredPathDTO[] = []

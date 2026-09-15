@@ -15,7 +15,7 @@ import type { SubagentRunDTO, TodoSnapshotDTO } from '../../../../shared/types'
 type Panel = 'todo' | 'bash' | 'agents'
 
 /** One stable overlay owner for all three task views. Switching tabs never moves the transcript. */
-export const SessionTasks = memo(function SessionTasks({ todos, subagents, busy, sessionPath, onOpenSession }: {
+export const SessionTasks = memo(function SessionTasks({ todos, subagents = [], busy, sessionPath = null, onOpenSession }: {
   todos: TodoSnapshotDTO | null
   /** Roster of this session's subagent runs (store-fed). */
   subagents: readonly SubagentRunDTO[]

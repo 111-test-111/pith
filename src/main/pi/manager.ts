@@ -25,7 +25,7 @@ import { createManagedBashTools, APP_BASH_TOOL_NAMES } from './bash-tools'
 import { TaskNotifications } from './task-notifications'
 import { RewindClient } from '../rewind/client'
 import { checkoutRoot, CheckoutCoordinator } from '../rewind/coordinator'
-import { uncoveredWrites } from '../rewind/coverage'
+import { classifyUncoveredWrites, uncoveredWrites } from '../rewind/coverage'
 import { RewindRecorder } from '../rewind/recorder'
 import { RewindFailure, failure as rewindFailure } from '../rewind/types'
 import { ChangeScopes } from './change-scopes'
@@ -41,6 +41,7 @@ import {
 } from './subagents/runtime'
 import { SubagentNotifications } from './subagents/notifications'
 import { SUBAGENT_TOOL_NAME } from './subagents/protocol'
+import { readDiskSubagentRuns } from './subagents/protocol'
 import type { SubagentRunStartData } from './subagents/protocol'
 import { createSubagentTool } from './subagents/tools'
 import { ensureDefaultProfiles, listSubagentProfiles } from './subagents/profiles'
@@ -423,37 +424,42 @@ export class PiManager {
    * The subagent engine, wired to this manager's own facilities. Children are
    * real ManagedSessions (disposal, event routing, bash ownership), created
    * through the same registry as user sessions — never an unmanaged
-   * AgentSession the shutdown paths cannot see.
+   * AgentSession the shutdown paths cannot see. Created lazily so partial
+   * instances (regression-check mocks via Object.create) work unchanged.
    */
-  readonly subagentRuntime = new SubagentRuntime({
-    isClosing: () => this.closing,
-    maxConcurrentSubagents: () => this.subagentMaxConcurrentSetting,
-    subagentsEnabled: () => this.subagentsEnabledFlag && !this.closing,
-    commandTasks: () => this.commandTasks,
-    acquireRunLease: (cwd, sessionPath) => this.checkoutCoordinator.acquire(cwd, 'run', sessionPath),
-    createChildSession: (options) => this.createSubagentChildSession(options),
-    emitSubagents: (sessionId, sessionPath, runs) => {
-      // Sequence-free metadata ping (same rule as context_usage): roster
-      // updates are not steps of the transcript's event log.
-      this.emit('pi:event', serialize({ type: 'subagents_update', sessionId, sessionPath, subagents: runs }))
-    },
-    resolveModelSpec: async (spec, fallback) => {
-      const runtime = await this.runtime()
-      if (spec) {
-        const [providerId, ...rest] = spec.split('/')
-        const modelId = rest.join('/')
-        if (providerId && modelId) {
-          const model = runtime.getModel(providerId, modelId)
-          if (model) return { model, spec }
+  private subagentRuntimeInstance: SubagentRuntime | null = null
+  private get subagentRuntime(): SubagentRuntime {
+    this.subagentRuntimeInstance ??= new SubagentRuntime({
+      isClosing: () => this.closing,
+      maxConcurrentSubagents: () => this.subagentMaxConcurrentSetting,
+      subagentsEnabled: () => this.subagentsEnabledFlag && !this.closing,
+      commandTasks: () => this.commandTasks,
+      acquireRunLease: (cwd, sessionPath) => this.checkoutCoordinator.acquire(cwd, 'run', sessionPath),
+      createChildSession: (options) => this.createSubagentChildSession(options),
+      emitSubagents: (sessionId, sessionPath, runs) => {
+        // Sequence-free metadata ping (same rule as context_usage): roster
+        // updates are not steps of the transcript's event log.
+        this.emit('pi:event', serialize({ type: 'subagents_update', sessionId, sessionPath, subagents: runs }))
+      },
+      resolveModelSpec: async (spec, fallback) => {
+        const runtime = await this.runtime()
+        if (spec) {
+          const [providerId, ...rest] = spec.split('/')
+          const modelId = rest.join('/')
+          if (providerId && modelId && runtime.getModel(providerId, modelId)) return { spec }
+          throw new Error(`Unknown subagent model "${spec}" (expected "provider/modelId")`)
         }
-        throw new Error(`Unknown subagent model "${spec}" (expected "provider/modelId")`)
+        // No override: inherit the parent's live model AS A SPEC, so the child
+        // resolves the same model instead of falling back to default selection.
+        const parent = fallback.model
+        return parent ? { spec: `${parent.provider}/${parent.id}` } : {}
+      },
+      notifySubagentChildWrite: (cwd) => {
+        if (this.cwd === cwd) void this.fileIndex?.refresh(true).catch(() => {})
       }
-      return { model: fallback.model, spec: undefined }
-    },
-    notifySubagentChildWrite: (cwd) => {
-      if (this.cwd === cwd) void this.fileIndex?.refresh(true).catch(() => {})
-    }
-  } satisfies SubagentHost)
+    } satisfies SubagentHost)
+    return this.subagentRuntimeInstance
+  }
 
   /**
    * Push context usage for every live session whose value moved, so the composer
@@ -576,7 +582,7 @@ export class PiManager {
     // Disposal owns the whole subtree: a parent being deleted or the app
     // quitting aborts its subagent runs (suppressed — they must not wake) and
     // tears down their child sessions through the same registry.
-    if (managed.subagents) this.subagentRuntime.abortAll(managed.subagents)
+    this.subagentRuntime.abortAll(managed.subagents)
     managed.subagents?.notifications?.dispose()
     managed.notifications?.dispose()
     managed.disposePromise = (async () => {
@@ -944,11 +950,23 @@ export class PiManager {
       this.checkoutCoordinator.setRecovery(sessionManager.getCwd(), status.pending[0]?.id)
     }
     const recoveryOnly = this.checkoutCoordinator.needsRecovery(sessionManager.getCwd())
-    const isChild = subagentRole !== undefined
+    let detectedRole = subagentRole
+    if (!detectedRole) {
+      // Any open path (sidebar click, search hit, delete/recover rebuild) can
+      // land on a subagent child file. The persisted run records are the only
+      // place its frozen role lives: without restoring them the child would
+      // re-activate the FULL tool set, gain a checkpoint recorder and lose its
+      // profile system prompt.
+      const runs = readDiskSubagentRuns(sessionManager.getEntries() as any[])
+      const current = runs[runs.length - 1]
+      if (current) detectedRole = { parentPath: current.start.parentSessionPath, resource: current.start.resource }
+    }
+    const role = detectedRole
+    const isChild = role !== undefined
     const todos = new TodoState(sessionManager)
     const fullServices = await this.servicesFor(
       sessionManager.getCwd(), todos, recoveryOnly,
-      isChild ? { appendSystemPrompt: subagentRole.resource.appendSystemPrompt } : undefined
+      isChild ? { appendSystemPrompt: role!.resource.appendSystemPrompt } : undefined
     )
     const services = { ...fullServices, resourceLoader: this.filterExtensions(fullServices.resourceLoader) }
     let notifications: TaskNotifications | undefined
@@ -956,9 +974,9 @@ export class PiManager {
     const subagentState = isChild ? null : new SubagentParentState(sessionManager.getSessionId())
     const { session } = await createAgentSessionFromServices({ services, sessionManager,
       ...(isChild ? {
-        tools: subagentRole.resource.tools,
-        ...(subagentRole.model ? { model: subagentRole.model } : {}),
-        ...(subagentRole.resource.thinkingLevel ? { thinkingLevel: subagentRole.resource.thinkingLevel as any } : {})
+        tools: role!.resource.tools,
+        ...(role!.model ? { model: role!.model } : {}),
+        ...(role!.resource.thinkingLevel ? { thinkingLevel: role!.resource.thinkingLevel as any } : {})
       } : {}),
       customTools: [...createManagedBashTools({ tasks: this.commandTasks, services,
         sessionId: sessionManager.getSessionId(), sessionPath: sessionManager.getSessionFile()!,
@@ -974,6 +992,15 @@ export class PiManager {
         })] : [])]
     })
     if (!isChild) parentSessionRef.session = session
+    if (isChild && role!.resource.thinkingLevel) {
+      // Thinking levels are model-derived: clamp the frozen request to what
+      // the child's actual model supports instead of letting it error.
+      const levels = session.getAvailableThinkingLevels() as string[]
+      const wanted = role!.resource.thinkingLevel as string
+      if (levels.length && !levels.includes(wanted)) {
+        session.setThinkingLevel((levels.includes('medium') ? 'medium' : levels[levels.length - 1]) as any)
+      }
+    }
     notifications = new TaskNotifications(session, this.commandTasks)
     const path = session.sessionFile ?? `memory:${session.sessionId}`
     const managed: ManagedSession = {
@@ -981,7 +1008,7 @@ export class PiManager {
       todos,
       resourceLoader: fullServices.resourceLoader,
       subagents: subagentState,
-      ...(isChild ? { subagentChild: { parentPath: subagentRole.parentPath, toolCeiling: subagentRole.resource.tools } } : {}),
+      ...(isChild ? { subagentChild: { parentPath: role!.parentPath, toolCeiling: role!.resource.tools } } : {}),
       initializing: true,
       lifecyclePromise: null,
       disposePromise: null,
@@ -1080,7 +1107,9 @@ export class PiManager {
 
   /** Create (or reopen) a subagent child through the same managed-session
    * machinery the app uses for user sessions — one registry, one shutdown
-   * path, one bash/task owner. Returns a release handle the runtime drives. */
+   * path, one bash/task owner. A live child of the same file is REUSED (one
+   * managed instance per file), so resuming a child the user is viewing never
+   * builds a second session over it. Returns the handle the runtime drives. */
   private async createSubagentChildSession(options: {
     mode: 'new' | 'reopen'
     cwd: string
@@ -1094,17 +1123,11 @@ export class PiManager {
       ? SessionManager.create(options.cwd, undefined, { parentSession: options.parentSessionPath })
       : SessionManager.open(options.sessionPath!)
     if (options.mode === 'new') this.materializeSession(sessionManager)
-    let model: any
-    if (options.resource.model) {
-      const runtime = await this.runtime()
-      const [providerId, ...rest] = options.resource.model.split('/')
-      model = providerId && rest.length ? runtime.getModel(providerId, rest.join('/')) : undefined
-    }
-    const managed = await this.createManagedSession(sessionManager, {
-      parentPath: options.parentSessionPath,
-      resource: options.resource,
-      model
-    })
+    const path = sessionManager.getSessionFile()
+    const existing = path ? this.sessions.get(path) : undefined
+    const managed = existing && !existing.disposing && !this.closing
+      ? existing
+      : await this.createManagedSession(sessionManager, await this.resolveSubagentRole(options))
     await managed.lifecyclePromise
     if (managed.disposing || this.closing) throw new Error('Subagent session was closed during initialization')
     return {
@@ -1112,7 +1135,18 @@ export class PiManager {
       sessionManager,
       path: managed.path,
       cwd: managed.cwd,
+      runId: options.runId,
+      parentSessionId: options.parentSessionId,
       resource: options.resource,
+      halt: async () => {
+        // Stop everything the child owns: its wake path first (a completion
+        // arriving mid-halt must not re-wake it), then its queues, its
+        // background processes and finally the SDK run itself.
+        managed.notifications.pause()
+        managed.session.clearQueue()
+        await this.commandTasksInstance?.stopSession(managed.path).catch(() => {})
+        await managed.session.abort().catch(() => {})
+      },
       release: () => {
         // A child the user is currently viewing stays alive; it is disposed by
         // its own lifecycle (navigation away is non-destructive in pi-app).
@@ -1121,6 +1155,30 @@ export class PiManager {
         }
       }
     }
+  }
+
+  /** Session files whose header names `parentPath` as their parent. */
+  private async subagentChildFiles(cwd: string, parentPath: string): Promise<string[]> {
+    let infos
+    try { infos = await SessionManager.list(cwd) } catch { return [] }
+    return infos.filter((info) => info.parentSessionPath === parentPath && isSubagentSessionFile(info.path)).map((info) => info.path)
+  }
+
+  /** Resolve the frozen role (tools, append prompt, model) for a child
+   * session, including the model object the snapshot's spec names. An
+   * unresolvable spec (model removed since dispatch) falls back to the
+   * session default rather than failing the open. */
+  private async resolveSubagentRole(options: {
+    parentSessionPath: string
+    resource: SubagentRunStartData['resource']
+  }): Promise<{ parentPath: string; resource: SubagentRunStartData['resource']; model?: any }> {
+    let model: any
+    if (options.resource.model) {
+      const runtime = await this.runtime()
+      const [providerId, ...rest] = options.resource.model.split('/')
+      model = providerId && rest.length ? runtime.getModel(providerId, rest.join('/')) : undefined
+    }
+    return { parentPath: options.parentSessionPath, resource: options.resource, ...(model ? { model } : {}) }
   }
 
   private async initializeSession(managed: ManagedSession, loader: ResourceLoader): Promise<void> {
@@ -1506,7 +1564,19 @@ export class PiManager {
     await this.checkoutCoordinator.ready()
     const targetCwd = managed?.cwd ?? SessionManager.open(path).getCwd()
     if (this.checkoutCoordinator.needsRecovery(targetCwd) || !this.checkoutCoordinator.canStart(targetCwd)) throw new RewindFailure('busy')
-    if (managed) await this.disposeManaged(managed)
+    if (managed) {
+      await this.subagentRuntime.stopAll(managed.subagents)
+      await this.disposeManaged(managed)
+    }
+    // Children are conversation sub-records of the deleted parent: stop them
+    // (already done above) and trash their files with it, or they would be
+    // orphaned — hidden from the sidebar but unreachable from any roster.
+    const childFiles = await this.subagentChildFiles(targetCwd, path)
+    for (const child of childFiles) {
+      const childManaged = this.sessions.get(child)
+      if (childManaged) await this.disposeManaged(childManaged)
+      await shell.trashItem(child).catch(() => {})
+    }
     await shell.trashItem(path).catch(() => {})
     if (!this.activeSession && this.cwd) {
       const sessions = await SessionManager.list(this.cwd).catch(() => [])
@@ -1751,11 +1821,12 @@ export class PiManager {
       if (this.closing || managed.disposing) throw new Error('Session is shutting down')
       if (session.isStreaming) throw new Error('Wait for the current response to finish')
       // Rewinding a branch invalidates every old task notification — and every
-      // subagent run of the discarded branch: abort it, suppressed, so a late
-      // completion cannot wake the branch the user rewound to.
+      // subagent run of the discarded branch: stop it NOW (awaited — the retry
+      // re-prompts immediately) and suppressed, so a late completion cannot
+      // wake the branch the user rewound to.
       managed.notifications?.pause()
       managed.subagents?.notifications?.pause()
-      if (managed.subagents) this.subagentRuntime.abortAll(managed.subagents)
+      await this.subagentRuntime.stopAll(managed.subagents)
       await this.commandTasksInstance?.stopSession(managed.path)
       session.clearQueue?.()
 
@@ -2436,7 +2507,15 @@ export class PiManager {
       const value = await this.rewindClient.call('preview', managed.cwd, managed.session.sessionId, checkpointId, action)
       const navigation = await this.rewindClient.call('navigation', managed.cwd, managed.session.sessionId, value.token)
       if (!action && value.scopeRoot) {
-        value.uncovered = await uncoveredWrites(managed.session.sessionManager.getBranch(), managed.cwd, value.scopeRoot, navigation.after, value.excluded)
+        const direct = await uncoveredWrites(managed.session.sessionManager.getBranch(), managed.cwd, value.scopeRoot, navigation.after, value.excluded)
+        // Child-session writes are invisible to the branch scan (the parent
+        // only sees the `agent` tool call): collect their successful written
+        // records and classify them under the same scope/excluded rules.
+        const subagentPaths = await this.subagentRuntime.collectSubagentWritePaths(
+          managed.session.sessionManager, managed.cwd, value.scopeRoot)
+        const subagentUncovered = await classifyUncoveredWrites(subagentPaths, value.scopeRoot, value.excluded)
+        const seen = new Set(direct.map((item) => item.path))
+        value.uncovered = [...direct, ...subagentUncovered.filter((item) => !seen.has(item.path))]
       }
       if (leaf !== managed.session.sessionManager.getLeafId()) throw new RewindFailure('changed')
       if (this.rewindPreviews.size >= 100) this.rewindPreviews.delete(this.rewindPreviews.keys().next().value!)
@@ -2528,7 +2607,9 @@ export class PiManager {
         if (known.target !== null && !session.sessionManager.getEntry(known.target)) throw new RewindFailure('missing')
         managed.notifications.pause()
         managed.subagents?.notifications?.pause()
-        if (managed.subagents) this.subagentRuntime.abortAll(managed.subagents)
+        // Awaited: the restore's exclusive window must not collide with the
+        // runs' coordinator leases (a restore would read as busy forever).
+        await this.subagentRuntime.stopAll(managed.subagents)
         const operation = await this.rewindClient.call('prepare', managed.cwd, session.sessionId, request.token,
           request.mode, request.operationId, before, request.mode === 'files' ? before : known.target, managed.path,
           { uncovered: known.uncovered ?? [], confirmed: request.skipUncovered === true })

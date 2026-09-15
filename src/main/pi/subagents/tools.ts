@@ -78,13 +78,15 @@ export function createSubagentTool(deps: SubagentToolDeps): ToolDefinition<typeo
         inheritContext: args.inherit_context,
         inputFiles: args.input_files
       }
-      const started = await runtime.start(state, { ...request, parentSession })
-      const detailsOf = (status: string, extra: Record<string, unknown> = {}) => ({
+      // The signal is registered BEFORE launch: a Stop issued while the
+      // model/session is still being created must cancel the launch itself.
+      const started = await runtime.start(state, { ...request, parentSession }, signal)
+      const detailsOf = (run: typeof started.run) => ({
         kind: 'pi-app-subagent',
-        subagent: { ...started.run, status, ...extra }
+        subagent: run
       })
       if (started.run.runInBackground) {
-        onUpdate?.({ content: [{ type: 'text', text: `${started.run.description}: started in background (run ${started.run.runId.slice(0, 8)}).` }], details: detailsOf('running') })
+        onUpdate?.({ content: [{ type: 'text', text: `${started.run.description}: started in background (run ${started.run.runId.slice(0, 8)}).` }], details: detailsOf(started.run) })
         return {
           content: [{
             type: 'text',
@@ -97,11 +99,9 @@ export function createSubagentTool(deps: SubagentToolDeps): ToolDefinition<typeo
               guidance: BACKGROUND_GUIDANCE
             }, null, 2)
           }],
-          details: detailsOf('running')
+          details: detailsOf(started.run)
         }
       }
-      const abort = () => runtime.abort(state, started.run.sessionId)
-      signal?.addEventListener('abort', abort, { once: true })
       try {
         const finished = await started.completion
         const body = JSON.stringify({
@@ -113,11 +113,14 @@ export function createSubagentTool(deps: SubagentToolDeps): ToolDefinition<typeo
           ...(finished.result !== undefined ? { result: finished.result } : { error: finished.error ?? 'No result' }),
           ...(finished.writtenFiles?.length ? { writtenFiles: finished.writtenFiles.map((file) => file.displayPath) } : {})
         }, null, 2)
-        onUpdate?.({ content: [{ type: 'text', text: body }], details: detailsOf(finished.status) })
+        // The FINISHED record rides the result details (writtenFiles included)
+        // — the changed-files list folds child writes from exactly this payload.
+        onUpdate?.({ content: [{ type: 'text', text: body }], details: detailsOf(finished) })
         if (finished.status !== 'completed' && finished.status !== 'aborted') throw new Error(body)
-        return { content: [{ type: 'text', text: body }], details: detailsOf(finished.status) }
+        return { content: [{ type: 'text', text: body }], details: detailsOf(finished) }
       } finally {
-        signal?.removeEventListener('abort', abort)
+        // A foreground run's abort is fully owned by the runtime's signal
+        // registration inside start(); nothing to unwind here.
       }
     }
   } satisfies ToolDefinition<typeof parameters>

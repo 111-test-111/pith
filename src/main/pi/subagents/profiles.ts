@@ -87,6 +87,7 @@ function parseFrontmatter(raw: string): { data: Record<string, string | boolean 
     const [, key, value] = entry
     if (value === 'true') data[key] = true
     else if (value === 'false') data[key] = false
+    else if (value !== '' && !Number.isNaN(Number(value))) data[key] = Number(value)
     else data[key] = value
   }
   return { data, body: match[2] }

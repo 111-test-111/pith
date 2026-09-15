@@ -198,3 +198,190 @@ const entriesOf = (...records) => records.map((record, index) => ({
 }
 
 console.log('check-subagents: all assertions passed')
+
+// ===========================================================================
+// Runtime integration checks (real SDK SessionManager files, mock host).
+// These close the loop the pure-protocol tests above cannot: what the runtime
+// actually PERSISTS must be readable by its own recovery paths.
+// ===========================================================================
+{
+  const { SubagentRuntime, SubagentParentState } = await import('../src/main/pi/subagents/runtime.ts')
+  const { SessionManager } = await import('@earendil-works/pi-coding-agent')
+  const { mkdirSync, writeFileSync, existsSync } = await import('node:fs')
+
+  const dir = await mkdtemp(join(tmpdir(), 'pith-subagents-e2e-'))
+  const profile = { name: 'explore', displayName: 'Explore', description: 'd', systemPrompt: 'You explore.', tools: ['read', 'grep'], inheritContext: false, runInBackground: false, enabled: true }
+  try {
+    // A real parent file (start() refuses unsaved parents). The sessionDir
+    // keeps the test's files out of the user's ~/.pi/agent/sessions tree.
+    const sessionsDir = join(dir, 'sessions')
+    mkdirSync(sessionsDir, { recursive: true })
+    const materialize = (manager) => {
+      writeFileSync(manager.getSessionFile(), `${JSON.stringify(manager.getHeader())}\n`, { flag: 'wx' })
+      // Mark the session flushed (what PiManager.materializeSession does), so
+      // later appendCustomEntry calls write incrementally to the real file.
+      manager.setSessionFile(manager.getSessionFile())
+    }
+    const parent = SessionManager.create(dir, sessionsDir)
+    materialize(parent)
+
+    /** Minimal fake AgentSession whose prompt behaviour each test controls. */
+    const fakeSession = (over = {}) => ({
+      sessionId: 'child-session',
+      subscribe: () => () => {},
+      prompt: async () => {},
+      abort: async () => {},
+      steer: () => {},
+      isIdle: true,
+      messages: [],
+      getLastAssistantText: () => undefined,
+      getActiveToolNames: () => ['read', 'grep', 'edit', 'write', 'bash', 'todo_write'],
+      sessionManager: parent,
+      ...over
+    })
+    const parentSession = fakeSession({ sessionId: 'parent-session', getActiveToolNames: () => ['read', 'grep', 'edit', 'write', 'bash', 'todo_write'] })
+
+    const leases = new Set()
+    const emits = []
+    const completionsDelivered = []
+    const makeHost = (childSession) => ({
+      isClosing: () => false,
+      maxConcurrentSubagents: () => 4,
+      subagentsEnabled: () => true,
+      commandTasks: () => null,
+      acquireRunLease: (_cwd, sessionPath) => { leases.add(sessionPath); return () => leases.delete(sessionPath) },
+      createChildSession: async (options) => {
+        // Real child file with the real parentSession header link.
+        const manager = SessionManager.create(options.cwd, sessionsDir, { parentSession: options.parentSessionPath })
+        materialize(manager)
+        // The fake session's scripted messages live in the REAL branch too —
+        // the runtime extracts written files (and status) from the persisted
+        // branch, exactly like a real AgentSession would.
+        for (const message of childSession.messages ?? []) manager.appendMessage(message)
+        childSession.sessionManager = manager
+        return {
+          session: childSession, sessionManager: manager, path: manager.getSessionFile(), cwd: options.cwd,
+          runId: options.runId, parentSessionId: options.parentSessionId, resource: options.resource,
+          halt: async () => { await childSession.abort() },
+          release: () => {}
+        }
+      },
+      emitSubagents: (_id, _path, runs) => emits.push(runs),
+      resolveModelSpec: async () => ({ spec: 'test/model' }),
+      notifySubagentChildWrite: () => {}
+    })
+    const baseRequest = (over = {}) => ({
+      parentSession, parentSessionPath: parent.getSessionFile(), parentToolCallId: 'call-1',
+      profile, description: 'Map modules', task: 'Map them', runInBackground: false, ...over
+    })
+
+    // --- 1) Real persistence round-trip: what start() wrote must read back ---
+    {
+      const session = fakeSession({ getLastAssistantText: () => 'All mapped.' })
+      const runtime = new SubagentRuntime(makeHost(session))
+      const state = new SubagentParentState('parent-session')
+      const { completion } = await runtime.start(state, baseRequest())
+      const finished = await completion
+      assert.equal(finished.status, 'completed')
+      assert.equal(finished.result, 'All mapped.')
+      assert.equal(leases.size, 0, 'run lease released at completion')
+      const childPath = finished.sessionPath
+      assert.ok(existsSync(childPath))
+      const runs = runtime.readChildRuns(childPath)
+      assert.equal(runs.length, 1, 'run start+result persisted to the real child file')
+      assert.equal(runs[0].start.parentSessionId, 'parent-session', 'real parent session id persisted')
+      assert.equal(runs[0].start.parentSessionPath, parent.getSessionFile())
+      assert.equal(runs[0].result?.status, 'completed')
+      assert.deepEqual(runs[0].start.resource.tools.sort(), ['grep', 'read'])
+    }
+
+    // --- 2) Startup cancellation: an aborted signal never reaches creation ---
+    {
+      let created = 0
+      const host = makeHost(fakeSession())
+      host.createChildSession = async (options) => { created++; return (await makeHost(fakeSession()).createChildSession(options)) }
+      const runtime = new SubagentRuntime(host)
+      const state = new SubagentParentState('parent-session')
+      const controller = new AbortController()
+      controller.abort()
+      await assert.rejects(
+        () => runtime.start(state, baseRequest(), controller.signal),
+        /cancelled before launch/
+      )
+      assert.equal(created, 0, 'no child session is created for a cancelled launch')
+      assert.equal(leases.size, 0)
+    }
+
+    // --- 3) Errored final round resolves prompt normally: status must fail ---
+    {
+      const session = fakeSession({ messages: [{ role: 'assistant', timestamp: 1, stopReason: 'error', error: 'provider 500' }] })
+      const runtime = new SubagentRuntime(makeHost(session))
+      const state = new SubagentParentState('parent-session')
+      const finished = await (await runtime.start(state, baseRequest())).completion
+      assert.equal(finished.status, 'failed')
+      assert.match(finished.error, /provider 500/)
+    }
+
+    // --- 4) prompt() rejection surfaces as failed, lease still released ---
+    {
+      const session = fakeSession({ prompt: async () => { throw new Error('model unavailable') } })
+      const runtime = new SubagentRuntime(makeHost(session))
+      const state = new SubagentParentState('parent-session')
+      const finished = await (await runtime.start(state, baseRequest())).completion
+      assert.equal(finished.status, 'failed')
+      assert.match(finished.error, /model unavailable/)
+      assert.equal(leases.size, 0)
+    }
+
+    // --- 5) Abort mid-run: complete stop, suppressed notification, aborted status ---
+    {
+      // The fake wires abort() to the pending prompt the way the real SDK
+      // does: abort settles the in-flight prompt, the run's completion then
+      // derives its aborted status from the abort bookkeeping.
+      let rejectPrompt
+      let halted = 0
+      const session = fakeSession({
+        prompt: () => new Promise((_resolve, reject) => { rejectPrompt = reject }),
+        abort: async () => { rejectPrompt?.(new Error('aborted by user')); rejectPrompt = undefined }
+      })
+      const host = makeHost(session)
+      const runtime = new SubagentRuntime(host)
+      const state = new SubagentParentState('parent-session')
+      state.notifications = { complete: (run) => completionsDelivered.push(run), drop: () => {}, canStart: true }
+      const { completion } = await runtime.start(state, baseRequest({ runInBackground: true }))
+      await runtime.stopAll(state)
+      const finished = await completion
+      assert.equal(finished.status, 'aborted')
+      assert.equal(completionsDelivered.length, 0, 'a stopped run never wakes the parent')
+      assert.equal(leases.size, 0, 'halt releases the run lease')
+      void halted
+    }
+
+    // --- 6) collectSubagentWritePaths: child writes from disk, parent branch anchored ---
+    {
+      // Parent branch: an agent toolCall + successful result.
+      parent.appendMessage({ role: 'user', content: 'delegate', timestamp: 1 })
+      parent.appendMessage({ role: 'assistant', content: [{ type: 'toolCall', id: 'agent-call-1', name: 'agent', arguments: { subagent_type: 'explore' } }], timestamp: 2 })
+      parent.appendMessage({ role: 'toolResult', toolCallId: 'agent-call-1', toolName: 'agent', isError: false, content: [{ type: 'text', text: 'ok' }], timestamp: 3 })
+      // The fake child performs a real (fake-session) write so the run's own
+      // result record carries its writtenFiles naturally.
+      const session = fakeSession({
+        messages: [
+          { role: 'assistant', content: [{ type: 'toolCall', id: 'w1', name: 'write', arguments: { path: 'src/a.ts', content: 'x\ny\n' } }], timestamp: 10 },
+          { role: 'toolResult', toolCallId: 'w1', toolName: 'write', isError: false, content: [{ type: 'text', text: 'ok' }], timestamp: 11 }
+        ]
+      })
+      const runtime = new SubagentRuntime(makeHost(session))
+      const state = new SubagentParentState(parent.getSessionId())
+      const { completion } = await runtime.start(state, baseRequest({ parentToolCallId: 'agent-call-1' }))
+      const finished = await completion
+      assert.equal(finished.writtenFiles?.length, 1)
+      const paths = await runtime.collectSubagentWritePaths(parent, dir, null, sessionsDir)
+      assert.deepEqual(paths, [join(dir, 'src', 'a.ts')])
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+}
+
+console.log('check-subagents: runtime integration assertions passed')

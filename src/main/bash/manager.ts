@@ -13,8 +13,9 @@ const RUNNING_LIMIT = 16
 const KILL_GRACE_MS = 1500
 const MAX_TIMER_MS = 2_147_483_647
 
-export const taskIsLive = (task: Pick<BashTaskDTO, 'status'>): boolean =>
-  task.status === 'running' || task.status === 'stopping'
+import { taskIsLive } from './task-status'
+
+export { taskIsLive }
 
 interface Task {
   releaseCheckout?: () => void

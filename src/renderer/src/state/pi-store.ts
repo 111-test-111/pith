@@ -275,7 +275,10 @@ export class PiStore {
       eventSequence: snapshotSequence,
       messages: unchanged ? cached.messages : snapshot.messages,
       todos: unchanged ? cached.todos : (snapshot.todos ?? null),
-      subagents: unchanged ? cached.subagents : (snapshot.subagents ?? []),
+      // Always take the snapshot's roster: it has no event sequence, so the
+      // unchanged-cached shortcut would keep a stale card (e.g. a run that
+      // finished while its parent was in the background) over the fresh state.
+      subagents: snapshot.subagents ?? [],
       streaming: unchanged ? cached.streaming : (snapshot.streaming ?? null),
       toolRuns: unchanged ? cached.toolRuns : (snapshot.toolRuns ?? {}),
       queue: unchanged ? cached.queue : (snapshot.queue ?? { steering: [], followUp: [] }),

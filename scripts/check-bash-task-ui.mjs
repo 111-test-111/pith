@@ -54,7 +54,7 @@ window.startStartupFixture=()=>{
  window.turnStore=null;window.startupStore=new PiStore();window.startupSends=[];
  window.startupStore.applySnapshot({sessionId:'startup',sessionPath:'/ui/startup',cwd:'/ui',projectless:false,messages:[],model:null,thinkingLevel:'off',isStreaming:false,initializing:true,eventSequence:0});
  function Startup(){const shell=React.useSyncExternalStore(window.startupStore.subscribe,window.startupStore.getShell);const {setLocale}=useI18n();window.setLocale=setLocale;
-  return React.createElement(Composer,{start:{projectName:'fixture'},models:[],model:null,thinkingLevel:'off',availableThinkingLevels:['off'],busy:false,initializing:shell.initializing,
+  return React.createElement(Composer,{start:{projectName:'fixture',cwd:'/ui',projects:[],onProjectChange:()=>{}},models:[],model:null,thinkingLevel:'off',availableThinkingLevels:['off'],busy:false,initializing:shell.initializing,
    queued:{steering:[],followUp:[]},onSend:p=>window.startupSends.push(p),onQueue:()=>{throw Error('unexpected queue')},onRecallQueue:async()=>[],onModelChange:()=>{},onThinkingLevelChange:()=>{}});}
  flushSync(()=>window.checkRoot.render(React.createElement(I18nProvider,{key:'startup'},React.createElement(ImagePreviewProvider,null,React.createElement('div',{id:'startup-fixture',style:{width:800,margin:'20px auto'}},React.createElement(Startup))))));
 };

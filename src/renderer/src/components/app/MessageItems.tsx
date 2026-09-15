@@ -840,8 +840,16 @@ export const AssistantGroup = memo(function AssistantGroup({
    * `turn-written-files` keeps repeat work off the streaming path).
    */
   const writtenFiles = useMemo(
-    () => !live && showWrittenFiles ? extractTurnWrittenFiles(writtenMessages, toolResults, cwd) : [],
-    [live, showWrittenFiles, writtenMessages, toolResults, cwd]
+    () => {
+      if (live || !showWrittenFiles) return []
+      // Background subagent completions land in this display group as turn
+      // notices (the wake continues the scope here); their written-file
+      // payloads belong in the same cumulative list as direct edit/write calls.
+      const completions = (notices ?? []).map((notice) => notice.message)
+        .filter((message) => message.customType === 'subagent_completion')
+      return extractTurnWrittenFiles(writtenMessages, toolResults, cwd, completions)
+    },
+    [live, showWrittenFiles, writtenMessages, toolResults, cwd, notices]
   )
   /**
    * The list belongs between the answer and the completion-actions row, so it

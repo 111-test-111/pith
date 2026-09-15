@@ -35,7 +35,13 @@ export class SubagentNotifications {
   private failures = 0
   private idleWakeHolds = 0
 
-  constructor(private session: AgentSession, private emitRun: (run: SubagentRunDTO) => void) {}
+  private readonly session: AgentSession
+  private readonly emitRun: (run: SubagentRunDTO) => void
+
+  constructor(session: AgentSession, emitRun: (run: SubagentRunDTO) => void) {
+    this.session = session
+    this.emitRun = emitRun
+  }
 
   get canStart(): boolean { return !this.paused && !this.disposed }
 

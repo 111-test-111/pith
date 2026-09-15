@@ -1,4 +1,4 @@
-import type { AssistantMsg, ChatMessage, ToolCallContent, ToolResultMsg } from '../../../shared/types'
+import type { AssistantMsg, ChatMessage, CustomMsg, ToolCallContent, ToolResultMsg } from '../../../shared/types'
 import { countDiffChanges, synthesizeWritePatch } from './diff'
 import { relativize, resolveFromCwd } from './tool-path'
 import { extractUserDisplay } from './user-message'
@@ -126,9 +126,29 @@ function mergeChange(
 export function extractTurnWrittenFiles(
   assistants: readonly AssistantMsg[],
   toolResults: ReadonlyMap<string, ToolResultMsg>,
-  cwd?: string | null
+  cwd?: string | null,
+  /** Background subagent completions delivered into this turn as custom
+   * messages; each carries the run's finished record (writtenFiles) — the
+   * same payload the foreground result details carry. */
+  completions?: readonly CustomMsg[]
 ): WrittenFile[] {
   const byPath = new Map<string, WrittenFile>()
+  for (const message of completions ?? []) {
+    if (message.customType !== 'subagent_completion') continue
+    const written = (message.details as { subagent?: { writtenFiles?: Array<{ filePath: string; patch?: string; added?: number; removed?: number }> } } | undefined)?.subagent?.writtenFiles
+    if (!Array.isArray(written)) continue
+    for (const file of written) {
+      if (typeof file?.filePath !== 'string' || !file.filePath) continue
+      mergeChange(
+        byPath,
+        file.filePath,
+        typeof file.patch === 'string' && file.patch.length > 0
+          ? { patch: file.patch, added: file.added ?? countDiffChanges(file.patch).added, removed: file.removed ?? countDiffChanges(file.patch).removed }
+          : null,
+        cwd
+      )
+    }
+  }
   for (const message of assistants) {
     for (const part of message.content) {
       if (part.type !== 'toolCall') continue
