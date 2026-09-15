@@ -171,6 +171,8 @@ const en = {
   'palette.hideRail': 'Hide right panel',
   'palette.untitled': 'New chat',
   'palette.current': 'Current',
+  'palette.compact': 'Compact conversation',
+  'palette.compactBusy': 'Stop the running turn before compacting',
   'sandbox.group': 'File sandbox',
   'sandbox.modeLabel': 'Sandbox mode',
   'sandbox.modeDesc': 'The mode a new chat starts in. Each session keeps its own mode and switches it from the composer.',

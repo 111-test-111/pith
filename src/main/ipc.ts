@@ -89,6 +89,8 @@ export function registerIpc(pi: PiManager): () => boolean {
   // this session's mode and gets the refreshed snapshot back.
   ipcMain.handle('sandbox:setMode', (_event, sessionPath: string, mode: SandboxMode) =>
     pi.setSessionSandboxMode(sessionPath, mode))
+  // Manual compaction, the app's equivalent of `/compact`.
+  ipcMain.handle('pi:compact', (_event, sessionPath: string) => pi.compactSession(sessionPath))
   ipcMain.handle('bash:list', (_event, sessionPath: string) => pi.listBashTasks(sessionPath))
   ipcMain.handle('bash:output', (_event, request: BashTaskRequest) => pi.bashTaskOutput(request))
   ipcMain.handle('bash:stop', (_event, request: BashTaskRequest) => pi.stopBashTask(request))

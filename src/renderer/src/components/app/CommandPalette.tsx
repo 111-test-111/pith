@@ -4,6 +4,7 @@ import { CommandPalette, type CommandItem } from '@/components/motion/command-pa
 import {
   Folder,
   MessageSquarePlus,
+  Minimize2,
   PanelLeft,
   PanelRight,
   Settings,
@@ -45,6 +46,7 @@ export function AppCommandPalette({
   onNewSession,
   onOpenSettings,
   onNewTerminal,
+  onCompact,
   onToggleSidebar,
   onToggleRail
 }: {
@@ -57,6 +59,8 @@ export function AppCommandPalette({
   onNewSession: (cwd?: string) => void
   onOpenSettings: () => void
   onNewTerminal: () => void
+  /** Manual compaction, the app's `/compact`; the caller guards a live run. */
+  onCompact: () => void
   onToggleSidebar: () => void
   onToggleRail: () => void
 }) {
@@ -90,6 +94,14 @@ export function AppCommandPalette({
         keywords: ['shell', 'console'],
         icon: SquareTerminal,
         onSelect: onNewTerminal
+      },
+      {
+        id: 'action.compact',
+        group: t('palette.group.actions'),
+        label: t('palette.compact'),
+        keywords: ['compact', 'summarize', 'context', 'history'],
+        icon: Minimize2,
+        onSelect: onCompact
       },
       {
         id: 'action.theme',
@@ -147,6 +159,7 @@ export function AppCommandPalette({
     activePath,
     folders,
     onNewSession,
+    onCompact,
     onNewTerminal,
     onOpenSession,
     onOpenSettings,

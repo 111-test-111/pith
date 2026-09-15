@@ -355,6 +355,22 @@ export class PiManager {
     return this.snapshotOf(managed)
   }
 
+  /**
+   * Manual compaction — the app's `/compact`. The SDK's own manual entry point
+   * aborts whatever is running first and never retries the interrupted turn, so
+   * a live run is refused here rather than silently killed: the user stops the
+   * turn deliberately, then compacts. Auto-compaction is unaffected and still
+   * enters through its own threshold/overflow path.
+   */
+  async compactSession(sessionPath: string): Promise<SessionSnapshotDTO> {
+    const managed = this.sessions.get(sessionPath)
+    if (!managed) throw new Error('No such session')
+    if (managed.subagentChild) throw new Error('A subagent session follows its parent session')
+    if (managed.session.isStreaming) throw new Error('Stop the running turn before compacting')
+    await managed.session.compact()
+    return this.snapshotOf(managed)
+  }
+
   // ---- subagents (delegated child sessions) ----
 
   /** Current roster of a parent session (renderer panel refresh). */

@@ -51,6 +51,7 @@ createRoot(document.getElementById('root')).render(
         onNewSession:spy('newSession'),
         onOpenSettings:spy('settings'),
         onNewTerminal:spy('terminal'),
+        onCompact:spy('compact'),
         onToggleSidebar:spy('toggleSidebar'),
         onToggleRail:spy('toggleRail')
       }))));
@@ -125,7 +126,7 @@ try {
   // 2. One list holds the workspace's actions, the projects and the sessions,
   //    each under its own localized group heading.
   const initial = await evaluate('window.dialogText()')
-  for (const expected of ['Actions', 'Projects', 'Sessions', 'Terminal', 'New chat', 'proj-a', 'Fix the parser']) {
+  for (const expected of ['Actions', 'Projects', 'Sessions', 'Terminal', 'New chat', 'Compact conversation', 'proj-a', 'Fix the parser']) {
     assert.ok(initial.includes(expected), `the initial list holds "${expected}": ${initial.slice(0, 200)}`)
   }
   assert.ok((await evaluate('window.options()')).length >= 10, 'actions, projects and sessions are all listed')
@@ -141,6 +142,17 @@ try {
   await pause(350)
   assert.deepEqual(await evaluate('window.calls'), [['terminal']], 'Enter ran the highlighted command')
   assert.equal(await evaluate('!!window.dialog()'), false, 'running a command closes the palette')
+
+  // 3b. Manual compaction is offered from the palette (the app's `/compact`
+  //     equivalent) and dispatches to its own action.
+  await evaluate('window.pressK()')
+  await pause(300)
+  await evaluate(`window.query('compact')`)
+  await pause(250)
+  assert.match((await evaluate('window.options()'))[0].text, /Compact conversation/, 'compaction is a command')
+  await evaluate('window.pressEnter()')
+  await pause(350)
+  assert.deepEqual(await evaluate('window.calls').then((calls) => calls.at(-1)), ['compact'], 'the compaction command dispatched')
 
   // 4. A click dispatches that row, and session rows carry their real target
   //    (path plus owning cwd) so the wired workspace action needs no lookup.

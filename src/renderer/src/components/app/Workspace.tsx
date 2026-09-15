@@ -43,6 +43,7 @@ import {
   AnimatedSidebarTrigger
 } from '@/components/motion/animated-sidebar'
 import { ThemeButton } from './ThemeButton'
+import { useToast } from './ToastProvider'
 import { WindowTitlebar } from './WindowTitlebar'
 import { useOverflowFade } from '@/lib/hooks/use-overflow-fade'
 import { Button } from '@/components/motion/button'
@@ -149,6 +150,7 @@ function SidebarRowMenuAction({ icon: Icon, label, tone = 'default', onSelect }:
 
 export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
   const { t } = useI18n()
+  const toast = useToast()
   const titleFade = useOverflowFade()
   const [sidebarPreferences, setSidebarPreferences] = useState(loadSidebarPreferences)
   const [sidebarSaveError, setSidebarSaveError] = useState(false)
@@ -1449,6 +1451,16 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
       onNewSession={(cwd) => void newSession(cwd)}
       onOpenSettings={() => setSettingsOpen(true)}
       onNewTerminal={newTerminal}
+      onCompact={() => {
+        // The SDK's manual compaction aborts whatever is running, so a live
+        // turn is the user's decision to stop first — never a silent kill.
+        if (shell.isStreaming) { toast.info({ title: t('palette.compactBusy') }); return }
+        if (!shell.sessionPath) return
+        void window.pi
+          .compactSession(shell.sessionPath)
+          .then((snapshot) => store.applySnapshot(snapshot))
+          .catch(() => toast.error({ title: t('chat.noticeCompactFailed') }))
+      }}
       onToggleSidebar={() => setSidebarOpen((open) => !open)}
       onToggleRail={() => setSidePanelOpen((open) => !open)}
     />

@@ -96,6 +96,9 @@ const api = {
   /** Change one session's mode; resolves with that session's fresh snapshot. */
   setSessionSandboxMode: (sessionPath: string, mode: SandboxMode): Promise<SessionSnapshotDTO> =>
     ipcRenderer.invoke('sandbox:setMode', sessionPath, mode),
+  /** Compact one session's context on demand (the CLI's `/compact`). */
+  compactSession: (sessionPath: string): Promise<SessionSnapshotDTO> =>
+    ipcRenderer.invoke('pi:compact', sessionPath),
   listSubagents: (sessionPath: string): Promise<SubagentRunDTO[]> => ipcRenderer.invoke('subagents:list', sessionPath),
   /** One session's transcript without making it the active session (the rail's
    * read-only subagent view). */
