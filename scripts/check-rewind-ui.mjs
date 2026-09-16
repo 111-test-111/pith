@@ -20,12 +20,12 @@ import {ModelEditorDialog} from '/src/components/app/settings/providers/ModelEdi
 import {Button} from '/src/components/motion/button/index.tsx';
 import {I18nProvider,useI18n} from '/src/i18n/index.tsx';import '/src/styles.css';
 localStorage.setItem('pi-app:locale','en');
-window.outside=false;window.statsReads=0;window.filePreviews=[];window.binaryIndex=false;window.large=false;window.patchReads=0;window.restores=[];window.commitMode='success';window.operations=[];window.previewActions={};window.pending=[];window.busy=false;let listener;
+window.outside=false;window.statsReads=0;window.filePreviews=[];window.binaryIndex=false;window.large=false;window.patchReads=0;window.restores=[];window.commitMode='success';window.operations=[];window.previewActions={};window.pending=[];window.busy=false;window.listError=undefined;window.empty=false;let listener;
 const cp={id:'checkpoint',sessionId:'session',timestamp:1700000000000,trigger:'before-turn',entryId:'before',description:'Fixture change',files:2,bytes:30,excluded:[],branch:'main',messageTimestamp:42};
 window.checkpoint=cp;
 window.statsBatches=[];window.failTotals=false;window.statsDelay=0;window.deck=false;window.patchDelay=0;window.patchFiles=[];window.mixedCoverage=false;window.filePreviewDelay=0;
 window.pi={configuredModels:async()=>[{providerId:'fixture',providerName:'Fixture provider',id:'source',name:'Fixture source',reasoning:true,input:['text'],contextWindow:32768,maxTokens:4096}],
-rewindList:async()=>({value:{checkpoints:[cp],operations:window.operations,pending:window.pending,enabled:true,busy:window.busy,bytes:30}}),
+rewindList:async()=>({value:{checkpoints:window.empty?[]:[cp],operations:window.operations,pending:window.pending,enabled:true,busy:window.busy,bytes:30,error:window.listError}}),
 onRewind:fn=>{listener=fn;return()=>{listener=undefined}},
 rewindPreview:async(path,id,action)=>{const token='preview-'+Date.now();window.previewActions[token]={id,action};return{value:{token,checkpointId:id,operationId:action?id:undefined,action,scopeRoot:'/standalone/workspace',uncovered:action?window.operations.find(op=>op.id===id)?.skipped:window.outside||window.mixedCoverage?[{path:'/project/Workspace.tsx',reason:'outside-workspace'}]:[],blocked:window.restoreBlock,changes:window.outside?[]:window.large||window.deck?Array.from({length:window.deck?40:1000},(_,i)=>({path:'file-'+i+'.txt',area:'worktree',singleFile:true,kind:'modified',binary:false,bytes:100000})):[{path:'file.txt',area:'worktree',singleFile:true,kind:'modified',binary:false,beforeMode:420,afterMode:493,bytes:30},{path:'file.txt',area:'index',kind:'modified',binary:false,bytes:20}],excluded:[{path:'.env',reason:'ignored'}]}}},
 rewindPreviewFile:async(path,token,file)=>{window.filePreviews.push({token,file});await new Promise(resolve=>setTimeout(resolve,window.filePreviewDelay));return{value:{token:'single-'+Date.now(),checkpointId:'checkpoint',file,changes:[{path:file,area:'worktree',kind:'modified',binary:false,bytes:30}],excluded:[]}}},
@@ -241,6 +241,23 @@ try {
   await until(`document.body.innerText.includes('An interrupted restore needs recovery')`)
   await clickText('Recover pre-operation state');await until('window.pending.length===0')
   console.log('PASS: stale preview rejection, in-flight Escape protection and recovery while checkout is blocked')
+  // One busy fact renders once: the sticky capture error and the restore
+  // block never stack the same sentence, while distinct facts both stay.
+  await evaluate(`window.busy=true;window.listError={code:'busy'};window.refresh()`)
+  await select('all')
+  await until(`!!document.querySelector('[data-rewind-error="busy"]')`)
+  assert.equal(await evaluate(`document.querySelectorAll('[data-rewind-error="busy"]').length`),1,'the busy notice renders exactly once')
+  assert(await evaluate(`document.querySelector('[data-rewind-restore]').disabled`),'a busy checkout keeps restore disabled')
+  await evaluate(`window.listError={code:'storage'};window.refresh()`)
+  await until(`!!document.querySelector('[data-rewind-error="storage"]')`)
+  assert.equal(await evaluate(`document.querySelectorAll('[data-rewind-error="storage"]').length`),1,'the capture failure renders once')
+  assert.equal(await evaluate(`document.querySelectorAll('[data-rewind-error="busy"]').length`),1,'distinct capture and restore facts both render')
+  await evaluate(`window.busy=false;window.listError={code:'busy'};window.empty=true;window.refresh()`)
+  await until(`document.body.innerText.includes('could not be saved')`)
+  assert.equal(await evaluate(`document.querySelectorAll('[data-rewind-checkpoint]').length`),0,'a failed capture explains the empty list instead of promising the next turn')
+  await evaluate(`window.empty=false;window.listError=undefined;window.refresh()`)
+  await until(`!!document.querySelector('[data-rewind-checkpoint]')`)
+  console.log('PASS: deduplicated busy/capture notices and an honest empty state after a failed capture')
   await evaluate('window.binaryIndex=true');await select()
   await until(`document.body.innerText.includes('Binary contents or index metadata')`)
   await until(`document.querySelector('[data-rewind-totals]')?.textContent==='Total+1−11 binary entries'`)

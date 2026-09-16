@@ -57,6 +57,7 @@ import { isSubagentSessionFile } from './subagents/session-filter'
 import { SessionListIndex, rowFromSessionManager } from './session-list'
 import { BASH_MIN_WAIT_MS, BASH_MAX_WAIT_MS, type StartupSessionMode } from '../../shared/types'
 import { FileIndex, readAttachment } from './files'
+import { compactedContextTokens } from './context-estimate'
 import { SessionSearch } from './session-search'
 import { UsageAggregator } from './usage'
 import { ensureDefaultWorkspace, isDefaultWorkspace } from './default-workspace'
@@ -432,6 +433,27 @@ export class PiManager {
     return this.snapshotOf(managed)
   }
 
+  /**
+   * Manual resource reload — the app's `/reload` (the CLI rebuilds the same
+   * set: extensions, skills, prompts and context files). Every live session is
+   * rebuilt from disk and its derived system prompt with it, which is what
+   * makes an edit made OUTSIDE the app — an extension's source, a SKILL.md, an
+   * AGENTS.md — reach the next turn without a restart.
+   *
+   * A live run is refused rather than deferred: reloading swaps the extension
+   * runner under the request in flight, and silently folding the request into
+   * `reloadPending` would make the button read as broken. Settings changes keep
+   * taking the deferred path — they were not asked for at this moment, so they
+   * land at `agent_settled` instead.
+   */
+  async reloadSession(sessionPath: string): Promise<SessionSnapshotDTO> {
+    const managed = this.sessions.get(sessionPath)
+    if (!managed) throw new Error('No such session')
+    if (managed.session.isStreaming) throw new Error('Stop the running turn before reloading')
+    await this.reloadLiveSessions()
+    return this.snapshotOf(managed)
+  }
+
   // ---- subagents (delegated child sessions) ----
 
   /** Current roster of a parent session (renderer panel refresh). */
@@ -597,7 +619,7 @@ export class PiManager {
       maxConcurrentSubagents: () => this.subagentMaxConcurrentSetting,
       subagentsEnabled: () => this.subagentsEnabledFlag && !this.closing,
       commandTasks: () => this.commandTasks,
-      acquireRunLease: (cwd, sessionPath) => this.checkoutCoordinator.acquire(cwd, 'run', sessionPath),
+      acquireRunLease: (cwd, sessionPath) => this.checkoutCoordinator.acquire(cwd, 'subagent', sessionPath),
       createChildSession: (options) => this.createSubagentChildSession(options),
       emitSubagents: (sessionId, sessionPath, runs) => {
         // Sequence-free metadata ping (same rule as context_usage): roster
@@ -797,6 +819,9 @@ export class PiManager {
   private activateSession(managed: ManagedSession, remember = true): void {
     if (this.closing || managed.disposing) return
     this.activeSession = managed
+    // A question asked while the user was viewing another session was
+    // filtered out there; re-announce it or it could never be answered.
+    this.publishEscalations(managed)
     if (remember) {
       this.activateFolder(managed.cwd)
       return
@@ -1146,6 +1171,18 @@ export class PiManager {
     let notifications: TaskNotifications | undefined
     const parentSessionRef: { session: import('@earendil-works/pi-coding-agent').AgentSession | null } = { session: null }
     const subagentState = isChild ? null : new SubagentParentState(sessionManager.getSessionId())
+    // The mode the tools read per call. A subagent child follows its parent
+    // session's live choice — a delegation must never run wider than the chat
+    // that dispatched it — and its denials are final: the child has no
+    // composer, so an escalation question there could never be answered.
+    const liveSandboxMode = (): SandboxMode => this.effectiveSandboxMode(managed)
+    const escalateForTools = (input: {
+      toolCallId: string
+      toolName: 'bash' | 'edit' | 'write'
+      sandboxPermissions: unknown
+      justification: unknown
+      signal?: AbortSignal
+    }): Promise<SandboxMode> => this.escalateFor(managed, input)
     const { session } = await createAgentSessionFromServices({ services, sessionManager,
       ...(isChild ? {
         tools: role!.resource.tools,
@@ -1154,15 +1191,15 @@ export class PiManager {
       } : {}),
       customTools: [...createManagedBashTools({ tasks: this.commandTasks, services,
         sessionId: sessionManager.getSessionId(), sessionPath: sessionManager.getSessionFile()!,
-        maxWaitMs: () => this.bashMaxWaitMs, sandboxMode: () => managed.sandboxMode,
-        escalate: (input) => this.escalateFor(managed, input),
+        maxWaitMs: () => this.bashMaxWaitMs, sandboxMode: liveSandboxMode,
+        ...(isChild ? {} : { escalate: escalateForTools }),
         canStart: () => notifications?.canStart ?? false }),
         // The file sandbox replaces the SDK's own edit/write so every mutation
         // passes the DSH path policy; reads are untouched.
         ...createSandboxFileTools({
           cwd: services.cwd,
-          getMode: () => managed.sandboxMode,
-          escalate: (input) => this.escalateFor(managed, input)
+          getMode: liveSandboxMode,
+          ...(isChild ? {} : { escalate: escalateForTools })
         }),
         createTodoTool(todos, () => notifications?.canStart ?? false),
         // Children never see the delegation tool — recursion is excluded at
@@ -1449,6 +1486,17 @@ export class PiManager {
     return this.snapshotOf(managed)
   }
 
+  /**
+   * The mode a snapshot reports and the tools enforce. A subagent child has
+   * no mode of its own — it follows its parent session's LIVE choice so a
+   * parent switch reaches the child's next tool call; a parent that is not
+   * live falls back to the child's own branch fold.
+   */
+  private effectiveSandboxMode(managed: ManagedSession): SandboxMode {
+    const parentPath = managed.subagentChild?.parentPath
+    return (parentPath ? this.sessions.get(parentPath)?.sandboxMode : undefined) ?? managed.sandboxMode
+  }
+
   /** Serialize one session's current state for the renderer. */
   private snapshotOf(managed: ManagedSession): SessionSnapshotDTO {
     this.flushStreamEvents(managed)
@@ -1467,8 +1515,12 @@ export class PiManager {
       cwd: managed.cwd,
       projectless: isDefaultWorkspace(managed.cwd),
       initializing: managed.initializing,
-      sandboxMode: managed.sandboxMode,
-      sandbox: sandboxStatus(managed.sandboxMode),
+      sandboxMode: this.effectiveSandboxMode(managed),
+      sandbox: sandboxStatus(this.effectiveSandboxMode(managed)),
+      // Fresh at serialization: an IPC snapshot (or a session switch) must
+      // carry the pending questions itself, not rely on the metadata event's
+      // arrival order relative to this snapshot.
+      escalations: listPendingEscalations(managed.path),
       messages,
       todos: managed.todos.snapshot,
       activeChangeScopeId: managed.changeScopes.current,
@@ -1543,7 +1595,10 @@ export class PiManager {
     const usage = stats.contextUsage
     if (!usage || !usage.contextWindow) return null
     const live = managed.streaming ? estimateTokens(managed.streaming as any) : 0
-    const tokens = usage.tokens === null || usage.tokens === undefined ? null : usage.tokens + live
+    const reported = usage.tokens === null || usage.tokens === undefined
+      ? compactedContextTokens(managed.session.messages)
+      : usage.tokens
+    const tokens = reported === null ? null : reported + live
     const cacheable = stats.tokens.cacheRead + stats.tokens.input
     return {
       tokens,
@@ -1554,7 +1609,8 @@ export class PiManager {
     }
   }
 
-  /** Initialize (or re-initialize for a new cwd) with the startup session. */
+  /**
+   * Initialize (or re-initialize for a new cwd) with the startup session. */
   async init(cwd?: string): Promise<SessionSnapshotDTO> {
     const navigationEpoch = ++this.navigationEpoch
     cwd = cwd && !isDefaultWorkspace(cwd) ? cwd : await ensureDefaultWorkspace()
@@ -2104,6 +2160,10 @@ export class PiManager {
         // one it already rendered.
         managed.eventSequence += 1
         managed.todos.restore()
+        // The branch moved, so the mode must be re-folded like the todos: the
+        // recorded mode is a fact about the SELECTED branch, and a stale live
+        // value here would silently widen on the next reopen.
+        managed.sandboxMode = sandboxModeFromBranch(sessionManager.getBranch(), this.defaultSandboxMode)
       }
       // Edited file references are re-inlined from disk (fresh content) — the
       // retry path carries its blocks inside the stored text already.
@@ -2838,6 +2898,9 @@ export class PiManager {
     const file = await openFile(managed.path, 'r')
     try { await file.sync() } finally { await file.close() }
     managed.todos.restore(); managed.changeScopes.restore(); managed.eventSequence += 1
+    // Same rule as the todos above: the selected branch moved, so re-fold the
+    // sandbox mode instead of keeping the abandoned branch's value live.
+    managed.sandboxMode = sandboxModeFromBranch(manager.getBranch(), this.defaultSandboxMode)
   }
 
   rewindRestore(request: RewindRequest): Promise<RewindResult<RewindCommitDTO>> {

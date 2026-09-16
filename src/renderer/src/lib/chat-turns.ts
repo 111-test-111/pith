@@ -37,6 +37,7 @@ export interface TurnNotice { beforeRound: number; message: CustomMsg }
  */
 export function buildTurns(messages: ChatMessage[]): ChatTurn[] {
   const turns: ChatTurn[] = []
+  const summaries: ChatTurn[] = []
   for (const message of messages) {
     const last = turns[turns.length - 1]
     switch (message.role) {
@@ -62,7 +63,10 @@ export function buildTurns(messages: ChatMessage[]): ChatTurn[] {
         break
       case 'compactionSummary':
       case 'branchSummary':
-        turns.push({ key: `s${message.timestamp}-${turns.length}`, role: 'info', message })
+        // Placed after the loop: these are written AFTER the messages they
+        // cover, but sit at the HEAD of the context array (everything they
+        // replaced is gone; only the kept tail follows them).
+        summaries.push({ key: `s${message.timestamp}-${summaries.length}`, role: 'info', message })
         break
       case 'bashExecution':
         turns.push({ key: `b${message.timestamp}-${turns.length}`, role: 'bash', message })
@@ -83,7 +87,48 @@ export function buildTurns(messages: ChatMessage[]): ChatTurn[] {
         break
     }
   }
+  placeSummaries(turns, summaries)
   return turns
+}
+
+/** The newest moment a turn paints, so a summary can be placed by time. */
+function turnEndedAt(turn: ChatTurn): number {
+  if (turn.role === 'user') return turn.user.timestamp
+  if (turn.role === 'assistant') {
+    const fromMessages = turn.assistants.reduce(
+      (end, message) => Math.max(end, message.completedAt ?? message.timestamp),
+      0
+    )
+    const fromNotices = turn.notices?.reduce(
+      (end, notice) => Math.max(end, notice.message.timestamp),
+      0
+    ) ?? 0
+    return Math.max(fromMessages, fromNotices)
+  }
+  return turn.message.timestamp
+}
+
+/**
+ * Put every summary where it happened instead of where the context array keeps
+ * it.
+ *
+ * A compaction replaces the summarized history and keeps the recent tail, so
+ * the SDK's message list is `[summary, ...kept, ...new]` — the summary is the
+ * NEWEST of those three groups by time, yet the array opens with it. Rendering
+ * that order verbatim pinned the row above the very conversation it
+ * summarizes. Inserting each one after every turn older than it restores the
+ * chronological reading (kept tail, then the summary, then what followed),
+ * which is the order the user watched happen.
+ */
+function placeSummaries(turns: ChatTurn[], summaries: ChatTurn[]): void {
+  for (const summary of summaries) {
+    const at = turnEndedAt(summary)
+    let index = 0
+    turns.forEach((turn, position) => {
+      if (turnEndedAt(turn) <= at) index = position + 1
+    })
+    turns.splice(index, 0, summary)
+  }
 }
 
 /** One file list per execution scope, even when user steers create multiple

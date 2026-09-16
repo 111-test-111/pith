@@ -94,6 +94,8 @@ export function registerIpc(pi: PiManager): () => boolean {
     pi.setSessionSandboxMode(sessionPath, mode))
   // Manual compaction, the app's equivalent of `/compact`.
   ipcMain.handle('pi:compact', (_event, sessionPath: string) => pi.compactSession(sessionPath))
+  // Manual resource reload, the app's equivalent of `/reload`.
+  ipcMain.handle('pi:reload', (_event, sessionPath: string) => pi.reloadSession(sessionPath))
   // Answer one pending sandbox escalation. The session path travels with the id
   // so an answer cannot settle another session's question.
   ipcMain.handle(

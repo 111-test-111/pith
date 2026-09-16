@@ -7,11 +7,6 @@ import { DEFAULT_SANDBOX_MODE, isSandboxMode, type SandboxMode } from '../../sha
 export { DEFAULT_SANDBOX_MODE, SANDBOX_MODES, isSandboxMode } from '../../shared/types'
 export type { SandboxMode } from '../../shared/types'
 
-/** Modes that need a platform runner; `danger-full-access` runs on the host. */
-export function isConfinedMode(mode: string): boolean {
-  return mode !== 'danger-full-access'
-}
-
 /** Custom session entry carrying one session's mode; the newest one wins. */
 export const SANDBOX_MODE_ENTRY_TYPE = 'pith_sandbox_mode'
 

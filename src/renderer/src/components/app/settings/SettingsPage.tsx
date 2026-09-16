@@ -148,7 +148,7 @@ export function SettingsPage({ open, onBack, ...sectionProps }: SettingsPageProp
             {SECTIONS.map((entry) => (
               <TabsContent key={entry.id} value={entry.id} className="mt-0 min-h-0 flex-1">
                 <div className="h-full overflow-y-auto overscroll-contain px-6 py-7 md:px-10">
-                  <div className="mx-auto w-full max-w-3xl">
+                  <div className="mx-auto w-full max-w-5xl">
                     <h2 className="text-lg font-semibold tracking-tight text-foreground">
                       {t(entry.labelKey)}
                     </h2>

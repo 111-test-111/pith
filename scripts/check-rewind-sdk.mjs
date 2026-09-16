@@ -138,6 +138,33 @@ pi.on('tool_result',e=>{if(e.toolName==='todo_write'&&e.input.todos[0]?.content=
   assert.equal(queuedCheckpoint.messageEntryId, queueUser.id)
   assert.equal(queuedCheckpoint.entryId, queueUser.parentId, 'steering messages have exact awaited checkpoints')
   console.log('PASS: real SDK prompt/steer capture barriers, one pre-turn point, no tool/resume points or hidden capture entries')
+  // Concurrent sessions share one checkout: another session's model turn (a
+  // plain run lease) must not starve this session's pre-turn capture, while
+  // the leases that can actually write — tool, process and a subagent run —
+  // still fence the snapshot window and surface a busy capture error.
+  {
+    const otherRun = app.checkoutCoordinator.acquire(project, 'run', join(temporary, 'other-session.jsonl'))
+    respond = () => [{ type: 'text', text: 'Done beside a run' }]
+    await session.prompt('Capture beside another session run')
+    await managed.rewind.idle(); otherRun()
+    const beside = value(await app.rewindList(managed.path))
+    assert.equal(beside.error, undefined, JSON.stringify(beside))
+    const besideUser = manager.getEntries().filter(entry => entry.type === 'message' && entry.message.role === 'user').at(-1)
+    assert(beside.checkpoints.some(cp => cp.messageEntryId === besideUser.id), 'a checkpoint is captured while a sibling session only streams')
+    for (const kind of ['tool', 'process', 'subagent']) {
+      const release = app.checkoutCoordinator.acquire(project, kind, join(temporary, 'writer-session.jsonl'))
+      respond = () => [{ type: 'text', text: 'Done' }]
+      await session.prompt('Capture fenced by ' + kind)
+      await managed.rewind.idle(); release()
+      const fenced = value(await app.rewindList(managed.path))
+      assert.equal(fenced.error?.code, 'busy', kind + ' lease fences the snapshot; the list surfaces the failed capture')
+    }
+    respond = () => [{ type: 'text', text: 'Done' }]
+    await session.prompt('Capture recovers')
+    await managed.rewind.idle()
+    assert.equal(value(await app.rewindList(managed.path)).error, undefined, 'a later successful capture clears the sticky error')
+  }
+  console.log('PASS: concurrent-session capture — sibling runs never starve checkpoints; writing leases still fence snapshots')
   async function restore(id, action, mode = 'all') {
     const preview = value(await app.rewindPreview(managed.path, id, action))
     return value(await app.rewindRestore({ sessionPath: managed.path, token: preview.token, mode, operationId: randomUUID() }))

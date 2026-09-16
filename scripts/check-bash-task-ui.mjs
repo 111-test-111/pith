@@ -32,12 +32,12 @@ import {GeneralSection} from '/src/components/app/settings/GeneralSection.tsx';
 import {TOOL_CATEGORIES} from '/src/lib/tool-categories.ts';
 import '/src/styles.css';
 localStorage.setItem('pi-app:locale','en');
-let listener;window.outputReads=0;window.stops=0;window.savedWait=10000;window.openedSessions=[];
+let listener;window.outputReads=0;window.stops=0;window.savedWait=10000;window.openedSessions=[];window.openPaths=[];
 window.task={id:'ui-task',sessionId:'ui-session',sessionPath:'/ui/session',toolCallId:'ui-call',command:'npm run build',cwd:'/ui',status:'running',background:true,reason:'wait_threshold',startedAt:Date.now()-1000,lastOutputAt:Date.now(),outputChars:11,logPath:'/ui/task.log',logTruncated:false,revision:1};
 window.pi={onBashTask:fn=>{listener=fn;return()=>{listener=undefined}},listBashTasks:async path=>path==='/ui/session'?[window.task]:[],
  bashTaskOutput:async request=>{window.outputReads++;const output='build 中文😀';return{task:window.task,output:request.cursor===undefined?output:'',cursor:output.length,truncated:false}},
  stopBashTask:async()=>{window.stops++;window.task={...window.task,status:'cancelled',endedAt:Date.now(),revision:window.task.revision+1};listener?.(window.task);return window.task},
- openPath:async()=>'',appInfo:async()=>({version:'fixture',bashMaxWaitMs:window.savedWait}),setBashMaxWaitMs:async value=>window.savedWait=value,openExternal:async()=>{}};
+ openPath:async path=>{window.openPaths.push(path);return ''},appInfo:async()=>({version:'fixture',bashMaxWaitMs:window.savedWait}),setBashMaxWaitMs:async value=>window.savedWait=value,openExternal:async()=>{}};
 const call={type:'toolCall',id:'ui-call',name:'bash',arguments:{command:'npm run build'}};
 const result={role:'toolResult',toolCallId:'ui-call',toolName:'bash',content:[],details:{bashTask:window.task},isError:false,timestamp:1};
 const second={type:'toolCall',id:'read-call',name:'bash',arguments:{command:'pwd'}};
@@ -152,6 +152,10 @@ try {
   const send = (method, params = {}) => new Promise((resolve, reject) => { const id = ++sequence; pending.set(id, (msg) => msg.error ? reject(msg.error) : resolve(msg.result)); ws.send(JSON.stringify({ id, method, params })) })
   const evaluate = async (expression) => { const result = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }); if (result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails)); return result.result.value }
   await send('Runtime.enable')
+  // The window is not frontmost while the check runs, and `navigator.clipboard`
+  // refuses a document that is not focused: the menu's copy assertions need
+  // the emulated focus the other CDP checks already ask for.
+  await send('Emulation.setFocusEmulationEnabled', { enabled: true })
   for (let i = 0; i < 200; i++) { if (await evaluate(`!!document.querySelector('#original [data-bash-task-id]')`)) break; await pause(50) }
   assert.equal(await evaluate(`document.querySelector('#original [data-bash-task-id]')?.dataset.bashTaskStatus`), 'running')
   assert.match(await evaluate(`document.querySelector('#original').innerText`), /Running in background/)
@@ -453,7 +457,9 @@ try {
   await pause(200)
   assert.match(await evaluate(`document.querySelector('#original').innerText`), /后台运行中/)
   assert.match(await evaluate(`document.querySelector('#settings').innerText`), /最大阻塞时长/)
-  await evaluate(`(()=>{const field=[...document.querySelectorAll('#settings fieldset')].find(f=>f.querySelector('legend')?.textContent.includes('最大阻塞时长'));field.querySelectorAll('button')[1].click()})()`)
+  // The wait threshold is a plain range-limited input: typing is filtered, the
+  // value is committed by the row's own Save button.
+  await evaluate(`(()=>{const input=document.querySelector('#settings input[aria-label="最大阻塞时长（秒）"]');const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;setter.call(input,'10.1');input.dispatchEvent(new Event('input',{bubbles:true}));return input.value})()`)
   await pause(150)
   await evaluate(`[...document.querySelectorAll('#settings button')].find(b=>b.textContent==='保存').click()`)
   await pause(150)
@@ -681,30 +687,140 @@ try {
   assert.notEqual(retrying.bg, 'rgba(0, 0, 0, 0)', 'an in-flight notice keeps its framed status row: ' + JSON.stringify(retrying))
   assert.notEqual(retrying.radius, '0px', 'the status row keeps its corner')
   await step(`{type:'auto_retry_end',success:true}`, 1)
-  // A failed compaction is the same shape of terminal failure.
-  await step(`{type:'compaction_end',errorMessage:'context window exhausted'}`, 1)
-  assert.equal(
-    await evaluate(`document.querySelector('#turn-fixture [data-turn-failure]').innerText`),
-    'Context compaction failed · context window exhausted',
-    'a failed compaction renders as the same unframed turn prose'
-  )
-  assert.equal(await evaluate(`document.querySelectorAll('#turn-fixture [data-turn-notice]').length`), 0, 'a terminal failure never doubles as the status row')
-  await step(`{type:'compaction_end'}`, 1)
-  assert.equal(await evaluate(`document.querySelectorAll('#turn-fixture [data-turn-failure]').length`), 0, 'a successful compaction clears the failure text')
 
-  // A settled compaction acknowledges itself in the flow, the way a background
-  // task completion does: the transcript it just replaced must not read as
-  // having changed by itself. It is feedback, not session content, so it is a
-  // quiet row — never a conversation card.
-  const compactionRows = () => evaluate(`document.querySelectorAll('#turn-fixture [data-compaction-notice]').length`)
-  assert.equal(await compactionRows(), 0, 'a compaction with no result adds no row')
-  await step(`{type:'compaction_end',result:{tokensBefore:120000,estimatedTokensAfter:18000}}`, 1)
-  assert.equal(await compactionRows(), 1, 'a settled compaction adds one notice row')
-  const compacted = await evaluate(`document.querySelector('#turn-fixture [data-compaction-notice]').textContent`)
-  assert.match(compacted, /Context compacted/, `the row names the outcome: ${compacted}`)
-  assert.match(compacted, /→/, `the row carries the token change: ${compacted}`)
+  // A compaction reads as a tool row, because that is what it is: one job runs
+  // over the conversation, the row waits on it, and the summary is its result.
+  const summaryRows = (kind, state) =>
+    `#turn-fixture [data-summary-row="${kind}"]` + (state ? `[data-state="${state}"]` : '')
+  const rowCount = (selector) => evaluate(`document.querySelectorAll(${JSON.stringify(selector)}).length`)
+  const press = async (selector) => {
+    const point = await evaluate(`(()=>{const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`)
+    await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...point, button: 'left', clickCount: 1 })
+    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...point, button: 'left', clickCount: 1 })
+    await pause(300)
+  }
+  await step(`{type:'compaction_start',reason:'manual'}`, 1)
+  assert.equal(await rowCount(summaryRows('compaction', 'running')), 1, 'a running compaction shows a running row')
+  assert.equal(
+    await evaluate(`document.querySelector(${JSON.stringify(summaryRows('compaction', 'running'))}).firstElementChild.getAttribute('aria-busy')`),
+    'true',
+    'the running row reports itself busy, like any tool execution'
+  )
+  await step(`{type:'compaction_end',errorMessage:'context window exhausted'}`, 1)
+  const failedCompaction = await evaluate(`(()=>{
+    const row = document.querySelector(${JSON.stringify(summaryRows('compaction', 'error'))});
+    return row ? { text: row.innerText, busy: row.firstElementChild.getAttribute('aria-busy') } : null;
+  })()`)
+  assert.ok(failedCompaction, 'a failed compaction renders an error row: ' + JSON.stringify(failedCompaction))
+  assert.equal(failedCompaction.busy, 'false')
+  assert.match(failedCompaction.text, /Compact context/, 'the row names the job')
+  assert.match(failedCompaction.text, /context window exhausted/, 'the reason is readable without a click: ' + failedCompaction.text)
+  assert.equal(await rowCount('#turn-fixture [data-turn-failure]'), 0, 'a compaction failure is not turn prose')
+  assert.equal(await rowCount('#turn-fixture [data-turn-notice]'), 0, 'and not the framed retry status row either')
+  await step(`{type:'compaction_end'}`, 1)
+  assert.equal(await rowCount('#turn-fixture [data-summary-row="compaction"]'), 0, 'a compaction that produced no summary leaves no row')
+
+  // A settled compaction is known through the session entry the SDK writes, and
+  // it must read at the BOTTOM. The context array opens with the summary — every
+  // entry it replaced is gone and only the kept tail follows it — so rendering
+  // that order verbatim pinned the row above the very conversation it
+  // summarizes. It is placed by time instead, after the tail it kept.
+  //
+  // The summary carries the SDK's own trailing file sections, one path per line
+  // between `<read-files>`/`<modified-files>` tags — a convention between the
+  // SDK and the model that markdown cannot render, so the row draws them as
+  // lists of file links. The fenced block quotes the same tags and must be left
+  // exactly as it was written.
+  await evaluate(`window.summaryText = [
+    '## Kept decisions', '', 'The attachment intake was unified.', '',
+    '~~~', '<read-files>', 'src/quoted.ts', '</read-files>', '~~~', '',
+    '<read-files>', 'src/a.ts', '/tmp/shot.png', '</read-files>', '',
+    '<modified-files>', 'AGENTS.md', '</modified-files>'
+  ].join('\\n')`)
+  await step(`{type:'compaction_end',messages:[
+    {role:'compactionSummary',summary:window.summaryText,tokensBefore:120000,timestamp:900},
+    {role:'user',timestamp:10,content:'original request'},
+    window.round(20,[window.writeCall('write-a','a.ts')]),
+    window.result('write-a'),
+    window.round(25,window.prose('kept answer'))
+  ]}`, 1)
+  const settled = await evaluate(`(()=>{
+    const row = document.querySelector(${JSON.stringify(summaryRows('compaction', 'success'))});
+    if (!row) return null;
+    const trigger = row.querySelector('button');
+    const turns = [...document.querySelectorAll('#turn-fixture [data-assistant-group]')].map((node) => node.getBoundingClientRect().top);
+    return {
+      top: row.getBoundingClientRect().top,
+      height: row.getBoundingClientRect().height,
+      lowestTurn: turns.length ? Math.max(...turns) : null,
+      open: trigger.getAttribute('aria-expanded'),
+      text: row.innerText,
+      hasBody: row.textContent.includes('Kept decisions')
+    };
+  })()`)
+  assert.ok(settled, 'the settled compaction renders its summary row: ' + JSON.stringify(settled))
+  assert.equal(settled.open, 'false', 'a summary stays collapsed until it is asked for')
+  assert.equal(settled.hasBody, false, 'the summary body is not mounted while collapsed')
+  assert.match(settled.text, /Compact context/, `the row names the job: ${settled.text}`)
+  assert.match(settled.text, /120\.0k tokens summarized/, `the row carries the size it summarized: ${settled.text}`)
+  assert.ok(settled.height < 60, `the row is one tool row tall: ${settled.height}`)
+  assert.ok(
+    settled.lowestTurn !== null && settled.top > settled.lowestTurn,
+    `the summary sits BELOW the tail it kept (${settled.top} > ${settled.lowestTurn})`
+  )
+  await evaluate(`document.querySelector(${JSON.stringify(summaryRows('compaction', 'success'))}).scrollIntoView({ block: 'center' })`)
+  await pause(150)
+  await press(summaryRows('compaction', 'success') + ' button')
+  const expanded = await evaluate(`(()=>{
+    const row = document.querySelector(${JSON.stringify(summaryRows('compaction', 'success'))});
+    return { open: row.querySelector('button').getAttribute('aria-expanded'), hasBody: row.textContent.includes('Kept decisions') };
+  })()`)
+  assert.equal(expanded.open, 'true', 'the trigger expands the row')
+  assert.equal(expanded.hasBody, true, 'expanding mounts the summary itself')
+
+  // The trailing file sections render as two bulleted lists of file links, and
+  // the quoted copy inside the fence is none of their business.
+  const files = await evaluate(`(() => {
+    const row = document.querySelector(${JSON.stringify(summaryRows('compaction', 'success'))});
+    const groups = [...row.querySelectorAll('[data-summary-file-group]')];
+    const links = [...row.querySelectorAll('[data-file-link]')];
+    const list = row.querySelector('ul');
+    const style = links.length ? getComputedStyle(links[0]) : null;
+    return {
+      labels: groups.map((group) => group.querySelector('p').textContent),
+      links: links.map((link) => link.textContent),
+      hrefs: [...row.querySelectorAll('ul li')].length,
+      bullet: list ? getComputedStyle(list).listStyleType : null,
+      underline: style ? style.textDecorationLine : null,
+      colour: style ? style.color : null,
+      quoted: row.textContent.includes('src/quoted.ts')
+    };
+  })()`)
+  assert.deepEqual(files.labels, ['Files read', 'Files modified'], `the sections are labelled in the UI language: ${JSON.stringify(files.labels)}`)
+  assert.deepEqual(files.links, ['src/a.ts', '/tmp/shot.png', 'AGENTS.md'], `read then modified, in the summary's order: ${JSON.stringify(files.links)}`)
+  assert.equal(files.hrefs, 3)
+  assert.equal(files.bullet, 'disc', `the sections are unordered lists: ${files.bullet}`)
+  assert.ok(String(files.underline).includes('underline'), `a path is a file link: ${files.underline}`)
+  assert.notEqual(files.colour, 'rgb(0, 0, 0)', 'the link wears the theme colour')
+  assert.ok(files.quoted, 'the fenced quote of the same tags is still rendered as code')
+  await press(summaryRows('compaction', 'success') + ' [data-file-link]')
+  assert.deepEqual(
+    await evaluate('window.openPaths.map((path) => path.endsWith("src/a.ts"))'),
+    [true],
+    'clicking a path opens it, like any other file link: ' + JSON.stringify(await evaluate('window.openPaths'))
+  )
+  if (process.env.PI_BASH_SCREENSHOT_DIR) {
+    await writeFile(join(process.env.PI_BASH_SCREENSHOT_DIR, 'compaction-row.png'), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'))
+  }
   await step(`{type:'compaction_end',aborted:true,result:{tokensBefore:90000,estimatedTokensAfter:10000}}`, 1)
-  assert.equal(await compactionRows(), 1, 'an aborted compaction is not a completion and adds nothing')
+  assert.equal(await rowCount('#turn-fixture [data-summary-row="compaction"]'), 1, 'an aborted compaction is not a completion and adds nothing')
+
+  // A branch summary is the same kind of entry and reads the same way.
+  await step(`{type:'compaction_end',messages:[
+    {role:'branchSummary',summary:'Abandoned that branch.',fromId:null,timestamp:950},
+    {role:'user',timestamp:10,content:'original request'}
+  ]}`, 0)
+  assert.equal(await rowCount(summaryRows('branch', 'success')), 1, 'a branch summary renders a row of the same shape')
 
   assert((await evaluate('window.frameCount')) > 20)
   assert.deepEqual(await evaluate('window.frameFailures'), [], 'no painted frame may expose an intermediate file list')

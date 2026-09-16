@@ -22,7 +22,9 @@ import {
 import { ToolResult, ToolResultOutput } from '@/components/agents/tool-result'
 import { StreamingResponse } from '@/components/agents/streaming-response'
 import { Markdown } from '@/lib/markdown'
+import { SummaryRow } from './SummaryRow'
 import { useFileNavigation } from '@/lib/file-navigation'
+import { TRANSCRIPT_ROW } from '@/lib/transcript-rhythm'
 import { cn } from '@/lib/utils'
 import { ToolIcon } from '@/lib/tool-icons'
 import { formatTime, formatTokenCount, basename } from '@/lib/format'
@@ -48,6 +50,7 @@ import {
   planRowCount,
   sameToolPlan,
   textBlockRenders,
+  textRendersRow,
   toolPlanKey,
   type ToolPlan
 } from '@/lib/tool-runs'
@@ -248,45 +251,24 @@ export const UserItem = memo(function UserItem({
 
 /**
  * A compaction or branch summary: the SDK replaces the summarized history (or
- * an abandoned branch) with this entry, so the row explains why earlier
- * messages are gone and lets the user read the summary itself.
+ * an abandoned branch) with this entry, so the sentence explains why earlier
+ * messages are gone and the expansion is the summary itself. Rendered as a tool
+ * row — see `SummaryRow` for why.
  */
 export const SummaryItem = memo(function SummaryItem({
   message
 }: {
   message: CompactionSummaryMsg | BranchSummaryMsg
 }) {
-  const { t } = useI18n()
-  const [open, setOpen] = useState(false)
-  const branch = message.role === 'branchSummary'
-  const tokensBefore = message.role === 'compactionSummary' ? message.tokensBefore : 0
-  return (
-    <div className="rounded-xl border border-dashed border-border bg-muted/30 px-3 py-2">
-      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        <RotateCcw aria-hidden="true" className="size-3.5 shrink-0" />
-        <span className="font-medium text-foreground">
-          {branch ? t('chat.summaryBranchTitle') : t('chat.summaryTitle')}
-        </span>
-        {tokensBefore > 0 ? (
-          <span className="tabular-nums">
-            {t('chat.summaryTokensBefore', { tokens: formatTokenCount(tokensBefore) })}
-          </span>
-        ) : null}
-        <Button
-          variant="ghost"
-          size="sm"
-          className="ml-auto px-2"
-          onClick={() => setOpen((value) => !value)}
-        >
-          {open ? t('chat.summaryHide') : t('chat.summaryShow')}
-        </Button>
-      </div>
-      {open ? (
-        <div className="mt-2 max-h-80 overflow-y-auto text-xs leading-5 text-muted-foreground">
-          <Markdown>{message.summary}</Markdown>
-        </div>
-      ) : null}
-    </div>
+  return message.role === 'compactionSummary' ? (
+    <SummaryRow
+      kind="compaction"
+      status="success"
+      summary={message.summary}
+      tokensBefore={message.tokensBefore}
+    />
+  ) : (
+    <SummaryRow kind="branch" status="success" summary={message.summary} />
   )
 })
 
@@ -480,6 +462,11 @@ const AssistantParts = memo(function AssistantParts({
             <RowReveal key={`thinking-${index}`} animate={streaming} className="w-full">
               <AgentActivity
                 status="complete"
+                // One row height for the whole transcript (see TOOL_ROW_HEIGHT):
+                // the row is the same box as a tool row and centres its own
+                // content, so the space between two rows' text is identical
+                // whichever pair of rows you look at.
+                className={TRANSCRIPT_ROW}
                 summary={
                   // Same leading-icon shape as a tool row, so the Reasoning row
                   // scans like the tool calls under it.
@@ -509,11 +496,19 @@ const AssistantParts = memo(function AssistantParts({
           if (planRows === null) return null
           const rows = planRows ?? splitByToolCategory(block.parts)
           return (
-            <div key={`tool-${index}`} className="w-full space-y-2">
+            <Fragment key={`tool-${index}`}>
               {/* Adjacent same-category calls fold into one row; everything
                   else (including a lone categorized call) keeps its own row,
                   so reasoning or a different category between two calls never
-                  merges them. */}
+                  merges them.
+
+                  Deliberately a Fragment, with no wrapper box: every row of a
+                  turn is a flex item of the group's own column, so the gap
+                  between two rows is the same 12px whether they are tool rows,
+                  a group row, a reasoning row or the waiting row. A block-local
+                  wrapper (this used to be `space-y-2`) put sibling rows of one
+                  round on a tighter 8px rhythm than rows of two rounds — the
+                  "spacing suddenly changed" the transcript must not have. */}
               {rows.flatMap((run) =>
                 run.category && run.items.length > 1 ? (
                   <RowReveal key={run.items[0].id} animate={streaming}>
@@ -538,15 +533,28 @@ const AssistantParts = memo(function AssistantParts({
                   ))
                 )
               )}
-            </div>
+            </Fragment>
           )
         }
 
         const text = block.parts.map((part) => part.text).join('\n\n')
-        if (!text) return null
+        // A text block that paints nothing — no text, or whitespace only, as a
+        // streamed round that opens with a bare space does — must not take a
+        // flex slot either: an empty markdown block has no height but still
+        // owns a gap, which is what made two tool rows sit 24px apart. The tool
+        // plan reads the same rule through `textBlockRenders`, so the plan and
+        // the paint always agree about whether a row exists.
+        if (!textRendersRow(text)) return null
         const isFinalBlock = index === blocks.length - 1
         return (
-          <MessageBubble key={`text-${index}`} variant="ghost" className="w-full">
+          <MessageBubble
+            key={`text-${index}`}
+            variant="ghost"
+            // One row height, content centred: a one-line reply then occupies the
+            // same box as a tool row, so the space around it matches every other
+            // row (a longer reply simply grows past the minimum).
+            className={cn('w-full', TRANSCRIPT_ROW)}
+          >
             <MessageBubbleContent>
               <StreamingResponse
                 status={streaming ? 'streaming' : 'complete'}
@@ -999,11 +1007,11 @@ export const AssistantGroup = memo(function AssistantGroup({
               // the only space between it and the rounds below is the flex gap.
               contentClassName="py-0"
               // The fold reads as a section header: a hairline under the trigger
-              // separates the process it hides from the answer below it, and its
-              // first row sits a little further below the trigger (16px) than
-              // body rows sit from each other (12px), identically whether the
-              // fold is open or closed.
-              className="mb-1 border-b border-border/70 pb-1"
+              // separates the process it hides from the answer below it. The
+              // rule sits on the row's own bottom edge, so the fold's first row
+              // keeps exactly the same spacing as every other pair of rows —
+              // whether the fold is open or closed.
+              className={cn(TRANSCRIPT_ROW, 'border-b border-border/70')}
             />
             <AgentDisclosure
               open={processOpen}

@@ -37,11 +37,15 @@ app.whenReady().then(()=>{
  const model={providerId:'deepseek',providerName:'DeepSeek',id:'fixture',name:'DeepSeek V4.1 Flash',reasoning:true,input:['text'],contextWindow:128000,maxTokens:8192,available:true,costInputPerM:0,costOutputPerM:0};
  const sessions=[{id:'chat-0',path:'/fixture/chat-0',cwd:'/workspace/pi-app',projectless:false,label:'梳理项目结构',created:new Date().toISOString(),modified:new Date().toISOString(),messageCount:2}];
  const calls=[];
+ let folders=['/workspace/pi-app','/workspace/piws'];
  const snapshot=(cwd='/workspace/pi-app')=>({sessionId:'fixture',sessionPath:'/fixture/chat-0',cwd,projectless:cwd.startsWith('/internal/'),messages:[],model,thinkingLevel:'high',availableThinkingLevels:['off','high'],isStreaming:false});
- ipcMain.handle('app:info',()=>({cwd:'/workspace/pi-app',folders:['/workspace/pi-app','/workspace/piws'],version:'fixture',contextFiles:true,bashMaxWaitMs:10000}));
+ ipcMain.handle('app:info',()=>({cwd:'/workspace/pi-app',folders:[...folders],version:'fixture',contextFiles:true,bashMaxWaitMs:10000}));
  ipcMain.handle('pi:init',()=>snapshot('/workspace/pi-app'));
- ipcMain.handle('pi:newSession',(_,cwd)=>{calls.push(cwd??null);return snapshot(cwd??'/internal/private-workspace')});
+ // The real manager remembers every folder it activates, so a project picked
+ // on the landing page shows up in the sidebar before it has a session.
+ ipcMain.handle('pi:newSession',(_,cwd)=>{calls.push(cwd??null);if(cwd)folders=[cwd,...folders.filter(f=>f!==cwd)];return snapshot(cwd??'/internal/private-workspace')});
  ipcMain.handle('pi:listSessions',()=>sessions);
+ ipcMain.handle('app:pickDirectory',()=>({cwd:'/workspace/new-project'}));
  ipcMain.handle('fixture:calls',()=>calls);
  ipcMain.handle('fixture:resize',(_,width,height)=>w.setBounds({width,height}));
  ipcMain.handle('pi:models',()=>[model]);ipcMain.handle('bash:list',()=>[]);ipcMain.handle('pi:providers',()=>[]);
@@ -126,9 +130,25 @@ app.whenReady().then(()=>{
   await click(TRIGGER)
   assert.equal(await panelOpen(), true)
   const options = await evaluate(`[...${projectList}.querySelectorAll('[role="option"]')].map(n=>n.innerText.replace(/\\n/g,' | '))`)
-  assert.deepEqual(options, ['不使用项目', 'pi-app | /workspace/pi-app', 'piws | /workspace/piws'])
+  assert.deepEqual(options, ['不使用项目', '新建项目…', 'pi-app | /workspace/pi-app', 'piws | /workspace/piws'])
   assert.ok(await evaluate(`${projectList}.getBoundingClientRect().height > 60`))
   await screenshot('panel-open-dark')
+
+  // The panel floats OVER the composer. The composer's own controls row (the
+  // model trigger) is z-20 too, and an equal z-index is settled by document
+  // order — the row comes later, so it painted across the panel's lower half.
+  const overlay = await evaluate(`(()=>{
+    const list=${projectList};
+    const trigger=document.querySelector('[data-state][class*="cursor-text"]');
+    const t=trigger.getBoundingClientRect(), l=list.getBoundingClientRect();
+    const top=Math.max(t.top,l.top), bottom=Math.min(t.bottom,l.bottom);
+    const left=Math.max(t.left,l.left), right=Math.min(t.right,l.right);
+    if (bottom<=top||right<=left) return {overlapping:false,list:l.toJSON(),trigger:t.toJSON()};
+    const hit=document.elementFromPoint((left+right)/2,(top+bottom)/2);
+    return {overlapping:true,onTop:hit===list||list.contains(hit),hit:hit?hit.tagName+'.'+hit.className:null};
+  })()`)
+  assert.equal(overlay.overlapping, true, 'the open panel must reach the composer controls row: ' + JSON.stringify(overlay))
+  assert.equal(overlay.onTop, true, 'the panel paints above the composer row it overlaps: ' + JSON.stringify(overlay))
 
   // Picking another project re-creates the session in that folder.
   await clickOption('piws')
@@ -162,6 +182,20 @@ app.whenReady().then(()=>{
   assert.equal(await panelOpen(), false)
   assert.deepEqual(await evaluate('fixture.calls()'), ['/workspace/piws', null, '/workspace/pi-app'])
 
+  // "New project…" is an action row, not a value: it asks for a folder and
+  // starts the chat there, which makes that folder a known project.
+  await click(TRIGGER)
+  await clickOption('新建项目')
+  await waitFor(`document.querySelector('${TRIGGER}').innerText.includes('new-project')`)
+  assert.deepEqual(await evaluate('fixture.calls()'), ['/workspace/piws', null, '/workspace/pi-app', '/workspace/new-project'])
+  assert.equal(await panelOpen(), false, 'picking a folder closes the panel')
+  // The picked folder is a known project now: the sidebar lists it even though
+  // it has no session yet.
+  const projectRow = `[data-sidebar-group="folder:/workspace/new-project"]`
+  await waitFor(`document.querySelector('${projectRow}')`)
+  assert.match(await evaluate(`document.querySelector('${projectRow}').closest('[role=treeitem]').innerText`), /new-project/)
+  await screenshot('new-project')
+
   // Starter cards are beUI TiltCards: the frame that carries the border tilts
   // with the pointer (reduced motion/touch keep it still), and a press still
   // only fills the composer draft.
@@ -182,12 +216,28 @@ app.whenReady().then(()=>{
     return Math.max(...text.replace(/^matrix3d\(|\)$/g, '').split(',').map((v, i) => [1, 2, 4, 6, 8, 9].includes(i) ? Math.abs(Number(v)) : 0))
   }
   const restingTransform = await cardTransform()
+  /**
+   * Hover the card and wait for it to react. CDP-injected mouse moves that
+   * land right after a reload — before the fresh document processes input —
+   * leave the card at rest, so the pair is retried (bounded) instead of
+   * asserting on one race; a card that never tilts still fails below.
+   */
+  const hoverCard = async (point, rest) => {
+    for (let attempt = 0; attempt < 8; attempt++) {
+      await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: point.x - 30, y: point.y - 30 })
+      await pause(120)
+      await send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...point })
+      await pause(400)
+      if ((await cardTransform()) !== rest) return
+    }
+  }
   const cardPoint = await evaluate(`(()=>{const r=${card}.getBoundingClientRect();return{x:r.x+r.width*0.2,y:r.y+r.height*0.3}})()`)
-  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...cardPoint })
-  await pause(900)
+  const hoverProbe = await evaluate(`(()=>{const el=document.elementFromPoint(${cardPoint.x},${cardPoint.y});return{point:[${cardPoint.x},${cardPoint.y}],hit:el?el.tagName+'.'+(el.className||''):null,onCard:Boolean(el&&${card}.contains(el)),hover:matchMedia('(hover: hover) and (pointer: fine)').matches,reduce:matchMedia('(prefers-reduced-motion: reduce)').matches}})()`)
+  assert.equal(hoverProbe.onCard, true, 'the pointer must be over a starter card: ' + JSON.stringify(hoverProbe))
+  await hoverCard(cardPoint, restingTransform)
   const tilted = await cardTransform()
   assert.match(tilted, /^matrix3d\(/, 'the card surface tilts: ' + tilted)
-  assert.notEqual(tilted, restingTransform, 'hover must move the card off its resting transform')
+  assert.notEqual(tilted, restingTransform, 'hover must move the card off its resting transform: ' + JSON.stringify(hoverProbe))
   const tiltAngle = await rotationOf()
   assert.ok(tiltAngle > 0.02, 'the tilt must be visible: ' + tiltAngle)
   assert.ok(tiltAngle < 0.08, 'the tilt must stay slight: ' + tiltAngle)
@@ -301,11 +351,11 @@ app.whenReady().then(()=>{
   await evaluate(`localStorage.setItem('theme','light')`)
   await send('Page.reload'); await pause(400); await ready()
   // A reload rebuilds the DOM: re-enter the card so its onMouseMove fires.
-  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: cardPoint.x, y: cardPoint.y - 240 })
-  await pause(200)
-  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...cardPoint })
-  await pause(900)
-  assert.notEqual(await cardTransform(), restingTransform, 'the light card tilts too')
+  const lightPoint = await evaluate(`(()=>{const r=${card}.getBoundingClientRect();return{x:r.x+r.width*0.2,y:r.y+r.height*0.3}})()`)
+  const probe = await evaluate(`(()=>{const el=document.elementFromPoint(${lightPoint.x},${lightPoint.y});return{inner:[innerWidth,innerHeight],point:[${lightPoint.x},${lightPoint.y}],hit:el?el.tagName+'.'+(el.className||''):null,onCard:Boolean(el&&${card}.contains(el)),hover:matchMedia('(hover: hover) and (pointer: fine)').matches,reduce:matchMedia('(prefers-reduced-motion: reduce)').matches}})()`)
+  assert.equal(probe.onCard, true, 'the pointer must be over a starter card: ' + JSON.stringify(probe))
+  await hoverCard(lightPoint, restingTransform)
+  assert.notEqual(await cardTransform(), restingTransform, 'the light card tilts too: ' + JSON.stringify(probe))
   await screenshot('starter-cards-hover-light')
   assert.deepEqual(exceptions, [])
   console.log('PASS: new-session project picker — options, project switch, projectless switch, privacy, escape, geometry, tilt cards')

@@ -58,7 +58,10 @@ export function TurnStatus({ className, step = THINKING_STEP, seedKey = 'live' }
     // `scripts/check-spinner-verbs.mjs` reads, like `data-todo-progress` for the
     // task list.
     <div
-      className={cn('flex h-6 items-center gap-2', className)}
+      // One row height for the transcript (see `lib/transcript-rhythm`): the
+      // waiting row is the same box as the rows above it, with its own line
+      // centred, so the last gap looks like every other one.
+      className={cn('flex min-h-9 items-center gap-2', className)}
       data-spinner-verb={verb?.id}
       data-spinner-loader={verb ? 'peeek' : 'spinner'}
     >

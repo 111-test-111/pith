@@ -395,7 +395,7 @@ try {
   await pause(120)
   let row = await evaluate(`window.__snapshot(${json(readCtx)}, 'en')`)
   assert.ok(row.exists, 'the waiting row renders')
-  assert.equal(row.height, 24, 'the row stays one 24px line: ' + row.height)
+  assert.equal(row.height, 36, 'the waiting row is the transcript’s shared 36px box: ' + row.height)
   assert.equal(row.loader, 'peeek', 'the plain spinner is replaced by the peeek wheel')
   assert.equal(row.dots, 11, 'the peeek wheel is ten dots plus the centre dot: ' + row.dots)
   assert.equal(row.loaderColor, row.accent.background, 'the dots wear the theme accent: ' + json(row.loaderColor))
@@ -520,7 +520,7 @@ try {
   assert.equal(off.id, null, 'off removes the sentence')
   assert.equal(off.loader, 'spinner', 'off restores the plain spinner glyph')
   assert.equal(off.dots, 0, 'and no dot grid: ' + off.dots)
-  assert.equal(off.height, 24, 'off keeps the same one-line row')
+  assert.equal(off.height, 36, 'off keeps the same one-row box')
   assert.equal(off.aria, '正在处理…', 'off keeps the screen-reader label: ' + off.aria)
 
   await evaluate(`window.__setEnabled(true)`)
@@ -532,7 +532,7 @@ try {
   await evaluate(`window.__width(120)`)
   await pause(200)
   const narrow = await evaluate(`window.__snapshot(${json(thinkingCtx)}, 'zh-CN')`)
-  assert.equal(narrow.height, 24, 'a narrow pane keeps the row one line tall: ' + narrow.height)
+  assert.equal(narrow.height, 36, 'a narrow pane keeps the shared one-row box: ' + narrow.height)
   assert.ok(narrow.sentenceHeight <= 24, 'the sentence never wraps to a second line: ' + narrow.sentenceHeight)
   assert.ok(
     ['nowrap', 'pre'].includes(narrow.whiteSpace),

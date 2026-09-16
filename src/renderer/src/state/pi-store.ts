@@ -37,19 +37,6 @@ export interface Notice {
   detail?: string
 }
 
-/**
- * A settled compaction, as a quiet row in the transcript flow. It is feedback,
- * not session content: the session's own record of a compaction is the
- * summary entry the SDK writes, so this is deliberately UI-only and vanishes
- * when the session changes.
- */
-export type CompactionNotice = {
-  id: string
-  tokensBefore: number
-  tokensAfter: number | null
-  at: number
-}
-
 export interface PiState {
   initializing: boolean
   todos: TodoSnapshotDTO | null
@@ -67,8 +54,6 @@ export interface PiState {
   sandboxMode: SandboxMode
   /** What the host can enforce for that mode right now. */
   sandbox: SandboxStatusDTO | null
-  /** Compactions that settled while this session was on screen. */
-  compactionNotices: CompactionNotice[]
   /** Pending one-shot escalation questions the user has to answer. */
   escalations: SandboxEscalationRequestDTO[]
   isStreaming: boolean
@@ -201,7 +186,6 @@ const initialState: PiState = {
   thinkingLevel: 'medium',
   sandboxMode: DEFAULT_SANDBOX_MODE,
   sandbox: null,
-  compactionNotices: [],
   escalations: [],
   isStreaming: false,
   contextUsage: null,
@@ -335,11 +319,10 @@ export class PiStore {
       ...(unchanged ? cached : {}),
       ready: true,
       initializing: snapshot.initializing ?? false,
-      // Switching sessions drops the previous session's compaction feedback
-      // along with its transcript.
-      compactionNotices: unchanged ? (cached?.compactionNotices ?? []) : [],
-      // An unanswered question belongs to the session it was asked in.
-      escalations: unchanged ? (cached?.escalations ?? []) : [],
+      // An unanswered question belongs to the session it was asked in. The
+      // snapshot carries the pending list (fresh at serialization), so neither
+      // a session switch nor an IPC snapshot can lose one to event ordering.
+      escalations: snapshot.escalations ?? (unchanged ? (cached?.escalations ?? []) : []),
       cwd: snapshot.cwd,
       projectless: snapshot.projectless,
       sessionId: snapshot.sessionId,
@@ -714,33 +697,15 @@ export class PiStore {
       case 'compaction_end': {
         // Main ships the rewritten (compaction-aware) message list with the
         // event; adopting it keeps the transcript in step with the SDK context.
+        // The acknowledgement is the summary row itself — a session entry that
+        // renders where it happened (`chat-turns` places it by time) and is
+        // still there when the session is reopened, which a UI-only row was not.
         const messages = Array.isArray(event.messages) ? (event.messages as ChatMessage[]) : null
-        // A compaction replaces the whole transcript, so it needs an explicit
-        // acknowledgement in the flow — the same quiet row a background-task
-        // completion gets — or the swap reads as the conversation changing by
-        // itself. Token counts come from the compaction result; a compaction
-        // that was aborted or failed is not a completion and adds no row.
-        const result = event.result as { tokensBefore?: unknown; estimatedTokensAfter?: unknown } | undefined
-        const tokensBefore = typeof result?.tokensBefore === 'number' ? result.tokensBefore : null
-        const tokensAfter = typeof result?.estimatedTokensAfter === 'number' ? result.estimatedTokensAfter : null
-        const settled = event.aborted !== true && !event.errorMessage && tokensBefore !== null
-        const compactionNotices = settled
-          ? [
-              ...this.state.compactionNotices,
-              {
-                id: `c${event.eventSequence ?? Date.now()}`,
-                tokensBefore: tokensBefore as number,
-                tokensAfter,
-                at: Date.now()
-              }
-            ]
-          : this.state.compactionNotices
         this.set({
           ...(messages ? { messages, streaming: null } : {}),
           notice: event.errorMessage
             ? { key: 'compactFailed', detail: event.errorMessage }
             : null,
-          compactionNotices,
           ...('contextUsage' in event ? { contextUsage: event.contextUsage ?? null } : {})
         })
         break

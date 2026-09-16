@@ -69,12 +69,20 @@ export class RewindRecorder {
     agent.continue = () => this.run(() => resume())
     // Keep ownership across extension input/before_agent_start hooks, retries,
     // compaction and queued continuations, beyond an individual agent loop.
-    for (const name of ['prompt', 'sendCustomMessage', 'executeBash', 'compact', 'reload'] as const) {
+    for (const name of ['prompt', 'sendCustomMessage', 'compact', 'reload'] as const) {
       const original = session[name].bind(session) as (...args: any[]) => Promise<any>
       ;(session as any)[name] = async (...args: any[]) => {
         const release = await coordinator.enter(cwd, 'run', sessionPath)
         try { return await original(...args) } finally { release() }
       }
+    }
+    // Extension-driven shell execution writes workspace files outside any
+    // tool admission, so it carries the process lease that snapshots and
+    // restores wait for — a plain run lease no longer fences snapshots.
+    const executeBash = session.executeBash.bind(session) as (...args: any[]) => Promise<any>
+    ;(session as any).executeBash = async (...args: any[]) => {
+      const release = await coordinator.enter(cwd, 'process', sessionPath)
+      try { return await executeBash(...args) } finally { release() }
     }
   }
   private async run(operation: () => Promise<void>): Promise<void> {
@@ -100,7 +108,7 @@ export class RewindRecorder {
           const entryId = session.sessionManager.getLeafId()
           checkpoint = await client.call('checkpoint', cwd, { sessionId: session.sessionId, trigger: 'before-turn',
             entryId, description: this.label, messageTimestamp: this.messageTimestamp })
-        }, false, this.options.sessionPath)
+        }, false)
         this.error = undefined
       } catch (error) {
         this.error = failure(error)

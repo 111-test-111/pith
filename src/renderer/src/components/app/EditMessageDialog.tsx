@@ -2,6 +2,7 @@ import {
   useEffect,
   useRef,
   useState,
+  type ClipboardEvent as ReactClipboardEvent,
   type KeyboardEvent as ReactKeyboardEvent
 } from 'react'
 import { FileText, ImagePlus, Paperclip, X } from '@/lib/icons'
@@ -11,6 +12,7 @@ import { Tooltip } from '@/components/motion/tooltip'
 import { Input } from '@/components/motion/input'
 import { basename } from '@/lib/format'
 import { extractUserDisplay } from '@/lib/user-message'
+import { readImageAttachment, resolveAttachmentFile } from '@/lib/attachments'
 import { useI18n } from '@/i18n'
 import type {
   ImageContent,
@@ -110,33 +112,37 @@ export function EditMessageDialog({
   }, [open, targetTimestamp, t])
 
   const addImage = (file: File) => {
-    const reader = new FileReader()
-    reader.onload = () => {
-      const dataUrl = String(reader.result)
-      const base64 = dataUrl.slice(dataUrl.indexOf(',') + 1)
-      setImages((current) => [
-        ...current,
-        {
-          id: nextId(),
-          name: file.name,
-          dataUrl,
-          image: { type: 'image', data: base64, mimeType: file.type || 'image/png' }
-        }
-      ])
-    }
-    reader.readAsDataURL(file)
+    void readImageAttachment(file).then((read) => {
+      if (read) setImages((current) => [...current, { id: nextId(), ...read }])
+    })
   }
 
   const addFile = async (file: File) => {
-    // Resolve the picked file through the workspace index, same as the composer.
-    const hits = await window.pi.searchFiles(file.name)
-    const hit = hits.find((candidate) => candidate.name === file.name) ?? hits[0]
-    if (!hit) return
+    // Same intake as the composer: the picked/pasted File's own path first, the
+    // workspace index only as the fallback for a File with no local backing.
+    const target = await resolveAttachmentFile(file)
+    if (!target) return
     setFiles((current) =>
-      current.some((entry) => entry.path === hit.path)
+      current.some((entry) => entry.path === target.path)
         ? current
-        : [...current, { id: nextId(), path: hit.path, label: hit.relPath }]
+        : [...current, { id: nextId(), path: target.path, label: target.relPath }]
     )
+  }
+
+  /**
+   * Paste files into the editor, exactly as the composer does. An image on the
+   * clipboard has bytes but no path, a copied file has one — the shared intake
+   * resolves both. Text-only pastes are left to the textarea.
+   */
+  const handlePaste = (event: ReactClipboardEvent<HTMLInputElement>) => {
+    const pasted = Array.from(event.clipboardData.files)
+    if (!pasted.length) return
+    // A clipboard holding files must not also paste their names as text.
+    event.preventDefault()
+    for (const file of pasted) {
+      if (file.type.startsWith('image/')) addImage(file)
+      else void addFile(file)
+    }
   }
 
   const removeImage = (id: string) => setImages((current) => current.filter((entry) => entry.id !== id))
@@ -208,6 +214,7 @@ export function EditMessageDialog({
             value={text}
             onChange={setText}
             onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
             aria-label={t('chat.editMessageBodyAria')}
             placeholder={t('composer.placeholder')}
             classNames={{ input: 'text-sm' }}

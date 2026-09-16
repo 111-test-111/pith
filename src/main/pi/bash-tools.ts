@@ -33,7 +33,8 @@ export const BASH_GUIDELINES = [
   'Never launch bash solely to wait for a managed task: this includes a single sleep N, sleep N; tail <task-log>, tail -f, and polling loops. Such a wait can itself become another background task and generate redundant completion notifications. To background real work, run that work directly with mode="background" or waitMs=0. A delay inside a requested program or timing test is still allowed.',
   'Use bash_task list/status/output for a specific progress question or readiness decision; output reads immediately and supports incremental reads with its cursor. Use it instead of tailing the task logPath. Do not repeatedly check unchanged status/output just to wait for completion. Use bash_task stop to terminate a task and its child processes when no longer needed; a model-requested stop does not automatically wake another turn. A user stopping an individual task in the UI sends a completion notification; do not restart it without a user request.',
   'Do not use shell &, nohup, disown, setsid or self-daemonization to escape managed task tracking. Commands are non-interactive (no terminal/stdin). Use the app terminal for interactive programs. Background tasks live with this application and are terminated when their session is stopped/deleted or the app quits.',
-  'Commands run under the session\'s DSH file-sandbox mode: read-only refuses every file write, workspace-write allows the workspace and the temp directories, and danger-full-access removes the fence. A denial is the file policy refusing the path, not a broken command — report it and ask the user to change the mode in Settings → General instead of retrying the same write or looking for another way to reach that path.'
+  'Commands run under the session\'s DSH file-sandbox mode: read-only refuses every file write, workspace-write allows the workspace and the temp directories, and danger-full-access removes the fence. A denial is the file policy refusing the path, not a broken command — report it and ask the user to change the mode in Settings → General instead of retrying the same write or looking for another way to reach that path.',
+  'A command that fails with "no sandbox backend is usable on this host" means the platform runner itself is missing — an environment limitation that retrying cannot fix. Report it and suggest switching the session to full access; never look for a way around the refusal.'
 ]
 
 export function createManagedBashTools(options: {
@@ -142,7 +143,12 @@ export function createManagedBashTools(options: {
       if (args.action === 'stop') await tasks.stop(sessionPath, args.taskId)
       const output = tasks.output(sessionPath, args.taskId, args.action === 'output' ? args.cursor : undefined, args.maxChars)
       return { content: [{ type: 'text', text: JSON.stringify({ ...output,
-        ...(output.task.background && taskIsLive(output.task) ? { guidance: PENDING_GUIDANCE } : {}) }) }], details: details(output.task) }
+        ...(output.task.background && taskIsLive(output.task) ? { guidance: PENDING_GUIDANCE } : {}),
+        // Same contract as the inline result: a denial explains itself and
+        // names the escalation lever, in the mode the command ran under.
+        ...(output.task.denied && output.task.sandboxMode
+          ? { sandbox: `${sandboxDenialMarker(output.task.sandboxMode)}\n${escalationHintMarker('command')}` }
+          : {}) }) }], details: details(output.task) }
     }
   } satisfies ToolDefinition<typeof taskParameters>]
 }

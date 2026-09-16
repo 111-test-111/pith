@@ -13,7 +13,7 @@ import type { RewindChangeDTO, RewindCommitDTO, RewindErrorDTO, RewindListDTO, R
 
 function ErrorMessage({ error }: { error: RewindErrorDTO }) {
   const { t } = useI18n()
-  return <div role="alert" className="space-y-1 rounded-card bg-destructive/5 p-3 text-sm text-destructive">
+  return <div role="alert" data-rewind-error={error.code} className="space-y-1 rounded-card bg-destructive/5 p-3 text-sm text-destructive">
     <p>{t(`rewind.error.${error.code}`)}</p>
     {error.paths?.length ? <p className="max-h-28 overflow-auto break-all text-xs">{error.paths.join('\n')}</p> : null}
   </div>
@@ -352,7 +352,7 @@ export function RewindDialog({ sessionPath, messageTimestamp, messageEntryId, on
               {!list.enabled ? <p className="p-2 text-xs text-muted-foreground">{t('rewind.disabled')}</p> : null}
               <div className="space-y-2">
                 <h3 className="px-2 text-xs font-medium text-muted-foreground">{t('rewind.checkpoints')}</h3>
-                {!checkpoints?.length ? <p className="p-2 text-xs text-muted-foreground">{t(messageTimestamp === undefined ? 'rewind.empty' : 'rewind.noMessageCheckpoint')}</p> : checkpoints.map(cp => <Button key={cp.id} data-rewind-checkpoint variant="ghost" disabled={loading || fileLoading || executing} aria-pressed={preview?.checkpointId === cp.id} onClick={() => void select(cp.id)} whileHover={undefined} pressScale={1} className={cn('h-auto w-full flex-col items-stretch gap-2.5 border border-transparent px-3 py-3 text-left', preview?.checkpointId === cp.id && 'border-primary/25 bg-primary/10')}>
+                {!checkpoints?.length ? <p className="p-2 text-xs text-muted-foreground">{t(messageTimestamp === undefined ? (list?.error ? 'rewind.emptyFailed' : 'rewind.empty') : 'rewind.noMessageCheckpoint')}</p> : checkpoints.map(cp => <Button key={cp.id} data-rewind-checkpoint variant="ghost" disabled={loading || fileLoading || executing} aria-pressed={preview?.checkpointId === cp.id} onClick={() => void select(cp.id)} whileHover={undefined} pressScale={1} className={cn('h-auto w-full flex-col items-stretch gap-2.5 border border-transparent px-3 py-3 text-left', preview?.checkpointId === cp.id && 'border-primary/25 bg-primary/10')}>
                   <span className="flex items-start gap-2">
                     <span data-rewind-checkpoint-title className="min-w-0 flex-1 line-clamp-2 break-words text-sm font-medium leading-5 text-foreground">{cp.description || t('rewind.untitledTurn')}</span>
                     {preview?.checkpointId === cp.id ? <Check aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-primary" /> : null}
@@ -423,7 +423,7 @@ export function RewindDialog({ sessionPath, messageTimestamp, messageEntryId, on
                     <p className="text-xs leading-5 text-muted-foreground">{t('rewind.uncoveredDescription')}</p>
                     <UncoveredFiles paths={preview.uncovered} />
                   </div> : null}
-                  {blocked && blocked.code !== 'uncovered' ? <ErrorMessage error={blocked} /> : null}
+                  {blocked && blocked.code !== 'uncovered' && blocked.code !== error?.code && blocked.code !== list?.error?.code ? <ErrorMessage error={blocked} /> : null}
                 </div>
                 {/* Mode controls the restore action, never the file preview. */}
                 <>

@@ -3,6 +3,7 @@ import { memo, useMemo, useState } from 'react'
 import { AgentActivity } from '@/components/agents/agent-activity'
 import { AgentDisclosure } from '@/components/agents/agent-disclosure'
 import { useI18n } from '@/i18n'
+import { TRANSCRIPT_ROW } from '@/lib/transcript-rhythm'
 import type { ToolCallContent, ToolResultMsg } from '../../../../shared/types'
 import type { ToolRun } from '@/state/pi-store'
 import type { ToolCategory } from '@/lib/tool-categories'
@@ -92,6 +93,9 @@ export const ToolGroupView = memo(function ToolGroupView({
           own empty item list. */}
       <AgentActivity
         status="complete"
+        // The group row shares the transcript's one row height, so a group and a
+        // tool row sit the same distance from whatever is above and below them.
+        className={TRANSCRIPT_ROW}
         summary={summary}
         open={open}
         onOpenChange={setOpen}

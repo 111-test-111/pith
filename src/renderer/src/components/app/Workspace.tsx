@@ -25,6 +25,8 @@ import {
   Pencil,
   Pin,
   PinOff,
+  Minimize2,
+  RefreshCw,
   Settings as SettingsIcon,
   Trash2
 } from '@/lib/icons'
@@ -46,6 +48,7 @@ import { ThemeButton } from './ThemeButton'
 import { useToast } from './ToastProvider'
 import { SandboxEscalationPanel } from './SandboxEscalationPanel'
 import { WindowTitlebar } from './WindowTitlebar'
+import { TitlebarOverflow } from './TitlebarOverflow'
 import { useOverflowFade } from '@/lib/hooks/use-overflow-fade'
 import { Button } from '@/components/motion/button'
 import { Tooltip } from '@/components/motion/tooltip'
@@ -539,6 +542,48 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
     }
   }, [store])
 
+  /**
+   * Manual compaction — the CLI's `/compact`. The SDK's manual entry point
+   * aborts whatever is running first and never retries the interrupted turn,
+   * so a live run is refused here rather than silently killed: the user stops
+   * the turn deliberately, then compacts. Shared by the title row's pocket and
+   * the command palette, which must not drift apart.
+   */
+  const handleCompact = useCallback(async () => {
+    const targetPath = store.getShell().sessionPath
+    if (store.getShell().isStreaming) { toast.info({ title: t('palette.compactBusy') }); return }
+    if (!targetPath) return
+    try {
+      const snapshot = await window.pi.compactSession(targetPath)
+      if (store.getShell().sessionPath === targetPath) store.applySnapshot(snapshot)
+    } catch {
+      // No toast: a failure renders as its own error row in the transcript
+      // (`SummaryRow`), where the reason can be read and kept.
+    }
+  }, [store, t, toast])
+
+  /**
+   * Manual resource reload — the app's `/reload`. Extensions, skills, prompts
+   * and context files are re-read from disk and each live session's derived
+   * system prompt is rebuilt, which is how an edit made OUTSIDE the app (an
+   * extension's source, a SKILL.md, an AGENTS.md) reaches the next turn without
+   * a restart. A live run is refused — reloading swaps the extension runner
+   * under the request in flight — so the user stops the turn first, exactly as
+   * with compaction.
+   */
+  const handleReload = useCallback(async () => {
+    const targetPath = store.getShell().sessionPath
+    if (store.getShell().isStreaming) { toast.info({ title: t('palette.reloadBusy') }); return }
+    if (!targetPath) return
+    try {
+      const snapshot = await window.pi.reloadSession(targetPath)
+      if (store.getShell().sessionPath === targetPath) store.applySnapshot(snapshot)
+      toast.success({ title: t('palette.reloadDone') })
+    } catch {
+      toast.error({ title: t('palette.reloadFailed') })
+    }
+  }, [store, t, toast])
+
   /** Fork the session at an assistant message: the fork opens as the active
    * session, gets its localized "Fork of …" title, and joins the sidebar. */
   const handleFork = useCallback(
@@ -968,7 +1013,19 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
       projectName: active ? basename(active) : null,
       cwd: active,
       projects: newSessionProjects,
-      onProjectChange: (cwd) => newSession(cwd ?? undefined)
+      onProjectChange: (cwd) => newSession(cwd ?? undefined),
+      // "New project…": ask for a folder that is not a known project yet and
+      // start the chat there. `newSession` remembers it as a folder, so the
+      // sidebar lists it (and its sessions) from that moment on.
+      onCreateProject: async () => {
+        try {
+          const result = await window.pi.pickDirectory()
+          if ('cancelled' in result) return
+          await newSession(result.cwd)
+        } catch (error) {
+          console.error('project pick failed', error)
+        }
+      }
     }
   }, [isNewSession, shell.cwd, shell.projectless, newSessionProjects, newSession])
 
@@ -1048,6 +1105,26 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
           </span>
         </div>
         <div className="flex shrink-0 items-center gap-1">
+          {/* Everything added to this row after its original toolbar lives in
+              here, so the controls that follow keep their places. */}
+          <TitlebarOverflow
+            actions={[
+              {
+                id: 'compact',
+                label: t('palette.compact'),
+                icon: <Minimize2 className="size-4" />,
+                disabled: !shell.sessionPath,
+                onSelect: () => void handleCompact()
+              },
+              {
+                id: 'reload',
+                label: t('palette.reload'),
+                icon: <RefreshCw className="size-4" />,
+                disabled: !shell.sessionPath,
+                onSelect: () => void handleReload()
+              }
+            ]}
+          />
           <Tooltip content={t(rewindWarning ? 'rewind.captureWarning' : 'rewind.title')}>
             <Button variant="ghost" size="icon" className="size-8" aria-label={t(rewindWarning ? 'rewind.captureWarning' : 'rewind.title')} data-rewind-entry disabled={!shell.sessionPath} onClick={() => { if (shell.sessionPath) setRewindTarget({ path: shell.sessionPath }) }}>{rewindWarning ? <AlertTriangle className="size-4 text-destructive" /> : <RotateCcw className="size-4" />}</Button>
           </Tooltip>
@@ -1487,16 +1564,7 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
       onNewSession={(cwd) => void newSession(cwd)}
       onOpenSettings={() => setSettingsOpen(true)}
       onNewTerminal={newTerminal}
-      onCompact={() => {
-        // The SDK's manual compaction aborts whatever is running, so a live
-        // turn is the user's decision to stop first — never a silent kill.
-        if (shell.isStreaming) { toast.info({ title: t('palette.compactBusy') }); return }
-        if (!shell.sessionPath) return
-        void window.pi
-          .compactSession(shell.sessionPath)
-          .then((snapshot) => store.applySnapshot(snapshot))
-          .catch(() => toast.error({ title: t('chat.noticeCompactFailed') }))
-      }}
+      onCompact={() => void handleCompact()}
       onToggleSidebar={() => setSidebarOpen((open) => !open)}
       onToggleRail={() => setSidePanelOpen((open) => !open)}
     />

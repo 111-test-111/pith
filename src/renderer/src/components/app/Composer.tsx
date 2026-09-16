@@ -12,6 +12,7 @@ import { Button } from '@/components/motion/button'
 import { ExpandableChip } from '@/components/motion/expandable-control'
 import { PromptInput } from '@/components/agents/prompt-input'
 import { basename, formatBytes } from '@/lib/format'
+import { readImageAttachment, resolveAttachmentFile, type AttachmentTarget } from '@/lib/attachments'
 import {
   otherBehavior,
   useStreamingBehavior,
@@ -146,24 +147,12 @@ export function Composer({
     // A read-only (subagent child) view never accepts new attachments; only
     // the send path is otherwise reachable, which the disabled field blocks.
     if (readOnly) return
-    const reader = new FileReader()
-    reader.onload = () => {
-      const dataUrl = String(reader.result)
-      const base64 = dataUrl.slice(dataUrl.indexOf(',') + 1)
-      setImages((current) => [
-        ...current,
-        {
-          id: nextId(),
-          name: file.name,
-          dataUrl,
-          image: { type: 'image', data: base64, mimeType: file.type || 'image/png' }
-        }
-      ])
-    }
-    reader.readAsDataURL(file)
+    void readImageAttachment(file).then((read) => {
+      if (read) setImages((current) => [...current, { id: nextId(), ...read }])
+    })
   }, [readOnly])
 
-  const addFileHit = useCallback((hit: FileHitDTO) => {
+  const addFileHit = useCallback((hit: AttachmentTarget) => {
     if (readOnly) return
     setFiles((current) =>
       current.some((f) => f.path === hit.path)
@@ -172,50 +161,18 @@ export function Composer({
     )
   }, [readOnly])
 
-  /** Add a chip for a real path, stat'ing it through the main process so the
-   * chip carries a usable relPath/kind/size — inside OR outside the workspace.
-   * The main process resolves relative to the active cwd either way. */
-  const addFilePath = useCallback(async (path: string) => {
-    if (readOnly) return
-    try {
-      const preview = await window.pi.readFile(path)
-      setFiles((current) =>
-        current.some((f) => f.path === preview.path)
-          ? current
-          : [
-              ...current,
-              {
-                id: nextId(),
-                path: preview.path,
-                relPath: preview.relPath,
-                kind: preview.kind,
-                size: preview.size
-              }
-            ]
-      )
-    } catch {
-      /* unreadable / deleted — drop it silently, like a failed mention */
-    }
-  }, [readOnly])
-
   /**
-   * Attach a File from a picker, paste or drop. Electron removed `File.path`
-   * in v32, so the backing path comes through the preload's webUtils bridge;
-   * a File with no local path (dragged out of a browser) falls back to a name
-   * search in the workspace index.
+   * Attach a File from a picker, paste or drop, through the shared intake: the
+   * preload's `webUtils` path for a real file, the workspace index for one with
+   * no local backing.
    */
   const addFileAttachment = useCallback(
     async (file: globalThis.File) => {
-      const path = window.pi.pathForFile(file)
-      if (path) {
-        await addFilePath(path)
-        return
-      }
-      const hits = await window.pi.searchFiles(file.name)
-      const hit = hits.find((h) => h.name === file.name) ?? hits[0]
-      if (hit) addFileHit(hit)
+      if (readOnly) return
+      const target = await resolveAttachmentFile(file)
+      if (target) addFileHit(target)
     },
-    [addFilePath, addFileHit]
+    [addFileHit, readOnly]
   )
   const removeImage = (id: string) => setImages((c) => c.filter((a) => a.id !== id))
   const removeFile = (id: string) => {

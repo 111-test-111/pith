@@ -100,6 +100,10 @@ const api = {
   /** Compact one session's context on demand (the CLI's `/compact`). */
   compactSession: (sessionPath: string): Promise<SessionSnapshotDTO> =>
     ipcRenderer.invoke('pi:compact', sessionPath),
+  /** Re-read extensions/skills/prompts/context files on demand (the CLI's
+   * `/reload`). Refused while that session runs. */
+  reloadSession: (sessionPath: string): Promise<SessionSnapshotDTO> =>
+    ipcRenderer.invoke('pi:reload', sessionPath),
   /** Answer one pending sandbox escalation for a session. */
   respondEscalation: (requestId: string, sessionPath: string, decision: SandboxEscalationDecision): Promise<boolean> =>
     ipcRenderer.invoke('sandbox:respondEscalation', requestId, sessionPath, decision),

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
-import { AdaptiveStepper, AdaptiveStepperDecrement, AdaptiveStepperIncrement, AdaptiveStepperValue } from '@/components/motion/adaptive-stepper'
 import { BASH_DEFAULT_MAX_WAIT_MS, BASH_MIN_WAIT_MS, BASH_MAX_WAIT_MS, DEFAULT_SANDBOX_MODE, type SandboxMode, type SandboxStatusDTO, type StartupSessionMode } from '../../../../../shared/types'
 import { Button } from '@/components/motion/button'
+import { Input } from '@/components/motion/input'
 import { Switch } from '@/components/motion/switch'
 import { RadioGroup, RadioGroupItem } from '@/components/motion/radio'
 import { useI18n } from '@/i18n'
@@ -11,22 +11,47 @@ import { useToolGrouping } from '@/lib/tool-grouping'
 import { useStreamingBehavior, type StreamingBehavior } from '@/lib/streaming-behavior'
 import { SettingsGroup, SettingsRow } from './SettingsRow'
 
+/** Mirrors the main-process guard for `subagents:setMaxConcurrent`. */
+const SUBAGENT_MIN_CONCURRENT = 1
+const SUBAGENT_MAX_CONCURRENT = 16
+
+/** One decimal place — the wait threshold's own resolution (step 0.1s). */
+const formatSeconds = (ms: number) => (ms / 1000).toFixed(1)
+
+/** A seconds field: digits only, at most one dot, never a second decimal. */
+function sanitizeSeconds(raw: string) {
+  const cleaned = raw.replace(/[^0-9.]/g, '')
+  const [head, ...rest] = cleaned.split('.')
+  return rest.length ? `${head}.${rest.join('')}` : head
+}
+
 /** Storage & install facts. Future startup/behavior prefs go here. */
 export function GeneralSection() {
   const { t } = useI18n()
-  const [waitSeconds, setWaitSeconds] = useState(String(BASH_DEFAULT_MAX_WAIT_MS / 1000))
+  const [waitSeconds, setWaitSeconds] = useState(formatSeconds(BASH_DEFAULT_MAX_WAIT_MS))
   const [savedWait, setSavedWait] = useState(BASH_DEFAULT_MAX_WAIT_MS)
   const [savingWait, setSavingWait] = useState(false)
   const [waitError, setWaitError] = useState(false)
   const waitMs = Math.round(Number(waitSeconds) * 1000)
   const validWait = waitSeconds.trim() !== '' && Number.isFinite(waitMs) && waitMs >= BASH_MIN_WAIT_MS && waitMs <= BASH_MAX_WAIT_MS
+  // The field is free text while it has focus; leaving it clamps into range, so
+  // a typed 999 or an empty box can never reach the setter.
+  const clampWaitSeconds = (raw: string) => {
+    const trimmed = raw.trim()
+    // `Number('')` is 0, which would look like a below-range entry; an empty
+    // field means “no answer”, so it goes back to the saved value.
+    const parsed = trimmed === '' ? Number.NaN : Number(trimmed)
+    if (!Number.isFinite(parsed)) return formatSeconds(savedWait)
+    const ms = Math.min(BASH_MAX_WAIT_MS, Math.max(BASH_MIN_WAIT_MS, Math.round(parsed * 1000)))
+    return formatSeconds(ms)
+  }
   const saveWait = async () => {
     if (!validWait) return
     setSavingWait(true)
     try {
       const value = await window.pi.setBashMaxWaitMs(waitMs)
       setSavedWait(value)
-      setWaitSeconds(String(value / 1000))
+      setWaitSeconds(formatSeconds(value))
       setWaitError(false)
     } catch { setWaitError(true) }
     finally { setSavingWait(false) }
@@ -62,6 +87,9 @@ export function GeneralSection() {
   const [savingSubagents, setSavingSubagents] = useState(false)
   /** Per-parent concurrent delegation limit; 1–16 mirrors the main-process guard. */
   const [subagentConcurrent, setSubagentConcurrent] = useState(4)
+  // Free text only while the field is being edited; `null` shows the saved
+  // number, so a failed save or a blur always lands on a real value.
+  const [concurrentDraft, setConcurrentDraft] = useState<string | null>(null)
   const [savingConcurrent, setSavingConcurrent] = useState(false)
   const [concurrentError, setConcurrentError] = useState(false)
   const saveConcurrent = (value: number) => {
@@ -72,6 +100,16 @@ export function GeneralSection() {
       .setSubagentMaxConcurrent(value)
       .then(setSubagentConcurrent, () => setConcurrentError(true))
       .finally(() => setSavingConcurrent(false))
+  }
+  // Leaving the field clamps whatever was typed into 1–16 and saves only a real
+  // change, so keystrokes never race the setter.
+  const commitConcurrent = () => {
+    const parsed = Number.parseInt(concurrentDraft ?? '', 10)
+    const next = Number.isFinite(parsed)
+      ? Math.min(SUBAGENT_MAX_CONCURRENT, Math.max(SUBAGENT_MIN_CONCURRENT, parsed))
+      : subagentConcurrent
+    setConcurrentDraft(null)
+    if (next !== subagentConcurrent) saveConcurrent(next)
   }
   // Same module store the Composer reads — a change here applies immediately.
   const [behavior, setBehavior] = useStreamingBehavior()
@@ -85,7 +123,7 @@ export function GeneralSection() {
   useEffect(() => {
     void window.pi
       .appInfo()
-      .then((info) => { setVersion(info.version); setCheckpoints(info.checkpointsEnabled); setStartup(info.startup); setSubagentsEnabled(info.subagentsEnabled !== false); setSubagentConcurrent(info.subagentMaxConcurrent ?? 4); setWaitSeconds(String(info.bashMaxWaitMs / 1000)); setSavedWait(info.bashMaxWaitMs); setSandboxMode(info.sandboxMode); setSandbox(info.sandbox) })
+      .then((info) => { setVersion(info.version); setCheckpoints(info.checkpointsEnabled); setStartup(info.startup); setSubagentsEnabled(info.subagentsEnabled !== false); setSubagentConcurrent(info.subagentMaxConcurrent ?? 4); setWaitSeconds(formatSeconds(info.bashMaxWaitMs)); setSavedWait(info.bashMaxWaitMs); setSandboxMode(info.sandboxMode); setSandbox(info.sandbox) })
       .catch(() => {})
   }, [])
 
@@ -174,19 +212,17 @@ export function GeneralSection() {
           label={t('subagent.concurrency')}
           description={t('subagent.concurrencyDesc')}
         >
-          <AdaptiveStepper
-            value={subagentConcurrent}
-            min={1}
-            max={16}
-            step={1}
+          <Input
+            value={concurrentDraft ?? String(subagentConcurrent)}
+            onChange={(value) => setConcurrentDraft(value.replace(/\D/g, '').slice(0, 2))}
+            onBlur={commitConcurrent}
+            onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur() }}
+            inputMode="numeric"
             disabled={!subagentsEnabled || savingSubagents || savingConcurrent}
             aria-label={t('subagent.concurrency')}
-            onValueChange={saveConcurrent}
-          >
-            <AdaptiveStepperDecrement aria-label={t('settings.decreaseValue')} />
-            <AdaptiveStepperValue />
-            <AdaptiveStepperIncrement aria-label={t('settings.increaseValue')} />
-          </AdaptiveStepper>
+            className="w-16"
+            classNames={{ field: 'h-8', input: 'px-2 text-center text-sm' }}
+          />
         </SettingsRow>
         {concurrentError ? <p role="alert" className="px-4 text-xs text-destructive">{t('subagent.concurrencyFailed')}</p> : null}
         <SettingsRow
@@ -203,22 +239,18 @@ export function GeneralSection() {
 
       <SettingsGroup title={t('bashTask.settingsGroup')}>
         <SettingsRow label={t('bashTask.maxWait')} description={t('bashTask.maxWaitDesc')}>
-          <AdaptiveStepper
-            value={Number(waitSeconds)}
-            min={BASH_MIN_WAIT_MS / 1000}
-            max={BASH_MAX_WAIT_MS / 1000}
-            step={0.1}
+          <Input
+            value={waitSeconds}
+            onChange={(value) => setWaitSeconds(sanitizeSeconds(value))}
+            onBlur={() => setWaitSeconds(clampWaitSeconds(waitSeconds))}
+            onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur() }}
+            inputMode="decimal"
             disabled={savingWait}
             aria-label={t('bashTask.waitSeconds')}
-            formatValueText={(value) => t('bashTask.waitSecondsValue', { seconds: value.toFixed(1) })}
-            onValueChange={(value) => setWaitSeconds(Number(value.toFixed(1)).toString())}
-          >
-            <AdaptiveStepperDecrement aria-label={t('settings.decreaseValue')} />
-            <AdaptiveStepperValue>
-              {(value) => t('bashTask.waitSecondsValue', { seconds: value.toFixed(1) })}
-            </AdaptiveStepperValue>
-            <AdaptiveStepperIncrement aria-label={t('settings.increaseValue')} />
-          </AdaptiveStepper>
+            className="w-20"
+            classNames={{ field: 'h-8', input: 'px-2 text-center text-sm' }}
+          />
+          <span className="text-xs text-muted-foreground">{t('bashTask.secondsUnit')}</span>
           <Button variant="ghost" size="sm" disabled={!validWait || waitMs === savedWait || savingWait} onClick={() => void saveWait()}>{t('bashTask.save')}</Button>
         </SettingsRow>
         {waitError ? <p className="px-4 text-xs text-destructive" role="status">{t('bashTask.saveFailed')}</p> : null}

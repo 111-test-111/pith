@@ -58,6 +58,7 @@ import {
   FolderInput as FolderInputGlyph,
   FolderKanban as FolderKanbanGlyph,
   FolderOpen as FolderOpenGlyph,
+  FolderPlus as FolderPlusGlyph,
   FolderTree as FolderTreeGlyph,
   GitFork as GitForkGlyph,
   GitPullRequest as GitPullRequestGlyph,
@@ -219,6 +220,7 @@ export const Folder = /* @__PURE__ */ createIcon('Folder', FolderGlyph)
 export const FolderInput = /* @__PURE__ */ createIcon('FolderInput', FolderInputGlyph)
 export const FolderKanban = /* @__PURE__ */ createIcon('FolderKanban', FolderKanbanGlyph)
 export const FolderOpen = /* @__PURE__ */ createIcon('FolderOpen', FolderOpenGlyph)
+export const FolderPlus = /* @__PURE__ */ createIcon('FolderPlus', FolderPlusGlyph)
 export const FolderTree = /* @__PURE__ */ createIcon('FolderTree', FolderTreeGlyph)
 export const GitFork = /* @__PURE__ */ createIcon('GitFork', GitForkGlyph)
 export const GitPullRequest = /* @__PURE__ */ createIcon('GitPullRequest', GitPullRequestGlyph)

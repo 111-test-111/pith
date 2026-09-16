@@ -136,13 +136,22 @@ export class BashTaskManager {
     // Fail closed before a task record exists: a confined mode with no usable
     // runner must not become a "running" task whose command actually ran on the
     // host. The same argv the shell would have received is what gets wrapped.
-    const innerArgv = options.commandTransport === 'stdin'
-      ? [options.shell, ...options.args]
-      : [options.shell, ...options.args, options.command]
-    const confined = options.sandboxMode
-      ? confineShellArgv(innerArgv, sandboxPolicyFor(options.sandboxMode, options.cwd))
-      : null
-    const argv = confined?.argv ?? innerArgv
+    // The lease is released on that refusal too: a leaked 'process' lease
+    // would fence every future restore and checkpoint snapshot for this cwd.
+    let confined: ReturnType<typeof confineShellArgv> = null
+    let argv: string[]
+    try {
+      const innerArgv = options.commandTransport === 'stdin'
+        ? [options.shell, ...options.args]
+        : [options.shell, ...options.args, options.command]
+      confined = options.sandboxMode
+        ? confineShellArgv(innerArgv, sandboxPolicyFor(options.sandboxMode, options.cwd))
+        : null
+      argv = confined?.argv ?? innerArgv
+    } catch (error) {
+      releaseCheckout?.()
+      throw error
+    }
     // A confined shell still inherits an environment; ambient credentials are
     // not part of what the file policy granted.
     const env = confined ? scrubbedParentEnv(options.env) : options.env
@@ -152,7 +161,7 @@ export class BashTaskManager {
       dto: { id, sessionId: options.sessionId, sessionPath: options.sessionPath, toolCallId: options.toolCallId,
         command: options.command, cwd: options.cwd, status: 'running', background: false,
         startedAt: Date.now(), outputChars: 0, logPath: join(this.directory, `${id}.log`),
-        logTruncated: false, revision: 0 },
+        logTruncated: false, revision: 0, ...(options.sandboxMode ? { sandboxMode: options.sandboxMode } : {}) },
       tail: '', logBytes: 0, done: new Promise<void>((r) => { resolve = r }), resolve: () => resolve(), finishing: false
     }
     this.tasks.set(id, task)

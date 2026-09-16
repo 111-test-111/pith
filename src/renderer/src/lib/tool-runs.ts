@@ -37,9 +37,23 @@ export function groupContent(content: AssistantMsg['content']): AssistantBlock[]
   return blocks
 }
 
-/** Mirrors AssistantParts: a text block with no text at all renders no row. */
+/**
+ * Text that paints no row: whitespace of every kind (including the zero-width
+ * characters a streamed start-of-round space can arrive as). A round that opens
+ * with a bare `" "` part is not empty, so it used to render as an empty
+ * markdown block — zero height, but still a flex item, which cost a whole extra
+ * gap between the rows around it (two tool rows sat 24px apart instead of 12px)
+ * and split a tool run that was visually continuous.
+ */
+const INVISIBLE_TEXT = /[\s\u200b-\u200d\ufeff]/g
+
+export function textRendersRow(text: string): boolean {
+  return text.replace(INVISIBLE_TEXT, '').length > 0
+}
+
+/** Mirrors AssistantParts: a text block that paints nothing renders no row. */
 export function textBlockRenders(block: { parts: TextContent[] }): boolean {
-  return block.parts.map((part) => part.text).join('\n\n').length > 0
+  return textRendersRow(block.parts.map((part) => part.text).join('\n\n'))
 }
 
 /** Rows one tool block renders after category folding. */
@@ -100,10 +114,10 @@ export function buildToolPlan(
         // Hidden reasoning paints nothing, so it cannot separate a run.
         if (showReasoning) flat.push(null)
       } else if (textBlockRenders(block)) {
-        // Only a block that paints a row separates two tool blocks. A streaming
-        // placeholder text block that never fills in renders nothing, so the
-        // tool rows around it stay visually adjacent — and must merge as soon
-        // as the next call appears, not once the round settles.
+        // Only a block that paints a row separates two tool blocks. A block
+        // with no text at all — or only whitespace — renders nothing, so the
+        // tool rows around it stay visually adjacent and must merge as soon as
+        // the next call appears, not once the round settles.
         flat.push(null)
       }
     })

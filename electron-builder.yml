@@ -7,8 +7,12 @@ files:
   - out/**/*
   - package.json
 # node-pty's native module and macOS spawn-helper must be real filesystem files.
+# The optional DSH sandbox runners carry native helpers too: the Landlock
+# addon loads a .node binary and the Windows ACL runner is spawned as a script.
 asarUnpack:
   - node_modules/node-pty/**/*
+  - node_modules/@deepseek-ai/node-addon-landlock-run/**/*
+  - node_modules/@deepseek-ai/dsh-sandbox-windows-acl/**/*
 extraResources:
   - from: resources/icons
     to: icons

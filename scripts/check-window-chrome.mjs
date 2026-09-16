@@ -17,7 +17,7 @@ try {
   const preload = join(temporary, 'preload.mjs')
   await writeFile(preload, `import ${JSON.stringify(join(repo, 'out/preload/index.mjs'))};
 import {contextBridge,ipcRenderer} from 'electron';
-contextBridge.exposeInMainWorld('fixture',{window:()=>ipcRenderer.invoke('fixture:window'),resize:(width,height)=>ipcRenderer.invoke('fixture:resize',width,height),fullscreen:value=>ipcRenderer.invoke('fixture:fullscreen',value),scenario:value=>ipcRenderer.invoke('fixture:scenario',value),startupChoices:()=>ipcRenderer.invoke('fixture:startupChoices')});`)
+contextBridge.exposeInMainWorld('fixture',{window:()=>ipcRenderer.invoke('fixture:window'),resize:(width,height)=>ipcRenderer.invoke('fixture:resize',width,height),fullscreen:value=>ipcRenderer.invoke('fixture:fullscreen',value),scenario:value=>ipcRenderer.invoke('fixture:scenario',value),startupChoices:()=>ipcRenderer.invoke('fixture:startupChoices'),reloads:()=>ipcRenderer.invoke('fixture:reloads'),compacts:()=>ipcRenderer.invoke('fixture:compacts')});`)
   const main = join(temporary, 'main.cjs')
   await build({ stdin: { contents: `
 import {app,BrowserWindow,ipcMain,nativeTheme} from 'electron';
@@ -28,6 +28,8 @@ app.whenReady().then(()=>{
  let scenario='project';
  let startupChoice='resume';
  const startupChoices=[];
+ const reloads=[];
+ const compacts=[];
  const model={providerId:'deepseek',providerName:'DeepSeek',id:'fixture',name:'DeepSeek V4.1 Flash',reasoning:true,input:['text'],contextWindow:128000,maxTokens:8192,available:true,costInputPerM:0,costOutputPerM:0};
  const labels=['统一窗口标题栏与页面布局','梳理项目结构与入口','实现一个新的工具面板','检查最近的界面改动'];
  const sessions=labels.map((label,i)=>({id:'chat-'+i,path:'/fixture/chat-'+i,cwd:'/workspace/pi-app',projectless:false,label,created:new Date().toISOString(),modified:new Date().toISOString(),messageCount:2}));
@@ -38,6 +40,8 @@ app.whenReady().then(()=>{
  ipcMain.handle('pi:newSession',(_,cwd)=>{scenario=cwd?'project':'projectless';return snapshot(cwd??'/internal/private-workspace')});
  ipcMain.handle('pi:listSessions',()=>scenario==='long'?[{...sessions[0],label:'A very long session title / 很长的会话标题 '.repeat(12)},...sessions.slice(1)]:sessions);
  ipcMain.handle('pi:models',()=>[model]);ipcMain.handle('bash:list',()=>[]);ipcMain.handle('pi:providers',()=>[]);
+ ipcMain.handle('pi:reload',(_,sessionPath)=>{reloads.push(sessionPath);return snapshot()});
+ ipcMain.handle('pi:compact',(_,sessionPath)=>{compacts.push(sessionPath);return snapshot()});
  ipcMain.handle('pi:searchSessions',()=>({sessions:[],groups:[],total:0,hasMore:false}));
  const w=new BrowserWindow({...windowChromeOptions(),width:1320,height:880,minWidth:760,minHeight:560,title:'Pith · Layout check',backgroundColor:'#0b0b0d',webPreferences:{preload:${JSON.stringify(preload)},contextIsolation:true,nodeIntegration:false,sandbox:false,backgroundThrottling:false}});
  ipcMain.on('window:setTheme',(event,theme)=>setWindowTheme(BrowserWindow.fromWebContents(event.sender),theme));
@@ -46,6 +50,8 @@ app.whenReady().then(()=>{
  ipcMain.handle('fixture:fullscreen',(_,value)=>w.setFullScreen(value));
  ipcMain.handle('fixture:scenario',(_,value)=>{scenario=value});
  ipcMain.handle('fixture:startupChoices',()=>startupChoices);
+ ipcMain.handle('fixture:reloads',()=>reloads);
+ ipcMain.handle('fixture:compacts',()=>compacts);
  w.loadFile(${JSON.stringify(join(repo, 'out/renderer/index.html'))});
 });app.on('window-all-closed',()=>app.quit());`, resolveDir: repo, loader: 'ts' },
     bundle: true, platform: 'node', format: 'cjs', packages: 'external', outfile: main })
@@ -116,6 +122,52 @@ app.whenReady().then(()=>{
   assert.equal(await evaluate(`getComputedStyle(document.querySelector('[data-slot="sidebar-trigger"]')).webkitAppRegion`), 'no-drag')
   assert.equal(await evaluate(`document.documentElement.scrollWidth<=innerWidth`), true)
   await screenshot('dark-home')
+  // The row's pocket for later actions: it rests collapsed and keeps nothing
+  // tabbable, unfolds to the LEFT of the chevron that leads the right-hand
+  // action group, leaves the controls beside it in place, and a pick reaches
+  // main and closes it again.
+  const pocket = () => evaluate(`(()=>{const p=document.querySelector('[data-titlebar-overflow]');const c=document.querySelector('[data-titlebar-more]');const a=document.querySelector('[data-titlebar-action="reload"]');const k=document.querySelector('[data-titlebar-action="compact"]');const r=document.querySelector('[data-rewind-entry]').getBoundingClientRect();return{state:p.dataset.titlebarOverflow,actions:document.querySelectorAll('[data-titlebar-action]').length,expanded:c.getAttribute('aria-expanded'),chevron:c.getBoundingClientRect().toJSON(),neighbour:r.toJSON(),action:a?a.getBoundingClientRect().toJSON():null,compact:k?k.getBoundingClientRect().toJSON():null}})()`)
+  const resting = await pocket()
+  assert.equal(resting.state, 'closed')
+  assert.equal(resting.actions, 0, 'a collapsed pocket keeps no tabbable button')
+  assert.equal(resting.expanded, 'false')
+  assert.ok(resting.chevron.left < resting.neighbour.left, 'the chevron leads the right-hand action group')
+  await click('[data-titlebar-more]')
+  await waitFor(`document.querySelector('[data-titlebar-action="reload"]')`)
+  const unfolded = await pocket()
+  assert.equal(unfolded.state, 'open')
+  assert.equal(unfolded.expanded, 'true')
+  assert.equal(unfolded.actions, 2, 'both later actions are in the pocket')
+  assert.equal(unfolded.action.width, 32, 'the revealed button keeps its full size')
+  assert.equal(unfolded.compact.width, 32)
+  assert.ok(unfolded.compact.right <= unfolded.action.left, 'the pocket lays its actions out in order')
+  assert.ok(Math.abs(unfolded.action.right - unfolded.compact.left - 68) < 0.5, 'two 32px buttons and their 4px gaps, nothing squeezed')
+  assert.ok(unfolded.action.right <= unfolded.chevron.left + 1, 'the pocket unfolds to the left of the chevron')
+  // Sub-pixel: Motion measures the pocket's `auto` width, so the row settles a
+  // fraction of a pixel from where it rested.
+  assert.ok(Math.abs(unfolded.chevron.left - resting.chevron.left) < 0.5, 'the chevron holds its place while the pocket opens')
+  assert.equal(unfolded.neighbour.left, resting.neighbour.left, 'the controls beside the chevron never move')
+  assert.ok(unfolded.chevron.right <= await evaluate('innerWidth'), 'the whole pocket stays inside the row')
+  await screenshot('dark-titlebar-pocket')
+  await click('[data-titlebar-action="reload"]')
+  assert.deepEqual(await evaluate('fixture.reloads()'), ['/fixture/chat-0'])
+  assert.equal((await pocket()).actions, 0, 'picking an action closes the pocket')
+  await click('[data-titlebar-more]')
+  await waitFor(`document.querySelector('[data-titlebar-action="compact"]')`)
+  await click('[data-titlebar-action="compact"]')
+  assert.deepEqual(await evaluate('fixture.compacts()'), ['/fixture/chat-0'])
+  assert.equal((await pocket()).actions, 0, 'the second action closes it too')
+  // Escape is the pocket's own key: it closes the surface and claims the event —
+  // the flag the composer's Esc-to-stop reads.
+  await click('[data-titlebar-more]')
+  await waitFor(`document.querySelector('[data-titlebar-action="reload"]')`)
+  await evaluate(`window.__esc=null;window.addEventListener('keydown',e=>{if(e.key==='Escape')window.__esc=e.defaultPrevented},false)`)
+  await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape' })
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape' })
+  await pause(400)
+  assert.equal((await pocket()).actions, 0, 'Escape closes the pocket')
+  assert.equal(await evaluate('window.__esc'), true, 'the pocket claims Escape before the rest of the page')
+  assert.equal(await evaluate(`document.activeElement===document.querySelector('[data-titlebar-more]')`), true, 'closing hands focus back to the chevron')
   // Real mouse events exercise the controls inside the draggable strip.
   await click('[data-slot="sidebar-trigger"]')
   assert.equal(await evaluate(`document.querySelector('[data-slot="sidebar-trigger"]').getAttribute('aria-expanded')`), 'false')
@@ -185,7 +237,7 @@ app.whenReady().then(()=>{
   await evaluate(`fixture.fullscreen(false)`)
   await waitFor(`fixture.window().then(w=>!w.fullscreen)`)
   assert.deepEqual(exceptions, [])
-  console.log('PASS: native title row, themes, control hit targets, sidebar, settings/draft, modal ownership, narrow layout, long titles, projectless privacy and fullscreen')
+  console.log('PASS: native title row, themes, control hit targets, titlebar pocket, sidebar, settings/draft, modal ownership, narrow layout, long titles, projectless privacy and fullscreen')
   if (process.env.PI_WINDOW_INSPECT) {
     console.log('Inspection endpoint: ' + endpoint)
     await evaluate(`fixture.scenario('project');localStorage.setItem('pi-app:locale','zh-CN');localStorage.setItem('theme','dark')`)

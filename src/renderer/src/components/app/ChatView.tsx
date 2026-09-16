@@ -1,7 +1,7 @@
 import { BashTasksProvider } from '@/lib/bash-tasks'
 import { SessionTasks } from './SessionTasks'
 import { memo, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, useSyncExternalStore } from 'react'
-import { AlertTriangle, Minimize2, RotateCcw, X } from '@/lib/icons'
+import { AlertTriangle, RotateCcw, X } from '@/lib/icons'
 import { MessageGroup } from '@/components/agents/message'
 import { MessageScroller } from '@/components/agents/message-scroller'
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from '@/components/motion/context-menu'
@@ -14,11 +14,11 @@ import type {
 } from '../../../../shared/types'
 import type { Notice, PiStore, PiState } from '@/state/pi-store'
 import { useI18n } from '@/i18n'
-import { formatTokenCount } from '@/lib/format'
 import { buildTurns, collectChangeScopes, type ChatTurn } from '@/lib/chat-turns'
 import { extractUserDisplay } from '@/lib/user-message'
 import { AssistantGroup, BashItem, CustomItem, SummaryItem, UserItem } from './MessageItems'
 import { RowReveal } from './RowReveal'
+import { SummaryRow } from './SummaryRow'
 import { TurnStatus } from './TurnStatus'
 
 /** Final answer text of a turn: the last round that produced prose. */
@@ -131,22 +131,18 @@ const RAIL_TITLE_LIMIT = 56
 const RAIL_DESCRIPTION_LIMIT = 88
 
 /**
- * Localized text for an in-flight work notice. The main process ships the key
+ * Localized text for an in-flight retry notice. The main process ships the key
  * and its parameters (never prose), and raw SDK error text rides along as a
- * detail suffix.
+ * detail suffix. Compaction is not here: it renders as a tool row (`SummaryRow`)
+ * in the same slot, because that is what it is.
  */
 function noticeText(notice: Notice, t: ReturnType<typeof useI18n>['t']): string {
-  const base =
-    notice.key === 'retrying'
-      ? t('chat.noticeRetrying', {
-          attempt: notice.params?.attempt ?? 0,
-          maxAttempts: notice.params?.maxAttempts ?? 0
-        })
-      : notice.key === 'retryFailed'
-        ? t('chat.noticeRetryFailed')
-        : notice.key === 'compacting'
-          ? t('chat.noticeCompacting')
-          : t('chat.noticeCompactFailed')
+  const base = notice.key === 'retrying'
+    ? t('chat.noticeRetrying', {
+        attempt: notice.params?.attempt ?? 0,
+        maxAttempts: notice.params?.maxAttempts ?? 0
+      })
+    : t('chat.noticeRetryFailed')
   return notice.detail ? `${base} · ${notice.detail}` : base
 }
 
@@ -254,16 +250,14 @@ export const ChatView = memo(function ChatView({
     return undefined
   })()
   /**
-   * A run that ENDED on a failure (`auto_retry_end` without success, or a
-   * failed compaction) is not status chrome: the turn's own group renders it as
-   * unframed error prose, directly above the retry/fork row it explains. The
-   * in-flight notices (retrying/compacting) stay in the framed status row
+   * A run that ENDED on a retry failure is not status chrome: the turn's own
+   * group renders it as unframed error prose, directly above the retry/fork row
+   * it explains. The in-flight retry notice stays in the framed status row
    * below, and so does a failure that has no settled assistant turn to host it.
+   * A compaction is neither: it is a tool row of its own (below).
    */
   const failureNotice =
-    state.notice && (state.notice.key === 'retryFailed' || state.notice.key === 'compactFailed')
-      ? noticeText(state.notice, t)
-      : null
+    state.notice && state.notice.key === 'retryFailed' ? noticeText(state.notice, t) : null
   const failureHosted = Boolean(failureNotice && lastTurn?.role === 'assistant')
   // A fresh streaming round either joins the trailing assistant turn or
   // (first round of a new turn) opens one.
@@ -437,28 +431,19 @@ export const ChatView = memo(function ChatView({
           <TurnStatus seedKey={spinnerSeed} />
         ) : null}
 
-        {state.compactionNotices.map((notice) => (
-          <RowReveal animate key={notice.id}>
-            {/* A compaction swaps the whole transcript, so it acknowledges
-                itself where the swap happened — the same quiet row a
-                background-task completion uses, never a conversation card. */}
-            <div
-              data-compaction-notice
-              className="flex items-center gap-2 rounded-xl border border-border/60 bg-muted/30 px-3 py-2 text-xs text-muted-foreground"
-            >
-              <Minimize2 aria-hidden="true" className="size-3.5 shrink-0" />
-              <span className="font-medium text-foreground">{t('chat.compacted')}</span>
-              <span className="tabular-nums">
-                {t('chat.compactedTokens', {
-                  before: formatTokenCount(notice.tokensBefore),
-                  after: notice.tokensAfter === null ? '—' : formatTokenCount(notice.tokensAfter)
-                })}
-              </span>
-            </div>
+        {state.notice?.key === 'compacting' ? (
+          <RowReveal animate>
+            <SummaryRow kind="compaction" status="running" />
           </RowReveal>
-        ))}
+        ) : null}
 
-        {state.notice && !failureHosted ? (
+        {state.notice?.key === 'compactFailed' ? (
+          <RowReveal animate>
+            <SummaryRow kind="compaction" status="error" detail={state.notice.detail} />
+          </RowReveal>
+        ) : null}
+
+        {state.notice && state.notice.key !== 'compacting' && state.notice.key !== 'compactFailed' && !failureHosted ? (
           <RowReveal animate>
             <div
               data-turn-notice

@@ -586,6 +586,10 @@ export interface SessionSnapshotDTO {
   sandboxMode?: SandboxMode
   /** What that mode can actually enforce on this host, right now. */
   sandbox?: SandboxStatusDTO
+  /** Pending one-shot sandbox escalation questions, fresh at snapshot time;
+   * carrying them here makes a session switch or an IPC snapshot unable to
+   * lose one to event/snapshot ordering. */
+  escalations?: SandboxEscalationRequestDTO[]
   /** Latest successful todo result on the complete selected branch, including compacted entries. */
   todos?: TodoSnapshotDTO | null
   activeChangeScopeId?: string | null
@@ -837,6 +841,9 @@ export interface BashTaskDTO {
   /** Set when the sandbox runner refused this command: the file policy, not
    * the command, is what failed. The user changes it in Settings. */
   denied?: boolean
+  /** The DSH file-sandbox mode this command ran under (confined launches
+   * only); lets a denied completion name the mode its escalation widens. */
+  sandboxMode?: SandboxMode
   error?: string
   revision: number
 }

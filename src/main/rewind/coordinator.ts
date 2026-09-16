@@ -2,7 +2,7 @@ import { existsSync, realpathSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { RewindFailure } from './types'
 
-type Kind = 'run' | 'tool' | 'process' | 'terminal'
+type Kind = 'run' | 'subagent' | 'tool' | 'process' | 'terminal'
 interface Lease { root: string; kind: Kind; sessionPath?: string }
 /** Canonical checkout identity, independent for linked worktrees. Never key by
  * common Git directory: each linked worktree has its own files and index. */
@@ -59,14 +59,18 @@ export class CheckoutCoordinator {
   busy(cwd: string, purpose: 'snapshot' | 'restore' = 'restore'): boolean {
     const root = checkoutRoot(cwd)
     return (purpose === 'restore' && this.terminalHostLost) || this.closed || this.recovery.has(root) || this.exclusive.has(root) || [...this.leases].some(lease =>
-      purpose === 'restore' ? lease.kind === 'terminal' || lease.root === root : lease.root === root && (lease.kind === 'tool' || lease.kind === 'process'))
+      purpose === 'restore' ? lease.kind === 'terminal' || lease.root === root : lease.root === root && (lease.kind === 'subagent' || lease.kind === 'tool' || lease.kind === 'process'))
   }
-  async withExclusive<T>(cwd: string, purpose: 'snapshot' | 'restore', operation: () => Promise<T>, recovering = false, sessionPath?: string): Promise<T> {
+  /** Snapshots are fenced only by work that can write the checkout: an
+   * executing tool, a managed process, or a whole subagent run. Another
+   * session's in-flight model turn (a plain 'run' lease) must not starve
+   * pre-turn capture — its tools queue behind the snapshot window instead. */
+  async withExclusive<T>(cwd: string, purpose: 'snapshot' | 'restore', operation: () => Promise<T>, recovering = false): Promise<T> {
     if (purpose === 'restore' && this.terminalHostLost) throw new RewindFailure('terminal')
     const pending = this.recovery.get(checkoutRoot(cwd))
     if (pending && !recovering) throw new RewindFailure('recovery', [], pending)
     const blocked = this.closed || this.exclusive.has(checkoutRoot(cwd)) || [...this.leases].some(lease =>
-      purpose === 'restore' ? lease.kind === 'terminal' || lease.root === checkoutRoot(cwd) : lease.root === checkoutRoot(cwd) && (lease.kind === 'tool' || lease.kind === 'process' || (lease.kind === 'run' && lease.sessionPath !== sessionPath)))
+      purpose === 'restore' ? lease.kind === 'terminal' || lease.root === checkoutRoot(cwd) : lease.root === checkoutRoot(cwd) && (lease.kind === 'subagent' || lease.kind === 'tool' || lease.kind === 'process'))
     if (blocked) throw new RewindFailure('busy')
     const root = checkoutRoot(cwd); this.exclusive.set(root, purpose)
     try { return await operation() } finally { this.exclusive.delete(root); for (const wake of [...this.waiters]) wake() }
