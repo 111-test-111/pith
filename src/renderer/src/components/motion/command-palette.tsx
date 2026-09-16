@@ -2,7 +2,9 @@
 // beui.dev/components/blocks/command-palette
 
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { Search, type LucideIcon } from "lucide-react";
+// local patch (pi-app): glyphs come from the app's Remix Icon adapter on
+// the square-style branch instead of native lucide-react.
+import { Search, type IconComponent } from "@/lib/icons";
 import {
   type ReactNode,
   useCallback,
@@ -27,7 +29,7 @@ export type CommandItem = {
   group?: string;
   hint?: string;
   keywords?: string[];
-  icon?: LucideIcon;
+  icon?: IconComponent;
   badge?: ReactNode;
   onSelect: () => void;
 };

@@ -96,7 +96,7 @@ export function ExtensionsSection() {
             type="button"
             aria-label={t('settings.extensionDismissError')}
             onClick={clearActionError}
-            className="grid size-4 shrink-0 place-items-center rounded-full transition-colors hover:bg-destructive/10"
+            className="grid size-4 shrink-0 place-items-center rounded-control transition-colors hover:bg-destructive/10"
           >
             <X className="size-3" />
           </button>

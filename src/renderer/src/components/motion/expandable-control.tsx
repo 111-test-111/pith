@@ -119,10 +119,12 @@ export function ExpandableButton({
         aria-expanded={isExpanded}
         disabled={disabled}
         className={cn(
-          "relative inline-flex h-11 min-w-11 items-center overflow-hidden rounded-full border border-border bg-transparent p-1 pr-1 text-sm font-medium text-foreground outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50",
+          // local patch (pi-app): hard-edged trigger — the square-style branch
+          // replaces the vendored circle with the control radius token.
+          "relative inline-flex h-11 min-w-11 items-center overflow-hidden rounded-control border border-border bg-transparent p-1 pr-1 text-sm font-medium text-foreground outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50",
           className,
         )}
-        style={{ borderRadius: "var(--app-radius-full)" }}
+        style={{ borderRadius: "var(--app-radius-control)" }}
         onClick={handleClick}
         whileTap={reduce || disabled ? undefined : { scale: 0.97 }}
         transition={transition}
@@ -194,10 +196,11 @@ export function ExpandableChip({
       <motion.div
         layout
         className={cn(
-          "inline-flex h-10 items-center overflow-hidden rounded-full border border-border bg-transparent text-sm text-foreground has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-inset has-[:focus-visible]:ring-ring",
+          // local patch (pi-app): hard-edged chip surface (square-style branch).
+          "inline-flex h-10 items-center overflow-hidden rounded-control border border-border bg-transparent text-sm text-foreground has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-inset has-[:focus-visible]:ring-ring",
           className,
         )}
-        style={{ borderRadius: "var(--app-radius-full)" }}
+        style={{ borderRadius: "var(--app-radius-control)" }}
         transition={transition}
       >
         <motion.button
@@ -240,7 +243,8 @@ export function ExpandableChip({
             aria-label={actionLabel}
             disabled={disabled || !isExpanded}
             className={cn(
-              "flex h-full w-8 shrink-0 items-center justify-center rounded-full text-muted-foreground outline-none transition-colors hover:text-foreground disabled:pointer-events-none",
+              // local patch (pi-app): hard-edged action (square-style branch).
+              "flex h-full w-8 shrink-0 items-center justify-center rounded-control text-muted-foreground outline-none transition-colors hover:text-foreground disabled:pointer-events-none",
               disabled && "opacity-50",
               actionClassName,
             )}

@@ -128,7 +128,7 @@ export function ContextRing({ usage }: { usage: ContextUsageDTO | null }) {
       <span
         role="status"
         aria-label={t('context.label')}
-        className="grid size-8 cursor-default place-items-center rounded-full transition-colors hover:bg-muted"
+        className="grid size-8 cursor-default place-items-center rounded-control transition-colors hover:bg-muted"
       >
         <svg width={14} height={14} viewBox="0 0 16 16" style={{ transform: 'rotate(-90deg)' }} aria-hidden="true">
           <circle cx={8} cy={8} r={radius} fill="none" strokeWidth={2.4} className="stroke-muted-foreground/30" />

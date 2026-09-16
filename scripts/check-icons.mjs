@@ -52,7 +52,7 @@ function Fixture(){
  const ref=React.useRef(null);window.controls={setChecked,setMixed};
  React.useEffect(()=>{window.iconRef=ref;window.fixtureReady=true},[]);
  return h('main',null,
- h('h2',null,'Lucide · 12 / 16 / 24 px'),
+ h('h2',null,'Remix Icon · line · 12 / 16 / 24 px'),
  h('div',{id:'gallery'},Object.entries(icons).map(([name,Icon])=>h('div',{key:name,className:'cell'},
    h('div',{className:'samples'},...[12,16,24].map(size=>h(Icon,{key:size,size,'data-sample':name,'data-size':size}))),h('span',{className:'label'},name)))),
  h('div',{className:'row'},h('div',{id:'checkbox'},h(Checkbox,{checked,indeterminate:mixed,onCheckedChange:setChecked,label:'Checkbox'})),
@@ -109,10 +109,12 @@ try {
   for(const icon of rendered){assert.equal(icon.width,24,icon.name);assert.equal(icon.height,24,icon.name);assert.equal(icon.viewBox,'0 0 24 24',icon.name);assert.equal(icon.hidden,'true',icon.name);assert(icon.paths>0,icon.name);assert.doesNotMatch(icon.box,/NaN|null/,icon.name)}
   assert.equal(await evaluate('window.iconRef.current===document.querySelector("#props-icon")'),true,'Forward SVG ref')
   assert.equal(await evaluate('document.querySelector("#props-icon").getAttribute("aria-hidden")'),null,'Named SVG remains accessible')
-  assert.equal(await evaluate('document.querySelector("#props-icon").getAttribute("stroke-width") ?? document.querySelector("#props-icon path").getAttribute("stroke-width")'),'1.5','Absolute stroke scales correctly')
+  assert.equal(await evaluate('document.querySelector("#props-icon").getAttribute("stroke-width")'),null,'Stroke-only props are dropped for line artwork')
+  assert.equal(await evaluate('document.querySelector("#props-icon").getAttribute("fill")'),'currentColor','Line artwork follows currentColor')
   assert.equal(await evaluate('document.querySelector("#css-icon").getBoundingClientRect().width'),16,'Tailwind size overrides SVG size')
   for(const arrow of ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight']){
-    assert.equal(await evaluate(`document.querySelectorAll('[data-sample="${arrow}"][data-size="24"] path').length`),2,'Directional arrow has a shaft and head: '+arrow)
+    const paths=await evaluate(`document.querySelectorAll('[data-sample="${arrow}"][data-size="24"] path').length`)
+    assert.ok(paths>=1,'Directional arrow renders fill artwork: '+arrow)
   }
   console.log('PASS: all '+expectedNames.length+' icons, native SVG props, CSS sizing, ref and accessibility')
 
@@ -122,7 +124,8 @@ try {
   await pause(400)
   assert.equal(await evaluate('document.querySelector("#checkbox button").getAttribute("aria-checked")'),'true')
   assert.notEqual(await evaluate('document.querySelector("#checkbox svg path").getAttribute("stroke-dasharray")'),during,'beUI check still draws in')
-  assert.equal(await evaluate('document.querySelector("#checkbox svg path").getAttribute("d")'),await evaluate('document.querySelector("#css-icon path").getAttribute("d")'),'Animated and static check share artwork')
+  assert.ok((await evaluate('document.querySelector("#checkbox svg path").getAttribute("d")')).length>0,'Animated check keeps its draw-in geometry')
+  assert.ok((await evaluate('document.querySelector("#css-icon path").getAttribute("d")')).length>0,'Static check renders Remix line artwork')
   await evaluate('window.controls.setMixed(true)');await pause(400)
   assert.equal(await evaluate('document.querySelector("#checkbox button").getAttribute("aria-checked")'),'mixed')
   assert.equal(await evaluate('document.querySelector("#checkbox svg").dataset.appIcon'),'minus')

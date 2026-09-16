@@ -28,15 +28,17 @@
   --app-titlebar-height: 52px;
   /* Geometry is independent of color, font size and theme. Both beUI's
    * existing size classes and app-owned semantic classes use this scale.
-   * Squircles need more corner room than circular arcs at the same size. */
+   * Experimental square style (pi-app): every scale step is 0 so cards,
+   * buttons and inputs are hard-edged; only --app-radius-full remains a
+   * true circle for rings, dots, switch tracks and ripples. */
   --app-corner-shape: squircle;
-  --app-radius-detail: 4px;
-  --app-radius-inner: 10px;
-  --app-radius-item: 14px;
+  --app-radius-detail: 0px;
+  --app-radius-inner: 0px;
+  --app-radius-item: 0px;
   --app-radius-control: var(--app-radius-item);
   --app-radius-icon: var(--app-radius-item);
-  --app-radius-card: 20px;
-  --app-radius-window: 28px;
+  --app-radius-card: 0px;
+  --app-radius-window: 0px;
   --app-radius-full: 9999px;
   --radius: var(--app-radius-detail);
 

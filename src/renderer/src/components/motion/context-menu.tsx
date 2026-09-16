@@ -1,7 +1,9 @@
 "use client";
 // beui.dev/components/motion/context-menu
 
-import { Check } from "lucide-react";
+// local patch (pi-app): glyphs come from the app's Remix Icon adapter on
+// the square-style branch instead of native lucide-react.
+import { Check } from "@/lib/icons";
 import {
   AnimatePresence,
   motion,

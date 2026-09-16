@@ -234,7 +234,7 @@ export function EditMessageDialog({
                     type="button"
                     aria-label={t('workspace.removeAttachment', { name: image.name })}
                     onClick={() => removeImage(image.id)}
-                    className="absolute -right-1.5 -top-1.5 grid size-5 place-items-center rounded-full bg-foreground text-background opacity-0 transition-opacity group-hover:opacity-100"
+                    className="absolute -right-1.5 -top-1.5 grid size-5 place-items-center rounded-control bg-foreground text-background opacity-0 transition-opacity group-hover:opacity-100"
                   >
                     <X className="size-3" />
                   </button>
@@ -249,7 +249,7 @@ export function EditMessageDialog({
                       type="button"
                       aria-label={t('workspace.removeAttachment', { name: file.label })}
                       onClick={() => removeFile(file.id)}
-                      className="grid size-4 shrink-0 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                      className="grid size-4 shrink-0 place-items-center rounded-control text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                     >
                       <X className="size-3" />
                     </button>

@@ -545,12 +545,14 @@ function Percent({ size, speed, reduce }: PartProps) {
       >
         {p}%
       </span>
+      {/* local patch (pi-app): hard-edged progress bar (square-style branch);
+           the pill track was a capsule, not one of the rings that stay round. */}
       <span
-        className="w-full overflow-hidden rounded-full bg-current/15"
+        className="w-full overflow-hidden rounded-detail bg-current/15"
         style={{ height: Math.max(3, size * 0.1) }}
       >
         <span
-          className="block h-full rounded-full bg-current"
+          className="block h-full rounded-detail bg-current"
           style={{ width: `${p}%` }}
         />
       </span>

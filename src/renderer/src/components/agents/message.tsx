@@ -166,7 +166,9 @@ export function MessageAvatar({
       data-slot="message-avatar"
       aria-hidden={placeholder || undefined}
       className={cn(
-        "grid size-7 shrink-0 place-items-center overflow-hidden rounded-full bg-muted text-xs font-medium text-muted-foreground [&_img]:size-full [&_img]:object-cover [&_svg]:size-3.5",
+        // local patch (pi-app): square avatar on the square-style branch;
+        // it is a container, not one of the rings that stay circular.
+        "grid size-7 shrink-0 place-items-center overflow-hidden rounded-control bg-muted text-xs font-medium text-muted-foreground [&_img]:size-full [&_img]:object-cover [&_svg]:size-3.5",
         placeholder && "invisible",
         className,
       )}

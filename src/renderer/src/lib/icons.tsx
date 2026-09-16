@@ -1,297 +1,307 @@
-import { forwardRef, type ForwardRefExoticComponent, type RefAttributes } from 'react'
-import { type LucideIcon, type LucideProps } from 'lucide-react'
+import { forwardRef, type ForwardRefExoticComponent, type ReactElement, type RefAttributes, type SVGProps } from 'react'
 import {
-  AlertCircle as AlertCircleGlyph,
-  AlertTriangle as AlertTriangleGlyph,
-  ArrowDown as ArrowDownGlyph,
-  ArrowDownWideNarrow as ArrowDownWideNarrowGlyph,
-  ArrowLeft as ArrowLeftGlyph,
-  ArrowRight as ArrowRightGlyph,
-  ArrowUp as ArrowUpGlyph,
-  ArrowUpNarrowWide as ArrowUpNarrowWideGlyph,
-  ArrowUpRight as ArrowUpRightGlyph,
-  Ban as BanGlyph,
-  Bell as BellGlyph,
-  BookDown as BookDownloadGlyph,
-  BookOpenText as BookOpenTextGlyph,
-  Bookmark as BookmarkGlyph,
-  BookSearch as BookSearchGlyph,
-  Bot as BotGlyph,
-  Braces as BracesGlyph,
-  Brain as BrainGlyph,
-  ChartColumn as ChartGlyph,
-  MessagesSquare as Chat01Glyph,
-  Check as CheckGlyph,
-  CheckCircle2 as CheckCircle2Glyph,
-  ChevronDown as ChevronDownGlyph,
-  ChevronLeft as ChevronLeftGlyph,
-  ChevronRight as ChevronRightGlyph,
-  ChevronsDownUp as ChevronsDownUpGlyph,
-  ChevronsUpDown as ChevronsUpDownGlyph,
-  Circle as CircleGlyph,
-  CircleAlert as CircleAlertGlyph,
-  CircleCheck as CircleCheckGlyph,
-  CircleHelp as CircleHelpGlyph,
-  CircleX as CircleXGlyph,
-  Clock as ClockGlyph,
-  Clock3 as Clock3Glyph,
-  CloudDownload as CloudDownloadGlyph,
-  TerminalSquare as CommandLineGlyph,
-  Compass as CompassGlyph,
-  Copy as CopyGlyph,
-  LayoutDashboard as DashboardGlyph,
-  Database as DatabaseGlyph,
-  Diff as DiffGlyph,
-  Download as DownloadGlyph,
-  ExternalLink as ExternalLinkGlyph,
-  Eye as EyeGlyph,
-  EyeOff as EyeOffGlyph,
-  FastForward as FastForwardGlyph,
-  FileCode2 as FileCode2Glyph,
-  FileDiff as FileDiffGlyph,
-  FilePen as FilePenGlyph,
-  FilePlus2 as FilePlus2Glyph,
-  FileSearch as FileSearchGlyph,
-  FileSearch2 as FileSearch2Glyph,
-  FileText as FileTextGlyph,
-  Folder as FolderGlyph,
-  FolderInput as FolderInputGlyph,
-  FolderKanban as FolderKanbanGlyph,
-  FolderOpen as FolderOpenGlyph,
-  FolderPlus as FolderPlusGlyph,
-  FolderTree as FolderTreeGlyph,
-  GitFork as GitForkGlyph,
-  GitPullRequest as GitPullRequestGlyph,
-  Globe as GlobeGlyph,
-  Globe2 as Globe2Glyph,
-  GraduationCap as GraduationCapGlyph,
-  Image as ImageGlyph,
-  ImageIcon as ImageIconGlyph,
-  ImagePlus as ImagePlusGlyph,
-  Info as InfoGlyph,
-  PackageOpen as InstallingUpdatesGlyph,
-  KeyRound as KeyRoundGlyph,
-  Lightbulb as LightbulbGlyph,
-  Link2 as Link2Glyph,
-  ListTodo as ListTodoGlyph,
-  Loader2 as Loader2Glyph,
-  LoaderCircle as LoaderCircleGlyph,
-  LogOut as LogOutGlyph,
-  Maximize2 as Maximize2Glyph,
-  MessageCirclePlus as MessageCirclePlusGlyph,
-  MessageSquare as MessageSquareGlyph,
-  MessageSquareDashed as MessageSquareDashedGlyph,
-  MessageSquarePlus as MessageSquarePlusGlyph,
-  MessageSquareText as MessageSquareTextGlyph,
-  Minimize2 as Minimize2Glyph,
-  Monitor as MonitorGlyph,
-  Moon as MoonGlyph,
-  MoreHorizontal as MoreHorizontalGlyph,
-  Music as MusicNoteGlyph,
-  Palette as PaletteGlyph,
-  PanelLeft as PanelLeftGlyph,
-  PanelRight as PanelRightGlyph,
-  Paperclip as PaperclipGlyph,
-  Pencil as PencilGlyph,
-  PencilLine as PencilLineGlyph,
-  Pin as PinGlyph,
-  PinOff as PinOffGlyph,
-  Plug as PlugGlyph,
-  PlugZap as PlugZapGlyph,
-  Plus as PlusGlyph,
-  Puzzle as PuzzleGlyph,
-  RefreshCw as RefreshCwGlyph,
-  RotateCcw as RotateCcwGlyph,
-  ScanSearch as ScanSearchGlyph,
-  ScrollText as ScrollTextGlyph,
-  Search as SearchGlyph,
-  SearchX as SearchXGlyph,
-  Settings as SettingsGlyph,
-  Settings2 as Settings2Glyph,
-  Shapes as ShapesGlyph,
-  ShieldCheck as ShieldCheckGlyph,
-  Sparkles as SparklesGlyph,
-  SquareCode as SourceCodeGlyph,
-  Square as SquareGlyph,
-  SquareTerminal as SquareTerminalGlyph,
-  Stethoscope as StethoscopeGlyph,
-  Captions as SubtitleGlyph,
-  Sun as SunGlyph,
-  Terminal as TerminalGlyph,
-  Type as TextFontGlyph,
-  TextSearch as TextSearchGlyph,
-  WrapText as WrapTextGlyph,
-  ThumbsDown as ThumbsDownGlyph,
-  ThumbsUp as ThumbsUpGlyph,
-  Trash2 as Trash2Glyph,
-  Undo2 as Undo2Glyph,
-  User as UserGlyph,
-  WandSparkles as WandSparklesGlyph,
-  Wrench as WrenchGlyph,
-  X as XGlyph,
-  XCircle as XCircleGlyph,
-  Zap as ZapGlyph,
-  ZoomIn as ZoomInGlyph,
-  ZoomOut as ZoomOutGlyph,
-} from 'lucide-react'
+  RiAddLine,
+  RiAlertLine,
+  RiAnticlockwise2Line,
+  RiArrowDownLine,
+  RiArrowDownSLine,
+  RiArrowGoBackLine,
+  RiArrowLeftLine,
+  RiArrowLeftSLine,
+  RiArrowRightLine,
+  RiArrowRightSLine,
+  RiArrowRightUpLine,
+  RiArrowUpLine,
+  RiArrowUpSLine,
+  RiAttachmentLine,
+  RiBarChart2Line,
+  RiBookOpenLine,
+  RiBookmarkLine,
+  RiBookReadLine,
+  RiBracesLine,
+  RiChat1Line,
+  RiChat3Line,
+  RiChat4Line,
+  RiChatNewLine,
+  RiChatOffLine,
+  RiCheckboxBlankCircleLine,
+  RiCheckboxCircleLine,
+  RiCheckLine,
+  RiClosedCaptioningLine,
+  RiCloseCircleLine,
+  RiCloseLine,
+  RiCodeSSlashLine,
+  RiCompass3Line,
+  RiComputerLine,
+  RiContractUpDownLine,
+  RiDashboardLine,
+  RiDatabase2Line,
+  RiDeleteBin6Line,
+  RiDownload2Line,
+  RiDownloadCloud2Line,
+  RiDownloadLine,
+  RiEdit2Line,
+  RiEditLine,
+  RiErrorWarningLine,
+  RiExpandUpDownLine,
+  RiExternalLinkLine,
+  RiEyeLine,
+  RiEyeOffLine,
+  RiFileAddLine,
+  RiFileCodeLine,
+  RiFileCopyLine,
+  RiFileDownloadLine,
+  RiFileEditLine,
+  RiFilePaperLine,
+  RiFileSearchLine,
+  RiFileTextLine,
+  RiFileTransferLine,
+  RiFlashlightLine,
+  RiFolderAddLine,
+  RiFolderLine,
+  RiFolderOpenLine,
+  RiFolderReceivedLine,
+  RiFontSize2,
+  RiFullscreenExitLine,
+  RiFullscreenLine,
+  RiGitBranchLine,
+  RiGitPullRequestLine,
+  RiGlobalLine,
+  RiGraduationCapLine,
+  RiImage2Line,
+  RiImageAddLine,
+  RiImageLine,
+  RiInformationLine,
+  RiKeyLine,
+  RiLayoutGridLine,
+  RiLayoutLeftLine,
+  RiLayoutRightLine,
+  RiLightbulbLine,
+  RiLinksLine,
+  RiLoader2Line,
+  RiLoader4Line,
+  RiLogoutBoxRLine,
+  RiMagicLine,
+  RiMentalHealthLine,
+  RiMoonLine,
+  RiMoreLine,
+  RiMusic2Line,
+  RiNodeTree,
+  RiNotification3Line,
+  RiPaletteLine,
+  RiPlug2Line,
+  RiPlugLine,
+  RiProhibitedLine,
+  RiPushpinLine,
+  RiPuzzleLine,
+  RiQuestionLine,
+  RiRecordCircleLine,
+  RiRefreshLine,
+  RiRobot2Line,
+  RiScan2Line,
+  RiSearch2Line,
+  RiSearchLine,
+  RiSettings4Line,
+  RiSettingsLine,
+  RiShapesLine,
+  RiShieldCheckLine,
+  RiSkipForwardLine,
+  RiSortAsc,
+  RiSortDesc,
+  RiSparkling2Line,
+  RiStethoscopeLine,
+  RiStopLine,
+  RiSubtractLine,
+  RiSunLine,
+  RiTerminalBoxLine,
+  RiTerminalLine,
+  RiTerminalWindowLine,
+  RiTextWrap,
+  RiThumbDownLine,
+  RiThumbUpLine,
+  RiTimeLine,
+  RiTodoLine,
+  RiUnpinLine,
+  RiUserLine,
+  RiWrenchLine,
+  RiZoomInLine,
+  RiZoomOutLine,
+  type RemixiconComponentType,
+} from '@remixicon/react'
 
 /**
- * App and beUI glyphs share this entry point; the artwork is Lucide. Call sites
- * keep semantic names (several predate Lucide's current spelling for the same
- * shape), so changing the pack stays inside this file.
+ * App and beUI glyphs share this entry point. Experimental square-style
+ * branch: the artwork is Remix Icon's line family (24×24, currentColor) and
+ * call sites keep their semantic names — several predate the current packs'
+ * spelling of the same shape, and a handful (BookDownload → file-download,
+ * Diff → file-transfer, Monitor → computer, ListTodo → todo …) only ever had
+ * a nearest-neighbour in Remix, so changing or tuning the pack stays inside
+ * this file.
  */
-export type IconProps = Omit<LucideProps, 'ref'>
+export type IconProps = Omit<SVGProps<SVGSVGElement>, 'ref'> & {
+  size?: string | number
+  /** Lucide-era call-site compat: accepted, never applied to line artwork. */
+  absoluteStrokeWidth?: boolean
+}
 export type IconComponent = ForwardRefExoticComponent<IconProps & RefAttributes<SVGSVGElement>>
 
-function createIcon(name: string, glyph: LucideIcon): IconComponent {
+/** The pack types its icons as ComponentClass although they render as plain
+ * function components; loose type for the one render-time cast below. */
+type RemixGlyph = (props: Record<string, unknown>) => ReactElement
+
+function createIcon(name: string, glyph: RemixiconComponentType): IconComponent {
   // Preserve the call-site accessibility default: an unlabelled glyph is
-  // decorative, a labelled one is exposed to assistive tech.
+  // decorative, a labelled one is exposed to assistive tech. Stroke-only
+  // Lucide-era props are accepted for compatibility and dropped — fill
+  // artwork carries no stroke geometry.
   const Component = forwardRef<SVGSVGElement, IconProps>((props, ref) => {
-    const Glyph = glyph as IconComponent
+    const { strokeWidth: _strokeWidth, absoluteStrokeWidth: _absolute, ...rest } = props
+    const Glyph = glyph as unknown as RemixGlyph
     return (
       <Glyph
         ref={ref}
-        aria-hidden={props['aria-label'] || props['aria-labelledby'] ? undefined : true}
+        aria-hidden={rest['aria-label'] || rest['aria-labelledby'] ? undefined : true}
         focusable="false"
         data-app-icon={name}
-        {...props}
+        {...rest}
       />
     )
   })
   Component.displayName = name
-  return Component
+  return Component as IconComponent
 }
 
 // Keep semantic component names at call sites; map their artwork only here.
-export const AlertCircle = /* @__PURE__ */ createIcon('AlertCircle', AlertCircleGlyph)
-export const AlertTriangle = /* @__PURE__ */ createIcon('AlertTriangle', AlertTriangleGlyph)
-export const ArrowDown = /* @__PURE__ */ createIcon('ArrowDown', ArrowDownGlyph)
-export const ArrowDownWideNarrow = /* @__PURE__ */ createIcon('ArrowDownWideNarrow', ArrowDownWideNarrowGlyph)
-export const ArrowLeft = /* @__PURE__ */ createIcon('ArrowLeft', ArrowLeftGlyph)
-export const ArrowRight = /* @__PURE__ */ createIcon('ArrowRight', ArrowRightGlyph)
-export const ArrowUp = /* @__PURE__ */ createIcon('ArrowUp', ArrowUpGlyph)
-export const ArrowUpNarrowWide = /* @__PURE__ */ createIcon('ArrowUpNarrowWide', ArrowUpNarrowWideGlyph)
-export const ArrowUpRight = /* @__PURE__ */ createIcon('ArrowUpRight', ArrowUpRightGlyph)
-export const Ban = /* @__PURE__ */ createIcon('Ban', BanGlyph)
-export const Bell = /* @__PURE__ */ createIcon('Bell', BellGlyph)
-export const BookDownload = /* @__PURE__ */ createIcon('BookDownload', BookDownloadGlyph)
-export const BookOpenText = /* @__PURE__ */ createIcon('BookOpenText', BookOpenTextGlyph)
-export const Bookmark = /* @__PURE__ */ createIcon('Bookmark', BookmarkGlyph)
-export const BookSearch = /* @__PURE__ */ createIcon('BookSearch', BookSearchGlyph)
-export const Bot = /* @__PURE__ */ createIcon('Bot', BotGlyph)
-export const Braces = /* @__PURE__ */ createIcon('Braces', BracesGlyph)
-export const Brain = /* @__PURE__ */ createIcon('Brain', BrainGlyph)
-export const Chart = /* @__PURE__ */ createIcon('Chart', ChartGlyph)
-export const Chat01 = /* @__PURE__ */ createIcon('Chat01', Chat01Glyph)
-export const Check = /* @__PURE__ */ createIcon('Check', CheckGlyph)
-export const CheckCircle2 = /* @__PURE__ */ createIcon('CheckCircle2', CheckCircle2Glyph)
-export const ChevronDown = /* @__PURE__ */ createIcon('ChevronDown', ChevronDownGlyph)
-export const ChevronLeft = /* @__PURE__ */ createIcon('ChevronLeft', ChevronLeftGlyph)
-export const ChevronRight = /* @__PURE__ */ createIcon('ChevronRight', ChevronRightGlyph)
-export const ChevronsDownUp = /* @__PURE__ */ createIcon('ChevronsDownUp', ChevronsDownUpGlyph)
-export const ChevronsUpDown = /* @__PURE__ */ createIcon('ChevronsUpDown', ChevronsUpDownGlyph)
-export const Circle = /* @__PURE__ */ createIcon('Circle', CircleGlyph)
-export const CircleAlert = /* @__PURE__ */ createIcon('CircleAlert', CircleAlertGlyph)
-export const CircleCheck = /* @__PURE__ */ createIcon('CircleCheck', CircleCheckGlyph)
-export const CircleHelp = /* @__PURE__ */ createIcon('CircleHelp', CircleHelpGlyph)
-export const CircleX = /* @__PURE__ */ createIcon('CircleX', CircleXGlyph)
-export const Clock = /* @__PURE__ */ createIcon('Clock', ClockGlyph)
-export const Clock3 = /* @__PURE__ */ createIcon('Clock3', Clock3Glyph)
-export const CloudDownload = /* @__PURE__ */ createIcon('CloudDownload', CloudDownloadGlyph)
-export const CommandLine = /* @__PURE__ */ createIcon('CommandLine', CommandLineGlyph)
-export const Compass = /* @__PURE__ */ createIcon('Compass', CompassGlyph)
-export const Copy = /* @__PURE__ */ createIcon('Copy', CopyGlyph)
-export const Dashboard = /* @__PURE__ */ createIcon('Dashboard', DashboardGlyph)
-export const Database = /* @__PURE__ */ createIcon('Database', DatabaseGlyph)
-export const Diff = /* @__PURE__ */ createIcon('Diff', DiffGlyph)
-export const Download = /* @__PURE__ */ createIcon('Download', DownloadGlyph)
-export const ExternalLink = /* @__PURE__ */ createIcon('ExternalLink', ExternalLinkGlyph)
-export const Eye = /* @__PURE__ */ createIcon('Eye', EyeGlyph)
-export const EyeOff = /* @__PURE__ */ createIcon('EyeOff', EyeOffGlyph)
-export const FastForward = /* @__PURE__ */ createIcon('FastForward', FastForwardGlyph)
-export const FileCode2 = /* @__PURE__ */ createIcon('FileCode2', FileCode2Glyph)
-export const FileDiff = /* @__PURE__ */ createIcon('FileDiff', FileDiffGlyph)
-export const FilePen = /* @__PURE__ */ createIcon('FilePen', FilePenGlyph)
-export const FilePlus2 = /* @__PURE__ */ createIcon('FilePlus2', FilePlus2Glyph)
-export const FileSearch = /* @__PURE__ */ createIcon('FileSearch', FileSearchGlyph)
-export const FileSearch2 = /* @__PURE__ */ createIcon('FileSearch2', FileSearch2Glyph)
-export const FileText = /* @__PURE__ */ createIcon('FileText', FileTextGlyph)
-export const Folder = /* @__PURE__ */ createIcon('Folder', FolderGlyph)
-export const FolderInput = /* @__PURE__ */ createIcon('FolderInput', FolderInputGlyph)
-export const FolderKanban = /* @__PURE__ */ createIcon('FolderKanban', FolderKanbanGlyph)
-export const FolderOpen = /* @__PURE__ */ createIcon('FolderOpen', FolderOpenGlyph)
-export const FolderPlus = /* @__PURE__ */ createIcon('FolderPlus', FolderPlusGlyph)
-export const FolderTree = /* @__PURE__ */ createIcon('FolderTree', FolderTreeGlyph)
-export const GitFork = /* @__PURE__ */ createIcon('GitFork', GitForkGlyph)
-export const GitPullRequest = /* @__PURE__ */ createIcon('GitPullRequest', GitPullRequestGlyph)
-export const Globe = /* @__PURE__ */ createIcon('Globe', GlobeGlyph)
-export const Globe2 = /* @__PURE__ */ createIcon('Globe2', Globe2Glyph)
-export const GraduationCap = /* @__PURE__ */ createIcon('GraduationCap', GraduationCapGlyph)
-export const Image = /* @__PURE__ */ createIcon('Image', ImageGlyph)
-export const ImageIcon = /* @__PURE__ */ createIcon('ImageIcon', ImageIconGlyph)
-export const ImagePlus = /* @__PURE__ */ createIcon('ImagePlus', ImagePlusGlyph)
-export const Info = /* @__PURE__ */ createIcon('Info', InfoGlyph)
-export const InstallingUpdates = /* @__PURE__ */ createIcon('InstallingUpdates', InstallingUpdatesGlyph)
-export const KeyRound = /* @__PURE__ */ createIcon('KeyRound', KeyRoundGlyph)
-export const Lightbulb = /* @__PURE__ */ createIcon('Lightbulb', LightbulbGlyph)
-export const Link2 = /* @__PURE__ */ createIcon('Link2', Link2Glyph)
-export const ListTodo = /* @__PURE__ */ createIcon('ListTodo', ListTodoGlyph)
-export const Loader2 = /* @__PURE__ */ createIcon('Loader2', Loader2Glyph)
-export const LoaderCircle = /* @__PURE__ */ createIcon('LoaderCircle', LoaderCircleGlyph)
-export const LogOut = /* @__PURE__ */ createIcon('LogOut', LogOutGlyph)
-export const Maximize2 = /* @__PURE__ */ createIcon('Maximize2', Maximize2Glyph)
-export const MessageCirclePlus = /* @__PURE__ */ createIcon('MessageCirclePlus', MessageCirclePlusGlyph)
-export const MessageSquare = /* @__PURE__ */ createIcon('MessageSquare', MessageSquareGlyph)
-export const MessageSquareDashed = /* @__PURE__ */ createIcon('MessageSquareDashed', MessageSquareDashedGlyph)
-export const MessageSquarePlus = /* @__PURE__ */ createIcon('MessageSquarePlus', MessageSquarePlusGlyph)
-export const MessageSquareText = /* @__PURE__ */ createIcon('MessageSquareText', MessageSquareTextGlyph)
-export const Minimize2 = /* @__PURE__ */ createIcon('Minimize2', Minimize2Glyph)
-export const Monitor = /* @__PURE__ */ createIcon('Monitor', MonitorGlyph)
-export const Moon = /* @__PURE__ */ createIcon('Moon', MoonGlyph)
-export const MoreHorizontal = /* @__PURE__ */ createIcon('MoreHorizontal', MoreHorizontalGlyph)
-export const MusicNote = /* @__PURE__ */ createIcon('MusicNote', MusicNoteGlyph)
-export const Palette = /* @__PURE__ */ createIcon('Palette', PaletteGlyph)
-export const PanelLeft = /* @__PURE__ */ createIcon('PanelLeft', PanelLeftGlyph)
-export const PanelRight = /* @__PURE__ */ createIcon('PanelRight', PanelRightGlyph)
-export const Paperclip = /* @__PURE__ */ createIcon('Paperclip', PaperclipGlyph)
-export const Pencil = /* @__PURE__ */ createIcon('Pencil', PencilGlyph)
-export const PencilLine = /* @__PURE__ */ createIcon('PencilLine', PencilLineGlyph)
-export const Pin = /* @__PURE__ */ createIcon('Pin', PinGlyph)
-export const PinOff = /* @__PURE__ */ createIcon('PinOff', PinOffGlyph)
-export const Plug = /* @__PURE__ */ createIcon('Plug', PlugGlyph)
-export const PlugZap = /* @__PURE__ */ createIcon('PlugZap', PlugZapGlyph)
-export const Plus = /* @__PURE__ */ createIcon('Plus', PlusGlyph)
-export const Puzzle = /* @__PURE__ */ createIcon('Puzzle', PuzzleGlyph)
-export const RefreshCw = /* @__PURE__ */ createIcon('RefreshCw', RefreshCwGlyph)
-export const RotateCcw = /* @__PURE__ */ createIcon('RotateCcw', RotateCcwGlyph)
-export const ScanSearch = /* @__PURE__ */ createIcon('ScanSearch', ScanSearchGlyph)
-export const ScrollText = /* @__PURE__ */ createIcon('ScrollText', ScrollTextGlyph)
-export const Search = /* @__PURE__ */ createIcon('Search', SearchGlyph)
-export const SearchX = /* @__PURE__ */ createIcon('SearchX', SearchXGlyph)
-export const Settings = /* @__PURE__ */ createIcon('Settings', SettingsGlyph)
-export const Settings2 = /* @__PURE__ */ createIcon('Settings2', Settings2Glyph)
-export const Shapes = /* @__PURE__ */ createIcon('Shapes', ShapesGlyph)
-export const ShieldCheck = /* @__PURE__ */ createIcon('ShieldCheck', ShieldCheckGlyph)
-export const Sparkles = /* @__PURE__ */ createIcon('Sparkles', SparklesGlyph)
-export const SourceCode = /* @__PURE__ */ createIcon('SourceCode', SourceCodeGlyph)
-export const Square = /* @__PURE__ */ createIcon('Square', SquareGlyph)
-export const SquareTerminal = /* @__PURE__ */ createIcon('SquareTerminal', SquareTerminalGlyph)
-export const Stethoscope = /* @__PURE__ */ createIcon('Stethoscope', StethoscopeGlyph)
-export const Subtitle = /* @__PURE__ */ createIcon('Subtitle', SubtitleGlyph)
-export const Sun = /* @__PURE__ */ createIcon('Sun', SunGlyph)
-export const Terminal = /* @__PURE__ */ createIcon('Terminal', TerminalGlyph)
-export const TextFont = /* @__PURE__ */ createIcon('TextFont', TextFontGlyph)
-export const TextSearch = /* @__PURE__ */ createIcon('TextSearch', TextSearchGlyph)
-export const WrapText = /* @__PURE__ */ createIcon('WrapText', WrapTextGlyph)
-export const ThumbsDown = /* @__PURE__ */ createIcon('ThumbsDown', ThumbsDownGlyph)
-export const ThumbsUp = /* @__PURE__ */ createIcon('ThumbsUp', ThumbsUpGlyph)
-export const Trash2 = /* @__PURE__ */ createIcon('Trash2', Trash2Glyph)
-export const Undo2 = /* @__PURE__ */ createIcon('Undo2', Undo2Glyph)
-export const User = /* @__PURE__ */ createIcon('User', UserGlyph)
-export const WandSparkles = /* @__PURE__ */ createIcon('WandSparkles', WandSparklesGlyph)
-export const Wrench = /* @__PURE__ */ createIcon('Wrench', WrenchGlyph)
-export const X = /* @__PURE__ */ createIcon('X', XGlyph)
-export const XCircle = /* @__PURE__ */ createIcon('XCircle', XCircleGlyph)
-export const Zap = /* @__PURE__ */ createIcon('Zap', ZapGlyph)
-export const ZoomIn = /* @__PURE__ */ createIcon('ZoomIn', ZoomInGlyph)
-export const ZoomOut = /* @__PURE__ */ createIcon('ZoomOut', ZoomOutGlyph)
+export const AlertCircle = /* @__PURE__ */ createIcon('AlertCircle', RiAlertLine)
+export const AlertTriangle = /* @__PURE__ */ createIcon('AlertTriangle', RiErrorWarningLine)
+export const ArrowDown = /* @__PURE__ */ createIcon('ArrowDown', RiArrowDownLine)
+export const ArrowDownWideNarrow = /* @__PURE__ */ createIcon('ArrowDownWideNarrow', RiSortDesc)
+export const ArrowLeft = /* @__PURE__ */ createIcon('ArrowLeft', RiArrowLeftLine)
+export const ArrowRight = /* @__PURE__ */ createIcon('ArrowRight', RiArrowRightLine)
+export const ArrowUp = /* @__PURE__ */ createIcon('ArrowUp', RiArrowUpLine)
+export const ArrowUpNarrowWide = /* @__PURE__ */ createIcon('ArrowUpNarrowWide', RiSortAsc)
+export const ArrowUpRight = /* @__PURE__ */ createIcon('ArrowUpRight', RiArrowRightUpLine)
+export const Ban = /* @__PURE__ */ createIcon('Ban', RiProhibitedLine)
+export const Bell = /* @__PURE__ */ createIcon('Bell', RiNotification3Line)
+export const BookDownload = /* @__PURE__ */ createIcon('BookDownload', RiFileDownloadLine)
+export const BookOpenText = /* @__PURE__ */ createIcon('BookOpenText', RiBookOpenLine)
+export const Bookmark = /* @__PURE__ */ createIcon('Bookmark', RiBookmarkLine)
+export const BookSearch = /* @__PURE__ */ createIcon('BookSearch', RiBookReadLine)
+export const Bot = /* @__PURE__ */ createIcon('Bot', RiRobot2Line)
+export const Braces = /* @__PURE__ */ createIcon('Braces', RiBracesLine)
+export const Brain = /* @__PURE__ */ createIcon('Brain', RiMentalHealthLine)
+export const Chart = /* @__PURE__ */ createIcon('Chart', RiBarChart2Line)
+export const Chat01 = /* @__PURE__ */ createIcon('Chat01', RiChat3Line)
+export const Check = /* @__PURE__ */ createIcon('Check', RiCheckLine)
+export const CheckCircle2 = /* @__PURE__ */ createIcon('CheckCircle2', RiCheckboxCircleLine)
+export const ChevronDown = /* @__PURE__ */ createIcon('ChevronDown', RiArrowDownSLine)
+export const ChevronLeft = /* @__PURE__ */ createIcon('ChevronLeft', RiArrowLeftSLine)
+export const ChevronRight = /* @__PURE__ */ createIcon('ChevronRight', RiArrowRightSLine)
+export const ChevronsDownUp = /* @__PURE__ */ createIcon('ChevronsDownUp', RiContractUpDownLine)
+export const ChevronsUpDown = /* @__PURE__ */ createIcon('ChevronsUpDown', RiExpandUpDownLine)
+export const Circle = /* @__PURE__ */ createIcon('Circle', RiRecordCircleLine)
+export const CircleAlert = /* @__PURE__ */ createIcon('CircleAlert', RiAlertLine)
+export const CircleCheck = /* @__PURE__ */ createIcon('CircleCheck', RiCheckboxCircleLine)
+export const CircleHelp = /* @__PURE__ */ createIcon('CircleHelp', RiQuestionLine)
+export const CircleX = /* @__PURE__ */ createIcon('CircleX', RiCloseCircleLine)
+export const Clock = /* @__PURE__ */ createIcon('Clock', RiTimeLine)
+export const Clock3 = /* @__PURE__ */ createIcon('Clock3', RiTimeLine)
+export const CloudDownload = /* @__PURE__ */ createIcon('CloudDownload', RiDownloadCloud2Line)
+export const CommandLine = /* @__PURE__ */ createIcon('CommandLine', RiTerminalBoxLine)
+export const Compass = /* @__PURE__ */ createIcon('Compass', RiCompass3Line)
+export const Copy = /* @__PURE__ */ createIcon('Copy', RiFileCopyLine)
+export const Dashboard = /* @__PURE__ */ createIcon('Dashboard', RiDashboardLine)
+export const Database = /* @__PURE__ */ createIcon('Database', RiDatabase2Line)
+export const Diff = /* @__PURE__ */ createIcon('Diff', RiFileTransferLine)
+export const Download = /* @__PURE__ */ createIcon('Download', RiDownloadLine)
+export const ExternalLink = /* @__PURE__ */ createIcon('ExternalLink', RiExternalLinkLine)
+export const Eye = /* @__PURE__ */ createIcon('Eye', RiEyeLine)
+export const EyeOff = /* @__PURE__ */ createIcon('EyeOff', RiEyeOffLine)
+export const FastForward = /* @__PURE__ */ createIcon('FastForward', RiSkipForwardLine)
+export const FileCode2 = /* @__PURE__ */ createIcon('FileCode2', RiFileCodeLine)
+export const FileDiff = /* @__PURE__ */ createIcon('FileDiff', RiFileTransferLine)
+export const FilePen = /* @__PURE__ */ createIcon('FilePen', RiFileEditLine)
+export const FilePlus2 = /* @__PURE__ */ createIcon('FilePlus2', RiFileAddLine)
+export const FileSearch = /* @__PURE__ */ createIcon('FileSearch', RiFileSearchLine)
+export const FileSearch2 = /* @__PURE__ */ createIcon('FileSearch2', RiFileSearchLine)
+export const FileText = /* @__PURE__ */ createIcon('FileText', RiFileTextLine)
+export const Folder = /* @__PURE__ */ createIcon('Folder', RiFolderLine)
+export const FolderInput = /* @__PURE__ */ createIcon('FolderInput', RiFolderReceivedLine)
+export const FolderKanban = /* @__PURE__ */ createIcon('FolderKanban', RiLayoutGridLine)
+export const FolderOpen = /* @__PURE__ */ createIcon('FolderOpen', RiFolderOpenLine)
+export const FolderPlus = /* @__PURE__ */ createIcon('FolderPlus', RiFolderAddLine)
+export const FolderTree = /* @__PURE__ */ createIcon('FolderTree', RiNodeTree)
+export const GitFork = /* @__PURE__ */ createIcon('GitFork', RiGitBranchLine)
+export const GitPullRequest = /* @__PURE__ */ createIcon('GitPullRequest', RiGitPullRequestLine)
+export const Globe = /* @__PURE__ */ createIcon('Globe', RiGlobalLine)
+export const Globe2 = /* @__PURE__ */ createIcon('Globe2', RiGlobalLine)
+export const GraduationCap = /* @__PURE__ */ createIcon('GraduationCap', RiGraduationCapLine)
+export const Image = /* @__PURE__ */ createIcon('Image', RiImageLine)
+export const ImageIcon = /* @__PURE__ */ createIcon('ImageIcon', RiImage2Line)
+export const ImagePlus = /* @__PURE__ */ createIcon('ImagePlus', RiImageAddLine)
+export const Info = /* @__PURE__ */ createIcon('Info', RiInformationLine)
+export const InstallingUpdates = /* @__PURE__ */ createIcon('InstallingUpdates', RiDownload2Line)
+export const KeyRound = /* @__PURE__ */ createIcon('KeyRound', RiKeyLine)
+export const Lightbulb = /* @__PURE__ */ createIcon('Lightbulb', RiLightbulbLine)
+export const Link2 = /* @__PURE__ */ createIcon('Link2', RiLinksLine)
+export const ListTodo = /* @__PURE__ */ createIcon('ListTodo', RiTodoLine)
+export const Loader2 = /* @__PURE__ */ createIcon('Loader2', RiLoader2Line)
+export const LoaderCircle = /* @__PURE__ */ createIcon('LoaderCircle', RiLoader4Line)
+export const LogOut = /* @__PURE__ */ createIcon('LogOut', RiLogoutBoxRLine)
+export const Maximize2 = /* @__PURE__ */ createIcon('Maximize2', RiFullscreenLine)
+export const MessageCirclePlus = /* @__PURE__ */ createIcon('MessageCirclePlus', RiChatNewLine)
+export const MessageSquare = /* @__PURE__ */ createIcon('MessageSquare', RiChat1Line)
+export const MessageSquareDashed = /* @__PURE__ */ createIcon('MessageSquareDashed', RiChatOffLine)
+export const MessageSquarePlus = /* @__PURE__ */ createIcon('MessageSquarePlus', RiChatNewLine)
+export const MessageSquareText = /* @__PURE__ */ createIcon('MessageSquareText', RiChat4Line)
+export const Minimize2 = /* @__PURE__ */ createIcon('Minimize2', RiFullscreenExitLine)
+export const Minus = /* @__PURE__ */ createIcon('Minus', RiSubtractLine)
+export const Monitor = /* @__PURE__ */ createIcon('Monitor', RiComputerLine)
+export const Moon = /* @__PURE__ */ createIcon('Moon', RiMoonLine)
+export const MoreHorizontal = /* @__PURE__ */ createIcon('MoreHorizontal', RiMoreLine)
+export const MusicNote = /* @__PURE__ */ createIcon('MusicNote', RiMusic2Line)
+export const Palette = /* @__PURE__ */ createIcon('Palette', RiPaletteLine)
+export const PanelLeft = /* @__PURE__ */ createIcon('PanelLeft', RiLayoutLeftLine)
+export const PanelRight = /* @__PURE__ */ createIcon('PanelRight', RiLayoutRightLine)
+export const Paperclip = /* @__PURE__ */ createIcon('Paperclip', RiAttachmentLine)
+export const Pencil = /* @__PURE__ */ createIcon('Pencil', RiEditLine)
+export const PencilLine = /* @__PURE__ */ createIcon('PencilLine', RiEdit2Line)
+export const Pin = /* @__PURE__ */ createIcon('Pin', RiPushpinLine)
+export const PinOff = /* @__PURE__ */ createIcon('PinOff', RiUnpinLine)
+export const Plug = /* @__PURE__ */ createIcon('Plug', RiPlugLine)
+export const PlugZap = /* @__PURE__ */ createIcon('PlugZap', RiPlug2Line)
+export const Plus = /* @__PURE__ */ createIcon('Plus', RiAddLine)
+export const Puzzle = /* @__PURE__ */ createIcon('Puzzle', RiPuzzleLine)
+export const RefreshCw = /* @__PURE__ */ createIcon('RefreshCw', RiRefreshLine)
+export const RotateCcw = /* @__PURE__ */ createIcon('RotateCcw', RiAnticlockwise2Line)
+export const ScanSearch = /* @__PURE__ */ createIcon('ScanSearch', RiScan2Line)
+export const ScrollText = /* @__PURE__ */ createIcon('ScrollText', RiFilePaperLine)
+export const Search = /* @__PURE__ */ createIcon('Search', RiSearchLine)
+export const SearchX = /* @__PURE__ */ createIcon('SearchX', RiCloseCircleLine)
+export const Settings = /* @__PURE__ */ createIcon('Settings', RiSettingsLine)
+export const Settings2 = /* @__PURE__ */ createIcon('Settings2', RiSettings4Line)
+export const Shapes = /* @__PURE__ */ createIcon('Shapes', RiShapesLine)
+export const ShieldCheck = /* @__PURE__ */ createIcon('ShieldCheck', RiShieldCheckLine)
+export const Sparkles = /* @__PURE__ */ createIcon('Sparkles', RiSparkling2Line)
+export const SourceCode = /* @__PURE__ */ createIcon('SourceCode', RiCodeSSlashLine)
+export const Square = /* @__PURE__ */ createIcon('Square', RiStopLine)
+export const SquareTerminal = /* @__PURE__ */ createIcon('SquareTerminal', RiTerminalWindowLine)
+export const Stethoscope = /* @__PURE__ */ createIcon('Stethoscope', RiStethoscopeLine)
+export const Subtitle = /* @__PURE__ */ createIcon('Subtitle', RiClosedCaptioningLine)
+export const Sun = /* @__PURE__ */ createIcon('Sun', RiSunLine)
+export const Terminal = /* @__PURE__ */ createIcon('Terminal', RiTerminalLine)
+export const TextFont = /* @__PURE__ */ createIcon('TextFont', RiFontSize2)
+export const TextSearch = /* @__PURE__ */ createIcon('TextSearch', RiSearch2Line)
+export const WrapText = /* @__PURE__ */ createIcon('WrapText', RiTextWrap)
+export const ThumbsDown = /* @__PURE__ */ createIcon('ThumbsDown', RiThumbDownLine)
+export const ThumbsUp = /* @__PURE__ */ createIcon('ThumbsUp', RiThumbUpLine)
+export const Trash2 = /* @__PURE__ */ createIcon('Trash2', RiDeleteBin6Line)
+export const Undo2 = /* @__PURE__ */ createIcon('Undo2', RiArrowGoBackLine)
+export const User = /* @__PURE__ */ createIcon('User', RiUserLine)
+export const WandSparkles = /* @__PURE__ */ createIcon('WandSparkles', RiMagicLine)
+export const Wrench = /* @__PURE__ */ createIcon('Wrench', RiWrenchLine)
+export const X = /* @__PURE__ */ createIcon('X', RiCloseLine)
+export const XCircle = /* @__PURE__ */ createIcon('XCircle', RiCloseCircleLine)
+export const Zap = /* @__PURE__ */ createIcon('Zap', RiFlashlightLine)
+export const ZoomIn = /* @__PURE__ */ createIcon('ZoomIn', RiZoomInLine)
+export const ZoomOut = /* @__PURE__ */ createIcon('ZoomOut', RiZoomOutLine)

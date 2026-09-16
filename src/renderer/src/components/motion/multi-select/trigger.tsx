@@ -1,7 +1,9 @@
 "use client";
 // beui.dev/components/motion/multi-select
 
-import { ChevronsUpDown, Search, X } from "lucide-react";
+// local patch (pi-app): glyphs come from the app's Remix Icon adapter on
+// the square-style branch instead of native lucide-react.
+import { ChevronsUpDown, Search, X } from "@/lib/icons";
 import { AnimatePresence, motion } from "motion/react";
 import type {
   InputHTMLAttributes,

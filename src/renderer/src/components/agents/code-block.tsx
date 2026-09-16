@@ -148,7 +148,8 @@ export function CodeBlock({
             onClick={handleCopy}
             whileTap={reduce ? undefined : { scale: 0.9 }}
             transition={SPRING_PRESS}
-            className="grid size-7 shrink-0 place-items-center rounded-full text-muted-foreground outline-none transition-colors hover:bg-background/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+            // local patch (pi-app): hard-edged copy action (square-style).
+            className="grid size-7 shrink-0 place-items-center rounded-control text-muted-foreground outline-none transition-colors hover:bg-background/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
           >
             {copied ? (
               <Check className="size-3.5" />

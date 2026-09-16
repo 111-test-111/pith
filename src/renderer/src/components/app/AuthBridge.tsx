@@ -92,7 +92,7 @@ export function AuthBridge({ prompt, notify, onReply, onCancel }: AuthBridgeProp
                 className="w-full rounded-xl border border-border px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-muted"
               >
                 <span className="flex items-center gap-2">
-                  <span className="grid size-5 shrink-0 place-items-center rounded-full border border-border text-[10px] text-muted-foreground">
+                  <span className="grid size-5 shrink-0 place-items-center rounded-control border border-border text-[10px] text-muted-foreground">
                     {index + 1}
                   </span>
                   {option.label}

@@ -205,10 +205,10 @@ app.on('window-all-closed',()=>app.quit());`)
         assert.equal(await style(selector, 'corner-shape'), 'superellipse(1)', selector + ': preserve true circles')
       }
       assert.equal(await evaluate('getComputedStyle(document.getElementById("pseudo"),"::before").cornerShape'), 'superellipse(1)', 'pseudo-element full-round utility')
-      // A control that asks for a circle must not keep a semantic radius that
-      // shares the element (the composer's send button is Button size="icon",
-      // which adds rounded-icon underneath the class name).
-      assert.equal(await evaluate(`(()=>{const e=document.querySelector('[aria-label="Send prompt"]'),s=getComputedStyle(e),r=e.getBoundingClientRect();return s.cornerShape==='superellipse(1)'&&parseFloat(s.borderTopLeftRadius)>=r.height/2&&r.height>0})()`), true, 'composer send control is a true circle')
+      // Square-style branch: the composer send control is hard-edged like
+      // every other control (the whole radius scale is 0); it keeps the
+      // squircle corner-shape and must not regress into a circle.
+      assert.equal(await evaluate(`(()=>{const e=document.querySelector('[aria-label="Send prompt"]'),s=getComputedStyle(e),r=e.getBoundingClientRect();return s.cornerShape==='superellipse(2)'&&parseFloat(s.borderTopLeftRadius)===0&&r.height>0})()`), true, 'composer send control is hard-edged')
       // The progressive fallback changes paint, never the controls' layout.
       const bounds = await evaluate(`JSON.stringify([...document.querySelectorAll('#primary,.lab-field,#segment')].map(e=>{const r=e.getBoundingClientRect();return [r.x,r.y,r.width,r.height]}))`)
       await evaluate('document.documentElement.style.setProperty("--app-corner-shape","round")')
@@ -229,9 +229,11 @@ app.on('window-all-closed',()=>app.quit());`)
       assert.notEqual(await style(dialog, 'box-shadow'), 'none')
       if (!dark && !reduced) {
         // Negative control: the original beUI mask must fail the geometric
-        // oracle despite still reporting corner-shape: squircle.
+        // oracle despite still reporting corner-shape: squircle. The mask uses
+        // a fixed radius — the square-style branch's own radius is 0 and would
+        // clip nothing.
         await beginFrames(dialog)
-        await evaluate(`(()=>{const e=document.querySelector(${JSON.stringify(dialog)});e.style.clipPath='inset(0 round '+getComputedStyle(e).borderTopLeftRadius+')'})()`)
+        await evaluate(`(()=>{const e=document.querySelector(${JSON.stringify(dialog)});e.style.clipPath='inset(0 round 24px)'})()`)
         await pause(80)
         assert.ok((await endFrames()).some(f => !f.inside), 'hit testing detects the old circular-mask regression')
         await evaluate(`document.querySelector(${JSON.stringify(dialog)}).style.removeProperty('clip-path')`)

@@ -613,8 +613,10 @@ function ResourceRow({
         "data-[menu-open=true]:bg-muted data-[menu-open=true]:text-foreground",
         "data-[dragging=true]:opacity-40",
         "data-[drop=inside]:bg-primary/10 data-[drop=inside]:ring-1 data-[drop=inside]:ring-primary/45",
-        "data-[drop=before]:before:absolute data-[drop=before]:before:-top-0.5 data-[drop=before]:before:right-2 data-[drop=before]:before:left-2 data-[drop=before]:before:h-0.5 data-[drop=before]:before:rounded-full data-[drop=before]:before:bg-primary",
-        "data-[drop=after]:after:absolute data-[drop=after]:after:-bottom-0.5 data-[drop=after]:after:right-2 data-[drop=after]:after:left-2 data-[drop=after]:after:h-0.5 data-[drop=after]:after:rounded-full data-[drop=after]:after:bg-primary",
+        // local patch (pi-app): drop indicators are square strips on the
+        // square-style branch instead of 2px capsules.
+        "data-[drop=before]:before:absolute data-[drop=before]:before:-top-0.5 data-[drop=before]:before:right-2 data-[drop=before]:before:left-2 data-[drop=before]:before:h-0.5 data-[drop=before]:before:rounded-detail data-[drop=before]:before:bg-primary",
+        "data-[drop=after]:after:absolute data-[drop=after]:after:-bottom-0.5 data-[drop=after]:after:right-2 data-[drop=after]:after:left-2 data-[drop=after]:after:h-0.5 data-[drop=after]:after:rounded-detail data-[drop=after]:after:bg-primary",
         !acceptsChildren && active && "bg-muted text-foreground",
         row.item.disabled && "cursor-not-allowed opacity-45",
       )}

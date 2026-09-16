@@ -88,7 +88,7 @@ function ActivityScroll({ viewKey, columns, children }: {
 
 function dayCellClasses(level: 0 | 1 | 2 | 3 | 4, weekHover: boolean): string {
   return cn(
-    'size-[var(--activity-cell-size)] rounded-full transition-shadow',
+    'size-[var(--activity-cell-size)] rounded-detail transition-shadow',
     level === 0 && 'bg-muted',
     level === 1 && 'bg-primary/25',
     level === 2 && 'bg-primary/45',
@@ -129,7 +129,7 @@ function DayCell({
   )
   if (hidden || !tooltip) return cell
   return (
-    <Tooltip content={tooltip} side="top" delay={80} wrapperClassName="rounded-full">
+    <Tooltip content={tooltip} side="top" delay={80} wrapperClassName="rounded-detail">
       {cell}
     </Tooltip>
   )

@@ -236,7 +236,8 @@ export function PromptInput({
                 size="icon"
                 disabled={disabled || loading}
                 aria-label="Add to prompt"
-                className="size-8 rounded-full"
+                // local patch (pi-app): hard-edged icon button (square-style).
+                className="size-8 rounded-control"
               >
                 <motion.span
                   aria-hidden="true"
@@ -345,7 +346,8 @@ export function PromptInput({
             disabled={loading && !canQueue ? !onStop : !canQueue && !canSubmit}
             aria-label={loading ? (canQueue ? "Queue message" : "Stop generating") : "Send prompt"}
             onClick={loading && !canQueue ? onStop : undefined}
-            className="size-8 rounded-full"
+            // local patch (pi-app): hard-edged send button (square-style).
+            className="size-8 rounded-control"
           >
             <AnimatePresence initial={false} mode="popLayout">
               <motion.span

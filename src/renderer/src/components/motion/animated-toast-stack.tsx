@@ -393,7 +393,9 @@ const ToastItem = memo(function ToastItem({
             <motion.span
               layout
               className={cn(
-                "inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full",
+                // local patch (pi-app): hard-edged toast icon tile
+                // (square-style branch).
+                "inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-control",
                 hasDetails && "mt-0.5",
                 STATUS_CLASS[status],
                 classNames?.iconWrap,
@@ -476,7 +478,9 @@ const ToastItem = memo(function ToastItem({
                   type="button"
                   onClick={() => toast.action?.onClick(toast)}
                   className={cn(
-                    "mt-2 inline-flex h-7 items-center rounded-full bg-primary/[0.06] px-3 text-xs font-medium text-foreground transition-colors hover:bg-primary/[0.1]",
+                    // local patch (pi-app): hard-edged toast action
+                    // (square-style branch).
+                    "mt-2 inline-flex h-7 items-center rounded-control bg-primary/[0.06] px-3 text-xs font-medium text-foreground transition-colors hover:bg-primary/[0.1]",
                     classNames?.action,
                   )}
                 >
@@ -491,7 +495,9 @@ const ToastItem = memo(function ToastItem({
                 onClick={() => onDismiss?.(toast.id)}
                 aria-label="Dismiss toast"
                 className={cn(
-                  "inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-primary/[0.06] hover:text-foreground",
+                  // local patch (pi-app): hard-edged dismiss button
+                  // (square-style branch).
+                  "inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-control text-muted-foreground transition-colors hover:bg-primary/[0.06] hover:text-foreground",
                   classNames?.close,
                 )}
               >

@@ -65,7 +65,9 @@ export const MetallicButton = forwardRef<
         "hover:bg-transparent hover:text-foreground",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
         "shadow-[0_8px_22px_rgba(0,0,0,0.16)]",
-        size === "icon" && "rounded-full",
+        // local patch (pi-app): icon-size metallic button is hard-edged on
+        // the square-style branch.
+        size === "icon" && "rounded-icon",
         className,
       )}
       {...rest}
