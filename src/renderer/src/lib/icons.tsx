@@ -19,11 +19,7 @@ import {
   RiBookmarkLine,
   RiBookReadLine,
   RiBracesLine,
-  RiChat1Line,
-  RiChat3Line,
   RiChat4Line,
-  RiChatNewLine,
-  RiChatOffLine,
   RiCheckboxBlankCircleLine,
   RiCheckboxCircleLine,
   RiCheckLine,
@@ -110,7 +106,7 @@ import {
   RiSortDesc,
   RiSparkling2Line,
   RiStethoscopeLine,
-  RiStopLine,
+  RiStopLargeLine,
   RiSubtractLine,
   RiSunLine,
   RiTerminalBoxLine,
@@ -191,7 +187,7 @@ export const Bot = /* @__PURE__ */ createIcon('Bot', RiRobot2Line)
 export const Braces = /* @__PURE__ */ createIcon('Braces', RiBracesLine)
 export const Brain = /* @__PURE__ */ createIcon('Brain', RiMentalHealthLine)
 export const Chart = /* @__PURE__ */ createIcon('Chart', RiBarChart2Line)
-export const Chat01 = /* @__PURE__ */ createIcon('Chat01', RiChat3Line)
+export const Chat01 = /* @__PURE__ */ createIcon('Chat01', RiChat4Line)
 export const Check = /* @__PURE__ */ createIcon('Check', RiCheckLine)
 export const CheckCircle2 = /* @__PURE__ */ createIcon('CheckCircle2', RiCheckboxCircleLine)
 export const ChevronDown = /* @__PURE__ */ createIcon('ChevronDown', RiArrowDownSLine)
@@ -249,10 +245,10 @@ export const Loader2 = /* @__PURE__ */ createIcon('Loader2', RiLoader2Line)
 export const LoaderCircle = /* @__PURE__ */ createIcon('LoaderCircle', RiLoader4Line)
 export const LogOut = /* @__PURE__ */ createIcon('LogOut', RiLogoutBoxRLine)
 export const Maximize2 = /* @__PURE__ */ createIcon('Maximize2', RiFullscreenLine)
-export const MessageCirclePlus = /* @__PURE__ */ createIcon('MessageCirclePlus', RiChatNewLine)
-export const MessageSquare = /* @__PURE__ */ createIcon('MessageSquare', RiChat1Line)
-export const MessageSquareDashed = /* @__PURE__ */ createIcon('MessageSquareDashed', RiChatOffLine)
-export const MessageSquarePlus = /* @__PURE__ */ createIcon('MessageSquarePlus', RiChatNewLine)
+export const MessageCirclePlus = /* @__PURE__ */ createIcon('MessageCirclePlus', RiChat4Line)
+export const MessageSquare = /* @__PURE__ */ createIcon('MessageSquare', RiChat4Line)
+export const MessageSquareDashed = /* @__PURE__ */ createIcon('MessageSquareDashed', RiChat4Line)
+export const MessageSquarePlus = /* @__PURE__ */ createIcon('MessageSquarePlus', RiChat4Line)
 export const MessageSquareText = /* @__PURE__ */ createIcon('MessageSquareText', RiChat4Line)
 export const Minimize2 = /* @__PURE__ */ createIcon('Minimize2', RiFullscreenExitLine)
 export const Minus = /* @__PURE__ */ createIcon('Minus', RiSubtractLine)
@@ -284,7 +280,7 @@ export const Shapes = /* @__PURE__ */ createIcon('Shapes', RiShapesLine)
 export const ShieldCheck = /* @__PURE__ */ createIcon('ShieldCheck', RiShieldCheckLine)
 export const Sparkles = /* @__PURE__ */ createIcon('Sparkles', RiSparkling2Line)
 export const SourceCode = /* @__PURE__ */ createIcon('SourceCode', RiCodeSSlashLine)
-export const Square = /* @__PURE__ */ createIcon('Square', RiStopLine)
+export const Square = /* @__PURE__ */ createIcon('Square', RiStopLargeLine)
 export const SquareTerminal = /* @__PURE__ */ createIcon('SquareTerminal', RiTerminalWindowLine)
 export const Stethoscope = /* @__PURE__ */ createIcon('Stethoscope', RiStethoscopeLine)
 export const Subtitle = /* @__PURE__ */ createIcon('Subtitle', RiClosedCaptioningLine)
