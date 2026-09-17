@@ -91,6 +91,10 @@ export interface BrowserPageViewProps {
    *  drives the URL input and the start-page overlay. */
   displayUrl: string
   onNavChange: (id: string, patch: BrowserNavPatch) => void
+  /** Task 15: fired once from the dom-ready handshake with the guest's
+   *  webContentsId, so the pane can keep its wcId → page-ownership map (popup
+   *  owner inheritance). Optional; only the pane binds it. */
+  onWebContentsId?: (webContentsId: number, id: string, owner: string) => void
   /** Registers the SELECTED page's find/print surface with the pane, so the
    *  pane-level ⌘F/⌘P shortcuts (and the guest relay) act on the page on
    *  screen without reaching into any webview element. Called with null on
@@ -249,7 +253,7 @@ function BrowserStartPage({ onOpen }: { onOpen: (raw: string) => boolean }): JSX
  *   input silently does nothing (pi-web's electron-webview-spike finding);
  *   background agent driving needs the opacity form.
  */
-export function BrowserPageView({ page, selected, displayUrl, onNavChange, bindPageActions, download }: BrowserPageViewProps) {
+export function BrowserPageView({ page, selected, displayUrl, onNavChange, onWebContentsId, bindPageActions, download }: BrowserPageViewProps) {
   const { t } = useI18n()
   const webviewRef = useRef<HTMLWebViewElement | null>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
@@ -544,8 +548,14 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, bindP
         id: page.id,
         owner: page.owner,
         url: guest.getURL(),
-        webContentsId
+        webContentsId,
+        // Task 15: only local popup rows carry one — the service stores it as
+        // pendingNavigate and performs the goto itself after the reconcile
+        // upgrade (the renderer never loadURLs a popup; it would lose the
+        // marker race and the page would never register).
+        navigateTo: page.navigateTo
       }).catch(() => { /* next reconcile pass re-registers by marker */ })
+      if (webContentsId !== undefined) onWebContentsId?.(webContentsId, page.id, page.owner)
     }
     // Origin of the previous document: a cross-site navigation clears the old
     // site's favicon (the new one arrives via page-favicon-updated); a
@@ -625,7 +635,7 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, bindP
       wv.removeEventListener('page-favicon-updated', onFavicon)
       wv.removeEventListener('found-in-page', onFoundInPage)
     }
-  }, [page.id, page.owner, onNavChange])
+  }, [page.id, page.owner, page.navigateTo, onNavChange, onWebContentsId])
 
   // IRON RULE: an unselected agent page must never take `display: none` —
   // keep it hosted at full size, invisible and pointer-transparent.

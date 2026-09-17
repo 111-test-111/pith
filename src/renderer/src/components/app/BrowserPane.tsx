@@ -7,8 +7,9 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/motion/tabs'
 import { Tooltip } from '@/components/motion/tooltip'
 import { useI18n } from '@/i18n'
 import { cn } from '@/lib/utils'
-import { HUMAN_OWNER, buildMarkerUrl, parseMarkerUrl } from '../../../../shared/browser.ts'
+import { createBrowserPageId, HUMAN_OWNER, buildMarkerUrl, parseMarkerUrl } from '../../../../shared/browser.ts'
 import { readOpenBrowserPages, snapshotOpenPages, writeOpenBrowserPages } from '@/lib/browser/session'
+import { BROWSER_OPEN_LINK_EVENT, drainPendingBrowserOpenLinks } from '@/lib/browser/open-link'
 import { getBrowserZoom, nextBrowserZoom, setBrowserZoom } from '@/lib/browser/zoom'
 import type { BrowserPanePage, BrowserStore } from '@/lib/browser/store'
 import { BrowserPageView, isEditableTarget, type BrowserNavPatch, type BrowserPageActions, type LocalNavInfo } from './BrowserPageView'
@@ -21,6 +22,32 @@ import { MiddleEllipsis } from './MiddleEllipsis'
  *  rendering the pending row mounts its marker webview, which completes the
  *  registration. getStatus also kicks a best-effort reconcile each tick. */
 const BROWSER_POLL_MS = 2_500
+
+/** Task 15: a local popup row awaiting its dom-ready handshake — NOT a server
+ *  pendingCreate (popups never call createPage); it joins the same render
+ *  branch below and clears through the self-heal once the server list covers
+ *  its tempId (browserSeen registered it state-side). */
+interface LocalPendingRow {
+  id: string
+  owner: string
+  /** The popup's url, reported as navigateTo in the seen handshake. */
+  navigateTo: string
+}
+
+/** The ONE pending-materialization row shape (Ruling D): server pendingCreates
+ *  and Task 15's local popup rows both become this row — its marker src is
+ *  what mounts the webview that completes the registration. No second render
+ *  path for "pending page → marker webview" exists. */
+const pendingRowOf = (id: string, owner: string, navigateTo?: string): BrowserPanePage => ({
+  id,
+  owner,
+  url: buildMarkerUrl(owner, id),
+  title: '',
+  agentBusy: false,
+  crashed: false,
+  pending: true,
+  navigateTo
+})
 
 /** Display url of a page row: localNav truth first, server meta as fallback;
  *  markers (the hosting convention, not a user-facing location) read as
@@ -82,6 +109,21 @@ export function BrowserPane({
   const [closedIds, setClosedIds] = useState<ReadonlySet<string>>(() => new Set())
   /** UI-side nav truth per page id (webview events; server meta falls back). */
   const [localNav, setLocalNav] = useState<Record<string, LocalNavInfo>>({})
+  /** Task 15: local popup rows materializing through the shared pending branch
+   *  above. Appended by the popup drain; each row's webview reports itself via
+   *  the dom-ready handshake (browserSeen with navigateTo) and the row clears
+   *  in the self-heal once the server list covers the tempId. */
+  const [localPending, setLocalPending] = useState<LocalPendingRow[]>([])
+  /** Task 15: webContentsId → page ownership, recorded at each page's dom-ready
+   *  handshake (where the id is read) and consulted when a `browser:popup`
+   *  arrives, so an opener's owner is inherited (an agent page's popup stays
+   *  agent-owned). Entries leave with their page (prune effect below); the
+   *  pane's unmount drops the whole instance-scoped map. */
+  const wcIdMapRef = useRef(new Map<number, { id: string; owner: string }>())
+  const registerWebContentsId = useCallback((webContentsId: number, id: string, owner: string) => {
+    wcIdMapRef.current.set(webContentsId, { id, owner })
+  }, [])
+  useEffect(() => () => { wcIdMapRef.current.clear() }, [])
   /** Set while our createPage round trip is in flight: the first fresh
    *  pendingCreate row that shows up is ours to select. */
   const awaitingCreateRef = useRef(false)
@@ -229,32 +271,29 @@ export function BrowserPane({
   }, [store])
 
   // Merged page model (pi-web BrowserTab semantics): serverPages ∪
-  // pendingCreates(物化为 pending 行) ∪ optimistic − closedIds. Identify
-  // optimistic pages by MEMBERSHIP in state.optimistic (T6-①), never by
-  // reading `pending === false` as "materialized".
+  // pendingCreates(物化为 pending 行) ∪ localPending(Task 15 popups) ∪ optimistic −
+  // closedIds. Identify optimistic pages by MEMBERSHIP in state.optimistic
+  // (T6-①), never by reading `pending === false` as "materialized".
   const pages = useMemo<BrowserPanePage[]>(() => {
     if (!status) return []
     const serverPages = status.pages
     const known = new Set(serverPages.map((page) => page.id))
-    // ONE materialization branch (Ruling D): server pendingCreates become
-    // pending rows that render the marker webview which completes their
-    // registration. Task 15's local popup rows join this union the same way —
-    // no refactor, one render path for every "pending page → marker webview".
-    const pending = status.pendingCreates
-      .filter((entry) => !known.has(entry.id))
-      .map((entry): BrowserPanePage => ({
-        id: entry.id,
-        owner: entry.owner,
-        url: buildMarkerUrl(entry.owner, entry.id),
-        title: '',
-        agentBusy: false,
-        crashed: false,
-        pending: true
-      }))
+    // ONE materialization branch (Ruling D): server pendingCreates AND local
+    // popup rows become pending rows through the same `pendingRowOf` shape —
+    // rendering the marker webview is what completes their registration, so
+    // there is exactly one render path for "pending page → marker webview".
+    const pending = [
+      ...status.pendingCreates
+        .filter((entry) => !known.has(entry.id))
+        .map((entry) => pendingRowOf(entry.id, entry.owner)),
+      ...localPending
+        .filter((row) => !known.has(row.id))
+        .map((row) => pendingRowOf(row.id, row.owner, row.navigateTo))
+    ]
     for (const page of pending) known.add(page.id)
     return [...serverPages, ...pending, ...state.optimistic.filter((page) => !known.has(page.id))]
       .filter((page) => !closedIds.has(page.id))
-  }, [state, status, closedIds])
+  }, [state, status, closedIds, localPending])
 
   // Selection falls back to the first page during render (a selected page was
   // closed/vanished): deriving here avoids an effect-chasing empty frame.
@@ -272,15 +311,21 @@ export function BrowserPane({
 
   // Self-heal the optimistic rows (T6-②): once the server list covers an
   // optimistic id, the placeholder's job is done — pi-web's refresh prunes
-  // its localPages the same way. The same pass prunes close tombstones for
-  // ids that fully left the registry (pages AND pendingCreates — a pending
-  // row stays hidden until its waiter resolves).
+  // its localPages the same way. The same pass clears Task 15's local popup
+  // rows once the server list covers their tempId (browserSeen registered
+  // them state-side — the server row replaces the placeholder), and prunes
+  // close tombstones for ids that fully left the registry (pages AND
+  // pendingCreates — a pending row stays hidden until its waiter resolves).
   useEffect(() => {
     if (!status) return
     const known = new Set(status.pages.map((page) => page.id))
     for (const page of state.optimistic) {
       if (known.has(page.id)) store.removeOptimistic(page.id)
     }
+    setLocalPending((prev) => {
+      const remaining = prev.filter((row) => !known.has(row.id))
+      return remaining.length === prev.length ? prev : remaining
+    })
     const pendingIds = new Set(status.pendingCreates.map((entry) => entry.id))
     setClosedIds((prev) => {
       const remaining = [...prev].filter((id) => known.has(id) || pendingIds.has(id))
@@ -289,14 +334,20 @@ export function BrowserPane({
   }, [state, status, store])
 
   useEffect(() => {
+    const ids = new Set(pages.map((page) => page.id))
     setLocalNav((prev) => {
-      const ids = new Set(pages.map((page) => page.id))
       const stale = Object.keys(prev).filter((id) => !ids.has(id))
       if (stale.length === 0) return prev
       const next = { ...prev }
       for (const id of stale) delete next[id]
       return next
     })
+    // Task 15: drop wcId→page entries whose page left the model (close/swap) —
+    // a stale entry would misattribute a future popup to a closed page's
+    // owner instead of falling back to human.
+    for (const [wcId, info] of wcIdMapRef.current) {
+      if (!ids.has(info.id)) wcIdMapRef.current.delete(wcId)
+    }
   }, [pages])
 
   // First fresh pendingCreate after our + click is ours: select the row as
@@ -432,10 +483,90 @@ export function BrowserPane({
       delete next[id]
       return next
     })
+    // A local popup row closed before its handshake must not resurrect: the
+    // closedIds tombstone self-heals away once the id leaves the registry,
+    // which would re-expose the row — drop it outright (removeOptimistic's
+    // mirror for the Task 15 queue).
+    setLocalPending((prev) => {
+      if (!prev.some((row) => row.id === id)) return prev
+      return prev.filter((row) => row.id !== id)
+    })
     store.removeOptimistic(id)
     void window.pi.browserClosePage(id).catch(() => { /* idempotent cleanup */ })
     if (wasLast) fireEmpty()
   }, [fireEmpty, store])
+
+  // ---- Task 15: chat open-link + popup drains ----
+
+  /** Open-link drain path: the human-owner standard createPage (its own
+   *  pendingCreate handshake), then select the new page and prewrite the
+   *  strip's destination (T8 prewrite, same guard as the restore latch — a
+   *  did-navigate that landed first wins). A rejection (consent gate in
+   *  front, host gone) drops the url like the restore latch does; the pane's
+   *  own consent/empty state is the fallback surface. */
+  const openLinkInNewPage = useCallback((url: string) => {
+    void window.pi.browserCreatePage(url)
+      .then((meta) => {
+        setSelectedPageId(meta.id)
+        setLocalNav((prev) => {
+          const shown = prev[meta.id]?.url ?? ''
+          if (shown && shown !== 'about:blank' && !parseMarkerUrl(shown)) return prev
+          return applyNavPatch(prev, meta.id, { url })
+        })
+      })
+      .catch(() => { /* nothing to host it — the consent/empty state shows */ })
+  }, [])
+
+  /** Popup materialization (the corrected flow): never `browserCreatePage` —
+   *  a CLIENT-SIDE tempId plus a local pending row through the same Ruling D
+   *  branch. That row's marker webview reports browserSeen({ id: tempId,
+   *  owner, url: <marker>, webContentsId, navigateTo }) on its dom-ready; the
+   *  service registers state + pendingNavigate, the reconcile upgrades the
+   *  page to runtime, and the SERVICE performs the goto. The renderer never
+   *  loadURLs a popup itself — it would lose the marker race and the page
+   *  would never register. */
+  const materializePopups = useCallback(() => {
+    const drained = store.drainPopups()
+    if (drained.length === 0) return
+    for (const popup of drained) {
+      // Owner inheritance via the wcId map: the opener's live page wins; an
+      // opener already gone (its row left the model, the map pruned) falls
+      // back to human.
+      const owner = wcIdMapRef.current.get(popup.openerWebContentsId)?.owner ?? HUMAN_OWNER
+      const tempId = createBrowserPageId()
+      setLocalPending((prev) => [...prev, { id: tempId, owner, navigateTo: popup.url }])
+      // Prewrite the strip's destination (applyNavPatch over a fresh id) so
+      // the row reads as the target page instead of about:blank/loading.
+      setLocalNav((prev) => applyNavPatch(prev, tempId, { url: popup.url }))
+      setSelectedPageId(tempId)
+    }
+  }, [store])
+
+  // Open-link drain: on mount (backstop for clicks that happened before this
+  // pane existed — Workspace only opens the tab) and on every event while
+  // mounted (the pane is up — drain immediately).
+  useEffect(() => {
+    const drain = () => {
+      const urls = drainPendingBrowserOpenLinks()
+      if (urls.length === 0) return
+      for (const url of urls) openLinkInNewPage(url)
+      // Pull once right away: the pendingCreate enqueue does not push state,
+      // so the poll alone would add up to one BROWSER_POLL_MS of dead air
+      // (same trick as newPage).
+      void window.pi.browserStatus().then((next) => store.applyStatus(next)).catch(() => {})
+    }
+    drain()
+    window.addEventListener(BROWSER_OPEN_LINK_EVENT, drain)
+    return () => window.removeEventListener(BROWSER_OPEN_LINK_EVENT, drain)
+  }, [openLinkInNewPage, store])
+
+  // Popup drain: on mount (popups queued while the pane was closed survive in
+  // the store) and whenever the queue is non-empty while mounted — including
+  // the hidden keep-alive layer under another rail tab. drainPopups clears
+  // the queue, so the empty re-run is a no-op.
+  useEffect(() => {
+    materializePopups()
+  }, [materializePopups, state.popups])
 
   const consentRequired = status?.consentRequired ?? true
 
@@ -532,6 +663,7 @@ export function BrowserPane({
               selected={page.id === effectiveSelectedId}
               displayUrl={displayUrlOf(page, localNav[page.id])}
               onNavChange={handleNavChange}
+              onWebContentsId={registerWebContentsId}
               bindPageActions={bindPageActions}
               // T14 download indicator: pane-store driven, so it stays put
               // across page switches (the newest entry of the ring).

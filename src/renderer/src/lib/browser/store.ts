@@ -10,8 +10,11 @@ import { buildMarkerUrl, HUMAN_OWNER } from '../../../../shared/browser.ts'
 import type { BrowserPageMeta } from '../../../../shared/browser.ts'
 import type { BrowserStatusDTO } from '../../../../shared/types.ts'
 
-/** 面板行：服务端页 meta + 本地占位标记（pending = createPage 往返/pendingCreate 物化中）。 */
-export interface BrowserPanePage extends BrowserPageMeta { pending?: boolean }
+/** 面板行：服务端页 meta + 本地占位标记（pending = createPage 往返/pendingCreate 物化中）。
+ *  navigateTo 仅 Task 15 的本地 popup 行携带：dom-ready 握手把它作为 browserSeen 的
+ *  navigateTo 上报——service 存 pendingNavigate，reconcile 升级 runtime 后由服务端 goto
+ *  （渲染端绝不自己 loadURL popup 页：会输掉与 reconcile 的 marker 竞态）。 */
+export interface BrowserPanePage extends BrowserPageMeta { pending?: boolean; navigateTo?: string }
 
 export interface BrowserPopupInfo {
   url: string

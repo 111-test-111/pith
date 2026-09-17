@@ -37,7 +37,8 @@ export function subscribeOpenLinksInBrowser(cb: () => void): () => void {
   }
 }
 
-export function getOpenLinksInBrowser(): boolean {
+/** 同步读偏好（非 React 上下文用——markdown 链接路由在事件回调里读，拿不到 hook）。 */
+export function getOpenLinksInBrowserPref(): boolean {
   if (openLinksCache === null) {
     try {
       openLinksCache = window.localStorage.getItem(OPEN_LINKS_PREF_KEY) !== 'false'
@@ -50,7 +51,7 @@ export function getOpenLinksInBrowser(): boolean {
 
 /** 即时生效：写盘（隐私模式等失败静默降级）+ 通知订阅者。 */
 export function setOpenLinksInBrowser(value: boolean): void {
-  if (value === getOpenLinksInBrowser()) return
+  if (value === getOpenLinksInBrowserPref()) return
   openLinksCache = value
   try {
     window.localStorage.setItem(OPEN_LINKS_PREF_KEY, value ? 'true' : 'false')
@@ -67,7 +68,7 @@ export function useOpenLinksInBrowserPref(): {
 } {
   const openLinksInBrowser = useSyncExternalStore(
     subscribeOpenLinksInBrowser,
-    getOpenLinksInBrowser,
+    getOpenLinksInBrowserPref,
   )
   return { openLinksInBrowser, setOpenLinksInBrowser }
 }

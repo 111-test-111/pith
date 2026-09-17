@@ -110,6 +110,7 @@ import { FileBrowserStore } from '@/state/file-browser-store'
 import { BrowserStore } from '@/lib/browser/store'
 import { subscribeBrowserPopups } from '@/lib/browser/popup'
 import { subscribeBrowserDownloads } from '@/lib/browser/downloads'
+import { BROWSER_OPEN_LINK_EVENT } from '@/lib/browser/open-link'
 import { HUMAN_OWNER } from '../../../../shared/browser'
 import { FileNavigationProvider, type FileTarget } from '@/lib/file-navigation'
 import { AuthBridge } from './AuthBridge'
@@ -264,7 +265,14 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
       }
     }
     const unsubscribeState = window.pi.onBrowserState(applyBrowserStatus)
-    const unsubscribePopups = subscribeBrowserPopups(browserStore)
+    // Task 15: popup 自动开面板。守卫刻意只看「事件是否刚刚到达」：只有 pane 未开时
+    // 收到的新 popup 才开面板；关闭前已入队的 popup 永不重开——它们由面板挂载时的
+    // drain 兜底（store 队列跨面板关闭存活）。这与 T10 的 per-batch 守卫同一精神：
+    // 用户主动关掉面板后，只有「新的」popup 到达才会再次打开，同一批已入队的不会
+    // 反复打扰（事件是唯一触发源，队列内容不是）。
+    const unsubscribePopups = subscribeBrowserPopups(browserStore, () => {
+      if (!sidePanelTabsRef.current.includes('browser')) openSidePanelTabRef.current?.('browser')
+    })
     // 下载完成事件进环形队列（≤5），工具条按最新一条渲染指示；指示在工具条层，
     // 切页不丢（T14）。
     const unsubscribeDownloads = subscribeBrowserDownloads(browserStore)
@@ -732,6 +740,15 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
   useEffect(() => {
     openSidePanelTabRef.current = openSidePanelTab
   })
+
+  // Task 15: 聊天里的 http(s) 链接普通点击 → 开浏览器面板（open-link 事件）。
+  // 事件可能先于本 effect 的订阅到达（markdown 在 Workspace 树内，实际不会，但队列
+  // 兜底成立）：面板晚于事件挂载时，BrowserPane 挂载 drain 会取走队列。
+  useEffect(() => {
+    const open = () => openSidePanelTabRef.current?.('browser')
+    window.addEventListener(BROWSER_OPEN_LINK_EVENT, open)
+    return () => window.removeEventListener(BROWSER_OPEN_LINK_EVENT, open)
+  }, [])
 
   /**
    * A delegation's "open session" shows the child BESIDE the chat. Navigating

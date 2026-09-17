@@ -50,7 +50,8 @@ import {
   DEVICE_SIZE_MIN, findDevicePreset,
 } from '../src/renderer/src/lib/browser/device.ts'
 import {
-  BROWSER_OPEN_LINK_EVENT, drainPendingBrowserOpenLinks, requestBrowserOpenLink,
+  BROWSER_OPEN_LINK_EVENT, drainPendingBrowserOpenLinks, getOpenLinksInBrowserPref,
+  requestBrowserOpenLink, setOpenLinksInBrowser,
 } from '../src/renderer/src/lib/browser/open-link.ts'
 import { BROWSER_DOWNLOADS_LIMIT, BrowserStore } from '../src/renderer/src/lib/browser/store.ts'
 import { subscribeBrowserPopups } from '../src/renderer/src/lib/browser/popup.ts'
@@ -1116,6 +1117,98 @@ test('popup: 无 window.pi 安全降级；有则转发 pushPopup 且退订移除
     stop()
     assert.equal(listeners.length, 0, '退订移除监听')
   })
+})
+
+// ---- Task 15：open-link 偏好的同步 getter（markdown 链接路由在事件回调里读）----
+test('open-link: getOpenLinksInBrowserPref 同步读同一 store；默认开，仅 \'false\' 关，set 即时生效', () => {
+  withWindowShim(({ store }) => {
+    assert.equal(getOpenLinksInBrowserPref(), true, '默认开（无键）')
+    setOpenLinksInBrowser(false)
+    assert.equal(getOpenLinksInBrowserPref(), false)
+    assert.equal(store.get('pi-app:open-links-in-browser'), 'false')
+    setOpenLinksInBrowser(true)
+    assert.equal(getOpenLinksInBrowserPref(), true, 'set 后同步 getter 即时读到新值')
+  })
+})
+
+// ---- Task 15：popup 订阅的 onPopup 观察者（Workspace 自动开面板钩子）----
+test('popup: onPopup 在 pushPopup 之后回调（回调里读到的队列已含本条）；缺省时行为不变', () => {
+  withWindowShim(() => {
+    const listeners = []
+    globalThis.window.pi = {
+      onBrowserPopup: (cb) => {
+        listeners.push(cb)
+        return () => { const i = listeners.indexOf(cb); if (i !== -1) listeners.splice(i, 1) }
+      },
+    }
+    const store = new BrowserStore()
+    const seen = []
+    const stop = subscribeBrowserPopups(store, () => { seen.push(store.getState().popups.length) })
+    listeners[0]({ url: 'https://p.dev/', openerWebContentsId: 7 })
+    assert.deepEqual(seen, [1], '回调时 popup 已入队——先 push 再回调，回调抛错不丢 popup')
+    stop()
+    const plain = new BrowserStore()
+    const stop2 = subscribeBrowserPopups(plain)
+    listeners[0]({ url: 'https://q.dev/', openerWebContentsId: 8 })
+    assert.equal(plain.getState().popups.length, 1, '无 onPopup 时与原行为一致')
+    stop2()
+  })
+})
+
+// ---- Task 15：聊天链接拦截源码钉（markdown 锚点渲染器）----
+// 语义钉：四修饰键全查、http(s) 门、同步偏好读取、拦截分支在放行分支之前、
+// # 锚点分支保持在最前（in-page 滚动行为不变）。
+test('markdown interception source pin: 修饰键全查 + http(s) 门 + 偏好门；拦截先于 navigation.open 放行', () => {
+  const source = readFileSync(
+    new URL('../src/renderer/src/lib/markdown.tsx', import.meta.url),
+    'utf8',
+  )
+  const fnAt = source.indexOf('function isBrowserOpenLinkClick')
+  assert.ok(fnAt !== -1, '找不到 isBrowserOpenLinkClick（拦截判定被内联/改名，需随重构更新本钉）')
+  const fn = source.slice(fnAt, source.indexOf('type MarkdownComponents', fnAt))
+  for (const key of ['metaKey', 'ctrlKey', 'shiftKey', 'altKey']) {
+    assert.ok(fn.includes(key), `修饰键检查缺 ${key}——带修饰键的点击必须保持既有 openExternal 行为`)
+  }
+  assert.ok(fn.includes('https?:'), '必须门控 http(s)——其他 scheme（file 链接等）走既有路由')
+  assert.ok(fn.includes('getOpenLinksInBrowserPref()'), '必须读同步偏好——偏好关时行为不变')
+  const anchorAt = source.indexOf("} else if (isBrowserOpenLinkClick(href, event)) {")
+  const queueAt = source.indexOf('requestBrowserOpenLink(href)')
+  const fallthroughAt = source.indexOf('} else navigation.open(href)')
+  const fragmentAt = source.indexOf("if (href.startsWith('#'))")
+  assert.ok(anchorAt !== -1 && queueAt !== -1 && fallthroughAt !== -1 && fragmentAt !== -1,
+    '锚点 onClick 的分支结构变了——拦截分支必须先于放行分支，# 锚点分支保持最前')
+  assert.ok(fragmentAt < anchorAt, '# 锚点分支必须在拦截判断之前（in-page 滚动行为不变）')
+  assert.ok(queueAt < fallthroughAt, 'requestBrowserOpenLink 必须在 navigation.open 放行之前')
+})
+
+// ---- Task 15：popup 物化源码钉（修正后的流程写死）----
+// renderer 绝不自己 loadURL popup（会输掉与 reconcile 的 marker 竞态）：tempId 客户端
+// 生成 → 本地 pending 行与 server pendingCreates 走同一 pendingRowOf 分支（Ruling D）→
+// dom-ready 握手带 navigateTo → service 存 pendingNavigate 并在 runtime 就位后自行 goto。
+test('popup materialization source pin: tempId 客户端生成 + Ruling D 同一分支 + navigateTo 上报 + 渲染端无 loadURL', () => {
+  const pane = readFileSync(
+    new URL('../src/renderer/src/components/app/BrowserPane.tsx', import.meta.url),
+    'utf8',
+  )
+  const view = readFileSync(
+    new URL('../src/renderer/src/components/app/BrowserPageView.tsx', import.meta.url),
+    'utf8',
+  )
+  assert.ok(
+    pane.includes('wcIdMapRef.current.get(popup.openerWebContentsId)?.owner ?? HUMAN_OWNER'),
+    'owner 继承必须经 wcId→page 映射，查不到回 human',
+  )
+  assert.ok(pane.includes('createBrowserPageId()'), 'tempId 必须客户端生成（popup 无法预知服务端 id）')
+  const modelStart = pane.indexOf('const pages = useMemo')
+  assert.ok(modelStart !== -1, '合并模型分支挪走了——源码钉需要随重构更新')
+  const model = pane.slice(modelStart, pane.indexOf('}, [state, status, closedIds, localPending])'))
+  assert.ok(model.includes('pendingRowOf(entry.id, entry.owner)'), 'server pendingCreates 必须走 pendingRowOf 分支')
+  assert.ok(model.includes('pendingRowOf(row.id, row.owner, row.navigateTo)'), '本地 popup 行必须走同一 pendingRowOf 分支（Ruling D：不许第二渲染路径）')
+  assert.ok(
+    view.includes('navigateTo: page.navigateTo'),
+    'dom-ready 握手必须把 pending 行的 navigateTo 上报（service 侧 goto 的唯一通道）',
+  )
+  assert.ok(!/loadURL\s*\(/.test(pane), 'BrowserPane 不得调用 loadURL——popup 的 goto 只能由 service 执行（注释里的词不算）')
 })
 
 // ---- Task 9 评审修复：zoom 生命周期的源码钉（pi-web 前身 BrowserTab.zoom-lifecycle.test.mjs）----

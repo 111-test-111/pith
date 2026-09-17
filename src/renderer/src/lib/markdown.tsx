@@ -13,6 +13,7 @@ import { PreviewThumb } from '@/components/app/ImagePreview'
 import { REMARK_PLUGINS } from '@/lib/markdown-plugins'
 import { localFileTarget, useFileNavigation } from '@/lib/file-navigation'
 import { codeLanguage } from '@/lib/file-language'
+import { getOpenLinksInBrowserPref, requestBrowserOpenLink } from '@/lib/browser/open-link'
 
 /**
  * Assistant markdown renderer: react-markdown + GFM (tables, task lists,
@@ -205,6 +206,16 @@ function splitMarkdownBlocks(text: string): { stable: string[]; tail: string } {
   return { stable, tail: text.slice(start) }
 }
 
+/** Task 15 聊天链接拦截：无修饰键的普通点击 + http(s) 链接 + 「链接在内置浏览器打开」
+ *  偏好开 → 内置浏览器打开。其余一律放行现有行为：⌘/Ctrl/Shift/Alt 点击（新标签等用户
+ *  意图）、其他 scheme（file 链接走 FileNavigationProvider 路由、其余 openExternal）、
+ *  偏好关。同步读偏好——事件回调里拿不到 hook 的 React 上下文。 */
+function isBrowserOpenLinkClick(href: string, event: { metaKey: boolean; ctrlKey: boolean; shiftKey: boolean; altKey: boolean }): boolean {
+  if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return false
+  if (!/^https?:\/\//i.test(href)) return false
+  return getOpenLinksInBrowserPref()
+}
+
 type MarkdownComponents = ComponentPropsWithoutRef<typeof ReactMarkdown>['components']
 
 const components: MarkdownComponents = {
@@ -241,6 +252,10 @@ const components: MarkdownComponents = {
             const heading = [...(page?.querySelectorAll<HTMLElement>('h1,h2,h3,h4,h5,h6') ?? [])].find(element =>
               element.textContent?.toLowerCase().replace(/[^\p{L}\p{N}\p{M}_\-\s]/gu, '').replace(/\s/g, '-') === anchor)
             if (page && heading) page.scrollTop += heading.getBoundingClientRect().top - page.getBoundingClientRect().top
+          } else if (isBrowserOpenLinkClick(href, event)) {
+            // Task 15: 入队 + 派发 pith:browser-open-link——面板已开则立即 drain，
+            // 未开则 Workspace 先开面板、挂载 drain 兜底。preventDefault 已在上面。
+            requestBrowserOpenLink(href)
           } else navigation.open(href)
         }}
         className="font-medium text-primary underline underline-offset-2 hover:opacity-80"
