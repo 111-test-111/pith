@@ -69,6 +69,7 @@ import {
   RiGitPullRequestLine,
   RiGlobalLine,
   RiGraduationCapLine,
+  RiHistoryLine,
   RiImage2Line,
   RiImageAddLine,
   RiImageLine,
@@ -91,6 +92,7 @@ import {
   RiNotification3Line,
   RiPaletteLine,
   RiPlug2Line,
+  RiPrinterLine,
   RiPlugLine,
   RiProhibitedLine,
   RiPushpinLine,
@@ -246,6 +248,7 @@ export const GitPullRequest = /* @__PURE__ */ createIcon('GitPullRequest', RiGit
 export const Globe = /* @__PURE__ */ createIcon('Globe', RiGlobalLine)
 export const Globe2 = /* @__PURE__ */ createIcon('Globe2', RiGlobalLine)
 export const GraduationCap = /* @__PURE__ */ createIcon('GraduationCap', RiGraduationCapLine)
+export const History = /* @__PURE__ */ createIcon('History', RiHistoryLine)
 export const Image = /* @__PURE__ */ createIcon('Image', RiImageLine)
 export const ImageIcon = /* @__PURE__ */ createIcon('ImageIcon', RiImage2Line)
 export const ImagePlus = /* @__PURE__ */ createIcon('ImagePlus', RiImageAddLine)
@@ -272,10 +275,32 @@ export const Minus = /* @__PURE__ */ createIcon('Minus', RiSubtractLine)
 export const Monitor = /* @__PURE__ */ createIcon('Monitor', RiComputerLine)
 export const Moon = /* @__PURE__ */ createIcon('Moon', RiMoonLine)
 export const MoreHorizontal = /* @__PURE__ */ createIcon('MoreHorizontal', RiMoreLine)
+// Remix packs no vertical ellipsis: the ⋮ is the horizontal glyph rotated a
+// quarter turn. Same wrapper contract as createIcon (a11y default, compat
+// props dropped) plus the one transform.
+export const MoreVertical = /* @__PURE__ */ (() => {
+  const Glyph = RiMoreLine as unknown as RemixGlyph
+  const Component = forwardRef<SVGSVGElement, IconProps>((props, ref) => {
+    const { strokeWidth: _strokeWidth, absoluteStrokeWidth: _absolute, className, ...rest } = props
+    return (
+      <Glyph
+        ref={ref}
+        aria-hidden={rest['aria-label'] || rest['aria-labelledby'] ? undefined : true}
+        focusable="false"
+        data-app-icon="MoreVertical"
+        {...rest}
+        className={className ? `rotate-90 ${className}` : 'rotate-90'}
+      />
+    )
+  })
+  Component.displayName = 'MoreVertical'
+  return Component as IconComponent
+})()
 export const MousePointer2 = /* @__PURE__ */ createIcon('MousePointer2', RiCursorLine)
 export const MousePointerClick = /* @__PURE__ */ createIcon('MousePointerClick', RiCursorFill)
 export const MusicNote = /* @__PURE__ */ createIcon('MusicNote', RiMusic2Line)
 export const Palette = /* @__PURE__ */ createIcon('Palette', RiPaletteLine)
+export const Printer = /* @__PURE__ */ createIcon('Printer', RiPrinterLine)
 export const PanelLeft = /* @__PURE__ */ createIcon('PanelLeft', RiLayoutLeftLine)
 export const PanelRight = /* @__PURE__ */ createIcon('PanelRight', RiLayoutRightLine)
 export const Paperclip = /* @__PURE__ */ createIcon('Paperclip', RiAttachmentLine)

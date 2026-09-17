@@ -452,6 +452,12 @@ const zhCN: Messages = {
   'browser.findPrev': '上一个匹配（Shift+Enter）',
   'browser.findClose': '关闭查找（Esc）',
   'browser.print': '打印页面（⌘P）',
+  'browser.menu': '更多操作',
+  'browser.menuFind': '页内查找',
+  'browser.menuHistory': '历史记录',
+  'browser.historyEmpty': '暂无历史记录',
+  'browser.historyClear': '清空历史',
+  'browser.historyClearConfirm': '再次点击确认清空',
 
   'review.emptyBody': '某一轮里被修改或新建的文件会连同 diff 出现在这里——一次一轮，新的在前。',
   'review.prevTurn': '上一个有改动的轮次',

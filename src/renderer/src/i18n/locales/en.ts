@@ -455,6 +455,12 @@ const en = {
   'browser.findPrev': 'Previous match (Shift+Enter)',
   'browser.findClose': 'Close find (Esc)',
   'browser.print': 'Print page (⌘P)',
+  'browser.menu': 'More options',
+  'browser.menuFind': 'Find in page',
+  'browser.menuHistory': 'History',
+  'browser.historyEmpty': 'No history yet',
+  'browser.historyClear': 'Clear history',
+  'browser.historyClearConfirm': 'Click again to confirm',
 
   'review.emptyTitle': 'Nothing to review yet',
   'review.emptyBody':

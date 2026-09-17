@@ -31,6 +31,7 @@ import {
   subscribeBrowserZoom
 } from '@/lib/browser/zoom'
 import { cn } from '@/lib/utils'
+import { BrowserOverlays } from './BrowserOverlays'
 
 /** Electron guest queries the pane needs — declared here because the renderer
  *  must not import Electron. The JSX element itself is @types/react's built-in
@@ -76,6 +77,9 @@ export interface LocalNavInfo {
 export interface BrowserPageActions {
   openFind: () => void
   print: () => void
+  /** The toolbar's whitelist-gated navigation — the T13 history rows ride it
+   *  so a history click lands on the CURRENT page through the same funnel. */
+  loadUrl: (raw: string) => string | null
 }
 
 export interface BrowserPageViewProps {
@@ -378,15 +382,6 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, bindP
     try { void wv.print().catch(() => { /* a failed print is the guest's to render */ }) } catch { /* guest not ready */ }
   }, [])
 
-  // Expose the selected page's find/print to the pane-level shortcuts (⌘F/⌘P
-  // and the guest relay). Only the SELECTED view binds, so the pane's actions
-  // always hit the page on screen. T13: menu opens find via this path.
-  useEffect(() => {
-    if (!selected) return
-    bindPageActions?.({ openFind, print: printPage })
-    return () => bindPageActions?.(null)
-  }, [bindPageActions, openFind, printPage, selected])
-
   // The guest follows the element layout, but under "display:none → visible"
   // and panel open/close animations it can end up stuck at a shrunken size
   // (measured in pi-web) — drive it explicitly in pixels. A display:none
@@ -437,6 +432,17 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, bindP
     void wv.loadURL(url).catch(() => { /* a failed load is the guest's to render */ })
     return url
   }, [])
+
+  // Expose the selected page's find/print/navigation to the pane-level
+  // shortcuts (⌘F/⌘P and the guest relay). Only the SELECTED view binds, so
+  // the pane's actions always hit the page on screen. T13: the ⋮ menu's
+  // find/print/history entries use these same callbacks directly
+  // (BrowserOverlays receives the identical references).
+  useEffect(() => {
+    if (!selected) return
+    bindPageActions?.({ openFind, print: printPage, loadUrl })
+    return () => bindPageActions?.(null)
+  }, [bindPageActions, loadUrl, openFind, printPage, selected])
 
   const navigate = useCallback((action: 'back' | 'forward' | 'reload') => {
     const wv = webviewRef.current as unknown as BrowserWebviewElement | null
@@ -604,6 +610,10 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, bindP
             </Tooltip>
             <ToolButton label={t('browser.zoomIn')} icon={ZoomIn} onClick={zoomIn} />
           </div>
+          {/* T13 ⋮ overflow menu + history panel. The callbacks are the same
+              function references bound into BrowserPageActions above, so a
+              menu entry and the pane-level shortcuts share one path. */}
+          <BrowserOverlays onFind={openFind} onPrint={printPage} onNavigate={loadUrl} />
         </div>
       ) : null}
       <div ref={wrapRef} className="relative min-h-0 flex-1">
