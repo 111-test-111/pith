@@ -438,6 +438,14 @@ const en = {
   'browser.closePage': 'Close page',
   'browser.pageLoading': 'Loading…',
   'browser.emptyHint': 'No pages open yet — start one to browse beside the conversation.',
+  'browser.back': 'Back',
+  'browser.forward': 'Forward',
+  'browser.reload': 'Reload',
+  'browser.urlPlaceholder': 'Enter URL',
+  'browser.startTitle': 'Start browsing',
+  'browser.startHint': 'Enter a URL to open a page',
+  'browser.recents': 'Recent',
+  'browser.openRecents': 'Open a recent address',
 
   'review.emptyTitle': 'Nothing to review yet',
   'review.emptyBody':

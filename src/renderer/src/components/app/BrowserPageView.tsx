@@ -1,20 +1,45 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import type { FocusEvent, JSX, MouseEvent } from 'react'
+import { ArrowLeft, ArrowRight, Globe, RefreshCw, type IconComponent } from '@/lib/icons'
+import { Button } from '@/components/motion/button'
+import { Input } from '@/components/motion/input'
+import { Tooltip } from '@/components/motion/tooltip'
+import { useI18n } from '@/i18n'
 import {
   BROWSER_PARTITION,
   HUMAN_OWNER,
   buildMarkerUrl,
+  normalizeNavigationUrl,
   parseMarkerUrl
 } from '../../../../shared/browser.ts'
+import {
+  getRecentUrls,
+  isRecordableUrl,
+  recordBrowserHistory,
+  recordRecentUrl,
+  subscribeBrowserRecents,
+  updateBrowserHistoryFaviconFor,
+  updateBrowserHistoryTitleFor
+} from '@/lib/browser/session'
 import type { BrowserPanePage } from '@/lib/browser/store'
 import { cn } from '@/lib/utils'
 
 /** Electron guest queries the pane needs — declared here because the renderer
  *  must not import Electron. The JSX element itself is @types/react's built-in
  *  `webview` (global `HTMLWebViewElement`), which already carries `src` and
- *  `partition`; the ref holds that element and event/style access is plain DOM. */
+ *  `partition`; the ref holds that element and event/style access is plain DOM.
+ *  The navigation methods are the webview's own DOM API — safe on the guest
+ *  (the forbidden reload is the CDP `Page.reload` command, which the service
+ *  avoids; `webview.reload()`/`loadURL()` are ordinary element calls). */
 export interface BrowserWebviewElement {
   getURL(): string
   getWebContentsId(): number
+  canGoBack(): boolean
+  canGoForward(): boolean
+  goBack(): void
+  goForward(): void
+  reload(): void
+  loadURL(url: string): Promise<void>
 }
 
 /** One webview event's display patch, folded into the pane's localNav map. */
@@ -35,7 +60,113 @@ export interface BrowserPageViewProps {
   page: BrowserPanePage
   /** Whether the page strip has this page selected. */
   selected: boolean
+  /** Display url of this page (localNav truth, markers shown as about:blank) —
+   *  drives the URL input and the start-page overlay. */
+  displayUrl: string
   onNavChange: (id: string, patch: BrowserNavPatch) => void
+}
+
+/** Icon-only toolbar button (the FilesPane ToolButton pattern). */
+function ToolButton({ label, icon: Icon, onClick }: { label: string; icon: IconComponent; onClick: () => void }) {
+  return (
+    <Tooltip content={label}>
+      <Button variant="ghost" size="icon" className="size-7 shrink-0" aria-label={label} onClick={onClick}>
+        <Icon aria-hidden className="size-3.5" />
+      </Button>
+    </Tooltip>
+  )
+}
+
+/** URL input's click-select-all (pi-web parity): after onFocus selects all,
+ *  the browser's default mousedown drops the caret at the click point ("select
+ *  then suddenly release"); intercept the default when unfocused and complete
+ *  focus+select by hand; leave a focused field alone so drag-selection and
+ *  caret placement keep working. */
+const urlSelectAllProps = {
+  onFocus: (e: FocusEvent<HTMLInputElement>) => e.target.select(),
+  onMouseDown: (e: MouseEvent<HTMLInputElement>) => {
+    if (document.activeElement !== e.currentTarget) {
+      e.preventDefault()
+      e.currentTarget.focus()
+      e.currentTarget.select()
+    }
+  }
+} as const
+
+/** Recents row label: hostname emphasized, path/search muted. */
+function recentUrlParts(url: string): { host: string; rest: string } {
+  try {
+    const parsed = new URL(url)
+    const rest = `${parsed.pathname === '/' ? '' : parsed.pathname}${parsed.search}`
+    return { host: parsed.host, rest }
+  } catch {
+    return { host: url, rest: '' }
+  }
+}
+
+/**
+ * Start-page overlay: shown where a page exists but is blank (display url is
+ * about:blank). Paints over the still-mounted guest (unmounting it would
+ * destroy it — the iron rule below) with a large URL input that navigates the
+ * CURRENT page and the recent-addresses list. The T7 no-pages empty state is
+ * a different surface and stays.
+ */
+function BrowserStartPage({ onOpen }: { onOpen: (raw: string) => boolean }): JSX.Element {
+  const { t } = useI18n()
+  const [draft, setDraft] = useState('')
+  const recents = useSyncExternalStore(subscribeBrowserRecents, getRecentUrls)
+  const submit = () => {
+    if (onOpen(draft)) setDraft('')
+  }
+  return (
+    <div className="absolute inset-0 z-10 overflow-y-auto bg-background" data-browser-start-page>
+      <div className="flex min-h-full flex-col items-center justify-center gap-5 p-6 text-center">
+        <div className="flex flex-col items-center gap-1.5">
+          <Globe aria-hidden="true" className="size-6 text-muted-foreground/70" />
+          <p className="text-sm font-medium text-foreground">{t('browser.startTitle')}</p>
+          <p className="text-xs text-muted-foreground">{t('browser.startHint')}</p>
+        </div>
+        <Input
+          value={draft}
+          onChange={setDraft}
+          placeholder={t('browser.urlPlaceholder')}
+          aria-label={t('browser.urlPlaceholder')}
+          spellCheck={false}
+          className="w-full max-w-md"
+          onKeyDown={(event) => {
+            if (event.key !== 'Enter' || event.nativeEvent.isComposing) return
+            submit()
+          }}
+          {...urlSelectAllProps}
+        />
+        {recents.length > 0 ? (
+          <div className="flex w-full max-w-md flex-col gap-1" role="list" aria-label={t('browser.openRecents')} data-browser-recents>
+            <p className="px-1 text-left text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">
+              {t('browser.recents')}
+            </p>
+            {recents.map((url) => {
+              const parts = recentUrlParts(url)
+              return (
+                <Button
+                  key={url}
+                  variant="ghost"
+                  size="sm"
+                  className="w-full justify-start gap-2 px-2 font-normal"
+                  onClick={() => onOpen(url)}
+                >
+                  <Globe aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground/70" />
+                  <span className="min-w-0 truncate text-xs">
+                    <span className="font-medium text-foreground">{parts.host}</span>
+                    <span className="text-muted-foreground">{parts.rest}</span>
+                  </span>
+                </Button>
+              )
+            })}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  )
 }
 
 /**
@@ -45,7 +176,7 @@ export interface BrowserPageViewProps {
  * webview destroys the guest (page state and history are lost) — so the pane
  * hosts every page at full size and only the VISIBILITY differs:
  *
- * - selected page: normal;
+ * - selected page: normal (plus its toolbar above the guest);
  * - unselected HUMAN page: `display: none`;
  * - unselected AGENT page (`owner !== HUMAN_OWNER`): `opacity: 0` +
  *   `pointerEvents: none`, still full size — NEVER `display: none`. Under
@@ -53,7 +184,8 @@ export interface BrowserPageViewProps {
  *   input silently does nothing (pi-web's electron-webview-spike finding);
  *   background agent driving needs the opacity form.
  */
-export function BrowserPageView({ page, selected, onNavChange }: BrowserPageViewProps) {
+export function BrowserPageView({ page, selected, displayUrl, onNavChange }: BrowserPageViewProps) {
+  const { t } = useI18n()
   const webviewRef = useRef<HTMLWebViewElement | null>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
   // Initial src is taken once at mount: new pages / pendingCreates carry a
@@ -66,6 +198,14 @@ export function BrowserPageView({ page, selected, onNavChange }: BrowserPageView
   // The marker registration handshake is one-shot; re-apply-zoom (Task 9)
   // must NOT share this latch — every real document fires its own dom-ready.
   const handshakeCompleteRef = useRef(false)
+  // Most recent committed url on this guest (marker loads excluded): the
+  // page-title / page-favicon history backfills attach to it.
+  const lastNavUrlRef = useRef('')
+  // null = not editing (the input shows displayUrl); a typed draft keeps the
+  // text stable while did-navigate events land mid-edit.
+  const [urlDraft, setUrlDraft] = useState<string | null>(null)
+  const [urlError, setUrlError] = useState(false)
+  const urlErrorTimerRef = useRef<number | null>(null)
 
   // The guest follows the element layout, but under "display:none → visible"
   // and panel open/close animations it can end up stuck at a shrunken size
@@ -89,6 +229,40 @@ export function BrowserPageView({ page, selected, onNavChange }: BrowserPageView
     syncSize()
     return () => observer.disconnect()
   }, [syncSize])
+
+  const flashUrlError = useCallback(() => {
+    setUrlError(true)
+    if (urlErrorTimerRef.current !== null) window.clearTimeout(urlErrorTimerRef.current)
+    urlErrorTimerRef.current = window.setTimeout(() => {
+      urlErrorTimerRef.current = null
+      setUrlError(false)
+    }, 700)
+  }, [])
+  useEffect(() => () => {
+    if (urlErrorTimerRef.current !== null) window.clearTimeout(urlErrorTimerRef.current)
+  }, [])
+
+  /** User-typed url → normalized → guest loadURL. Returns the normalized url,
+   *  or null when it does not parse (caller shows the error styling). */
+  const loadUrl = useCallback((raw: string): string | null => {
+    const url = normalizeNavigationUrl(raw)
+    const wv = webviewRef.current as unknown as BrowserWebviewElement | null
+    if (!url || !wv) return null
+    void wv.loadURL(url).catch(() => { /* a failed load is the guest's to render */ })
+    return url
+  }, [])
+
+  const navigate = useCallback((action: 'back' | 'forward' | 'reload') => {
+    const wv = webviewRef.current as unknown as BrowserWebviewElement | null
+    if (!wv) return
+    if (action === 'back') {
+      if (wv.canGoBack()) wv.goBack()
+    } else if (action === 'forward') {
+      if (wv.canGoForward()) wv.goForward()
+    } else {
+      wv.reload()
+    }
+  }, [])
 
   useEffect(() => {
     const wv = webviewRef.current
@@ -124,6 +298,14 @@ export function BrowserPageView({ page, selected, onNavChange }: BrowserPageView
       // Loading the initial marker src is not a real navigation: keep it out
       // of localNav so the strip keeps its about:blank display semantics.
       if (parseMarkerUrl(raw)) return
+      lastNavUrlRef.current = raw
+      // History/recents record REAL human navigation only (markers and
+      // agent-driven pages stay out; SPA routes arrive as in-page navigations
+      // and are excluded there).
+      if (page.owner === HUMAN_OWNER && isRecordableUrl(raw)) {
+        recordRecentUrl(raw)
+        recordBrowserHistory(raw)
+      }
       let origin = ''
       try { origin = new URL(raw).origin } catch { /* about:blank & friends */ }
       const crossSite = origin !== prevOrigin
@@ -135,14 +317,17 @@ export function BrowserPageView({ page, selected, onNavChange }: BrowserPageView
       const e = event as unknown as { url?: string; isMainFrame?: boolean }
       if (e.isMainFrame === false) return // same-document subframe noise
       if (typeof e.url !== 'string') return
+      lastNavUrlRef.current = e.url
       // Same-document navigation does not reset the title — did-navigate /
       // page-title-updated arrive in either order and a reset here would drop
-      // a title that got there first.
+      // a title that got there first. Deliberately NOT recorded: an SPA route
+      // is not a real navigation.
       onNavChange(page.id, { url: e.url })
     }
     const onTitle = (event: Event) => {
       const title = (event as unknown as { title?: string }).title ?? ''
       onNavChange(page.id, { title })
+      if (page.owner === HUMAN_OWNER) updateBrowserHistoryTitleFor(lastNavUrlRef.current, title)
     }
     const onFavicon = (event: Event) => {
       // Candidates follow the site's declaration order; the last is usually
@@ -150,6 +335,9 @@ export function BrowserPageView({ page, selected, onNavChange }: BrowserPageView
       const favicons = (event as unknown as { favicons?: string[] }).favicons ?? []
       const favicon = favicons.length > 0 ? favicons[favicons.length - 1] : null
       onNavChange(page.id, { favicon })
+      if (page.owner === HUMAN_OWNER && favicon) {
+        updateBrowserHistoryFaviconFor(lastNavUrlRef.current, favicon)
+      }
     }
     wv.addEventListener('dom-ready', onDomReady)
     wv.addEventListener('did-navigate', onNav)
@@ -171,20 +359,48 @@ export function BrowserPageView({ page, selected, onNavChange }: BrowserPageView
   return (
     <div
       data-browser-page={page.id}
-      className={cn('absolute inset-0', !selected && !backgroundAgent && 'hidden')}
+      className={cn('absolute inset-0 flex min-h-0 flex-col', !selected && !backgroundAgent && 'hidden')}
       style={backgroundAgent ? { opacity: 0, pointerEvents: 'none' } : undefined}
     >
-      <webview
-        ref={webviewRef}
-        src={initialSrcRef.current}
-        partition={BROWSER_PARTITION}
-        // allowpopups as a STRING spread (React strips boolean attributes on
-        // unknown elements, so a `true` prop never reaches the DOM) — without
-        // it Chromium swallows guest `window.open` before the main-process
-        // popup handler ever sees it (pi-web electron-webview-spike finding).
-        {...{ allowpopups: 'true' } as Record<string, string>}
-        className="h-full w-full"
-      />
+      {selected ? (
+        <div className="flex h-11 shrink-0 items-center gap-1 border-b border-border/40 px-2" data-browser-toolbar>
+          <ToolButton label={t('browser.back')} icon={ArrowLeft} onClick={() => navigate('back')} />
+          <ToolButton label={t('browser.forward')} icon={ArrowRight} onClick={() => navigate('forward')} />
+          <ToolButton label={t('browser.reload')} icon={RefreshCw} onClick={() => navigate('reload')} />
+          <Input
+            value={urlDraft ?? displayUrl}
+            onChange={setUrlDraft}
+            placeholder={t('browser.urlPlaceholder')}
+            spellCheck={false}
+            error={urlError}
+            className="min-w-0 flex-1"
+            classNames={{ field: 'h-8', input: 'h-full px-2.5 font-mono text-xs' }}
+            onKeyDown={(event) => {
+              if (event.key !== 'Enter' || event.nativeEvent.isComposing) return
+              const url = loadUrl(urlDraft ?? displayUrl)
+              if (url !== null) setUrlDraft(url)
+              else flashUrlError()
+            }}
+            {...urlSelectAllProps}
+          />
+        </div>
+      ) : null}
+      <div ref={wrapRef} className="relative min-h-0 flex-1">
+        <webview
+          ref={webviewRef}
+          src={initialSrcRef.current}
+          partition={BROWSER_PARTITION}
+          // allowpopups as a STRING spread (React strips boolean attributes on
+          // unknown elements, so a `true` prop never reaches the DOM) — without
+          // it Chromium swallows guest `window.open` before the main-process
+          // popup handler ever sees it (pi-web electron-webview-spike finding).
+          {...{ allowpopups: 'true' } as Record<string, string>}
+          className="h-full w-full"
+        />
+        {selected && displayUrl === 'about:blank' ? (
+          <BrowserStartPage onOpen={(raw) => loadUrl(raw) !== null} />
+        ) : null}
+      </div>
     </div>
   )
 }

@@ -7,6 +7,7 @@ import { Tooltip } from '@/components/motion/tooltip'
 import { useI18n } from '@/i18n'
 import { cn } from '@/lib/utils'
 import { HUMAN_OWNER, buildMarkerUrl, parseMarkerUrl } from '../../../../shared/browser.ts'
+import { readOpenBrowserPages, snapshotOpenPages, writeOpenBrowserPages } from '@/lib/browser/session'
 import type { BrowserPanePage, BrowserStore } from '@/lib/browser/store'
 import { BrowserPageView, type BrowserNavPatch, type LocalNavInfo } from './BrowserPageView'
 import { LabelTooltip } from './LabelTooltip'
@@ -19,9 +20,35 @@ import { MiddleEllipsis } from './MiddleEllipsis'
  *  registration. getStatus also kicks a best-effort reconcile each tick. */
 const BROWSER_POLL_MS = 2_500
 
-/** Marker URLs display as about:blank (they are the hosting convention, not a
- *  user-facing location). */
-const displayPageUrl = (url: string): string => (parseMarkerUrl(url) ? 'about:blank' : url)
+/** Display url of a page row: localNav truth first, server meta as fallback;
+ *  markers (the hosting convention, not a user-facing location) read as
+ *  about:blank. */
+const displayUrlOf = (page: Pick<BrowserPanePage, 'url'>, nav?: LocalNavInfo): string => {
+  const raw = nav?.url || page.url
+  return parseMarkerUrl(raw) ? 'about:blank' : raw
+}
+
+/** Fold one webview event patch into the localNav map (pure; returns the same
+ *  reference when nothing changed so setLocalNav skips the render). */
+function applyNavPatch(
+  prev: Record<string, LocalNavInfo>,
+  id: string,
+  patch: BrowserNavPatch
+): Record<string, LocalNavInfo> {
+  const current = prev[id]
+  const next: LocalNavInfo = {
+    url: patch.url ?? current?.url ?? '',
+    title: patch.title ?? current?.title ?? '',
+    favicon: patch.favicon === undefined ? current?.favicon : (patch.favicon ?? undefined)
+  }
+  if (
+    current &&
+    current.url === next.url &&
+    current.title === next.title &&
+    current.favicon === next.favicon
+  ) return prev
+  return { ...prev, [id]: next }
+}
 
 /**
  * The embedded browser pane: a page strip (beUI segment tabs) over one
@@ -43,6 +70,22 @@ export function BrowserPane({ store, onEmpty }: { store: BrowserStore; onEmpty: 
   /** Set while our createPage round trip is in flight: the first fresh
    *  pendingCreate row that shows up is ours to select. */
   const awaitingCreateRef = useRef(false)
+  // ---- Task 8: first-status latch / open-pages restore / empty transition ----
+  // Status snapshot that predates THIS mount: the workspace-owned store keeps
+  // its last value across a rail collapse (which unmounts this pane and kills
+  // its webviews). The latch, the empty transition and the snapshot write
+  // consume only statuses that arrived after the mount — a stale snapshot
+  // reading as non-empty must never suppress a restore.
+  const staleStatusRef = useRef(status)
+  /** First-status latch: fired (or deliberately skipped) once per mount. */
+  const autoFilledRef = useRef(false)
+  /** The latch's createPage round trips are filling an empty model: the
+   *  emptiness they own must not trip onEmpty mid-restore. */
+  const autoFillInFlightRef = useRef(false)
+  /** A post-mount status has shown a non-empty merged model. */
+  const sawPagesRef = useRef(false)
+  /** onEmpty at most once per mount (closePage and the transition share it). */
+  const emptyFiredRef = useRef(false)
 
   // Workspace wiring keeps the store fed; this pane owns the poll (a closed
   // tab has no webviews to host, so pendingCreates may simply time out).
@@ -136,23 +179,85 @@ export function BrowserPane({ store, onEmpty }: { store: BrowserStore; onEmpty: 
     setSelectedPageId(fresh.id)
   }, [state, status, closedIds])
 
-  const handleNavChange = useCallback((id: string, patch: BrowserNavPatch) => {
-    setLocalNav((prev) => {
-      const current = prev[id]
-      const next: LocalNavInfo = {
-        url: patch.url ?? current?.url ?? '',
-        title: patch.title ?? current?.title ?? '',
-        favicon: patch.favicon === undefined ? current?.favicon : (patch.favicon ?? undefined)
-      }
-      if (
-        current &&
-        current.url === next.url &&
-        current.title === next.title &&
-        current.favicon === next.favicon
-      ) return prev
-      return { ...prev, [id]: next }
-    })
+  // onEmpty at most once per pane mount: closePage's direct call and the
+  // empty-after-first-status transition share this guard.
+  const fireEmpty = useCallback(() => {
+    if (emptyFiredRef.current) return
+    emptyFiredRef.current = true
+    onEmptyRef.current()
   }, [])
+
+  const handleNavChange = useCallback((id: string, patch: BrowserNavPatch) => {
+    setLocalNav((prev) => applyNavPatch(prev, id, patch))
+  }, [])
+
+  // First-status latch (once per mount): a FRESH status (never the stale
+  // pre-mount one — pointer T7-①: EVERY pane remount on zero pages is a
+  // restore candidate, be it tab close→reopen or rail collapse→reopen) with
+  // zero pages, no pendingCreates/optimistic and consent past → restore the
+  // open-pages snapshot, else open one blank page. Live arrivals win: pages
+  // or pendingCreates on that first status skip the restore entirely. A
+  // consent-required status stays armed — the grant's own status fires it.
+  useEffect(() => {
+    if (autoFilledRef.current) return
+    if (!status || status === staleStatusRef.current) return
+    if (status.consentRequired) return
+    autoFilledRef.current = true
+    if (pages.length > 0 || status.pendingCreates.length > 0 || store.getState().optimistic.length > 0) return
+    const saved = readOpenBrowserPages()
+    const restores: Array<string | undefined> = saved.length > 0 ? [...saved] : [undefined]
+    autoFillInFlightRef.current = true
+    let remaining = restores.length
+    for (const url of restores) {
+      void window.pi.browserCreatePage(url)
+        .then((meta) => {
+          // Prewrite the row's target url while it still shows about:blank or
+          // a marker — the strip and the snapshot show the destination before
+          // the guest's did-navigate lands (did-navigate usually wins the
+          // race since the service's goto precedes resolution; the guard
+          // keeps this a no-op then).
+          setLocalNav((prev) => {
+            const shown = prev[meta.id]?.url ?? ''
+            if (shown && shown !== 'about:blank' && !parseMarkerUrl(shown)) return prev
+            return applyNavPatch(prev, meta.id, { url })
+          })
+        })
+        .catch(() => { /* once per mount — the empty state's New-page button is the fallback */ })
+        .finally(() => {
+          remaining -= 1
+          if (remaining === 0) autoFillInFlightRef.current = false
+        })
+    }
+  }, [pages, status, store])
+
+  // Empty after the first real status (pointer T7-④): once the merged model
+  // HAS been non-empty post-mount, it going empty for ANY reason — server-side
+  // removal, crash sweep — closes the tab, exactly like the close button.
+  // Boot (no status, or the stale pre-mount snapshot) never counts, and the
+  // latch's own in-flight fill is skipped — the restore owns that emptiness.
+  useEffect(() => {
+    if (!status || status === staleStatusRef.current || status.consentRequired) return
+    if (autoFillInFlightRef.current) return
+    if (pages.length > 0) {
+      sawPagesRef.current = true
+      return
+    }
+    if (!sawPagesRef.current || emptyFiredRef.current) return
+    fireEmpty()
+  }, [fireEmpty, pages, status])
+
+  // Continuous open-pages snapshot (Task 8): every merged-model/localNav
+  // change rewrites the snapshot from the human pages' display urls
+  // (snapshotOpenPages filters non-recordable urls; the write inside
+  // session.ts skips same-value writes). Skipped before the first FRESH
+  // status so this effect can never blank the snapshot the restore latch is
+  // about to read.
+  useEffect(() => {
+    if (!status || status === staleStatusRef.current) return
+    writeOpenBrowserPages(
+      snapshotOpenPages(pages.map((page) => ({ owner: page.owner, url: displayUrlOf(page, localNav[page.id]) })))
+    )
+  }, [localNav, pages, status])
 
   const newPage = useCallback(() => {
     awaitingCreateRef.current = true
@@ -193,8 +298,8 @@ export function BrowserPane({ store, onEmpty }: { store: BrowserStore; onEmpty: 
     })
     store.removeOptimistic(id)
     void window.pi.browserClosePage(id).catch(() => { /* idempotent cleanup */ })
-    if (wasLast) onEmptyRef.current()
-  }, [store])
+    if (wasLast) fireEmpty()
+  }, [fireEmpty, store])
 
   const consentRequired = status?.consentRequired ?? true
 
@@ -211,7 +316,7 @@ export function BrowserPane({ store, onEmpty }: { store: BrowserStore; onEmpty: 
             <TabsList className="gap-1 bg-muted/60 p-0.5">
               {pages.map((page) => {
                 const nav = localNav[page.id]
-                const url = nav?.url || displayPageUrl(page.url)
+                const url = displayUrlOf(page, nav)
                 const label =
                   page.pending && !nav
                     ? t('browser.pageLoading')
@@ -289,6 +394,7 @@ export function BrowserPane({ store, onEmpty }: { store: BrowserStore; onEmpty: 
               key={page.id}
               page={page}
               selected={page.id === effectiveSelectedId}
+              displayUrl={displayUrlOf(page, localNav[page.id])}
               onNavChange={handleNavChange}
             />
           ))}
