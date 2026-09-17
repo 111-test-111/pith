@@ -254,6 +254,11 @@ export function BrowserPane({ store, onEmpty }: { store: BrowserStore; onEmpty: 
   // about to read.
   useEffect(() => {
     if (!status || status === staleStatusRef.current) return
+    // The auto-blank/restore fill is in flight: the model is legitimately
+    // empty until the restored pages round-trip — writing now would blank
+    // the snapshot the latch just read. The fill's own completion re-runs
+    // this effect and writes the restored urls.
+    if (autoFillInFlightRef.current) return
     writeOpenBrowserPages(
       snapshotOpenPages(pages.map((page) => ({ owner: page.owner, url: displayUrlOf(page, localNav[page.id]) })))
     )

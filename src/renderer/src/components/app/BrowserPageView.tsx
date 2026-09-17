@@ -9,6 +9,7 @@ import {
   BROWSER_PARTITION,
   HUMAN_OWNER,
   buildMarkerUrl,
+  isAllowedNavigationUrl,
   normalizeNavigationUrl,
   parseMarkerUrl
 } from '../../../../shared/browser.ts'
@@ -201,8 +202,10 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange }: Bro
   // Most recent committed url on this guest (marker loads excluded): the
   // page-title / page-favicon history backfills attach to it.
   const lastNavUrlRef = useRef('')
-  // null = not editing (the input shows displayUrl); a typed draft keeps the
-  // text stable while did-navigate events land mid-edit.
+  // Draft semantics (Ruling I — binding): null = not editing, the input shows
+  // the LIVE navigation url (displayUrl), so link clicks, redirects and
+  // Back/Forward always flow through. A change (focus + typing) holds the
+  // draft; blur and a successful Enter submit both release it back to null.
   const [urlDraft, setUrlDraft] = useState<string | null>(null)
   const [urlError, setUrlError] = useState(false)
   const urlErrorTimerRef = useRef<number | null>(null)
@@ -242,12 +245,18 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange }: Bro
     if (urlErrorTimerRef.current !== null) window.clearTimeout(urlErrorTimerRef.current)
   }, [])
 
-  /** User-typed url → normalized → guest loadURL. Returns the normalized url,
-   *  or null when it does not parse (caller shows the error styling). */
+  /** User-typed url → normalized → whitelist-gated → guest loadURL. Returns
+   *  the normalized url, or null when it does not parse OR the navigation
+   *  whitelist rejects the scheme (file:/view-source:/data:/javascript: …).
+   *  The URL bar is one of the entries shared/browser.ts funnels through that
+   *  whitelist — the same gate the service applies to browser_navigate/goto —
+   *  so no embedder-driven navigation can bypass it (both entry points here,
+   *  toolbar Enter and the start-page input, route through this one call).
+   *  The caller shows the error styling for null. */
   const loadUrl = useCallback((raw: string): string | null => {
     const url = normalizeNavigationUrl(raw)
     const wv = webviewRef.current as unknown as BrowserWebviewElement | null
-    if (!url || !wv) return null
+    if (!url || !isAllowedNavigationUrl(url) || !wv) return null
     void wv.loadURL(url).catch(() => { /* a failed load is the guest's to render */ })
     return url
   }, [])
@@ -378,9 +387,14 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange }: Bro
             onKeyDown={(event) => {
               if (event.key !== 'Enter' || event.nativeEvent.isComposing) return
               const url = loadUrl(urlDraft ?? displayUrl)
-              if (url !== null) setUrlDraft(url)
+              // Success RELEASES the draft: the field returns to the live
+              // navigation url (did-navigate updates it) instead of pinning
+              // the typed text over link clicks / redirects / Back-Forward.
+              // A failed parse keeps the draft — the user is still editing.
+              if (url !== null) setUrlDraft(null)
               else flashUrlError()
             }}
+            onBlur={() => setUrlDraft(null)}
             {...urlSelectAllProps}
           />
         </div>
