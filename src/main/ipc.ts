@@ -1,4 +1,6 @@
 import { app, ipcMain, dialog, session, shell, BrowserWindow } from 'electron'
+import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { PiManager } from './pi/manager'
 import { TerminalManager } from './terminal/manager'
 import { registerQuitHandler } from './shutdown'
@@ -71,10 +73,19 @@ export function registerIpc(pi: PiManager): () => boolean {
   // Embedded browser singleton: one per app, owned here and by the quit
   // cleanup above (runs before the window exists — registerIpc is called from
   // index.ts ahead of createWindow). Nothing connects at startup: the CDP
-  // connect is lazy behind consent, and getStatus only kicks a best-effort
-  // reconcile that no-ops before it.
+  // connect is lazy behind consent — target discovery rides the service's own
+  // 1s reconcile poll plus the renderer's explicit pulls (pane createPage,
+  // consent), never a status read.
   initBrowserService({
     cdpPort: getCdpPort(),
+    // The shell window's own document, mirroring index.ts's loadURL/loadFile
+    // decision (same expression, same compiled __dirname): reconcile and
+    // registerPopup exclude it from the registry by exact match. registerIpc
+    // runs before createWindow, but the loaded URL is deterministic from these
+    // two inputs; exact matching (not a localhost prefix) is what keeps agent
+    // pages like the user's dev server on http://localhost:3000/ registrable.
+    shellDocumentUrl: process.env.ELECTRON_RENDERER_URL
+      ?? pathToFileURL(join(__dirname, '../renderer/index.html')).toString(),
     consent: {
       get: () => loadSettings().browserConsent,
       grant: () => saveSettings({ ...loadSettings(), browserConsent: true })

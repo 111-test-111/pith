@@ -148,12 +148,15 @@ process.on('unhandledRejection', (reason) => {
 try {
   // ---- Fixture server: deterministic http pages on 127.0.0.1 (the navigation
   // whitelist accepts any http/https URL; a local server needs no network). ----
+  // Unique download filename: a same-named file in the user's real Downloads
+  // must never collide (the handler dedupes only when it exists at that moment).
+  const downloadName = `browser-check-${process.pid}-${Date.now()}.txt`
   const fixture = createServer((request, response) => {
     const url = new URL(request.url ?? '/', 'http://fixture.test')
     if (url.pathname === '/download.txt') {
       response.writeHead(200, {
         'Content-Type': 'text/plain',
-        'Content-Disposition': 'attachment; filename="browser-check.txt"'
+        'Content-Disposition': `attachment; filename="${downloadName}"`
       })
       response.end('browser download fixture')
       return
@@ -386,17 +389,18 @@ try {
   // ================= Download (flow) =========================================
   await guest.locator('#download').click({ force: true, timeout: 10_000 })
   await eventually(() => evaluate('Boolean(document.querySelector(\'[data-browser-toolbar] button[aria-label="Reveal in folder"]\'))'), 'toolbar download indicator', 20_000)
-  const downloadCandidates = [join(home, 'Downloads', 'browser-check.txt'), join(homedir(), 'Downloads', 'browser-check.txt')]
+  const downloadCandidates = [join(home, 'Downloads', downloadName), join(homedir(), 'Downloads', downloadName)]
   const downloadPath = await eventually(async () => {
     for (const candidate of downloadCandidates) {
       try { if ((await stat(candidate)).size > 0) return candidate } catch { /* not yet */ }
     }
     return null
   }, 'downloaded fixture file', 20_000)
-  assert.equal(await readFile(downloadPath, 'utf8'), 'browser download fixture')
-  // A temp-home landing dies with the temp dir; only the real-home fallback
-  // needs explicit (verified) cleanup.
+  // Pre-register for cleanup BEFORE content verification: a failed verification
+  // must still remove the artifact. (A temp-home landing dies with the temp dir;
+  // only the real-home fallback needs explicit cleanup.)
   if (downloadPath.startsWith(homedir())) downloadArtifacts.push(downloadPath)
+  assert.equal(await readFile(downloadPath, 'utf8'), 'browser download fixture')
   pass('flow', `guest download is intercepted by the browser session: toolbar indicator appears and the file lands complete (${downloadPath})`)
 
   // ================= Popup routing (flow + iron 10 live) =====================

@@ -198,12 +198,6 @@ function contextPagesOf(context: BrowserContextLike): PageLike[] {
   return Array.isArray(raw) ? (raw as PageLike[]) : []
 }
 
-/** pi-app 壳自身窗口的 URL（壳窗口永不进注册表；reconcile 与 registerPopup 共用）。
- *  dev 由 vite 加载 http://localhost:5173，打包后加载 file://——guest 页不会以这两种形态出现。 */
-function isShellWindowUrl(url: string): boolean {
-  return url.startsWith('http://localhost:') || url.startsWith('file://')
-}
-
 interface PageRuntime {
   page: PageLike
   cdp: CdpSessionLike | null
@@ -232,6 +226,12 @@ export interface BrowserServiceDeps {
   settle?: Partial<SettleTimings>
   /** 注册表变更时通知（service 内部 ~30ms 合并；ipc.ts 传入的 emit 走 browser:state）。 */
   onStateChange?: () => void
+  /** 壳窗口自身文档的 URL（dev: ELECTRON_RENDERER_URL；打包: file:// 的渲染入口），
+   *  由 ipc.ts 与 index.ts 的 loadURL/loadFile 同一表达式传入。reconcile/registerPopup
+   *  据此把壳窗口精确排除在注册表外（file:// 前缀兜底打包形态）。不能按 localhost
+   *  前缀泛配——agent 打开的本地 dev server 页（编码代理的一等用例）会被当成壳窗口，
+   *  永远拿不到 runtime。 */
+  shellDocumentUrl?: string
 }
 
 export class BrowserService {
@@ -304,9 +304,10 @@ export class BrowserService {
   }
 
   getStatus() {
-    // human 纯浏览（客户端 webview 建页/导航）不产生任何服务端调用——借客户端
-    // 状态轮询顺带踢一次尽力而为的 reconcile（含首次 CDP 连接），注册表保持新鲜。
-    void this.reconcileElectronTargets().catch(() => {})
+    // 纯读：不在这里踢 reconcile——标题会变的页面（未读计数/时钟）会让
+    // notify→broadcast→getStatus→reconcile→title 变化→notify 以 ~30ms 合并节奏自持
+    // 循环（每轮对每个注册页各做一次 title()）。target 发现由 1s reconcile 轮询与
+    // 渲染层的显式拉取路径（面板建页/consent 后的首次调用）覆盖。
     // 陈旧 pendingCreate 清扫：waiter 已超时的条目超过 TTL 后不再展示
     //（waiter 未超时的保留——renderer 可能正在挂载）。
     const cutoff = Date.now() - PENDING_CREATE_TTL_MS
@@ -370,6 +371,16 @@ export class BrowserService {
     try { this.reconcile(context) } catch { /* 与轮询路径同样静默 */ }
   }
 
+  /** pi-app 壳自身窗口的 URL（壳窗口永不进注册表；reconcile 与 registerPopup 共用）。
+   *  打包壳加载 file://（前缀判定）；dev 壳文档按构造时传入的 shellDocumentUrl 精确
+   *  匹配——不能按 http://localhost: 前缀泛配，否则 agent 打开的本地 dev server 页
+   *  （http://localhost:3000/）会被当成壳窗口，永远拿不到 runtime。 */
+  private isShellWindowUrl(url: string): boolean {
+    const shellDocumentUrl = this.deps.shellDocumentUrl
+    if (shellDocumentUrl !== undefined && url === shellDocumentUrl) return true
+    return url.startsWith('file://')
+  }
+
   private reconcile(context: BrowserContextLike): void {
     const present = contextPagesOf(context)
     // 消失注销：注册表中的 Page 已不在 context.pages() → 按关闭处理。
@@ -378,7 +389,7 @@ export class BrowserService {
     }
     // marker 登记：新 Page 且 URL 携带 marker → 按 marker 的 owner/pageId 登记
     // （id 用 marker 的 pageId，非 idGen）。无 marker 的一律跳过——壳窗口
-    // （localhost/file://）、裸 about:blank 与其他外部 target 的归属不猜。
+    // （shellDocumentUrl 精确/file://）、裸 about:blank 与其他外部 target 的归属不猜。
     // closingTargetIds 里的 id 是 close 在途的页——target 摘除有延迟，不得重登。
     // 仅有 state 登记（renderer 上报）而无 runtime 的同 id 页：target 浮现后在此升级。
     for (const page of present) {
@@ -386,7 +397,7 @@ export class BrowserService {
       for (const rt of this.runtime.values()) if (rt.page === page) { known = true; break }
       if (known) continue
       const url = page.url()
-      if (isShellWindowUrl(url)) { this.resetForeignPageEmulation(page); continue } // 壳窗口永不登记（与 registerPopup 同一判定）
+      if (this.isShellWindowUrl(url)) { this.resetForeignPageEmulation(page); continue } // 壳窗口永不登记（与 registerPopup 同一判定）
       const marker = parseMarkerUrl(url)
       if (!marker || this.closingTargetIds.has(marker.pageId)) { this.resetForeignPageEmulation(page); continue }
       if (pageById(this.state, marker.pageId) && this.runtime.has(marker.pageId)) continue
@@ -463,7 +474,7 @@ export class BrowserService {
     // reconcile，避免按 idGen 错登；壳窗口（auto-attach 也会对已存在 target 触发
     // page 事件）永不登记——但不属注册表的 target 都要清掉 playwright 的默认仿真。
     const url = page.url()
-    if (parseMarkerUrl(url) !== null || url === '' || url === 'about:blank' || isShellWindowUrl(url)) {
+    if (parseMarkerUrl(url) !== null || url === '' || url === 'about:blank' || this.isShellWindowUrl(url)) {
       this.resetForeignPageEmulation(page)
       return
     }

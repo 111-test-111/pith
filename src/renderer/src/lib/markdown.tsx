@@ -206,7 +206,9 @@ function splitMarkdownBlocks(text: string): { stable: string[]; tail: string } {
   return { stable, tail: text.slice(start) }
 }
 
-/** Task 15 聊天链接拦截：无修饰键的普通点击 + http(s) 链接 + 「链接在内置浏览器打开」
+/** Markdown 链接拦截——作用于所有 Markdown 面（聊天、侧聊、摘要行、文件预览），有意
+ *  如此（Settings 文案即「Chat and markdown links」）：无修饰键的普通点击 + http(s) 链接 +
+ *  「链接在内置浏览器打开」
  *  偏好开 → 内置浏览器打开。其余一律放行现有行为：⌘/Ctrl/Shift/Alt 点击（新标签等用户
  *  意图）、其他 scheme（file 链接走 FileNavigationProvider 路由、其余 openExternal）、
  *  偏好关。同步读偏好——事件回调里拿不到 hook 的 React 上下文。 */

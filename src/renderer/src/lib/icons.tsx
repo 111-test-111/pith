@@ -28,6 +28,7 @@ import {
   RiCheckLine,
   RiClosedCaptioningLine,
   RiCloseCircleLine,
+  RiCloseLargeLine,
   RiCloseLine,
   RiCodeSSlashLine,
   RiCompass3Line,
@@ -103,6 +104,7 @@ import {
   RiRewindLine,
   RiRobot2Line,
   RiScan2Line,
+  RiScanLine,
   RiSearch2Line,
   RiSearchLine,
   RiSendPlane2Line,
@@ -317,7 +319,7 @@ export const RefreshCw = /* @__PURE__ */ createIcon('RefreshCw', RiRefreshLine)
 export const Rewind = /* @__PURE__ */ createIcon('Rewind', RiRewindLine)
 export const RotateCcw = /* @__PURE__ */ createIcon('RotateCcw', RiAnticlockwise2Line)
 export const ScanSearch = /* @__PURE__ */ createIcon('ScanSearch', RiScan2Line)
-export const ScanText = /* @__PURE__ */ createIcon('ScanText', RiScan2Line)
+export const ScanText = /* @__PURE__ */ createIcon('ScanText', RiScanLine)
 export const ScrollText = /* @__PURE__ */ createIcon('ScrollText', RiFilePaperLine)
 export const Search = /* @__PURE__ */ createIcon('Search', RiSearchLine)
 export const SearchX = /* @__PURE__ */ createIcon('SearchX', RiCloseCircleLine)
@@ -351,7 +353,7 @@ export const WandSparkles = /* @__PURE__ */ createIcon('WandSparkles', RiMagicLi
 export const Wrench = /* @__PURE__ */ createIcon('Wrench', RiWrenchLine)
 export const X = /* @__PURE__ */ createIcon('X', RiCloseLine)
 export const XCircle = /* @__PURE__ */ createIcon('XCircle', RiCloseCircleLine)
-export const XSquare = /* @__PURE__ */ createIcon('XSquare', RiCloseCircleLine)
+export const XSquare = /* @__PURE__ */ createIcon('XSquare', RiCloseLargeLine)
 export const Zap = /* @__PURE__ */ createIcon('Zap', RiFlashlightLine)
 export const ZoomIn = /* @__PURE__ */ createIcon('ZoomIn', RiZoomInLine)
 export const ZoomOut = /* @__PURE__ */ createIcon('ZoomOut', RiZoomOutLine)

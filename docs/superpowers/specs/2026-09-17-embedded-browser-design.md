@@ -119,7 +119,7 @@ scripts/check-browser-ui.mjs      真 Electron E2E（含 Electron 44 铁律重�
 
 | 方法 | 入参 → 行为 |
 |---|---|
-| `browser:status` | `→ { available, consentRequired, pages: BrowserPageMeta[], pendingCreates: [{id,owner,createdAt}] }`；顺带踢一次 reconcile |
+| `browser:status` | `→ { available, consentRequired, pages: BrowserPageMeta[], pendingCreates: [{id,owner,createdAt}] }`（纯读，不踢 reconcile） |
 | `browser:consent` | `→ grantConsent()`（幂等；写 app-settings.json） |
 | `browser:createPage` | `{ url?: string } → createPage("human", url?)`（URL 经策略校验） |
 | `browser:closePage` | `{ id } → closePage(id)` |
@@ -193,7 +193,7 @@ scripts/check-browser-ui.mjs      真 Electron E2E（含 Electron 44 铁律重�
 2. **导航白名单**：主 frame 仅 `http:`/`https:`/`about:blank`（可带 marker fragment）——URL 栏、`browser_navigate`、服务端 goto 全部收口于 `shared/browser.ts` 的 `isAllowedNavigationUrl`；弹窗不做 scheme 门控（Chrome 自身阻止 file:/chrome:/javascript:，与 pi-web 同决策）。
 3. **弹窗路由**：per-contents `setWindowOpenHandler`——marker URL 一律 deny（伪造只记一次日志）；壳窗口 http(s) deny + `shell.openExternal`（沿用 pi-app 现行为）；webview guest deny + `browser:popup` 事件（owner 经 opener 继承）。
 4. **权限**：browser 分区 `setPermissionRequestHandler`——默认拒绝全部敏感权限（geolocation/notifications/media（麦克风与摄像头）/midi/serial/usb/bluetooth），仅放行 `fullscreen`、`clipboard-sanitized-write`、`pointerLock`（pi-web 未做，本移植补上）。
-5. **不可信内容边界**：工具返回的页面文本全部 `wrapUntrustedContent` 包裹 + 工具描述含注入警示；unmet/New pages 等 pi-app 自产数据在边界外。
+5. **不可信内容边界**：工具返回的页面来源文本全部 `wrapUntrustedContent` 包裹 + 工具描述含注入警示；**页面自报的 url/title 即使出现在 app 拼装的列表里也在边界内**（`browser_pages` 的行列表、`New pages` 的行列表各自整体包裹——页面可以把标题写成指令）；只有 id/计数/标签等 app 自产字段（`activePageId:` 行、段头、收尾指引、unmet 条件）在边界外。
 6. **绝不上溯 shell 能力**：guest 无 node、preload 不注入 webview；`webviewTag: true` 仅为承载，guest 与 app 同 contextIsolation 边界。
 
 ## 10. 生命周期与退出

@@ -38,9 +38,13 @@ export function decideBrowserPermission(permission: string): boolean {
   return BROWSER_ALLOWED_PERMISSIONS.has(permission)
 }
 
-/** 壳文档前缀（与 service 的 isShellWindowUrl 同一集合：dev 由 vite 加载 localhost，打包后 file://）。 */
+/** 壳文档判定（弹窗分类只认 file:// 前缀——打包壳加载 file://，而导航白名单本就禁止 file: 的
+ *  guest 页，不会误分类）。dev 的 localhost 壳文档不能按前缀认：那会把 agent 打开的本地
+ *  dev server（http://localhost:3000/ 是编码代理的一等用例）错路由到 openExternal 而不是
+ *  面板。壳窗口自身的弹窗按 contents 身份分流（contents === shellWin），不经过本函数；
+ *  dev 壳窗口在注册表侧的排除由 service 的 shellDocumentUrl 精确匹配负责。 */
 function isShellDocumentUrl(url: string): boolean {
-  return url.startsWith('http://localhost:') || url.startsWith('file://')
+  return url.startsWith('file://')
 }
 
 /** 纯函数：webview guest 弹窗 URL 的分类（marker 前缀 / 壳文档 / 普通页）。 */

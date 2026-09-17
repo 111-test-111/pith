@@ -31,19 +31,6 @@ export function formatElapsed(seconds: number): string {
   return `${minutes}:${secs}`
 }
 
-export function formatRelativeTime(iso: string): string {
-  const then = new Date(iso).getTime()
-  const diff = Date.now() - then
-  const minutes = Math.round(diff / 60_000)
-  if (minutes < 1) return 'now'
-  if (minutes < 60) return `${minutes}m ago`
-  const hours = Math.round(minutes / 60)
-  if (hours < 24) return `${hours}h ago`
-  const days = Math.round(hours / 24)
-  if (days < 7) return `${days}d ago`
-  return new Date(iso).toLocaleDateString()
-}
-
 export function basename(path: string): string {
   return path.split(/[\\/]/).pop() ?? path
 }
