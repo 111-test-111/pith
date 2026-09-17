@@ -430,6 +430,16 @@ const en = {
   'terminal.clear': 'Clear',
   'terminal.selectAll': 'Select all',
 
+  // browser tab
+  'browser.consentTitle': 'Shared browser profile',
+  'browser.consentBody':
+    'The embedded browser keeps a persistent login profile on this machine. Every session and the agent browser tools share it — agents can read and act on websites with your logged-in identity.',
+  'browser.consentGrant': 'I understand, continue',
+  'browser.newPage': 'New page',
+  'browser.closePage': 'Close page',
+  'browser.pageLoading': 'Loading…',
+  'browser.emptyHint': 'No pages open yet — start one to browse beside the conversation.',
+
   'review.emptyTitle': 'Nothing to review yet',
   'review.emptyBody':
     'Files a turn edits or writes show up here with their diffs — one turn at a time, newest first.',

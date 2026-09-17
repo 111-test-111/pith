@@ -426,6 +426,17 @@ const zhCN: Messages = {
   'terminal.paste': '粘贴',
   'terminal.clear': '清屏',
   'terminal.selectAll': '全选',
+
+  // 浏览器标签页
+  'browser.consentTitle': '共享浏览器 profile',
+  'browser.consentBody':
+    '内嵌浏览器会在本机持久保存登录态。所有会话与 agent 浏览器工具共享该 profile——agent 能以你已登录的身份读取和操作网站。',
+  'browser.consentGrant': '我已了解，继续',
+  'browser.newPage': '新建页面',
+  'browser.closePage': '关闭页面',
+  'browser.pageLoading': '正在加载…',
+  'browser.emptyHint': '还没有打开的页面——新建一个，即可在会话旁浏览。',
+
   'review.emptyBody': '某一轮里被修改或新建的文件会连同 diff 出现在这里——一次一轮，新的在前。',
   'review.prevTurn': '上一个有改动的轮次',
   'review.nextTurn': '下一个有改动的轮次',

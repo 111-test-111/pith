@@ -107,6 +107,8 @@ import {
 import { SideChatStore } from '@/state/side-chat-store'
 import { TerminalStore } from '@/state/terminal-store'
 import { FileBrowserStore } from '@/state/file-browser-store'
+import { BrowserStore } from '@/lib/browser/store'
+import { subscribeBrowserPopups } from '@/lib/browser/popup'
 import { FileNavigationProvider, type FileTarget } from '@/lib/file-navigation'
 import { AuthBridge } from './AuthBridge'
 import { AlertTriangle, Rewind } from '@/lib/icons'
@@ -224,6 +226,19 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
   const [terminals] = useState(() => new TerminalStore())
   const [files] = useState(() => new FileBrowserStore())
   useEffect(() => () => terminals.dispose(), [terminals])
+  // The embedded browser's pages outlive their pane: the store (and the guest
+  // pages it mirrors) live as long as the workspace — closing the rail tab
+  // only hides them, like the file browser's tabs.
+  const [browserStore] = useState(() => new BrowserStore())
+  useEffect(() => {
+    const unsubscribeState = window.pi.onBrowserState((status) => browserStore.applyStatus(status))
+    const unsubscribePopups = subscribeBrowserPopups(browserStore)
+    void window.pi.browserStatus().then((status) => browserStore.applyStatus(status)).catch(() => {})
+    return () => {
+      unsubscribeState()
+      unsubscribePopups()
+    }
+  }, [browserStore])
   const newTerminal = useCallback(() => {
     const current = store.getShell()
     terminals.create(current.projectless ? null : current.cwd)
@@ -1524,6 +1539,10 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
               terminals,
               onNewTerminal: newTerminal,
               onTerminalsEmpty: () => closeSidePanelTab('terminal'),
+              browserStore,
+              // Per-kind teardown is `closeSidePanelTab`'s job; the browser
+              // pane owns none (its store lives with the workspace).
+              onBrowserEmpty: () => closeSidePanelTab('browser'),
               store,
               reviewTurnId,
               sideChat,

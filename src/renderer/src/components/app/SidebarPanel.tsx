@@ -23,7 +23,7 @@ import {
   ContextMenuTrigger
 } from '@/components/motion/context-menu'
 import { Tooltip } from '@/components/motion/tooltip'
-import { DURATION, EASE_OUT, motionTransition } from '@/lib/ease'
+import { DURATION, EASE_OUT } from '@/lib/ease'
 import { useI18n } from '@/i18n'
 import type { MessageKey } from '@/i18n/locales/en'
 import { cn } from '@/lib/utils'
@@ -36,11 +36,13 @@ import { ReviewPane } from './ReviewPane'
 import { ContextDetailPane } from './ContextDetailPane'
 import { TerminalPane } from './TerminalPane'
 import { FilesPane } from './FilesPane'
+import { BrowserPane } from './BrowserPane'
 import { SubagentSessionPane } from './SubagentSessionPane'
 import type { FileBrowserStore } from '@/state/file-browser-store'
 import type { TerminalStore } from '@/state/terminal-store'
 import type { SideChatStore } from '@/state/side-chat-store'
 import type { PiStore } from '@/state/pi-store'
+import type { BrowserStore } from '@/lib/browser/store'
 import type { SubagentRunDTO } from '../../../../shared/types'
 
 /** Fallback width before the workspace has applied the user's panel layout. */
@@ -75,6 +77,11 @@ export interface SidebarPaneProps {
   terminals: TerminalStore
   onNewTerminal: () => void
   onTerminalsEmpty: () => void
+  /** The embedded browser's store, owned by the workspace (pane unmount
+   *  keeps pages alive; only tab close folds the rail entry). */
+  browserStore: BrowserStore
+  /** The browser's last page closed: the tab folds away (no extra teardown). */
+  onBrowserEmpty: () => void
   /** The workspace store, for panes that read the session's transcript. */
   store: PiStore
   /** Turn the review pane should open on (from the transcript's Review action). */
@@ -125,7 +132,7 @@ export const SIDEBAR_TABS: SidebarTabSpec[] = [
     labelKey: 'sidebar.browser',
     shortcutKey: 'sidebar.shortcutBrowser',
     icon: Globe,
-    render: () => <SidebarPanePlaceholder kind="browser" />
+    render: (props) => <BrowserPane store={props.browserStore} onEmpty={props.onBrowserEmpty} />
   },
   {
     id: 'files',
@@ -198,26 +205,6 @@ function SidebarPicker({ onOpen }: { onOpen: (kind: SidebarTabKind) => void }) {
         ))}
       </SharedLayoutBg>
     </div>
-  )
-}
-
-/** Placeholder body for a pane that is still to be implemented. */
-function SidebarPanePlaceholder({ kind }: { kind: SidebarTabKind }) {
-  const { t } = useI18n()
-  const reduce = useReducedMotion()
-  const spec = specFor(kind)
-  return (
-    <motion.div
-      key={kind}
-      initial={reduce ? false : { opacity: 0 }}
-      animate={{ opacity: 1 }}
-      transition={motionTransition(reduce, { duration: DURATION.fast, ease: EASE_OUT })}
-      className="flex h-full flex-col items-center justify-center gap-2 text-center"
-    >
-      <spec.icon aria-hidden="true" className="size-6 text-muted-foreground/70" />
-      <p className="text-sm text-muted-foreground">{t(spec.labelKey)}</p>
-      <p className="text-xs text-muted-foreground/70">{t('sidebar.placeholder')}</p>
-    </motion.div>
   )
 }
 
