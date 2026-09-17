@@ -2201,11 +2201,12 @@ export class PiManager {
       await this.disposeManaged(managed)
     }
     // The file is about to leave the disk: drop its browser pages (fire-and-
-    // forget — the trash must not wait on guest teardown). An unmanaged session
-    // can still own pages registered before it was last closed.
-    void getBrowserService()?.closePagesForOwner(agentOwner(
-      managed ? managed.session.sessionManager.getSessionId() : SessionManager.open(path).getSessionId()
-    ))
+    // forget — the trash must not wait on guest teardown). Managed sessions
+    // already recycled theirs inside disposeManaged above; only an unmanaged
+    // session (pages registered before it was last closed) needs the sweep.
+    if (!managed) {
+      void getBrowserService()?.closePagesForOwner(agentOwner(SessionManager.open(path).getSessionId()))
+    }
     // Children are conversation sub-records of the deleted parent: stop them
     // (already done above) and trash their files with it, or they would be
     // orphaned — hidden from the sidebar but unreachable from any roster.

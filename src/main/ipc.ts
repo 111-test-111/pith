@@ -76,7 +76,7 @@ export function registerIpc(pi: PiManager): () => boolean {
   // connect is lazy behind consent — target discovery rides the service's own
   // 1s reconcile poll plus the renderer's explicit pulls (pane createPage,
   // consent), never a status read.
-  initBrowserService({
+  const browser = initBrowserService({
     cdpPort: getCdpPort(),
     // The shell window's own document, mirroring index.ts's loadURL/loadFile
     // decision (same expression, same compiled __dirname): reconcile and
@@ -101,7 +101,6 @@ export function registerIpc(pi: PiManager): () => boolean {
       }
     }
   })
-  const browser = getBrowserService()!
 
   // ---- Embedded browser: the renderer's only control surface for the service ----
   ipcMain.handle('browser:status', (): BrowserStatusDTO => browser.getStatus())

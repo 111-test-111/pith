@@ -289,9 +289,14 @@ export function BrowserAnnotate({ wv, wrapEl, pageZoom, active, onExit, page }: 
       if (Math.abs(dy) >= Math.abs(dx)) dx = 0
       else dy = 0
       try {
-        guest.sendInputEvent({ type: 'mouseWheel', x, y, deltaX: -dx, deltaY: -dy })
+        // The real webview API returns a promise — a wheel on a not-ready or
+        // destroyed guest rejects asynchronously, which a bare try/catch
+        // cannot see (pi-web caught it; so do we).
+        void guest.sendInputEvent({ type: 'mouseWheel', x, y, deltaX: -dx, deltaY: -dy }).catch(() => {
+          /* guest not ready / destroyed — drop the event (async rejection) */
+        })
       } catch {
-        /* guest not ready / destroyed — drop the event */
+        /* guest not ready / destroyed — drop the event (sync throw) */
       }
       // Scrolling hides the hover highlight (a box jumping with the scroll is
       // flicker); the resting point is resolved once, 250ms after the LAST

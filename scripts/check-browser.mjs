@@ -726,6 +726,29 @@ test('service: 壳页（页事件路径）不被收养——shellDocumentUrl 无
   assert.equal(svc.listPages().length, 0, '壳页绝不进注册表（reconcile 与页事件路径同判）')
 })
 
+// 13d. 握手延迟：pendingCreate 入队即推送状态（渲染层经 browser:state 即刻物化 marker
+// webview，不再等 2.5s 轮询）；且 seen 上报（= dom-ready）在握手等待期立即触发
+// reconcile——createPage 不需手动踢或等 1s tick 就 resolve。空白页首开的 ~3-4s 由此塌缩。
+test('service: 入队即推送 + seen 即时 reconcile（握手延迟两跳全消）', async () => {
+  const ctx = mockContext()
+  let pushes = 0
+  const svc = new BrowserService(makeDeps(ctx, { onStateChange: () => { pushes += 1 } }))
+  svc.grantConsent()
+  const created = svc.createPage('human') // 不 await：握手挂起
+  await new Promise((r) => setTimeout(r, 10)) // ensureStarted 的 connect 微任务先行，随后入队
+  assert.equal(svc.getStatus().pendingCreates.length, 1, '入队立即可见')
+  await new Promise((r) => setTimeout(r, 80)) // 合并窗 30ms
+  assert.ok(pushes >= 1, '入队推送了状态（渲染层不等轮询）')
+  const pending = svc.getStatus().pendingCreates[0]
+  const marker = mockPage({ url: buildMarkerUrl('human', pending.id) })
+  ctx.pages.push(marker)
+  // seen 上报（renderer 的 dom-ready 握手）→ registerExternalPage 内部即时踢 reconcile
+  svc.registerExternalPage({ id: pending.id, owner: 'human', url: marker.url(), webContentsId: 9999 })
+  const meta = await created // 无需手动 reconcileElectronTargets、无需等 1s tick
+  assert.equal(meta.id, pending.id)
+  await svc.dispose()
+})
+
 // 14. registerExternalPage：幂等 / 白名单外拒绝 / 关闭后不复活
 test('service: registerExternalPage 幂等登记、scheme 白名单外与空 id 拒绝、关闭后不复活', async () => {
   const svc = await consentedService()

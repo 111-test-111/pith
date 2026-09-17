@@ -65,9 +65,9 @@ export interface BrowserWebviewElement {
   executeJavaScript(code: string): Promise<unknown>
   /** Annotation wheel forwarding: host-pixel mouseWheel with PURE pixel
    *  deltas — payloads carrying wheelTicks or precise-scrolling flags are
-   *  silently swallowed by guests. Synchronous on the webview element;
-   *  throws before dom-ready. */
-  sendInputEvent(event: { type: 'mouseWheel'; x: number; y: number; deltaX: number; deltaY: number }): void
+   *  silently swallowed by guests. Rejects (async) when the guest is not
+   *  ready/destroyed; throws synchronously before dom-ready. */
+  sendInputEvent(event: { type: 'mouseWheel'; x: number; y: number; deltaX: number; deltaY: number }): Promise<void>
   /** Live document title — the annotation payload's <title> prefers it over
    *  the pane's display meta. */
   getTitle(): string
@@ -129,7 +129,7 @@ export interface BrowserPageViewProps {
 
 /** Icon-only toolbar button (the FilesPane ToolButton pattern). `className`
  *  lets a caller re-tint the glyph (the failed-download indicator). */
-function ToolButton({ label, icon: Icon, onClick, className }: { label: string; icon: IconComponent; onClick: () => void; className?: string }) {
+function ToolButton({ label, icon: Icon, onClick, className, pressed }: { label: string; icon: IconComponent; onClick: () => void; className?: string; pressed?: boolean }) {
   return (
     <Tooltip content={label}>
       <Button variant="ghost" size="icon" className={cn('size-7 shrink-0', className)} aria-label={label} onClick={onClick}>
@@ -601,6 +601,10 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, onWeb
       // Loading the initial marker src is not a real navigation: keep it out
       // of localNav so the strip keeps its about:blank display semantics.
       if (parseMarkerUrl(raw)) return
+      // A committed navigation tears down the annotate selection: the chosen
+      // element belongs to the previous document, so keeping the highlight
+      // would submit a payload mismatched with the live page.
+      setAnnotating(false)
       lastNavUrlRef.current = raw
       // History/recents record REAL human navigation only (markers and
       // agent-driven pages stay out; SPA routes arrive as in-page navigations
@@ -690,6 +694,7 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, onWeb
             label={t('browser.annotateToggle')}
             icon={PencilLine}
             className={annotating ? 'text-primary hover:text-primary' : undefined}
+            pressed={annotating}
             onClick={() => setAnnotating((v) => !v)}
           />
           <Input

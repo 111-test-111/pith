@@ -512,6 +512,12 @@ export class BrowserService {
     const webContentsId = typeof entry.webContentsId === 'number' ? entry.webContentsId : undefined
     // navigateTo 走同一 scheme 白名单（它是 renderer 替 agent popup 页声明的待导航 URL）
     const navigateTo = entry.navigateTo && isAllowedNavigationUrl(entry.navigateTo) ? entry.navigateTo : undefined
+    // Handshake latency: a seen report IS the guest's dom-ready — when a
+    // createPage waiter is parked on a marker page, reconcile NOW instead of
+    // waiting for the 1s tick (the marker target is already in
+    // context.pages()). Gated on waiters so ordinary seen refreshes add no
+    // reconcile load.
+    if (this.registrationWaiters.size > 0) void this.reconcileElectronTargets().catch(() => {})
     const existing = pageById(this.state, id)
     if (existing) {
       // wcId 上报不受 runtime 状态限制（reconcile 只刷 url/title，不管这个字段——
@@ -576,11 +582,18 @@ export class BrowserService {
       const timer = setTimeout(() => {
         this.registrationWaiters.delete(id)
         this.pendingCreates = this.pendingCreates.filter((p) => p.id !== id)
+        // Handshake latency: pendingCreates is NOT part of `state`, so without
+        // this the pane would only learn the timeout via its 2.5s poll.
+        this.notifyState()
         reject(new BrowserHostUnavailableError())
       }, this.createTimeoutMs)
       timer.unref()
       this.registrationWaiters.set(id, { resolve, timer })
       this.pendingCreates.push({ id, owner, url, createdAt: Date.now() })
+      // Handshake latency: push the queue change immediately — the renderer
+      // materializes the marker webview on the browser:state event, not on
+      // its next poll (this is the 2.5s the blank page used to wait out).
+      this.notifyState()
     })
     // 登记完成（waiter resolve 时 runtime 已就位）后再按 url 导航——顺序安全
     const rt = this.requireRuntime(meta.id)

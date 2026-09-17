@@ -305,6 +305,10 @@ const api = {
    *  zoom through the app ladder and f/p to the selected page's find/print. */
   onBrowserGuestShortcut: (cb: (payload: { key: string }) => void) =>
     subscribe('browser:guest-shortcut', cb),
+  /** A pointer press inside a webview guest, relayed by main: guest input never
+   *  reaches the host DOM, so host-side overlays use this as their outside-press
+   *  (the ⋮ popover closes when the user clicks the page). */
+  onBrowserGuestPointer: (cb: () => void) => subscribe('browser:guest-pointer', () => cb()),
 
   onEvent: (listener: (event: PiEvent) => void) => subscribe('pi:event', listener),
   /** Side-chat stream (deltas and the terminal status of one exchange). */

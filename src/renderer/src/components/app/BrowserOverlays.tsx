@@ -5,13 +5,13 @@ import { Button } from '@/components/motion/button'
 import { Input } from '@/components/motion/input'
 import { Loader } from '@/components/motion/loader'
 import { MorphPopover, MorphPopoverContent } from '@/components/motion/popover-morph'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/motion/select'
 import { Tooltip } from '@/components/motion/tooltip'
 import { useI18n } from '@/i18n'
 import {
   CUSTOM_DEVICE_ID,
   DEVICE_NONE_ID,
   DEVICE_PRESETS,
+  INITIAL_DEVICE_STATE,
   commitDeviceSize,
   findDevicePreset,
   resolveDevicePresetId,
@@ -225,11 +225,26 @@ export function BrowserOverlays({
       if (event.key !== 'Escape' || event.isComposing) return
       event.preventDefault()
       event.stopPropagation()
+      // Hand focus back to the trigger like closeOverlay does — a bare
+      // setOpen strands a keyboard user on <body>.
+      triggerEl?.focus({ preventScroll: true })
       setOpenTracked(false)
     }
     window.addEventListener('keydown', onKeyDown, true)
     return () => window.removeEventListener('keydown', onKeyDown, true)
-  }, [open, setOpenTracked])
+  }, [open, setOpenTracked, triggerEl])
+
+  // A pointer press inside a webview guest NEVER reaches the host DOM — the
+  // guest is a separate process, so the MorphPopover's document-level
+  // outside-press cannot see it (clicking the page left the menu open until
+  // the user clicked app chrome). Main's input-event relay forwards the guest
+  // mouseDown as a ping; that ping is the popover's "outside press" here.
+  // No focus steal: the click keeps the guest focused.
+  useEffect(() => {
+    return window.pi.onBrowserGuestPointer(() => {
+      if (openRef.current) setOpenTracked(false)
+    })
+  }, [setOpenTracked])
 
   // Ruling C: the menu is a growable list of entries; find/print close the
   // overlay and act, history swaps this panel's view in place.
@@ -352,15 +367,17 @@ export function BrowserOverlays({
 }
 
 /**
- * The 设备 view of the overflow panel (T14): one beUI `Select` — the disabled
- * 无 row (labels the full-fill state; device mode exits only through the
- * selection reset, so the dropdown offers no inline off), the five presets
+ * The 设备 view of the overflow panel (T14): an in-panel row list — 无 (a real
+ * off switch: clicking it returns the page to full-fill), the five presets
  * (names verbatim) and 自定义 — plus, while a device is active, the 宽/高
- * number fields. Editing holds DIGIT-ONLY DRAFTS (never clobbering a partial
- * entry like “393”); leaving a field commits it through `commitDeviceSize`
- * (clamp 200–3840), and the committed pair then resolves back to its preset
- * or falls to 自定义. The state itself lives in the page view — this panel
- * only edits it, so the pinning survives the popover closing.
+ * number fields. NOT a nested Select dropdown: the vendored Select renders
+ * its options inline (no portal), so inside this popover's panel they clip
+ * at the panel edge. Editing holds DIGIT-ONLY DRAFTS (never clobbering a
+ * partial entry like “393”); leaving a field commits it through
+ * `commitDeviceSize` (clamp 200–3840), and the committed pair then resolves
+ * back to its preset or falls to 自定义. The state itself lives in the page
+ * view — this panel only edits it, so the pinning survives the popover
+ * closing.
  */
 function BrowserDevicePanel({
   device,
@@ -379,11 +396,9 @@ function BrowserDevicePanel({
 
   const handlePresetChange = useCallback(
     (presetId: string) => {
-      if (presetId === DEVICE_NONE_ID) {
-        // 无 is a disabled row; a stray selection is a no-op (the off state is
-        // reached by switching pages, per spec).
-        return
-      }
+      // 无 never routes through here — the row list maps it directly to
+      // INITIAL_DEVICE_STATE (a real off switch); this guard stays defensive.
+      if (presetId === DEVICE_NONE_ID) return
       setWidthDraft(null)
       setHeightDraft(null)
       const preset = findDevicePreset(presetId)
@@ -413,23 +428,35 @@ function BrowserDevicePanel({
 
   return (
     <div className="flex flex-col gap-2.5 p-2" data-browser-device>
-      <Select value={device.presetId} onValueChange={handlePresetChange}>
-        <SelectTrigger
-          aria-label={t('browser.menuDevice')}
-          className="h-8 rounded-control px-2.5 text-xs"
-        >
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {/* 无 labels the full-fill state and stays disabled: device mode is
-              exited by the selection reset (spec), not by an inline toggle. */}
-          <SelectItem value={DEVICE_NONE_ID} disabled>{t('browser.deviceNone')}</SelectItem>
-          {DEVICE_PRESETS.map((preset) => (
-            <SelectItem key={preset.id} value={preset.id}>{preset.name}</SelectItem>
-          ))}
-          <SelectItem value={CUSTOM_DEVICE_ID}>{t('browser.deviceCustom')}</SelectItem>
-        </SelectContent>
-      </Select>
+      {/* In-panel row list, not a nested Select: the vendored dropdown renders
+          inline (no portal) and clips at this popover panel's edge. The list
+          also gives 无 a real off switch instead of a disabled row. */}
+      <div className="flex flex-col gap-0.5" role="listbox" aria-label={t('browser.menuDevice')}>
+        {[
+          { id: DEVICE_NONE_ID, name: t('browser.deviceNone') },
+          ...DEVICE_PRESETS.map((preset) => ({ id: preset.id, name: preset.name })),
+          { id: CUSTOM_DEVICE_ID, name: t('browser.deviceCustom') }
+        ].map((row) => {
+          const selected = device.presetId === row.id
+          return (
+            <Button
+              key={row.id}
+              variant="ghost"
+              className={cn('h-7 justify-start px-2 text-xs', selected && 'bg-primary/5 text-primary')}
+              aria-pressed={selected}
+              onClick={() => {
+                if (row.id === DEVICE_NONE_ID) {
+                  onDeviceChange(INITIAL_DEVICE_STATE)
+                  return
+                }
+                handlePresetChange(row.id)
+              }}
+            >
+              {row.name}
+            </Button>
+          )
+        })}
+      </div>
       {device.presetId !== DEVICE_NONE_ID ? (
         <div className="flex items-center gap-2" data-browser-device-size>
           <label htmlFor={widthId} className="shrink-0 text-xs text-muted-foreground">

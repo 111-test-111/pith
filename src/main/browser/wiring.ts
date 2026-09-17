@@ -108,6 +108,10 @@ function wireContents(contents: WebContents): void {
   if (contents.getType() !== 'webview') return
   contents.on('input-event', (_event, input) => {
     if (input.type !== 'keyDown' && input.type !== 'mouseDown' && input.type !== 'mouseWheel') return
+    // A guest pointer press never reaches the host DOM (separate process) —
+    // forward it unthrottled so host-side overlays (the ⋮ popover) can treat
+    // it as an outside press. One message per physical click.
+    if (input.type === 'mouseDown') activeEmit?.('browser:guest-pointer', {})
     const now = Date.now()
     if (now - (relayedAt.get(contents.id) ?? 0) < INPUT_RELAY_THROTTLE_MS) return
     relayedAt.set(contents.id, now)
@@ -124,12 +128,16 @@ function wireContents(contents: WebContents): void {
   contents.on('before-input-event', (event, input) => {
     if (input.type !== 'keyDown') return
     if (!(input.meta || input.control)) return
-    if (
-      input.key !== '=' && input.key !== '+' && input.key !== '-' && input.key !== '0' &&
-      input.key !== 'f' && input.key !== 'p'
-    ) return
+    // Match by key OR physical code: non-US layouts report other `key`
+    // spellings for the same physical keys — the renderer's window listener
+    // carries the same code fallback, so both paths stay layout-independent.
+    const GUEST_SHORTCUT_CODES: Record<string, string> = {
+      Equal: '=', Minus: '-', Digit0: '0', KeyF: 'f', KeyP: 'p'
+    }
+    const key = GUEST_SHORTCUT_CODES[input.code ?? ''] ?? input.key
+    if (key !== '=' && key !== '+' && key !== '-' && key !== '0' && key !== 'f' && key !== 'p') return
     event.preventDefault()
-    activeEmit?.('browser:guest-shortcut', { key: input.key })
+    activeEmit?.('browser:guest-shortcut', { key })
   })
   contents.once('destroyed', () => {
     // 与输入中继同一处清理：before-input 监听随 emitter 销毁，这里再显式摘除 + 清节流表。

@@ -421,7 +421,11 @@ export function Composer({
     setValue((current) => (current.trim() ? `${current.trimEnd()}\n\n${text}` : text))
     setMention(null)
     requestAnimationFrame(() => {
-      const textarea = textareaRef.current
+      // textareaRef is only populated after PromptInput's first focus — a
+      // composer never focused this session has no textarea ref yet; fall
+      // back to the container query (selectStarter's path) so the FIRST
+      // annotation still focuses the field.
+      const textarea = textareaRef.current ?? inputContainerRef.current?.querySelector('textarea') ?? null
       if (!textarea) return
       textarea.focus()
       textarea.setSelectionRange(textarea.value.length, textarea.value.length)

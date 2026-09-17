@@ -465,7 +465,7 @@ try {
     ['src/renderer/src/components/app/BrowserPageView.tsx'],
     /const pinWidth = Math\.min\(pinned\.width, width\)[\s\S]*?wv\.style\.width = `\$\{pinWidth\}px`/
   )
-  trims.push('device emulation live measurement: trimmed after three unstable drive attempts (portaled Select + popover outside-press/focus-scope); the preset table and the element-pinning code path are source-asserted instead')
+  trims.push('device emulation live measurement: trimmed after three unstable drive attempts (popover outside-press/focus-scope); the preset table and the element-pinning code path are source-asserted instead. The panel itself is an in-panel ROW LIST — the vendored Select rendered its options inline (no portal) and clipped at the popover edge')
 
   // ================= Zoom: dom-ready reapply, proven live (flow) =============
   const zoomLabel = () => evaluate('document.querySelector("[data-browser-zoom] .tabular-nums")?.textContent?.trim()')
@@ -634,7 +634,13 @@ try {
   assert.match(disposeBody, /this\.handleProcessExit\(\)/, 'dispose hands lifecycle back to ipc.ts/shutdown.ts (references dropped)')
   assert.match(disposeBody, /this\.clearStateNotify\(\)/, 'dispose tears down the notify timer (references dropped)')
   assert.match(disposeBody, /刻意不调 electronBrowser\.close\(\)/, 'dispose documents the deliberate no-close decision')
-  assert.doesNotMatch(disposeBody.replace(/^\s*\/\/.*$/gm, ''), /\.close\(/, 'dispose must contain NO executable close call — Browser.close() over CDP can kill the app (iron 12)')
+  // The negative guard spans the WHOLE file (comments stripped — block
+  // comments first, then line comments): dispose() is the one place a close
+  // could hide today, but any future method joining it must trip the same alarm.
+  const serviceNoComments = serviceSource
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '')
+  assert.doesNotMatch(serviceNoComments, /\.close\(/, 'service.ts must contain NO executable close call anywhere — Browser.close() over CDP can kill the app (iron 12)')
   iron(12, 'live', 'the app stays alive the whole run with external playwright clients attached and is NOT closed by them — and the app-side half is source-asserted: dispose() only drops references (handleProcessExit + clearStateNotify, no .close() call, electronBrowser.close() prohibition pinned in source); the clients are dropped, never closed')
 
   // ---- Source-only iron rules (7 of 13; regexes verified against src). ------
