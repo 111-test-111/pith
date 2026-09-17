@@ -26,6 +26,28 @@ import {
 // ---- Task 4：CDP 端口与接线纯函数 ----
 import { getCdpPort, pickCdpPort } from '../src/main/browser/cdp-port.ts'
 import { classifyGuestPopup, decideBrowserPermission } from '../src/main/browser/wiring.ts'
+// ---- Task 6：渲染层纯逻辑（store/session/zoom/device/open-link/popup）----
+import {
+  BROWSER_RECENTS_LIMIT, BROWSER_HISTORY_LIMIT, OPEN_BROWSER_PAGES_LIMIT,
+  clearBrowserHistory, getBrowserHistory, getRecentUrls, isRecordableUrl,
+  pushBrowserHistory, readOpenBrowserPages, recordBrowserHistory, recordRecentUrl,
+  snapshotOpenPages, subscribeBrowserRecents, updateBrowserHistoryFavicon,
+  updateBrowserHistoryTitle, updateBrowserHistoryTitleFor, upsertRecentUrl, writeOpenBrowserPages,
+} from '../src/renderer/src/lib/browser/session.ts'
+import {
+  BROWSER_ZOOM_STEPS, effectiveWebviewZoom, getBrowserZoom, guestBoxToHost,
+  hostPointToGuest, nextBrowserZoom, normalizeBrowserZoom, setBrowserZoom,
+  subscribeBrowserZoom,
+} from '../src/renderer/src/lib/browser/zoom.ts'
+import {
+  clampDeviceSize, CUSTOM_DEVICE_ID, DEVICE_PRESETS, DEVICE_SIZE_MAX,
+  DEVICE_SIZE_MIN, findDevicePreset,
+} from '../src/renderer/src/lib/browser/device.ts'
+import {
+  BROWSER_OPEN_LINK_EVENT, drainPendingBrowserOpenLinks, requestBrowserOpenLink,
+} from '../src/renderer/src/lib/browser/open-link.ts'
+import { BROWSER_DOWNLOADS_LIMIT, BrowserStore } from '../src/renderer/src/lib/browser/store.ts'
+import { subscribeBrowserPopups } from '../src/renderer/src/lib/browser/popup.ts'
 
 const tests = []
 const test = (name, fn) => tests.push([name, fn])
@@ -752,6 +774,342 @@ test('pickCdpPort: PITH_CDP_PORT 合法优先；非法/缺省回落 19000–3899
     if (original === undefined) delete process.env.PITH_CDP_PORT
     else process.env.PITH_CDP_PORT = original
   }
+})
+
+// ---- Task 6：渲染层纯逻辑（node 直测；window/localStorage 桩仅在下列用例内安装并还原，
+// 前面的 service 套件不可见桩）----
+// Map 桩 + setItem 写入日志 + CustomEvent 收集：withWindowShim(fn) 在 fn 期间替换
+// globalThis.window，结束（含抛错）后原样还原。渲染层模块全部惰性访问 window——
+// 模块导入不触窗，首次 get*/record* 调用发生在桩内。
+function withWindowShim(fn) {
+  const store = new Map()
+  const writes = []
+  const events = []
+  const previous = globalThis.window
+  globalThis.window = {
+    localStorage: {
+      getItem: (k) => (store.has(k) ? store.get(k) : null),
+      setItem: (k, v) => { writes.push([k, String(v)]); store.set(k, String(v)) },
+      removeItem: (k) => store.delete(k),
+      clear: () => store.clear(),
+    },
+    dispatchEvent: (e) => { events.push(e) },
+  }
+  try {
+    return fn({ store, writes, events })
+  } finally {
+    if (previous === undefined) delete globalThis.window
+    else globalThis.window = previous
+  }
+}
+
+// ---- zoom：阶梯吸附/夹取/相对界面缩放/坐标换算 ----
+test('zoom: 阶梯吸附——平局取较低档；非法值回退 100%；阶梯外夹到端点档', () => {
+  assert.equal(normalizeBrowserZoom(0.95), 0.9, '0.9 与 1 等距 → 低档')
+  assert.equal(normalizeBrowserZoom(1.05), 1, '1 与 1.1 等距 → 低档（并且 effectiveWebviewZoom(1,1.05) 依赖原值直乘）')
+  assert.equal(normalizeBrowserZoom(1.625), 1.5, '1.5 与 1.75 的精确二进制平局 → 低档')
+  assert.equal(normalizeBrowserZoom(0.93), 0.9)
+  assert.equal(normalizeBrowserZoom(1.07), 1.1)
+  for (const bad of [Number.NaN, 0, -1.5]) assert.equal(normalizeBrowserZoom(bad), 1, String(bad))
+  assert.equal(normalizeBrowserZoom(0.1), BROWSER_ZOOM_STEPS[0], '阶梯下方夹到端点档')
+  assert.equal(normalizeBrowserZoom(100), 3, '阶梯上方夹到端点档')
+  assert.equal(normalizeBrowserZoom(Number.POSITIVE_INFINITY), 3)
+})
+
+test('zoom: nextBrowserZoom 先吸附再步进，端点停住', () => {
+  assert.equal(nextBrowserZoom(1, 1), 1.1)
+  assert.equal(nextBrowserZoom(1, -1), 0.9)
+  assert.equal(nextBrowserZoom(1.05, 1), 1.1, '1.05 吸附到 1 再放大一档')
+  assert.equal(nextBrowserZoom(1.625, 1), 1.75)
+  assert.equal(nextBrowserZoom(BROWSER_ZOOM_STEPS[0], -1), BROWSER_ZOOM_STEPS[0], '最小档再缩小停住')
+  assert.equal(nextBrowserZoom(3, 1), 3, '最大档再放大停住')
+})
+
+test('zoom: effectiveWebviewZoom = 页面档 × 界面缩放（不再整化）；界面缩放非法回退 1', () => {
+  assert.equal(effectiveWebviewZoom(1, 1.05), 1.05, '界面 105%、页面 100% → guest 1.05，写成 1 会闪缩')
+  assert.equal(effectiveWebviewZoom(1.1, 1.05), 1.1 * 1.05)
+  assert.equal(effectiveWebviewZoom(0.93, 2), 0.9 * 2, '页面值先吸附阶梯')
+  assert.equal(effectiveWebviewZoom(1, Number.NaN), 1)
+  assert.equal(effectiveWebviewZoom(1, 0), 1)
+})
+
+test('zoom: hostPointToGuest / guestBoxToHost 换算与往返', () => {
+  assert.deepEqual(hostPointToGuest({ x: 250, y: 100 }, 1.25), { x: 200, y: 80 })
+  const box = { x: 40, y: 60, width: 300, height: 200 }
+  const host = guestBoxToHost(box, 1.5)
+  assert.deepEqual(host, { x: 60, y: 90, width: 450, height: 300 })
+  // guest 盒中心的 host 坐标换回 guest 坐标 = 原盒中心（同一 scale 两侧相消）
+  const center = hostPointToGuest({ x: host.x + host.width / 2, y: host.y + host.height / 2 }, 1.5)
+  assert.deepEqual(center, { x: box.x + box.width / 2, y: box.y + box.height / 2 })
+})
+
+test('zoom: setBrowserZoom 持久化 + 同值不写盘不通知；getBrowserZoom 空存储回落 100%', () => {
+  withWindowShim(({ store, writes }) => {
+    let notified = 0
+    const stop = subscribeBrowserZoom(() => { notified++ })
+    assert.equal(getBrowserZoom(), 1, '空存储回落 100%')
+    setBrowserZoom(1.5)
+    assert.equal(getBrowserZoom(), 1.5)
+    assert.equal(store.get('pi-app:browser-zoom'), '1.5', '键名 pi-app:browser-zoom')
+    assert.equal(notified, 1)
+    setBrowserZoom(1.5) // 同值：不写盘、不通知
+    assert.equal(notified, 1)
+    assert.equal(writes.length, 1)
+    setBrowserZoom(7) // 阶梯外吸附到端点档
+    assert.equal(getBrowserZoom(), 3)
+    assert.equal(store.get('pi-app:browser-zoom'), '3')
+    stop()
+  })
+})
+
+// ---- session：纯函数核心（用例取自 $PIWEB/lib/browser-session.test.mjs 语义）----
+test('session: upsertRecentUrl 去重置顶、非 http(s) 不入列、超量截断', () => {
+  const list = ['https://a.dev/', 'https://b.dev/', 'https://c.dev/']
+  assert.deepEqual(upsertRecentUrl(list, 'https://b.dev/'), ['https://b.dev/', 'https://a.dev/', 'https://c.dev/'])
+  assert.deepEqual(upsertRecentUrl(list, 'https://d.dev/'), ['https://d.dev/', 'https://a.dev/', 'https://b.dev/', 'https://c.dev/'])
+  assert.equal(upsertRecentUrl(list, 'https://a.dev/'), list, '已在顶 → 原引用')
+  assert.equal(upsertRecentUrl(list, 'file:///etc'), list, '不可记录 URL → 原引用')
+  assert.equal(upsertRecentUrl(list, 'about:blank'), list)
+  assert.ok(isRecordableUrl('https://a/'))
+  const capped = Array.from({ length: BROWSER_RECENTS_LIMIT }, (_, i) => `https://${i}.dev/`)
+  const upserted = upsertRecentUrl(capped, 'https://new.dev/')
+  assert.equal(upserted.length, BROWSER_RECENTS_LIMIT, '默认限量 8')
+  assert.equal(upserted[0], 'https://new.dev/')
+  assert.equal(upserted.at(-1), 'https://6.dev/', '尾部挤出')
+})
+
+test('session: pushBrowserHistory——队首同 URL 刷新去重只回填标题，其余前置并限量', () => {
+  const t0 = 1000
+  const list = pushBrowserHistory([], { url: 'https://a.dev/', title: 'A', at: t0 })
+  assert.deepEqual(list, [{ url: 'https://a.dev/', title: 'A', at: t0 }])
+  // 队首同 URL：无标题/同标题 → 原引用；新标题 → 回填且 at 不变
+  assert.equal(pushBrowserHistory(list, { url: 'https://a.dev/', at: t0 + 5 }), list)
+  assert.equal(pushBrowserHistory(list, { url: 'https://a.dev/', title: 'A', at: t0 + 5 }), list)
+  const renamed = pushBrowserHistory(list, { url: 'https://a.dev/', title: 'A2', at: t0 + 5 })
+  assert.deepEqual(renamed, [{ url: 'https://a.dev/', title: 'A2', at: t0 }])
+  // 不同 URL 前置；非 http(s) 原引用
+  const two = pushBrowserHistory(renamed, { url: 'https://b.dev/', title: 'B', at: t0 + 10 })
+  assert.deepEqual(two.map((e) => e.url), ['https://b.dev/', 'https://a.dev/'])
+  assert.equal(pushBrowserHistory(two, { url: 'file:///x', at: t0 }), two)
+  let long = []
+  for (let i = 0; i < BROWSER_HISTORY_LIMIT + 5; i++) long = pushBrowserHistory(long, { url: `https://${i}.dev/`, at: i })
+  assert.equal(long.length, BROWSER_HISTORY_LIMIT, '默认限量 500')
+  assert.equal(long[0].url, `https://${BROWSER_HISTORY_LIMIT + 4}.dev/`)
+})
+
+test('session: updateBrowserHistoryTitle/Favicon 未命中/空值/无变化保持引用，命中只改目标条', () => {
+  const list = [
+    { url: 'https://a.dev/', title: 'A', favicon: 'f1', at: 1 },
+    { url: 'https://b.dev/', title: 'B', at: 2 },
+  ]
+  assert.equal(updateBrowserHistoryTitle(list, 'https://c.dev/', 'C'), list, '未命中')
+  assert.equal(updateBrowserHistoryTitle(list, 'https://a.dev/', ''), list, '空标题')
+  assert.equal(updateBrowserHistoryTitle(list, 'https://a.dev/', 'A'), list, '标题无变化')
+  assert.equal(updateBrowserHistoryFavicon(list, 'https://b.dev/', ''), list, '空图标')
+  assert.equal(updateBrowserHistoryFavicon(list, 'https://a.dev/', 'f1'), list, '图标无变化')
+  const titled = updateBrowserHistoryTitle(list, 'https://b.dev/', 'B2')
+  assert.deepEqual(titled[1], { url: 'https://b.dev/', title: 'B2', at: 2 })
+  assert.equal(titled[0], list[0], '其余条目引用不变')
+  const faved = updateBrowserHistoryFavicon(list, 'https://b.dev/', 'https://b.dev/favicon.ico')
+  assert.deepEqual(faved[1], { url: 'https://b.dev/', title: 'B', favicon: 'https://b.dev/favicon.ico', at: 2 })
+})
+
+test('session: snapshotOpenPages 只收 human 页与 http(s)，保持顺序并限量', () => {
+  const pages = [
+    { owner: 'human', url: 'https://h1.dev/' },
+    { owner: 'agent:s1', url: 'https://agent.dev/' },
+    { owner: 'human', url: 'file:///etc' },
+    { owner: 'human', url: 'about:blank' },
+    { owner: 'human', url: 'https://h2.dev/' },
+  ]
+  assert.deepEqual(snapshotOpenPages(pages), ['https://h1.dev/', 'https://h2.dev/'])
+  const many = Array.from({ length: OPEN_BROWSER_PAGES_LIMIT + 3 }, (_, i) => ({ owner: 'human', url: `https://${i}.dev/` }))
+  const snap = snapshotOpenPages(many)
+  assert.equal(snap.length, OPEN_BROWSER_PAGES_LIMIT, '默认限量 12')
+  assert.equal(snap[0], 'https://0.dev/', '保持打开顺序')
+})
+
+test('session: localStorage 适配——写盘、lastWritten 同值跳写、history 回填与清空', () => {
+  withWindowShim(({ store, writes }) => {
+    let recentsNotified = 0
+    const stopRecents = subscribeBrowserRecents(() => { recentsNotified++ })
+    recordRecentUrl('https://a.dev/')
+    recordRecentUrl('https://b.dev/')
+    recordRecentUrl('https://a.dev/')
+    assert.deepEqual(getRecentUrls(), ['https://a.dev/', 'https://b.dev/'])
+    assert.equal(recentsNotified, 3, '三次去重置顶都通知')
+    recordRecentUrl('https://a.dev/') // 已在顶
+    recordRecentUrl('file:///etc') // 不可记录
+    assert.equal(recentsNotified, 3, '无变化不通知')
+    assert.deepEqual(JSON.parse(store.get('pi-app:browser-recents')), ['https://a.dev/', 'https://b.dev/'])
+    recordRecentUrl('https://c.dev/')
+    assert.deepEqual(getRecentUrls(), ['https://c.dev/', 'https://a.dev/', 'https://b.dev/'])
+    stopRecents()
+    // lastWritten 同值跳过：写打开页快照，同值 JSON 不再 setItem
+    writeOpenBrowserPages(['https://x.dev/'])
+    const n = writes.length
+    writeOpenBrowserPages(['https://x.dev/'])
+    assert.equal(writes.length, n, '同值派生跳过写盘')
+    writeOpenBrowserPages(['https://y.dev/'])
+    assert.equal(writes.length, n + 1)
+    assert.deepEqual(readOpenBrowserPages(), ['https://y.dev/'], '读回写入值（写入侧只限量不过滤）')
+    // 历史：记录、刷新去重、标题回填、清空
+    recordBrowserHistory('https://a.dev/', 1)
+    recordBrowserHistory('https://a.dev/', 2) // 队首同 URL、无标题 → 原状
+    updateBrowserHistoryTitleFor('https://a.dev/', 'Example')
+    assert.deepEqual(getBrowserHistory(), [{ url: 'https://a.dev/', title: 'Example', at: 1 }])
+    assert.equal(JSON.parse(store.get('pi-app:browser-history')).length, 1)
+    clearBrowserHistory()
+    assert.deepEqual(getBrowserHistory(), [])
+    assert.deepEqual(JSON.parse(store.get('pi-app:browser-history')), [])
+  })
+})
+
+// ---- device：clampDeviceSize 边界与预设 ----
+test('device: clampDeviceSize——非正/NaN/∞ 回 200，超上限夹 3840，先取整再夹取', () => {
+  assert.equal(DEVICE_SIZE_MIN, 200)
+  assert.equal(DEVICE_SIZE_MAX, 3840)
+  for (const bad of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) assert.equal(clampDeviceSize(bad), DEVICE_SIZE_MIN, String(bad))
+  assert.equal(clampDeviceSize(4000), DEVICE_SIZE_MAX)
+  assert.equal(clampDeviceSize(4000.4), DEVICE_SIZE_MAX)
+  assert.equal(clampDeviceSize(500.6), 501, '先四舍五入再夹取')
+  assert.equal(clampDeviceSize(150), DEVICE_SIZE_MIN, '下限之下夹取')
+  assert.equal(clampDeviceSize(375), 375)
+  assert.equal(findDevicePreset('iphone-se')?.width, 375)
+  assert.equal(findDevicePreset('nope'), null)
+  assert.equal(DEVICE_PRESETS.length, 5)
+  assert.ok(DEVICE_PRESETS.every((p) => clampDeviceSize(p.width) === p.width && clampDeviceSize(p.height) === p.height))
+  assert.equal(CUSTOM_DEVICE_ID, 'custom')
+})
+
+// ---- store：useSyncExternalStore 源的队列/乐观页语义 ----
+function makeStatus(pages = [], pendingCreates = []) {
+  return { available: true, consentRequired: false, pages, pendingCreates }
+}
+
+test('store: applyStatus 同引用不通知，异引用通知；getState 在无变更时身份稳定', () => {
+  const store = new BrowserStore()
+  let notified = 0
+  const stop = store.subscribe(() => { notified++ })
+  assert.equal(store.getState().status, null)
+  const s1 = makeStatus()
+  store.applyStatus(s1)
+  assert.equal(notified, 1)
+  assert.equal(store.getState().status, s1)
+  store.applyStatus(s1) // 轮询反复派生的同值：跳过
+  assert.equal(notified, 1)
+  const stateBefore = store.getState()
+  assert.equal(store.getState(), stateBefore, '同一 state 对象在两次通知之间身份稳定')
+  store.applyStatus(makeStatus())
+  assert.equal(notified, 2)
+  assert.notEqual(store.getState(), stateBefore, '变更时整体替换')
+  stop()
+})
+
+test('store: optimistic 生命周期——add 占位 pending、resolve 解除、remove 移除；未知/重复 id 原样', () => {
+  const store = new BrowserStore()
+  let notified = 0
+  const stop = store.subscribe(() => { notified++ })
+  store.addOptimistic('p-opt1')
+  const added = store.getState().optimistic
+  assert.equal(added.length, 1)
+  assert.equal(added[0].id, 'p-opt1')
+  assert.equal(added[0].pending, true, '占位 = pendingCreate 物化中')
+  assert.equal(added[0].owner, HUMAN_OWNER)
+  assert.equal(added[0].url, buildMarkerUrl(HUMAN_OWNER, 'p-opt1'), 'marker URL 可直接物化 webview')
+  assert.equal(added[0].title, '')
+  store.addOptimistic('p-opt1') // 重复 add：原状
+  assert.equal(store.getState().optimistic, added)
+  assert.equal(notified, 1)
+  store.resolveOptimistic('p-opt1')
+  assert.equal(store.getState().optimistic[0].pending, false, '往返完成解除 pending')
+  assert.equal(store.getState().optimistic.length, 1)
+  store.resolveOptimistic('nope')
+  assert.equal(store.getState().optimistic[0].pending, false, '未知 id 原样')
+  store.removeOptimistic('nope')
+  assert.equal(store.getState().optimistic.length, 1)
+  store.removeOptimistic('p-opt1')
+  assert.deepEqual(store.getState().optimistic, [])
+  stop()
+})
+
+test('store: pushPopup/drainPopups——先进先出、drain 清空、空 drain 不通知', () => {
+  const store = new BrowserStore()
+  let notified = 0
+  const stop = store.subscribe(() => { notified++ })
+  store.pushPopup({ url: 'https://p1.dev/', openerWebContentsId: 7 })
+  store.pushPopup({ url: 'https://p2.dev/', openerWebContentsId: 8 })
+  assert.equal(notified, 2)
+  assert.deepEqual(store.drainPopups(), [
+    { url: 'https://p1.dev/', openerWebContentsId: 7 },
+    { url: 'https://p2.dev/', openerWebContentsId: 8 },
+  ])
+  assert.deepEqual(store.getState().popups, [])
+  const n = notified
+  assert.deepEqual(store.drainPopups(), [], '空 drain 返回空数组')
+  assert.equal(notified, n, '空 drain 不通知')
+  stop()
+})
+
+test('store: pushDownload 环形 ≤5，保留最新', () => {
+  assert.equal(BROWSER_DOWNLOADS_LIMIT, 5)
+  const store = new BrowserStore()
+  for (let i = 1; i <= 7; i++) store.pushDownload({ path: `/dl/f${i}.bin`, filename: `f${i}.bin` })
+  assert.deepEqual(store.getState().downloads.map((d) => d.filename), ['f3.bin', 'f4.bin', 'f5.bin', 'f6.bin', 'f7.bin'])
+})
+
+test('store: applyStatus 只换 status 字段，popups/downloads/optimistic 数组引用不变', () => {
+  const store = new BrowserStore()
+  store.pushPopup({ url: 'https://p.dev/', openerWebContentsId: 1 })
+  store.addOptimistic('p-opt9')
+  const { popups, downloads, optimistic } = store.getState()
+  store.applyStatus(makeStatus())
+  const next = store.getState()
+  assert.equal(next.popups, popups)
+  assert.equal(next.downloads, downloads)
+  assert.equal(next.optimistic, optimistic)
+})
+
+// ---- open-link：事件名 pith:browser-open-link + 待打开队列 ----
+test('open-link: request 入队并派发 pith:browser-open-link；drain 取走并清空', () => {
+  withWindowShim(({ events }) => {
+    assert.equal(BROWSER_OPEN_LINK_EVENT, 'pith:browser-open-link')
+    requestBrowserOpenLink('https://a.dev/')
+    requestBrowserOpenLink('https://b.dev/')
+    assert.equal(events.length, 2)
+    assert.equal(events[0].type, 'pith:browser-open-link')
+    assert.deepEqual(drainPendingBrowserOpenLinks(), ['https://a.dev/', 'https://b.dev/'])
+    assert.deepEqual(drainPendingBrowserOpenLinks(), [], '再 drain 为空')
+  })
+})
+
+// ---- popup：window.pi.onBrowserPopup → store.pushPopup 的默认接线 ----
+test('popup: 无 window.pi 安全降级；有则转发 pushPopup 且退订移除监听', () => {
+  const store = new BrowserStore()
+  const previous = globalThis.window
+  try {
+    delete globalThis.window // node 裸环境：没有 window.pi
+    const stop = subscribeBrowserPopups(store)
+    assert.equal(typeof stop, 'function')
+    stop()
+  } finally {
+    if (previous !== undefined) globalThis.window = previous
+  }
+  withWindowShim(() => {
+    const listeners = []
+    globalThis.window.pi = {
+      onBrowserPopup: (cb) => {
+        listeners.push(cb)
+        return () => { const i = listeners.indexOf(cb); if (i !== -1) listeners.splice(i, 1) }
+      },
+    }
+    const stop = subscribeBrowserPopups(store)
+    assert.equal(listeners.length, 1)
+    listeners[0]({ url: 'https://pop.dev/', openerWebContentsId: 42 })
+    assert.deepEqual(store.getState().popups, [{ url: 'https://pop.dev/', openerWebContentsId: 42 }])
+    stop()
+    assert.equal(listeners.length, 0, '退订移除监听')
+  })
 })
 
 // service 套件的挂起 promise（建页握手 waiter、autoMaterialize 轮询、notify 合并窗）
