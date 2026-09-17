@@ -31,6 +31,10 @@
  *   dir (Node's os.homedir honors it). The only file the run may place
  *   outside the temp root is a download in the real ~/Downloads, which is
  *   content-verified and deleted at cleanup.
+ * - Rejection policy: unhandled rejections are allowed ONLY when they match
+ *   playwright's connection-teardown family (the deliberately abandoned
+ *   guest close and the dropped clients at app kill) — counted NOTEs. Any
+ *   other unhandled rejection fails the run (exit 1).
  * - Consent: the check DRIVES the real consent card (the isolated profile
  *   seeds `browserConsent: false`) instead of pre-seeding `true` — the grant
  *   round trip is itself part of the surface under test.
@@ -108,11 +112,37 @@ async function eventually(fn, label, timeout = 20_000) {
   throw new Error(`timed out waiting for ${label}: ${last instanceof Error ? last.message : String(last)}`)
 }
 
-// Abandoned promises are part of the design here (iron rule 2's hung close,
-// unclosed second playwright connections). When the app is killed at cleanup
-// they reject — expected, and it must not crash the run.
+// Abandoned promises are part of the design here (iron rule 2's deliberately
+// hung page.close(), the two connectOverCDP clients dropped un-closed at
+// cleanup). When the app is killed in `finally` they reject with playwright's
+// connection-teardown family — expected, and each match below is COUNTED and
+// printed as a NOTE in `finally` (rejections from the app kill land during
+// that teardown). ANY OTHER unhandled rejection is a harness defect (a
+// floating promise in helper code): it prints a FAIL line and sets the exit
+// code immediately, so it can never end a green run. The allowlist matches
+// playwright-core's exact teardown messages, prefix-gated; an upstream
+// rewording resurfaces as a failure, never as a silent pass.
+const benignRejectionKind = (reason) => {
+  const message = reason instanceof Error ? reason.message : String(reason)
+  if (/^Target page, context or browser has been closed/.test(message)) return 'playwright: target/context/browser closed (dropped client / abandoned guest close at app kill)'
+  if (/^Target browser or context has been closed/.test(message)) return 'playwright: browser or context closed (dropped client at app kill)'
+  if (/^Browser has been closed/.test(message)) return 'playwright: browser closed (dropped client at app kill)'
+  if (/^Target closed/.test(message)) return 'playwright: target closed (protocol channel died at app kill)'
+  if (/^Session closed/.test(message)) return 'playwright: session closed (CDP session died at app kill)'
+  if (/^Protocol error /.test(message) && / (Target closed|Browser[^"]*closed|Session closed|Connection closed)/.test(message)) return 'playwright: protocol error against the dead connection (app kill)'
+  return null
+}
+const benignRejectionKinds = new Map()
+let unexpectedRejections = 0
 process.on('unhandledRejection', (reason) => {
-  console.log(`NOTE: expected unhandled rejection from an abandoned CDP promise: ${reason instanceof Error ? reason.message : String(reason)}`)
+  const kind = benignRejectionKind(reason)
+  if (kind) {
+    benignRejectionKinds.set(kind, (benignRejectionKinds.get(kind) ?? 0) + 1)
+    return
+  }
+  unexpectedRejections += 1
+  console.error(`FAIL unhandled rejection (not in the abandoned-promise allowlist): ${reason instanceof Error ? reason.stack ?? reason.message : String(reason)}`)
+  process.exitCode = 1
 })
 
 try {
@@ -253,6 +283,11 @@ try {
   await send('Page.reload')
   await eventually(() => evaluate('document.readyState === "complete" && document.body && document.body.innerText.length > 50'), 'shell renderer after locale reload', 30_000)
   await eventually(async () => (await evaluate('document.documentElement.lang')) === 'en', 'locale pinned to en')
+  // Documented substitution — must appear in the run's TRIMS section: the en
+  // pin is a shell-only reload BEFORE any guest exists (rule 6 forbids
+  // reloading GUESTS, never the shell), so label assertions stay
+  // host-locale-independent.
+  trims.push('locale: pinned to en via localStorage + ONE shell-only reload before any guest exists (rule 6 forbids guest reloads, not shell reloads); label/aria-label assertions run against the pinned en UI')
 
   // ================= Group 3 (opening): pane opens from the sidebar ==========
   // The right rail starts closed on a fresh profile; toggle it like a human,
@@ -372,7 +407,7 @@ try {
     'popup guest target for the attached client', 15_000
   )
   await popupPage.waitForLoadState('domcontentloaded', { timeout: 10_000 })
-  iron(10, 'live', 'guest window.open is denied as a window and routed through browser:popup: the pane strip gains a row driven by the SAME webview pipeline — no OS popup window exists (wiring setWindowOpenHandler deny corroborates)')
+  iron(10, 'live', 'guest window.open is routed through browser:popup: the pane strip gains a second row driven by the SAME webview pipeline (asserted here: the strip row and its attached-client target)')
   pass('flow', 'popup materializes a second strip row whose target is visible to the attached client')
   // Substitution (documented): the popup's OWNER INHERITANCE needs an
   // agent-owned opener, which this account-less check cannot mint; the
@@ -523,13 +558,13 @@ try {
   await eventually(() => evaluate('!document.querySelector("[data-browser-annotate-capture]")'), 'annotate mode exits on Esc')
 
   // ================= Keep-alive (ui, Ruling H) ===============================
-  await evaluate('document.querySelector("[data-browser-page]")?.setAttribute("data-keepalive-probe","1")')
+  await evaluate('document.querySelector("[data-browser-page] webview")?.setAttribute("data-keepalive-probe","1")')
   await click('[data-sidebar-tabs] button[aria-label="New tab"]')
   await eventually(() => evaluate('[...document.querySelectorAll(\'[data-panel=right] button span\')].some((s)=>s.textContent.trim()===\'Context\')'), 'picker rows')
   await evaluate(`[...document.querySelectorAll('[data-panel=right] button')].find((b)=>[...b.querySelectorAll('span')].some((s)=>s.textContent.trim()==='Context')).click()`)
   await eventually(() => evaluate('Boolean(document.querySelector(\'[data-sidebar-tab="context"] [role=tab][aria-selected="true"]\'))'), 'context tab active')
   assert.equal(await evaluate('Boolean(document.querySelector("[data-browser-page] webview"))'), true, 'webview element survives the rail switch')
-  assert.equal(await evaluate('document.querySelector("[data-browser-page]")?.getAttribute("data-keepalive-probe")'), '1', 'the SAME DOM node survives (no remount)')
+  assert.equal(await evaluate('document.querySelector("[data-browser-page] webview")?.getAttribute("data-keepalive-probe")'), '1', 'the SAME webview element survives (an inner remount would lose the probe attribute)')
   pass('ui', 'keep-alive: switching rail tabs keeps the browser layer mounted — the identical webview node persists in the hidden layer')
 
   // ================= Link interception (ui, documented substitution) =========
@@ -580,10 +615,23 @@ try {
   await eventually(async () => !(await evaluate('Boolean(document.querySelector("[data-panel=right]"))')), 'rail folds after its last tab closes', 10_000)
   pass('ui', 'closing the last remaining rail tab folds the right rail')
 
-  // ================= Iron rule 12 (live): app outlives the clients ===========
+  // ================= Iron rule 12 (live + app-side source) ==================
   assert.equal(app.exitCode, null, 'app process still running')
   assert.equal(await evaluate('document.readyState'), 'complete', 'shell still responsive with the playwright clients attached')
-  iron(12, 'live', 'the app stays alive the whole run with external playwright clients attached and is NOT closed by them — dispose only drops references (never Browser.close()/context.close()); the clients are dropped, never closed')
+  // The APP-side half of the rule, source-asserted: the dispose path must DROP
+  // references, never close. The needle pins dispose()'s exact shape
+  // (handleProcessExit + clearStateNotify) and the deliberate no-close
+  // comment, and the body — comments stripped — is negatively asserted to
+  // contain no .close( call at all (Browser.close() over CDP can kill the
+  // Electron shell).
+  const serviceSource = await read('src/main/browser/service.ts')
+  const disposeBody = /dispose\(\): void \{[\s\S]*?\n  \}/.exec(serviceSource)?.[0]
+  assert.ok(disposeBody, 'BrowserService.dispose() found in service.ts')
+  assert.match(disposeBody, /this\.handleProcessExit\(\)/, 'dispose hands lifecycle back to ipc.ts/shutdown.ts (references dropped)')
+  assert.match(disposeBody, /this\.clearStateNotify\(\)/, 'dispose tears down the notify timer (references dropped)')
+  assert.match(disposeBody, /刻意不调 electronBrowser\.close\(\)/, 'dispose documents the deliberate no-close decision')
+  assert.doesNotMatch(disposeBody.replace(/^\s*\/\/.*$/gm, ''), /\.close\(/, 'dispose must contain NO executable close call — Browser.close() over CDP can kill the app (iron 12)')
+  iron(12, 'live', 'the app stays alive the whole run with external playwright clients attached and is NOT closed by them — and the app-side half is source-asserted: dispose() only drops references (handleProcessExit + clearStateNotify, no .close() call, electronBrowser.close() prohibition pinned in source); the clients are dropped, never closed')
 
   // ---- Source-only iron rules (7 of 13; regexes verified against src). ------
   await sourceIron(3, ['src/renderer/src/components/app/BrowserPageView.tsx'], /IRON RULE: an unselected agent page must never take `display: none`[\s\S]*?opacity: 0, pointerEvents: 'none'/)
@@ -635,7 +683,7 @@ try {
   const liveRules = [...assertedIronRules].filter((rule) => results.iron.some((line) => line.startsWith(`${rule}.`) && !line.includes('[source-assertion]')))
   console.log(`SUMMARY group1 iron: ${results.iron.length}/13 re-proven (${liveRules.length} live [${liveRules.join(',')}], ${13 - liveRules.length} explicit [source-assertion]; none silently dropped)`)
   console.log(`SUMMARY group2 flow: ${results.flow.length} assertions green (attach, marker handshake, human nav + recents/history, guest Playwright primitives, download interception, popup routing, zoom dom-ready reapply)`)
-  console.log(`SUMMARY group3 ui: ${results.ui.length} assertions green (sidebar + consent entry, find bar, device preset pin, annotate end-to-end, keep-alive, link-event reaction, strip close/fold, theme round-trip)`)
+  console.log(`SUMMARY group3 ui: ${results.ui.length} assertions green (pane entry + driven consent grant, find bar, annotate end-to-end, keep-alive, link-event reaction, strip close + last-page closes the rail tab, rail fold)`)
   console.log('TRIMS/SUBSTITUTIONS:')
   for (const trim of trims) console.log(`  - ${trim}`)
   console.log('PASS check-browser-ui')
@@ -660,6 +708,11 @@ try {
       await Promise.race([forced, pause(3_000)])
     }
   }
+  // Fail-visible accounting for the unhandledRejection filter: benign
+  // teardown rejections from the app kill land DURING this teardown, so the
+  // filtered counts (and any unexpected one) are reported here.
+  for (const [kind, count] of benignRejectionKinds) console.log(`NOTE: ${count} benign unhandled rejection(s) (abandoned-promise allowlist): ${kind}`)
+  if (unexpectedRejections > 0) console.error(`FAIL: ${unexpectedRejections} unexpected unhandled rejection(s) — not in the abandoned-promise allowlist (exit code already set)`)
   // No orphan Electron from THIS run: nothing carrying the temp root survives.
   try {
     const { stdout } = await execFileAsync('ps', ['-axo', 'pid=,command='])
