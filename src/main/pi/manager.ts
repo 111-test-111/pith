@@ -1514,7 +1514,13 @@ export class PiManager {
         // The embedded browser's agent tools. Registered in the CHILD path too:
         // a subagent profile may name browser_* tools and the frozen ceiling
         // admits them by name, so the names must exist to be activated.
-        ...(this.browserToolsFlag && getBrowserService()
+        // Gated on the SERVICE, never on browserToolsFlag: customTools is
+        // frozen at build (the SDK reuses the array on every registry
+        // rebuild) and setActiveToolsByName silently drops unknown names, so
+        // flag-gating here would leave the live toggle a no-op for every
+        // existing session. Exposure is the active set's job — see
+        // applyActiveTools.
+        ...(getBrowserService()
           ? createBrowserTools({ ownerId: sessionManager.getSessionId(), service: getBrowserService()! })
           : [])]
     })
@@ -1749,6 +1755,36 @@ export class PiManager {
     return { parentPath: options.parentSessionPath, resource: options.resource, ...(model ? { model } : {}) }
   }
 
+  /**
+   * Compute and apply a session's active tool set: at startup
+   * (initializeSession) AND after every live reload (reloadManagedSession).
+   * The re-application is not optional — the SDK's reload() rebuilds the
+   * registry with `includeAllExtensionTools`, which re-activates EVERY
+   * registered tool, so a reload can only ADD names to the active set, never
+   * remove them. This method is therefore what actually enforces a settings
+   * toggle's removal (browser_* going inactive when the user turns the
+   * setting off) after the reload it rides.
+   */
+  private applyActiveTools(managed: ManagedSession, loader: ResourceLoader): void {
+    if (managed.subagentChild) {
+      // Children activate ONLY their frozen ceiling: the normal path below
+      // re-activates every built-in + extension tool, which would silently
+      // widen a profile's tool restriction.
+      managed.session.setActiveToolsByName([...managed.subagentChild.toolCeiling])
+      return
+    }
+    // An SDK tools allowlist would also hide extension tools. Activate the
+    // complete set after lazy registration, deduplicating app overrides.
+    // The delegation tool is gated by its setting here (its customTool is
+    // registered at build; the runtime re-checks dispatch live).
+    managed.session.setActiveToolsByName([...new Set([
+      ...BUILTIN_TOOL_NAMES, ...APP_BASH_TOOL_NAMES, ...APP_FILE_TOOL_NAMES, TODO_TOOL_NAME, ASK_USER_TOOL_NAME,
+      ...(managed.subagents ? [SUBAGENT_TOOL_NAME] : []),
+      ...(this.browserToolsFlag ? APP_BROWSER_TOOL_NAMES : []),
+      ...loader.getExtensions().extensions.flatMap((extension) => [...extension.tools.keys()])
+    ])])
+  }
+
   private async initializeSession(managed: ManagedSession, loader: ResourceLoader): Promise<void> {
     // Publish the managed session and its barrier before running extension code.
     await new Promise<void>((resolve) => setImmediate(resolve))
@@ -1761,23 +1797,7 @@ export class PiManager {
         console.error(`Extension error (${error.extensionPath}): ${error.error}`)
       } })
       if (this.closing || managed.disposing) return
-      if (managed.subagentChild) {
-        // Children activate ONLY their frozen ceiling: the normal path below
-        // re-activates every built-in + extension tool, which would silently
-        // widen a profile's tool restriction.
-        managed.session.setActiveToolsByName([...managed.subagentChild.toolCeiling])
-      } else {
-        // An SDK tools allowlist would also hide extension tools. Activate the
-        // complete set after lazy registration, deduplicating app overrides.
-        // The delegation tool is gated by its setting here (its customTool is
-        // registered at build; the runtime re-checks dispatch live).
-        managed.session.setActiveToolsByName([...new Set([
-          ...BUILTIN_TOOL_NAMES, ...APP_BASH_TOOL_NAMES, ...APP_FILE_TOOL_NAMES, TODO_TOOL_NAME, ASK_USER_TOOL_NAME,
-          ...(managed.subagents ? [SUBAGENT_TOOL_NAME] : []),
-          ...(this.browserToolsFlag ? APP_BROWSER_TOOL_NAMES : []),
-          ...loader.getExtensions().extensions.flatMap((extension) => [...extension.tools.keys()])
-        ])])
-      }
+      this.applyActiveTools(managed, loader)
     } catch (error) {
       if (!this.closing && !managed.disposing) {
         this.emitSessionError(managed, error)
@@ -2736,12 +2756,17 @@ export class PiManager {
   }
 
   /**
-   * Toggle the browser_* agent tools. The flag is read at session build (the
-   * customTools array and the active set both), and live sessions reload so a
-   * rebuilt runtime re-derives against it — the same walk as setAppendPrompt:
-   * an idle session reloads now, a streaming one defers to `agent_settled`
+   * Toggle the browser_* agent tools. The 13 tools register whenever the
+   * browser service exists (service-gated at build — registration can never
+   * change for a live session); this flag only decides the ACTIVE set, and
+   * live sessions reach it through the setAppendPrompt reload walk: an idle
+   * session reloads now, a streaming one defers to `agent_settled`
    * (reloading mid-run would swap the extension runner under an in-flight
-   * request). ipc.ts persists the preference; this only applies it.
+   * request). Because the SDK's reload re-activates every registered tool,
+   * reloadManagedSession re-applies the active set AFTER it resolves — that
+   * re-application is what removes the browser_* names when the flag goes
+   * off (and is a harmless no-op when it goes on). ipc.ts persists the
+   * preference; this only applies it.
    */
   async setBrowserAgentTools(enabled: boolean): Promise<void> {
     this.browserToolsFlag = enabled === true
@@ -2956,6 +2981,13 @@ export class PiManager {
         await managed.session.reload({ beforeSessionStart: () => {
           if (this.closing || managed.disposing) throw new Error('Session is shutting down')
         } })
+        // reload() re-activated every registered tool (includeAllExtensionTools);
+        // re-applying the active set AFTER it resolves is what removes the
+        // browser_* names when the flag is now off — and re-pins children to
+        // their frozen ceiling. The loader is filtered exactly as at startup
+        // (initializeSession receives the filtered one too), so disabled
+        // extensions' tools are not re-activated here either.
+        this.applyActiveTools(managed, this.filterExtensions(managed.resourceLoader))
       }
       catch { /* Keep the existing resource-reload error policy. */ }
       finally { this.catalogCache = null }
