@@ -433,7 +433,6 @@ const zhCN: Messages = {
   'browser.consentGrant': '我已了解，继续',
   'browser.newPage': '新建页面',
   'browser.closePage': '关闭页面',
-  'browser.pageLoading': '正在加载…',
   'browser.emptyHint': '还没有打开的页面——新建一个，即可在会话旁浏览。',
   'browser.back': '后退',
   'browser.forward': '前进',

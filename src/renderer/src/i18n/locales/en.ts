@@ -436,7 +436,6 @@ const en = {
   'browser.consentGrant': 'I understand, continue',
   'browser.newPage': 'New page',
   'browser.closePage': 'Close page',
-  'browser.pageLoading': 'Loading…',
   'browser.emptyHint': 'No pages open yet — start one to browse beside the conversation.',
   'browser.back': 'Back',
   'browser.forward': 'Forward',

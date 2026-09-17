@@ -24,15 +24,17 @@ import { MiddleEllipsis } from './MiddleEllipsis'
  *  this poll only reads status. */
 const BROWSER_POLL_MS = 2_500
 
-/** Task 15: a local popup row awaiting its dom-ready handshake — NOT a server
- *  pendingCreate (popups never call createPage); it joins the same render
+/** A local row materialized by the pane itself (Task 15 popups, and the
+ *  first-paint auto-fill) awaiting its dom-ready handshake — NOT a server
+ *  pendingCreate (neither calls createPage); it joins the same render
  *  branch below and clears through the self-heal once the server list covers
  *  its tempId (browserSeen registered it state-side). */
 interface LocalPendingRow {
   id: string
   owner: string
-  /** The popup's url, reported as navigateTo in the seen handshake. */
-  navigateTo: string
+  /** The target url, reported as navigateTo in the seen handshake — absent
+   *  for a blank page (no navigation for the service to perform). */
+  navigateTo?: string
 }
 
 /** The ONE pending-materialization row shape (Ruling D): server pendingCreates
@@ -381,6 +383,43 @@ export function BrowserPane({
   // open-pages snapshot, else open one blank page. Live arrivals win: pages
   // or pendingCreates on that first status skip the restore entirely. A
   // consent-required status stays armed — the grant's own status fires it.
+  // First-paint auto-fill (mount-once): decide from LOCAL knowledge before
+  // any server round trip — the row and its marker webview render in the
+  // pane's FIRST commit, so opening the tab shows the blank page (or the
+  // restore rows, prewritten with their target urls) at once. This is the
+  // popup materialization path verbatim (client-side tempId + seen with
+  // navigateTo): registration happens in the background while the user
+  // already sees the page. Declines (and the status latch below stays armed
+  // as the fallback) whenever anything could already own the model: queued
+  // popups, any server-known page or pendingCreate (a stale snapshot listing
+  // pre-close ghosts is the sweep-window case — the latch handles it once
+  // the sweep's fresh status lands), or a consent gate we KNOW is closed. A
+  // null status is unknown, not closed: rows materialize behind the consent
+  // card and are simply there when the grant lifts it.
+  useEffect(() => {
+    if (autoFilledRef.current) return
+    const storeState = store.getState()
+    if (storeState.popups.length > 0 || storeState.optimistic.length > 0) return
+    const current = storeState.status
+    if (current && (current.consentRequired || current.pages.length > 0 || current.pendingCreates.length > 0)) return
+    autoFilledRef.current = true
+    const saved = readOpenBrowserPages()
+    const targets: Array<string | undefined> = saved.length > 0 ? [...saved] : [undefined]
+    const rows = targets.map((url) => pendingRowOf(createBrowserPageId(), HUMAN_OWNER, url))
+    setLocalPending((prev) => [...prev, ...rows])
+    setLocalNav((prev) => {
+      let next = prev
+      for (let i = 0; i < targets.length; i++) {
+        const url = targets[i]
+        if (url) next = applyNavPatch(next, rows[i].id, { url })
+      }
+      return next
+    })
+    setSelectedPageId(rows[0].id)
+    // The rows exist in the same commit — no async gap for onEmpty to trip
+    // on, so autoFillInFlightRef stays with the latch's createPage path.
+  }, [])
+
   useEffect(() => {
     if (autoFilledRef.current) return
     if (!status || status === staleStatusRef.current) return
@@ -585,10 +624,10 @@ export function BrowserPane({
               {pages.map((page) => {
                 const nav = localNav[page.id]
                 const url = displayUrlOf(page, nav)
-                const label =
-                  page.pending && !nav
-                    ? t('browser.pageLoading')
-                    : (nav?.title || page.title || url || 'about:blank')
+                // A pending row IS the feedback (the row + its blank surface
+                // exist); a separate loading label reads as a waiting state on
+                // a page that has, in fact, already appeared.
+                const label = nav?.title || page.title || url || 'about:blank'
                 const isActive = page.id === effectiveSelectedId
                 return (
                   <div key={page.id} className="group/browser-page relative flex items-center" data-browser-tab={page.id}>
@@ -596,7 +635,7 @@ export function BrowserPane({
                       <TabsTrigger
                         value={page.id}
                         indicatorClassName="bg-background shadow-xs ring-1 ring-border"
-                        className={cn('h-7 min-h-0 pl-2.5 pr-7', isActive && 'text-foreground')}
+                        className={cn('h-7 min-h-0 gap-1.5 pl-2.5 pr-7', isActive && 'text-foreground')}
                       >
                         {nav?.favicon ? (
                           <img
