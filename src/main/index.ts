@@ -1,6 +1,9 @@
-import { app, BrowserWindow, screen, shell } from 'electron'
+import { app, BrowserWindow, screen } from 'electron'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { appendCdpSwitches, pickCdpPort } from './browser/cdp-port.ts'
+import { getBrowserService } from './browser/service.ts'
+import { installBrowserWiring } from './browser/wiring.ts'
 import { createPiManager, registerIpc } from './ipc'
 import { installMediaProtocol, registerMediaScheme } from './media-protocol'
 import { guardExternalNavigation } from './navigation'
@@ -10,6 +13,9 @@ import { windowChromeOptions } from './window-chrome'
 
 // A privileged scheme has to be declared before the app is ready.
 registerMediaScheme()
+// Same for the embedded browser's CDP endpoint: the port must be picked and its
+// Chromium switches appended before the app is ready.
+appendCdpSwitches(pickCdpPort())
 
 // Keep existing settings and Chromium storage through the product rename.
 app.setPath('userData', join(app.getPath('appData'), 'pi-app'))
@@ -32,6 +38,13 @@ const MIN_HEIGHT = 560
 const BOUNDS_SAVE_DELAY_MS = 400
 /** How much of the window must still land on a display to reuse its position. */
 const MIN_VISIBLE_EDGE = 48
+
+/** Renderer broadcast with the same shape `registerIpc` uses: browser events reach every window. */
+function broadcast(channel: string, payload: unknown): void {
+  for (const w of BrowserWindow.getAllWindows()) {
+    if (!w.isDestroyed()) w.webContents.send(channel, payload)
+  }
+}
 
 /**
  * The size/position to open with: the saved normal bounds when a window has
@@ -74,11 +87,25 @@ function createWindow(): BrowserWindow {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
-      spellcheck: false
+      spellcheck: false,
+      // The embedded browser's pages are <webview> guests hosted by the renderer.
+      webviewTag: true
     }
   })
 
   registerQuitShortcut(win.webContents, () => app.quit())
+
+  // Embedded browser wiring: per-contents window-open routing (this replaces the
+  // window-level open-external handler that used to live below), guest input relay,
+  // download takeover and the permission allowlist for the browser partition. It
+  // reports false until the browser service is initialized in ipc.ts, before
+  // createWindow — the transitional no-op state stays visible. The branch also
+  // documents the config dependency: `treeshake: false` in electron.vite.config.ts
+  // is what keeps this wiring in the bundle (rollup 4's inter-procedural folding
+  // proves these electron-only effects "pure" and would delete them otherwise).
+  if (!installBrowserWiring(win, getBrowserService(), broadcast)) {
+    console.warn('[Pith] browser wiring skipped: browser service not initialized yet')
+  }
 
   // Restore the maximized state the window was closed in. Reading bounds while
   // maximized or full screen yields the maximized rect, so persistence always
@@ -121,12 +148,6 @@ function createWindow(): BrowserWindow {
     // macOS ignores setFullScreen before the window is visible, so restore the
     // full-screen state only once it is on screen.
     if (saved?.fullscreen) win.setFullScreen(true)
-  })
-
-  // Open external links in the system browser instead of a new app window.
-  win.webContents.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url)
-    return { action: 'deny' }
   })
 
   // The window is an application shell, never a document viewer; see

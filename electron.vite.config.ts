@@ -20,6 +20,13 @@ export default defineConfig({
           'rewind-worker': resolve('src/main/rewind/worker.ts'),
           'terminal-host': resolve('src/main/terminal/host.ts')
         },
+        // Rollup 4's inter-procedural tree-shaking proves functions whose leaves are
+        // electron/parameter calls "pure" and deletes their call statements from
+        // function bodies — measured on the browser wiring: installBrowserWiring
+        // (and, after the service init lands, its whole body) was folded out of
+        // index.mjs. The main process graph is full of exactly such electron-only
+        // installers, so cross-module folding stays off here.
+        treeshake: false,
         output: { format: 'es', entryFileNames: '[name].mjs' }
       }
     }

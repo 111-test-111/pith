@@ -23,6 +23,9 @@ import {
   BrowserService, BrowserHostUnavailableError, ConsentRequiredError, NavigationBlockedError,
   StaleSnapshotError, __setBrowserServiceForTests, getBrowserService, initBrowserService,
 } from '../src/main/browser/service.ts'
+// ---- Task 4：CDP 端口与接线纯函数 ----
+import { getCdpPort, pickCdpPort } from '../src/main/browser/cdp-port.ts'
+import { classifyGuestPopup, decideBrowserPermission } from '../src/main/browser/wiring.ts'
 
 const tests = []
 const test = (name, fn) => tests.push([name, fn])
@@ -708,6 +711,47 @@ test('service: initBrowserService 幂等；getBrowserService/__setBrowserService
   assert.equal(getBrowserService(), sentinel)
   __setBrowserServiceForTests(null)
   assert.equal(getBrowserService(), null)
+})
+
+// ---- Task 4：CDP 端口与接线纯函数 ----
+test('decideBrowserPermission: allowlist 三真；media/geolocation/notifications/midi/serial/usb/bluetooth 一律假', () => {
+  assert.equal(decideBrowserPermission('fullscreen'), true)
+  assert.equal(decideBrowserPermission('clipboard-sanitized-write'), true)
+  assert.equal(decideBrowserPermission('pointerLock'), true)
+  for (const denied of ['media', 'geolocation', 'notifications', 'midi', 'serial', 'usb', 'bluetooth']) {
+    assert.equal(decideBrowserPermission(denied), false, denied)
+  }
+  // allowlist 之外的合法权限名同样拒绝
+  assert.equal(decideBrowserPermission('window-management'), false)
+})
+
+test('classifyGuestPopup: marker 前缀 / 壳文档（http://localhost:* 与 file://） / 普通页三分类', () => {
+  assert.equal(classifyGuestPopup(buildMarkerUrl(agentOwner('s1'), 'p-pop1')), 'marker')
+  assert.equal(classifyGuestPopup('http://localhost:5173/workspace'), 'shell')
+  assert.equal(classifyGuestPopup('file:///Users/x/pi-app/out/renderer/index.html'), 'shell')
+  assert.equal(classifyGuestPopup('https://example.com/page?q=1'), 'guest')
+  assert.equal(classifyGuestPopup('about:blank'), 'guest', '空白 popup 留给 renderer 建页流程')
+})
+
+test('pickCdpPort: PITH_CDP_PORT 合法优先；非法/缺省回落 19000–38999；getCdpPort 记录同值', () => {
+  const original = process.env.PITH_CDP_PORT
+  try {
+    process.env.PITH_CDP_PORT = '34567'
+    assert.equal(pickCdpPort(), 34567)
+    assert.equal(getCdpPort(), 34567)
+    for (const invalid of ['0', '65536', '-1', 'abc', '19000.5', '']) {
+      process.env.PITH_CDP_PORT = invalid
+      const port = pickCdpPort()
+      assert.ok(Number.isInteger(port) && port >= 19000 && port <= 38999, `非法 env ${JSON.stringify(invalid)} 应回落区间，实际 ${port}`)
+    }
+    delete process.env.PITH_CDP_PORT
+    const port = pickCdpPort()
+    assert.ok(port >= 19000 && port <= 38999, `无 env 应回落区间，实际 ${port}`)
+    assert.equal(getCdpPort(), port)
+  } finally {
+    if (original === undefined) delete process.env.PITH_CDP_PORT
+    else process.env.PITH_CDP_PORT = original
+  }
 })
 
 // service 套件的挂起 promise（建页握手 waiter、autoMaterialize 轮询、notify 合并窗）
