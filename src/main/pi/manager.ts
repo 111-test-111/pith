@@ -2713,6 +2713,10 @@ export class PiManager {
     return this.appendPrompt()
   }
 
+  /** Browser agent tools (browser_navigate / browser_snapshot / …). Registered
+   * per session when Task 10 lands; until then the switch is persisted only. */
+  async setBrowserAgentTools(_enabled: boolean): Promise<void> {}
+
   // ---- context files (AGENTS.md / CLAUDE.md) ----
 
   contextFilesEnabled(): boolean {

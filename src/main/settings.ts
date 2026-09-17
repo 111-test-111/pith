@@ -56,6 +56,11 @@ export interface AppSettings {
    * `bash`, `edit` and `write` may perform. Reads, network, MCP and extensions
    * are outside it, and there is no approval gate — the mode is the policy. */
   sandboxMode: SandboxMode
+  /** The user consented to the embedded browser once; the service skips the
+   * consent prompt from then on and connects to the shell's CDP endpoint. */
+  browserConsent: boolean
+  /** The model's browser_* tools are registered into sessions at build time. */
+  browserAgentToolsEnabled: boolean
 }
 
 const defaults: AppSettings = {
@@ -71,7 +76,9 @@ const defaults: AppSettings = {
   subagentsEnabled: true,
   subagentMaxConcurrent: 4,
   askUserTimeoutSeconds: ASK_USER_DEFAULT_TIMEOUT_S,
-  sandboxMode: DEFAULT_SANDBOX_MODE
+  sandboxMode: DEFAULT_SANDBOX_MODE,
+  browserConsent: false,
+  browserAgentToolsEnabled: false
 }
 
 function settingsPath(): string {

@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { appendCdpSwitches, pickCdpPort } from './browser/cdp-port.ts'
 import { installBrowserWiring } from './browser/wiring.ts'
-import { createPiManager, registerIpc } from './ipc'
+import { broadcast, createPiManager, registerIpc } from './ipc'
 import { installMediaProtocol, registerMediaScheme } from './media-protocol'
 import { guardExternalNavigation } from './navigation'
 import { loadSettings, saveSettings, type WindowBounds } from './settings'
@@ -37,13 +37,6 @@ const MIN_HEIGHT = 560
 const BOUNDS_SAVE_DELAY_MS = 400
 /** How much of the window must still land on a display to reuse its position. */
 const MIN_VISIBLE_EDGE = 48
-
-/** Renderer broadcast with the same shape `registerIpc` uses: browser events reach every window. */
-function broadcast(channel: string, payload: unknown): void {
-  for (const w of BrowserWindow.getAllWindows()) {
-    if (!w.isDestroyed()) w.webContents.send(channel, payload)
-  }
-}
 
 /**
  * The size/position to open with: the saved normal bounds when a window has
@@ -99,7 +92,7 @@ function createWindow(): BrowserWindow {
   // download takeover and the permission allowlist for the browser partition. The
   // wiring installs unconditionally; only the input relay is service-aware, and it
   // looks the singleton up lazily via getBrowserService() — a designed no-op until
-  // the service initializes in ipc.ts (Task 5's registerIpc).
+  // the service initializes in ipc.ts (registerIpc).
   installBrowserWiring(win, broadcast)
 
   // Restore the maximized state the window was closed in. Reading bounds while

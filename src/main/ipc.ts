@@ -1,9 +1,12 @@
-import { app, ipcMain, dialog, shell, BrowserWindow } from 'electron'
+import { app, ipcMain, dialog, session, shell, BrowserWindow } from 'electron'
 import { PiManager } from './pi/manager'
 import { TerminalManager } from './terminal/manager'
 import { registerQuitHandler } from './shutdown'
 import { isDefaultWorkspace } from './pi/default-workspace'
 import { loadSettings, saveSettings } from './settings'
+import { getBrowserService, initBrowserService } from './browser/service'
+import { getCdpPort } from './browser/cdp-port'
+import { BROWSER_PARTITION, HUMAN_OWNER } from '../shared/browser'
 import { sandboxStatus } from './sandbox/broker'
 import { setWindowTheme } from './window-chrome'
 import { listFileDirectory, readFileDocument, readFileGitDiff } from './file-browser'
@@ -15,6 +18,7 @@ import { MAX_CONCURRENT_SUBAGENTS_DEFAULT } from './pi/subagents/runtime'
 import type { AskUserAnswer } from '../shared/ask-user'
 import type {
   AppInfoDTO,
+  BrowserStatusDTO,
   FileBrowserRequest,
   RewindRequest,
   RewindStatsTargetDTO,
@@ -37,14 +41,17 @@ import type {
   WindowTheme
 } from '../shared/types'
 
-export function createPiManager(): PiManager {
-  const emit = (channel: string, payload: unknown) => {
-    for (const win of BrowserWindow.getAllWindows()) {
-      if (!win.isDestroyed()) win.webContents.send(channel, payload)
-    }
+/** Renderer broadcast shared by every main-process emitter (PiManager's event
+ * sink and the browser wiring alike): events reach every window. */
+export function broadcast(channel: string, payload: unknown): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) win.webContents.send(channel, payload)
   }
-  const notifyError = (message: string) => emit('pi:event', { type: 'pi_error', message })
-  return new PiManager(emit, notifyError)
+}
+
+export function createPiManager(): PiManager {
+  const notifyError = (message: string) => broadcast('pi:event', { type: 'pi_error', message })
+  return new PiManager(broadcast, notifyError)
 }
 
 export function registerIpc(pi: PiManager): () => boolean {
@@ -59,7 +66,68 @@ export function registerIpc(pi: PiManager): () => boolean {
   const terminals = new TerminalManager(pi.checkoutCoordinator)
   ipcMain.handle('terminal:create', (event, payload) => terminals.create(event.sender, payload))
   ipcMain.on('terminal:command', (event, command) => terminals.command(event.sender, command))
-  const isQuitting = registerQuitHandler(app, [() => terminals.dispose(), () => pi.dispose()])
+  const isQuitting = registerQuitHandler(app, [() => terminals.dispose(), () => pi.dispose(), async () => getBrowserService()?.dispose()])
+
+  // Embedded browser singleton: one per app, owned here and by the quit
+  // cleanup above (runs before the window exists — registerIpc is called from
+  // index.ts ahead of createWindow). Nothing connects at startup: the CDP
+  // connect is lazy behind consent, and getStatus only kicks a best-effort
+  // reconcile that no-ops before it.
+  initBrowserService({
+    cdpPort: getCdpPort(),
+    consent: {
+      get: () => loadSettings().browserConsent,
+      grant: () => saveSettings({ ...loadSettings(), browserConsent: true })
+    },
+    // The service coalesces registry changes (~30ms) into this callback, which
+    // runs from a setTimeout — a throwing consumer would crash main, so it
+    // stays best-effort like every other broadcast in this file.
+    onStateChange: () => {
+      try {
+        broadcast('browser:state', getBrowserService()?.getStatus())
+      } catch {
+        /* best-effort */
+      }
+    }
+  })
+  const browser = getBrowserService()!
+
+  // ---- Embedded browser: the renderer's only control surface for the service ----
+  ipcMain.handle('browser:status', (): BrowserStatusDTO => browser.getStatus())
+  ipcMain.handle('browser:consent', (): BrowserStatusDTO => {
+    browser.grantConsent()
+    return browser.getStatus()
+  })
+  ipcMain.handle('browser:createPage', (_event, url?: string) => browser.createPage(HUMAN_OWNER, url))
+  ipcMain.handle('browser:closePage', (_event, id: string) => browser.closePage(id))
+  // Renderer reports a guest the service does not know yet; the returned row
+  // is irrelevant to it (fresh state arrives on browser:state).
+  ipcMain.handle('browser:seen', (_event, payload: { id: string; owner: string; url: string; webContentsId?: number; navigateTo?: string }) => {
+    browser.registerExternalPage(payload)
+  })
+  ipcMain.handle('browser:elementAt', (_event, id: string, x: number, y: number) => browser.resolveElementAt(id, x, y))
+  // Theme follow is cosmetic: a failure (no CDP yet, guest mid-navigation)
+  // must not surface as a rejected invoke.
+  ipcMain.handle('browser:theme', async (_event, colorScheme: 'dark' | 'light') => {
+    try {
+      await browser.setColorScheme(colorScheme)
+    } catch {
+      /* best-effort */
+    }
+  })
+  // Wipe the browser partition's storage (cookies/localStorage/indexDB/cache —
+  // login states included; the renderer menu confirms twice). Errors propagate
+  // as a rejected invoke.
+  ipcMain.handle('browser:clearData', async () => {
+    const ses = session.fromPartition(BROWSER_PARTITION)
+    await ses.clearStorageData({
+      // pi-web's list minus appcache/websql: Chromium removed both long ago and
+      // this Electron's typings reject them — clearing them is a no-op today.
+      storages: ['cachestorage', 'cookies', 'filesystem', 'indexdb', 'localstorage', 'serviceworkers', 'shadercache']
+    })
+    await ses.clearCache()
+    await ses.clearAuthCache()
+  })
 
   ipcMain.handle('app:info', (): AppInfoDTO => {
     const settings = loadSettings()
@@ -75,6 +143,8 @@ export function registerIpc(pi: PiManager): () => boolean {
       subagentsEnabled: settings.subagentsEnabled !== false,
       subagentMaxConcurrent: settings.subagentMaxConcurrent ?? MAX_CONCURRENT_SUBAGENTS_DEFAULT,
       askUserTimeoutSeconds: settings.askUserTimeoutSeconds,
+      browserConsent: settings.browserConsent === true,
+      browserAgentToolsEnabled: settings.browserAgentToolsEnabled === true,
       version: app.getVersion()
     }
   })
@@ -92,6 +162,12 @@ export function registerIpc(pi: PiManager): () => boolean {
   ipcMain.handle('app:setBashMaxWaitMs', (_event, value: number) => pi.setBashMaxWaitMs(value))
   ipcMain.handle('app:setAskUserTimeoutSeconds', (_event, value: number) => pi.setAskUserTimeoutSeconds(value))
   ipcMain.handle('app:setSandboxMode', (_event, mode: SandboxMode) => pi.setSandboxMode(mode))
+  // The manager method itself is a stub until the browser tools land (Task 10);
+  // the persisted preference is owned here like the other app:set* switches.
+  ipcMain.handle('app:setBrowserAgentTools', (_event, enabled: boolean) => {
+    saveSettings({ ...loadSettings(), browserAgentToolsEnabled: enabled })
+    return pi.setBrowserAgentTools(enabled)
+  })
   // The live mode belongs to a session, not to the app: the composer switches
   // this session's mode and gets the refreshed snapshot back.
   ipcMain.handle('sandbox:setMode', (_event, sessionPath: string, mode: SandboxMode) =>

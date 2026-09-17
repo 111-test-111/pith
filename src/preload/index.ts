@@ -1,8 +1,10 @@
 import type { AskUserAnswer } from '../shared/ask-user'
+import type { BrowserPageMeta, ElementAtInfo } from '../shared/browser'
 import type { RewindPatchDTO, RewindStatsDTO, RewindStatsTargetDTO } from '../shared/types'
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type {
   AppInfoDTO,
+  BrowserStatusDTO,
   RewindResult,
   RewindListDTO,
   RewindPreviewDTO,
@@ -267,6 +269,32 @@ const api = {
   openPath: (path: string): Promise<string> => ipcRenderer.invoke('shell:openPath', path),
   showInFolder: (path: string): Promise<void> => ipcRenderer.invoke('shell:showInFolder', path),
   openExternal: (url: string): Promise<void> => ipcRenderer.invoke('shell:openExternal', url),
+
+  // ---- Embedded browser (shared/browser.ts; the service lives in main) ----
+  browserStatus: (): Promise<BrowserStatusDTO> => ipcRenderer.invoke('browser:status'),
+  /** Grants the one-time consent, then resolves with the fresh status. */
+  browserConsent: (): Promise<BrowserStatusDTO> => ipcRenderer.invoke('browser:consent'),
+  browserCreatePage: (url?: string): Promise<BrowserPageMeta> =>
+    ipcRenderer.invoke('browser:createPage', url),
+  browserClosePage: (id: string): Promise<void> => ipcRenderer.invoke('browser:closePage', id),
+  /** Registers a guest the service does not know yet (state-only until a
+   * reconcile upgrades it to a full registration). */
+  browserSeen: (payload: { id: string; owner: string; url: string; webContentsId?: number; navigateTo?: string }): Promise<void> =>
+    ipcRenderer.invoke('browser:seen', payload),
+  /** Resolves the element under viewport coordinates (human annotation). */
+  browserElementAt: (id: string, x: number, y: number): Promise<ElementAtInfo | null> =>
+    ipcRenderer.invoke('browser:elementAt', id, x, y),
+  /** All guest pages follow the app theme (errors are swallowed in main). */
+  browserTheme: (colorScheme: 'dark' | 'light'): Promise<void> =>
+    ipcRenderer.invoke('browser:theme', colorScheme),
+  /** Wipes the browser partition's storage (login states included); the
+   * renderer menu confirms twice. */
+  browserClearData: (): Promise<void> => ipcRenderer.invoke('browser:clearData'),
+  onBrowserState: (cb: (status: BrowserStatusDTO) => void) => subscribe('browser:state', cb),
+  onBrowserPopup: (cb: (payload: { url: string; openerWebContentsId: number }) => void) =>
+    subscribe('browser:popup', cb),
+  onBrowserDownload: (cb: (payload: { path: string; filename: string }) => void) =>
+    subscribe('browser:download', cb),
 
   onEvent: (listener: (event: PiEvent) => void) => subscribe('pi:event', listener),
   /** Side-chat stream (deltas and the terminal status of one exchange). */

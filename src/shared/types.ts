@@ -6,6 +6,7 @@
 
 import type { AskUserRecordDTO, PendingAskUserDTO } from './ask-user'
 import type { TableFormat } from './table'
+import type { BrowserPageMeta } from './browser'
 
 export type WindowTheme = 'light' | 'dark' | 'system'
 
@@ -932,6 +933,20 @@ export interface SandboxStatusDTO {
   unsandboxed: boolean
 }
 
+/** A createPage handshake entry waiting for the renderer to materialize its
+ * webview guest (marker URL). Same shape the service's pendingCreates carries. */
+export interface BrowserPendingCreateDTO { id: string; owner: string; createdAt: number }
+
+/** Embedded browser registry readout (`browser:status` / `browser:state`).
+ * `available` stays true in this host: pages are renderer-hosted webviews and
+ * the service always answers. */
+export interface BrowserStatusDTO {
+  available: boolean
+  consentRequired: boolean
+  pages: BrowserPageMeta[]
+  pendingCreates: BrowserPendingCreateDTO[]
+}
+
 export interface AppInfoDTO {
   checkpointsEnabled: boolean
   bashMaxWaitMs: number
@@ -956,6 +971,10 @@ export interface AppInfoDTO {
    * real interaction cancels it for good (collapsing does not).
    */
   askUserTimeoutSeconds: number
+  /** The user consented to the embedded browser (stored, asked once). */
+  browserConsent: boolean
+  /** Whether the model's browser_* tools are enabled for sessions. */
+  browserAgentToolsEnabled: boolean
   version: string
 }
 
