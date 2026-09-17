@@ -1,10 +1,23 @@
 import { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore } from 'react'
 import type { JSX } from 'react'
-import { Globe, History, MoreVertical, Printer, Search, Trash2, type IconComponent } from '@/lib/icons'
+import { Globe, History, MoreVertical, Printer, Search, Smartphone, Trash2, type IconComponent } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
+import { Input } from '@/components/motion/input'
+import { Loader } from '@/components/motion/loader'
 import { MorphPopover, MorphPopoverContent } from '@/components/motion/popover-morph'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/motion/select'
 import { Tooltip } from '@/components/motion/tooltip'
 import { useI18n } from '@/i18n'
+import {
+  CUSTOM_DEVICE_ID,
+  DEVICE_NONE_ID,
+  DEVICE_PRESETS,
+  commitDeviceSize,
+  findDevicePreset,
+  resolveDevicePresetId,
+  sanitizeDeviceDigits,
+  type DeviceEmulationState
+} from '@/lib/browser/device'
 import {
   clearBrowserHistory,
   getBrowserHistory,
@@ -16,13 +29,25 @@ import { cn } from '@/lib/utils'
 /** Second-click deadline of the two-step 清空历史 confirm. */
 const CLEAR_CONFIRM_MS = 5_000
 
+/** After a successful 清除数据 the note lingers 3s, then the panel closes
+ *  itself (spec: transient note + auto-close). */
+const CLEAR_DONE_CLOSE_MS = 3_000
+
 /** Menu entry shape — Ruling C: entries are data, so Task 14's 设备模拟 /
- *  清除数据 additions are new array items, not new markup. */
+ *  清除数据 additions are new array items, not new markup. The clear-data
+ *  entry is the first one that changes costume in place (confirm tint, busy
+ *  spinner), so the shape grows the three optional flags it needs. */
 interface BrowserMenuEntry {
   id: string
   icon: IconComponent
   label: string
   onSelect: () => void
+  /** Destructive tint (the confirm costume of 清除数据). */
+  destructive?: boolean
+  /** Disabled while the clear round trip is in flight. */
+  disabled?: boolean
+  /** Icon slot renders the beUI spinner instead of the entry glyph. */
+  busy?: boolean
 }
 
 /**
@@ -41,17 +66,23 @@ interface BrowserMenuEntry {
 export function BrowserOverlays({
   onFind,
   onPrint,
-  onNavigate
+  onNavigate,
+  device,
+  onDeviceChange
 }: {
   onFind: () => void
   onPrint: () => void
   /** The toolbar's whitelist-gated navigation; returns the normalized url or
    *  null when the parse/whitelist/guest rejected it. */
   onNavigate: (raw: string) => string | null
+  /** Device-emulation state (T14): owned by the page view (selection-scoped,
+   *  not persisted), edited through the 设备 sub-view. */
+  device: DeviceEmulationState
+  onDeviceChange: (next: DeviceEmulationState) => void
 }): JSX.Element {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
-  const [view, setView] = useState<'menu' | 'history'>('menu')
+  const [view, setView] = useState<'menu' | 'history' | 'device'>('menu')
   const [triggerEl, setTriggerEl] = useState<HTMLButtonElement | null>(null)
   const triggerId = useId()
 
@@ -68,6 +99,90 @@ export function BrowserOverlays({
     triggerEl?.focus({ preventScroll: true })
     setOpen(false)
   }, [triggerEl])
+
+  // ---- 清除数据 (T14): the ⋮ quick path beside Settings' row (T11). Same
+  // browserClearData call — only the inline two-step confirm lives here. ----
+  const [clearConfirming, setClearConfirming] = useState(false)
+  const [clearing, setClearing] = useState(false)
+  const [clearDone, setClearDone] = useState(false)
+  const [clearFailed, setClearFailed] = useState(false)
+  const clearConfirmTimerRef = useRef<number | null>(null)
+  const clearDoneTimerRef = useRef<number | null>(null)
+  // The done auto-close runs from a timer; it must reach the LATEST
+  // closeOverlay (trigger element changes) without re-arming the timer.
+  const closeOverlayRef = useRef(closeOverlay)
+  useEffect(() => { closeOverlayRef.current = closeOverlay }, [closeOverlay])
+
+  // Reopening the menu always starts fresh: no leftover confirm costume or
+  // result note from the previous visit (an in-flight clear keeps showing
+  // its busy state — that is honest).
+  useEffect(() => {
+    if (!open) return
+    setClearConfirming(false)
+    setClearDone(false)
+    setClearFailed(false)
+  }, [open])
+
+  // Closing cancels both timers: the 5s confirm revert is moot while closed,
+  // and the done auto-close must NOT fire after a manual close (it would
+  // yank focus back to the trigger through closeOverlay).
+  useEffect(() => {
+    if (open) return
+    if (clearConfirmTimerRef.current !== null) {
+      window.clearTimeout(clearConfirmTimerRef.current)
+      clearConfirmTimerRef.current = null
+    }
+    if (clearDoneTimerRef.current !== null) {
+      window.clearTimeout(clearDoneTimerRef.current)
+      clearDoneTimerRef.current = null
+    }
+    setClearConfirming(false)
+  }, [open])
+
+  // Unmount never leaves a trailing timer behind (same rule as the history
+  // panel's confirm revert below).
+  useEffect(
+    () => () => {
+      if (clearConfirmTimerRef.current !== null) window.clearTimeout(clearConfirmTimerRef.current)
+      if (clearDoneTimerRef.current !== null) window.clearTimeout(clearDoneTimerRef.current)
+    },
+    []
+  )
+
+  const handleClearData = useCallback(() => {
+    if (clearing) return
+    setClearDone(false)
+    setClearFailed(false)
+    if (!clearConfirming) {
+      // First click: the entry flips to its destructive confirm costume and
+      // reverts after 5s (same deadline as the history panel / Settings row).
+      setClearConfirming(true)
+      if (clearConfirmTimerRef.current !== null) window.clearTimeout(clearConfirmTimerRef.current)
+      clearConfirmTimerRef.current = window.setTimeout(() => {
+        clearConfirmTimerRef.current = null
+        setClearConfirming(false)
+      }, CLEAR_CONFIRM_MS)
+      return
+    }
+    if (clearConfirmTimerRef.current !== null) window.clearTimeout(clearConfirmTimerRef.current)
+    clearConfirmTimerRef.current = null
+    setClearConfirming(false)
+    setClearing(true)
+    void window.pi
+      .browserClearData()
+      .then(
+        () => {
+          setClearDone(true)
+          if (clearDoneTimerRef.current !== null) window.clearTimeout(clearDoneTimerRef.current)
+          clearDoneTimerRef.current = window.setTimeout(() => {
+            clearDoneTimerRef.current = null
+            closeOverlayRef.current()
+          }, CLEAR_DONE_CLOSE_MS)
+        },
+        () => setClearFailed(true)
+      )
+      .finally(() => setClearing(false))
+  }, [clearConfirming, clearing])
 
   // The vendored MorphPopover closes on Escape, but its window handler neither
   // preventDefaults nor stops propagation — the pane's window-level Esc
@@ -109,6 +224,21 @@ export function BrowserOverlays({
     },
     // Task 14 appends 设备模拟 / 清除数据 entries here.
     {
+      id: 'device',
+      icon: Smartphone,
+      label: t('browser.menuDevice'),
+      onSelect: () => setView('device')
+    },
+    {
+      id: 'clear-data',
+      icon: Trash2,
+      label: t(clearConfirming ? 'browser.clearDataConfirm' : 'browser.menuClearData'),
+      onSelect: handleClearData,
+      destructive: clearConfirming,
+      disabled: clearing,
+      busy: clearing
+    },
+    {
       id: 'history',
       icon: History,
       label: t('browser.menuHistory'),
@@ -138,10 +268,12 @@ export function BrowserOverlays({
         align="end"
         sideOffset={6}
         radius="var(--app-radius-control)"
-        className={cn('p-1', view === 'history' ? 'w-72' : 'w-56')}
+        className={cn('p-1', view === 'history' ? 'w-72' : view === 'device' ? 'w-64' : 'w-56')}
       >
         {view === 'history' ? (
           <BrowserHistoryPanel onNavigate={onNavigate} onClose={closeOverlay} />
+        ) : view === 'device' ? (
+          <BrowserDevicePanel device={device} onDeviceChange={onDeviceChange} />
         ) : (
           <div data-browser-menu>
             {menuEntries.map((entry) => {
@@ -151,18 +283,160 @@ export function BrowserOverlays({
                   key={entry.id}
                   variant="ghost"
                   size="sm"
-                  className="h-9 w-full justify-start gap-2.5 px-2.5 font-normal"
+                  disabled={entry.disabled}
+                  className={cn(
+                    'h-9 w-full justify-start gap-2.5 px-2.5 font-normal',
+                    entry.destructive &&
+                      'text-destructive hover:bg-destructive/10 hover:text-destructive'
+                  )}
                   onClick={entry.onSelect}
                 >
-                  <Icon aria-hidden="true" className="size-4 shrink-0" />
+                  {entry.busy ? (
+                    <Loader variant="dither-plus" size={16} label={t('browser.menuClearData')} className="size-4 shrink-0" />
+                  ) : (
+                    <Icon aria-hidden="true" className="size-4 shrink-0" />
+                  )}
                   {entry.label}
                 </Button>
               )
             })}
           </div>
         )}
+        {/* 清除数据's transient result note: inside the popover, below the
+            view content, so it survives a view swap while it lingers. */}
+        {clearDone || clearFailed ? (
+          <p
+            role={clearDone ? 'status' : 'alert'}
+            data-browser-clear-status={clearDone ? 'done' : 'failed'}
+            className={cn(
+              'border-t border-border px-2.5 py-2 text-xs',
+              clearDone ? 'text-muted-foreground' : 'text-destructive'
+            )}
+          >
+            {t(clearDone ? 'browser.clearDataDone' : 'browser.clearDataFailed')}
+          </p>
+        ) : null}
       </MorphPopoverContent>
     </MorphPopover>
+  )
+}
+
+/**
+ * The 设备 view of the overflow panel (T14): one beUI `Select` — the disabled
+ * 无 row (labels the full-fill state; device mode exits only through the
+ * selection reset, so the dropdown offers no inline off), the five presets
+ * (names verbatim) and 自定义 — plus, while a device is active, the 宽/高
+ * number fields. Editing holds DIGIT-ONLY DRAFTS (never clobbering a partial
+ * entry like “393”); leaving a field commits it through `commitDeviceSize`
+ * (clamp 200–3840), and the committed pair then resolves back to its preset
+ * or falls to 自定义. The state itself lives in the page view — this panel
+ * only edits it, so the pinning survives the popover closing.
+ */
+function BrowserDevicePanel({
+  device,
+  onDeviceChange
+}: {
+  device: DeviceEmulationState
+  onDeviceChange: (next: DeviceEmulationState) => void
+}): JSX.Element {
+  const { t } = useI18n()
+  const widthId = useId()
+  const heightId = useId()
+  // Null = not editing; the field then shows the COMMITTED dimension, so a
+  // preset switch flows through even while the panel is closed.
+  const [widthDraft, setWidthDraft] = useState<string | null>(null)
+  const [heightDraft, setHeightDraft] = useState<string | null>(null)
+
+  const handlePresetChange = useCallback(
+    (presetId: string) => {
+      if (presetId === DEVICE_NONE_ID) {
+        // 无 is a disabled row; a stray selection is a no-op (the off state is
+        // reached by switching pages, per spec).
+        return
+      }
+      setWidthDraft(null)
+      setHeightDraft(null)
+      const preset = findDevicePreset(presetId)
+      if (preset) {
+        onDeviceChange({ presetId, width: preset.width, height: preset.height })
+      } else {
+        // 自定义 keeps the last committed dimensions (seeded from the first
+        // preset when the user jumps straight to custom).
+        onDeviceChange({ ...device, presetId: CUSTOM_DEVICE_ID })
+      }
+    },
+    [device, onDeviceChange]
+  )
+
+  /** Blur commit for one axis: clears the draft, clamps the value and lets
+   *  the committed pair pick its preset (diverging values fall to custom). */
+  const commitDimension = (axis: 'width' | 'height', raw: string | null) => {
+    if (axis === 'width') setWidthDraft(null)
+    else setHeightDraft(null)
+    if (raw === null) return
+    const committed = commitDeviceSize(raw, axis === 'width' ? device.width : device.height)
+    const next: DeviceEmulationState =
+      axis === 'width' ? { ...device, width: committed } : { ...device, height: committed }
+    next.presetId = resolveDevicePresetId(next.width, next.height)
+    onDeviceChange(next)
+  }
+
+  return (
+    <div className="flex flex-col gap-2.5 p-2" data-browser-device>
+      <Select value={device.presetId} onValueChange={handlePresetChange}>
+        <SelectTrigger
+          aria-label={t('browser.menuDevice')}
+          className="h-8 rounded-control px-2.5 text-xs"
+        >
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {/* 无 labels the full-fill state and stays disabled: device mode is
+              exited by the selection reset (spec), not by an inline toggle. */}
+          <SelectItem value={DEVICE_NONE_ID} disabled>{t('browser.deviceNone')}</SelectItem>
+          {DEVICE_PRESETS.map((preset) => (
+            <SelectItem key={preset.id} value={preset.id}>{preset.name}</SelectItem>
+          ))}
+          <SelectItem value={CUSTOM_DEVICE_ID}>{t('browser.deviceCustom')}</SelectItem>
+        </SelectContent>
+      </Select>
+      {device.presetId !== DEVICE_NONE_ID ? (
+        <div className="flex items-center gap-2" data-browser-device-size>
+          <label htmlFor={widthId} className="shrink-0 text-xs text-muted-foreground">
+            {t('browser.deviceWidth')}
+          </label>
+          <Input
+            id={widthId}
+            value={widthDraft ?? String(device.width)}
+            onChange={(value) => setWidthDraft(sanitizeDeviceDigits(value))}
+            onBlur={() => commitDimension('width', widthDraft)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') event.currentTarget.blur()
+            }}
+            inputMode="numeric"
+            aria-label={t('browser.deviceWidth')}
+            className="w-16 shrink-0"
+            classNames={{ field: 'h-8', input: 'px-2 text-center text-sm' }}
+          />
+          <label htmlFor={heightId} className="shrink-0 text-xs text-muted-foreground">
+            {t('browser.deviceHeight')}
+          </label>
+          <Input
+            id={heightId}
+            value={heightDraft ?? String(device.height)}
+            onChange={(value) => setHeightDraft(sanitizeDeviceDigits(value))}
+            onBlur={() => commitDimension('height', heightDraft)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') event.currentTarget.blur()
+            }}
+            inputMode="numeric"
+            aria-label={t('browser.deviceHeight')}
+            className="w-16 shrink-0"
+            classNames={{ field: 'h-8', input: 'px-2 text-center text-sm' }}
+          />
+        </div>
+      ) : null}
+    </div>
   )
 }
 

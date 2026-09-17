@@ -533,6 +533,9 @@ export function BrowserPane({
               displayUrl={displayUrlOf(page, localNav[page.id])}
               onNavChange={handleNavChange}
               bindPageActions={bindPageActions}
+              // T14 download indicator: pane-store driven, so it stays put
+              // across page switches (the newest entry of the ring).
+              download={state.downloads.length > 0 ? state.downloads[state.downloads.length - 1] : null}
             />
           ))}
         </div>

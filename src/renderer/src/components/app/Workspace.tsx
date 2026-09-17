@@ -109,6 +109,7 @@ import { TerminalStore } from '@/state/terminal-store'
 import { FileBrowserStore } from '@/state/file-browser-store'
 import { BrowserStore } from '@/lib/browser/store'
 import { subscribeBrowserPopups } from '@/lib/browser/popup'
+import { subscribeBrowserDownloads } from '@/lib/browser/downloads'
 import { HUMAN_OWNER } from '../../../../shared/browser'
 import { FileNavigationProvider, type FileTarget } from '@/lib/file-navigation'
 import { AuthBridge } from './AuthBridge'
@@ -264,10 +265,14 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
     }
     const unsubscribeState = window.pi.onBrowserState(applyBrowserStatus)
     const unsubscribePopups = subscribeBrowserPopups(browserStore)
+    // 下载完成事件进环形队列（≤5），工具条按最新一条渲染指示；指示在工具条层，
+    // 切页不丢（T14）。
+    const unsubscribeDownloads = subscribeBrowserDownloads(browserStore)
     void window.pi.browserStatus().then((status) => applyBrowserStatus(status)).catch(() => {})
     return () => {
       unsubscribeState()
       unsubscribePopups()
+      unsubscribeDownloads()
     }
   }, [browserStore])
   const newTerminal = useCallback(() => {

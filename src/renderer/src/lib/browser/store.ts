@@ -21,6 +21,8 @@ export interface BrowserPopupInfo {
 export interface BrowserDownloadInfo {
   path: string
   filename: string
+  /** 下载失败完成时的原因（main 侧数据；面板只显示本地化文案，不透传该串）。 */
+  error?: string
 }
 
 export interface BrowserPaneState {

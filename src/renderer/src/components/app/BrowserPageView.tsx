@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { FocusEvent, JSX, MouseEvent } from 'react'
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Globe, RefreshCw, X, ZoomIn, ZoomOut, type IconComponent } from '@/lib/icons'
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Download, Globe, RefreshCw, X, ZoomIn, ZoomOut, type IconComponent } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
 import { Input } from '@/components/motion/input'
 import { Tooltip } from '@/components/motion/tooltip'
@@ -22,7 +22,8 @@ import {
   updateBrowserHistoryFaviconFor,
   updateBrowserHistoryTitleFor
 } from '@/lib/browser/session'
-import type { BrowserPanePage } from '@/lib/browser/store'
+import type { BrowserDownloadInfo, BrowserPanePage } from '@/lib/browser/store'
+import { INITIAL_DEVICE_STATE, resolveDeviceSize, type DeviceEmulationState } from '@/lib/browser/device'
 import {
   effectiveWebviewZoom,
   getBrowserZoom,
@@ -95,13 +96,18 @@ export interface BrowserPageViewProps {
    *  screen without reaching into any webview element. Called with null on
    *  deselect/unmount. */
   bindPageActions?: (actions: BrowserPageActions | null) => void
+  /** Newest completed download (pane-store driven, toolbar-level — T14): it
+   *  survives page switches because the pane owns the store ring, not this
+   *  per-page view. */
+  download?: BrowserDownloadInfo | null
 }
 
-/** Icon-only toolbar button (the FilesPane ToolButton pattern). */
-function ToolButton({ label, icon: Icon, onClick }: { label: string; icon: IconComponent; onClick: () => void }) {
+/** Icon-only toolbar button (the FilesPane ToolButton pattern). `className`
+ *  lets a caller re-tint the glyph (the failed-download indicator). */
+function ToolButton({ label, icon: Icon, onClick, className }: { label: string; icon: IconComponent; onClick: () => void; className?: string }) {
   return (
     <Tooltip content={label}>
-      <Button variant="ghost" size="icon" className="size-7 shrink-0" aria-label={label} onClick={onClick}>
+      <Button variant="ghost" size="icon" className={cn('size-7 shrink-0', className)} aria-label={label} onClick={onClick}>
         <Icon aria-hidden className="size-3.5" />
       </Button>
     </Tooltip>
@@ -243,7 +249,7 @@ function BrowserStartPage({ onOpen }: { onOpen: (raw: string) => boolean }): JSX
  *   input silently does nothing (pi-web's electron-webview-spike finding);
  *   background agent driving needs the opacity form.
  */
-export function BrowserPageView({ page, selected, displayUrl, onNavChange, bindPageActions }: BrowserPageViewProps) {
+export function BrowserPageView({ page, selected, displayUrl, onNavChange, bindPageActions, download }: BrowserPageViewProps) {
   const { t } = useI18n()
   const webviewRef = useRef<HTMLWebViewElement | null>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
@@ -288,6 +294,23 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, bindP
   const zoomOut = useCallback(() => {
     setBrowserZoom(nextBrowserZoom(getBrowserZoom(), -1))
   }, [])
+
+  // ---- 设备模拟 (T14) ----
+  // Selection-scoped view state (spec: lives in the component, NOT persisted;
+  // switching the selected page resets to 无): each page view resets whenever
+  // it gains OR loses selection, so every newly selected page starts at
+  // full-fill and no hidden background page keeps a stale pin.
+  const [device, setDevice] = useState<DeviceEmulationState>(INITIAL_DEVICE_STATE)
+  const wasSelectedRef = useRef(selected)
+  useEffect(() => {
+    if (wasSelectedRef.current === selected) return
+    wasSelectedRef.current = selected
+    setDevice(INITIAL_DEVICE_STATE)
+  }, [selected])
+  // The size the webview element is pinned to while a device is active; null
+  // = full-fill. Guest zoom (setZoomFactor) keeps applying INSIDE the guest —
+  // it is content zoom and does not interact with the element's box.
+  const deviceSize = resolveDeviceSize(device)
 
   // ---- In-page find (Task 12) ----
   // The bar's state lives in THIS view's lifecycle: only the selected page
@@ -386,6 +409,14 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, bindP
   // and panel open/close animations it can end up stuck at a shrunken size
   // (measured in pi-web) — drive it explicitly in pixels. A display:none
   // wrapper reports 0×0: leave it alone; becoming visible re-fires this.
+  // Device mode (T14) pins the element to min(device, container) instead —
+  // ELEMENT-LEVEL VIEWPORT ONLY, deliberately NO CDP setDeviceMetricsOverride:
+  // the annotation coordinate invariant "guest viewport == element" depends on
+  // the element and the guest viewport staying the same surface (device.ts
+  // header note), and CDP metrics would break it while changing the render
+  // shape. The applied size reaches this callback through a ref so it stays
+  // dependency-free (the ResizeObserver below never re-subscribes per edit).
+  const deviceSizeRef = useRef<{ width: number; height: number } | null>(null)
   const syncSize = useCallback(() => {
     const wrap = wrapRef.current
     const wv = webviewRef.current
@@ -393,8 +424,14 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, bindP
     const width = wrap.clientWidth
     const height = wrap.clientHeight
     if (width === 0 || height === 0) return
-    wv.style.width = `${width}px`
-    wv.style.height = `${height}px`
+    const pinned = deviceSizeRef.current
+    if (pinned) {
+      wv.style.width = `${Math.min(pinned.width, width)}px`
+      wv.style.height = `${Math.min(pinned.height, height)}px`
+    } else {
+      wv.style.width = `${width}px`
+      wv.style.height = `${height}px`
+    }
   }, [])
   useEffect(() => {
     const wrap = wrapRef.current
@@ -404,6 +441,12 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, bindP
     syncSize()
     return () => observer.disconnect()
   }, [syncSize])
+  // A device change re-pins immediately (the ResizeObserver only fires on
+  // container resizes, not on this state change).
+  useEffect(() => {
+    deviceSizeRef.current = deviceSize
+    syncSize()
+  }, [deviceSize, syncSize])
 
   const flashUrlError = useCallback(() => {
     setUrlError(true)
@@ -610,10 +653,32 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, bindP
             </Tooltip>
             <ToolButton label={t('browser.zoomIn')} icon={ZoomIn} onClick={zoomIn} />
           </div>
+          {/* T14 download indicator: newest entry of the pane store's ring.
+              A failed download keeps the destructive tint and its localized
+              failure tooltip, and the click deliberately NO-OPS — revealing
+              the folder would point at a file that never landed. */}
+          {download ? (
+            <ToolButton
+              label={download.error ? t('browser.downloadFailed') : t('browser.downloadReveal')}
+              icon={Download}
+              className={download.error ? 'text-destructive hover:text-destructive' : undefined}
+              onClick={() => {
+                if (download.error) return
+                void window.pi.showInFolder(download.path)
+              }}
+            />
+          ) : null}
           {/* T13 ⋮ overflow menu + history panel. The callbacks are the same
               function references bound into BrowserPageActions above, so a
-              menu entry and the pane-level shortcuts share one path. */}
-          <BrowserOverlays onFind={openFind} onPrint={printPage} onNavigate={loadUrl} />
+              menu entry and the pane-level shortcuts share one path. T14:
+              device state lives here and the 设备 sub-view edits it. */}
+          <BrowserOverlays
+            onFind={openFind}
+            onPrint={printPage}
+            onNavigate={loadUrl}
+            device={device}
+            onDeviceChange={setDevice}
+          />
         </div>
       ) : null}
       <div ref={wrapRef} className="relative min-h-0 flex-1">
@@ -626,7 +691,15 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, bindP
           // it Chromium swallows guest `window.open` before the main-process
           // popup handler ever sees it (pi-web electron-webview-spike finding).
           {...{ allowpopups: 'true' } as Record<string, string>}
-          className="h-full w-full"
+          // Device mode (T14) swaps the full-fill layout for a pinned,
+          // centered element inside the relative wrap (`absolute inset-0
+          // m-auto` centres the explicit pixel box syncSize writes) and adds
+          // the visible device frame (bezel look, all theme tokens).
+          className={cn(
+            deviceSize
+              ? 'absolute inset-0 m-auto rounded-card border border-border bg-background shadow-overlay'
+              : 'h-full w-full'
+          )}
         />
         {selected && displayUrl === 'about:blank' ? (
           <BrowserStartPage onOpen={(raw) => loadUrl(raw) !== null} />

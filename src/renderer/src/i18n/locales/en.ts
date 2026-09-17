@@ -461,6 +461,17 @@ const en = {
   'browser.historyEmpty': 'No history yet',
   'browser.historyClear': 'Clear history',
   'browser.historyClearConfirm': 'Click again to confirm',
+  'browser.menuDevice': 'Device emulation',
+  'browser.deviceNone': 'None (full width)',
+  'browser.deviceCustom': 'Custom',
+  'browser.deviceWidth': 'Width',
+  'browser.deviceHeight': 'Height',
+  'browser.menuClearData': 'Clear browsing data',
+  'browser.clearDataConfirm': 'Click again to clear',
+  'browser.clearDataDone': 'Browsing data cleared.',
+  'browser.clearDataFailed': 'Failed to clear browsing data.',
+  'browser.downloadReveal': 'Reveal in folder',
+  'browser.downloadFailed': 'Download failed',
 
   'review.emptyTitle': 'Nothing to review yet',
   'review.emptyBody':

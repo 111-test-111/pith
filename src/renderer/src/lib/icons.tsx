@@ -111,6 +111,7 @@ import {
   RiShapesLine,
   RiShieldCheckLine,
   RiSkipForwardLine,
+  RiSmartphoneLine,
   RiSortAsc,
   RiSortDesc,
   RiSparkling2Line,
@@ -322,6 +323,7 @@ export const Search = /* @__PURE__ */ createIcon('Search', RiSearchLine)
 export const SearchX = /* @__PURE__ */ createIcon('SearchX', RiCloseCircleLine)
 export const Send = /* @__PURE__ */ createIcon('Send', RiSendPlane2Line)
 export const Settings = /* @__PURE__ */ createIcon('Settings', RiSettingsLine)
+export const Smartphone = /* @__PURE__ */ createIcon('Smartphone', RiSmartphoneLine)
 export const Settings2 = /* @__PURE__ */ createIcon('Settings2', RiSettings4Line)
 export const Shapes = /* @__PURE__ */ createIcon('Shapes', RiShapesLine)
 export const ShieldCheck = /* @__PURE__ */ createIcon('ShieldCheck', RiShieldCheckLine)
