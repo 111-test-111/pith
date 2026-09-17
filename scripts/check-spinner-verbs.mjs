@@ -6,7 +6,7 @@
  *
  * Covered: the verb table and its pools (every verb reachable, no typos), tool →
  * pool targeting, the wall-clock slot math and the pure hash pick, the row's
- * peeek loader + accent sentence in both locales, per-slot latching (a step change
+ * dither loader + accent sentence in both locales, per-slot latching (a step change
  * mid-slot never swaps the sentence), beUI's native TextShimmer (its sweep
  * running continuously across a rotation, with the component's own reduced-motion
  * reset), the Settings preference off/on, the one-line/truncating geometry, and
@@ -85,15 +85,22 @@ window.__snapshot = (ctx, locale) => {
     id: row ? row.getAttribute('data-spinner-verb') : null,
     text: sentence ? sentence.textContent : null,
     loader: row ? row.getAttribute('data-spinner-loader') : null,
-    // The peeek wheel is eleven circles inside the status wrapper: ten pulsing
-    // dots plus the still centre dot (vendored structure, pinned so a loader
-    // swap cannot pass unnoticed).
-    dots: row && row.querySelector('[role=status]') ? row.querySelectorAll('[role=status] .rounded-full').length : 0,
+    // The row's spinner is beUI's "dither" — a 4×4 Bayer matrix of squares —
+    // with its four corner particles dropped: twelve cells inside the status
+    // wrapper (vendored structure, pinned so a loader swap cannot pass
+    // unnoticed), plus their grid slots, so the check can prove which cells are
+    // missing rather than only how many survive.
+    cells: row && row.querySelector('[role=status] .grid')
+      ? [...row.querySelectorAll('[role=status] .grid > span')].map((cell) => ({
+          column: getComputedStyle(cell).gridColumnStart,
+          row: getComputedStyle(cell).gridRowStart
+        }))
+      : [],
     // Theme colour, checked against a probe that resolves the same tokens: the
-    // loader's dots (currentColor) and the sentence's gradient must both be the
-    // accent the row asks for, and neither may fall back to the vendored default.
-    loaderColor: row && row.querySelector('[role=status] .rounded-full')
-      ? getComputedStyle(row.querySelector('[role=status] .rounded-full')).backgroundColor
+    // loader's particles (currentColor) and the sentence's gradient must both be
+    // the accent the row asks for, and neither may fall back to the vendored default.
+    loaderColor: row && row.querySelector('[role=status] .grid > span')
+      ? getComputedStyle(row.querySelector('[role=status] .grid > span')).backgroundColor
       : null,
     accent: (() => {
       const probe = document.createElement('span');
@@ -388,7 +395,7 @@ try {
   const json = (value) => JSON.stringify(value)
   await evaluate(`window.__seed = ${json(seed)}`)
 
-  // ── 2. The live row: peeek wheel + beUI's accent-tinted shimmering sentence ─
+  // ── 2. The live row: dither spinner + beUI's accent-tinted shimmering sentence ─
   // Mounted 1.5s before slot 501 so the first read is unambiguously slot 500 and
   // the second one lands after the row's own 10-second timer re-latched.
   await evaluate(`window.__setClock(5008500); window.__mount('en', ${json(readCtx)})`)
@@ -396,8 +403,17 @@ try {
   let row = await evaluate(`window.__snapshot(${json(readCtx)}, 'en')`)
   assert.ok(row.exists, 'the waiting row renders')
   assert.equal(row.height, 36, 'the waiting row is the transcript’s shared 36px box: ' + row.height)
-  assert.equal(row.loader, 'peeek', 'the plain spinner is replaced by the peeek wheel')
-  assert.equal(row.dots, 11, 'the peeek wheel is ten dots plus the centre dot: ' + row.dots)
+  assert.equal(row.loader, 'dither-plus', 'the plain spinner is replaced by the corner-less dither: ' + row.loader)
+  assert.equal(row.cells.length, 12, "the dither keeps twelve of its 4×4 matrix's sixteen particles: " + row.cells.length)
+  // Only the corners went: the four corner slots are the ones with no cell, and
+  // every other slot of the matrix has exactly one.
+  const lattice = row.cells.map((cell) => `${cell.column}/${cell.row}`).sort()
+  const expected = []
+  for (let column = 1; column <= 4; column++)
+    for (let row = 1; row <= 4; row++)
+      if (!((column === 1 || column === 4) && (row === 1 || row === 4)))
+        expected.push(`${column}/${row}`)
+  assert.deepEqual(lattice, expected.sort(), 'and it is exactly the four corners that are missing: ' + json(row.cells))
   assert.equal(row.loaderColor, row.accent.background, 'the dots wear the theme accent: ' + json(row.loaderColor))
   assert.equal(row.slot, 500, 'the first read sits in the mounting slot: ' + row.slot)
   assert.ok(row.inPool && row.text === row.expected, 'the sentence is the read pool pick for its slot: ' + json(row))
@@ -519,7 +535,7 @@ try {
   const off = await evaluate(`window.__snapshot(${json(thinkingCtx)}, 'zh-CN')`)
   assert.equal(off.id, null, 'off removes the sentence')
   assert.equal(off.loader, 'spinner', 'off restores the plain spinner glyph')
-  assert.equal(off.dots, 0, 'and no dot grid: ' + off.dots)
+  assert.equal(off.cells.length, 0, 'and no dither grid: ' + json(off.cells))
   assert.equal(off.height, 36, 'off keeps the same one-row box')
   assert.equal(off.aria, '正在处理…', 'off keeps the screen-reader label: ' + off.aria)
 
@@ -552,7 +568,7 @@ try {
   const reduced = await evaluate(`window.__snapshot(${json(readCtx)}, 'en')`)
   const reduceQuery = await evaluate(`matchMedia('(prefers-reduced-motion: reduce)').matches`)
   assert.ok(reduceQuery, 'the reduced-motion media query is emulated')
-  assert.ok(reduced.id && reduced.loader === 'peeek', 'reduced motion still shows the peeek row: ' + json(reduced))
+  assert.ok(reduced.id && reduced.loader === 'dither-plus', 'reduced motion still shows the dither row: ' + json(reduced))
   // The shimmer's reduced-motion reset travels inside the vendored component: the
   // animation stops, and the static gradient still paints the sentence.
   assert.equal(reduced.animationName, 'none', 'reduced motion stops the sweep: ' + reduced.animationName)
@@ -574,7 +590,7 @@ try {
   await screenshot('spinner-verb-reduced')
   console.log(
     'PASS: spinner verbs — 53 entries and their pools, step targeting, wall-clock rotation and per-slot latching, ' +
-      "the tool-glyph-sized peeek wheel and the accent-tinted beUI TextShimmer sentence (its own keyframes and " +
+      "the tool-glyph-sized beUI dither (its four corner particles dropped) and the accent-tinted beUI TextShimmer sentence (its own keyframes and " +
       'reduced-motion reset, one text node and no app-local timers, its phase surviving a rotation), both locales, the ' +
       'Settings preference and one-line truncating geometry.'
   )

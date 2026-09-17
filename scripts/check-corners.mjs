@@ -46,7 +46,7 @@ import React from 'react';
 import {createRoot} from 'react-dom/client';
 import {Button} from '/src/components/motion/button';
 import {Input} from '/src/components/motion/input.tsx';
-import {Switch} from '/src/components/motion/switch.tsx';
+import {Checkbox} from '/src/components/motion/checkbox.tsx';
 import {RadioGroup,RadioGroupItem} from '/src/components/motion/radio.tsx';
 import {Tabs,TabsList,TabsTrigger} from '/src/components/motion/tabs.tsx';
 import {Select,SelectTrigger,SelectContent,SelectItem} from '/src/components/motion/select.tsx';
@@ -75,7 +75,7 @@ function Fixture(){
    h('section',null,h('div',{className:'lab-label'},'Controls'),
     h('div',{className:'lab-row'},h(Button,{id:'primary',ripple:true},'Continue'),h(Button,{variant:'secondary'},'Cancel'),h(Button,{variant:'ghost',size:'icon','aria-label':'Icon control'},'+')),
     h(Input,{label:'Project name',defaultValue:'Pith',classNames:{field:'lab-field'}}),
-    h('div',{className:'lab-row'},h(Switch,{checked,onCheckedChange:setChecked,'aria-label':'Enable feature'}),
+    h('div',{className:'lab-row'},h(Checkbox,{mark:'square',checked,onCheckedChange:setChecked,'aria-label':'Enable feature'}),
      h(RadioGroup,{defaultValue:'on',orientation:'horizontal'},h(RadioGroupItem,{value:'on',label:'Enabled'})),
      h('span',{id:'status-dot',className:'size-1.5 rounded-full bg-primary'}),
      h('span',{id:'pseudo','data-drop':'before',className:'data-[drop=before]:before:rounded-full'}),h(Loader,{variant:'dots',size:16})),
@@ -201,9 +201,15 @@ app.on('window-all-closed',()=>app.quit());`)
       for (const selector of ['#primary', '.lab-field', '#segment [aria-selected="true"]', '[data-slot="message-bubble"] .rounded-inherit']) {
         assert.equal(await style(selector, 'corner-shape'), 'superellipse(2)', selector + ': continuous corners')
       }
-      for (const selector of ['[role="switch"]', '[role="switch"] > div', '[role="radio"]', '[role="radio"] > span', '#status-dot']) {
-        assert.equal(await style(selector, 'corner-shape'), 'superellipse(1)', selector + ': preserve true circles')
+      // Square-style branch: the selection controls (the point-select checkbox
+      // that replaced every switch, single choice) are hard-edged like every
+      // other control — only genuinely circular geometry keeps `rounded-full`'s
+      // shape (status/legend dots, loader artwork).
+      for (const selector of ['[role="checkbox"]', '[role="checkbox"] > span', '[role="radio"]', '[role="radio"] > span']) {
+        assert.equal(await style(selector, 'corner-shape'), 'superellipse(2)', selector + ': continuous selection control')
+        assert.equal(await style(selector, 'border-top-left-radius'), '0px', selector + ': hard edge')
       }
+      assert.equal(await style('#status-dot', 'corner-shape'), 'superellipse(1)', '#status-dot: true circles stay circular')
       assert.equal(await evaluate('getComputedStyle(document.getElementById("pseudo"),"::before").cornerShape'), 'superellipse(1)', 'pseudo-element full-round utility')
       // Square-style branch: the composer send control is hard-edged like
       // every other control (the whole radius scale is 0); it keeps the

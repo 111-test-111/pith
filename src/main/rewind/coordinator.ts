@@ -4,6 +4,25 @@ import { RewindFailure } from './types'
 
 type Kind = 'run' | 'subagent' | 'tool' | 'process' | 'terminal'
 interface Lease { root: string; kind: Kind; sessionPath?: string }
+/** The live facts that refuse a restore of one checkout, as data rather than a
+ * yes/no: `PiManager` turns them into the single named reason the rewind panel
+ * shows, so the banner can tell an in-flight turn from a writing tool, an open
+ * terminal or an unfinished recovery instead of listing all of them. */
+export interface RestoreBlockers {
+  /** An interactive terminal is open (any checkout), or the terminal host was
+   * lost — a shell can cd, so both conservatively fence restores. */
+  terminal: boolean
+  /** An unfinished recovery owns this checkout until it is resolved. */
+  recovery: boolean
+  /** A snapshot or restore window is open on this checkout. */
+  exclusive: boolean
+  /** Plain model turns for this checkout, which end on their own. */
+  runs: number
+  /** Leases that can write the checkout: tool, process and subagent runs. */
+  writers: number
+  /** The app is shutting down. */
+  closing: boolean
+}
 /** Canonical checkout identity, independent for linked worktrees. Never key by
  * common Git directory: each linked worktree has its own files and index. */
 export function checkoutRoot(cwd: string): string {
@@ -56,10 +75,30 @@ export class CheckoutCoordinator {
     const lease: Lease = { root, kind, sessionPath }; this.leases.add(lease)
     return () => { this.leases.delete(lease) }
   }
-  busy(cwd: string, purpose: 'snapshot' | 'restore' = 'restore'): boolean {
+  /** `busy` and the named reason the UI shows read the same facts. */
+  restoreBlockers(cwd: string): RestoreBlockers {
     const root = checkoutRoot(cwd)
-    return (purpose === 'restore' && this.terminalHostLost) || this.closed || this.recovery.has(root) || this.exclusive.has(root) || [...this.leases].some(lease =>
-      purpose === 'restore' ? lease.kind === 'terminal' || lease.root === root : lease.root === root && (lease.kind === 'subagent' || lease.kind === 'tool' || lease.kind === 'process'))
+    let runs = 0, writers = 0
+    for (const lease of this.leases) {
+      if (lease.root !== root) continue
+      if (lease.kind === 'run') runs++
+      else if (lease.kind === 'subagent' || lease.kind === 'tool' || lease.kind === 'process') writers++
+    }
+    return {
+      terminal: this.terminalHostLost || [...this.leases].some(lease => lease.kind === 'terminal'),
+      recovery: this.recovery.has(root),
+      exclusive: this.exclusive.has(root),
+      runs,
+      writers,
+      closing: this.closed
+    }
+  }
+  busy(cwd: string, purpose: 'snapshot' | 'restore' = 'restore'): boolean {
+    const blockers = this.restoreBlockers(cwd)
+    // A snapshot waits only for work that can write the checkout; a restore is
+    // stricter (any lease on this root, plus terminals anywhere).
+    if (purpose === 'snapshot') return blockers.closing || blockers.recovery || blockers.exclusive || blockers.writers > 0
+    return blockers.closing || blockers.recovery || blockers.exclusive || blockers.writers > 0 || blockers.terminal || blockers.runs > 0
   }
   /** Snapshots are fenced only by work that can write the checkout: an
    * executing tool, a managed process, or a whole subagent run. Another
@@ -69,8 +108,8 @@ export class CheckoutCoordinator {
     if (purpose === 'restore' && this.terminalHostLost) throw new RewindFailure('terminal')
     const pending = this.recovery.get(checkoutRoot(cwd))
     if (pending && !recovering) throw new RewindFailure('recovery', [], pending)
-    const blocked = this.closed || this.exclusive.has(checkoutRoot(cwd)) || [...this.leases].some(lease =>
-      purpose === 'restore' ? lease.kind === 'terminal' || lease.root === checkoutRoot(cwd) : lease.root === checkoutRoot(cwd) && (lease.kind === 'subagent' || lease.kind === 'tool' || lease.kind === 'process'))
+    const blockers = this.restoreBlockers(cwd)
+    const blocked = blockers.closing || blockers.exclusive || blockers.writers > 0 || (purpose === 'restore' && (blockers.terminal || blockers.runs > 0))
     if (blocked) throw new RewindFailure('busy')
     const root = checkoutRoot(cwd); this.exclusive.set(root, purpose)
     try { return await operation() } finally { this.exclusive.delete(root); for (const wake of [...this.waiters]) wake() }

@@ -6,5 +6,8 @@ dist/
 .env
 .env.*
 
+# Generated: file-type icon SVGs written by scripts/prepare-file-icons.mjs
+src/renderer/public/file-icons/
+
 # TypeScript incremental build info
 *.tsbuildinfo

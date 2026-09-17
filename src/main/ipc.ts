@@ -12,6 +12,7 @@ import { readFontData } from './font'
 import { readTableRange, readTableSlice, readTableStat } from './table'
 import { saveFileCopy } from './file-actions'
 import { MAX_CONCURRENT_SUBAGENTS_DEFAULT } from './pi/subagents/runtime'
+import type { AskUserAnswer } from '../shared/ask-user'
 import type {
   AppInfoDTO,
   FileBrowserRequest,
@@ -19,6 +20,7 @@ import type {
   RewindStatsTargetDTO,
   BashTaskRequest,
   SubagentActionPayload,
+  SubagentProfileCreatePayload,
   CustomModelDTO,
   ModelsConfigDTO,
   PromptPayload,
@@ -72,6 +74,7 @@ export function registerIpc(pi: PiManager): () => boolean {
       startup: settings.startup,
       subagentsEnabled: settings.subagentsEnabled !== false,
       subagentMaxConcurrent: settings.subagentMaxConcurrent ?? MAX_CONCURRENT_SUBAGENTS_DEFAULT,
+      askUserTimeoutSeconds: settings.askUserTimeoutSeconds,
       version: app.getVersion()
     }
   })
@@ -87,6 +90,7 @@ export function registerIpc(pi: PiManager): () => boolean {
   ipcMain.handle('app:setCheckpointsEnabled', (_event, enabled: boolean) => pi.setCheckpointsEnabled(enabled))
   ipcMain.handle('app:setStartup', (_event, mode: StartupSessionMode) => pi.setStartupMode(mode))
   ipcMain.handle('app:setBashMaxWaitMs', (_event, value: number) => pi.setBashMaxWaitMs(value))
+  ipcMain.handle('app:setAskUserTimeoutSeconds', (_event, value: number) => pi.setAskUserTimeoutSeconds(value))
   ipcMain.handle('app:setSandboxMode', (_event, mode: SandboxMode) => pi.setSandboxMode(mode))
   // The live mode belongs to a session, not to the app: the composer switches
   // this session's mode and gets the refreshed snapshot back.
@@ -103,6 +107,19 @@ export function registerIpc(pi: PiManager): () => boolean {
     (_event, requestId: string, sessionPath: string, decision: SandboxEscalationDecision) =>
       pi.respondEscalation(requestId, sessionPath, decision)
   )
+  // Answer (or dismiss) one pending ask_user_question set. Answers are
+  // validated against the pending entry's own question list in main.
+  ipcMain.handle(
+    'askUser:respond',
+    (_event, requestId: string, ownerPath: string, payload: { answers?: AskUserAnswer[]; cancelled?: boolean }) =>
+      pi.respondAskUser(requestId, ownerPath, payload)
+  )
+  // The user's first real interaction with a question panel: main cancels the
+  // auto-settle countdown and republishes so every view hides it.
+  ipcMain.handle(
+    'askUser:engage',
+    (_event, requestId: string, ownerPath: string) => pi.engageAskUser(requestId, ownerPath)
+  )
   ipcMain.handle('bash:list', (_event, sessionPath: string) => pi.listBashTasks(sessionPath))
   ipcMain.handle('bash:output', (_event, request: BashTaskRequest) => pi.bashTaskOutput(request))
   ipcMain.handle('bash:stop', (_event, request: BashTaskRequest) => pi.stopBashTask(request))
@@ -111,6 +128,15 @@ export function registerIpc(pi: PiManager): () => boolean {
   ipcMain.handle('subagents:action', (_event, payload: SubagentActionPayload) => pi.subagentAction(payload))
   ipcMain.handle('subagents:setEnabled', (_event, enabled: boolean) => pi.setSubagentsEnabled(enabled))
   ipcMain.handle('subagents:setMaxConcurrent', (_event, value: number) => pi.setSubagentMaxConcurrent(value))
+  ipcMain.handle('subagents:profiles', () => pi.subagentProfiles())
+  ipcMain.handle(
+    'subagents:createProfile',
+    (_event, payload: SubagentProfileCreatePayload) => pi.createSubagentProfile(payload)
+  )
+  ipcMain.handle(
+    'subagents:setProfileTools',
+    (_event, filePath: string, tools: 'all' | string[]) => pi.setSubagentProfileTools(filePath, tools)
+  )
 
   ipcMain.handle('app:setContextFiles', (_event, enabled: boolean): Promise<boolean> =>
     pi.setContextFilesEnabled(enabled)
@@ -133,6 +159,7 @@ export function registerIpc(pi: PiManager): () => boolean {
   ipcMain.handle('pi:listSessions', () => pi.listSessions())
   ipcMain.handle('pi:searchSessions', (_event, request: SessionSearchRequest) => pi.searchSessions(request))
   ipcMain.handle('pi:usageStats', (): Promise<UsageStatsDTO> => pi.usageStats())
+  ipcMain.handle('pi:contextDetail', (_event, sessionPath?: string) => pi.contextDetail(sessionPath))
   ipcMain.handle('pi:deleteSession', (_event, path: string) => pi.deleteSession(path))
   ipcMain.handle('pi:renameSession', (_event, path: string, name: string) =>
     pi.renameSession(path, name)

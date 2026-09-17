@@ -4,7 +4,7 @@ import { Input } from '@/components/motion/input'
 import { Button } from '@/components/motion/button'
 import { AgentDisclosure } from '@/components/agents/agent-disclosure'
 import { CenterMorphModal, CenterMorphModalContent, CenterMorphModalTrigger } from '@/components/motion/center-morph-modal'
-import { Switch } from '@/components/motion/switch'
+import { Checkbox } from '@/components/motion/checkbox'
 import { Tooltip } from '@/components/motion/tooltip'
 import { LabelTooltip } from './LabelTooltip'
 import { useI18n } from '@/i18n'
@@ -117,7 +117,7 @@ export function SessionSearch({ sessions, activePath, runningPaths, onOpen, chil
   const [query, setQuery] = useState('')
   const [includeDetails, setIncludeDetails] = useState(false)
   /** The switch's own track carries this id; its label sits before it. */
-  const detailsSwitchId = useId()
+  const detailsCheckboxId = useId()
   const [sort, setSort] = useState<SessionSearchSort>('newest')
   const [offset, setOffset] = useState(0)
   const [response, setResponse] = useState<{ key: string; value: SessionSearchResultDTO } | null>(null)
@@ -272,12 +272,12 @@ export function SessionSearch({ sessions, activePath, runningPaths, onOpen, chil
             </div>
           </div>
           <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-border px-4 pb-2">
-            {/* Info, its text, then the switch — three equal gaps. The text is
-                its own label (not the switch's `label` slot) so it can sit
-                between the two controls; the switch's optional `id` is what
-                keeps the click-to-toggle association. The icon button's `-mr`
-                cancels its own 7px inset so the gap the eye sees (glyph → text)
-                equals the layout gap (text → track). */}
+            {/* Info, its text, then the mark — three equal gaps. The text is
+                its own label (not the control's `label` slot) so it can sit
+                between the two controls; the checkbox's `id` is what keeps the
+                click-to-toggle association. The icon button's `-mr` cancels
+                its own 7px inset so the gap the eye sees (glyph → text) equals
+                the layout gap (text → box). */}
             <div className="flex items-center gap-2">
               {/* The vendored tooltip is whitespace-nowrap, and app classes
                   cannot override it (Tailwind emits whitespace-nowrap after
@@ -290,10 +290,10 @@ export function SessionSearch({ sessions, activePath, runningPaths, onOpen, chil
                   <Info aria-hidden="true" className="size-3.5" />
                 </Button>
               </Tooltip>
-              <label htmlFor={detailsSwitchId} className="cursor-pointer text-xs text-muted-foreground">
+              <label htmlFor={detailsCheckboxId} className="cursor-pointer text-xs text-muted-foreground">
                 {t('sessionSearch.includeDetails')}
               </label>
-              <Switch id={detailsSwitchId} checked={includeDetails} ariaLabel={t('sessionSearch.includeDetails')}
+              <Checkbox id={detailsCheckboxId} checked={includeDetails} aria-label={t('sessionSearch.includeDetails')}
                 onCheckedChange={(checked) => {
                   setIncludeDetails(checked)
                   setOffset(0)

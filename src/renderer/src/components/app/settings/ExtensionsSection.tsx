@@ -3,7 +3,7 @@ import { Download, Info, Plus, RefreshCw, Trash2, X } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
 import { Input } from '@/components/motion/input'
 import { MorphingModal } from '@/components/motion/morphing-modal'
-import { Switch } from '@/components/motion/switch'
+import { Checkbox } from '@/components/motion/checkbox'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/motion/tabs'
 import { Tooltip } from '@/components/motion/tooltip'
 import { useI18n } from '@/i18n'
@@ -40,7 +40,7 @@ const RESOURCE_ORDER: ExtensionResourceKind[] = ['extension', 'skill', 'prompt',
  * prompts, themes and extensions), where it is installed, and the package
  * actions — update and remove — while the switch enables/disables it.
  *
- * beUI-native: `Tabs` for the split, `Switch`/`Button`/`Input`/`Tooltip` and
+ * beUI-native: `Tabs` for the split, `Checkbox`/`Button`/`Input`/`Tooltip` and
  * the app's `MorphingModal`-based dialogs for install and removal.
  */
 export function ExtensionsSection() {
@@ -204,12 +204,13 @@ function ExtensionDetail({
             </span>
           ) : null}
           {!extension.manageable ? (
-            <Switch
+            <Checkbox
+              mark="square"
               className="ml-auto"
               checked={extension.enabled}
               onCheckedChange={onToggle}
               disabled={working}
-              ariaLabel={t('settings.extensionToggle', { name: extension.name })}
+              aria-label={t('settings.extensionToggle', { name: extension.name })}
             />
           ) : null}
         </div>
@@ -223,12 +224,13 @@ function ExtensionDetail({
               <Trash2 className="size-3.5" />
               {removing ? t('settings.extensionRemoving') : t('settings.extensionRemove')}
             </Button>
-            <Switch
+            <Checkbox
+              mark="square"
               className="ml-auto"
               checked={extension.enabled}
               onCheckedChange={onToggle}
               disabled={working}
-              ariaLabel={t('settings.extensionToggle', { name: extension.name })}
+              aria-label={t('settings.extensionToggle', { name: extension.name })}
             />
           </div>
         ) : null}

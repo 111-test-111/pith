@@ -2,6 +2,7 @@ import { app } from 'electron'
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { BASH_DEFAULT_MAX_WAIT_MS, BASH_MIN_WAIT_MS, BASH_MAX_WAIT_MS, type StartupSessionMode } from '../shared/types'
+import { ASK_USER_DEFAULT_TIMEOUT_S, clampAskUserTimeoutSeconds } from '../shared/ask-user'
 import { DEFAULT_SANDBOX_MODE, isSandboxMode } from './sandbox/mode'
 import type { SandboxMode } from './sandbox/types'
 
@@ -48,6 +49,9 @@ export interface AppSettings {
   subagentsEnabled: boolean
   /** Max simultaneous subagent runs per parent session (starting + active). */
   subagentMaxConcurrent: number
+  /** Seconds an unanswered ask_user_question panel waits before it closes
+   * itself. Any real interaction cancels the countdown. */
+  askUserTimeoutSeconds: number
   /** DSH file-sandbox mode for this app: which file effects the first-party
    * `bash`, `edit` and `write` may perform. Reads, network, MCP and extensions
    * are outside it, and there is no approval gate — the mode is the policy. */
@@ -66,6 +70,7 @@ const defaults: AppSettings = {
   windowBounds: null,
   subagentsEnabled: true,
   subagentMaxConcurrent: 4,
+  askUserTimeoutSeconds: ASK_USER_DEFAULT_TIMEOUT_S,
   sandboxMode: DEFAULT_SANDBOX_MODE
 }
 
@@ -85,7 +90,10 @@ export function loadSettings(): AppSettings {
     const startupSession = typeof raw.startupSession === 'string' ? raw.startupSession : null
     const concurrent = raw.subagentMaxConcurrent
     const subagentMaxConcurrent = Number.isInteger(concurrent) && concurrent >= 1 && concurrent <= 16 ? concurrent : 4
-    return { ...defaults, ...raw, bashMaxWaitMs, startup, startupSession, subagentMaxConcurrent,
+    const askUserTimeoutSeconds = clampAskUserTimeoutSeconds(
+      typeof raw.askUserTimeoutSeconds === 'number' ? raw.askUserTimeoutSeconds : ASK_USER_DEFAULT_TIMEOUT_S
+    )
+    return { ...defaults, ...raw, bashMaxWaitMs, startup, startupSession, subagentMaxConcurrent, askUserTimeoutSeconds,
       sandboxMode: isSandboxMode(raw.sandboxMode) ? raw.sandboxMode : DEFAULT_SANDBOX_MODE }
   } catch {
     return { ...defaults }

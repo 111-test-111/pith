@@ -17,6 +17,7 @@ import type {
   ProviderDTO
 } from '../../../../../shared/types'
 import { ProviderIcon } from '../ProviderIcon'
+import { ModelInputBadges } from '../ModelInputBadges'
 import { ProviderStatus } from '../AuthBridge'
 import { SettingsGroup, SettingsRow } from './SettingsRow'
 import { useModelsConfig } from './providers/use-models-config'
@@ -327,11 +328,14 @@ export function ProvidersSection() {
                             >
                               <span className="flex min-w-0 flex-1 flex-col">
                                 <span className="truncate text-sm text-foreground">{model.name}</span>
-                                <span className="truncate text-[11px] text-muted-foreground">
-                                  {model.reasoning ? t('model.reasoning') : t('model.standard')}
-                                  {model.contextWindow
-                                    ? ` · ${t('model.contextK', { k: Math.round(model.contextWindow / 1000) })}`
-                                    : ''}
+                                <span className="flex min-w-0 items-center gap-1 text-[11px] text-muted-foreground">
+                                  <span className="truncate">
+                                    {model.reasoning ? t('model.reasoning') : t('model.standard')}
+                                    {model.contextWindow
+                                      ? ` · ${t('model.contextK', { k: Math.round(model.contextWindow / 1000) })}`
+                                      : ''}
+                                  </span>
+                                  <ModelInputBadges input={model.input} />
                                 </span>
                               </span>
                             </SelectItem>

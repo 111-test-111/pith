@@ -37,6 +37,29 @@ const DRAIN_MAX_CYCLES = 100
 // snapshots from a previously disposed ManagedSession.
 let rosterSequence = 0
 
+/** Whether a frozen ceiling names at least one tool the parent attributes to
+ * an extension — in which case the child's loader must load extensions or
+ * the tool has no definition to call (the checked-tools bug). Attribution
+ * follows the SDK's own tagging: extension-registered tools carry their
+ * extension's sourceInfo whose `source` is the extension's ORIGIN TAG
+ * ("local", "temporary", "npm:…") — never a literal "extension" — while the
+ * SDK reserves exactly two synthetic sources for non-extension tools:
+ * "builtin" for the built-ins and "sdk" for customTools (the app's own
+ * bash/todo_write/ask_user). Anything else is an extension tool, the same
+ * rule the tools catalog attributes by. Every other ceiling stays
+ * extension-free, so ordinary read-only delegations never multiply MCP
+ * hosts. Pure and script-checked. */
+export function ceilingNeedsExtensions(
+  ceiling: readonly string[],
+  parentTools: ReadonlyArray<{ name: string; sourceInfo?: { source?: string } }>
+): boolean {
+  const attributed = new Map(parentTools.map((tool) => [tool.name, tool.sourceInfo?.source ?? 'sdk']))
+  return ceiling.some((name) => {
+    const source = attributed.get(name)
+    return source !== undefined && source !== 'builtin' && source !== 'sdk'
+  })
+}
+
 /** Everything a start needs, resolved by the tool layer. */
 export interface StartSubagentRequest {
   parentSession: AgentSession
@@ -95,6 +118,8 @@ export interface SubagentHost {
     parentSessionId: string
     runId: string
     resource: SubagentRunStartData['resource']
+    /** Profile name, for the ask-user source badge in the parent's panel. */
+    profile?: string
     /** Child session file, required for `reopen`. */
     sessionPath?: string
   }): Promise<ChildSessionHandle>
@@ -249,6 +274,10 @@ export class SubagentRuntime {
         : request.profile.tools.filter((tool) => parentActive.has(tool)))
         .filter((tool) => !(SUBAGENT_EXCLUDED_TOOLS as readonly string[]).includes(tool))
       if (!ceiling.length) throw new SubagentError(`Profile "${request.profile.name}" resolves to an empty tool set for this session`)
+      // Extension tools only exist in a child whose loader loads extensions;
+      // decide from the frozen ceiling and persist it with the run so a
+      // reopened child restores the same decision.
+      const needsExtensions = ceilingNeedsExtensions(ceiling, request.parentSession.getAllTools())
       const task = `${request.task}${loadSubagentInputFiles(request.inputFiles, cwd)}`
       const inherit = request.inheritContext ?? request.profile.inheritContext
       const { spec } = await this.host.resolveModelSpec(request.modelSpec ?? request.profile.model, request.parentSession)
@@ -263,6 +292,7 @@ export class SubagentRuntime {
       ].filter(Boolean).join('\n\n')
       const resource: SubagentRunStartData['resource'] = {
         tools: ceiling,
+        ...(needsExtensions ? { extensions: true as const } : {}),
         ...(spec ? { model: spec } : {}),
         ...(thinking ? { thinkingLevel: thinking } : {}),
         ...(maxTurns !== undefined && Number.isInteger(maxTurns) && maxTurns > 0 ? { maxTurns } : {}),
@@ -275,7 +305,8 @@ export class SubagentRuntime {
         mode: 'new', cwd,
         parentSessionPath: request.parentSessionPath,
         parentSessionId: request.parentSession.sessionId,
-        runId, resource
+        runId, resource,
+        profile: request.profile.name
       })
       // Swap the creation lease for a child-keyed run lease: it now covers the
       // whole run (model work, background drain, cleanup) and additionally
@@ -341,6 +372,7 @@ export class SubagentRuntime {
         parentSessionId: parentSession.sessionId,
         runId,
         resource: current.start.resource,
+        profile: current.start.profile,
         sessionPath: rosterEntry.sessionPath
       })
       const releaseRunLease = await this.leaseChild(child)

@@ -2,8 +2,9 @@
  * The composer's model picker is beUI's `Combobox`: a searchable model list
  * whose popover stays open while a reasoning model's thinking levels replace
  * it. This runs the real picker in isolated Electron and checks the compact
- * trigger, the search field, the two-stage flow and the level change. No model
- * calls, no user data.
+ * trigger, the search field, the two-stage flow, the level change and the
+ * model row itself (inputs accepted, no step hint). No
+ * model calls, no user data.
  */
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
@@ -28,9 +29,9 @@ import '/src/styles.css';
 localStorage.setItem('pi-app:locale','en');
 window.changes=[];window.levelChanges=[];
 const models=[
- {providerId:'p1',providerName:'Provider One',id:'m1',name:'Model One',reasoning:true,available:true,contextWindow:128000},
- {providerId:'p1',providerName:'Provider One',id:'m2',name:'Model Two',reasoning:false,available:true,contextWindow:64000},
- {providerId:'p2',providerName:'Provider Two',id:'m3',name:'Model Three',reasoning:false,available:true}];
+ {providerId:'p1',providerName:'Provider One',id:'m1',name:'Model One',reasoning:true,available:true,contextWindow:128000,input:['text','image']},
+ {providerId:'p1',providerName:'Provider One',id:'m2',name:'Model Two',reasoning:false,available:true,contextWindow:64000,input:['text']},
+ {providerId:'p2',providerName:'Provider Two',id:'m3',name:'Model Three',reasoning:false,available:true,input:['text','image']}];
 function Fixture(){
  const {setLocale}=useI18n();window.setLocale=setLocale;
  const [value,setValue]=React.useState('p1/m1');
@@ -93,6 +94,43 @@ try {
 
   await openPicker()
   assert.equal((await options()).length, 3, 'all available models are listed')
+
+  // A model row states the inputs it accepts, and carries no step hint: the
+  // picker's second stage opens on a reasoning model by itself.
+  const rowFacts = await evaluate(`(()=>{
+    const rows=[...document.querySelectorAll('[role=option]')];
+    const fact=(name)=>{
+      const row=rows.find(o=>o.textContent.includes(name));
+      if(!row) return null;
+      const r=row.getBoundingClientRect();
+      const group=row.querySelector('[role=group]');
+      const g=group?group.getBoundingClientRect():null;
+      return { height:Math.round(r.height),
+        hints:[...row.querySelectorAll('svg')].filter(s=>!s.closest('[role=group]') && s.getAttribute('data-app-icon')!=='Check').length,
+        group: g?{label:group.getAttribute('aria-label'),text:group.textContent.trim(),inside:g.bottom<=r.bottom+0.5&&g.right<=r.right+0.5}:null };
+    };
+    const names=['Model One','Model Two','Model Three'].map(fact);
+    return {one:names[0],two:names[1],three:names[2],total:names.map(f=>f.hints).reduce((a,b)=>a+b,0)};
+  })()`)
+  assert.match(rowFacts.one.group.text, /text/, 'a text-only input is stated')
+  assert.match(rowFacts.one.group.text, /image/, 'an image input is stated')
+  assert.equal(rowFacts.one.group.label, 'Supported input', 'the badges are labelled as a group')
+  assert.match(rowFacts.two.group.text, /text/, 'the second model states its text input')
+  assert.doesNotMatch(rowFacts.two.group.text, /image/, 'and nothing it does not accept')
+  for (const key of ['one', 'two', 'three']) {
+    assert.equal(rowFacts[key].group.inside, true, `${key}: the input badges stay inside their row`)
+  }
+  assert.equal(
+    rowFacts.total,
+    0,
+    'no expand/step hint is drawn in a model row (the only other glyph is the selection check)'
+  )
+  assert.equal(
+    rowFacts.one.height,
+    rowFacts.two.height,
+    'a two-input row is no taller than a one-input row'
+  )
+  assert.equal(rowFacts.two.height, rowFacts.three.height, 'every model row keeps one height')
   // Search filters the list.
   await evaluate(`(()=>{const input=document.querySelector('input[role=combobox]');const set=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;set.call(input,'three');input.dispatchEvent(new Event('input',{bubbles:true}))})()`)
   await pause(200)
@@ -123,7 +161,7 @@ try {
   assert.match(await evaluate(`document.querySelector('.cursor-text').textContent`), /Model Two/, 'the trigger follows the non-reasoning model')
 
   assert.deepEqual(exceptions, [], 'no uncaught renderer exceptions')
-  console.log('PASS: model picker — searchable combobox, two-stage thinking step, level + model changes')
+  console.log('PASS: model picker — searchable combobox, per-row input badges, no step hint, two-stage thinking step, level + model changes')
 } finally {
   ws?.close()
   if (child && child.exitCode === null) { const exited = new Promise((r) => child.once('exit', r)); child.kill(); await exited }

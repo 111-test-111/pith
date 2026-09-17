@@ -1,64 +1,95 @@
 import { useSyncExternalStore } from 'react'
 
 /**
- * Typeface preference for the whole app.
+ * Typeface preferences for the whole app.
  *
- * The interface is either the system sans-serif or a serif stack (`ui`), and
- * code uses a monospace family the user types in (`mono`) — left empty it is
- * the platform default. Both are applied as CSS variables that `styles.css`
- * maps onto Tailwind's `font-sans`/`font-mono` tokens, so every consumer —
- * vendored beUI components included — follows along without per-element
- * changes. A renderer preference like locale/accent: stored in localStorage
- * and applied before first paint.
+ * Both typefaces are free text: the user types a family (or a whole family
+ * list) and it is written at the head of the stack. Anything the machine has
+ * installed applies immediately, and anything it does not simply falls through
+ * to the next family — CSS resolves that per glyph, which is what keeps a
+ * mixed-script UI whole.
+ *
+ * The interface stack's own tail is the system sans-serif, so an empty field
+ * and an unknown family land in the same place. A value the CSS parser itself
+ * rejects drops straight to that tail as well, instead of being written into a
+ * declaration that would be invalid at computed-value time (which does not fall
+ * back — it discards the whole `font-family`).
+ *
+ * Both are applied as CSS variables that `styles.css` maps onto Tailwind's
+ * `font-sans`/`font-mono` tokens, so every consumer — vendored beUI components
+ * included — follows along without per-element changes. A renderer preference
+ * like locale/accent: stored in localStorage and applied before first paint.
  */
-export type UIFont = 'sans' | 'serif'
-
 export interface FontSettings {
-  /** Interface text: system sans-serif, or a serif stack. */
-  ui: UIFont
+  /** Interface family (or full family list); empty = the system sans-serif. */
+  ui: string
   /** Monospace family (or full family list) for code; empty = system default. */
   mono: string
 }
 
-const UI_STACKS: Record<UIFont, string> = {
-  sans: "ui-sans-serif, system-ui, -apple-system, 'SF Pro Text', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif",
-  // Georgia/Times cover Latin, the CJK faces cover Chinese — fallback is
-  // per-glyph, so a mixed-script UI renders serif in both.
-  serif:
-    "ui-serif, Georgia, Cambria, 'Songti SC', 'Noto Serif CJK SC', 'SimSun', 'Times New Roman', Times, serif"
-}
+/** The interface tail: the default, and what an unknown or rejected family
+ * falls back to. It leads with the platform's own UI face (`ui-sans-serif`/
+ * `system-ui`), which already carries the CJK glyphs the named Latin families
+ * below it lack — fallback is per-glyph, so a mixed-script UI stays whole. */
+const UI_FALLBACK =
+  "ui-sans-serif, system-ui, -apple-system, 'SF Pro Text', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif"
 
 const MONO_STACK =
   "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace"
-const DEFAULT_SETTINGS: FontSettings = { ui: 'sans', mono: '' }
+
+const DEFAULT_SETTINGS: FontSettings = { ui: '', mono: '' }
 
 const STORAGE_KEY = 'pi-app:fonts'
 
 /** A family name can hold anything the user types; drop the characters that
  * would break out of the single CSS declaration the value is written into
- * (`setProperty` would otherwise reject the whole value). */
-function sanitizeMono(value: string): string {
-  return value.replace(/[;{}\n\r\\]/g, ' ').trim()
+ * (`setProperty` accepts an unparseable token stream on a custom property, and
+ * the damage only shows up later, at the consumer). Quotes go too when they are
+ * unbalanced — same reason, and an unquoted multi-word family is valid CSS. */
+function sanitizeFamily(value: string): string {
+  let out = value.replace(/[;{}\n\r\\]/g, ' ')
+  if ((out.match(/["']/g) ?? []).length % 2 === 1) out = out.replace(/["']/g, ' ')
+  return out.replace(/\s+/g, ' ').trim()
+}
+
+/** Whether the engine accepts the stack as a `font-family` value. Guarded for
+ * the non-DOM contexts the check scripts import this module from. */
+function isUsableStack(stack: string): boolean {
+  return typeof CSS === 'undefined' || typeof CSS.supports !== 'function'
+    ? true
+    : CSS.supports('font-family', stack)
+}
+
+/** The CSS stack the interface setting resolves to. The typed family comes
+ * first, then the sans-serif tail — so an unknown family and an empty field
+ * both end up on the tail. */
+function resolveUIFont(family: string): string {
+  const custom = sanitizeFamily(family)
+  if (!custom) return UI_FALLBACK
+  const stack = `${custom}, ${UI_FALLBACK}`
+  return isUsableStack(stack) ? stack : UI_FALLBACK
 }
 
 /** The CSS stack the monospace setting resolves to. The typed family comes
  * first, then the platform mono faces, and — because most monospace faces only
  * carry Latin — the interface stack last: glyphs the code font lacks (CJK in a
- * comment, say) fall back to the interface face, so they follow the
- * sans/serif choice instead of whatever the browser would pick on its own. */
-function resolveMonoFont(family: string, ui: UIFont): string {
-  const custom = sanitizeMono(family)
-  const mono = custom ? `${custom}, ${MONO_STACK}` : MONO_STACK
-  return `${mono}, ${UI_STACKS[ui]}`
+ * comment, say) fall back to the interface face, so they follow the interface
+ * setting instead of whatever the browser would pick on its own. */
+function resolveMonoFont(family: string, ui: string): string {
+  const custom = sanitizeFamily(family)
+  const stack = custom ? `${custom}, ${MONO_STACK}` : MONO_STACK
+  const mono = isUsableStack(stack) ? stack : MONO_STACK
+  return `${mono}, ${resolveUIFont(ui)}`
 }
 
 function read(): FontSettings {
   try {
     const raw = JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? '{}')
-    return {
-      ui: raw?.ui === 'serif' ? 'serif' : 'sans',
-      mono: typeof raw?.mono === 'string' ? raw.mono : ''
-    }
+    // `sans`/`serif` are the retired radio values: the interface typeface is a
+    // free-form family now, and both of them mean the sans-serif tail — exactly
+    // what an empty field resolves to, so they reset rather than kept as text.
+    const ui = typeof raw?.ui === 'string' && raw.ui !== 'sans' && raw.ui !== 'serif' ? raw.ui : ''
+    return { ui, mono: typeof raw?.mono === 'string' ? raw.mono : '' }
   } catch {
     return DEFAULT_SETTINGS
   }
@@ -66,7 +97,7 @@ function read(): FontSettings {
 
 function apply(settings: FontSettings): void {
   const root = document.documentElement
-  root.style.setProperty('--app-font-ui', UI_STACKS[settings.ui])
+  root.style.setProperty('--app-font-ui', resolveUIFont(settings.ui))
   root.style.setProperty('--app-font-mono', resolveMonoFont(settings.mono, settings.ui))
 }
 

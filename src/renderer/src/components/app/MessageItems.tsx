@@ -10,7 +10,7 @@ import {
   useState,
   type ReactNode
 } from 'react'
-import { Brain, ChevronDown, FileText, GitFork, Pencil, RotateCcw } from '@/lib/icons'
+import { Brain, ChevronDown, FileText, GitFork, Pencil, RefreshCw, Rewind } from '@/lib/icons'
 import { AgentActivity } from '@/components/agents/agent-activity'
 import { AgentDisclosure } from '@/components/agents/agent-disclosure'
 import {
@@ -24,7 +24,7 @@ import { StreamingResponse } from '@/components/agents/streaming-response'
 import { Markdown } from '@/lib/markdown'
 import { SummaryRow } from './SummaryRow'
 import { useFileNavigation } from '@/lib/file-navigation'
-import { TRANSCRIPT_ROW } from '@/lib/transcript-rhythm'
+import { TRANSCRIPT_ROW, TRANSCRIPT_ROW_WIDTH } from '@/lib/transcript-rhythm'
 import { cn } from '@/lib/utils'
 import { ToolIcon } from '@/lib/tool-icons'
 import { formatTime, formatTokenCount, basename } from '@/lib/format'
@@ -58,7 +58,7 @@ import { useI18n } from '@/i18n'
 import type { MessageKey } from '@/i18n/locales/en'
 import { useShowReasoning } from '@/lib/show-reasoning'
 import { useToolGrouping } from '@/lib/tool-grouping'
-import { frontierStepContext } from '@/lib/spinner-verbs'
+import { frontierStepContext, frontierWaitingOnUser } from '@/lib/spinner-verbs'
 import { ToolCallView } from './ToolCallView'
 import { ToolGroupView } from './ToolGroupView'
 import { Button } from '@/components/motion/button'
@@ -236,7 +236,7 @@ export const UserItem = memo(function UserItem({
         {showActions ? (
           <MessageActions alwaysVisible={actionsAlwaysVisible}>
             {text ? <CopyAction text={text} /> : null}
-            {onRewind ? <MessageAction label={t('rewind.title')} onClick={() => onRewind(message)}><RotateCcw className="size-3.5" /></MessageAction> : null}
+            {onRewind ? <MessageAction label={t('rewind.title')} onClick={() => onRewind(message)}><Rewind className="size-3.5" /></MessageAction> : null}
             {onEdit ? (
               <MessageAction label={t('chat.messageResend')} onClick={() => onEdit(message)}>
                 <Pencil className="size-3.5" />
@@ -321,6 +321,9 @@ export const CustomItem = memo(function CustomItem({ message }: { message: Custo
   if (message.customType === 'bash_task_completion' && task) return <BashTaskRow task={task} completion />
   const subagent = (message.details as { subagent?: SubagentRunDTO } | undefined)?.subagent
   if (message.customType === 'subagent_completion' && subagent) return <SubagentCompletionRow run={subagent} />
+  // An async question's outcome is tool data for the model: it stays out of the
+  // transcript — the Q&A record panel is where the user reads it.
+  if (message.customType === 'ask_user_answer') return null
   return (
     <div className="rounded-xl border border-border bg-card px-3 py-2">
       <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
@@ -430,7 +433,7 @@ const AssistantParts = memo(function AssistantParts({
       <>
         {onResend && retryFrom ? (
           <MessageAction label={t('chat.messageRetry')} onClick={() => onResend(retryFrom)}>
-            <RotateCcw className="size-3.5" />
+            <RefreshCw className="size-3.5" />
           </MessageAction>
         ) : null}
         {onFork && forkAt ? (
@@ -511,7 +514,7 @@ const AssistantParts = memo(function AssistantParts({
                   "spacing suddenly changed" the transcript must not have. */}
               {rows.flatMap((run) =>
                 run.category && run.items.length > 1 ? (
-                  <RowReveal key={run.items[0].id} animate={streaming}>
+                  <RowReveal key={run.items[0].id} animate={streaming} className={TRANSCRIPT_ROW_WIDTH}>
                     <ToolGroupView
                       category={run.category}
                       calls={run.items}
@@ -522,7 +525,7 @@ const AssistantParts = memo(function AssistantParts({
                   </RowReveal>
                 ) : (
                   run.items.map((call) => (
-                    <RowReveal key={call.id} animate={streaming}>
+                    <RowReveal key={call.id} animate={streaming} className={TRANSCRIPT_ROW_WIDTH}>
                       <ToolCallView
                         call={call}
                         result={toolResults.get(call.id)}
@@ -873,6 +876,9 @@ export const AssistantGroup = memo(function AssistantGroup({
   // newest content part of the newest round — the tool call that is running, or
   // the reasoning/prose the model is writing now. Only the live turn needs it.
   const liveStep = live ? frontierStepContext(messages) : undefined
+  // A pending ask_user_question suspends the turn on the user's answer: the
+  // waiting row then states that instead of playing a work verb.
+  const waitingUser = live ? frontierWaitingOnUser(messages) : false
   // Nothing folds while the turn runs — the rows the user is watching stay put,
   // and the fold appears in the same frame the turn settles. Settled, the
   // boundary is the turn's own final reply block, so every block before it is
@@ -1096,7 +1102,7 @@ export const AssistantGroup = memo(function AssistantGroup({
         ))}
         {tailMessages.length > 0 || foldedRowCount === 0 ? noticeRows(messages.length) : null}
 
-        {live ? <TurnStatus step={liveStep} seedKey={spinnerSeed} /> : null}
+        {live ? <TurnStatus step={liveStep} waitingUser={waitingUser} seedKey={spinnerSeed} /> : null}
 
         {writtenFilesNode && !writtenFilesInFooter ? writtenFilesNode : null}
 
@@ -1123,7 +1129,7 @@ export const AssistantGroup = memo(function AssistantGroup({
           <MessageActions alwaysVisible={actionsAlwaysVisible}>
             {onResend && retryFrom ? (
               <MessageAction label={t('chat.messageRetry')} onClick={() => onResend(retryFrom)}>
-                <RotateCcw className="size-3.5" />
+                <RefreshCw className="size-3.5" />
               </MessageAction>
             ) : null}
             {onFork && forkAt ? (

@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'motion/react'
-import { Clock, FastForward, Image as ImageIcon, Paperclip, Undo2, X, Zap } from '@/lib/icons'
+import { Clock, FastForward, Image as ImageIcon, Paperclip, Rewind, X, Zap } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
 import { Tooltip } from '@/components/motion/tooltip'
 import { EASE_OUT } from '@/lib/ease'
@@ -66,7 +66,7 @@ export function QueuePanel({
                 aria-label={t('composer.recallQueue')}
                 onClick={onRecall}
               >
-                <Undo2 className="size-3.5" />
+                <Rewind className="size-3.5" />
               </Button>
             </Tooltip>
           </div>

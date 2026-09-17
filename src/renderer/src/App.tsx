@@ -6,6 +6,7 @@ import { ToastProvider } from './components/app/ToastProvider'
 import { Welcome } from './components/app/Welcome'
 import { Workspace } from './components/app/Workspace'
 import { PiStore } from './state/pi-store'
+import { useNotificationSoundEvents } from './lib/notification-sounds'
 import { I18nProvider, useI18n } from './i18n'
 import type { SessionSnapshotDTO } from '../../shared/types'
 
@@ -19,6 +20,10 @@ function applyAccent(accent: string): void {
 
 function AppInner() {
   const { t } = useI18n()
+  // Notification cues: mounted here (not in Workspace) so they also cover the
+  // boot/ welcome phases, and so every session's events — background ones
+  // included — reach one player.
+  useNotificationSoundEvents()
   const { theme, resolvedTheme } = useTheme()
   useEffect(() => {
     // During renderer HMR the previous preload can stay alive until Electron

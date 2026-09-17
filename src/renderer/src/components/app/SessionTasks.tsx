@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useId, useRef, useState } from 'react'
-import { Bot, ChevronDown, ListTodo, Terminal, X } from '@/lib/icons'
+import { Bot, ChevronDown, CircleHelp, ListTodo, Terminal, X } from '@/lib/icons'
 import { AgentDisclosure } from '@/components/agents/agent-disclosure'
 import { TodoList } from '@/components/agents/todo-list'
 import { Button } from '@/components/motion/button'
@@ -10,15 +10,19 @@ import { useDismiss } from '@/lib/hooks/use-dismiss'
 import { cn } from '@/lib/utils'
 import { BashTaskList } from './BashTaskView'
 import { SubagentList } from './SubagentView'
+import { AskUserRecordList } from './AskUserRecordList'
 import type { SubagentRunDTO, TodoSnapshotDTO } from '../../../../shared/types'
+import type { AskUserRecordDTO } from '../../../../shared/ask-user'
 
-type Panel = 'todo' | 'bash' | 'agents'
+type Panel = 'todo' | 'bash' | 'agents' | 'ask'
 
-/** One stable overlay owner for all three task views. Switching tabs never moves the transcript. */
-export const SessionTasks = memo(function SessionTasks({ todos, subagents = [], busy, sessionPath = null, onOpenSession }: {
+/** One stable overlay owner for all four task views. Switching tabs never moves the transcript. */
+export const SessionTasks = memo(function SessionTasks({ todos, subagents = [], askUserRecords = [], busy, sessionPath = null, onOpenSession }: {
   todos: TodoSnapshotDTO | null
   /** Roster of this session's subagent runs (store-fed). */
   subagents: readonly SubagentRunDTO[]
+  /** Every ask_user_question of this session, oldest first (store-fed). */
+  askUserRecords?: readonly AskUserRecordDTO[]
   busy: boolean
   /** This session's file — the parent path roster actions address. */
   sessionPath: string | null
@@ -26,6 +30,7 @@ export const SessionTasks = memo(function SessionTasks({ todos, subagents = [], 
   onOpenSession?: (path: string) => void
 }) {
   const { t } = useI18n()
+  const records = askUserRecords
   const tasks = useBashTasks().filter((task) => task.background)
   const [selected, setSelected] = useState<Panel | null>(null)
   const root = useRef<HTMLDivElement>(null)
@@ -40,7 +45,8 @@ export const SessionTasks = memo(function SessionTasks({ todos, subagents = [], 
   const unfinished = items.some((item) => item.status === 'pending' || item.status === 'in_progress')
   const running = tasks.filter(bashTaskLive).length
   const agentsRunning = subagents.filter((run) => run.status === 'running').length
-  const open = selected !== null && (selected === 'todo' ? items.length > 0 : selected === 'bash' ? tasks.length > 0 : subagents.length > 0)
+  const awaiting = records.filter((record) => record.status === 'pending').length
+  const open = selected !== null && (selected === 'todo' ? items.length > 0 : selected === 'bash' ? tasks.length > 0 : selected === 'agents' ? subagents.length > 0 : records.length > 0)
   const close = useCallback(() => setSelected(null), [])
   useDismiss(open, close, root, { escape: false })
   useEffect(() => { if (selected && !open) setSelected(null) }, [selected, open])
@@ -55,27 +61,31 @@ export const SessionTasks = memo(function SessionTasks({ todos, subagents = [], 
     window.addEventListener('keydown', keydown, true)
     return () => window.removeEventListener('keydown', keydown, true)
   }, [open, selected, close])
-  if (!items.length && !tasks.length && !subagents.length) return null
-  const title = selected === 'todo' ? t('todo.title') : selected === 'bash' ? t('taskPanel.background') : t('taskPanel.agents')
+  if (!items.length && !tasks.length && !subagents.length && !records.length) return null
+  const title = selected === 'todo' ? t('todo.title') : selected === 'bash' ? t('taskPanel.background') : selected === 'agents' ? t('taskPanel.agents') : t('askUser.recordsTitle')
   const summary = selected === 'todo'
     ? t('todo.progress', { done, total: items.length })
     : selected === 'bash'
       ? t('bashTask.summary', { count: tasks.length, running })
-      : t('subagent.summary', { count: subagents.length, running: agentsRunning })
+      : selected === 'agents'
+        ? t('subagent.summary', { count: subagents.length, running: agentsRunning })
+        : t('askUser.recordsSummary', { count: records.length, answered: records.filter((record) => record.status === 'answered').length })
 
   return (
     <div ref={root} className="relative z-20 shrink-0" data-session-tasks>
       <div role="group" aria-label={t('taskPanel.label')} className="flex flex-wrap items-center gap-1 border-b border-border px-4 py-1.5">
-        {(['todo', 'bash', 'agents'] as const).map((panel) => {
-          if (panel === 'todo' ? !items.length : panel === 'bash' ? !tasks.length : !subagents.length) return null
+        {(['todo', 'bash', 'agents', 'ask'] as const).map((panel) => {
+          if (panel === 'todo' ? !items.length : panel === 'bash' ? !tasks.length : panel === 'agents' ? !subagents.length : !records.length) return null
           const active = open && selected === panel
-          const Icon = panel === 'todo' ? ListTodo : panel === 'bash' ? Terminal : Bot
-          const label = panel === 'todo' ? t('todo.title') : panel === 'bash' ? t('taskPanel.background') : t('taskPanel.agents')
+          const Icon = panel === 'todo' ? ListTodo : panel === 'bash' ? Terminal : panel === 'agents' ? Bot : CircleHelp
+          const label = panel === 'todo' ? t('todo.title') : panel === 'bash' ? t('taskPanel.background') : panel === 'agents' ? t('taskPanel.agents') : t('askUser.recordsTitle')
           const count = panel === 'todo'
             ? `${done}/${items.length}`
             : panel === 'bash'
               ? String(running || tasks.length)
-              : String(agentsRunning || subagents.length)
+              : panel === 'agents'
+                ? String(agentsRunning || subagents.length)
+                : String(awaiting || records.length)
           return (
             <Button key={panel} ref={(node) => { triggers.current[panel] = node }}
               id={`${baseId}-${panel}`} size="sm" variant={active ? 'secondary' : 'ghost'}
@@ -127,6 +137,7 @@ export const SessionTasks = memo(function SessionTasks({ todos, subagents = [], 
           {selected === 'agents' && sessionPath ? (
             <SubagentList runs={subagents} sessionPath={sessionPath} onOpenSession={onOpenSession} />
           ) : null}
+          {selected === 'ask' ? <AskUserRecordList records={records} /> : null}
         </AgentDisclosure>
       </div>
     </div>

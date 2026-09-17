@@ -72,12 +72,12 @@ export function Switch({
           data-state={checked ? "checked" : "unchecked"}
           className={cn(
             // local patch (pi-app): compact track. The vendored 28×48 pill was
-            // oversized for the app — it replaced a 20×20 checkbox in Settings
-            // and sits in rows whose tallest control is that size. 20×32 with a
-            // 16px thumb keeps the 2px inset and a 12px travel (~0.75 of the
-            // thumb, iOS' proportion), and leaves only 12px of straight line
-            // between the two 10px arcs instead of the vendored 28px.
-            "group peer inline-flex h-5 w-8 shrink-0 cursor-pointer items-center px-0.5 rounded-full outline-none transition-colors duration-200",
+            // oversized for the app — it replaced a 20×20 checkbox that sits in
+            // the same rows — so it is 20×32 with a 16px thumb: the 2px inset
+            // and a 12px travel stay, and the two ends are square now.
+            // local patch (pi-app): the app's square-style branch owns this
+            // control's geometry, so the track keeps no radius at all.
+            "group peer inline-flex h-5 w-8 shrink-0 cursor-pointer items-center rounded-control px-0.5 outline-none transition-colors duration-200",
             "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
             "disabled:cursor-not-allowed disabled:opacity-60",
             checked ? "justify-end bg-primary" : "justify-start bg-muted-foreground/60",
@@ -87,7 +87,7 @@ export function Switch({
             ref={thumbRef}
             layout
             animate={{ scale: squish ? 0.9 : 1 }}
-            className="pointer-events-none block size-4 rounded-full bg-background shadow-md"
+            className="pointer-events-none block size-4 rounded-control bg-background shadow-md"
           >
             {/* Stretch toward the destination while active. */}
             <div

@@ -345,9 +345,9 @@ function ResourceMenuAction({
 
 // local patch (pi-app): the row menu is portalled to the viewport, so a row
 // near the bottom edge would have its panel cut off by the window — see
-// ResourceRow.resolveMenuSide. Tallest menu the app renders (six h-8 actions
+// ResourceRow.resolveMenuSide. Tallest menu the app renders (seven h-8 actions
 // plus the panel's padding and divider), and the gap kept from the window edge.
-const ROW_MENU_HEIGHT = 200;
+const ROW_MENU_HEIGHT = 232;
 const ROW_MENU_EDGE_MARGIN = 12;
 
 interface ResourceRowProps {
@@ -528,6 +528,15 @@ function ResourceRow({
       onFocus={onFocus}
       onKeyDown={onKeyDown}
       onClick={(event) => {
+        // local patch (pi-app): the row menu is portalled to the viewport, so a
+        // press inside it bubbles back through THIS row's React tree — without
+        // this guard every menu action (Copy session ID among them) also
+        // selected the session behind the open menu.
+        if (
+          event.target instanceof Element &&
+          event.target.closest("[data-sidebar-resource-menu]")
+        )
+          return;
         if (
           event.defaultPrevented ||
           draggedRef.current ||

@@ -52,8 +52,10 @@
   /* Typefaces. The defaults below are what the app ships with; Settings →
    * Appearance overwrites them at runtime (inline style on <html>) through
    * lib/fonts.ts, and the `@theme inline` mapping below makes Tailwind's
-   * `font-sans`/`font-mono` utilities follow the change everywhere. The
-   * interface stack is sans or serif depending on the setting, hence "ui". */
+   * `font-sans`/`font-mono` utilities follow the change everywhere. Both are
+   * free-form in Settings, so these stand-ins must stay the same stacks
+   * lib/fonts.ts falls back to — the interface one is the system sans-serif,
+   * which is both the default and where an unknown or rejected family lands. */
   --app-font-ui:
     ui-sans-serif, system-ui, -apple-system, 'SF Pro Text', 'Segoe UI', Roboto,
     'Helvetica Neue', Arial, sans-serif;
@@ -334,6 +336,27 @@ body:has([aria-modal="true"]:not([aria-hidden="true"])) .window-titlebar {
 /* Selection follows the accent color. */
 ::selection {
   background: color-mix(in oklch, var(--primary) 25%, transparent);
+}
+
+/* Session sidebar glass (Settings → Appearance, default on): the sidebar
+ * panel goes translucent + frosted (Workspace passes the Tailwind utilities),
+ * and this wash is painted behind it through AnimatedSidebar's backdrop slot.
+ * The colors are accent-tinted mixes, so every accent preset and both themes
+ * get a matched wash with no extra wiring; dark mode mixes a little deeper
+ * because its primary is lighter against a near-black background and the same
+ * share would all but vanish. The wash is static — no animation, so the
+ * frosted panel costs nothing per frame at rest. */
+.sidebar-glass-wash {
+  background:
+    radial-gradient(125% 80% at 0% 0%, color-mix(in oklch, var(--primary) 46%, var(--background)) 0%, transparent 56%),
+    radial-gradient(115% 85% at 100% 100%, color-mix(in oklch, var(--primary) 30%, var(--background)) 0%, transparent 52%),
+    radial-gradient(85% 55% at 55% 42%, color-mix(in oklch, var(--primary) 18%, var(--background)) 0%, transparent 72%);
+}
+.dark .sidebar-glass-wash {
+  background:
+    radial-gradient(125% 80% at 0% 0%, color-mix(in oklch, var(--primary) 38%, var(--background)) 0%, transparent 56%),
+    radial-gradient(115% 85% at 100% 100%, color-mix(in oklch, var(--primary) 24%, var(--background)) 0%, transparent 52%),
+    radial-gradient(85% 55% at 55% 42%, color-mix(in oklch, var(--primary) 14%, var(--background)) 0%, transparent 72%);
 }
 
 /* App-wide scrollbars are invisible: scrolling keeps working, the chrome never

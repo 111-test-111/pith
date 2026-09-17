@@ -2,7 +2,7 @@
 // beui.dev/components/agents/chat-app
 
 // local patch (pi-app): use the shared Lucide icon adapter.
-import { ArrowUp, Plus, Square } from "@/lib/icons";
+import { Plus, Send, Square } from "@/lib/icons";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   type FormEvent,
@@ -340,14 +340,17 @@ export function PromptInput({
           {/* local patch (pi-app): while loading, the button queues a non-empty
               draft (submit path) and only falls back to stop when it is empty —
               send doubles as queue-while-busy, like pi's TUI. */}
+          {/* local patch (pi-app): the send control is a quiet glyph button, not
+              a filled primary square — the shape only appears as a faded
+              primary wash on hover, so the composer's corner stays calm. */}
           <Button
             type={loading && !canQueue ? "button" : "submit"}
+            variant="ghost"
             size="icon"
             disabled={loading && !canQueue ? !onStop : !canQueue && !canSubmit}
             aria-label={loading ? (canQueue ? "Queue message" : "Stop generating") : "Send prompt"}
             onClick={loading && !canQueue ? onStop : undefined}
-            // local patch (pi-app): hard-edged send button (square-style).
-            className="size-8 rounded-control"
+            className="size-8 rounded-control text-primary hover:bg-primary/10 hover:text-primary disabled:opacity-40"
           >
             <AnimatePresence initial={false} mode="popLayout">
               <motion.span
@@ -361,7 +364,7 @@ export function PromptInput({
                 {loading && !canQueue ? (
                   <Square className="size-3 fill-current" />
                 ) : (
-                  <ArrowUp className="size-4" />
+                  <Send className="size-4" />
                 )}
               </motion.span>
             </AnimatePresence>

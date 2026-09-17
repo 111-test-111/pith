@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 
 import { AnimatedNumber } from '@/components/motion/animated-number'
+import { Button } from '@/components/motion/button'
 import { NumberTicker } from '@/components/motion/number-ticker'
 import { Tooltip } from '@/components/motion/tooltip'
 import { useI18n } from '@/i18n'
@@ -49,11 +50,17 @@ function formatCost(cost: number): string | null {
  * every turn boundary, so hovering just reveals a readout that is already
  * current.
  *
+ * Clicking opens the rail's context tab, which is the same readout plus the
+ * fields the bubble has no room for. The trigger is therefore a real button
+ * when a caller wires one up (the tooltip's own press rule then takes the
+ * bubble away on the click that opened the pane) and stays a plain `status`
+ * readout in a view with no rail to open, like an opened subagent child.
+ *
  * The numbers are printed at full precision (exact token count, one decimal of
  * percent) on purpose: on a large window a coarse readout moves so rarely that a
  * live ring reads as frozen.
  */
-export function ContextRing({ usage }: { usage: ContextUsageDTO | null }) {
+export function ContextRing({ usage, onOpen }: { usage: ContextUsageDTO | null; onOpen?: () => void }) {
   const { t } = useI18n()
 
   if (!usage || !usage.contextWindow) return null
@@ -125,10 +132,12 @@ export function ContextRing({ usage }: { usage: ContextUsageDTO | null }) {
         </div>
       }
     >
-      <span
-        role="status"
+      <Button
+        variant="ghost"
+        size="icon"
         aria-label={t('context.label')}
-        className="grid size-8 cursor-default place-items-center rounded-control transition-colors hover:bg-muted"
+        onClick={onOpen}
+        className="rounded-control"
       >
         <svg width={14} height={14} viewBox="0 0 16 16" style={{ transform: 'rotate(-90deg)' }} aria-hidden="true">
           <circle cx={8} cy={8} r={radius} fill="none" strokeWidth={2.4} className="stroke-muted-foreground/30" />
@@ -145,7 +154,7 @@ export function ContextRing({ usage }: { usage: ContextUsageDTO | null }) {
             />
           ) : null}
         </svg>
-      </span>
+      </Button>
     </Tooltip>
   )
 }

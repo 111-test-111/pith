@@ -1,7 +1,7 @@
 import { BashTasksProvider } from '@/lib/bash-tasks'
 import { SessionTasks } from './SessionTasks'
 import { memo, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, useSyncExternalStore } from 'react'
-import { AlertTriangle, RotateCcw, X } from '@/lib/icons'
+import { AlertTriangle, RefreshCw, Rewind, X } from '@/lib/icons'
 import { MessageGroup } from '@/components/agents/message'
 import { MessageScroller } from '@/components/agents/message-scroller'
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from '@/components/motion/context-menu'
@@ -402,7 +402,7 @@ export const ChatView = memo(function ChatView({
 
   return (
     <BashTasksProvider sessionPath={state.sessionPath}>
-      <SessionTasks key={state.sessionPath} todos={state.todos} subagents={state.subagents} busy={busy} sessionPath={state.sessionPath} onOpenSession={onOpenSession} />
+      <SessionTasks key={state.sessionPath} todos={state.todos} subagents={state.subagents} askUserRecords={state.askUserRecords} busy={busy} sessionPath={state.sessionPath} onOpenSession={onOpenSession} />
       <ContextMenu open={menuOpen} onOpenChange={setMenuOpen}>
       <ContextMenuTrigger>
       <MessageScroller
@@ -470,7 +470,7 @@ export const ChatView = memo(function ChatView({
                     aria-label={t('chat.errorRetry')}
                     onClick={() => onResend?.(lastUserTurn)}
                   >
-                    <RotateCcw className="size-3.5" />
+                    <RefreshCw className="size-3.5" />
                   </Button>
                 ) : null}
                 <Button variant="ghost" size="icon" className="size-6" aria-label={t('chat.dismissError')} onClick={() => onDismissError?.()}>

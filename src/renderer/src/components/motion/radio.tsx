@@ -122,7 +122,11 @@ export function RadioGroupItem({
         transition={SPRING_PRESS}
         data-state={selected ? "checked" : "unchecked"}
         className={cn(
-          "relative inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2 outline-none transition-colors duration-200",
+          // local patch (pi-app): square-style branch — the single-choice mark is
+          // hard-edged like every other control, not a circle, and it is sized
+          // to the label's own text (14px box, 6px mark) rather than the
+          // vendored 20px box, which read heavier than the line it marks.
+          "relative inline-flex size-3.5 shrink-0 items-center justify-center rounded-control border-2 outline-none transition-colors duration-200",
           "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
           "disabled:cursor-not-allowed disabled:opacity-60",
           selected
@@ -133,7 +137,7 @@ export function RadioGroupItem({
         {selected ? (
           <motion.span
             layoutId={layoutId}
-            className="absolute inset-1 rounded-full bg-primary"
+            className="size-1.5 rounded-control bg-primary"
             transition={reduce ? { duration: 0 } : SPRING_LAYOUT}
           />
         ) : null}

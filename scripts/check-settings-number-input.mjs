@@ -1,12 +1,14 @@
 /**
- * Settings numeric-field regression check: the two numbers in General settings
- * (subagent concurrency, bash wait threshold) are plain beUI `Input` fields —
- * no increment/decrement actions, no native number spinners — that filter what
- * can be typed and clamp into their documented range (1–16, 0.1–60s) the moment
- * the field is left, so an out-of-range value can never reach the setter.
+ * Settings numeric-field regression check: the numeric settings fields (the
+ * bash wait threshold in General; the subagent concurrency limit in the
+ * Subagents section, where it moved beside the profiles it governs) are plain
+ * beUI `Input` fields — no increment/decrement actions, no native number
+ * spinners — that filter what can be typed and clamp into their documented
+ * range (1–16, 0.1–60s) the moment the field is left, so an out-of-range value
+ * can never reach the setter.
  *
- * Real `GeneralSection` in isolated Electron against a mocked `window.pi`; no
- * SDK, no model calls, no network. Run after building:
+ * Real `GeneralSection` + `SubagentsSection` in isolated Electron against a
+ * mocked `window.pi`; no SDK, no model calls, no network. Run after building:
  *   node scripts/check-settings-number-input.mjs
  * `PI_SETTINGS_INPUT_SCREENSHOT_DIR` retains the light/dark screenshots.
  */
@@ -28,6 +30,7 @@ const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 const CONCURRENCY_LABEL = 'Concurrent delegations'
 const WAIT_LABEL = 'Maximum blocking time in seconds'
+const ASK_TIMEOUT_LABEL = 'Auto-close seconds'
 
 const fixture = `<!doctype html><html><head><style>
 body { margin: 0; background: var(--background); }
@@ -36,6 +39,7 @@ body { margin: 0; background: var(--background); }
 import React from 'react';
 import {createRoot} from 'react-dom/client';
 import {GeneralSection} from '/src/components/app/settings/GeneralSection.tsx';
+import {SubagentsSection} from '/src/components/app/settings/SubagentsSection.tsx';
 import {I18nProvider} from '/src/i18n/index.tsx';
 import '/src/styles.css';
 
@@ -47,15 +51,29 @@ const appInfo = {
   subagentsEnabled: true,
   subagentMaxConcurrent: Number(params.get('concurrency') ?? 4),
   bashMaxWaitMs: Number(params.get('waitMs') ?? 10000),
+  askUserTimeoutSeconds: Number(params.get('askTimeout') ?? 120),
   sandboxMode: 'workspace-write',
-  sandbox: { support: 'ok', backend: 'seatbelt' }
+  sandbox: { support: params.get('sandbox') ?? 'ready', backend: 'seatbelt' }
 };
 window.calls = [];
+const subagentProfiles = {
+  profiles: [
+    { name: 'explore', displayName: 'Explorer', description: 'Read-only researcher.', systemPrompt: 'You explore.',
+      tools: ['read', 'grep', 'find', 'ls'], toolsSource: 'explicit', inheritContext: true, runInBackground: false,
+      enabled: true, scope: 'global', filePath: '/agents/explore.md' }
+  ],
+  globalDir: '/agents',
+  projectDir: null
+};
 window.pi = {
   appInfo: async () => appInfo,
   setStartup: async (v) => v,
   setSubagentsEnabled: async (v) => v,
   setSubagentMaxConcurrent: async (v) => { window.calls.push(['concurrency', v]); return v; },
+  subagentProfiles: async () => subagentProfiles,
+  setSubagentProfileTools: async (filePath, tools) => { window.calls.push(['profileTools', filePath, tools]); return subagentProfiles; },
+  toolsCatalog: async () => ({ tools: [], extensions: [], skills: [], skillDiagnostics: [] }),
+  setAskUserTimeoutSeconds: async (v) => { window.calls.push(['askTimeout', v]); return v; },
   setBashMaxWaitMs: async (v) => { window.calls.push(['waitMs', v]); return v; },
   setCheckpointsEnabled: async (v) => v,
   setSandboxMode: async (v) => v,
@@ -128,7 +146,7 @@ window.clickSave = (label) => {
 };
 
 const h = React.createElement;
-createRoot(document.getElementById('root')).render(h(I18nProvider, null, h(GeneralSection)));
+createRoot(document.getElementById('root')).render(h(I18nProvider, null, h('div', null, h(GeneralSection), h(SubagentsSection))));
 window.fixtureReady = true;
 </script></body></html>`
 
@@ -341,6 +359,24 @@ app.on('window-all-closed',()=>app.quit());`
   assert.deepEqual((await calls()).at(-1), ['concurrency', 3], 'the sign-free value is what gets saved')
   await screenshot('general-light-clamped')
 
+  // --- the ask_user_question auto-settle deadline is the same kind of field:
+  // whole seconds, filtered while typing, clamped on leave, saved explicitly
+  await load()
+  await pause(300)
+  const askField = await assertTextField(ASK_TIMEOUT_LABEL, { unit: 's', save: 'Save' })
+  assert.equal(askField.value, '120', 'the ask panel deadline shows the saved seconds')
+  assert.equal(askField.saveDisabled, true, 'its Save is disabled while nothing changed')
+  assert.equal(await typed(ASK_TIMEOUT_LABEL, '1a2s.5'), '125', 'letters, units and dots never enter the deadline field')
+  assert.equal(await typed(ASK_TIMEOUT_LABEL, '12345'), '1234', 'the deadline field takes at most four digits')
+  assert.equal(await left(ASK_TIMEOUT_LABEL), '1234', 'an in-range entry is kept on leave')
+  assert.equal(await left(ASK_TIMEOUT_LABEL, '9999'), '3600', 'an above-range entry clamps to the maximum')
+  assert.equal(await left(ASK_TIMEOUT_LABEL, ''), '120', 'an emptied deadline field restores the saved value')
+  await typed(ASK_TIMEOUT_LABEL, '45')
+  assert.equal(await evaluate(`window.clickSave(${JSON.stringify(ASK_TIMEOUT_LABEL)})`), true, 'the deadline Save is clickable')
+  await frame()
+  assert.deepEqual((await calls()).at(-1), ['askTimeout', 45], 'Save commits the typed seconds exactly once')
+  assert.equal((await probe(ASK_TIMEOUT_LABEL)).saveDisabled, true, 'and disables Save again')
+
   // --- both locales
   await evaluate('localStorage.setItem("pi-app:locale","zh-CN")')
   await load('?concurrency=4&waitMs=10000')
@@ -362,6 +398,21 @@ app.on('window-all-closed',()=>app.quit());`
   await frame()
   assert.equal((await evaluate(`window.probeField('并发委派数')`)).height, 32, 'reduced motion keeps the compact field')
   await screenshot('general-dark-zh')
+
+  // The sandbox group's status line speaks only when there is something to act
+  // on: a host that runs unconfined shows nothing, because the radio group
+  // above already names the mode that is on.
+  await evaluate('document.documentElement.classList.remove("dark")')
+  await load()
+  const enforced = await evaluate(`document.querySelector('[data-sandbox-status]')?.textContent`)
+  assert.match(enforced ?? '', /seatbelt/, `an enforced host reports its backend: ${enforced}`)
+  await load('?sandbox=host')
+  assert.ok(await evaluate(`document.querySelectorAll('[role="radio"]').length`) >= 3, 'the settings page still renders its mode choices')
+  assert.equal(
+    await evaluate(`!!document.querySelector('[data-sandbox-status]')`),
+    false,
+    'full access on the host shows no status line'
+  )
 
   assert.deepEqual(exceptions, [], 'no renderer exceptions')
 

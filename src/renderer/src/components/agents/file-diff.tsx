@@ -31,6 +31,9 @@ import { SPRING_PRESS, SPRING_SWAP } from "@/lib/ease";
 import { cn } from "@/lib/utils";
 // local patch (pi-app): bounded row DOM for the scrollable hover preview.
 import { DIFF_ROW_HEIGHT, useDiffWindow } from "@/lib/hooks/use-diff-window";
+// local patch (pi-app): the diff viewport's clipped edge fades instead of
+// cutting a line (the app hides every scrollbar, so the cut had no other cue).
+import { useScrollFade } from "@/lib/hooks/use-scroll-fade";
 
 export type FileDiffStatus = "streaming" | "complete";
 export type FileDiffLineType = "added" | "removed" | "context";
@@ -147,6 +150,10 @@ export function FileDiff({
   const [copied, setCopied] = useState(false);
   const [internalOpen, setInternalOpen] = useState(defaultOpen);
   const currentOpen = open ?? internalOpen;
+  // local patch (pi-app): a mask on whichever end of the cap hides rows. A
+  // Review body (`maxHeightOverride={null}`) never overflows, so it keeps none,
+  // and the body is lazy, so the measurement follows the disclosure's state.
+  const { edges: fadeEdges, maskImage } = useScrollFade(viewportRef, { dependsOn: currentOpen });
   const streaming = status === "streaming";
   const additions = additionsProp ?? lines.filter((line) => line.type === "added").length;
   const deletions = deletionsProp ?? lines.filter((line) => line.type === "removed").length;
@@ -315,10 +322,15 @@ export function FileDiff({
             <div
               ref={viewportRef}
               data-slot="file-diff-viewport"
+              data-fade={fadeEdges.top && fadeEdges.bottom ? "both" : fadeEdges.bottom ? "bottom" : fadeEdges.top ? "top" : "none"}
               aria-live="polite"
               onScroll={virtual ? onScroll : undefined}
               className="scrollbar-hide overflow-auto"
-              style={{ maxHeight: maxHeightOverride === undefined ? maxHeight : maxHeightOverride ?? undefined }}
+              style={{
+                maxHeight: maxHeightOverride === undefined ? maxHeight : maxHeightOverride ?? undefined,
+                maskImage,
+                WebkitMaskImage: maskImage
+              }}
             >
               {/* local patch (pi-app): the row wrapper is as wide as the widest
                   line (never narrower than the viewport), so a row's added/
@@ -353,8 +365,12 @@ export function FileDiff({
                       }
                       className={cn(
                         "grid grid-cols-[2.25rem_2.25rem_1rem_minmax(0,1fr)]",
-                        type === "added" && "bg-emerald-500/[0.07]",
-                        type === "removed" && "bg-rose-500/[0.07]",
+                        // local patch (pi-app): the vendored 7% wash was too pale
+                        // to read as a change on the muted panel — the owner
+                        // asked for deeper diff colours everywhere FileDiff
+                        // renders (tool rows, review, checkpoints, previews).
+                        type === "added" && "bg-emerald-500/[0.14]",
+                        type === "removed" && "bg-rose-500/[0.14]",
                       )}
                     >
                       <span className="select-none pr-2 text-right tabular-nums text-muted-foreground/40">

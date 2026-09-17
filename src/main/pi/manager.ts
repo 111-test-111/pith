@@ -18,7 +18,7 @@ import { app, shell } from 'electron'
 import { settleWithin, SESSION_DISPOSE_TIMEOUT_MS } from '../shutdown'
 import { homedir } from 'node:os'
 import { open as openFile } from 'node:fs/promises'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { BashTaskManager } from '../bash/manager'
 import { createManagedBashTools, APP_BASH_TOOL_NAMES } from './bash-tools'
@@ -27,6 +27,9 @@ import { isSandboxMode, sandboxModeFromBranch, SANDBOX_MODE_ENTRY_TYPE } from '.
 import { sandboxStatus } from '../sandbox/broker'
 import { resolveEscalatedMode } from '../sandbox/escalation'
 import { clearSessionEscalations, listPendingEscalations, respondToEscalation } from '../sandbox/pending'
+import { clearSessionAskUserRequests, clearSubagentAskUserRequests, createAskUserTool, engageAskUser as engageAskUserRequest, listPendingAskUser, respondAskUserRequest } from './ask-user'
+import type { AskUserAnswer } from '../../shared/ask-user'
+import { ASK_USER_MAX_TIMEOUT_S, ASK_USER_MIN_TIMEOUT_S, ASK_USER_TOOL_NAME, clampAskUserTimeoutSeconds } from '../../shared/ask-user'
 import type { SandboxMode } from '../sandbox/types'
 import type { SandboxEscalationDecision } from '../../shared/types'
 import { TaskNotifications } from './task-notifications'
@@ -47,17 +50,20 @@ import {
   type SubagentHost
 } from './subagents/runtime'
 import { SubagentNotifications } from './subagents/notifications'
+import { AskUserNotifications } from './ask-user-notifications'
+import { AskUserRecords } from './ask-user-records'
 import { SUBAGENT_TOOL_NAME } from './subagents/protocol'
 import { readDiskSubagentRuns } from './subagents/protocol'
 import type { SubagentRunStartData } from './subagents/protocol'
 import { createSubagentTool, installSubagentResultHook } from './subagents/tools'
 import { subagentModelSpecError } from './subagents/model-spec'
-import { ensureDefaultProfiles, listSubagentProfiles } from './subagents/profiles'
+import { ensureDefaultProfiles, createSubagentProfileFile, listSubagentProfiles, toSubagentProfileDTO, writeSubagentProfileTools } from './subagents/profiles'
 import { isSubagentSessionFile } from './subagents/session-filter'
 import { SessionListIndex, rowFromSessionManager } from './session-list'
-import { BASH_MIN_WAIT_MS, BASH_MAX_WAIT_MS, type StartupSessionMode } from '../../shared/types'
+import { BASH_MIN_WAIT_MS, BASH_MAX_WAIT_MS, SDK_BUILTIN_TOOL_NAMES, type StartupSessionMode, type SubagentProfileCreatePayload, type SubagentProfileDTO, type SubagentProfilesDTO } from '../../shared/types'
 import { FileIndex, readAttachment } from './files'
 import { compactedContextTokens } from './context-estimate'
+import { buildContextDetail, statsFromEntries, type ContextStatsLike } from './context-detail'
 import { SessionSearch } from './session-search'
 import { UsageAggregator } from './usage'
 import { ensureDefaultWorkspace, isDefaultWorkspace } from './default-workspace'
@@ -91,6 +97,7 @@ import type {
   BashTaskOutputDTO,
   CatalogRecommendationDTO,
   ChatMessage,
+  ContextDetailDTO,
   ContextUsageDTO,
   CustomModelDTO,
   DefaultModelDTO,
@@ -111,6 +118,7 @@ import type {
   RecalledItemDTO,
   RewindResult,
   RewindListDTO,
+  RewindBusyReason,
   RewindPreviewDTO,
   RewindRequest,
   RewindUncoveredPathDTO,
@@ -140,9 +148,10 @@ const MAX_FOLDERS = 12
  * The built-in tools the app keeps active. Passed explicitly because a `tools`
  * allowlist would also filter out every extension-registered tool (see
  * `AgentSession._refreshToolRegistry`), which is why the manager omits it and
- * sets the active set by hand instead.
+ * sets the active set by hand instead. The list itself lives in shared/types
+ * so Settings → Subagents offers the same names without a session.
  */
-const BUILTIN_TOOL_NAMES = ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls']
+const BUILTIN_TOOL_NAMES = SDK_BUILTIN_TOOL_NAMES
 
 /**
  * Streaming updates (`message_update` carries the FULL accumulated partial
@@ -247,6 +256,8 @@ interface ManagedSession {
   sandboxMode: SandboxMode
   rewind?: RewindRecorder
   todos: TodoState
+  /** Every ask_user_question this session asked, folded from its branch. */
+  askRecords: AskUserRecords
   /** One real loader/runtime per session; the SDK receives its filtered proxy. */
   resourceLoader: ResourceLoader
   /** Subagent roster/runs for normal sessions; null on children. */
@@ -260,6 +271,8 @@ interface ManagedSession {
   disposing: boolean
   changeScopes: ChangeScopes
   notifications: TaskNotifications
+  /** Async ask_user outcomes: the answer is steered in long after the call. */
+  askUser: AskUserNotifications
   session: AgentSession
   path: string
   cwd: string
@@ -267,6 +280,11 @@ interface ManagedSession {
   pendingStreamEvents: Map<string, PiEvent>
   streamFlushTimer: ReturnType<typeof setTimeout> | null
   streaming: ChatMessage | null
+  /** Set by `abort()` (Stop/Esc) and consumed by the settle that ends that
+   * run, so the renderer can tell a user-stopped run from a finished one
+   * (its notification cue stays silent for a stop). Cleared on `agent_start`
+   * as well, so a stop issued while idle cannot linger onto a later run. */
+  userAborted?: boolean
   toolRuns: Record<string, ToolRunDTO>
   /** Rich payload mirror of the SDK's two queues, keyed by queued text. */
   queueMirror: { steering: QueuedItem[]; followUp: QueuedItem[] }
@@ -306,6 +324,8 @@ export class PiManager {
   }
   private subagentsEnabledFlag = loadSettings().subagentsEnabled !== false
   private subagentMaxConcurrentSetting = loadSettings().subagentMaxConcurrent ?? MAX_CONCURRENT_SUBAGENTS_DEFAULT
+  /** Ask-panel auto-settle deadline; read live by every ask_user_question call. */
+  private askUserTimeoutMs = clampAskUserTimeoutSeconds(loadSettings().askUserTimeoutSeconds) * 1000
 
   private get commandTasks(): BashTaskManager {
     return this.commandTasksInstance ??= new BashTaskManager(join(app.getPath('userData'), 'bash-tasks'),
@@ -331,6 +351,15 @@ export class PiManager {
     if (!Number.isInteger(value) || value < BASH_MIN_WAIT_MS || value > BASH_MAX_WAIT_MS) throw new Error('Invalid bash wait threshold')
     saveSettings({ ...loadSettings(), bashMaxWaitMs: value })
     this.bashMaxWaitMs = value
+    return value
+  }
+  /** Settings → General: how long an untouched ask panel waits before it closes. */
+  setAskUserTimeoutSeconds(value: number): number {
+    if (!Number.isInteger(value) || value < ASK_USER_MIN_TIMEOUT_S || value > ASK_USER_MAX_TIMEOUT_S) {
+      throw new Error('Invalid ask-user timeout')
+    }
+    saveSettings({ ...loadSettings(), askUserTimeoutSeconds: value })
+    this.askUserTimeoutMs = value * 1000
     return value
   }
   /** Settings → General: the default a session starts from, not a live mode. */
@@ -404,6 +433,47 @@ export class PiManager {
       ...(input.signal ? { signal: input.signal } : {}),
       onChanged: () => this.publishEscalations(managed)
     })
+  }
+
+  /**
+   * Publish this chat's pending ask_user_question sets (subagent children
+   * included — they register under the owner path). Same sequence-free
+   * metadata rule as escalations: a pending question is state the renderer
+   * has to answer, not a transcript step.
+   */
+  private publishAskUser(managed: ManagedSession): void {
+    this.emit(
+      'pi:event',
+      serialize({
+        type: 'ask_user',
+        sessionId: managed.session.sessionId,
+        sessionPath: managed.path,
+        requests: listPendingAskUser(managed.path)
+      })
+    )
+  }
+
+  /**
+   * Answer one pending question set (or dismiss it). The owner path travels
+   * with the id so an answer cannot settle another chat's question; invalid
+   * answers are rejected against the entry's own question list.
+   */
+  respondAskUser(requestId: string, ownerPath: string, payload: { answers?: AskUserAnswer[]; cancelled?: boolean }): boolean {
+    const accepted = respondAskUserRequest(requestId, ownerPath, payload)
+    const managed = this.sessions.get(ownerPath)
+    if (managed) this.publishAskUser(managed)
+    return accepted
+  }
+
+  /**
+   * The user touched the panel: cancel the auto-settle countdown and tell every
+   * view, so a re-mounted panel stops drawing one. Collapsing never comes here.
+   */
+  engageAskUser(requestId: string, ownerPath: string): boolean {
+    const accepted = engageAskUserRequest(requestId, ownerPath)
+    const managed = this.sessions.get(ownerPath)
+    if (managed) this.publishAskUser(managed)
+    return accepted
   }
 
   /**
@@ -507,6 +577,130 @@ export class PiManager {
   }
 
   /**
+   * The full context readout of one open session for the rail's context tab.
+   *
+   * A live session is read from memory — its `messages` are the branch's
+   * compaction-converted context, which is what the breakdown estimates — and a
+   * path that is not managed any more (the visible session was just switched
+   * away from) falls back to the file, so the pane can never throw at a session
+   * boundary.
+   *
+   * Everything here is in-memory except the fallback's one file read, so the
+   * renderer can ask for it whenever the ring's readout moves (main's 2s
+   * `context_usage` ping): the pane follows the ring live instead of showing a
+   * snapshot that ages between turns.
+   */
+  async contextDetail(sessionPath?: string): Promise<ContextDetailDTO> {
+    const managed = sessionPath ? this.sessions.get(sessionPath) : this.activeSession
+    if (!managed) {
+      if (!sessionPath) throw new Error('Pi session is not initialized')
+      return this.diskContextDetail(sessionPath)
+    }
+    const session = managed.session
+    const stats = session.getSessionStats() as unknown as ContextStatsLike
+    const usage = this.contextUsageOf(managed) ?? {
+      tokens: null,
+      contextWindow: session.model?.contextWindow ?? 0,
+      percent: null,
+      sessionCost: stats.cost,
+      cacheHitRate: null
+    }
+    const header = session.sessionManager.getHeader()
+    const createdAt = header?.timestamp ? Date.parse(header.timestamp) : NaN
+    let lastActivity: number | null = null
+    const file = session.sessionFile
+    if (file) {
+      try {
+        lastActivity = statSync(file).mtimeMs
+      } catch {
+        // A file that vanished keeps the header-derived values only.
+      }
+    }
+    return buildContextDetail({
+      messages: session.messages as any[],
+      entries: session.sessionManager.getEntries() as any[],
+      stats,
+      usage,
+      meta: {
+        sessionId: session.sessionId,
+        sessionPath: managed.path,
+        title: session.sessionManager.getSessionName() ?? null,
+        cwd: managed.cwd,
+        projectless: isDefaultWorkspace(managed.cwd),
+        provider: session.model?.provider ?? null,
+        model: session.model?.name ?? session.model?.id ?? null,
+        thinkingLevel: session.thinkingLevel as ThinkingLevel,
+        createdAt: Number.isFinite(createdAt) ? createdAt : null,
+        lastActivity
+      }
+    })
+  }
+
+  /**
+   * The context readout of a session file nobody holds open: the same shape,
+   * from disk alone. The counts and token totals are recomputed from the file's
+   * own usage reports (`statsFromEntries`, mirroring the SDK's stats); only the
+   * live ring readout stays blank, because a file has no context window — `—` is
+   * the honest answer there, not a guess.
+   */
+  private diskContextDetail(path: string): ContextDetailDTO {
+    const manager = SessionManager.open(path)
+    const entries = manager.getEntries() as any[]
+    const messages = manager.buildContextEntries()
+      .filter((entry) => entry.type === 'message')
+      .map((entry) => entry.message) as any[]
+    const header = manager.getHeader()
+    const createdAt = header?.timestamp ? Date.parse(header.timestamp) : NaN
+    let lastActivity: number | null = null
+    try {
+      lastActivity = statSync(path).mtimeMs
+    } catch {
+      // Unreadable file: the pane still opens with the messages it could read.
+    }
+    // The provider/model of the LAST request the file recorded is what the
+    // session was working with; older entries may name earlier models.
+    let provider: string | null = null
+    let model: string | null = null
+    let thinkingLevel: ThinkingLevel | null = null
+    for (const entry of entries) {
+      if (entry?.type === 'thinking_level_change' && typeof entry.thinkingLevel === 'string') {
+        thinkingLevel = entry.thinkingLevel as ThinkingLevel
+        continue
+      }
+      const message = entry?.type === 'message' ? entry.message : null
+      if (message?.role !== 'assistant') continue
+      if (typeof message.provider === 'string') provider = message.provider
+      if (typeof message.model === 'string') model = message.model
+    }
+    const cwd = manager.getCwd()
+    const stats = statsFromEntries(entries)
+    return buildContextDetail({
+      messages,
+      entries,
+      stats,
+      usage: {
+        tokens: null,
+        contextWindow: 0,
+        percent: null,
+        sessionCost: stats.cost,
+        cacheHitRate: null
+      },
+      meta: {
+        sessionId: manager.getSessionId(),
+        sessionPath: path,
+        title: manager.getSessionName() ?? null,
+        cwd,
+        projectless: isDefaultWorkspace(cwd),
+        provider,
+        model,
+        thinkingLevel,
+        createdAt: Number.isFinite(createdAt) ? createdAt : null,
+        lastActivity
+      }
+    })
+  }
+
+  /**
    * Panel actions on a parent's subagent runs. `resume` continues a finished
    * child session under a fresh run, sharing the dispatch admission path.
    */
@@ -539,6 +733,47 @@ export class PiManager {
     saveSettings({ ...loadSettings(), subagentMaxConcurrent: value })
     this.subagentMaxConcurrentSetting = value
     return value
+  }
+
+  /** Every profile visible in the active workspace, for Settings → Subagents,
+ * plus the directories a new file can land in. Each profile is an ordinary
+ * Markdown file; a project-scope file shadows a same-name global one exactly
+ * as the `agent` tool resolves them. */
+  subagentProfiles(): SubagentProfilesDTO {
+    const cwd = this.cwd ?? null
+    return {
+      profiles: listSubagentProfiles(cwd).map(toSubagentProfileDTO),
+      globalDir: join(getAgentDir(), 'agents'),
+      projectDir: cwd && !isDefaultWorkspace(cwd) ? join(cwd, '.pi', 'agents') : null
+    }
+  }
+
+  /** Create one new profile file (Settings → Subagents). The target directory
+   * comes from the chosen scope — project scope needs a real project to be
+   * active; a projectless chat's internal workspace never hosts profiles. */
+  async createSubagentProfile(payload: SubagentProfileCreatePayload): Promise<SubagentProfilesDTO> {
+    const cwd = this.cwd ?? null
+    const dir = payload.scope === 'project'
+      ? (cwd && !isDefaultWorkspace(cwd) ? join(cwd, '.pi', 'agents') : null)
+      : join(getAgentDir(), 'agents')
+    if (!dir) throw new Error('No project workspace is active')
+    createSubagentProfileFile(dir, payload)
+    await this.reloadLiveSessions()
+    return this.subagentProfiles()
+  }
+
+  /** Rewrite one profile's `tools:` frontmatter line (Settings → Subagents).
+   * Only a currently listed profile file is accepted — the same rule the
+   * skill methods follow, so this cannot become an arbitrary file write —
+   * and live sessions reload, because the `agent` tool's description embeds
+   * each profile's tool set at session build. */
+  async setSubagentProfileTools(filePath: string, tools: 'all' | string[]): Promise<SubagentProfilesDTO> {
+    if (!listSubagentProfiles(this.cwd ?? null).some((profile) => profile.filePath === filePath)) {
+      throw new Error('Unknown subagent profile')
+    }
+    writeSubagentProfileTools(filePath, tools)
+    await this.reloadLiveSessions()
+    return this.subagentProfiles()
   }
 
   /** Persist which session the next launch opens. */
@@ -722,7 +957,7 @@ export class PiManager {
     return this.modelRuntime
   }
 
-  private async servicesFor(cwd: string, todos: TodoState, recoveryOnly = false, subagent?: { appendSystemPrompt?: string }): Promise<AgentSessionServices> {
+  private async servicesFor(cwd: string, todos: TodoState, recoveryOnly = false, subagent?: { appendSystemPrompt?: string; extensions?: boolean }): Promise<AgentSessionServices> {
     // A loader owns mutable extension closures and an ExtensionRuntime whose
     // actions bind to ONE session. Sharing it by cwd lets another session's
     // bind/reload/dispose overwrite or invalidate a still-live MCP context.
@@ -730,9 +965,14 @@ export class PiManager {
       cwd,
       modelRuntime: await this.runtime(),
       resourceLoaderOptions: {
-        // v1 subagent children never load extensions: N children with
-        // extension runtimes would multiply MCP hosts per workspace.
-        noExtensions: recoveryOnly || subagent !== undefined,
+        // A subagent child loads extensions ONLY when its frozen ceiling
+        // names an extension-attributed tool (web_search, mcp, ctx_*…): the
+        // ceiling create-allowlist then admits them by name, and
+        // `_refreshToolRegistry` keeps even lazily-registered ones inside it.
+        // Every other delegation stays extension-free — N children with
+        // extension runtimes would multiply MCP hosts per workspace. A
+        // recovery-only session never loads extensions at all.
+        noExtensions: recoveryOnly || (subagent !== undefined && subagent.extensions !== true),
         extensionFactories: [todos.extension()],
         ...(subagent?.appendSystemPrompt ? { appendSystemPrompt: [subagent.appendSystemPrompt] } : {}),
         // Children inherit AGENTS.md per the same live app setting — a
@@ -771,6 +1011,12 @@ export class PiManager {
     // A question whose session is going away has no answerer: settle it as
     // cancelled so nothing is left waiting on a closed session.
     clearSessionEscalations(managed.path)
+    // A question whose session is going away has no answerer: settle it as
+    // cancelled so nothing is left waiting on a closed session. A subagent
+    // child's questions live under the parent's path, so its own teardown
+    // must clear them by source — the owner key stays for the parent itself.
+    clearSessionAskUserRequests(managed.path)
+    if (managed.subagentChild) clearSubagentAskUserRequests(managed.path)
     if (managed.disposePromise) return managed.disposePromise
     managed.disposing = true
     managed.rewind?.dispose()
@@ -845,8 +1091,18 @@ export class PiManager {
       sessionId: managed.session.sessionId,
       sessionPath: managed.path,
       cwd: managed.cwd,
+      // A child session's run is a step of its parent's turn, not a chat the
+      // user is in: the renderer's notification cues read this to stay silent
+      // for a delegation's many child rounds (one chime when the PARENT ends).
+      ...(managed.subagentChild ? { subagentChild: true } : {}),
+      // A user-stopped run is not a finished one: stamped for the same reason
+      // as `subagentChild`, so the renderer's cue can stay silent. Consumed
+      // here, one settle per stop.
+      ...(managed.userAborted ? { userAborted: true } : {}),
       eventSequence: managed.eventSequence
     } as PiEvent
+    if (event.type === 'agent_start') managed.userAborted = false
+    else if (event.type === 'agent_settled') managed.userAborted = false
 
     // Usage (and cost) move on completed messages and compaction boundaries;
     // attach the payload so those updates land in the same render as the
@@ -1141,6 +1397,8 @@ export class PiManager {
   private async createManagedSession(sessionManager: SessionManager, subagentRole?: {
     parentPath: string
     resource: SubagentRunStartData['resource']
+    /** Profile name, for the ask-user source badge on live child runs. */
+    profile?: string
     model?: any
   }): Promise<ManagedSession> {
     await this.checkoutCoordinator.ready()
@@ -1158,17 +1416,20 @@ export class PiManager {
       // profile system prompt.
       const runs = readDiskSubagentRuns(sessionManager.getEntries() as any[])
       const current = runs[runs.length - 1]
-      if (current) detectedRole = { parentPath: current.start.parentSessionPath, resource: current.start.resource }
+      if (current) detectedRole = { parentPath: current.start.parentSessionPath, resource: current.start.resource, profile: current.start.profile }
     }
     const role = detectedRole
     const isChild = role !== undefined
     const todos = new TodoState(sessionManager)
+    const askRecords = new AskUserRecords(sessionManager)
     const fullServices = await this.servicesFor(
       sessionManager.getCwd(), todos, recoveryOnly,
-      isChild ? { appendSystemPrompt: role!.resource.appendSystemPrompt } : undefined
+      isChild ? { appendSystemPrompt: role!.resource.appendSystemPrompt, extensions: role!.resource.extensions } : undefined
     )
     const services = { ...fullServices, resourceLoader: this.filterExtensions(fullServices.resourceLoader) }
     let notifications: TaskNotifications | undefined
+    /** Built with `notifications`, once the session exists. */
+    let askUserNotifications: AskUserNotifications | undefined
     const parentSessionRef: { session: import('@earendil-works/pi-coding-agent').AgentSession | null } = { session: null }
     const subagentState = isChild ? null : new SubagentParentState(sessionManager.getSessionId())
     // The mode the tools read per call. A subagent child follows its parent
@@ -1202,12 +1463,43 @@ export class PiManager {
           ...(isChild ? {} : { escalate: escalateForTools })
         }),
         createTodoTool(todos, () => notifications?.canStart ?? false),
+        // ask_user_question suspends on the pending registry until the user
+        // answers. A subagent child has no composer of its own, so its
+        // questions register under the PARENT's path with a source badge —
+        // the parent's panel answers them and the child's call resolves.
+        createAskUserTool({
+          ownerPath: isChild ? role!.parentPath : (sessionManager.getSessionFile() ?? `memory:${sessionManager.getSessionId()}`),
+          ...(isChild ? {
+            source: {
+              kind: 'subagent' as const,
+              sessionPath: sessionManager.getSessionFile() ?? `memory:${sessionManager.getSessionId()}`,
+              ...(role!.profile ? { profile: role!.profile } : {})
+            }
+          } : {}),
+          onChanged: () => {
+            if (isChild) {
+              const owner = this.sessions.get(role!.parentPath)
+              if (owner) this.publishAskUser(owner)
+            } else {
+              this.publishAskUser(managed)
+            }
+          },
+          canStart: () => notifications?.canStart ?? false,
+          // Read live, so changing the deadline in Settings applies to the
+          // next question without rebuilding any session.
+          timeoutMs: () => this.askUserTimeoutMs,
+          // An async question is answered long after its call returned; the
+          // outcome goes through this session's own outbox so it is steered
+          // into the conversation the ask belongs to (a child's own, not the
+          // parent's, even though the parent's panel answered it).
+          deliverAsync: (delivery) => askUserNotifications?.settle(delivery)
+        }),
         // Children never see the delegation tool — recursion is excluded at
         // both the ceiling (allowlist) and the customTools layer.
         ...(subagentState && this.subagentsEnabledFlag ? [createSubagentTool({
           runtime: this.subagentRuntime, state: subagentState, parentSessionRef,
           parentSessionPath: sessionManager.getSessionFile()!,
-          profiles: listSubagentProfiles(sessionManager.getCwd()),
+          profiles: () => listSubagentProfiles(sessionManager.getCwd()),
           canStart: () => (notifications?.canStart ?? false) && subagentState.notifications!.canStart
         })] : [])]
     })
@@ -1223,10 +1515,12 @@ export class PiManager {
       }
     }
     notifications = new TaskNotifications(session, this.commandTasks)
+    askUserNotifications = new AskUserNotifications(session)
     const path = session.sessionFile ?? `memory:${session.sessionId}`
     const managed: ManagedSession = {
       recoveryOnly,
       todos,
+      askRecords,
       resourceLoader: fullServices.resourceLoader,
       subagents: subagentState,
       ...(isChild ? { subagentChild: { parentPath: role!.parentPath, toolCeiling: role!.resource.tools } } : {}),
@@ -1238,6 +1532,7 @@ export class PiManager {
       // Fold this session's own mode before anything can call a tool.
       sandboxMode: sandboxModeFromBranch(sessionManager.getBranch(), this.defaultSandboxMode),
       notifications,
+      askUser: askUserNotifications,
       session,
       path,
       cwd: sessionManager.getCwd(),
@@ -1291,18 +1586,22 @@ export class PiManager {
       managed.rewind?.observe(event)
       const previousTodos = managed.todos.snapshot
       managed.todos.observe(event)
+      const previousRecords = managed.askRecords.snapshot
+      managed.askRecords.observe(event)
       managed.changeScopes.observe(event)
       const leaf = session.sessionManager.getLeafEntry()
       const userEntryId = event.type === 'message_end' && event.message.role === 'user' && leaf?.type === 'message' && leaf.message === event.message ? leaf.id : undefined
       const routed = { ...event,
         ...(event.type === 'agent_start' || previousTodos !== managed.todos.snapshot ? { todos: managed.todos.snapshot } : {}),
+        ...(previousRecords !== managed.askRecords.snapshot ? { askUserRecords: managed.askRecords.snapshot } : {}),
         ...('message' in event ? { message: { ...managed.changeScopes.stamp(event.message as ChatMessage), ...(userEntryId ? { sessionEntryId: userEntryId } : {}) } } : {}),
         ...(event.type === 'agent_start' ? { changeScopeId: managed.changeScopes.active } : {}),
-        ...(event.type === 'agent_settled' ? { continuing: notifications!.continuesAtSettled || subagentState?.notifications?.continuesAtSettled } : {})
+        ...(event.type === 'agent_settled' ? { continuing: notifications!.continuesAtSettled || subagentState?.notifications?.continuesAtSettled || askUserNotifications!.continuesAtSettled } : {})
       }
       this.routeEvent(managed, routed as AgentSessionEvent)
       notifications!.observe(event)
       subagentState?.notifications?.observe(event)
+      askUserNotifications!.observe(event)
     }
     managed.unsubscribe = session.subscribe(event => {
       // User message persistence immediately follows SDK session listeners.
@@ -1340,6 +1639,8 @@ export class PiManager {
     parentSessionId: string
     runId: string
     resource: SubagentRunStartData['resource']
+    /** Profile name, for the ask-user source badge. */
+    profile?: string
     sessionPath?: string
   }): Promise<ChildSessionHandle> {
     const sessionManager = options.mode === 'new'
@@ -1375,6 +1676,7 @@ export class PiManager {
     // A stopped child kept open for viewing has paused its own bash owner.
     // Resume is the sole write admission for that view and reopens this owner.
     managed.notifications.resume()
+    managed.askUser.resume()
     // The handle's manager MUST be the one the live AgentSession writes
     // through: a freshly `open()`ed manager shares the file but not the
     // in-memory tree, and run records written through it land on a different
@@ -1387,7 +1689,7 @@ export class PiManager {
       runId: options.runId,
       parentSessionId: options.parentSessionId,
       resource: options.resource,
-      isSettled: () => managed.session.isIdle && !managed.notifications.hasPendingCompletions,
+      isSettled: () => managed.session.isIdle && !managed.notifications.hasPendingCompletions && !managed.askUser.hasPendingDeliveries,
       halt: async () => {
         // Stop everything the child owns: its wake path first (a completion
         // arriving mid-halt must not re-wake it), then its queues, its
@@ -1421,7 +1723,8 @@ export class PiManager {
   private async resolveSubagentRole(options: {
     parentSessionPath: string
     resource: SubagentRunStartData['resource']
-  }): Promise<{ parentPath: string; resource: SubagentRunStartData['resource']; model?: any }> {
+    profile?: string
+  }): Promise<{ parentPath: string; resource: SubagentRunStartData['resource']; profile?: string; model?: any }> {
     let model: any
     if (options.resource.model) {
       const runtime = await this.runtime()
@@ -1454,7 +1757,7 @@ export class PiManager {
         // The delegation tool is gated by its setting here (its customTool is
         // registered at build; the runtime re-checks dispatch live).
         managed.session.setActiveToolsByName([...new Set([
-          ...BUILTIN_TOOL_NAMES, ...APP_BASH_TOOL_NAMES, ...APP_FILE_TOOL_NAMES, TODO_TOOL_NAME,
+          ...BUILTIN_TOOL_NAMES, ...APP_BASH_TOOL_NAMES, ...APP_FILE_TOOL_NAMES, TODO_TOOL_NAME, ASK_USER_TOOL_NAME,
           ...(managed.subagents ? [SUBAGENT_TOOL_NAME] : []),
           ...loader.getExtensions().extensions.flatMap((extension) => [...extension.tools.keys()])
         ])])
@@ -1521,8 +1824,12 @@ export class PiManager {
       // carry the pending questions itself, not rely on the metadata event's
       // arrival order relative to this snapshot.
       escalations: listPendingEscalations(managed.path),
+      // Pending ask_user_question sets, subagent children's included (they
+      // are listed under this owner path by construction).
+      pendingAskUser: listPendingAskUser(managed.path),
       messages,
       todos: managed.todos.snapshot,
+      askUserRecords: managed.askRecords.snapshot,
       activeChangeScopeId: managed.changeScopes.current,
       streaming: serialize(managed.streaming) as any,
       toolRuns: serialize(managed.toolRuns),
@@ -1533,7 +1840,7 @@ export class PiManager {
       model: modelRef(managed.session.model),
       thinkingLevel: (managed.session.thinkingLevel ?? 'medium') as ThinkingLevel,
       availableThinkingLevels: managed.session.getAvailableThinkingLevels() as ThinkingLevel[],
-      isStreaming: managed.session.isStreaming || managed.notifications.continuesAtSettled,
+      isStreaming: managed.session.isStreaming || managed.notifications.continuesAtSettled || managed.askUser.continuesAtSettled,
       contextUsage: this.contextUsageOf(managed),
       subagents: managed.subagents?.snapshot() ?? [],
       subagentChild: Boolean(managed.subagentChild),
@@ -1915,12 +2222,14 @@ export class PiManager {
       return
     }
     managed?.notifications.resume()
+    managed?.askUser?.resume()
     managed?.subagents?.notifications?.resume()
     if (!managed || !session) {
       this.notifyError('Pi session is not initialized. Pick a working directory first.')
       return
     }
     managed.notifications.holdWake()
+    managed.askUser.holdWake()
     managed.subagents?.notifications?.holdWake()
     void (async () => {
       try {
@@ -1963,6 +2272,7 @@ export class PiManager {
         this.emitSessionError(managed, error)
       } finally {
         managed.notifications.releaseWake()
+        managed.askUser.releaseWake()
         managed.subagents?.notifications?.releaseWake()
       }
     })()
@@ -2012,14 +2322,17 @@ export class PiManager {
     }
     if (stopping) {
       managed.notifications.pause()
+      managed.askUser.pause()
       managed.subagents?.notifications?.pause()
       if (managed.subagents) this.subagentRuntime.abortAll(managed.subagents)
       void this.commandTasksInstance?.stopSession(managed.path)
     }
     managed.session.clearQueue()
     managed.notifications.queuesCleared()
+    managed.askUser.queuesCleared()
     if (stopping) void managed.session.abort().catch(() => {})
     else managed.notifications.flush()
+    managed.askUser.flush()
     return result
   }
 
@@ -2049,6 +2362,7 @@ export class PiManager {
     try {
       session.clearQueue()
       managed.notifications.queuesCleared()
+      managed.askUser.queuesCleared()
       managed.subagents?.notifications?.queuesCleared()
       const nextSteering: QueuedItem[] = []
       const nextFollowUp: QueuedItem[] = []
@@ -2077,6 +2391,7 @@ export class PiManager {
     }
     this.emitQueueState(managed)
     managed.notifications.flush()
+    managed.askUser.flush()
     managed.subagents?.notifications?.flush()
   }
 
@@ -2160,6 +2475,7 @@ export class PiManager {
         // one it already rendered.
         managed.eventSequence += 1
         managed.todos.restore()
+        managed.askRecords.restore()
         // The branch moved, so the mode must be re-folded like the todos: the
         // recorded mode is a fact about the SELECTED branch, and a stale live
         // value here would silently widen on the next reopen.
@@ -2238,7 +2554,9 @@ export class PiManager {
   abort(): void {
     const managed = this.activeSession
     if (!managed) return
+    managed.userAborted = true
     managed.notifications.pause()
+    managed.askUser.pause()
     // Stop closes the wake path BEFORE aborting: a subagent completing during
     // or after the stop must not restart the conversation.
     managed.subagents?.notifications?.pause()
@@ -2592,6 +2910,7 @@ export class PiManager {
   private async reloadManagedSession(managed: ManagedSession): Promise<void> {
     if (this.closing || managed.disposing) return
     managed.notifications.holdWake()
+    managed.askUser.holdWake()
     managed.subagents?.notifications?.holdWake()
     const previous = managed.lifecyclePromise
     const pending = (async () => {
@@ -2611,6 +2930,7 @@ export class PiManager {
     finally {
       if (managed.lifecyclePromise === pending) managed.lifecyclePromise = null
       managed.notifications.releaseWake()
+      managed.askUser.releaseWake()
       managed.subagents?.notifications?.releaseWake()
     }
   }
@@ -2798,13 +3118,31 @@ export class PiManager {
     try { return { value: await operation() } } catch (error) { return { error: rewindFailure(error) } }
   }
 
+  /**
+   * Why a restore is refused right now, as one named reason. The order is what
+   * the user acts on first: an unfinished recovery outranks everything, an open
+   * terminal is closable, a queued message is recallable, then work that can
+   * write the checkout, and a plain model turn last — that one ends by itself.
+   * Undefined means nothing blocks.
+   */
+  private rewindBusyReason(managed: ManagedSession): RewindBusyReason | undefined {
+    if (managed.session.getSteeringMessages().length || managed.session.getFollowUpMessages().length) return 'queued'
+    const blockers = this.checkoutCoordinator.restoreBlockers(managed.cwd)
+    if (blockers.recovery) return 'recovery'
+    if (blockers.terminal) return 'terminal'
+    if (blockers.writers > 0 || blockers.exclusive || blockers.closing) return 'work'
+    if (blockers.runs > 0) return 'turn'
+    return undefined
+  }
+
   rewindList(path: string): Promise<RewindResult<RewindListDTO>> {
     return this.rewindResult(async () => {
       const managed = this.rewindSession(path)
       const list = await this.rewindClient.call('list', managed.cwd, managed.session.sessionId)
       this.checkoutCoordinator.setRecovery(managed.cwd, list.pending[0]?.id)
+      const busyReason = this.rewindBusyReason(managed)
       return { ...list, checkpoints: list.checkpoints.filter(cp => cp.trigger === 'before-turn'), enabled: loadSettings().checkpointsEnabled !== false,
-        busy: this.checkoutCoordinator.busy(managed.cwd) || !!managed.session.getSteeringMessages().length || !!managed.session.getFollowUpMessages().length, error: this.checkoutCoordinator.restoreError() ?? managed.rewind?.error }
+        busy: busyReason !== undefined, busyReason, error: this.checkoutCoordinator.restoreError() ?? managed.rewind?.error }
     })
   }
 
@@ -2897,7 +3235,7 @@ export class PiManager {
       empty: !manager.getBranch().some(entry => entry.type === 'message') })
     const file = await openFile(managed.path, 'r')
     try { await file.sync() } finally { await file.close() }
-    managed.todos.restore(); managed.changeScopes.restore(); managed.eventSequence += 1
+    managed.todos.restore(); managed.askRecords.restore(); managed.changeScopes.restore(); managed.eventSequence += 1
     // Same rule as the todos above: the selected branch moved, so re-fold the
     // sandbox mode instead of keeping the abandoned branch's value live.
     managed.sandboxMode = sandboxModeFromBranch(manager.getBranch(), this.defaultSandboxMode)
@@ -2926,6 +3264,7 @@ export class PiManager {
         if (before !== known.leaf) throw new RewindFailure('changed')
         if (known.target !== null && !session.sessionManager.getEntry(known.target)) throw new RewindFailure('missing')
         managed.notifications.pause()
+        managed.askUser.pause()
         managed.subagents?.notifications?.pause()
         // Awaited: the restore's exclusive window must not collide with the
         // runs' coordinator leases (a restore would read as busy forever).
@@ -2996,6 +3335,7 @@ export class PiManager {
         const recordedSelection = selection?.operationId === operation.id && selection.target === entry?.parentId && (selection.target === operation.beforeEntryId || selection.target === operation.afterEntryId)
         if (leaf !== operation.beforeEntryId && leaf !== operation.afterEntryId && !recordedSelection) throw new RewindFailure('changed')
         owner.notifications.pause()
+        owner.askUser.pause()
         if (operation.mode !== 'files') await this.rewindLeaf(owner, operation.beforeEntryId, operation.id)
         const restored = await this.rewindClient.call('finish', owner.cwd, owner.session.sessionId, operationId, false)
         this.checkoutCoordinator.setRecovery(owner.cwd)

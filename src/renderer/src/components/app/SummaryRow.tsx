@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { Minimize2, RotateCcw } from '@/lib/icons'
+import { Minimize2, Rewind } from '@/lib/icons'
 import { ToolResult } from '@/components/agents/tool-result'
 import { Markdown } from '@/lib/markdown'
 import { formatTokenCount } from '@/lib/format'
@@ -34,7 +34,7 @@ export function SummaryRow({ kind, status, summary, tokensBefore, detail }: {
   detail?: string
 }) {
   const { t } = useI18n()
-  const Icon = kind === 'compaction' ? Minimize2 : RotateCcw
+  const Icon = kind === 'compaction' ? Minimize2 : Rewind
   const meta = tokensBefore && tokensBefore > 0
     ? t('chat.summaryTokensBefore', { tokens: formatTokenCount(tokensBefore) })
     : undefined

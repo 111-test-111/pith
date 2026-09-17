@@ -54,18 +54,26 @@ export interface SubagentToolDeps {
    * creates the session, so the object only exists after it resolves. */
   parentSessionRef: { session: AgentSession | null }
   parentSessionPath: string
-  /** Resolved once per session build (edits apply on the next reload). */
-  profiles: SubagentProfile[]
+  /** Live roster, re-read per dispatch and per system-prompt build. A static
+   * array froze the tool sets of the session that built it — a Settings edit
+   * then reached neither the roster the model reads nor the profile a
+   * dispatch resolved, until the whole session was reopened. */
+  profiles: () => SubagentProfile[]
   canStart: () => boolean
 }
 
 export function createSubagentTool(deps: SubagentToolDeps): ToolDefinition<typeof parameters> {
-  const { runtime, state, profiles, parentSessionRef } = deps
+  const { runtime, state, parentSessionRef } = deps
   return {
     name: SUBAGENT_TOOL_NAME,
     label: 'agent',
     parameters,
-    description: subagentToolDescription(profiles),
+    // A getter, not a frozen value: the SDK re-reads tool descriptions each
+    // time it builds the system prompt (and `session.reload()` rebuilds it),
+    // so the roster follows the profile files without rebuilding the session.
+    get description() {
+      return subagentToolDescription(deps.profiles())
+    },
     promptSnippet: 'Delegate a self-contained subtask to an independent subagent session.',
     promptGuidelines: SUBAGENT_GUIDELINES,
     executionMode: 'parallel',
@@ -73,7 +81,7 @@ export function createSubagentTool(deps: SubagentToolDeps): ToolDefinition<typeo
       if (signal?.aborted || !deps.canStart()) throw new Error('Subagent cancelled before launch')
       const parentSession = parentSessionRef.session
       if (!parentSession) throw new Error('Subagent launched before its session finished initializing')
-      const profile = profiles.find((item) => item.name === args.subagent_type && item.enabled)
+      const profile = deps.profiles().find((item) => item.name === args.subagent_type && item.enabled)
       if (!profile) throw new Error(`Unknown or disabled subagent profile: ${args.subagent_type}`)
       const request: StartSubagentRequest = {
         parentSession,

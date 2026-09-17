@@ -190,18 +190,22 @@ export function TabsContent({ value, children, className }: { value: string; chi
   // Inactive panels stay mounted but hidden, so their content (e.g. source
   // code) is present in the server-rendered HTML for crawlers and assistive
   // tech, instead of being dropped from the DOM.
-  if (!active) {
-    return (
-      <div hidden className={className}>
-        {children}
-      </div>
-    );
-  }
+  // local patch (pi-app): one element type for both states. The registry's
+  // active `motion.div` vs inactive plain `div` switch changed the element
+  // TYPE at the same tree position, so every tab change tore down the
+  // deactivated panel's whole subtree and rebuilt it inside the hidden div —
+  // remounting its components (state loss, effects refiring, a full commit
+  // in the switch frame) even though the panel was supposed to stay mounted.
+  // The panel is now a single motion.div whose animate target flips with
+  // `active`: the entrance fade still replays on every activation (it
+  // animates from the inactive target, opacity 0 / y 4), an inactive first
+  // mount animates nothing (initial equals its animate target), and the
+  // hidden attribute still removes inactive panels from layout and a11y.
   return (
     <motion.div
-      key={value}
+      hidden={!active}
       initial={{ opacity: 0, y: reduce ? 0 : 4 }}
-      animate={{ opacity: 1, y: 0 }}
+      animate={active ? { opacity: 1, y: 0 } : { opacity: 0, y: reduce ? 0 : 4 }}
       transition={{ duration: 0.18, ease: EASE_OUT }}
       className={cn("mt-4", className)}
     >

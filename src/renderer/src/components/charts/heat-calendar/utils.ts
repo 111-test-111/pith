@@ -32,13 +32,26 @@ export const addDays = (d: Date, n: number) => {
 /** Monday on or before `d`, so every column reads Mon to Sun, top to bottom. */
 export const mondayOf = (d: Date) => addDays(startOfDay(d), -((d.getUTCDay() + 6) % 7));
 
-export const fmtDay = new Intl.DateTimeFormat("en-US", {
-  timeZone: "UTC",
-  weekday: "short",
-  month: "short",
-  day: "numeric",
-});
+/** Formatters follow the app locale. The vendored constants were pinned to
+ * en-US, which left the daily grid's month labels English inside a zh-CN
+ * interface while the weekly view (formatted by the app) was localized. */
+const FORMATTERS = new Map<string, Intl.DateTimeFormat>();
 
-export const fmtMonth = new Intl.DateTimeFormat("en-US", { timeZone: "UTC", month: "short" });
+function formatter(options: Intl.DateTimeFormatOptions, locale?: string): Intl.DateTimeFormat {
+  const key = `${locale ?? ""}|${options.month ?? ""}|${options.weekday ?? ""}|${options.day ?? ""}|${options.year ?? ""}`;
+  let format = FORMATTERS.get(key);
+  if (!format) {
+    format = new Intl.DateTimeFormat(locale, { timeZone: "UTC", ...options });
+    FORMATTERS.set(key, format);
+  }
+  return format;
+}
 
-export const fmtRange = new Intl.DateTimeFormat("en-US", { timeZone: "UTC", month: "short", day: "numeric" });
+/** `fmtDay(locale).format(date)` — one cached formatter per locale and shape. */
+export const fmtDay = (locale?: string) =>
+  formatter({ weekday: "short", month: "short", day: "numeric" }, locale);
+
+export const fmtMonth = (locale?: string) => formatter({ month: "short" }, locale);
+
+export const fmtRange = (locale?: string) =>
+  formatter({ month: "short", day: "numeric" }, locale);

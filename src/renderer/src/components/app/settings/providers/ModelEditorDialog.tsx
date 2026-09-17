@@ -3,7 +3,7 @@ import { AlertCircle, CheckCircle2, Copy, ExternalLink, Loader2, PlugZap, Sparkl
 import { MorphingModal } from '@/components/motion/morphing-modal'
 import { Button } from '@/components/motion/button'
 import { Input } from '@/components/motion/input'
-import { Switch } from '@/components/motion/switch'
+import { Checkbox } from '@/components/motion/checkbox'
 import { useI18n } from '@/i18n'
 import type {
   CatalogRecommendationDTO,
@@ -545,8 +545,8 @@ export function ModelEditorDialog({
         ) : null}
 
         <div className="flex flex-wrap gap-x-6 gap-y-2 px-1">
-          <Switch checked={reasoning} onCheckedChange={setReasoning} label={t('settings.reasoning')} />
-          <Switch checked={image} onCheckedChange={setImage} label={t('settings.imageInput')} />
+          <Checkbox mark="square" checked={reasoning} onCheckedChange={setReasoning} label={t('settings.reasoning')} />
+          <Checkbox mark="square" checked={image} onCheckedChange={setImage} label={t('settings.imageInput')} />
         </div>
 
         <div className="grid grid-cols-2 gap-3">

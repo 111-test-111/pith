@@ -37,6 +37,13 @@ export interface SubagentRunStartData {
    * the child session is reopened later. */
   resource: {
     tools: string[]
+    /** True when the frozen ceiling names at least one tool the parent
+     * attributes to an extension: the child then loads extensions so those
+     * tools can register (the create allowlist admits them by name). Absent
+     * on pure built-in/app ceilings, which stay extension-free — an
+     * explore/review delegation must not multiply MCP hosts. Persisted with
+     * the run so a reopened child restores the same loader decision. */
+    extensions?: true
     model?: string
     thinkingLevel?: string
     maxTurns?: number

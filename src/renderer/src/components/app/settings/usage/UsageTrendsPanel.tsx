@@ -1,11 +1,15 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { computePosition, flip, offset, shift } from '@floating-ui/react'
-import { motion, useReducedMotion } from 'motion/react'
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
+import { createPortal } from 'react-dom'
 import { Button } from '@/components/motion/button'
+import { NumberTicker } from '@/components/motion/number-ticker'
 import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/motion/select'
 import { Tabs, TabsList, TabsTrigger } from '@/components/motion/tabs'
+import { TooltipSurface } from '@/components/motion/tooltip-surface'
 import { useI18n } from '@/i18n'
 import { ChevronLeft, ChevronRight, Download } from '@/lib/icons'
+import { EASE_OUT, SPRING_GLIDE } from '@/lib/ease'
 import {
   areaPath,
   buildUsageChartModel,
@@ -66,8 +70,11 @@ function xTickTextAnchor(i: number, last: number): 'start' | 'middle' | 'end' {
  * Crosshair readout for the chart. beUI's Tooltip is trigger-driven (it wraps
  * one element and opens on its hover), which cannot express "follow the
  * pointer across the plot", so this composes the same @floating-ui primitives
- * beUI's tooltip uses (virtual anchor + offset/flip/shift) over the same
- * bubble styling — one readout surface for the whole chart.
+ * beUI's tooltip uses (virtual anchor + offset/flip/shift) over the shared
+ * `TooltipSurface` — the same bubble the heat-calendar readout wears, one
+ * readout surface for every chart in the app. The anchor is the live pointer
+ * position, so the bubble tracks the cursor instead of hanging off one fixed
+ * spot above the plot.
  */
 function ChartReadout({
   anchor,
@@ -78,14 +85,20 @@ function ChartReadout({
   show: boolean
   children: React.ReactNode
 }) {
-  const ref = useRef<HTMLDivElement>(null)
+  const ref = useRef<HTMLSpanElement>(null)
   const [positioned, setPositioned] = useState(false)
 
   useEffect(() => {
     const element = ref.current
-    if (!element || !show) return
-    // A zero-size virtual element at the crosshair top; flip/shift keep the
-    // readout inside the window exactly like a beUI tooltip bubble.
+    if (!element || !show) {
+      // Re-show starts hidden until placed, so a stale position from the last
+      // open can never flash for a frame.
+      if (!show) setPositioned(false)
+      return
+    }
+    // A zero-size virtual element under the cursor; flip/shift keep the
+    // readout inside the window exactly like a beUI tooltip bubble. The last
+    // position stays visible while a pointer move repositions — no flicker.
     const virtual = {
       getBoundingClientRect: () => ({ x: anchor.x, y: anchor.y, top: anchor.y, bottom: anchor.y, left: anchor.x, right: anchor.x, width: 0, height: 0 })
     }
@@ -102,22 +115,28 @@ function ChartReadout({
     })
     return () => {
       cancelled = true
-      setPositioned(false)
     }
   }, [anchor, show])
 
-  if (!show) return null
-  return (
-    <div
-      ref={ref}
-      role="tooltip"
-      className={cn(
-        'pointer-events-none fixed z-[9999] block rounded-lg border border-border bg-background px-2.5 py-1.5 text-left text-xs font-medium text-foreground shadow-overlay',
-        positioned ? 'visible' : 'invisible'
-      )}
-    >
-      {children}
-    </div>
+  if (typeof document === 'undefined') return null
+  return createPortal(
+    <AnimatePresence>
+      {show ? (
+        <span
+          ref={ref}
+          className={cn('pointer-events-none fixed z-[9999] block', positioned ? 'visible' : 'invisible')}
+        >
+          <TooltipSurface
+            side="top"
+            style={{ transformOrigin: 'center bottom', maxWidth: 'calc(100vw - 16px)', whiteSpace: 'normal' }}
+            className="text-left"
+          >
+            {children}
+          </TooltipSurface>
+        </span>
+      ) : null}
+    </AnimatePresence>,
+    document.body
   )
 }
 
@@ -137,8 +156,16 @@ function UsageAreaChart({
   const [width, setWidth] = useState(0)
   const [hover, setHover] = useState<number | null>(null)
   const [readoutShown, setReadoutShown] = useState(false)
+  // The readout follows the pointer. Its position is committed at most once per
+  // animation frame: a `setState` per mousemove would re-render the whole SVG
+  // several times inside one frame on a high-rate pointer.
   const [anchor, setAnchor] = useState({ x: 0, y: 0 })
+  const pointerRef = useRef({ x: 0, y: 0 })
+  const frameRef = useRef(0)
   const gradBase = useId().replace(/[^a-zA-Z0-9_-]/g, '')
+  // The stacked body draws itself in from the left through this clip, like the
+  // fan chart's projection reveal — the whole stack reads as one gesture.
+  const clipId = useId().replace(/[^a-zA-Z0-9_-]/g, '')
 
   useLayoutEffect(() => {
     const el = wrapRef.current
@@ -151,6 +178,10 @@ function UsageAreaChart({
     })
     ro.observe(el)
     return () => ro.disconnect()
+  }, [])
+
+  useEffect(() => () => {
+    if (frameRef.current) cancelAnimationFrame(frameRef.current)
   }, [])
 
   // Rest the pointer briefly before the readout appears — sweeping the chart
@@ -190,10 +221,13 @@ function UsageAreaChart({
     const rect = e.currentTarget.ownerSVGElement?.getBoundingClientRect()
     if (!rect || days.length === 0) return
     const i = days.length > 1 ? Math.round((e.clientX - rect.left - MARGIN.left) / stepX) : 0
-    const clamped = Math.max(0, Math.min(days.length - 1, i))
-    setHover(clamped)
-    const wrapRect = wrapRef.current?.getBoundingClientRect()
-    if (wrapRect) setAnchor({ x: wrapRect.left + x(clamped), y: wrapRect.top + MARGIN.top })
+    setHover(Math.max(0, Math.min(days.length - 1, i)))
+    pointerRef.current = { x: e.clientX, y: e.clientY }
+    if (frameRef.current) return
+    frameRef.current = requestAnimationFrame(() => {
+      frameRef.current = 0
+      setAnchor(pointerRef.current)
+    })
   }
 
   const hoverX = hover !== null ? x(hover) : 0
@@ -210,6 +244,16 @@ function UsageAreaChart({
                 <stop offset="100%" stopColor={l.color} stopOpacity={0.04} />
               </linearGradient>
             ))}
+            <clipPath id={clipId}>
+              <motion.rect
+                x={0}
+                y={0}
+                height={CHART_HEIGHT}
+                initial={{ width: reduce ? width : 0 }}
+                animate={{ width }}
+                transition={reduce ? { duration: 0 } : { duration: 0.8, ease: EASE_OUT }}
+              />
+            </clipPath>
           </defs>
 
           {/* horizontal gridlines + y labels */}
@@ -233,19 +277,16 @@ function UsageAreaChart({
             ) : null
           )}
 
-          {/* stacked areas — remount on model change replays the rise-in */}
-          <motion.g
-            initial={reduce ? { opacity: 1 } : { opacity: 0, y: 6 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={reduce ? { duration: 0 } : { duration: 0.45, ease: 'easeOut' }}
-          >
+          {/* stacked areas — the clip above reveals them left to right on
+              mount and on every range/group switch (the chart remounts per key) */}
+          <g clipPath={`url(#${clipId})`}>
             {layers.map((l, i) => (
               <g key={l.key}>
                 <path d={areaPath(xs, l.top.map(y), l.bottom.map(y))} fill={`url(#${gradBase}-${i})`} />
                 <path d={smoothLine(xs, l.top.map(y))} fill="none" stroke={l.color} strokeWidth={1.5} strokeLinejoin="round" />
               </g>
             ))}
-          </motion.g>
+          </g>
 
           {/* today marker */}
           {todayIdx >= 0 && (
@@ -257,13 +298,32 @@ function UsageAreaChart({
             </g>
           )}
 
-          {/* hover crosshair + boundary dots */}
+          {/* hover crosshair + boundary dots — they flow along the series on a
+              spring instead of stepping day to day, like the fan chart's cursor */}
           {hover !== null && (
             <g pointerEvents="none">
-              <line className="stroke-muted-foreground" x1={hoverX} x2={hoverX} y1={MARGIN.top - 6} y2={y(0)} strokeWidth={1} strokeDasharray="3 3" />
+              <motion.line
+                className="stroke-muted-foreground"
+                y1={MARGIN.top - 6}
+                y2={y(0)}
+                strokeWidth={1}
+                strokeDasharray="3 3"
+                initial={false}
+                animate={{ x1: hoverX, x2: hoverX }}
+                transition={reduce ? { duration: 0 } : { type: 'spring', ...SPRING_GLIDE }}
+              />
               {layers.map((l) =>
                 l.top[hover] > 0 ? (
-                  <circle key={l.key} cx={hoverX} cy={y(l.top[hover])} r={3} fill={l.color} stroke="var(--card)" strokeWidth={1.5} />
+                  <motion.circle
+                    key={l.key}
+                    r={3}
+                    fill={l.color}
+                    stroke="var(--card)"
+                    strokeWidth={1.5}
+                    initial={false}
+                    animate={{ cx: hoverX, cy: y(l.top[hover]) }}
+                    transition={reduce ? { duration: 0 } : { type: 'spring', ...SPRING_GLIDE }}
+                  />
                 ) : null
               )}
             </g>
@@ -458,20 +518,29 @@ export function UsageTrendsPanel({ stats, today }: { stats: UsageStatsDTO; today
     URL.revokeObjectURL(url)
   }
 
+  // Range-scoped summary. The token total deliberately lives only in the
+  // Token activity panel above (the all-time headline); these cards carry what
+  // the chart itself does not draw — requests and cost per selected range.
   const statCards = [
-    { label: t('settings.usage.totalTokens'), value: formatTokenCount(model.totalTokens) },
-    { label: t('settings.usage.requests'), value: model.totalRequests.toLocaleString(locale) },
-    { label: t('settings.usage.cost'), value: formatUsd(model.totalCost) }
+    { label: t('settings.usage.requests'), value: model.totalRequests, format: (v: number) => v.toLocaleString(locale) },
+    { label: t('settings.usage.cost'), value: Math.round(model.totalCost * 10000), format: (v: number) => formatUsd(v / 10000) }
   ]
 
   return (
     <div className="flex flex-col gap-4">
       {/* summary cards */}
-      <div className="grid grid-cols-1 gap-3 min-[560px]:grid-cols-3">
+      <div className="grid grid-cols-1 gap-3 min-[560px]:grid-cols-2">
         {statCards.map((card) => (
-          <div key={card.label} className="rounded-card border border-border/70 bg-card px-4 py-3.5">
+          <div key={card.label} data-usage-stat={card.label} className="rounded-card border border-border/70 bg-card px-4 py-3.5">
             <div className="text-xs text-muted-foreground">{card.label}</div>
-            <div className="mt-1 text-[15px] font-semibold tabular-nums text-foreground">{card.value}</div>
+            <div className="mt-1 text-[15px] font-semibold tabular-nums text-foreground">
+              <NumberTicker
+                value={card.value}
+                format={card.format}
+                duration={0.5}
+                className="text-[15px] font-semibold text-foreground"
+              />
+            </div>
           </div>
         ))}
       </div>

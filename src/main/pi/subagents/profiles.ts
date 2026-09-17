@@ -1,24 +1,27 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { getAgentDir } from '@earendil-works/pi-coding-agent'
 import { join } from 'node:path'
-import { SUBAGENT_READ_ONLY_TOOLS, type ThinkingLevel } from '../../../shared/types.ts'
+import { SUBAGENT_PROFILE_NAME_PATTERN, SUBAGENT_READ_ONLY_TOOLS, type SubagentProfileCreatePayload, type SubagentProfileDTO, type ThinkingLevel } from '../../../shared/types.ts'
 
 /**
  * Subagent profiles: Markdown files with a flat YAML-ish frontmatter, body is
- * the profile's system prompt. Scopes (later shadows earlier):
- *   builtin < global `${agentDir}/agents` < project `<cwd>/.pi/agents`
+ * the profile's system prompt. Every profile is an ordinary editable file —
+ * there is no builtin/custom split; the four starters are just files seeded
+ * once on first run. Scopes (later shadows earlier):
+ *   global `${agentDir}/agents` < project `<cwd>/.pi/agents`
  * Same-name profiles in a later scope override earlier ones wholesale.
  *
- * Tool sets come from one of three sources, in order: an explicit `tools:` CSV,
- * a `tool_preset` resolved through the preset file pi-web shares from the same
- * agent dir (`pi-web-tool-presets.json`), or — when neither resolves — the
- * conservative read-only default. An unknown restriction must never silently
- * become full access: the `piweb-agent-*` profiles on a machine that also has
- * pi-web installed declare their tools only as a preset, and defaulting those
- * to `all` made a profile named `explore` perfectly able to write files.
+ * Tool sets come from one of three sources, in order: an explicit `tools:` CSV
+ * (what Settings → Subagents edits), a `tool_preset` resolved through the
+ * preset file pi-web shares from the same agent dir
+ * (`pi-web-tool-presets.json`), or — when neither resolves — the conservative
+ * read-only default. An unknown restriction must never silently become full
+ * access: the `piweb-agent-*` profiles on a machine that also has pi-web
+ * installed declare their tools only as a preset, and defaulting those to
+ * `all` made a profile named `explore` perfectly able to write files.
  */
 
-export type SubagentProfileScope = 'builtin' | 'global' | 'project'
+export type SubagentProfileScope = 'global' | 'project'
 
 export interface SubagentProfile {
   name: string
@@ -39,10 +42,12 @@ export interface SubagentProfile {
   runInBackground: boolean
   enabled: boolean
   scope: SubagentProfileScope
-  filePath?: string
+  /** Always set for a parsed/listed profile — every profile IS a file. */
+  filePath: string
 }
 
-/** First-run templates. Written once as ordinary editable files; deleting one
+/** First-run templates. Written once as ordinary editable files — after the
+ * first run they are indistinguishable from user files, and deleting one
  * deletes it (the marker never resurrects them). */
 const DEFAULT_PROFILES: Array<Pick<SubagentProfile, 'name' | 'displayName' | 'description' | 'systemPrompt' | 'tools'>> = [
   {
@@ -75,7 +80,7 @@ const DEFAULT_PROFILES: Array<Pick<SubagentProfile, 'name' | 'displayName' | 'de
   }
 ]
 
-const PROFILE_NAME_PATTERN = /^[a-z0-9][a-z0-9-_]*$/
+const PROFILE_NAME_PATTERN = SUBAGENT_PROFILE_NAME_PATTERN
 /** Marker written NEXT TO the starter files it guards (the legacy one lives in
  * app userData and cannot see a drifted agent directory). */
 const DIR_MARKER = '.pi-app-defaults-v1.json'
@@ -145,15 +150,21 @@ function parseTools(value: string | undefined): 'all' | string[] | undefined {
 }
 
 function parseProfileFile(filePath: string, scope: SubagentProfileScope): SubagentProfile | null {
-  const name = filePath.split(/[\\/]/).pop()!.replace(/\.md$/i, '')
-  if (!PROFILE_NAME_PATTERN.test(name)) return null
-  let parsed: { data: Record<string, string | boolean | number>; body: string }
+  let raw: string
   try {
-    parsed = parseFrontmatter(readFileSync(filePath, 'utf8'))
+    raw = readFileSync(filePath, 'utf8')
   } catch {
     return null
   }
-  const { data, body } = parsed
+  return parseProfileSource(filePath, raw, scope)
+}
+
+/** Parse profile text without touching the disk, so an in-memory edit can be
+ * validated before it is written. */
+function parseProfileSource(filePath: string, raw: string, scope: SubagentProfileScope): SubagentProfile | null {
+  const name = filePath.split(/[\\/]/).pop()!.replace(/\.md$/i, '')
+  if (!PROFILE_NAME_PATTERN.test(name)) return null
+  const { data, body } = parseFrontmatter(raw)
   const description = asText(data.description) || null
   if (!description) return null // A profile without a description cannot be chosen by the model.
   const explicitTools = parseTools(typeof data.tools === 'string' ? data.tools : undefined)
@@ -196,6 +207,101 @@ function parseProfileFile(filePath: string, scope: SubagentProfileScope): Subage
   }
 }
 
+/** The frontmatter block of a profile file, located the same way the skill
+ * frontmatter editor locates its block: between the leading `---` fence and
+ * the first line that closes it. */
+function findFrontmatterBlock(content: string): { openingEnd: number; closingStart: number; newline: string } | undefined {
+  const NEWLINE = '\r\n|\n|\r'
+  const opening = new RegExp(`^\uFEFF?---[ \t]*(${NEWLINE})`).exec(content)
+  if (!opening) return undefined
+  const rest = content.slice(opening[0].length)
+  const closing = new RegExp(`(^|${NEWLINE})---`).exec(rest)
+  if (!closing) return undefined
+  return {
+    openingEnd: opening[0].length,
+    closingStart: opening[0].length + closing.index + closing[1].length,
+    newline: opening[1]
+  }
+}
+
+/** Surgical `tools:` edit: replace the existing line inside the frontmatter
+ * (or insert one right after the opening fence) while preserving the original
+ * formatting of every other line — the same discipline the skill frontmatter
+ * editor follows. The key is detected by presence, not value, so an explicit
+ * `tools: all` is updated in place instead of duplicated. */
+export function setProfileToolsLine(content: string, tools: 'all' | string[]): string {
+  const value = tools === 'all' ? 'all' : tools.join(',')
+  const block = findFrontmatterBlock(content)
+  if (!block) {
+    // No frontmatter block at all — create one (unreachable for a file that
+    // parsed as a profile, but the function stays total for tests).
+    const bom = content.startsWith('\uFEFF') ? '\uFEFF' : ''
+    const body = bom ? content.slice(1) : content
+    return `${bom}---\ntools: ${value}\n---\n${body}`
+  }
+  const head = content.slice(block.openingEnd, block.closingStart)
+  const keyLine = /(^|\r\n|\n|\r)([ \t]*(?:"tools"|'tools'|tools)[ \t]*:)[^\r\n]*/
+  if (keyLine.test(head)) {
+    return content.slice(0, block.openingEnd) + head.replace(keyLine, `$1$2 ${value}`) + content.slice(block.closingStart)
+  }
+  return content.slice(0, block.openingEnd) + `tools: ${value}${block.newline}` + content.slice(block.openingEnd)
+}
+
+/** Rewrite one profile's `tools:` line. The caller (PiManager) has already
+ * verified the file is a currently listed profile, so this cannot be turned
+ * into an arbitrary file write; the edit is still re-parsed before it is
+ * committed, and a result that stops parsing as the SAME profile (name,
+ * description, body) is refused instead of written. */
+export function writeSubagentProfileTools(filePath: string, tools: 'all' | string[]): SubagentProfile {
+  const raw = readFileSync(filePath, 'utf8')
+  const before = parseProfileFile(filePath, 'global')
+  if (!before) throw new Error('Not a subagent profile')
+  let next: 'all' | string[] = 'all'
+  if (tools === 'all') {
+    next = 'all'
+  } else {
+    const names = [...new Set(tools.map((name) => name.trim().toLowerCase()).filter((name) => name.length > 0))]
+    if (!names.length) throw new Error('A subagent profile needs at least one enabled tool')
+    if (names.some((name) => /[\r\n,]/.test(name))) throw new Error('Invalid tool name in profile tools')
+    next = names
+  }
+  const updated = setProfileToolsLine(raw, next)
+  const reparsed = parseProfileSource(filePath, updated, before.scope)
+  if (!reparsed || reparsed.description !== before.description || reparsed.systemPrompt !== before.systemPrompt) {
+    throw new Error('The tools edit would invalidate the profile')
+  }
+  if (JSON.stringify(reparsed.tools) !== JSON.stringify(next)) {
+    throw new Error('The tools edit did not round-trip')
+  }
+  writeFileSync(filePath, updated, 'utf8')
+  return reparsed
+}
+
+/** Create one new profile file in `dir`. Validation mirrors the loader's own
+ * rules — the name must be a valid profile name, the description a non-empty
+ * single line (a profile without one cannot be chosen by the model and would
+ * be invisible) — an existing file is never overwritten, and the content is
+ * re-parsed before it is committed. The new file deliberately declares NO
+ * `tools:` line: least privilege, the same rule a hand-written file follows. */
+export function createSubagentProfileFile(dir: string, payload: SubagentProfileCreatePayload): SubagentProfile {
+  const name = payload.name.trim()
+  if (!PROFILE_NAME_PATTERN.test(name)) throw new Error('Invalid subagent profile name')
+  // Newlines cannot live in a flat one-line frontmatter value.
+  const description = payload.description.replace(/[\r\n]+/g, ' ').trim()
+  if (!description) throw new Error('A subagent profile needs a description')
+  const systemPrompt = payload.systemPrompt.trim()
+  mkdirSync(dir, { recursive: true })
+  const filePath = join(dir, `${name}.md`)
+  if (existsSync(filePath)) throw new Error('A profile with this name already exists')
+  const content = `---\ndescription: ${description}\n---\n\n${systemPrompt}${systemPrompt ? '\n' : ''}`
+  const parsed = parseProfileSource(filePath, content, payload.scope)
+  if (!parsed || parsed.description !== description || parsed.systemPrompt !== systemPrompt) {
+    throw new Error('The new profile does not round-trip')
+  }
+  writeFileSync(filePath, content, 'utf8')
+  return parsed
+}
+
 /** All profiles visible in `cwd`, shadowed by scope; disabled ones included
  * (the tool description filters them). */
 export function listSubagentProfiles(cwd: string | null): SubagentProfile[] {
@@ -213,6 +319,28 @@ export function listSubagentProfiles(cwd: string | null): SubagentProfile[] {
     }
   }
   return [...byName.values()]
+}
+
+/** Serialization for Settings → Subagents: the profile exactly as parsed, with
+ * optional fields omitted rather than null/undefined-populated. */
+export function toSubagentProfileDTO(profile: SubagentProfile): SubagentProfileDTO {
+  return {
+    name: profile.name,
+    displayName: profile.displayName,
+    description: profile.description,
+    systemPrompt: profile.systemPrompt,
+    tools: profile.tools === 'all' ? 'all' : [...profile.tools],
+    ...(profile.toolsSource ? { toolsSource: profile.toolsSource } : {}),
+    ...(profile.toolPreset ? { toolPreset: profile.toolPreset } : {}),
+    ...(profile.model ? { model: profile.model } : {}),
+    ...(profile.thinking ? { thinking: profile.thinking } : {}),
+    ...(profile.maxTurns !== undefined ? { maxTurns: profile.maxTurns } : {}),
+    inheritContext: profile.inheritContext,
+    runInBackground: profile.runInBackground,
+    enabled: profile.enabled,
+    scope: profile.scope,
+    filePath: profile.filePath
+  }
 }
 
 export function serializeProfile(profile: SubagentProfile): string {
@@ -269,7 +397,10 @@ export function ensureDefaultProfiles(stateDir: string): void {
       inheritContext: true,
       runInBackground: false,
       enabled: true,
-      scope: 'builtin'
+      // Written as an ordinary global file — nothing distinguishes a starter
+      // from a user profile once it is on disk.
+      scope: 'global',
+      filePath
     }), 'utf8')
   }
   writeMarkers()

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { FileText, FolderOpen, RefreshCw } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
 import { Input } from '@/components/motion/input'
-import { Switch } from '@/components/motion/switch'
+import { Checkbox } from '@/components/motion/checkbox'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/motion/tabs'
 import { Tooltip } from '@/components/motion/tooltip'
 import { useI18n } from '@/i18n'
@@ -22,7 +22,7 @@ import type { SkillContentDTO, SkillInfoDTO } from '../../../../../shared/types'
  * skill is formatted into the system prompt), and previews the SKILL.md itself.
  *
  * beUI-native: `Tabs` for the list/detail split, `Input` for search,
- * `Switch`, `Button`, `Tooltip`, and the app's `Markdown` renderer (the one
+ * `Checkbox`, `Button`, `Tooltip`, and the app's `Markdown` renderer (the one
  * allowed non-beUI renderer) for the preview.
  */
 export function SkillsSection() {
@@ -178,12 +178,13 @@ function SkillDetail({
               {skill.packageName}
             </span>
           ) : null}
-          <Switch
+          <Checkbox
+            mark="square"
             className="ml-auto"
             checked={!skill.disableModelInvocation}
             onCheckedChange={(enabled) => onToggle(!enabled)}
             disabled={busy}
-            ariaLabel={t('settings.skillModelInvocation')}
+            aria-label={t('settings.skillModelInvocation')}
           />
         </div>
         <p className="flex flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground">

@@ -2,9 +2,11 @@ import { useEffect, useState } from 'react'
 import { useTheme } from 'next-themes'
 import { RadioGroup, RadioGroupItem } from '@/components/motion/radio'
 import { Input } from '@/components/motion/input'
+import { Checkbox } from '@/components/motion/checkbox'
 import { Tooltip } from '@/components/motion/tooltip'
 import { cn } from '@/lib/utils'
-import { useFontSettings, type UIFont } from '@/lib/fonts'
+import { useFontSettings } from '@/lib/fonts'
+import { useSidebarGlass } from '@/lib/sidebar-glass'
 import { useI18n, LOCALE_NAMES, type Locale } from '@/i18n'
 import { SettingsGroup, SettingsRow } from './SettingsRow'
 
@@ -21,20 +23,26 @@ export const ACCENTS = [
   { id: 'cyan', color: 'oklch(0.61 0.105 215)' }
 ] as const
 
-/** Free-text monospace family; empty leaves the app on the platform default.
- * The field previews the typed family while its placeholder stays interface
- * text (it is a normal UI string, not a font sample). */
-function MonoFontPicker({
+/** Free-text family field, shared by both typefaces; empty leaves the app on
+ * the system default (the sans-serif tail for the interface, the platform mono for
+ * code). The field previews the family it edits — `--app-font-ui`/
+ * `--app-font-mono` carry the typed name first, so `font-sans`/`font-mono`
+ * here renders the typed value as it is typed — while the monospace field
+ * pins its placeholder back to interface text (a normal UI string, not a
+ * font sample). */
+function FontPicker({
   label,
   description,
   placeholder,
   value,
+  inputClassName,
   onChange
 }: {
   label: string
   description: string
   placeholder: string
   value: string
+  inputClassName: string
   onChange: (family: string) => void
 }) {
   return (
@@ -49,7 +57,7 @@ function MonoFontPicker({
         classNames={{
           root: 'w-56',
           field: 'h-8',
-          input: 'font-mono text-xs placeholder:font-sans'
+          input: `text-xs ${inputClassName}`
         }}
       />
     </SettingsRow>
@@ -67,6 +75,7 @@ export function AppearanceSection({
   const { t, locale, setLocale } = useI18n()
   const { theme, setTheme } = useTheme()
   const [fonts, setFonts] = useFontSettings()
+  const [sidebarGlass, setSidebarGlass] = useSidebarGlass()
   const [mounted, setMounted] = useState(false)
 
   // next-themes resolves the stored theme after mount; render the neutral
@@ -106,22 +115,20 @@ export function AppearanceSection({
       </SettingsGroup>
 
       <SettingsGroup title={t('settings.fonts')} description={t('settings.fontsDesc')}>
-        <SettingsRow label={t('settings.uiFont')} description={t('settings.uiFontDesc')}>
-          <RadioGroup
-            orientation="horizontal"
-            value={fonts.ui}
-            onValueChange={(next) => setFonts({ ui: next as UIFont })}
-            className="gap-6"
-          >
-            <RadioGroupItem value="sans" label={t('settings.fontSans')} />
-            <RadioGroupItem value="serif" label={t('settings.fontSerif')} />
-          </RadioGroup>
-        </SettingsRow>
-        <MonoFontPicker
+        <FontPicker
+          label={t('settings.uiFont')}
+          description={t('settings.uiFontDesc')}
+          placeholder={t('settings.fontDefault')}
+          value={fonts.ui}
+          inputClassName="font-sans"
+          onChange={(ui) => setFonts({ ui })}
+        />
+        <FontPicker
           label={t('settings.monoFont')}
           description={t('settings.monoFontDesc')}
           placeholder={t('settings.fontDefault')}
           value={fonts.mono}
+          inputClassName="font-mono placeholder:font-sans"
           onChange={(mono) => setFonts({ mono })}
         />
       </SettingsGroup>
@@ -148,6 +155,20 @@ export function AppearanceSection({
             ))}
           </div>
         </div>
+      </SettingsGroup>
+
+      <SettingsGroup title={t('settings.sidebar')}>
+        <SettingsRow
+          label={t('settings.sidebarGlass')}
+          description={t('settings.sidebarGlassDesc')}
+        >
+          <Checkbox
+            mark="square"
+            checked={sidebarGlass}
+            onCheckedChange={setSidebarGlass}
+            aria-label={t('settings.sidebarGlass')}
+          />
+        </SettingsRow>
       </SettingsGroup>
     </div>
   )

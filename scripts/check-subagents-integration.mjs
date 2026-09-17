@@ -98,10 +98,10 @@ export { extractTurnWrittenFiles, extractReviewTurns } from './src/renderer/src/
 
   const parent = SessionManager.create(temporary, sessionsDir); await materialize(parent)
   const profile = { name: 'worker', displayName: 'Worker', description: 'test', systemPrompt: 'test', tools: ['write'], enabled: true, inheritContext: false, runInBackground: false }
-  const parentSession = { sessionId: parent.getSessionId(), sessionManager: parent, getActiveToolNames: () => ['write'], messages: [] }
+  const parentSession = { sessionId: parent.getSessionId(), sessionManager: parent, getActiveToolNames: () => ['write'], getAllTools: () => [], messages: [] }
   const request = { parentSession, parentSessionPath: parent.getSessionFile(), parentToolCallId: 'call', profile, description: 'test', task: 'test', runInBackground: false }
   const makeRuntime = (over = {}) => {
-    const counters = { prompts: 0, halts: 0, releases: 0, listeners: 0 }
+    const counters = { prompts: 0, halts: 0, releases: 0, listeners: 0, resources: [] }
     const leases = new Set()
     let settled = over.settled ?? true
     const host = { isClosing: () => false, subagentsEnabled: () => true, maxConcurrentSubagents: () => over.limit ?? 4, commandTasks: () => null,
@@ -109,6 +109,7 @@ export { extractTurnWrittenFiles, extractReviewTurns } from './src/renderer/src/
       resolveModelSpec: async () => ({}), emitSubagents: () => {}, notifySubagentChildWrite: () => {},
       createChildSession: async options => {
         await over.creation?.promise
+        counters.resources.push(options.resource)
         const manager = SessionManager.create(temporary, sessionsDir, { parentSession: parent.getSessionFile() }); await materialize(manager)
         const session = { sessionId: manager.getSessionId(), sessionManager: manager, messages: [], isIdle: true, getLastAssistantText: () => 'done',
           subscribe: () => { counters.listeners++; return () => { counters.listeners-- } },
@@ -135,6 +136,11 @@ export { extractTurnWrittenFiles, extractReviewTurns } from './src/renderer/src/
     const stopping = e.runtime.stopAll(e.state)
     creation.resolve()
     const { completion } = await start
+    // The frozen resource snapshot: the ceiling as filtered, and a ceiling
+    // with no extension-attributed tool stays extension-free (the stub
+    // parent registers no extension tools).
+    assert.deepEqual(e.counters.resources[0].tools, ['write'])
+    assert.equal(e.counters.resources[0].extensions, undefined, 'a pure built-in ceiling never loads extensions')
     await releaseEntered.promise
     assert.equal(e.counters.prompts, 0)
     assert.equal(e.leases.size, 1, 'cleanup still owns its run lease')
@@ -280,7 +286,7 @@ export { extractTurnWrittenFiles, extractReviewTurns } from './src/renderer/src/
     const drainState = new SubagentParentState(drainParent.getSessionId())
     drainState.notifications = { complete: () => {}, drop: () => {}, canStart: true }
     const bashProfile = { ...profile, name: 'bashworker', tools: ['bash'] }
-    const drainRequest = { parentSession: { sessionId: drainParent.getSessionId(), sessionManager: drainParent, getActiveToolNames: () => ['bash'], messages: [] },
+    const drainRequest = { parentSession: { sessionId: drainParent.getSessionId(), sessionManager: drainParent, getActiveToolNames: () => ['bash'], getAllTools: () => [], messages: [] },
       parentSessionPath: drainParent.getSessionFile(), parentToolCallId: 'drain-call', profile: bashProfile, description: 'drain', task: 'run bg', runInBackground: false }
     let rounds = 0, woke = 0
     drainSession.agent.streamFunction = () => stream(assistant((++rounds % 3) === 1

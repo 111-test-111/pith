@@ -17,7 +17,7 @@ try {
   const preload = join(temporary, 'preload.mjs')
   await writeFile(preload, `import ${JSON.stringify(join(repo, 'out/preload/index.mjs'))};
 import {contextBridge,ipcRenderer} from 'electron';
-contextBridge.exposeInMainWorld('fixture',{window:()=>ipcRenderer.invoke('fixture:window'),resize:(width,height)=>ipcRenderer.invoke('fixture:resize',width,height),fullscreen:value=>ipcRenderer.invoke('fixture:fullscreen',value),scenario:value=>ipcRenderer.invoke('fixture:scenario',value),startupChoices:()=>ipcRenderer.invoke('fixture:startupChoices'),reloads:()=>ipcRenderer.invoke('fixture:reloads'),compacts:()=>ipcRenderer.invoke('fixture:compacts')});`)
+contextBridge.exposeInMainWorld('fixture',{window:()=>ipcRenderer.invoke('fixture:window'),resize:(width,height)=>ipcRenderer.invoke('fixture:resize',width,height),fullscreen:value=>ipcRenderer.invoke('fixture:fullscreen',value),scenario:value=>ipcRenderer.invoke('fixture:scenario',value),startupChoices:()=>ipcRenderer.invoke('fixture:startupChoices'),reloads:()=>ipcRenderer.invoke('fixture:reloads'),compacts:()=>ipcRenderer.invoke('fixture:compacts'),opens:()=>ipcRenderer.invoke('fixture:opens')});`)
   const main = join(temporary, 'main.cjs')
   await build({ stdin: { contents: `
 import {app,BrowserWindow,ipcMain,nativeTheme} from 'electron';
@@ -30,6 +30,7 @@ app.whenReady().then(()=>{
  const startupChoices=[];
  const reloads=[];
  const compacts=[];
+ const opens=[];
  const model={providerId:'deepseek',providerName:'DeepSeek',id:'fixture',name:'DeepSeek V4.1 Flash',reasoning:true,input:['text'],contextWindow:128000,maxTokens:8192,available:true,costInputPerM:0,costOutputPerM:0};
  const labels=['统一窗口标题栏与页面布局','梳理项目结构与入口','实现一个新的工具面板','检查最近的界面改动'];
  const sessions=labels.map((label,i)=>({id:'chat-'+i,path:'/fixture/chat-'+i,cwd:'/workspace/pi-app',projectless:false,label,created:new Date().toISOString(),modified:new Date().toISOString(),messageCount:2}));
@@ -39,7 +40,7 @@ app.whenReady().then(()=>{
  ipcMain.handle('pi:init',()=>snapshot(scenario==='projectless'?'/internal/private-workspace':'/workspace/pi-app'));
  ipcMain.handle('pi:newSession',(_,cwd)=>{scenario=cwd?'project':'projectless';return snapshot(cwd??'/internal/private-workspace')});
  ipcMain.handle('pi:listSessions',()=>scenario==='long'?[{...sessions[0],label:'A very long session title / 很长的会话标题 '.repeat(12)},...sessions.slice(1)]:sessions);
- ipcMain.handle('pi:models',()=>[model]);ipcMain.handle('bash:list',()=>[]);ipcMain.handle('pi:providers',()=>[]);
+ ipcMain.handle('pi:openSession',(_,path)=>{opens.push(path);return snapshot()});ipcMain.handle('pi:models',()=>[model]);ipcMain.handle('bash:list',()=>[]);ipcMain.handle('pi:providers',()=>[]);
  ipcMain.handle('pi:reload',(_,sessionPath)=>{reloads.push(sessionPath);return snapshot()});
  ipcMain.handle('pi:compact',(_,sessionPath)=>{compacts.push(sessionPath);return snapshot()});
  ipcMain.handle('pi:searchSessions',()=>({sessions:[],groups:[],total:0,hasMore:false}));
@@ -52,6 +53,7 @@ app.whenReady().then(()=>{
  ipcMain.handle('fixture:startupChoices',()=>startupChoices);
  ipcMain.handle('fixture:reloads',()=>reloads);
  ipcMain.handle('fixture:compacts',()=>compacts);
+ ipcMain.handle('fixture:opens',()=>opens);
  w.loadFile(${JSON.stringify(join(repo, 'out/renderer/index.html'))});
 });app.on('window-all-closed',()=>app.quit());`, resolveDir: repo, loader: 'ts' },
     bundle: true, platform: 'node', format: 'cjs', packages: 'external', outfile: main })
@@ -168,6 +170,25 @@ app.whenReady().then(()=>{
   assert.equal((await pocket()).actions, 0, 'Escape closes the pocket')
   assert.equal(await evaluate('window.__esc'), true, 'the pocket claims Escape before the rest of the page')
   assert.equal(await evaluate(`document.activeElement===document.querySelector('[data-titlebar-more]')`), true, 'closing hands focus back to the chevron')
+  // The session row menu's own additions: copy-session-ID sits between Rename
+  // and the destructive Delete, and copies the session's own ID — not its file
+  // path. `navigator.clipboard` refuses an unfocused document, so the write is
+  // wrapped in the focus emulation the other CDP checks use.
+  await click('button[aria-label="Actions for 统一窗口标题栏与页面布局"]')
+  const rowMenu = '[data-sidebar-resource-menu="/fixture/chat-0"]'
+  await waitFor(`document.querySelector('${rowMenu}')`)
+  const menuRows = await evaluate(`[...document.querySelectorAll('${rowMenu} button')].map((b) => b.innerText.trim())`)
+  assert.deepEqual(menuRows.slice(-3), ['重命名', '复制会话 ID', '删除会话'], `the ID action sits before the destructive one: ${JSON.stringify(menuRows)}`)
+  await send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  await evaluate(`navigator.clipboard.writeText('__NOT_COPIED__')`)
+  const copyPoint = await evaluate(`(()=>{const b=[...document.querySelectorAll('${rowMenu} button')].find((n) => n.innerText.trim()==='复制会话 ID');const r=b.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`)
+  await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...copyPoint, button: 'left', clickCount: 1 })
+  await send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...copyPoint, button: 'left', clickCount: 1 })
+  await pause(400)
+  assert.equal(await evaluate('navigator.clipboard.readText()'), 'chat-0', 'the action copies the session ID, not the file path')
+  assert.deepEqual(await evaluate('fixture.opens()'), [], 'a menu action must not select the session it belongs to')
+  await waitFor(`!document.querySelector('${rowMenu}')`)
+  await send('Emulation.setFocusEmulationEnabled', { enabled: false })
   // Real mouse events exercise the controls inside the draggable strip.
   await click('[data-slot="sidebar-trigger"]')
   assert.equal(await evaluate(`document.querySelector('[data-slot="sidebar-trigger"]').getAttribute('aria-expanded')`), 'false')
@@ -193,6 +214,19 @@ app.whenReady().then(()=>{
   assert.equal(await evaluate(`document.querySelector('textarea').value`), '保留这份草稿 / keep this draft')
   await click('button[aria-label="搜索会话"]')
   await waitFor(`document.querySelector('[aria-modal="true"]')`)
+  // The "include tools, files and thinking" filter is a square point-select
+  // box, not a switch, and it is sized to the row's own 12px text.
+  const detailsBox = await evaluate(`(()=>{const dialog=document.querySelector('[aria-modal="true"]');const box=dialog.querySelector('[role="checkbox"]');if(!box)return null;const label=document.querySelector('label[for="'+box.id+'"]');const r=box.getBoundingClientRect();return {switches:dialog.querySelectorAll('[role="switch"]').length,checked:box.getAttribute('aria-checked'),label:label?label.innerText.trim():null,width:r.width,radius:getComputedStyle(box).borderTopLeftRadius}})()`)
+  assert.ok(detailsBox, 'the search filter renders a checkbox')
+  assert.equal(detailsBox.switches, 0, 'and no switch next to it')
+  assert.equal(detailsBox.checked, 'false', 'it starts off — search covers prose only')
+  assert.ok(detailsBox.label, `its label sits beside it and is associated: ${JSON.stringify(detailsBox)}`)
+  assert.equal(detailsBox.width, 14, `the box is text-sized: ${JSON.stringify(detailsBox)}`)
+  assert.equal(detailsBox.radius, '0px', 'and hard-edged like every other control')
+  await screenshot('search-details')
+  await click('[role="checkbox"]')
+  assert.equal(await evaluate(`document.querySelector('[role="checkbox"]').getAttribute('aria-checked')`), 'true', 'clicking the box toggles the filter')
+  await click('[role="checkbox"]')
   assert.equal(await evaluate(`getComputedStyle(document.querySelector('[data-window-titlebar]')).webkitAppRegion`), 'no-drag')
   await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape' })
   await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape' })
@@ -237,7 +271,7 @@ app.whenReady().then(()=>{
   await evaluate(`fixture.fullscreen(false)`)
   await waitFor(`fixture.window().then(w=>!w.fullscreen)`)
   assert.deepEqual(exceptions, [])
-  console.log('PASS: native title row, themes, control hit targets, titlebar pocket, sidebar, settings/draft, modal ownership, narrow layout, long titles, projectless privacy and fullscreen')
+  console.log('PASS: native title row, themes, control hit targets, titlebar pocket, session row menu, sidebar, settings/draft, modal ownership, narrow layout, long titles, projectless privacy and fullscreen')
   if (process.env.PI_WINDOW_INSPECT) {
     console.log('Inspection endpoint: ' + endpoint)
     await evaluate(`fixture.scenario('project');localStorage.setItem('pi-app:locale','zh-CN');localStorage.setItem('theme','dark')`)

@@ -496,6 +496,11 @@ export interface AnimatedSidebarProps
   collapsible?: SidebarCollapsible;
   ariaLabel?: string;
   panelClassName?: string;
+  // local patch (pi-app): an optional decorative layer painted behind the
+  // panel — the glass sidebar renders its accent wash here, and the panel's
+  // translucent, backdrop-blurred surface shows it through. Rendered inside
+  // the desktop aside only: the mobile sheet stays an opaque overlay.
+  backdrop?: ReactNode;
   // local patch (pi-app): a panel edge is being dragged to resize the sidebar,
   // and the width must follow the pointer exactly. The morph spring would
   // otherwise trail the cursor by a frame or two and keep springing after the
@@ -514,6 +519,8 @@ export const AnimatedSidebar = forwardRef<HTMLElement, AnimatedSidebarProps>(
       children,
       className,
       panelClassName,
+      // local patch (pi-app): see AnimatedSidebarProps.backdrop.
+      backdrop,
       style,
       // local patch (pi-app): see AnimatedSidebarProps.resizing.
       resizing = false,
@@ -567,6 +574,10 @@ export const AnimatedSidebar = forwardRef<HTMLElement, AnimatedSidebarProps>(
           className,
         )}
       >
+        {/* local patch (pi-app): the decorative backdrop slot — a positioned
+            sibling that paints before the panel, so a translucent panel
+            surface (with backdrop-filter) frosts whatever is rendered here. */}
+        {backdrop}
         <motion.div
           initial={false}
           animate={{

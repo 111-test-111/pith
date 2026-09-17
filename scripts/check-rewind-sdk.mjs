@@ -234,10 +234,42 @@ pi.on('tool_result',e=>{if(e.toolName==='todo_write'&&e.input.todos[0]?.content=
   console.log('PASS: lost committed reply reconciliation and operation idempotency')
   const release = await app.checkoutCoordinator.enter(project, 'process', 'another-session')
   const blockedPreview = value(await app.rewindPreview(managed.path, before.id))
-  assert.equal(value(await app.rewindList(managed.path)).busy, true)
+  const blockedList = value(await app.rewindList(managed.path))
+  assert.equal(blockedList.busy, true)
+  assert.equal(blockedList.busyReason, 'work', 'a live writer is named as work, not as this session’s own turn')
   const blocked = await app.rewindRestore({ sessionPath: managed.path, token: blockedPreview.token, mode: 'files', operationId: randomUUID() })
   assert.equal(blocked.error.code, 'busy'); release()
   console.log('PASS: checkout process lifetime blocks restore independently of SDK idle')
+  // The panel is told WHICH fact refuses the restore, so it never has to list
+  // three unrelated causes in one sentence. Each lease kind names itself, and
+  // the order is what the user acts on first.
+  session.clearQueue()
+  const busyReason = async () => value(await app.rewindList(managed.path)).busyReason
+  assert.equal(await busyReason(), undefined, 'an idle checkout reports no reason')
+  const runLease = app.checkoutCoordinator.acquire(project, 'run', managed.path)
+  assert.equal(await busyReason(), 'turn', 'a plain model turn is named as the turn')
+  const toolLease = app.checkoutCoordinator.acquire(project, 'tool', managed.path)
+  assert.equal(await busyReason(), 'work', 'a writer outranks the plain turn it belongs to')
+  toolLease()
+  const terminalLease = app.checkoutCoordinator.acquire(project, 'terminal')
+  assert.equal(await busyReason(), 'terminal', 'a terminal lease anywhere is named as the terminal')
+  terminalLease()
+  await session.steer('queued while blocked')
+  assert.equal(await busyReason(), 'queued', 'a queued message is named as the queue, ahead of the turn')
+  session.clearQueue()
+  // A recovery marker comes from the engine's pending operations: the list
+  // mirrors them into the coordinator on every read, so a marker injected by
+  // hand is cleared again by the next list call. Inject it through the list.
+  const listReply = async (method, ...args) => {
+    const reply = await originalCall(method, ...args)
+    return method === 'list' ? { ...reply, pending: [{ id: 'op-reason', status: 'conflict' }] } : reply
+  }
+  app.rewindClient.call = listReply
+  assert.equal(await busyReason(), 'recovery', 'an unresolved recovery outranks everything')
+  app.rewindClient.call = originalCall
+  assert.equal(await busyReason(), 'turn', 'with the recovery resolved the surviving run lease reports itself')
+  runLease()
+  assert.equal(await busyReason(), undefined, 'releasing the last lease clears the reason')
   await session.prompt('Preserve this branch across crash recovery')
   await writeFile(join(project, 'file.txt'), 'CRASH PREIMAGE\r\n')
   const crashPreview = value(await app.rewindPreview(managed.path, before.id))

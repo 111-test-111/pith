@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Button } from '@/components/motion/button'
 import { Input } from '@/components/motion/input'
-import { Switch } from '@/components/motion/switch'
+import { Checkbox } from '@/components/motion/checkbox'
 import { useI18n } from '@/i18n'
 import { SettingsGroup, SettingsRow } from './SettingsRow'
 
@@ -10,7 +10,7 @@ import { SettingsGroup, SettingsRow } from './SettingsRow'
  * (~/.pi/agent/APPEND_SYSTEM.md) and whether AGENTS.md/CLAUDE.md context files
  * are injected. The main process owns both files/settings and reloads every
  * live session so a change reaches the next turn without a restart.
- * UI is beUI-native: the vendored `Input` (multiline), `Switch` and `Button`.
+ * UI is beUI-native: the vendored `Input` (multiline), `Checkbox` and `Button`.
  */
 export function PromptSection() {
   const { t } = useI18n()
@@ -76,11 +76,12 @@ export function PromptSection() {
           label={t('settings.promptContextLabel')}
           description={t('settings.promptContextDesc')}
         >
-          <Switch
+          <Checkbox
+            mark="square"
             checked={contextFiles}
             onCheckedChange={(next) => void toggleContextFiles(next)}
             disabled={loading}
-            ariaLabel={t('settings.promptContextLabel')}
+            aria-label={t('settings.promptContextLabel')}
           />
         </SettingsRow>
       </SettingsGroup>

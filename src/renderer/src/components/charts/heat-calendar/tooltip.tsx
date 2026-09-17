@@ -21,7 +21,7 @@ export function HeatCalendarTooltip({
   children?: ReactNode | ((data: NonNullable<ReturnType<typeof useHeatCalendar>["tooltip"]>) => ReactNode);
   className?: string;
 }) {
-  const { gridRef, tooltipId, tip, tooltip, unit } = useHeatCalendar();
+  const { gridRef, tooltipId, tip, tooltip, unit, locale } = useHeatCalendar();
   const [dismissed, setDismissed] = useState<typeof tip>(null);
   const surfaceRef = useRef<HTMLSpanElement>(null);
   const [coords, setCoords] = useState<{ top: number; left: number } | null>(null);
@@ -108,8 +108,8 @@ export function HeatCalendarTooltip({
                       </span>
                       <span className="text-muted-foreground">
                         {tooltip.days > 1 && tooltip.startDate && tooltip.endDate
-                          ? `${fmtRange.format(tooltip.startDate)} – ${fmtRange.format(tooltip.endDate)}`
-                          : fmtDay.format(tooltip.date)}
+                          ? `${fmtRange(locale).format(tooltip.startDate)} – ${fmtRange(locale).format(tooltip.endDate)}`
+                          : fmtDay(locale).format(tooltip.date)}
                       </span>
                       {tooltip.days > 1 ? (
                         <span className="text-muted-foreground">{tooltip.days} days</span>

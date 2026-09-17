@@ -4,6 +4,7 @@ import { Button } from '@/components/motion/button'
 import { ToolIcon } from '@/lib/tool-icons'
 import { bashTaskLive, bashTaskStatus, useBashTask, useBashTaskAvailable } from '@/lib/bash-tasks'
 import { useI18n } from '@/i18n'
+import { useCappedListFade } from '@/lib/hooks/use-capped-list-fade'
 import type { BashTaskDTO } from '../../../../shared/types'
 
 function BashOutput({ task }: { task: BashTaskDTO }) {
@@ -85,64 +86,16 @@ export function BashTaskRow({ task: fallback, completion = false, inset = false 
   )
 }
 
-/** BeUI's capped-list edge fade: the same 12px ramp AgentActivity puts on its
- * scrolling viewport, applied to whichever end actually cuts a row. Whole rows
- * at the cap's boundaries stay crisp; a row that is only half in view fades out
- * instead of ending in a hard chop. */
-const SCROLL_FADE = 12
-const fadeMask = (top: boolean, bottom: boolean) => {
-  if (!top && !bottom) return undefined
-  const stops = [
-    ...(top ? ['transparent', `black ${SCROLL_FADE}px`] : ['black']),
-    ...(bottom ? [`black calc(100% - ${SCROLL_FADE}px)`, 'transparent'] : []),
-  ]
-  return `linear-gradient(to bottom, ${stops.join(', ')})`
-}
-
 export function BashTaskList({ tasks }: { tasks: readonly BashTaskDTO[] }) {
-  const list = useRef<HTMLDivElement>(null)
-  const [cut, setCut] = useState({ top: false, bottom: false })
-  const ids = tasks.map((task) => task.id).join('\n')
-  useEffect(() => {
-    const node = list.current
-    if (!node) return
-    let frame = 0
-    const measure = () => {
-      frame = 0
-      const box = node.getBoundingClientRect()
-      const pad = parseFloat(getComputedStyle(node).paddingTop) || 0
-      const top = box.top + pad
-      const bottom = box.bottom - pad
-      let cutTop = false
-      let cutBottom = false
-      for (const row of node.children) {
-        const rect = row.getBoundingClientRect()
-        if (rect.top < top - 0.5 && rect.bottom > top + 0.5) cutTop = true
-        if (rect.top < bottom - 0.5 && rect.bottom > bottom + 0.5) cutBottom = true
-      }
-      setCut((prev) => (prev.top === cutTop && prev.bottom === cutBottom ? prev : { top: cutTop, bottom: cutBottom }))
-    }
-    const schedule = () => { if (!frame) frame = requestAnimationFrame(measure) }
-    const observer = new ResizeObserver(schedule)
-    observer.observe(node)
-    for (const row of node.children) observer.observe(row)
-    node.addEventListener('scroll', schedule, { passive: true })
-    schedule()
-    return () => {
-      if (frame) cancelAnimationFrame(frame)
-      observer.disconnect()
-      node.removeEventListener('scroll', schedule)
-    }
-  }, [ids])
-  const mask = fadeMask(cut.top, cut.bottom)
+  // The drawer's shared capped-list frame: a 4 + 6*36 + 5*8 + 4 = 264px
+  // (16.5rem) cap — six collapsed rows (`ToolResult`'s `min-h-9`) with 4px edge
+  // padding and 8px gaps — plus the edge fade wherever a scroll cuts a row.
+  const { list, mask } = useCappedListFade(tasks.map((task) => task.id).join('\n'))
   return (
     <div
       ref={list}
       data-bash-tasks-list=""
-      // The drawer's list frame, shared with the todo and subagent panels: a
-      // 4 + 6*36 + 5*8 + 4 = 264px (16.5rem) cap — six collapsed rows
-      // (`ToolResult`'s `min-h-9`) with 4px edge padding and 8px gaps — so a
-      // short list grows row by row and the three panels stop at one height.
+      // The drawer's list frame, shared with the todo, subagent and Q&A panels.
       className="max-h-[16.5rem] space-y-2 overflow-y-auto p-1"
       style={{ maskImage: mask, WebkitMaskImage: mask }}
     >

@@ -13,6 +13,7 @@ import {
   Chat01,
   ChevronDown,
   ChevronRight,
+  Copy,
   Folder,
   FolderInput,
   FolderOpen,
@@ -47,6 +48,7 @@ import {
 import { ThemeButton } from './ThemeButton'
 import { useToast } from './ToastProvider'
 import { SandboxEscalationPanel } from './SandboxEscalationPanel'
+import { AskUserPanel } from './AskUserPanel'
 import { WindowTitlebar } from './WindowTitlebar'
 import { TitlebarOverflow } from './TitlebarOverflow'
 import { useOverflowFade } from '@/lib/hooks/use-overflow-fade'
@@ -68,6 +70,12 @@ import type {
   UserMsg
 } from '../../../../shared/types'
 import { PiStore } from '@/state/pi-store'
+import { useSidebarGlass } from '@/lib/sidebar-glass'
+import {
+  SidebarGlassWash,
+  sidebarGlassFadeClassName,
+  sidebarGlassPanelClassName
+} from './SidebarGlass'
 import type { StreamingBehavior } from '@/lib/streaming-behavior'
 import { ChatView } from './ChatView'
 import { Composer } from './Composer'
@@ -101,7 +109,7 @@ import { TerminalStore } from '@/state/terminal-store'
 import { FileBrowserStore } from '@/state/file-browser-store'
 import { FileNavigationProvider, type FileTarget } from '@/lib/file-navigation'
 import { AuthBridge } from './AuthBridge'
-import { AlertTriangle, RotateCcw } from '@/lib/icons'
+import { AlertTriangle, Rewind } from '@/lib/icons'
 import { RewindDialog } from './RewindDialog'
 import { ConfirmDialog } from './ConfirmDialog'
 import type { AuthNotifyDTO, AuthPromptDTO } from '../../../../shared/types'
@@ -158,6 +166,9 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
   const titleFade = useOverflowFade()
   const [sidebarPreferences, setSidebarPreferences] = useState(loadSidebarPreferences)
   const [sidebarSaveError, setSidebarSaveError] = useState(false)
+  /** Frosted-glass session sidebar (Settings → Appearance, default on): only
+   * this column consumes it, and the setter lives in the settings row. */
+  const [sidebarGlass] = useSidebarGlass()
   const persistSidebarPreferences = useCallback((next: SessionSidebarPreferences) => {
     saveSidebarPreferences(next)
     setSidebarPreferences(next)
@@ -991,6 +1002,20 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
 
   const sessionsByPath = useMemo(() => new Map(sessions.map((session) => [session.path, session])), [sessions])
 
+  /** Sidebar row action: copy the session's own ID (the SDK header's id), not
+   * its file path — that is the value other tools address the session by. */
+  const copySessionId = useCallback((path: string) => {
+    const sessionId = sessionsByPath.get(path)?.id
+    if (!sessionId) {
+      toast.error({ title: t('workspace.sessionIdCopyFailed') })
+      return
+    }
+    navigator.clipboard
+      .writeText(sessionId)
+      .then(() => toast.success({ title: t('workspace.sessionIdCopied') }))
+      .catch(() => toast.error({ title: t('workspace.sessionIdCopyFailed') }))
+  }, [sessionsByPath, t, toast])
+
   /** Projects a new chat can be started in: the sidebar's own folder order,
    * with the active cwd kept in front even before the list catches up. The
    * projectless workspace is never offered as a path — only as "no project". */
@@ -1126,7 +1151,7 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
             ]}
           />
           <Tooltip content={t(rewindWarning ? 'rewind.captureWarning' : 'rewind.title')}>
-            <Button variant="ghost" size="icon" className="size-8" aria-label={t(rewindWarning ? 'rewind.captureWarning' : 'rewind.title')} data-rewind-entry disabled={!shell.sessionPath} onClick={() => { if (shell.sessionPath) setRewindTarget({ path: shell.sessionPath }) }}>{rewindWarning ? <AlertTriangle className="size-4 text-destructive" /> : <RotateCcw className="size-4" />}</Button>
+            <Button variant="ghost" size="icon" className="size-8" aria-label={t(rewindWarning ? 'rewind.captureWarning' : 'rewind.title')} data-rewind-entry disabled={!shell.sessionPath} onClick={() => { if (shell.sessionPath) setRewindTarget({ path: shell.sessionPath }) }}>{rewindWarning ? <AlertTriangle className="size-4 text-destructive" /> : <Rewind className="size-4" />}</Button>
           </Tooltip>
           <Tooltip content={t('workspace.settings')} className={settingsOpen ? 'hidden' : undefined}>
             <Button variant="ghost" size="icon" className="size-8" aria-label={t('workspace.settings')} onClick={() => setSettingsOpen(true)}>
@@ -1150,7 +1175,12 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
         // both panels read them — not just the one whose own strip is pulled.
         resizing={resizing !== null}
         className="min-h-0 data-[mobile=true]:pt-[var(--app-titlebar-height)]"
-        panelClassName={cn('h-full border-border/50 bg-background', activeEdge.left && 'border-primary')}
+        // Glass on: the panel surface goes translucent and frosted, and the
+        // accent wash painted behind it shows through (SidebarGlass.tsx builds
+        // both layers). Glass off is the plain opaque column, with no wash
+        // mounted at all.
+        backdrop={sidebarGlass ? <SidebarGlassWash /> : undefined}
+        panelClassName={cn(sidebarGlassPanelClassName(sidebarGlass), activeEdge.left && 'border-primary')}
       >
         <AnimatedSidebarContent className="gap-5 overflow-hidden px-2 pb-3 pt-2">
           <AnimatedSidebarGroup className="shrink-0 px-1 py-0">
@@ -1328,13 +1358,18 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
                           onSelect={() => { controls.close(); controls.moves.up?.() }} /> : null}
                         {controls.moves.down ? <SidebarRowMenuAction icon={ArrowDown} label={t('workspace.moveSessionDown')}
                           onSelect={() => { controls.close(); controls.moves.down?.() }} /> : null}
-                        <SidebarRowMenuAction icon={RotateCcw} label={t('rewind.title')} onSelect={() => {
+                        <SidebarRowMenuAction icon={Rewind} label={t('rewind.title')} onSelect={() => {
                           controls.close()
                           const session = sessionsByPath.get(item.id)
                           if (session) void openSession(session.path, session.cwd).then(() => setRewindTarget({ path: session.path }))
                         }} />
                         <SidebarRowMenuAction icon={Pencil} label={t('workspace.renameSession')}
                           onSelect={() => controls.rename()} />
+                        <SidebarRowMenuAction icon={Copy} label={t('workspace.copySessionId')}
+                          onSelect={() => {
+                            controls.close()
+                            copySessionId(item.id)
+                          }} />
                         <SidebarRowMenuAction icon={Trash2} tone="destructive" label={t('workspace.deleteSession')}
                           onSelect={() => {
                             controls.close()
@@ -1354,10 +1389,7 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
                   }}
                 />
               </div>
-              <div
-                aria-hidden="true"
-                className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-background to-transparent"
-              />
+              <div aria-hidden="true" data-sidebar-fade className={sidebarGlassFadeClassName(sidebarGlass)} />
             </AnimatedSidebarGroupContent>
           </AnimatedSidebarGroup>
         </AnimatedSidebarContent>
@@ -1413,6 +1445,23 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
               />
             ) : null}
 
+            {/* A pending question set blocks the running turn on the user's
+                answer, so it lives where the next action is — above the
+                composer, after any escalation card. */}
+            {shell.pendingAskUser[0] ? (
+              <AskUserPanel
+                request={shell.pendingAskUser[0]}
+                onEngage={(requestId) => {
+                  const request = shell.pendingAskUser[0]
+                  if (request) void window.pi.askUserEngage(requestId, request.sessionPath)
+                }}
+                onRespond={(requestId, payload) => {
+                  const request = shell.pendingAskUser[0]
+                  if (request) void window.pi.respondAskUser(requestId, request.sessionPath, payload)
+                }}
+              />
+            ) : null}
+
             <Composer
               start={newSessionStart}
               models={models}
@@ -1430,6 +1479,7 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
               sessionPath={shell.sessionPath}
               onSandboxSnapshot={(snapshot) => store.applySnapshot(snapshot)}
               contextUsage={shell.contextUsage}
+              onOpenContext={() => openSidePanelTab('context')}
               queued={shell.queue}
               onSend={handleSend}
               onQueue={handleQueue}

@@ -1,9 +1,10 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useEffect, useRef, useState } from 'react'
 import { ToolResult } from '@/components/agents/tool-result'
 import { Button } from '@/components/motion/button'
 import { Bot, FileDiff } from '@/lib/icons'
 import { formatTime } from '@/lib/format'
 import { useI18n } from '@/i18n'
+import { useCappedListFade } from '@/lib/hooks/use-capped-list-fade'
 import { SUBAGENT_READ_ONLY_TOOLS, type SubagentRunDTO } from '../../../../shared/types'
 
 /**
@@ -180,64 +181,20 @@ function SubagentRow({ run, sessionPath, onOpenSession }: {
   )
 }
 
-/** BeUI's capped-list edge fade (the same 12px ramp the bash task list uses):
- * whole rows at the cap's boundaries stay crisp; a half-visible row fades. */
-const SCROLL_FADE = 12
-const fadeMask = (top: boolean, bottom: boolean) => {
-  if (!top && !bottom) return undefined
-  const stops = [
-    ...(top ? ['transparent', `black ${SCROLL_FADE}px`] : ['black']),
-    ...(bottom ? [`black calc(100% - ${SCROLL_FADE}px)`, 'transparent'] : [])
-  ]
-  return `linear-gradient(to bottom, ${stops.join(', ')})`
-}
-
 export function SubagentList({ runs, sessionPath, onOpenSession }: {
   runs: readonly SubagentRunDTO[]
   sessionPath: string
   onOpenSession?: (path: string) => void
 }) {
-  const list = useRef<HTMLDivElement>(null)
-  const [cut, setCut] = useState({ top: false, bottom: false })
-  const ids = useMemo(() => runs.map((run) => run.sessionId).join('\n'), [runs])
-  useEffect(() => {
-    const node = list.current
-    if (!node) return
-    let frame = 0
-    const measure = () => {
-      frame = 0
-      const box = node.getBoundingClientRect()
-      const pad = parseFloat(getComputedStyle(node).paddingTop) || 0
-      const top = box.top + pad
-      const bottom = box.bottom - pad
-      let cutTop = false
-      let cutBottom = false
-      for (const row of node.children) {
-        const rect = row.getBoundingClientRect()
-        if (rect.top < top - 0.5 && rect.bottom > top + 0.5) cutTop = true
-        if (rect.top < bottom - 0.5 && rect.bottom > bottom + 0.5) cutBottom = true
-      }
-      setCut((prev) => (prev.top === cutTop && prev.bottom === cutBottom ? prev : { top: cutTop, bottom: cutBottom }))
-    }
-    const schedule = () => { if (!frame) frame = requestAnimationFrame(measure) }
-    const observer = new ResizeObserver(schedule)
-    observer.observe(node)
-    for (const row of node.children) observer.observe(row)
-    node.addEventListener('scroll', schedule, { passive: true })
-    schedule()
-    return () => {
-      if (frame) cancelAnimationFrame(frame)
-      observer.disconnect()
-      node.removeEventListener('scroll', schedule)
-    }
-  }, [ids])
-  const mask = fadeMask(cut.top, cut.bottom)
+  // The drawer's list frame (see the bash list): the same 16.5rem cap, 4px edge
+  // padding, 8px row gaps and edge fade, so all four panels match.
+  const { list, mask } = useCappedListFade(runs.map((run) => run.sessionId).join('\n'))
   return (
     <div
       ref={list}
       data-subagents-list=""
       // The drawer's list frame (see the bash list): the same 16.5rem cap,
-      // 4px edge padding and 8px row gaps, so all three panels match.
+      // 4px edge padding, 8px row gaps and edge fade, so all four panels match.
       className="max-h-[16.5rem] space-y-2 overflow-y-auto p-1"
       style={{ maskImage: mask, WebkitMaskImage: mask }}
     >

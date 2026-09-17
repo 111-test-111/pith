@@ -231,9 +231,25 @@ export function TodoList({
   const previousComplete = useRef(false);
   const [internalOpen, setInternalOpen] = useState(defaultOpen);
   const currentOpen = open ?? internalOpen;
+  // local patch (pi-app): which row the list positions itself on. The vendored
+  // list always scrolled to the BOTTOM, so a long plan opened on its last, least
+  // relevant row; the row that matters is the one being worked on, and with
+  // nothing running it is the newest completed one. Last wins in both passes,
+  // so a legacy list carrying several in-progress rows lands on the newest.
+  let runningIndex = -1;
+  let completedIndex = -1;
+  items.forEach((item, index) => {
+    const status = item.status ?? "pending";
+    if (status === "in-progress") runningIndex = index;
+    else if (status === "completed") completedIndex = index;
+  });
+  const targetIndex = runningIndex >= 0 ? runningIndex : completedIndex;
+  // A list that is being positioned for the first time since it opened does it
+  // instantly: the panel is appearing, and a glide inside it reads as a second,
+  // unrelated animation. A task update in an already-positioned list scrolls.
+  const positioned = useRef(false);
   const completed = items.filter((item) => item.status === "completed").length;
   const allComplete = items.length > 0 && completed === items.length;
-  const itemCount = items.length;
 
   const setOpen = useCallback(
     (next: boolean) => {
@@ -255,21 +271,43 @@ export function TodoList({
 
   useLayoutEffect(() => {
     const viewport = viewportRef.current;
-    if (!viewport || itemCount === 0) return;
+    const list = viewport?.querySelector("ol");
+    const target =
+      list && targetIndex >= 0
+        ? (list.children[targetIndex] as HTMLElement | undefined)
+        : undefined;
+    if (!viewport || !list || !target || !currentOpen) {
+      positioned.current = false;
+      return;
+    }
 
+    const behavior: ScrollBehavior =
+      reduce || !positioned.current ? "auto" : "smooth";
+    positioned.current = true;
     const frame = requestAnimationFrame(() => {
-      if (viewport.scrollHeight <= viewport.clientHeight) return;
+      const max = viewport.scrollHeight - viewport.clientHeight;
+      if (max <= 0) return;
+      // The row's offset inside the list is layout-only, so Motion's entrance or
+      // `layout` transform on the row itself cannot skew it; the list's own
+      // on-screen top already carries the scrollport's current position.
+      const rowCenter =
+        list.getBoundingClientRect().top +
+        (target.offsetTop - list.offsetTop) +
+        target.offsetHeight / 2;
+      const viewportCenter =
+        viewport.getBoundingClientRect().top + viewport.clientHeight / 2;
+      const top = Math.min(
+        max,
+        Math.max(0, viewport.scrollTop + rowCenter - viewportCenter),
+      );
       if (typeof viewport.scrollTo === "function") {
-        viewport.scrollTo({
-          top: viewport.scrollHeight,
-          behavior: reduce ? "auto" : "smooth",
-        });
+        viewport.scrollTo({ top, behavior });
       } else {
-        viewport.scrollTop = viewport.scrollHeight;
+        viewport.scrollTop = top;
       }
     });
     return () => cancelAnimationFrame(frame);
-  }, [itemCount, reduce]);
+  }, [currentOpen, items.length, reduce, targetIndex]);
 
   return (
     <section

@@ -32,6 +32,9 @@ import {
 import { ActionSwapRollText } from "@/components/motion/action-swap-roll";
 import { AgentDisclosure } from "@/components/agents/agent-disclosure";
 import { SPRING_PRESS, SPRING_SWAP } from "@/lib/ease";
+// local patch (pi-app): the output viewport's clipped edge fades instead of
+// cutting a line (the app hides every scrollbar, so the cut had no other cue).
+import { useScrollFade } from "@/lib/hooks/use-scroll-fade";
 import { cn } from "@/lib/utils";
 
 export type ToolResultStatus = "running" | "success" | "error" | "cancelled";
@@ -192,6 +195,9 @@ export function ToolResult({
   const [copied, setCopied] = useState(false);
   const [internalOpen, setInternalOpen] = useState(defaultOpen);
   const currentOpen = open ?? internalOpen;
+  // local patch (pi-app): a mask on whichever end of the cap hides output. The
+  // body is lazy, so the measurement follows the disclosure's own state.
+  const { edges: fadeEdges, maskImage } = useScrollFade(viewportRef, { dependsOn: currentOpen });
   const running = status === "running";
   const canCopy = Boolean(copyText || onCopy);
   const titleKey = getSwapKey(title, status);
@@ -346,8 +352,9 @@ export function ToolResult({
                 ref={viewportRef}
                 role="log"
                 aria-live="polite"
+                data-fade={fadeEdges.top && fadeEdges.bottom ? "both" : fadeEdges.bottom ? "bottom" : fadeEdges.top ? "top" : "none"}
                 className="scrollbar-hide overflow-y-auto"
-                style={{ maxHeight }}
+                style={{ maxHeight, maskImage, WebkitMaskImage: maskImage }}
               >
                 <div className={cn("p-3", contentClassName)}>{children}</div>
               </div>

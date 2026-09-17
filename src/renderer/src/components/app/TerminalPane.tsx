@@ -7,6 +7,7 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/motion/tabs'
 import { Tooltip } from '@/components/motion/tooltip'
 import { LabelTooltip } from './LabelTooltip'
 import { useI18n } from '@/i18n'
+import { TERMINAL_FONT_PX } from '@/lib/terminal-runtime'
 import { cn } from '@/lib/utils'
 import type { TerminalStore } from '@/state/terminal-store'
 
@@ -97,22 +98,21 @@ export function TerminalPane({ terminals, onNew, onEmpty }: {
           </Button>
         </Tooltip>
       </div>
-      {tab && tab.status !== 'running' ? (
+      {tab && tab.status !== 'running' && tab.status !== 'starting' ? (
         <div role="status" className="flex shrink-0 items-center gap-2 px-3 py-2 text-xs text-muted-foreground">
           {/* The status is the whole page for an exited terminal, so it carries the
-              tone: a clean exit is neutral, a failure is destructive. */}
+              tone: a clean exit is neutral, a failure is destructive. The starting
+              phase renders no row — the surface attaches in well under a second,
+              and a text line that flashes for a few frames reads as a glitch. The
+              message sits at the terminal's own body size (TERMINAL_FONT_PX), not
+              the badge's 11px chrome. */}
           <AnimatedBadge
             size="sm"
             className="max-w-full"
-            status={
-              tab.status === 'starting'
-                ? 'loading'
-                : tab.status === 'exited' && !tab.exitCode
-                  ? 'neutral'
-                  : 'danger'
-            }
+            style={{ fontSize: TERMINAL_FONT_PX }}
+            status={tab.status === 'exited' && !tab.exitCode ? 'neutral' : 'danger'}
           >
-            {tab.status === 'starting' ? t('terminal.starting') : tab.status === 'exited'
+            {tab.status === 'exited'
               ? t('terminal.exited', { code: tab.exitCode ?? 0 })
               : t(tab.error === 'directory' ? 'terminal.directoryError' : 'terminal.startError')}
           </AnimatedBadge>

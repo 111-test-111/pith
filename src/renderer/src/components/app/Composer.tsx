@@ -75,6 +75,9 @@ interface ComposerProps {
    * overlay owns the surface, so Esc there does not abort a background run. */
   escapeStopsRun?: boolean
   contextUsage?: ContextUsageDTO | null
+  /** Open the rail's context detail pane (the ring's click); omitted where no
+   * rail exists, which leaves the ring a plain readout. */
+  onOpenContext?: () => void
   /** This session's DSH file-sandbox mode, and what the host can enforce. */
   sandboxMode?: SandboxMode
   sandbox?: SandboxStatusDTO | null
@@ -116,6 +119,7 @@ export function Composer({
   onOpenSession,
   escapeStopsRun = true,
   contextUsage,
+  onOpenContext,
   sandboxMode = DEFAULT_SANDBOX_MODE,
   sandbox = null,
   sessionPath = null,
@@ -569,7 +573,7 @@ export function Composer({
                     <Loader2 aria-hidden="true" className="size-3.5 animate-spin" />
                   </span>
                 </LabelTooltip>
-              ) : <ContextRing usage={contextUsage ?? null} />}
+              ) : <ContextRing usage={contextUsage ?? null} onOpen={onOpenContext} />}
               actions={[
                 {
                   value: 'attach-image',

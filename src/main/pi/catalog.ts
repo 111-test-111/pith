@@ -266,6 +266,12 @@ export function buildToolCatalog(
   }
 
   const perExtension = new Map<string, Map<string, ToolInfoDTO>>()
+  // One row per tool NAME, because a name is one callable tool. Two extensions
+  // can override the same built-in (pi-fff's `grep`/`find` against a
+  // pretty-printer that also registers them), and the session's own registry
+  // keeps only the definition that won. The live pass below writes last, so the
+  // surviving row is always the definition the model actually calls.
+  const byName = new Map<string, ToolInfoDTO>()
 
   // Tools registered at load time (static `extension.tools` map).
   for (const extension of extensions) {
@@ -274,17 +280,15 @@ export function buildToolCatalog(
     const label = labels.get(id) ?? id
     for (const [name, registered] of extension.tools) {
       if (APP_TOOL_NAMES.some((appName) => appName === name)) continue
-      setTool(
-        perExtension,
-        id,
-        toolDTO(
-          name,
-          registered.definition,
-          { kind: 'extension', extensionId: id, label },
-          enabled && active.has(name),
-          !enabled
-        )
+      const dto = toolDTO(
+        name,
+        registered.definition,
+        { kind: 'extension', extensionId: id, label },
+        enabled && active.has(name),
+        !enabled
       )
+      setTool(perExtension, id, dto)
+      byName.set(dto.name, dto)
     }
   }
 
@@ -301,17 +305,16 @@ export function buildToolCatalog(
     const id = extension ? extensionId(extension) : tool.sourceInfo.source
     const label = labels.get(id) ?? tool.sourceInfo.source
     const enabled = !disabledExtensions.has(id)
-    setTool(
-      perExtension,
-      id,
-      toolDTO(
-        tool.name,
-        tool,
-        { kind: 'extension', extensionId: id, label },
-        enabled && active.has(tool.name),
-        !enabled
-      )
+    const dto = toolDTO(
+      tool.name,
+      tool,
+      { kind: 'extension', extensionId: id, label },
+      enabled && active.has(tool.name),
+      !enabled
     )
+    setTool(perExtension, id, dto)
+    // Live definitions win over a stale static claim for the same name.
+    byName.set(dto.name, dto)
   }
 
   // A disabled lazily-registering extension has no live tools left; reuse the
@@ -319,14 +322,17 @@ export function buildToolCatalog(
   for (const [id, snapshot] of knownTools) {
     if (!disabledExtensions.has(id) || perExtension.get(id)?.size) continue
     for (const dto of snapshot) {
-      setTool(perExtension, id, { ...dto, active: false, disabledByExtension: true })
+      const disabled = { ...dto, active: false, disabledByExtension: true }
+      setTool(perExtension, id, disabled)
+      // A snapshot is the last resort: never let a switched-off extension's
+      // memory of a tool take a name a live tool already answers to.
+      if (!byName.has(dto.name)) byName.set(dto.name, disabled)
     }
   }
 
-  const tools: ToolInfoDTO[] = []
-  for (const map of perExtension.values()) tools.push(...map.values())
+  const tools: ToolInfoDTO[] = [...byName.values()]
 
-  const present = new Set(tools.map((tool) => tool.name))
+  const present = new Set(byName.keys())
   const builtinSeen = new Set<string>()
   for (const tool of sessionTools) {
     if ((tool.sourceInfo.source !== 'builtin' && !(tool.sourceInfo.source === 'sdk' && APP_TOOL_NAMES.some((name) => name === tool.name))) || present.has(tool.name)) continue

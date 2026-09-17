@@ -248,6 +248,168 @@ const entriesOf = (...records) => records.map((record, index) => ({
   }
 }
 
+// --- profile tools: the surgical `tools:` edit changes ONE line and nothing
+//     else (Settings → Subagents writes through exactly this path) ---
+{
+  const agentDir = await mkdtemp(join(tmpdir(), 'pith-subagent-agentdir-tools-'))
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR
+  process.env.PI_CODING_AGENT_DIR = agentDir
+  try {
+    const { mkdirSync, readFileSync } = await import('node:fs')
+    const agentsDir = join(agentDir, 'agents')
+    mkdirSync(agentsDir, { recursive: true })
+    const original = [
+      '---',
+      'description: Keeps its shape',
+      'display_name: Keeps Shape',
+      'tool_preset: some-preset',
+      'inherit_context: false',
+      'max_turns: 12',
+      '---',
+      '',
+      'You are the keeper.'
+    ].join('\n')
+
+    // Insert when no `tools:` line exists: everything else stays byte-identical.
+    const inserted = profiles.setProfileToolsLine(original, ['read', 'grep'])
+    assert.ok(inserted.startsWith('---\ntools: read,grep\ndescription: Keeps its shape\n'), 'a missing tools: line is inserted right after the opening fence')
+    assert.ok(inserted.endsWith('You are the keeper.'), 'the body is untouched')
+    assert.ok(inserted.includes('tool_preset: some-preset'), 'other frontmatter keys survive')
+
+    // Replace in place keeps the surrounding lines and their order.
+    const replaced = profiles.setProfileToolsLine(inserted, 'all')
+    assert.ok(replaced.includes('tools: all\n'), 'the value is replaced in place')
+    assert.ok(!replaced.includes('read,grep'), 'the old value is gone')
+    assert.ok(replaced.includes('max_turns: 12'), 'later lines keep their place')
+
+    // A quoted key is updated in place, never duplicated.
+    const quoted = profiles.setProfileToolsLine('---\ndescription: q\n"tools": read\n---\n\nB.', ['grep'])
+    assert.ok(quoted.includes('"tools": grep'), 'the quoted key itself is rewritten')
+    assert.ok(!quoted.includes('"tools": read'), 'without a second tools key')
+
+    // CRLF files keep their line endings.
+    const crlf = profiles.setProfileToolsLine('---\r\ndescription: q\r\ntools: read\r\n---\r\n\r\nB.', ['grep'])
+    assert.ok(crlf.includes('tools: grep\r\n'), 'CRLF is preserved')
+
+    // The write path validates before it commits: dedupe + lowercase, a
+    // re-parse that must still be the SAME profile, and an empty set refused.
+    await writeFile(join(agentsDir, 'keeper.md'), original, 'utf8')
+    const written = profiles.writeSubagentProfileTools(join(agentsDir, 'keeper.md'), ['mcp', 'Read', 'mcp', ''])
+    assert.deepEqual(written.tools, ['mcp', 'read'], 'names are deduped and lowercased')
+    assert.equal(written.description, 'Keeps its shape')
+    assert.equal(written.systemPrompt, 'You are the keeper.')
+    const onDisk = readFileSync(join(agentsDir, 'keeper.md'), 'utf8')
+    assert.ok(onDisk.includes('tools: mcp,read\n'), 'exactly one tools: line is written')
+    assert.ok(onDisk.includes('tool_preset: some-preset'), 'an explicit list overrides a preset without deleting it')
+    assert.equal((onDisk.match(/^tools:/gm) ?? []).length, 1, 'the line is never duplicated')
+    let refused = false
+    try { profiles.writeSubagentProfileTools(join(agentsDir, 'keeper.md'), []) } catch { refused = true }
+    assert.ok(refused, 'an empty tool set never reaches the file')
+    await writeFile(join(agentsDir, 'not-a-profile.md'), 'no frontmatter here', 'utf8')
+    refused = false
+    try { profiles.writeSubagentProfileTools(join(agentsDir, 'not-a-profile.md'), ['read']) } catch { refused = true }
+    assert.ok(refused, 'a file that does not parse as a profile is refused')
+  } finally {
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir
+    await rm(agentDir, { recursive: true, force: true })
+  }
+}
+
+// --- profile creation (Settings → Subagents): a least-privilege starter file
+//     validated to the loader's own rules ---
+{
+  const agentDir = await mkdtemp(join(tmpdir(), 'pith-subagent-agentdir-create-'))
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR
+  process.env.PI_CODING_AGENT_DIR = agentDir
+  try {
+    const { existsSync, readFileSync } = await import('node:fs')
+    const dir = join(agentDir, 'agents')
+    const created = profiles.createSubagentProfileFile(dir, {
+      name: 'docs-writer', description: 'Writes docs.\nA newline is flattened', systemPrompt: 'You write docs.', scope: 'global'
+    })
+    assert.equal(created.name, 'docs-writer')
+    assert.equal(created.description, 'Writes docs. A newline is flattened', 'newlines cannot enter flat frontmatter')
+    assert.equal(created.systemPrompt, 'You write docs.')
+    assert.equal(created.toolsSource, 'default', 'a new profile declares no tools: line — least privilege')
+    assert.equal(created.scope, 'global')
+    const onDisk = readFileSync(join(dir, 'docs-writer.md'), 'utf8')
+    assert.ok(onDisk.startsWith('---\ndescription: Writes docs. A newline is flattened\n---\n\nYou write docs.\n'), 'the file is exactly the form plus its body')
+    assert.ok(!onDisk.includes('tools:'), 'the starter file carries no tools line')
+    // An existing file is never overwritten.
+    let refused = false
+    try { profiles.createSubagentProfileFile(dir, { name: 'docs-writer', description: 'Other', systemPrompt: '', scope: 'global' }) } catch { refused = true }
+    assert.ok(refused, 'an existing file is never overwritten')
+    // Names and descriptions follow the loader's own rules.
+    refused = false
+    try { profiles.createSubagentProfileFile(dir, { name: 'Bad Name', description: 'x', systemPrompt: '', scope: 'project' }) } catch { refused = true }
+    assert.ok(refused, 'an invalid name is refused')
+    refused = false
+    try { profiles.createSubagentProfileFile(dir, { name: 'fresh', description: '   ', systemPrompt: '', scope: 'global' }) } catch { refused = true }
+    assert.ok(refused, 'an empty description is refused — the file would be invisible')
+    assert.equal(existsSync(join(dir, 'fresh.md')), false, 'a refused create writes nothing')
+    assert.ok(existsSync(join(dir, 'docs-writer.md')), 'the one accepted create is on disk')
+  } finally {
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir
+    await rm(agentDir, { recursive: true, force: true })
+  }
+}
+
+// --- extension ceilings + live roster: only an extension-attributed tool
+//     makes a child load extensions, and the profile list a session reads
+//     follows the files — a Settings save applies to the very next delegation ---
+{
+  const { ceilingNeedsExtensions } = await import('../src/main/pi/subagents/runtime.ts')
+  const { createSubagentTool } = await import('../src/main/pi/subagents/tools.ts')
+  // REAL SDK shapes: extension tools carry their extension's origin tag
+  // ("local"/"temporary"/"npm:…"), never a literal "extension"; the SDK's two
+  // synthetic sources are "builtin" and "sdk". The fixtures must mirror the
+  // loader or the test validates a predicate that can never fire.
+  const parentTools = [
+    { name: 'read', sourceInfo: { source: 'builtin' } },
+    { name: 'todo_write', sourceInfo: { source: 'sdk' } },
+    { name: 'ask_user_question', sourceInfo: { source: 'sdk' } },
+    { name: 'web_search', sourceInfo: { source: 'local' } },
+    { name: 'web_fetch', sourceInfo: { source: 'npm:tavily' } },
+    { name: 'mcp', sourceInfo: { source: 'temporary' } }
+  ]
+  assert.equal(ceilingNeedsExtensions(['read', 'grep', 'todo_write', 'ask_user_question'], parentTools), false, 'built-in/app ceilings stay extension-free (no MCP hosts per explore run)')
+  assert.equal(ceilingNeedsExtensions(['read', 'web_search'], parentTools), true, 'a "local"-tagged extension tool in the ceiling loads extensions — the checked-tools bug')
+  assert.equal(ceilingNeedsExtensions(['read', 'web_fetch'], parentTools), true, 'an npm-tagged extension tool counts too')
+  assert.equal(ceilingNeedsExtensions(['mcp', 'mcpScript', 'mcp__beui'], parentTools), true, 'the MCP family counts (any non-builtin/sdk tag)')
+  assert.equal(ceilingNeedsExtensions(['read', 'unknown-tool'], parentTools), false, 'unknown names never count')
+
+  const profileOf = (name, tools) => ({ name, displayName: name, description: `${name} profile`, systemPrompt: 'x', tools,
+    toolsSource: 'explicit', inheritContext: false, runInBackground: false, enabled: true, scope: 'global', filePath: `/${name}.md` })
+  let roster = [profileOf('scout', ['read'])]
+  const dispatched = []
+  const started = { run: { runId: 'r1', sessionId: 'c1', sessionPath: '/c.jsonl', parentToolCallId: 'tc', profile: 'scout',
+      description: 'd', task: 't', runInBackground: true, status: 'running', createdAt: new Date().toISOString(), seq: 1 },
+    completion: Promise.resolve({ status: 'completed', runId: 'r1', sessionId: 'c1', description: 'd', profile: 'scout' }) }
+  const tool = createSubagentTool({
+    runtime: { start: async (_state, request) => { dispatched.push(request.profile); return started } },
+    state: {},
+    parentSessionRef: { session: { getActiveToolNames: () => [] } },
+    parentSessionPath: '/p.jsonl',
+    profiles: () => roster,
+    canStart: () => true
+  })
+  assert.match(tool.description, /scout profile/, 'the roster renders')
+  await tool.execute('tc1', { subagent_type: 'scout', prompt: 'p', description: 'd', run_in_background: true }, undefined, undefined)
+  assert.equal(dispatched[0].tools.join(','), 'read', 'a dispatch resolves the roster live')
+  // A Settings save replaces the roster; the SAME tool instance follows it —
+  // for the description the model reads AND the profile a dispatch resolves.
+  roster = [profileOf('scout', ['read', 'web_search'])]
+  assert.match(tool.description, /read,web_search/, 'the roster re-derives from the files without rebuilding the session')
+  await tool.execute('tc2', { subagent_type: 'scout', prompt: 'p', description: 'd', run_in_background: true }, undefined, undefined)
+  assert.equal(dispatched[1].tools.join(','), 'read,web_search', 'the NEXT delegation uses the saved tool set, not the build-time one')
+  roster = []
+  let vanished = false
+  try { await tool.execute('tc3', { subagent_type: 'scout', prompt: 'p', description: 'd', run_in_background: true }, undefined, undefined) } catch { vanished = true }
+  assert.ok(vanished, 'a removed/disabled profile stops dispatching immediately')
+}
+
 // --- starter profiles: the marker beside the files heals a drifted agent dir
 //     and still respects a deliberate removal ---
 {
@@ -439,6 +601,7 @@ console.log('check-subagents: all assertions passed')
         messages: [],
         getLastAssistantText: () => undefined,
         getActiveToolNames: () => ['read', 'grep', 'edit', 'write', 'bash', 'todo_write'],
+        getAllTools: () => [],
         sessionManager: parent,
         ...over
       }

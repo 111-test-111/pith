@@ -58,7 +58,7 @@ export function NewSessionHeader({ projectName, cwd, projects, onProjectChange, 
   return (
     <div className="mb-6 flex flex-col items-start text-left">
       <div className="mb-5 flex max-w-full items-center gap-2 text-xs text-muted-foreground">
-        <PithIcon className="mr-1 size-9" />
+        <PithIcon variant="square" className="mr-1 size-9" />
         <span className="shrink-0">{t('newSession.label')}</span>
         <span aria-hidden="true" className="h-3 w-px shrink-0 bg-border" />
         <Select

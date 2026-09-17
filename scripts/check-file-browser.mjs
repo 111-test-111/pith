@@ -196,7 +196,10 @@ const w=new BrowserWindow({show:false,width:1500,height:950,webPreferences:{prel
   assert.equal(await evaluate(`getComputedStyle(document.querySelector('[data-file-preview] [role=tab][aria-selected=true]')).backgroundColor`),'rgba(0, 0, 0, 0)','view switch uses underline with no filled segment')
   assert.equal(await evaluate(`document.querySelector('[data-file-preview] [role=tab][aria-selected=true] > span').getBoundingClientRect().height`),1,'native beUI underline indicator')
   await waitFor('document.querySelector("[data-file-tree] [data-file-icon$=\\"package.json\\"]")','file type icons')
-  assert.equal(await evaluate(`new Set(['README.md','package.json','data.json','file#25%.txt'].map(name=>document.querySelector('[data-file-tree] [data-file-icon$="'+name+'"]').innerHTML)).size`),4,'Symbols distinguish extensions and special filenames')
+  assert.equal(await evaluate(`new Set(['README.md','package.json','data.json','file#25%.txt'].map(name=>document.querySelector('[data-file-tree] [data-file-icon$="'+name+'"]').getAttribute('src'))).size`),4,'file-type icons distinguish extensions and special filenames')
+  // The icons are separate SVG files in the public directory, so this also
+  // proves the relative URL resolves in the packaged file:// renderer.
+  assert.equal(await evaluate(`Array.from(document.querySelectorAll('[data-file-tree] [data-file-icon]')).filter(img=>!(img.complete&&img.naturalWidth>0)).length`),0,'file-type icons decode')
   await click('[aria-label="New tab"]')
   await click('a[href="README.md"]')
   await waitFor('document.querySelector("[data-file-markdown]")','file link dismisses pane picker')
@@ -217,6 +220,25 @@ const w=new BrowserWindow({show:false,width:1500,height:950,webPreferences:{prel
   const modeTrigger = await evaluate(`(()=>{const node=document.querySelector('[aria-label="Sandbox mode"]');return node?node.textContent.trim():null})()`)
   assert.ok(modeTrigger, 'the composer offers a sandbox mode switcher')
   assert.match(modeTrigger, /Workspace write/, `the switcher shows the session's mode: ${modeTrigger}`)
+  // Every entry leads with its own glyph, and full access — the one mode that
+  // runs unconfined — wears the warning colour in the list and in the trigger.
+  // The panel stays mounted while closed, so the options are readable without
+  // opening it.
+  const modeList = await evaluate(`(()=>{const probe=document.createElement('span');probe.className='text-amber-600 dark:text-amber-400';document.body.appendChild(probe);const warning=getComputedStyle(probe).color;probe.remove();const icons=[...document.querySelectorAll('[data-sandbox-mode-option]')];const trigger=document.querySelector('[data-sandbox-mode-icon]');return {warning,triggerMode:trigger.dataset.sandboxModeIcon,trigger:getComputedStyle(trigger).color,options:icons.map(node=>({mode:node.dataset.sandboxModeOption,label:node.textContent.trim(),color:getComputedStyle(node.querySelector('svg')).color}))}})()`)
+  assert.deepEqual(
+    modeList.options.map((option) => option.mode),
+    ['read-only', 'workspace-write', 'danger-full-access'],
+    `every mode has an entry with its own glyph: ${JSON.stringify(modeList.options)}`
+  )
+  assert.ok(modeList.options.every((option) => option.label), `entries stay labelled: ${JSON.stringify(modeList.options)}`)
+  const fullAccess = modeList.options.find((option) => option.mode === 'danger-full-access')
+  assert.equal(fullAccess.color, modeList.warning, `full access wears the warning colour: ${JSON.stringify(modeList)}`)
+  assert.ok(
+    modeList.options.filter((option) => option.mode !== 'danger-full-access').every((option) => option.color !== modeList.warning),
+    `the confined modes do not: ${JSON.stringify(modeList)}`
+  )
+  assert.equal(modeList.triggerMode, 'workspace-write', `the trigger shows the selected mode's own glyph: ${JSON.stringify(modeList)}`)
+  assert.notEqual(modeList.trigger, modeList.warning, `that glyph is not the warning tone: ${JSON.stringify(modeList)}`)
 
   // A pending escalation renders as beUI's approval card right above the
   // composer, and answering it goes back through IPC carrying the question's own
@@ -590,7 +612,7 @@ const w=new BrowserWindow({show:false,width:1500,height:950,webPreferences:{prel
   assert.ok(searchAsset,'built search worker')
   await evaluate(`new Promise((resolve,reject)=>{const worker=new Worker(${JSON.stringify(pathToFileURL(join(repo,'out/renderer/assets',searchAsset)).href)},{type:'module'});worker.onmessage=e=>{worker.terminate();window.packagedSearch=e.data;resolve(true)};worker.onerror=reject;worker.postMessage({text:'SDK SDK sdk',query:'SDK',options:{matchCase:false,wholeWord:true,regex:false}})})`)
   assert.equal(await evaluate('window.packagedSearch.matches.length'),3,'packaged file:// search worker')
-  console.log('PASS: actual Workspace links, Markdown/source/diff, highlighting, relative links, top-level file tab/chooser lifecycle, native tree keyboard/selection/reveal, Symbols file types, 14k-line virtualization, find/Escape, session/rail persistence, themes and narrow geometry')
+  console.log('PASS: actual Workspace links, Markdown/source/diff, highlighting, relative links, top-level file tab/chooser lifecycle, native tree keyboard/selection/reveal, file-type icon sources and decoding, 14k-line virtualization, find/Escape, session/rail persistence, themes and narrow geometry')
 
   }
 } finally {

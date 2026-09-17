@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { AssistantMsg } from '../../../shared/types'
+import { ASK_USER_TOOL_NAME } from '../../../shared/ask-user'
 import type { Locale } from '@/i18n'
 import { toolCategory } from './tool-categories'
 
@@ -195,6 +196,26 @@ export function frontierStepContext(messages: readonly AssistantMsg[]): SpinnerS
     }
   }
   return THINKING_STEP
+}
+
+/**
+ * True when the frontier step is a pending ask_user_question call: the turn is
+ * suspended on the user's answer, not on work of its own. The waiting row then
+ * plays a fixed "waiting for your answer" sentence instead of a verb — the
+ * verb pools describe what the AGENT is doing, and while a question is open
+ * the honest sentence is that it is waiting on the user. Same walk order as
+ * `frontierStepContext`, so the two can never disagree about the frontier.
+ */
+export function frontierWaitingOnUser(messages: readonly AssistantMsg[]): boolean {
+  for (let messageIndex = messages.length - 1; messageIndex >= 0; messageIndex--) {
+    const content = messages[messageIndex].content
+    for (let partIndex = content.length - 1; partIndex >= 0; partIndex--) {
+      const part = content[partIndex]
+      if (part.type === 'toolCall') return part.name === ASK_USER_TOOL_NAME
+      if (part.type === 'thinking' || part.type === 'text') return false
+    }
+  }
+  return false
 }
 
 /** Wall-clock slot index — the only thing allowed to advance the sentence. */

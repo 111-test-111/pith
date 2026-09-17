@@ -14,6 +14,7 @@ export type LoaderVariant =
   | "bars"
   | "dot-matrix"
   | "dither"
+  | "dither-plus"
   | "ascii"
   | "ascii-line"
   | "ascii-braille"
@@ -25,7 +26,6 @@ export type LoaderVariant =
   | "metaballs"
   | "newton"
   | "helix"
-  | "peeek"
   | "percent";
 
 // Terminal-style frame sets — the loaders CLI AI agents cycle through.
@@ -80,6 +80,9 @@ export function Loader({
         <DotMatrix size={size} speed={speed} reduce={reduce} />
       )}
       {variant === "dither" && <Dither size={size} speed={speed} reduce={reduce} />}
+      {variant === "dither-plus" && (
+        <Dither size={size} speed={speed} reduce={reduce} corners={false} />
+      )}
       {ASCII_SETS[variant] && (
         <Ascii frames={ASCII_SETS[variant]} size={size} speed={speed} reduce={reduce} />
       )}
@@ -93,7 +96,6 @@ export function Loader({
       )}
       {variant === "newton" && <Newton size={size} speed={speed} reduce={reduce} />}
       {variant === "helix" && <Helix size={size} speed={speed} reduce={reduce} />}
-      {variant === "peeek" && <Peeek size={size} speed={speed} reduce={reduce} />}
       {variant === "percent" && (
         <Percent size={size} speed={speed} reduce={reduce} />
       )}
@@ -463,62 +465,6 @@ function Helix({ size, speed, reduce }: PartProps) {
   );
 }
 
-// local patch (pi-app): the owner's "Peeek" loader — ten accent dots pulsing
-// around a still centre dot. Ported from css3-loader-animationpeeek
-// (src/style.scss): dot 1.4em, outward radius 2.8em, inward 1.4em, dot scale and
-// opacity 1 -> 0.5, ten dots 36deg apart, 0.125s stagger inside a 2.5s cycle,
-// infinite. Scaled so the 7em wheel is the `size` square, and painted with
-// `bg-current` — the caller's text colour, which is the theme accent in the
-// waiting row — instead of the reference's green background and white dots.
-function Peeek({ size, speed, reduce }: PartProps) {
-  const dots = 10;
-  const cycle = speed * 2.5;
-  const dot = size * 0.2;
-  const outer = size * 0.4;
-  const inner = size * 0.2;
-  const centre = size / 2 - dot / 2;
-  return (
-    <span className="relative" style={{ width: size, height: size }}>
-      <span
-        className="absolute rounded-full bg-current"
-        style={{ width: dot, height: dot, left: centre, top: centre }}
-      />
-      {Array.from({ length: dots }, (_, index) => (
-        // The rotated frame carries the dot's own radial axis, so the animated
-        // translation below always runs outward from the wheel's centre.
-        <span
-          key={`peeek-${index}`}
-          className="absolute"
-          style={{
-            width: dot,
-            height: dot,
-            left: centre,
-            top: centre,
-            transform: `rotate(${(360 / dots) * index}deg)`,
-          }}
-        >
-          <motion.span
-            className="block rounded-full bg-current"
-            style={{ width: dot, height: dot }}
-            animate={
-              reduce
-                ? { opacity: [1, 0.45, 1] }
-                : { y: [-outer, -inner, -outer], scale: [1, 0.5, 1], opacity: [1, 0.5, 1] }
-            }
-            transition={{
-              duration: cycle,
-              ease: EASE_IN_OUT,
-              repeat: Infinity,
-              // Reference: animation-delay = cycle * i / dots / 2.
-              delay: ((index + 1) * cycle) / (dots * 2),
-            }}
-          />
-        </span>
-      ))}
-    </span>
-  );
-}
-
 function Percent({ size, speed, reduce }: PartProps) {
   const [p, setP] = useState(0);
   useEffect(() => {
@@ -631,7 +577,22 @@ const BAYER_4 = [
   0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5,
 ];
 
-function Dither({ size, speed, reduce }: PartProps) {
+// local patch (pi-app): the four corners of that 4×4 grid — indices 0/3/12/15.
+const DITHER_CORNERS = new Set([0, 3, 12, 15]);
+
+function Dither({
+  size,
+  speed,
+  reduce,
+  corners = true,
+}: PartProps & {
+  // local patch (pi-app): `dither-plus` drops the four corner particles of the
+  // 4×4 Bayer matrix — the waiting row's spinner. Only the corners go: every
+  // surviving cell keeps the registry's cell size, gap, opacity pulse and Bayer
+  // stagger, and takes its own explicit grid slot, because auto-flow would slide
+  // the twelve remaining cells into the four holes.
+  corners?: boolean;
+}) {
   const n = 4;
   const gap = Math.max(1, size * 0.05);
   const cell = (size - gap * (n - 1)) / n;
@@ -640,21 +601,29 @@ function Dither({ size, speed, reduce }: PartProps) {
       className="grid"
       style={{ gap, gridTemplateColumns: `repeat(${n}, ${cell}px)` }}
     >
-      {BAYER_4.map((order, idx) => (
-        <motion.span
-          // biome-ignore lint/suspicious/noArrayIndexKey: fixed matrix cells, order never changes
-          key={idx}
-          className="bg-current"
-          style={{ width: cell, height: cell }}
-          animate={reduce ? { opacity: [0.3, 1, 0.3] } : { opacity: [0.1, 1, 0.1] }}
-          transition={{
-            duration: speed,
-            ease: EASE_IN_OUT,
-            repeat: Infinity,
-            delay: (order / BAYER_4.length) * speed,
-          }}
-        />
-      ))}
+      {BAYER_4.map((order, idx) =>
+        !corners && DITHER_CORNERS.has(idx) ? null : (
+          <motion.span
+            // biome-ignore lint/suspicious/noArrayIndexKey: fixed matrix cells, order never changes
+            key={idx}
+            className="bg-current"
+            style={{
+              width: cell,
+              height: cell,
+              ...(corners
+                ? null
+                : { gridColumn: (idx % n) + 1, gridRow: Math.floor(idx / n) + 1 }),
+            }}
+            animate={reduce ? { opacity: [0.3, 1, 0.3] } : { opacity: [0.1, 1, 0.1] }}
+            transition={{
+              duration: speed,
+              ease: EASE_IN_OUT,
+              repeat: Infinity,
+              delay: (order / BAYER_4.length) * speed,
+            }}
+          />
+        ),
+      )}
     </span>
   );
 }

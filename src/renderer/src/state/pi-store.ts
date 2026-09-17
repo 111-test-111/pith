@@ -15,6 +15,7 @@ import type {
   UserMsg
 } from '../../../shared/types'
 import { DEFAULT_SANDBOX_MODE, type SandboxEscalationRequestDTO, type SandboxMode, type SandboxStatusDTO } from '../../../shared/types'
+import type { AskUserRecordDTO, PendingAskUserDTO } from '../../../shared/ask-user'
 
 export interface ToolRun {
   toolCallId: string
@@ -40,6 +41,8 @@ export interface Notice {
 export interface PiState {
   initializing: boolean
   todos: TodoSnapshotDTO | null
+  /** Every ask_user_question of this session, oldest first (the record panel). */
+  askUserRecords: AskUserRecordDTO[]
   /** Subagent roster of this session (roster cards + tool-row details). */
   subagents: SubagentRunDTO[]
   ready: boolean
@@ -56,6 +59,9 @@ export interface PiState {
   sandbox: SandboxStatusDTO | null
   /** Pending one-shot escalation questions the user has to answer. */
   escalations: SandboxEscalationRequestDTO[]
+  /** Pending ask_user_question sets the user has to answer (subagent
+   * children's questions included — they arrive under this owner path). */
+  pendingAskUser: PendingAskUserDTO[]
   isStreaming: boolean
   /** True while the visible session is itself a subagent child (read-only). */
   subagentChild: boolean
@@ -98,6 +104,8 @@ export interface PiShellState {
   sandbox: SandboxStatusDTO | null
   /** Pending escalation questions for this session, oldest first. */
   escalations: SandboxEscalationRequestDTO[]
+  /** Pending ask_user_question sets for this session, oldest first. */
+  pendingAskUser: PendingAskUserDTO[]
   isStreaming: boolean
   contextUsage: ContextUsageDTO | null
   /** Pending steering/follow-up messages (SDK queue state) for the composer. */
@@ -174,6 +182,7 @@ function insertByTimestamp(messages: ChatMessage[], incoming: ChatMessage): void
 const initialState: PiState = {
   initializing: false,
   todos: null,
+  askUserRecords: [],
   subagents: [],
   subagentChild: false,
   subagentParentPath: null,
@@ -187,6 +196,7 @@ const initialState: PiState = {
   sandboxMode: DEFAULT_SANDBOX_MODE,
   sandbox: null,
   escalations: [],
+  pendingAskUser: [],
   isStreaming: false,
   contextUsage: null,
   eventSequence: 0,
@@ -210,6 +220,7 @@ function shellOf(state: PiState, availableThinkingLevels: ThinkingLevel[]): PiSh
     sandboxMode: state.sandboxMode,
     sandbox: state.sandbox,
     escalations: state.escalations,
+    pendingAskUser: state.pendingAskUser,
     isStreaming: state.isStreaming,
     contextUsage: state.contextUsage,
     queue: state.queue,
@@ -323,6 +334,7 @@ export class PiStore {
       // snapshot carries the pending list (fresh at serialization), so neither
       // a session switch nor an IPC snapshot can lose one to event ordering.
       escalations: snapshot.escalations ?? (unchanged ? (cached?.escalations ?? []) : []),
+      pendingAskUser: snapshot.pendingAskUser ?? (unchanged ? (cached?.pendingAskUser ?? []) : []),
       cwd: snapshot.cwd,
       projectless: snapshot.projectless,
       sessionId: snapshot.sessionId,
@@ -342,6 +354,7 @@ export class PiStore {
       eventSequence: snapshotSequence,
       messages: unchanged ? cached.messages : snapshot.messages,
       todos: unchanged ? cached.todos : (snapshot.todos ?? null),
+      askUserRecords: unchanged ? cached.askUserRecords : (snapshot.askUserRecords ?? []),
       subagents,
       streaming: unchanged ? cached.streaming : (snapshot.streaming ?? null),
       toolRuns: unchanged ? cached.toolRuns : (snapshot.toolRuns ?? {}),
@@ -482,6 +495,10 @@ export class PiStore {
     // Main sends committed task state with its sequenced message/branch event.
     // It is independent of compaction's replacement transcript.
     if ('todos' in event) this.state = { ...this.state, todos: event.todos ?? null }
+    const eventRecords = (event as { askUserRecords?: unknown }).askUserRecords
+    if (Array.isArray(eventRecords)) {
+      this.state = { ...this.state, askUserRecords: eventRecords as AskUserRecordDTO[] }
+    }
     switch (event.type) {
       case 'session_initialized':
         this.setAvailableThinkingLevels(event.availableThinkingLevels)
@@ -689,6 +706,19 @@ export class PiStore {
         this.set({
           escalations: Array.isArray(event.requests)
             ? (event.requests as SandboxEscalationRequestDTO[])
+            : []
+        })
+        break
+      }
+
+      // Main republishes the whole pending question-set list for one chat
+      // whenever it changes; only the visible session's questions belong here
+      // (a subagent child's set arrives under the parent's owner path).
+      case 'ask_user': {
+        if (event.sessionPath && event.sessionPath !== this.state.sessionPath) break
+        this.set({
+          pendingAskUser: Array.isArray(event.requests)
+            ? (event.requests as PendingAskUserDTO[])
             : []
         })
         break

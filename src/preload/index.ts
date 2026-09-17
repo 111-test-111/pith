@@ -1,3 +1,4 @@
+import type { AskUserAnswer } from '../shared/ask-user'
 import type { RewindPatchDTO, RewindStatsDTO, RewindStatsTargetDTO } from '../shared/types'
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type {
@@ -14,6 +15,7 @@ import type {
   AuthPromptDTO,
   AuthNotifyDTO,
   CatalogRecommendationDTO,
+  ContextDetailDTO,
   CustomModelDTO,
   DefaultModelDTO,
   DiscoveredModelDTO,
@@ -49,6 +51,8 @@ import type {
   SkillContentDTO,
   StartupSessionMode,
   SubagentActionPayload,
+  SubagentProfileCreatePayload,
+  SubagentProfilesDTO,
   SubagentRunDTO,
   TestModelResultDTO,
   ThinkingLevel,
@@ -93,6 +97,9 @@ const api = {
   stopBashTask: (request: BashTaskRequest): Promise<BashTaskDTO> => ipcRenderer.invoke('bash:stop', request),
   onBashTask: (listener: (task: BashTaskDTO) => void) => subscribe('pi:bash-task', listener),
   setBashMaxWaitMs: (value: number): Promise<number> => ipcRenderer.invoke('app:setBashMaxWaitMs', value),
+  /** Auto-settle deadline for an unanswered ask_user_question panel, in seconds. */
+  setAskUserTimeoutSeconds: (value: number): Promise<number> =>
+    ipcRenderer.invoke('app:setAskUserTimeoutSeconds', value),
   setSandboxMode: (mode: SandboxMode): Promise<SandboxMode> => ipcRenderer.invoke('app:setSandboxMode', mode),
   /** Change one session's mode; resolves with that session's fresh snapshot. */
   setSessionSandboxMode: (sessionPath: string, mode: SandboxMode): Promise<SessionSnapshotDTO> =>
@@ -107,6 +114,12 @@ const api = {
   /** Answer one pending sandbox escalation for a session. */
   respondEscalation: (requestId: string, sessionPath: string, decision: SandboxEscalationDecision): Promise<boolean> =>
     ipcRenderer.invoke('sandbox:respondEscalation', requestId, sessionPath, decision),
+  /** Answer (or dismiss) one pending ask_user_question set for a session. */
+  respondAskUser: (requestId: string, ownerPath: string, payload: { answers?: AskUserAnswer[]; cancelled?: boolean }): Promise<boolean> =>
+    ipcRenderer.invoke('askUser:respond', requestId, ownerPath, payload),
+  /** The user touched the panel: main cancels the auto-settle countdown. */
+  askUserEngage: (requestId: string, ownerPath: string): Promise<boolean> =>
+    ipcRenderer.invoke('askUser:engage', requestId, ownerPath),
   listSubagents: (sessionPath: string): Promise<SubagentRunDTO[]> => ipcRenderer.invoke('subagents:list', sessionPath),
   /** One session's transcript without making it the active session (the rail's
    * read-only subagent view). */
@@ -115,6 +128,18 @@ const api = {
   setSubagentsEnabled: (enabled: boolean): Promise<boolean> => ipcRenderer.invoke('subagents:setEnabled', enabled),
   setSubagentMaxConcurrent: (value: number): Promise<number> =>
     ipcRenderer.invoke('subagents:setMaxConcurrent', value),
+  /** Every subagent profile visible in the active workspace (Settings →
+   * Subagents), plus the directories a new file can land in. Each profile is
+   * an ordinary Markdown file; there is no builtin split. */
+  subagentProfiles: (): Promise<SubagentProfilesDTO> => ipcRenderer.invoke('subagents:profiles'),
+  /** Create one new profile file; resolves with the fresh list/dirs (live
+   * sessions reload so the agent tool roster picks it up). */
+  createSubagentProfile: (payload: SubagentProfileCreatePayload): Promise<SubagentProfilesDTO> =>
+    ipcRenderer.invoke('subagents:createProfile', payload),
+  /** Rewrite one profile's `tools:` frontmatter line; resolves with the fresh
+   * list/dirs (live sessions reload so the agent tool roster updates). */
+  setSubagentProfileTools: (filePath: string, tools: 'all' | string[]): Promise<SubagentProfilesDTO> =>
+    ipcRenderer.invoke('subagents:setProfileTools', filePath, tools),
   appInfo: (): Promise<AppInfoDTO> => ipcRenderer.invoke('app:info'),
   setContextFiles: (enabled: boolean): Promise<boolean> =>
     ipcRenderer.invoke('app:setContextFiles', enabled),
@@ -129,6 +154,8 @@ const api = {
   searchSessions: (request: SessionSearchRequest): Promise<SessionSearchResultDTO> =>
     ipcRenderer.invoke('pi:searchSessions', request),
   usageStats: (): Promise<UsageStatsDTO> => ipcRenderer.invoke('pi:usageStats'),
+  contextDetail: (sessionPath?: string): Promise<ContextDetailDTO> =>
+    ipcRenderer.invoke('pi:contextDetail', sessionPath),
   deleteSession: (path: string): Promise<SessionSnapshotDTO | null> =>
     ipcRenderer.invoke('pi:deleteSession', path),
   renameSession: (path: string, name: string): Promise<void> =>

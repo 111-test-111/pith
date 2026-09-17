@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Brain, ChevronLeft, ChevronRight, Loader2 } from '@/lib/icons'
+import { Brain, ChevronLeft, Loader2 } from '@/lib/icons'
 import {
   Combobox,
   ComboboxContent,
@@ -15,6 +15,7 @@ import { Tooltip } from '@/components/motion/tooltip'
 import { useI18n } from '@/i18n'
 import type { MessageKey } from '@/i18n/locales/en'
 import { ProviderIcon } from './ProviderIcon'
+import { ModelInputBadges } from './ModelInputBadges'
 import type { ModelDTO, ThinkingLevel } from '../../../../shared/types'
 
 type Translate = ReturnType<typeof useI18n>['t']
@@ -231,19 +232,20 @@ export function ModelPicker({
                       keywords={[model.providerName, model.providerId, model.id]}
                       className="py-1.5"
                     >
+                      {/* Name/meta column, with the inputs it accepts stated
+                          in the meta line. */}
                       <span className="flex min-w-0 flex-1 flex-col">
                         <span className="truncate text-sm text-foreground">{model.name}</span>
-                        <span className="truncate text-[11px] text-muted-foreground">
-                          {model.reasoning ? t('model.reasoning') : t('model.standard')}
-                          {model.contextWindow
-                            ? ` · ${t('model.contextK', { k: Math.round(model.contextWindow / 1000) })}`
-                            : ''}
+                        <span className="flex min-w-0 items-center gap-1 text-[11px] text-muted-foreground">
+                          <span className="truncate">
+                            {model.reasoning ? t('model.reasoning') : t('model.standard')}
+                            {model.contextWindow
+                              ? ` · ${t('model.contextK', { k: Math.round(model.contextWindow / 1000) })}`
+                              : ''}
+                          </span>
+                          <ModelInputBadges input={model.input} />
                         </span>
                       </span>
-                      {/* A reasoning model has a second step; hint it. */}
-                      {model.reasoning ? (
-                        <ChevronRight aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
-                      ) : null}
                     </ComboboxItem>
                   ))}
                 </ComboboxGroup>

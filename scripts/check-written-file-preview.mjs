@@ -199,6 +199,16 @@ app.on('window-all-closed',()=>app.quit());`)
   assert.equal(bottom.height,3000*20,'virtual rows retain the complete scroll range')
   assert.ok(bottom.text.includes('file1Line3000'),'last line is reachable')
   assert.ok(bottom.rows<=40,'scrolling does not expand the mounted window')
+  // The cap's clipped edge fades instead of cutting a line, and only the edge
+  // that actually hides content carries the ramp: scrolled to the end, the
+  // bottom edge is content's own end.
+  const fadeAtEnd=await evaluate(`(()=>{const v=document.querySelector('[data-slot="file-diff-viewport"]');const s=getComputedStyle(v);return {fade:v.dataset.fade,mask:s.maskImage==='none'?'':s.maskImage,overflow:v.scrollHeight-v.clientHeight,top:v.scrollTop}})()`)
+  assert.ok(fadeAtEnd.overflow>0,'the preview body is taller than its cap')
+  assert.equal(fadeAtEnd.fade,'top','scrolled to the end, only the top edge fades')
+  assert.match(fadeAtEnd.mask,/12px/,'the clipped edge is masked, not cut')
+  const fadeAtTop=await evaluate(`(async()=>{const v=document.querySelector('[data-slot="file-diff-viewport"]');v.scrollTop=0;await new Promise(r=>setTimeout(r,80));return {fade:v.dataset.fade,mask:getComputedStyle(v).maskImage}})()`)
+  assert.equal(fadeAtTop.fade,'bottom','at the top only the bottom edge fades')
+  assert.match(fadeAtTop.mask,/12px/,'and the ramp is applied there too')
   await move(positions[1].cx,positions[1].y);await pause(240)
   assert.equal(await panels(),1,'returning from panel to row keeps it open')
   await click(positions[1].cx,positions[1].y);await move(50,50);await pause(240)
@@ -261,6 +271,11 @@ app.on('window-all-closed',()=>app.quit());`)
   assert.deepEqual(surfaceHeights[0].map(v=>v.height),[20,60,160,220],'transcript diffs shrink to content and cap only long bodies')
   assert.deepEqual(surfaceHeights[1].map(v=>v.height),[20,60,160,800],'review bodies use full content height with no minimum or cap')
   assert.deepEqual(surfaceHeights.map(items=>items.map(v=>v.scrollHeight)),[[20,60,160,800],[20,60,160,800]],'both views retain exactly the complete line height')
+  // Only the body whose cap actually hides a line carries the ramp; an uncapped
+  // review body (`maxHeightOverride={null}`) never masks.
+  const surfaceFades=await evaluate(`['transcript-diffs','review-diffs'].map(id=>[...document.querySelectorAll('#'+id+' [data-slot="file-diff-viewport"]')].map(v=>v.dataset.fade))`)
+  assert.deepEqual(surfaceFades[0],['none','none','none','bottom'],'only the capped transcript body masks, and only its bottom edge')
+  assert.deepEqual(surfaceFades[1],['none','none','none','none'],'an uncapped review body never masks')
   await evaluate('window.checkRoot.unmount()')
   console.log('Transcript and review diffs fit 1-, 3-, 8- and 40-line content without reserved space.')
   console.log('Passed hover, frame geometry, scroll, pin, keyboard, cold-token, cross-turn and cleanup checks.')

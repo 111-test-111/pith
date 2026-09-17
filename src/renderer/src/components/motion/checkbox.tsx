@@ -19,6 +19,11 @@ export interface CheckboxProps {
   "aria-label"?: string;
   /** Associates an external message (e.g. a form error) with the control. */
   "aria-describedby"?: string;
+  // local patch (pi-app): the mark the box draws when it is on. `check` is the
+  // list-selection glyph (multi-select, filters); `square` is the app's on/off
+  // control — it replaced every `Switch`, so "selected = on" is a primary point
+  // inset in the frame instead of a check.
+  mark?: 'check' | 'square';
 }
 
 export function Checkbox({
@@ -31,11 +36,13 @@ export function Checkbox({
   id: idProp,
   "aria-label": ariaLabel,
   "aria-describedby": ariaDescribedBy,
+  mark = 'check',
 }: CheckboxProps) {
   const autoId = useId();
   const id = idProp ?? autoId;
   const reduce = useReducedMotion();
   const showMark = checked || indeterminate;
+  const square = mark === 'square';
 
   return (
     <label
@@ -61,48 +68,77 @@ export function Checkbox({
           checked ? "checked" : indeterminate ? "indeterminate" : "unchecked"
         }
         className={cn(
-          "inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md border-2 outline-none transition-colors duration-200",
+          // local patch (pi-app): square-style branch — hard-edged like every
+          // other control, and text-sized (14px box, 9px mark) rather than the
+          // vendored 20px one, which read heavier than the line it marks.
+          "inline-flex size-3.5 shrink-0 items-center justify-center rounded-control border-2 outline-none transition-colors duration-200",
           "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
           "disabled:cursor-not-allowed disabled:opacity-60",
           showMark
-            ? "border-primary bg-primary text-primary-foreground"
+            ? square
+              ? // local patch (pi-app): the square mark's fill is the point
+                // INSIDE the frame, so the box's own interior stays open and
+                // only the frame takes the primary border when it is on.
+                "border-primary bg-background"
+              : "border-primary bg-primary text-primary-foreground"
             : "border-muted-foreground/50 bg-background hover:border-muted-foreground",
         )}
       >
-        <AnimatePresence initial={false}>
-          {showMark ? (
-            <AnimatedIcon
-              icon={indeterminate ? "minus" : "check"}
-              key={indeterminate ? "indeterminate" : "checked"}
-              width="12"
-              height="12"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth={2}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              initial={reduce ? { opacity: 1 } : { opacity: 0, scale: 0.5 }}
-              animate={reduce ? { opacity: 1 } : { opacity: 1, scale: 1 }}
-              exit={
-                reduce
-                  ? { opacity: 0 }
-                  : { opacity: 0, scale: 0.5, filter: "blur(4px)" }
-              }
-              transition={
-                reduce ? { duration: 0 } : { duration: 0.16, ease: EASE_OUT }
-              }
-              draw={{
-                initial: reduce ? { pathLength: 1 } : { pathLength: 0 },
-                animate: { pathLength: 1 },
-                transition: reduce ? { duration: 0 } : { duration: indeterminate ? 0.2 : 0.3, ease: EASE_OUT, delay: 0.04 },
-              }}
-              aria-hidden
+        {square ? (
+          <AnimatePresence initial={false}>
+            {showMark ? (
+              <motion.span
+                key="square"
+                data-checkbox-square
+                // A true square at every corner preset: the point-selection
+                // mark is the one glyph that must not follow the radius scale.
+                className="size-1.5 bg-primary"
+                initial={reduce ? { opacity: 1 } : { opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={
+                  reduce ? { duration: 0 } : { duration: 0.14, ease: EASE_OUT }
+                }
+                aria-hidden
+              />
+            ) : null}
+          </AnimatePresence>
+        ) : (
+          <AnimatePresence initial={false}>
+            {showMark ? (
+              <AnimatedIcon
+                icon={indeterminate ? "minus" : "check"}
+                key={indeterminate ? "indeterminate" : "checked"}
+                width="9"
+                height="9"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={2}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                initial={reduce ? { opacity: 1 } : { opacity: 0, scale: 0.5 }}
+                animate={reduce ? { opacity: 1 } : { opacity: 1, scale: 1 }}
+                exit={
+                  reduce
+                    ? { opacity: 0 }
+                    : { opacity: 0, scale: 0.5, filter: "blur(4px)" }
+                }
+                transition={
+                  reduce ? { duration: 0 } : { duration: 0.16, ease: EASE_OUT }
+                }
+                draw={{
+                  initial: reduce ? { pathLength: 1 } : { pathLength: 0 },
+                  animate: { pathLength: 1 },
+                  transition: reduce ? { duration: 0 } : { duration: indeterminate ? 0.2 : 0.3, ease: EASE_OUT, delay: 0.04 },
+                }}
+                aria-hidden
             >
               <title>{indeterminate ? "Partially selected" : "Selected"}</title>
-            </AnimatedIcon>
-          ) : null}
-        </AnimatePresence>
+              </AnimatedIcon>
+            ) : null}
+          </AnimatePresence>
+        )}
       </motion.button>
       {label ? (
         <span className={cn("select-none text-sm text-foreground", disabled && "opacity-60")}>

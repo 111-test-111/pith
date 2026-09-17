@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useId, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
-import { ChevronDown, Diff, Undo2 } from '@/lib/icons'
+import { ChevronDown, Diff, Rewind } from '@/lib/icons'
 import { getCachedAgentCodeTokens, prefetchAgentCodeTokens } from '@/components/agents/agent-code'
 import { FileDiff, type FileDiffLine } from '@/components/agents/file-diff'
 import { Button } from '@/components/motion/button'
@@ -344,7 +344,7 @@ export const TurnWrittenFiles = memo(function TurnWrittenFiles({
               </Button>
             ) : null}
             <Button variant="ghost" size="sm">
-              {t('tool.filesUndo')}<Undo2 aria-hidden="true" className="size-3.5" />
+              {t('tool.filesUndo')}<Rewind aria-hidden="true" className="size-3.5" />
             </Button>
             <Button variant="ghost" size="sm" onClick={onReview}>{t('tool.filesReview')}</Button>
           </span>

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
-import { AlertTriangle, ChevronDown, Info, RotateCcw } from '@/lib/icons'
+import { AlertTriangle, ChevronDown, Info, Rewind } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
 import { MorphPopover, MorphPopoverContent, MorphPopoverTrigger } from '@/components/motion/popover-morph'
 import { useI18n } from '@/i18n'
@@ -42,7 +42,7 @@ export function RewindActions({ mode, onModeChange, onRestore, actionLabel, disa
   return <div className="ml-auto flex shrink-0 items-center gap-1">
     <div className="flex items-center">
       <Button ref={actionRef} data-rewind-restore data-rewind-selected-mode={mode} variant="primary" size="sm" whileHover={undefined} whileTap={undefined} className="h-8 gap-1.5 rounded-r-none px-2.5 text-xs" disabled={disabled} aria-label={actionLabel ?? t(`rewind.restoreMode.${mode}`)} onClick={onRestore}>
-        <RotateCcw aria-hidden="true" className="hidden size-3.5 @min-[500px]:block" />
+        <Rewind aria-hidden="true" className="hidden size-3.5 @min-[500px]:block" />
         {actionLabel ?? <><span className="hidden @min-[500px]:inline">{t(`rewind.restoreMode.${mode}`)}</span><span className="@min-[500px]:hidden">{t(`rewind.shortMode.${mode}`)}</span></>}
       </Button>
       <MorphPopover open={open === 'mode'} onOpenChange={value => setOpen(value ? 'mode' : null)}>

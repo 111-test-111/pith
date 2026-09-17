@@ -7,6 +7,10 @@ import { parseUnifiedDiff, countDiffChanges, synthesizeWritePatch } from '@/lib/
 import { basename } from '@/lib/format'
 import { displayToolDir } from '@/lib/tool-path'
 import { ToolIcon } from '@/lib/tool-icons'
+import { cn } from '@/lib/utils'
+import { TRANSCRIPT_ROW, TRANSCRIPT_ROW_WIDTH } from '@/lib/transcript-rhythm'
+import { firstAskUserQuestionText, isAskUserToolDetails, askUserRecordKind } from '../../../../shared/ask-user'
+import { AskUserKindChip } from './AskUserRecordList'
 import type { ImageContent, ToolCallContent, ToolResultMsg } from '../../../../shared/types'
 import type { ToolRun } from '@/state/pi-store'
 import { useI18n } from '@/i18n'
@@ -186,6 +190,19 @@ function LazyDiff({ file, diff, status, tool }: LazyDiffProps) {
 }
 
 /**
+ * The ask_user_question tool's settled details, from the committed result or
+ * (while the run is still open) its partial — same source discipline as
+ * `patchOf`.
+ */
+function askUserDetails(result: ToolResultMsg | undefined, run: ToolRun | undefined) {
+  const sources = [result?.details, (run?.partial as any)?.details] as unknown[]
+  for (const source of sources) {
+    if (isAskUserToolDetails(source)) return source
+  }
+  return null
+}
+
+/**
  * Maps a pi tool call + its execution state onto beUI disclosure components:
  * every tool becomes a ToolResult row (edit/write prefer a FileDiff surface when
  * the SDK returned a unified diff). The row's glyph comes from the app-wide
@@ -229,6 +246,25 @@ export const ToolCallView = memo(function ToolCallView({ call, result, run, cwd 
   )
 
   switch (call.name) {
+    case 'ask_user_question': {
+      // The row names the question instead of the bare tool name — the first
+      // question is what the user needs to recognize while it waits for them —
+      // and stops there: the Q&A record itself lives in the strip's own panel
+      // (`AskUserRecordList`), never in the transcript.
+      const details = askUserDetails(result, run)
+      const firstQuestion = firstAskUserQuestionText(args)
+      const title = [t('askUser.rowVerb'), firstQuestion].filter(Boolean).join(' · ')
+      return (
+        <div
+          data-ask-user-row
+          className={cn(TRANSCRIPT_ROW, TRANSCRIPT_ROW_WIDTH, 'flex-row items-center gap-2')}
+        >
+          <ToolIcon name="ask_user_question" className="size-4 text-muted-foreground" />
+          <span className="min-w-0 flex-1 truncate text-sm text-foreground">{title}</span>
+          <AskUserKindChip kind={details ? askUserRecordKind(details) : 'pending'} />
+        </div>
+      )
+    }
     case 'todo_write':
       return (
         <ToolResult animateChanges={false} lazyContent open={open} onOpenChange={setOpen}

@@ -1,8 +1,11 @@
 /**
  * Tooltip lifecycle around overlays, in isolated Electron: no model calls, no
- * user data. The real `SessionSearchTrigger` + `CenterMorphModal` pair is the
- * scenario — hovering the search button, opening the panel, dismissing it by
- * pressing the backdrop and getting focus handed back to the trigger.
+ * user data. Two scenarios share one page: the real `SessionSearchTrigger` +
+ * `CenterMorphModal` pair (hovering the search button, opening the panel,
+ * dismissing it by pressing the backdrop and getting focus handed back to the
+ * trigger), and the real `ContextRing` — a control since it opens the rail's
+ * context pane — where a press must both dismiss the readout it was showing and
+ * deliver the click that opens the pane.
  */
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
@@ -25,14 +28,17 @@ import {Tooltip} from '/src/components/motion/tooltip.tsx';
 import {Button} from '/src/components/motion/button/index.tsx';
 import {CenterMorphModal,CenterMorphModalContent,CenterMorphModalTrigger} from '/src/components/motion/center-morph-modal.tsx';
 import {SessionSearchTrigger} from '/src/components/app/SessionSearch.tsx';
+import {ContextRing} from '/src/components/app/ContextRing.tsx';
 import '/src/styles.css';
 localStorage.setItem('pi-app:locale','en');
+const USAGE={tokens:85000,contextWindow:200000,percent:42.5,sessionCost:1.2345,cacheHitRate:0.93};
 function Fixture(){
   const [open,setOpen]=React.useState(false);window.setPanelOpen=setOpen;
   return React.createElement(I18nProvider,null,
     React.createElement('div',{id:'plain-fixture',style:{padding:'24px 24px 8px'}},
       React.createElement(Tooltip,{content:'Plain label'},
-        React.createElement(Button,{id:'plain-trigger',variant:'ghost',size:'icon','aria-label':'Plain trigger'},'?'))),
+        React.createElement(Button,{id:'plain-trigger',variant:'ghost',size:'icon','aria-label':'Plain trigger'},'?')),
+      React.createElement('span',{id:'status-fixture'},React.createElement(ContextRing,{usage:USAGE,onOpen:()=>{window.ringOpened=(window.ringOpened||0)+1}}))),
     React.createElement(CenterMorphModal,{open,onOpenChange:setOpen},
       React.createElement('div',{id:'search-fixture',style:{padding:'24px 24px 40px'}},React.createElement(SessionSearchTrigger)),
       React.createElement(CenterMorphModalContent,{ariaLabel:'Session search',closeButtonLabel:'Close search'},
@@ -98,7 +104,29 @@ try {
   await pause(250)
   assert.deepEqual(await evaluate('window.labels()'), [], 'a press dismisses the label')
 
-  // 3. The reported case: hover the search button, open the panel, dismiss it by
+  // 3. The composer's context ring opens the rail's context pane, so it is a
+  //    control: a press takes the readout down (the bubble must not hang over
+  //    the panel the click just opened) AND delivers the click.
+  const ring = `#status-fixture button`
+  assert.ok(await evaluate(`!!document.querySelector('${ring}')`), 'the real context ring is mounted as a button')
+  await evaluate(`window.hover(document.querySelector('${ring}'))`)
+  await pause(600)
+  const hovered = await evaluate('window.labels()')
+  assert.equal(hovered.length, 1, 'hovering the ring shows its readout')
+  // The numbers count up from zero (AnimatedNumber/NumberTicker), so the
+  // assertion is about what the readout *is*, not a mid-animation digit.
+  assert.match(hovered[0].text, /context used/, 'and the readout is the ring content: ' + hovered[0].text)
+  assert.match(hovered[0].text, /\d+(\.\d+)?%/, 'with the live percent: ' + hovered[0].text)
+  assert.match(hovered[0].text, /200\.0K/, 'and the window: ' + hovered[0].text)
+  await evaluate(`window.press(document.querySelector('${ring}'))`)
+  await pause(250)
+  assert.deepEqual(await evaluate('window.labels()'), [], 'a press on the ring dismisses its readout')
+  assert.equal(await evaluate('window.ringOpened'), 1, 'and the click opens the context pane')
+  await evaluate(`window.unhover(document.querySelector('${ring}'))`)
+  await pause(250)
+  assert.deepEqual(await evaluate('window.labels()'), [], 'leaving the ring still closes it')
+
+  // 4. The reported case: hover the search button, open the panel, dismiss it by
   //    pressing the backdrop. Closing hands focus back to the trigger, which is
   //    not the user asking for a label.
   await evaluate(`window.unhover(document.querySelector('${plain}'))`)
@@ -117,7 +145,7 @@ try {
   assert.ok(closed.focused, 'closing hands focus back to the trigger: ' + JSON.stringify(closed))
   assert.deepEqual(closed.labels, [], 'a restored focus must not resurrect the label: ' + JSON.stringify(closed))
 
-  // 4. The keyboard path survives: Tab (a key press) focusing the trigger still
+  // 5. The keyboard path survives: Tab (a key press) focusing the trigger still
   //    shows its label, so the fix is about the input, not about focus.
   await pause(400)
   // Park focus somewhere else first: `focus()` on the already-focused trigger
@@ -131,7 +159,7 @@ try {
   assert.ok(labelled.focused, 'the trigger is focused')
   assert.equal(labelled.labels.length, 1, 'keyboard focus still shows the label: ' + JSON.stringify(labelled))
 
-  // 5. Escape closes the panel too, and the keyboard user keeps their label of
+  // 6. Escape closes the panel too, and the keyboard user keeps their label of
   //    where focus landed instead of leaving it invisible.
   await evaluate(`window.press(document.querySelector('${search}'))`)
   await pause(150)
@@ -146,7 +174,7 @@ try {
     await mkdir(process.env.PI_TOOLTIP_SCREENSHOT_DIR, { recursive: true })
     await writeFile(join(process.env.PI_TOOLTIP_SCREENSHOT_DIR, 'tooltip-after-dismiss.png'), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'))
   }
-  console.log('PASS: tooltip lifecycle around overlays — hover/press, pointer dismissal with focus restoration, keyboard focus, and Escape.')
+  console.log('PASS: tooltip lifecycle around overlays — hover/press, the context ring as a control (press dismisses its readout and opens the pane), pointer dismissal with focus restoration, keyboard focus, and Escape.')
 } finally {
   ws?.close()
   child?.kill()

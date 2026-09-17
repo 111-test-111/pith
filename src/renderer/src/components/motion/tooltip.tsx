@@ -110,6 +110,23 @@ const REDUCED_VARIANTS: Variants = {
   exit: { opacity: 0, transition: { duration: 0.1, ease: EASE_OUT } },
 };
 
+// local patch (pi-app): a press only dismisses the label when the press can
+// open something of its own.
+//
+// The rule used to be unconditional, so pressing a trigger that is not a
+// control — the composer's context ring is a `role="status"` readout, and the
+// file find bar's match counter is another — took away the label the user was
+// pointing at and gave nothing back: the bubble only returned after leaving the
+// trigger and re-entering it. A real control (button, menu item, option, a
+// focusable field) still drops the label on press, because the overlay that
+// press opens must never carry the stale bubble above itself.
+const INTERACTIVE_PRESS =
+  'button, a[href], input, select, textarea, summary, [tabindex], [role="button"], [role="link"], [role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"], [role="option"], [role="tab"], [role="switch"], [role="checkbox"], [role="radio"], [role="slider"]';
+
+function pressCanAct(target: EventTarget | null): boolean {
+  return target instanceof Element && target.closest(INTERACTIVE_PRESS) !== null;
+}
+
 /** The corner the bubble grows out of: the one facing its trigger. */
 function originFor(placement: Placement): string {
   const [side, align] = placement.split("-") as [Side, Align | undefined];
@@ -302,13 +319,14 @@ export function Tooltip({
         }}
         onBlur={hide}
         onPointerDown={(event: PointerEvent) => {
-          // Pressing the trigger is not a request for the label either, and the
-          // overlay the press may open would otherwise carry the old bubble
-          // above it: hide on press, as a native tooltip does. The tap record
-          // still holds the state the press began on, so `toggleOnTap` keeps
-          // acting on what the finger pressed, not on what this hid.
+          // Pressing a real trigger is not a request for the label either, and
+          // the overlay the press may open would otherwise carry the old bubble
+          // above it: hide on press, as a native tooltip does. A trigger that
+          // cannot act (see `pressCanAct`) keeps its label. The tap record still
+          // holds the state the press began on, so `toggleOnTap` keeps acting on
+          // what the finger pressed, not on what this hid.
           tap.start(event, open);
-          hide();
+          if (pressCanAct(event.target)) hide();
         }}
         // A gesture the platform took away sends no click, and a key press
         // starts an activation that never had a pointer behind it. Either way

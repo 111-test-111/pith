@@ -1,7 +1,8 @@
 import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/motion/select'
-import { ShieldCheck } from '@/lib/icons'
+import { AlertTriangle, Eye, FilePen, type IconComponent } from '@/lib/icons'
 import { useI18n } from '@/i18n'
 import { useToast } from './ToastProvider'
+import { cn } from '@/lib/utils'
 import { SANDBOX_MODES, type SandboxMode, type SandboxStatusDTO, type SessionSnapshotDTO } from '../../../../shared/types'
 import type { MessageKey } from '@/i18n/locales/en'
 
@@ -17,9 +18,35 @@ const MODE_DESCRIPTION: Record<SandboxMode, MessageKey> = {
   'danger-full-access': 'sandbox.fullAccessDesc'
 }
 
+/** One glyph per mode: look, write here, run unconfined. */
+const MODE_ICON: Record<SandboxMode, IconComponent> = {
+  'read-only': Eye,
+  'workspace-write': FilePen,
+  'danger-full-access': AlertTriangle
+}
+
+/** The one mode that runs unconfined, and so wears the warning colour. */
+const FULL_ACCESS: SandboxMode = 'danger-full-access'
+const WARNING_TONE = 'text-amber-600 dark:text-amber-400'
+
+/**
+ * Full access is the mode that runs on the host, so its glyph — in the trigger
+ * and in the list — keeps the warning tone. A host with no runner refuses the
+ * two confined modes instead, which is what their destructive tint says.
+ */
+function modeTone(mode: SandboxMode, unenforceable: boolean): string {
+  if (mode === FULL_ACCESS) return WARNING_TONE
+  return unenforceable ? 'text-destructive' : ''
+}
+
 /**
  * The session's DSH file-sandbox mode, at the bottom of the composer next to the
  * model picker.
+ *
+ * A dropdown, but every entry leads with a glyph of its own: the eye, the file
+ * and pen, the warning triangle. The trigger shows the selected mode's glyph so
+ * the current permission is readable without opening the list, and the one mode
+ * that runs unconfined carries the warning colour everywhere.
  *
  * Switching records the mode on the session's branch and returns the refreshed
  * snapshot. The tools read the live value, so the change applies from the next
@@ -51,6 +78,7 @@ export function SandboxModePicker({
   // Only a mode that can actually be enforced is worth offering as safe; the
   // status line stays in Settings, where there is room to explain the host.
   const unenforceable = status?.support === 'dependencies-missing'
+  const CurrentIcon = MODE_ICON[mode]
 
   return (
     <Select
@@ -64,24 +92,41 @@ export function SandboxModePicker({
         className="h-8 w-auto gap-1.5 rounded-control border-0 bg-transparent px-2.5 text-xs hover:bg-muted"
       >
         <span className="flex min-w-0 items-center gap-1.5 whitespace-nowrap">
-          <ShieldCheck
+          <CurrentIcon
             aria-hidden="true"
-            className={unenforceable ? 'size-3.5 shrink-0 text-destructive' : 'size-3.5 shrink-0'}
+            data-sandbox-mode-icon={mode}
+            className={cn('size-3.5 shrink-0', modeTone(mode, unenforceable))}
           />
-          <span className="max-w-44 truncate">{t(MODE_LABEL[mode])}</span>
+          <span className={cn('max-w-44 truncate', mode === FULL_ACCESS && WARNING_TONE)}>
+            {t(MODE_LABEL[mode])}
+          </span>
         </span>
       </SelectTrigger>
       <SelectContent className="left-0 right-auto w-72">
-        {SANDBOX_MODES.map((option) => (
-          <SelectItem key={option} value={option} className="py-1.5">
-            <span className="flex min-w-0 flex-col">
-              <span className="truncate">{t(MODE_LABEL[option])}</span>
-              <span className="text-[10px] leading-4 text-muted-foreground">
-                {t(MODE_DESCRIPTION[option])}
+        {SANDBOX_MODES.map((option) => {
+          const OptionIcon = MODE_ICON[option]
+          return (
+            <SelectItem key={option} value={option} className="py-1.5">
+              <span
+                data-sandbox-mode-option={option}
+                className="flex min-w-0 items-start gap-2"
+              >
+                <OptionIcon
+                  aria-hidden="true"
+                  className={cn('mt-0.5 size-4 shrink-0', modeTone(option, unenforceable))}
+                />
+                <span className="flex min-w-0 flex-col">
+                  <span className={cn('truncate', option === FULL_ACCESS && WARNING_TONE)}>
+                    {t(MODE_LABEL[option])}
+                  </span>
+                  <span className="text-[10px] leading-4 text-muted-foreground">
+                    {t(MODE_DESCRIPTION[option])}
+                  </span>
+                </span>
               </span>
-            </span>
-          </SelectItem>
-        ))}
+            </SelectItem>
+          )
+        })}
       </SelectContent>
     </Select>
   )

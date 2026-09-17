@@ -13,6 +13,13 @@ import {
 export interface TurnStatusProps {
   className?: string
   /**
+   * True when the turn is suspended on a pending ask_user_question: the row
+   * then plays a fixed localized "waiting for your answer" sentence instead
+   * of a rotating verb — this is the turn's actual state, not flavor text, so
+   * it renders even with spinner verbs switched off.
+   */
+  waitingUser?: boolean
+  /**
    * Frontier step of the live turn — reasoning, or the kind of tool call that
    * is running — which selects the verb pool. Defaults to the thinking pool,
    * the honest answer while no round has produced a part yet.
@@ -35,22 +42,23 @@ export interface TurnStatusProps {
  *
  * With spinner verbs on (Settings → General, default) the row plays a Claude
  * Code style status sentence matched to the step that is running; loader and
- * sentence both wear the theme accent — the `peeek` dots are drawn in
+ * sentence both wear the theme accent — the dither particles are drawn in
  * `currentColor` (the row passes `text-primary`) and the sentence's beUI
  * `TextShimmer` is tinted to the same accent — and the sentence keeps the
  * component's own reduced-motion reset. Off, the row is exactly what it always
  * was: the plain spinner with only a screen-reader label.
  *
- * The loader is deliberately not `morph` (an SVG path's `d` every frame is
- * uncacheable, non-composited raster work) and not app-local art: `peeek` is the
- * reference ten-dot pulse ported into the vendored Loader, so the row keeps one
- * loader component with its `role=status` wiring and reduced-motion contract.
+ * The loader is deliberately beUI's own art and not `morph` (an SVG path's `d`
+ * every frame is uncacheable, non-composited raster work): `dither-plus` is the
+ * registry's `dither` — `opacity` on fixed grid cells — with the four corner
+ * particles of its 4×4 Bayer matrix dropped, so the row keeps one loader
+ * component with its `role=status` wiring and reduced-motion contract.
  */
-export function TurnStatus({ className, step = THINKING_STEP, seedKey = 'live' }: TurnStatusProps) {
+export function TurnStatus({ className, waitingUser = false, step = THINKING_STEP, seedKey = 'live' }: TurnStatusProps) {
   const { t, locale } = useI18n()
   const [verbsEnabled] = useSpinnerVerbs()
   const verb = useLiveSpinnerVerb(verbsEnabled, step, seedKey)
-  const label = verb ? spinnerVerbLabel(verb, locale) : null
+  const label = waitingUser ? t('askUser.waiting') : verb ? spinnerVerbLabel(verb, locale) : null
 
   return (
     // `data-spinner-verb` names the sentence this row is playing and
@@ -62,11 +70,12 @@ export function TurnStatus({ className, step = THINKING_STEP, seedKey = 'live' }
       // waiting row is the same box as the rows above it, with its own line
       // centred, so the last gap looks like every other one.
       className={cn('flex min-h-9 items-center gap-2', className)}
+      data-spinner-waiting-user={waitingUser ? 'true' : undefined}
       data-spinner-verb={verb?.id}
-      data-spinner-loader={verb ? 'peeek' : 'spinner'}
+      data-spinner-loader={verb ? 'dither-plus' : 'spinner'}
     >
       <Loader
-        variant={verb ? 'peeek' : 'spinner'}
+        variant={verb ? 'dither-plus' : 'spinner'}
         // `size-4` — the same square as the transcript's tool glyphs.
         size={16}
         label={t('chat.working')}

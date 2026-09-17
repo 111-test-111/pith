@@ -25,6 +25,9 @@ export function useHeatCalendarModel({
   values,
   endDate,
   color = "var(--accent)",
+  // local patch (pi-app): the grid's month/day labels follow the app locale
+  // instead of the vendored en-US formatters.
+  locale,
   selection: controlledSelection,
   defaultSelection = null,
   onSelectionChange,
@@ -94,11 +97,11 @@ export function useHeatCalendarModel({
       const m = date ? date.getUTCMonth() : -1;
       const fresh =
         start !== null && date !== null && (w === 0 || addDays(start, (w - 1) * 7).getUTCMonth() !== m);
-      return { id: `w${w}`, w, m, label: fresh && date ? fmtMonth.format(date) : null };
+      return { id: `w${w}`, w, m, label: fresh && date ? fmtMonth(locale).format(date) : null };
     });
     if (list[1]?.label || list[2]?.label) list[0].label = null;
     return list;
-  }, [start, weeks]);
+  }, [start, weeks, locale]);
 
   // one click anchors a span and dims everything else; hovering then previews
   // the run from the anchor to the pointer and totals it live, and a second
@@ -154,6 +157,7 @@ export function useHeatCalendarModel({
   return {
     unit,
     weeks,
+    locale,
     reduce,
     canHover,
     hover,

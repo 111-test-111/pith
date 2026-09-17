@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="shell" x1="160" y1="96" x2="864" y2="928" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#DCDFE2"/>
+      <stop offset=".48" stop-color="#C8CDD1"/>
+      <stop offset="1" stop-color="#AEB6BE"/>
+    </linearGradient>
+    <linearGradient id="core" x1="520" y1="304" x2="608" y2="416" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFD58A"/>
+      <stop offset="1" stop-color="#F0A34A"/>
+    </linearGradient>
+  </defs>
+  <!-- Renderer-only square variant of the brand mark, for the hard-edge UI.
+       resources/pith.svg stays the packaging master (Dock .icns/.ico + favicon),
+       which keeps its rounded tile — do not square that one. Same 832px
+       silhouette on a 1024px canvas so both marks sit at one optical size. -->
+  <g transform="translate(512 512) scale(0.9285714286) translate(-512 -512)">
+  <rect x="64" y="64" width="896" height="896" fill="url(#shell)"/>
+  <rect x="66" y="66" width="892" height="892" fill="none" stroke="#FFFFFF" stroke-opacity=".35" stroke-width="4"/>
+  <!-- A single P, with the pith held in its open counter. No font dependency. -->
+  <path d="M304 736V288a48 48 0 0 1 48-48h192c124 0 208 78 208 192S668 624 544 624H432v112a32 32 0 0 1-32 32h-64a32 32 0 0 1-32-32Zm128-240h112c50 0 80-25 80-64s-30-64-80-64H432Z" fill="#272D2A" fill-rule="evenodd"/>
+  <circle cx="542" cy="432" r="36" fill="url(#core)"/>
+  </g>
+</svg>

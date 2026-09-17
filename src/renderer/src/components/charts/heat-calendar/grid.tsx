@@ -31,6 +31,7 @@ export function HeatCalendarGrid({ children, className }: { children?: ReactNode
     gridRef,
     tooltipId,
     unit,
+    locale,
   } = useHeatCalendar();
   return (
     <div
@@ -69,10 +70,11 @@ export function HeatCalendarGrid({ children, className }: { children?: ReactNode
           const on = hot?.w === w && hot?.d === d;
           const isEnd = span ? i === span.lo || i === span.hi : pinned?.w === w && pinned?.d === d;
           const dim = (step !== null && step !== b) || (span !== null && (i < span.lo || i > span.hi));
-          // the ripple: the hovered cell rises most, the ring around it a little, two out barely
+          // local patch (pi-app): the hover animation belongs to the hovered cell
+          // alone. The vendored ripple also scaled the cells around it, which read
+          // as the pointer deforming the particles it passed over.
           const dist = hot ? Math.max(Math.abs(hot.w - w), Math.abs(hot.d - d)) : 9;
-          const lift =
-            reduce || !canHover ? 1 : dist === 0 ? LIFT[0] : canHover && dist < LIFT.length ? LIFT[dist] : 1;
+          const lift = reduce || !canHover ? 1 : dist === 0 ? LIFT[0] : 1;
           return (
             // the outer span owns the legend dim so it never fights the transforms inside
             <span
@@ -91,7 +93,7 @@ export function HeatCalendarGrid({ children, className }: { children?: ReactNode
                     cannot steal a click either */}
               <motion.button
                 type="button"
-                aria-label={`${count(v)} ${unit}${date ? ` on ${fmtDay.format(date)}` : ""}`}
+                aria-label={`${count(v)} ${unit}${date ? ` on ${fmtDay(locale).format(date)}` : ""}`}
                 data-heat-cell={`${w}-${d}`}
                 aria-pressed={isEnd}
                 aria-describedby={on ? tooltipId : undefined}
@@ -114,7 +116,7 @@ export function HeatCalendarGrid({ children, className }: { children?: ReactNode
                     transition: "box-shadow 150ms",
                   }}
                   // the diagonal wave: each cell arrives (w + d) steps after the corner;
-                  // once settled, the ripple spreads out from the hovered cell by distance
+                  // once settled, only the hovered cell springs up
                   initial={reduce ? false : { opacity: 0, scale: 0.4 }}
                   animate={
                     settled

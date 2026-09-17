@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
-import { ArrowLeft, Chart, GraduationCap, KeyRound, Palette, Puzzle, ScrollText, Settings2, Wrench } from '@/lib/icons'
+import { ArrowLeft, Bot, Chart, GraduationCap, KeyRound, Palette, Puzzle, ScrollText, Settings2, Wrench } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/motion/tabs'
 import { EASE_OUT } from '@/lib/ease'
@@ -11,6 +11,7 @@ import { PromptSection } from './PromptSection'
 import { AppearanceSection } from './AppearanceSection'
 import { ProvidersSection } from './ProvidersSection'
 import { ToolsSection } from './ToolsSection'
+import { SubagentsSection } from './SubagentsSection'
 import { ExtensionsSection } from './ExtensionsSection'
 import { SkillsSection } from './SkillsSection'
 import { UsageSection } from './UsageSection'
@@ -72,6 +73,13 @@ const SECTIONS: {
     render: () => <ToolsSection />
   },
   {
+    id: 'subagents',
+    labelKey: 'subagent.settingsTitle',
+    descriptionKey: 'subagent.settingsDesc',
+    icon: <Bot className="size-4" />,
+    render: () => <SubagentsSection />
+  },
+  {
     id: 'extensions',
     labelKey: 'settings.extensions',
     descriptionKey: 'settings.extensionsDesc',
@@ -108,7 +116,22 @@ interface SettingsPageProps extends SectionProps {
 export function SettingsPage({ open, onBack, ...sectionProps }: SettingsPageProps) {
   const { t } = useI18n()
   const [section, setSection] = useState(SECTIONS[0].id)
+  // Sections mount lazily: a panel's content renders on first activation and
+  // stays mounted afterwards (its scroll position survives switching). The
+  // vendored TabsContent keeps inactive panels in the DOM but `hidden` —
+  // rendering all eight sections the moment Settings opens mounts ~2.4k nodes
+  // and fires every section's IPC reads (usage aggregation, catalog,
+  // providers…) in the same frame the entry animation starts, which lands the
+  // responses mid-animation as a second stutter. Opening Settings now mounts
+  // only the first section; each other section loads when the user first
+  // visits it.
+  const [mounted, setMounted] = useState<ReadonlySet<string>>(() => new Set([SECTIONS[0].id]))
   const reduce = useReducedMotion()
+
+  const selectSection = (id: string) => {
+    setSection(id)
+    setMounted((previous) => (previous.has(id) ? previous : new Set(previous).add(id)))
+  }
 
   return (
     <AnimatePresence initial={false}>
@@ -129,7 +152,7 @@ export function SettingsPage({ open, onBack, ...sectionProps }: SettingsPageProp
 
           <Tabs
             value={section}
-            onValueChange={setSection}
+            onValueChange={selectSection}
             variant="pill"
             className="flex min-h-0 flex-1"
           >
@@ -155,7 +178,9 @@ export function SettingsPage({ open, onBack, ...sectionProps }: SettingsPageProp
                     <p className="mt-1.5 text-sm leading-5 text-muted-foreground">
                       {t(entry.descriptionKey)}
                     </p>
-                    <div className="mt-7">{entry.render(sectionProps)}</div>
+                    <div className="mt-7">
+                      {mounted.has(entry.id) ? entry.render(sectionProps) : null}
+                    </div>
                   </div>
                 </div>
               </TabsContent>

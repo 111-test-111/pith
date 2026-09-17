@@ -5,11 +5,11 @@ import { useHeatCalendar } from "./context";
 import { fmtRange, STEPS } from "./utils";
 
 export function HeatCalendarLegend({ className }: { className?: string }) {
-  const { start, end, step, setStep, fill, canHover, reduce } = useHeatCalendar();
+  const { start, end, step, setStep, fill, canHover, reduce, locale } = useHeatCalendar();
   return (
     <div className={cn("mt-3 flex flex-wrap items-center justify-between gap-3", className)}>
       <span className="text-xs text-muted-foreground">
-        {start && end ? `${fmtRange.format(start)} – ${fmtRange.format(end)}` : "\u00a0"}
+        {start && end ? `${fmtRange(locale).format(start)} – ${fmtRange(locale).format(end)}` : "\u00a0"}
       </span>
       {/* hovering a step keeps only cells of that level lit, so the legend doubles as a filter */}
       <span className="flex items-center gap-1" onPointerLeave={() => setStep(null)}>

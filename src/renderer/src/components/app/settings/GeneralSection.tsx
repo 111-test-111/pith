@@ -1,19 +1,17 @@
 import { useEffect, useState } from 'react'
 import { BASH_DEFAULT_MAX_WAIT_MS, BASH_MIN_WAIT_MS, BASH_MAX_WAIT_MS, DEFAULT_SANDBOX_MODE, type SandboxMode, type SandboxStatusDTO, type StartupSessionMode } from '../../../../../shared/types'
+import { ASK_USER_DEFAULT_TIMEOUT_S, ASK_USER_MAX_TIMEOUT_S, ASK_USER_MIN_TIMEOUT_S, clampAskUserTimeoutSeconds } from '../../../../../shared/ask-user'
 import { Button } from '@/components/motion/button'
 import { Input } from '@/components/motion/input'
-import { Switch } from '@/components/motion/switch'
+import { Checkbox } from '@/components/motion/checkbox'
 import { RadioGroup, RadioGroupItem } from '@/components/motion/radio'
 import { useI18n } from '@/i18n'
 import { useShowReasoning } from '@/lib/show-reasoning'
 import { useSpinnerVerbs } from '@/lib/spinner-verbs'
+import { previewNotificationSound, useNotificationSounds } from '@/lib/notification-sounds'
 import { useToolGrouping } from '@/lib/tool-grouping'
 import { useStreamingBehavior, type StreamingBehavior } from '@/lib/streaming-behavior'
 import { SettingsGroup, SettingsRow } from './SettingsRow'
-
-/** Mirrors the main-process guard for `subagents:setMaxConcurrent`. */
-const SUBAGENT_MIN_CONCURRENT = 1
-const SUBAGENT_MAX_CONCURRENT = 16
 
 /** One decimal place — the wait threshold's own resolution (step 0.1s). */
 const formatSeconds = (ms: number) => (ms / 1000).toFixed(1)
@@ -56,6 +54,34 @@ export function GeneralSection() {
     } catch { setWaitError(true) }
     finally { setSavingWait(false) }
   }
+  // ask_user_question auto-settle deadline: whole seconds (the field caps its
+  // own digits, the setter enforces the documented range).
+  const [askTimeout, setAskTimeout] = useState(String(ASK_USER_DEFAULT_TIMEOUT_S))
+  const [savedAskTimeout, setSavedAskTimeout] = useState(ASK_USER_DEFAULT_TIMEOUT_S)
+  const [savingAskTimeout, setSavingAskTimeout] = useState(false)
+  const [askTimeoutError, setAskTimeoutError] = useState(false)
+  const askTimeoutValue = Number(askTimeout)
+  const validAskTimeout = askTimeout.trim() !== ''
+    && Number.isInteger(askTimeoutValue)
+    && askTimeoutValue >= ASK_USER_MIN_TIMEOUT_S
+    && askTimeoutValue <= ASK_USER_MAX_TIMEOUT_S
+  // Digits only while typing; leaving the field clamps into range, so an empty
+  // box or a typed 99999 can never reach the setter.
+  const clampAskTimeout = (raw: string) => {
+    const parsed = raw.trim() === '' ? Number.NaN : Number(raw)
+    return String(clampAskUserTimeoutSeconds(parsed))
+  }
+  const saveAskTimeout = async () => {
+    if (!validAskTimeout) return
+    setSavingAskTimeout(true)
+    try {
+      const value = await window.pi.setAskUserTimeoutSeconds(askTimeoutValue)
+      setSavedAskTimeout(value)
+      setAskTimeout(String(value))
+      setAskTimeoutError(false)
+    } catch { setAskTimeoutError(true) }
+    finally { setSavingAskTimeout(false) }
+  }
   const [checkpoints, setCheckpoints] = useState(true)
   const [checkpointError, setCheckpointError] = useState(false)
   const [savingCheckpoints, setSavingCheckpoints] = useState(false)
@@ -82,35 +108,8 @@ export function GeneralSection() {
       }, () => setSandboxError(true))
       .finally(() => setSavingSandbox(false))
   }
-  // Subagent delegation; read from appInfo, applied through the setter IPC.
-  const [subagentsEnabled, setSubagentsEnabled] = useState(true)
-  const [savingSubagents, setSavingSubagents] = useState(false)
-  /** Per-parent concurrent delegation limit; 1–16 mirrors the main-process guard. */
-  const [subagentConcurrent, setSubagentConcurrent] = useState(4)
-  // Free text only while the field is being edited; `null` shows the saved
-  // number, so a failed save or a blur always lands on a real value.
-  const [concurrentDraft, setConcurrentDraft] = useState<string | null>(null)
-  const [savingConcurrent, setSavingConcurrent] = useState(false)
-  const [concurrentError, setConcurrentError] = useState(false)
-  const saveConcurrent = (value: number) => {
-    setSubagentConcurrent(value)
-    setSavingConcurrent(true)
-    setConcurrentError(false)
-    void window.pi
-      .setSubagentMaxConcurrent(value)
-      .then(setSubagentConcurrent, () => setConcurrentError(true))
-      .finally(() => setSavingConcurrent(false))
-  }
-  // Leaving the field clamps whatever was typed into 1–16 and saves only a real
-  // change, so keystrokes never race the setter.
-  const commitConcurrent = () => {
-    const parsed = Number.parseInt(concurrentDraft ?? '', 10)
-    const next = Number.isFinite(parsed)
-      ? Math.min(SUBAGENT_MAX_CONCURRENT, Math.max(SUBAGENT_MIN_CONCURRENT, parsed))
-      : subagentConcurrent
-    setConcurrentDraft(null)
-    if (next !== subagentConcurrent) saveConcurrent(next)
-  }
+  // Subagent delegation settings (switch + concurrency) live in the
+  // Subagents section, beside the profiles they govern.
   // Same module store the Composer reads — a change here applies immediately.
   const [behavior, setBehavior] = useStreamingBehavior()
   // Display preference of the transcript, shared with the message rows.
@@ -119,11 +118,13 @@ export function GeneralSection() {
   const [toolGrouping, setToolGrouping] = useToolGrouping()
   // Plays a status sentence on the turn-in-progress row instead of a bare spinner.
   const [spinnerVerbs, setSpinnerVerbs] = useSpinnerVerbs()
+  // Audio cues for a finished turn and for a question waiting on the user.
+  const [sounds, setSounds] = useNotificationSounds()
 
   useEffect(() => {
     void window.pi
       .appInfo()
-      .then((info) => { setVersion(info.version); setCheckpoints(info.checkpointsEnabled); setStartup(info.startup); setSubagentsEnabled(info.subagentsEnabled !== false); setSubagentConcurrent(info.subagentMaxConcurrent ?? 4); setWaitSeconds(formatSeconds(info.bashMaxWaitMs)); setSavedWait(info.bashMaxWaitMs); setSandboxMode(info.sandboxMode); setSandbox(info.sandbox) })
+      .then((info) => { setVersion(info.version); setCheckpoints(info.checkpointsEnabled); setStartup(info.startup); setWaitSeconds(formatSeconds(info.bashMaxWaitMs)); setSavedWait(info.bashMaxWaitMs); setSandboxMode(info.sandboxMode); setSandbox(info.sandbox); setAskTimeout(String(info.askUserTimeoutSeconds ?? ASK_USER_DEFAULT_TIMEOUT_S)); setSavedAskTimeout(info.askUserTimeoutSeconds ?? ASK_USER_DEFAULT_TIMEOUT_S) })
       .catch(() => {})
   }, [])
 
@@ -175,64 +176,72 @@ export function GeneralSection() {
           label={t('settings.showReasoning')}
           description={t('settings.showReasoningDesc')}
         >
-          <Switch
+          <Checkbox
+            mark="square"
             checked={showReasoning}
             onCheckedChange={setShowReasoning}
-            ariaLabel={t('settings.showReasoning')}
+            aria-label={t('settings.showReasoning')}
           />
         </SettingsRow>
         <SettingsRow
           label={t('settings.toolGrouping')}
           description={t('settings.toolGroupingDesc')}
         >
-          <Switch
+          <Checkbox
+            mark="square"
             checked={toolGrouping}
             onCheckedChange={setToolGrouping}
-            ariaLabel={t('settings.toolGrouping')}
+            aria-label={t('settings.toolGrouping')}
           />
         </SettingsRow>
-        <SettingsRow
-          label={t('subagent.settingsTitle')}
-          description={t('subagent.settingsDesc')}
-        >
-          <Switch
-            checked={subagentsEnabled}
-            disabled={savingSubagents}
-            onCheckedChange={(value) => {
-              setSavingSubagents(true)
-              void window.pi
-                .setSubagentsEnabled(value)
-                .then(setSubagentsEnabled, () => {})
-                .finally(() => setSavingSubagents(false))
-            }}
-            ariaLabel={t('subagent.settingsTitle')}
-          />
-        </SettingsRow>
-        <SettingsRow
-          label={t('subagent.concurrency')}
-          description={t('subagent.concurrencyDesc')}
-        >
-          <Input
-            value={concurrentDraft ?? String(subagentConcurrent)}
-            onChange={(value) => setConcurrentDraft(value.replace(/\D/g, '').slice(0, 2))}
-            onBlur={commitConcurrent}
-            onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur() }}
-            inputMode="numeric"
-            disabled={!subagentsEnabled || savingSubagents || savingConcurrent}
-            aria-label={t('subagent.concurrency')}
-            className="w-16"
-            classNames={{ field: 'h-8', input: 'px-2 text-center text-sm' }}
-          />
-        </SettingsRow>
-        {concurrentError ? <p role="alert" className="px-4 text-xs text-destructive">{t('subagent.concurrencyFailed')}</p> : null}
         <SettingsRow
           label={t('settings.spinnerVerbs')}
           description={t('settings.spinnerVerbsDesc')}
         >
-          <Switch
+          <Checkbox
+            mark="square"
             checked={spinnerVerbs}
             onCheckedChange={setSpinnerVerbs}
-            ariaLabel={t('settings.spinnerVerbs')}
+            aria-label={t('settings.spinnerVerbs')}
+          />
+        </SettingsRow>
+      </SettingsGroup>
+
+      <SettingsGroup title={t('settings.soundsGroup')}>
+        <SettingsRow label={t('settings.soundsEnabled')} description={t('settings.soundsEnabledDesc')}>
+          <Checkbox
+            mark="square"
+            checked={sounds.enabled}
+            onCheckedChange={(value) => setSounds({ enabled: value === true })}
+            aria-label={t('settings.soundsEnabled')}
+          />
+        </SettingsRow>
+        {/* The two cues side by side, each with its own switch and a preview
+            that plays it even while it is off — the only way to judge a cue
+            before turning it on. The switches stay visible (not hidden) when
+            the master is off, so the choice is remembered. */}
+        <SettingsRow label={t('settings.soundTurnComplete')} description={t('settings.soundTurnCompleteDesc')}>
+          <Button variant="ghost" size="sm" onClick={() => previewNotificationSound('turnComplete')}>
+            {t('settings.soundPreview')}
+          </Button>
+          <Checkbox
+            mark="square"
+            disabled={!sounds.enabled}
+            checked={sounds.turnComplete}
+            onCheckedChange={(value) => setSounds({ turnComplete: value === true })}
+            aria-label={t('settings.soundTurnComplete')}
+          />
+        </SettingsRow>
+        <SettingsRow label={t('settings.soundAskUser')} description={t('settings.soundAskUserDesc')}>
+          <Button variant="ghost" size="sm" onClick={() => previewNotificationSound('askUser')}>
+            {t('settings.soundPreview')}
+          </Button>
+          <Checkbox
+            mark="square"
+            disabled={!sounds.enabled}
+            checked={sounds.askUser}
+            onCheckedChange={(value) => setSounds({ askUser: value === true })}
+            aria-label={t('settings.soundAskUser')}
           />
         </SettingsRow>
       </SettingsGroup>
@@ -256,6 +265,25 @@ export function GeneralSection() {
         {waitError ? <p className="px-4 text-xs text-destructive" role="status">{t('bashTask.saveFailed')}</p> : null}
       </SettingsGroup>
 
+      <SettingsGroup title={t('askUser.settingsGroup')}>
+        <SettingsRow label={t('askUser.timeoutLabel')} description={t('askUser.timeoutDesc')}>
+          <Input
+            value={askTimeout}
+            onChange={(value) => setAskTimeout(value.replace(/[^0-9]/g, '').slice(0, 4))}
+            onBlur={() => setAskTimeout(clampAskTimeout(askTimeout))}
+            onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur() }}
+            inputMode="numeric"
+            disabled={savingAskTimeout}
+            aria-label={t('askUser.timeoutSeconds')}
+            className="w-20"
+            classNames={{ field: 'h-8', input: 'px-2 text-center text-sm' }}
+          />
+          <span className="text-xs text-muted-foreground">{t('askUser.secondsUnit')}</span>
+          <Button variant="ghost" size="sm" disabled={!validAskTimeout || askTimeoutValue === savedAskTimeout || savingAskTimeout} onClick={() => void saveAskTimeout()}>{t('askUser.save')}</Button>
+        </SettingsRow>
+        {askTimeoutError ? <p className="px-4 text-xs text-destructive" role="status">{t('askUser.saveFailed')}</p> : null}
+      </SettingsGroup>
+
       <SettingsGroup title={t('sandbox.group')}>
         <SettingsRow label={t('sandbox.modeLabel')} description={t('sandbox.modeDesc')}>
           <RadioGroup
@@ -269,15 +297,20 @@ export function GeneralSection() {
             <RadioGroupItem value="danger-full-access" disabled={savingSandbox} label={t('sandbox.fullAccess')} />
           </RadioGroup>
         </SettingsRow>
-        <div className={sandbox?.support === 'dependencies-missing' ? 'px-4 pb-1 text-xs text-destructive' : 'px-4 pb-1 text-xs text-muted-foreground'} role="status">
-          {sandbox ? t(`sandbox.status.${sandbox.support}`, { backend: sandbox.backend ?? '' }) : null}
-        </div>
+        {/* A host that runs unconfined needs no status line: the radio group
+            above already shows which mode is on. Only an unfreeable or missing
+            runner says something the user has to act on. */}
+        {sandbox && sandbox.support !== 'host' ? (
+          <div data-sandbox-status className={sandbox.support === 'dependencies-missing' ? 'px-4 pb-1 text-xs text-destructive' : 'px-4 pb-1 text-xs text-muted-foreground'} role="status">
+            {t(`sandbox.status.${sandbox.support}`, { backend: sandbox.backend ?? '' })}
+          </div>
+        ) : null}
         {sandboxError ? <p className="px-4 text-xs text-destructive" role="alert">{t('sandbox.saveFailed')}</p> : null}
       </SettingsGroup>
 
       <SettingsGroup title={t('settings.storage')}>
         <SettingsRow label={t('rewind.setting')} description={t('rewind.settingDescription')}>
-          <Switch checked={checkpoints} disabled={savingCheckpoints} ariaLabel={t('rewind.setting')} onCheckedChange={value => {
+          <Checkbox mark="square" checked={checkpoints} disabled={savingCheckpoints} aria-label={t('rewind.setting')} onCheckedChange={value => {
             setSavingCheckpoints(true); setCheckpointError(false)
             void window.pi.setCheckpointsEnabled(value === true).then(setCheckpoints, () => setCheckpointError(true)).finally(() => setSavingCheckpoints(false))
           }} />

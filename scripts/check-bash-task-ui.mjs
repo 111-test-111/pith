@@ -432,6 +432,46 @@ try {
   await evaluate(`document.querySelector('[data-task-panel] ol').parentElement.scrollTo({top:0,behavior:'instant'})`)
   await pause(100)
   assert.equal(await evaluate(`document.querySelector('[data-task-panel] ol').parentElement.scrollTop`),0,'long task lists remain scrollable')
+  // Opening the panel positions the list on the row that matters — the running
+  // task, centred — and never parks it on the bottom of the plan the way the
+  // vendored list did. Each scenario re-opens the panel, so the list mounts
+  // fresh exactly like a user's click on the entry.
+  const todoProbe = (id) => `(() => {
+    const viewport = document.querySelector('[data-task-panel] ol').parentElement;
+    const box = viewport.getBoundingClientRect();
+    const node = document.querySelector('[data-todo-id=' + JSON.stringify(${JSON.stringify(id)}) + ']');
+    const rect = node ? node.closest('li').getBoundingClientRect() : null;
+    return {scrollTop:Math.round(viewport.scrollTop),max:Math.round(viewport.scrollHeight-viewport.clientHeight),
+      offset:rect?Math.round((rect.top+rect.height/2)-(box.top+box.height/2)):null,
+      visible:rect?rect.top>=box.top-1&&rect.bottom<=box.bottom+1:false};
+  })()`
+  const reopenTodoPanel = async () => {
+    await evaluate(`document.querySelector('[data-task-trigger=todo]').click()`)
+    await pause(150)
+    await evaluate(`document.querySelector('[data-task-trigger=todo]').click()`)
+    await pause(350)
+  }
+  const setPlan = (statusAt) => evaluate(`window.setTodos(${JSON.stringify({ toolCallId: 'placement', items: Array.from({ length: 40 }, (_, i) => ({ id: `pick-${i}`, content: `task ${i}`, status: statusAt(i) })) })})`)
+  await setPlan((i) => (i === 24 ? 'in_progress' : 'pending'))
+  await reopenTodoPanel()
+  const runningRow = await evaluate(todoProbe('pick-24'))
+  assert.ok(runningRow.visible, 'opening shows the running task: ' + JSON.stringify(runningRow))
+  assert.ok(Math.abs(runningRow.offset) <= 2, 'the running task is centred in the panel: ' + JSON.stringify(runningRow))
+  assert.ok(runningRow.scrollTop < runningRow.max, 'opening never parks on the bottom: ' + JSON.stringify(runningRow))
+  if (process.env.PI_BASH_SCREENSHOT_DIR) {
+    await writeFile(join(process.env.PI_BASH_SCREENSHOT_DIR, 'todo-panel-running.png'), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'))
+  }
+  // Nothing running: the newest completed task takes its place.
+  await setPlan((i) => (i <= 29 ? 'completed' : 'pending'))
+  await reopenTodoPanel()
+  const finishedRow = await evaluate(todoProbe('pick-29'))
+  assert.ok(finishedRow.visible, 'opening shows the newest completed task: ' + JSON.stringify(finishedRow))
+  assert.ok(Math.abs(finishedRow.offset) <= 2, 'the newest completed task is centred: ' + JSON.stringify(finishedRow))
+  assert.ok(finishedRow.scrollTop < finishedRow.max, 'a completed target never parks on the bottom either: ' + JSON.stringify(finishedRow))
+  // Neither running nor completed: no target, so the list stays where it starts.
+  await setPlan(() => 'pending')
+  await reopenTodoPanel()
+  assert.equal((await evaluate(todoProbe('pick-0'))).scrollTop, 0, 'a plan with nothing running or completed is left at the top')
   await evaluate(`document.querySelector('[data-task-trigger=bash]').click()`)
   await pause(100)
   assert.equal(await evaluate(`document.querySelector('[data-task-panel]').getAttribute('aria-hidden')`),'false')
@@ -685,7 +725,11 @@ try {
   assert.ok(retrying.found, 'an in-flight notice renders: ' + JSON.stringify(retrying))
   assert.match(retrying.text, /retrying \(attempt 1 of 3\)/, 'the in-flight sentence is the retrying one')
   assert.notEqual(retrying.bg, 'rgba(0, 0, 0, 0)', 'an in-flight notice keeps its framed status row: ' + JSON.stringify(retrying))
-  assert.notEqual(retrying.radius, '0px', 'the status row keeps its corner')
+  // The frame's corner comes from the theme token, so assert it against the
+  // token itself: the square-style branch resolves every step to 0, and a
+  // hardcoded non-zero radius would fail there for the wrong reason.
+  const controlRadius = await evaluate(`(() => { const probe = document.createElement('div'); probe.style.borderRadius = 'var(--app-radius-control)'; document.body.appendChild(probe); const value = getComputedStyle(probe).borderTopLeftRadius; probe.remove(); return value })()`)
+  assert.equal(retrying.radius, controlRadius, 'the status row keeps the theme radius token: ' + JSON.stringify({ radius: retrying.radius, controlRadius }))
   await step(`{type:'auto_retry_end',success:true}`, 1)
 
   // A compaction reads as a tool row, because that is what it is: one job runs

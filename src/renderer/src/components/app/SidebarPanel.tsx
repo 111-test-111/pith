@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 're
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import {
   Bot,
+  Chart,
   Folder,
   Globe,
   MessageCirclePlus,
@@ -32,6 +33,7 @@ import { FileTypeIcon } from './FileTypeIcon'
 import { MiddleEllipsis } from './MiddleEllipsis'
 import { SideChatPane } from './SideChatPane'
 import { ReviewPane } from './ReviewPane'
+import { ContextDetailPane } from './ContextDetailPane'
 import { TerminalPane } from './TerminalPane'
 import { FilesPane } from './FilesPane'
 import { SubagentSessionPane } from './SubagentSessionPane'
@@ -46,7 +48,7 @@ export const SIDEBAR_PANEL_WIDTH = 400
 
 /** The panes the right rail can host. Besides the fixed kinds, the rail hosts
  * one tab per open FILE and per open SUBAGENT SESSION (both keyed by path). */
-export type SidebarTabKind = 'review' | 'terminal' | 'browser' | 'files' | 'chat'
+export type SidebarTabKind = 'review' | 'context' | 'terminal' | 'browser' | 'files' | 'chat'
 export type SidebarTabId = SidebarTabKind | `file:${string}` | `agent:${string}`
 export const fileTabId = (path: string): SidebarTabId => `file:${path}`
 export const filePathForTab = (id: SidebarTabId | null): string | null => id?.startsWith('file:') ? id.slice(5) : null
@@ -103,6 +105,13 @@ export const SIDEBAR_TABS: SidebarTabSpec[] = [
     shortcutKey: 'sidebar.shortcutReview',
     icon: ScanSearch,
     render: (props) => <ReviewPane store={props.store} focusTurnId={props.reviewTurnId} />
+  },
+  {
+    id: 'context',
+    labelKey: 'sidebar.context',
+    shortcutKey: 'sidebar.shortcutContext',
+    icon: Chart,
+    render: (props) => <ContextDetailPane store={props.store} />
   },
   {
     id: 'terminal',

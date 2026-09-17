@@ -20,6 +20,8 @@ export interface HeatCalendarProps {
   endDate?: Date;
   /** The single hue. Any CSS color; magnitude maps to its strength, never to a second color. */
   color?: string;
+  /** BCP-47 tag for the month/day labels; defaults to the engine locale. */
+  locale?: string;
   className?: string;
   children?: ReactNode;
   /** Controlled selection; null clears it. Cell coordinates are zero-based week/day (Monday first). */

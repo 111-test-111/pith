@@ -4,6 +4,7 @@
  * neither side imports the other's runtime packages.
  */
 
+import type { AskUserRecordDTO, PendingAskUserDTO } from './ask-user'
 import type { TableFormat } from './table'
 
 export type WindowTheme = 'light' | 'dark' | 'system'
@@ -140,6 +141,14 @@ export interface PiEvent {
   cwd?: string
   /** Monotonic within one live AgentSession; guards snapshot/event races. */
   eventSequence?: number
+  /** True when this event belongs to a subagent child session. A child's turns
+   * are steps of its parent's run, so notification cues (renderer-side) skip
+   * them instead of chiming once per delegated round. */
+  subagentChild?: boolean
+  /** True on the `agent_settled` that ends a run the user stopped themselves
+   * (Stop/Esc). A stopped run is not a finished one, so the completion cue
+   * stays silent for it. */
+  userAborted?: boolean
   [key: string]: any
 }
 
@@ -461,6 +470,73 @@ export interface ContextUsageDTO {
   cacheHitRate: number | null
 }
 
+/**
+ * Token split of ONE message of the context, for the detail pane's breakdown
+ * bar. The numbers are the SDK's own `estimateTokens` heuristic (chars/4), so
+ * they are estimates — see `ContextBreakdownDTO` for how the residue is
+ * reconciled with the ring's provider-anchored total.
+ */
+export interface ContextBreakdownDTO {
+  user: number
+  assistant: number
+  toolResults: number
+  /** System prompt + tool schemas + estimate residue: total − the three above. */
+  other: number
+  /** Sum of the four buckets; never null (falls back to the message estimates). */
+  total: number
+}
+
+/**
+ * Everything the right rail's context tab shows about the open session:
+ * the SDK's own session stats plus the message-level detail the stats do not
+ * carry. `usage` is the same readout the composer ring renders, so the two can
+ * never disagree about the window, the percent or the cost.
+ *
+ * Every number here is either reported by the SDK or the ring's own; the only
+ * derived one is `tokens.reasoning` (a documented subset the SDK's totals drop)
+ * and `breakdown`, which is labelled as an estimate wherever it is shown.
+ */
+export interface ContextDetailDTO {
+  sessionId: string
+  sessionPath: string | null
+  /** Session name, or the first user message; null when the file has neither. */
+  title: string | null
+  cwd: string
+  projectless: boolean
+  provider: string | null
+  model: string | null
+  /** Null for a session file read from disk whose level is not recorded; the
+   * pane shows `—` rather than inventing a level. */
+  thinkingLevel: ThinkingLevel | null
+  /** Session header creation time, epoch ms; null when unreadable. */
+  createdAt: number | null
+  /** Session file mtime, epoch ms; null when unreadable. */
+  lastActivity: number | null
+  /** Cumulative billed totals over the whole session FILE — every branch, the
+   * abandoned ones from resends/retries included — not the context size. */
+  userMessages: number
+  assistantMessages: number
+  toolCalls: number
+  toolResults: number
+  totalMessages: number
+  tokens: {
+    input: number
+    output: number
+    /** Subset of `output`; null when no provider reported a reasoning split. */
+    reasoning: number | null
+    cacheRead: number
+    cacheWrite: number
+    /** Cumulative billed tokens over the whole session, NOT the context size. */
+    total: number
+  }
+  cost: number
+  /** The composer ring's live readout (context size, window, percent, cache hit). */
+  usage: ContextUsageDTO
+  /** Estimated token split of the CURRENT context; never sums to more than the
+   * ring's total, which it is reconciled against (see the pane's own note). */
+  breakdown: ContextBreakdownDTO
+}
+
 // ---- Tools & extensions catalog (Settings → Tools / Extensions) ----
 
 /** Where a tool comes from: a built-in SDK tool or an installed extension. */
@@ -590,8 +666,13 @@ export interface SessionSnapshotDTO {
    * carrying them here makes a session switch or an IPC snapshot unable to
    * lose one to event/snapshot ordering. */
   escalations?: SandboxEscalationRequestDTO[]
+  /** Pending ask_user_question sets the user has to answer, fresh at snapshot
+   * time; subagent children's questions are listed under the owning parent. */
+  pendingAskUser?: PendingAskUserDTO[]
   /** Latest successful todo result on the complete selected branch, including compacted entries. */
   todos?: TodoSnapshotDTO | null
+  /** Every ask_user_question on the selected branch, oldest first — the Q&A record panel. */
+  askUserRecords?: AskUserRecordDTO[]
   activeChangeScopeId?: string | null
   sessionId: string
   sessionPath?: string
@@ -644,6 +725,61 @@ export type SubagentRunStatus = 'running' | 'completed' | 'failed' | 'aborted' |
  * `tool_preset` this app does not know, or a missing `tools:` field): an
  * unknown restriction must never widen to write/bash access. */
 export const SUBAGENT_READ_ONLY_TOOLS: readonly string[] = ['read', 'grep', 'find', 'ls']
+
+/** The SDK's seven built-in tools — every session keeps these active, and
+ * Settings → Subagents offers them even when no live session exists to read a
+ * catalog from. */
+export const SDK_BUILTIN_TOOL_NAMES: readonly string[] = ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls']
+
+/** A profile file's name (its filename without `.md`): lowercase letters,
+ * digits, `-` and `_`, starting with a letter or digit. Shared so the
+ * Settings creation form validates exactly what the loader accepts. */
+export const SUBAGENT_PROFILE_NAME_PATTERN = /^[a-z0-9][a-z0-9-_]*$/
+
+/** Payload for creating one new profile file (Settings → Subagents). */
+export interface SubagentProfileCreatePayload {
+  name: string
+  description: string
+  systemPrompt: string
+  scope: 'global' | 'project'
+}
+
+/** The subagents tab's read model: every visible profile plus the two
+ * directories a new file can land in. `projectDir` is null when no project is
+ * active (projectless chats use a hidden internal workspace), in which case
+ * the creation form offers global scope only. */
+export interface SubagentProfilesDTO {
+  profiles: SubagentProfileDTO[]
+  globalDir: string
+  projectDir: string | null
+}
+
+/** One subagent profile as Settings → Subagents renders it: an ordinary
+ * Markdown file (flat frontmatter + system-prompt body) in the global
+ * `${agentDir}/agents` or the project's `.pi/agents` directory. There is no
+ * builtin/custom split — a starter profile is just a file seeded on first
+ * run and editable like any other. */
+export interface SubagentProfileDTO {
+  name: string
+  displayName: string
+  description: string
+  systemPrompt: string
+  /** 'all' resolves against the parent session's active tools at dispatch. */
+  tools: 'all' | string[]
+  /** Where `tools` came from — an unresolved preset is flagged so the settings
+   * row can say why the set is only read-only. */
+  toolsSource?: 'explicit' | 'preset' | 'unresolved-preset' | 'default'
+  /** The `tool_preset` id the profile declares, when any (diagnostics). */
+  toolPreset?: string
+  model?: string
+  thinking?: ThinkingLevel
+  maxTurns?: number
+  inheritContext: boolean
+  runInBackground: boolean
+  enabled: boolean
+  scope: 'global' | 'project'
+  filePath: string
+}
 
 /** One subagent run as the renderer sees it (roster card + tool-row details). */
 export interface SubagentRunDTO {
@@ -814,6 +950,12 @@ export interface AppInfoDTO {
   subagentsEnabled: boolean
   /** Per-parent limit on concurrently running subagent delegations. */
   subagentMaxConcurrent: number
+  /**
+   * Auto-settle deadline for an ask_user_question panel, in seconds. The
+   * countdown runs from the moment the panel appears and the user's first
+   * real interaction cancels it for good (collapsing does not).
+   */
+  askUserTimeoutSeconds: number
   version: string
 }
 
@@ -1172,10 +1314,21 @@ export interface RewindListDTO {
   operations: RewindOperationDTO[]
   pending: RewindOperationDTO[]
   enabled: boolean
+  /** The restore is refused right now; `busyReason` says why. */
   busy: boolean
+  /**
+   * The one live fact that refuses a restore, named so the panel can say what
+   * is actually holding it instead of one sentence that lists every
+   * possibility. Ordered by what the user acts on first: an unfinished recovery
+   * outranks everything, an open terminal is closable, a queued message is
+   * recallable, then work that can write the checkout, and a plain model turn
+   * last — that one ends by itself. Absent while nothing blocks.
+   */
+  busyReason?: RewindBusyReason
   bytes: number
   error?: RewindErrorDTO
 }
+export type RewindBusyReason = 'recovery' | 'terminal' | 'queued' | 'work' | 'turn'
 export interface RewindPatchDTO { patch: string; truncated: boolean; binary?: boolean }
 export interface RewindStatsDTO { added: number; removed: number; binary: boolean }
 export type RewindStatsTargetDTO = Pick<RewindChangeDTO, 'path' | 'area' | 'stage'>

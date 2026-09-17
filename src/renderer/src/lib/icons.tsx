@@ -19,6 +19,7 @@ import {
   RiBookmarkLine,
   RiBookReadLine,
   RiBracesLine,
+  RiBrainLine,
   RiChat4Line,
   RiCheckboxBlankCircleLine,
   RiCheckboxCircleLine,
@@ -78,11 +79,9 @@ import {
   RiLoader4Line,
   RiLogoutBoxRLine,
   RiMagicLine,
-  RiMentalHealthLine,
   RiMoonLine,
   RiMoreLine,
   RiMusic2Line,
-  RiNodeTree,
   RiNotification3Line,
   RiPaletteLine,
   RiPlug2Line,
@@ -93,10 +92,12 @@ import {
   RiQuestionLine,
   RiRecordCircleLine,
   RiRefreshLine,
+  RiRewindLine,
   RiRobot2Line,
   RiScan2Line,
   RiSearch2Line,
   RiSearchLine,
+  RiSendPlane2Line,
   RiSettings4Line,
   RiSettingsLine,
   RiShapesLine,
@@ -112,11 +113,13 @@ import {
   RiTerminalBoxLine,
   RiTerminalLine,
   RiTerminalWindowLine,
+  RiText,
   RiTextWrap,
   RiThumbDownLine,
   RiThumbUpLine,
   RiTimeLine,
   RiTodoLine,
+  RiTreeLine,
   RiUnpinLine,
   RiUserLine,
   RiWrenchLine,
@@ -185,7 +188,7 @@ export const Bookmark = /* @__PURE__ */ createIcon('Bookmark', RiBookmarkLine)
 export const BookSearch = /* @__PURE__ */ createIcon('BookSearch', RiBookReadLine)
 export const Bot = /* @__PURE__ */ createIcon('Bot', RiRobot2Line)
 export const Braces = /* @__PURE__ */ createIcon('Braces', RiBracesLine)
-export const Brain = /* @__PURE__ */ createIcon('Brain', RiMentalHealthLine)
+export const Brain = /* @__PURE__ */ createIcon('Brain', RiBrainLine)
 export const Chart = /* @__PURE__ */ createIcon('Chart', RiBarChart2Line)
 export const Chat01 = /* @__PURE__ */ createIcon('Chat01', RiChat4Line)
 export const Check = /* @__PURE__ */ createIcon('Check', RiCheckLine)
@@ -193,6 +196,7 @@ export const CheckCircle2 = /* @__PURE__ */ createIcon('CheckCircle2', RiCheckbo
 export const ChevronDown = /* @__PURE__ */ createIcon('ChevronDown', RiArrowDownSLine)
 export const ChevronLeft = /* @__PURE__ */ createIcon('ChevronLeft', RiArrowLeftSLine)
 export const ChevronRight = /* @__PURE__ */ createIcon('ChevronRight', RiArrowRightSLine)
+export const ChevronUp = /* @__PURE__ */ createIcon('ChevronUp', RiArrowUpSLine)
 export const ChevronsDownUp = /* @__PURE__ */ createIcon('ChevronsDownUp', RiContractUpDownLine)
 export const ChevronsUpDown = /* @__PURE__ */ createIcon('ChevronsUpDown', RiExpandUpDownLine)
 export const Circle = /* @__PURE__ */ createIcon('Circle', RiRecordCircleLine)
@@ -226,7 +230,7 @@ export const FolderInput = /* @__PURE__ */ createIcon('FolderInput', RiFolderRec
 export const FolderKanban = /* @__PURE__ */ createIcon('FolderKanban', RiLayoutGridLine)
 export const FolderOpen = /* @__PURE__ */ createIcon('FolderOpen', RiFolderOpenLine)
 export const FolderPlus = /* @__PURE__ */ createIcon('FolderPlus', RiFolderAddLine)
-export const FolderTree = /* @__PURE__ */ createIcon('FolderTree', RiNodeTree)
+export const FolderTree = /* @__PURE__ */ createIcon('FolderTree', RiTreeLine)
 export const GitFork = /* @__PURE__ */ createIcon('GitFork', RiGitBranchLine)
 export const GitPullRequest = /* @__PURE__ */ createIcon('GitPullRequest', RiGitPullRequestLine)
 export const Globe = /* @__PURE__ */ createIcon('Globe', RiGlobalLine)
@@ -269,11 +273,13 @@ export const PlugZap = /* @__PURE__ */ createIcon('PlugZap', RiPlug2Line)
 export const Plus = /* @__PURE__ */ createIcon('Plus', RiAddLine)
 export const Puzzle = /* @__PURE__ */ createIcon('Puzzle', RiPuzzleLine)
 export const RefreshCw = /* @__PURE__ */ createIcon('RefreshCw', RiRefreshLine)
+export const Rewind = /* @__PURE__ */ createIcon('Rewind', RiRewindLine)
 export const RotateCcw = /* @__PURE__ */ createIcon('RotateCcw', RiAnticlockwise2Line)
 export const ScanSearch = /* @__PURE__ */ createIcon('ScanSearch', RiScan2Line)
 export const ScrollText = /* @__PURE__ */ createIcon('ScrollText', RiFilePaperLine)
 export const Search = /* @__PURE__ */ createIcon('Search', RiSearchLine)
 export const SearchX = /* @__PURE__ */ createIcon('SearchX', RiCloseCircleLine)
+export const Send = /* @__PURE__ */ createIcon('Send', RiSendPlane2Line)
 export const Settings = /* @__PURE__ */ createIcon('Settings', RiSettingsLine)
 export const Settings2 = /* @__PURE__ */ createIcon('Settings2', RiSettings4Line)
 export const Shapes = /* @__PURE__ */ createIcon('Shapes', RiShapesLine)
@@ -288,6 +294,8 @@ export const Sun = /* @__PURE__ */ createIcon('Sun', RiSunLine)
 export const Terminal = /* @__PURE__ */ createIcon('Terminal', RiTerminalLine)
 export const TextFont = /* @__PURE__ */ createIcon('TextFont', RiFontSize2)
 export const TextSearch = /* @__PURE__ */ createIcon('TextSearch', RiSearch2Line)
+// The "T" glyph: a text modality marker (distinct from TextFont's size mark).
+export const Type = /* @__PURE__ */ createIcon('Type', RiText)
 export const WrapText = /* @__PURE__ */ createIcon('WrapText', RiTextWrap)
 export const ThumbsDown = /* @__PURE__ */ createIcon('ThumbsDown', RiThumbDownLine)
 export const ThumbsUp = /* @__PURE__ */ createIcon('ThumbsUp', RiThumbUpLine)

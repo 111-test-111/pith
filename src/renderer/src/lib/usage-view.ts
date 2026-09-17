@@ -18,12 +18,6 @@ export interface TokenActivityPoint {
   tokens: number
 }
 
-export interface TokenActivityWeek {
-  startDay: string
-  endDay: string
-  tokens: number
-}
-
 export interface TokenActivitySummary {
   totalTokens: number
   peakDailyTokens: number
@@ -36,7 +30,7 @@ export interface TokenActivity {
   summary: TokenActivitySummary
   daily: TokenActivityPoint[]
   calendarWeeks: Array<Array<TokenActivityPoint | null>>
-  weekly: TokenActivityWeek[]
+  /** Tokens inside the visible 365-day window — what the grid draws. */
   visibleTokens: number
   maxVisibleDailyTokens: number
 }
@@ -123,14 +117,6 @@ export function buildTokenActivity(stats: UsageStatsDTO, today: string): TokenAc
   const { current, longest } = streaks(activeDayKeys, today)
   const daily = dailySeries(totals, today)
   const weeks = calendarWeeks(daily, today)
-  const weekly = weeks.map((week) => {
-    const points = week.filter((point): point is TokenActivityPoint => point !== null)
-    return {
-      startDay: points[0]?.day ?? today,
-      endDay: points.at(-1)?.day ?? today,
-      tokens: points.reduce((sum, point) => sum + point.tokens, 0)
-    }
-  })
 
   return {
     summary: {
@@ -142,8 +128,7 @@ export function buildTokenActivity(stats: UsageStatsDTO, today: string): TokenAc
     },
     daily,
     calendarWeeks: weeks,
-    weekly,
-    visibleTokens: weekly.reduce((sum, week) => sum + week.tokens, 0),
+    visibleTokens: daily.reduce((sum, point) => sum + point.tokens, 0),
     maxVisibleDailyTokens: Math.max(0, ...daily.map((point) => point.tokens))
   }
 }
@@ -358,17 +343,75 @@ export function niceMax(v: number): number {
   return nf * base
 }
 
-/** Smooth polyline through every point (quadratic midpoints — no overshoot). */
+function polyline(xs: number[], ys: number[]): string {
+  return xs.map((x, i) => `${i === 0 ? 'M' : 'L'} ${r2(x)} ${r2(ys[i])}`).join(' ')
+}
+
+/**
+ * Smooth cubic through EVERY point (Fritsch–Carlson monotone tangents).
+ *
+ * A quadratic-midpoint spline (the previous shape) only touches the midpoints
+ * between samples, so the curve at a day's x is not that day's value — and the
+ * crosshair dot, anchored to the day's value, floated above or below the line
+ * it was supposed to mark. Interpolating with monotone tangents keeps the
+ * curve exactly through each vertex, refuses overshoot (no dip below the
+ * previous day's cumulative total), and still reads as one smooth line.
+ * `xs` may be ascending or descending: the tangent weights flip sign together,
+ * so the result is the same curve either way (`areaPath` walks the bottom edge
+ * backwards).
+ */
 export function smoothLine(xs: number[], ys: number[]): string {
-  if (xs.length === 0) return ''
-  if (xs.length === 1) return `M ${r2(xs[0])} ${r2(ys[0])} L ${r2(xs[0] + 0.01)} ${r2(ys[0])}`
-  let d = `M ${r2(xs[0])} ${r2(ys[0])}`
-  for (let i = 1; i < xs.length - 1; i++) {
-    const mx = (xs[i] + xs[i + 1]) / 2
-    const my = (ys[i] + ys[i + 1]) / 2
-    d += ` Q ${r2(xs[i])} ${r2(ys[i])} ${r2(mx)} ${r2(my)}`
+  const n = xs.length
+  if (n === 0) return ''
+  if (n === 1) return `M ${r2(xs[0])} ${r2(ys[0])} L ${r2(xs[0] + 0.01)} ${r2(ys[0])}`
+
+  const dx: number[] = []
+  const slope: number[] = []
+  for (let i = 0; i < n - 1; i++) {
+    const d = xs[i + 1] - xs[i]
+    // Two samples on one x cannot be interpolated — fall back to the plain
+    // polyline rather than dividing by zero.
+    if (d === 0) return polyline(xs, ys)
+    dx.push(d)
+    slope.push((ys[i + 1] - ys[i]) / d)
   }
-  return `${d} L ${r2(xs[xs.length - 1])} ${r2(ys[ys.length - 1])}`
+
+  const m: number[] = new Array(n)
+  m[0] = slope[0]
+  m[n - 1] = slope[n - 2]
+  for (let i = 1; i < n - 1; i++) {
+    if (slope[i - 1] * slope[i] <= 0) {
+      m[i] = 0
+      continue
+    }
+    const w1 = 2 * dx[i] + dx[i - 1]
+    const w2 = dx[i] + 2 * dx[i - 1]
+    m[i] = (w1 + w2) / (w1 / slope[i - 1] + w2 / slope[i])
+  }
+
+  // Fritsch–Carlson: pull the tangents back inside the monotone region.
+  for (let i = 0; i < n - 1; i++) {
+    if (slope[i] === 0) {
+      m[i] = 0
+      m[i + 1] = 0
+      continue
+    }
+    const a = m[i] / slope[i]
+    const b = m[i + 1] / slope[i]
+    const s = a * a + b * b
+    if (s > 9) {
+      const t = 3 / Math.sqrt(s)
+      m[i] = t * a * slope[i]
+      m[i + 1] = t * b * slope[i]
+    }
+  }
+
+  let d = `M ${r2(xs[0])} ${r2(ys[0])}`
+  for (let i = 0; i < n - 1; i++) {
+    const h = dx[i] / 3
+    d += ` C ${r2(xs[i] + h)} ${r2(ys[i] + m[i] * h)} ${r2(xs[i + 1] - h)} ${r2(ys[i + 1] - m[i + 1] * h)} ${r2(xs[i + 1])} ${r2(ys[i + 1])}`
+  }
+  return d
 }
 
 export function areaPath(xs: number[], topYs: number[], bottomYs: number[]): string {
