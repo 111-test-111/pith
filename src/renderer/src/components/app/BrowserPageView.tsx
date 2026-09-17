@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { FocusEvent, JSX, MouseEvent } from 'react'
-import { ArrowLeft, ArrowRight, Globe, RefreshCw, type IconComponent } from '@/lib/icons'
+import { ArrowLeft, ArrowRight, Globe, RefreshCw, ZoomIn, ZoomOut, type IconComponent } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
 import { Input } from '@/components/motion/input'
 import { Tooltip } from '@/components/motion/tooltip'
@@ -23,6 +23,13 @@ import {
   updateBrowserHistoryTitleFor
 } from '@/lib/browser/session'
 import type { BrowserPanePage } from '@/lib/browser/store'
+import {
+  effectiveWebviewZoom,
+  getBrowserZoom,
+  nextBrowserZoom,
+  setBrowserZoom,
+  subscribeBrowserZoom
+} from '@/lib/browser/zoom'
 import { cn } from '@/lib/utils'
 
 /** Electron guest queries the pane needs — declared here because the renderer
@@ -41,6 +48,7 @@ export interface BrowserWebviewElement {
   goForward(): void
   reload(): void
   loadURL(url: string): Promise<void>
+  setZoomFactor(factor: number): void
 }
 
 /** One webview event's display patch, folded into the pane's localNav map. */
@@ -76,6 +84,34 @@ function ToolButton({ label, icon: Icon, onClick }: { label: string; icon: IconC
       </Button>
     </Tooltip>
   )
+}
+
+/** Push the shared page zoom to one guest. The store keeps the ladder value
+ *  relative to the host UI (the pane hosts at 1× UI scale today), so the
+ *  absolute factor is `effectiveWebviewZoom`. `setZoomFactor` throws while
+ *  the guest document is not ready — silent by design: every dom-ready and
+ *  committed navigation re-applies, so an early failure needs no retry. */
+function applyZoom(wv: BrowserWebviewElement | null, pageZoom: number): void {
+  if (!wv) return
+  try {
+    wv.setZoomFactor(effectiveWebviewZoom(pageZoom, 1))
+  } catch {
+    /* guest not ready — re-applied on the next dom-ready / navigation */
+  }
+}
+
+/** True when the keydown target is a text-entry surface (input, textarea,
+ *  contentEditable host or child): the browser zoom shortcuts must not steal
+ *  keystrokes a field owns. */
+export function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false
+  if (target.closest('input, textarea')) return true
+  let node: Element | null = target
+  while (node) {
+    if ((node as HTMLElement).isContentEditable) return true
+    node = node.parentElement
+  }
+  return false
 }
 
 /** URL input's click-select-all (pi-web parity): after onFocus selects all,
@@ -210,6 +246,27 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange }: Bro
   const [urlError, setUrlError] = useState(false)
   const urlErrorTimerRef = useRef<number | null>(null)
 
+  // Shared page zoom (pane-wide ladder state, persisted in localStorage): the
+  // selected toolbar reads it here and every page view re-applies it to its
+  // own guest, so one change covers all pages.
+  const pageZoom = useSyncExternalStore(subscribeBrowserZoom, getBrowserZoom)
+  // Event handlers (dom-ready / did-navigate) read the zoom through this ref
+  // so their listener effect stays decoupled from zoom changes.
+  const pageZoomRef = useRef(pageZoom)
+  useEffect(() => {
+    pageZoomRef.current = pageZoom
+    // Live re-apply on every change (dom-ready re-applies anyway; this makes
+    // toolbar/shortcut feedback instant on the already-loaded guest).
+    applyZoom(webviewRef.current as unknown as BrowserWebviewElement | null, pageZoom)
+  }, [pageZoom])
+
+  const zoomIn = useCallback(() => {
+    setBrowserZoom(nextBrowserZoom(getBrowserZoom(), 1))
+  }, [])
+  const zoomOut = useCallback(() => {
+    setBrowserZoom(nextBrowserZoom(getBrowserZoom(), -1))
+  }, [])
+
   // The guest follows the element layout, but under "display:none → visible"
   // and panel open/close animations it can end up stuck at a shrunken size
   // (measured in pi-web) — drive it explicitly in pixels. A display:none
@@ -277,7 +334,10 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange }: Bro
     const wv = webviewRef.current
     if (!wv) return
     const onDomReady = () => {
-      // T9: re-apply zoom on every dom-ready (not latched)
+      // Re-apply zoom on EVERY dom-ready — deliberately OUTSIDE the one-shot
+      // handshake latch below: the first marker→site navigation and later
+      // cross-origin navigations can reset the guest's zoom factor.
+      applyZoom(wv as unknown as BrowserWebviewElement, pageZoomRef.current)
       if (handshakeCompleteRef.current) return
       handshakeCompleteRef.current = true
       // Register the guest with the service (state-only until a reconcile
@@ -303,6 +363,9 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange }: Bro
     // same-site navigation keeps it — re-clearing would just flash a blank.
     let prevOrigin = ''
     const onNav = (event: Event) => {
+      // Best-effort zoom re-apply: a committed navigation is the other moment
+      // the guest may have reset its factor (applyZoom catches silently).
+      applyZoom(wv as unknown as BrowserWebviewElement, pageZoomRef.current)
       const raw = (event as unknown as { url?: string }).url ?? ''
       // Loading the initial marker src is not a real navigation: keep it out
       // of localNav so the strip keeps its about:blank display semantics.
@@ -397,6 +460,13 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange }: Bro
             onBlur={() => setUrlDraft(null)}
             {...urlSelectAllProps}
           />
+          <div className="flex shrink-0 items-center" data-browser-zoom>
+            <ToolButton label={t('browser.zoomOut')} icon={ZoomOut} onClick={zoomOut} />
+            <span className="w-10 shrink-0 text-center text-xs tabular-nums text-muted-foreground">
+              {Math.round(pageZoom * 100)}%
+            </span>
+            <ToolButton label={t('browser.zoomIn')} icon={ZoomIn} onClick={zoomIn} />
+          </div>
         </div>
       ) : null}
       <div ref={wrapRef} className="relative min-h-0 flex-1">

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { JSX } from 'react'
+import { useTheme } from 'next-themes'
 import { Bot, Globe, Plus, X } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
 import { Tabs, TabsList, TabsTrigger } from '@/components/motion/tabs'
@@ -8,8 +9,9 @@ import { useI18n } from '@/i18n'
 import { cn } from '@/lib/utils'
 import { HUMAN_OWNER, buildMarkerUrl, parseMarkerUrl } from '../../../../shared/browser.ts'
 import { readOpenBrowserPages, snapshotOpenPages, writeOpenBrowserPages } from '@/lib/browser/session'
+import { getBrowserZoom, nextBrowserZoom, setBrowserZoom } from '@/lib/browser/zoom'
 import type { BrowserPanePage, BrowserStore } from '@/lib/browser/store'
-import { BrowserPageView, type BrowserNavPatch, type LocalNavInfo } from './BrowserPageView'
+import { BrowserPageView, isEditableTarget, type BrowserNavPatch, type LocalNavInfo } from './BrowserPageView'
 import { LabelTooltip } from './LabelTooltip'
 import { MiddleEllipsis } from './MiddleEllipsis'
 
@@ -56,8 +58,21 @@ function applyNavPatch(
  * in through the workspace-owned `BrowserStore` (`browser:state` pushes + the
  * poll below); display truth for titles/URLs/favicons is this pane's own
  * `localNav` map, fed by webview events (server meta is only the fallback).
+ *
+ * `active` (threaded by SidebarPanel's keep-alive layer) is true only while
+ * this pane's rail tab is the one on screen: the pane-wide ⌘±/0 zoom
+ * shortcuts register only then, so the hidden keep-alive layer never
+ * consumes them.
  */
-export function BrowserPane({ store, onEmpty }: { store: BrowserStore; onEmpty: () => void }): JSX.Element {
+export function BrowserPane({
+  store,
+  onEmpty,
+  active
+}: {
+  store: BrowserStore
+  onEmpty: () => void
+  active: boolean
+}): JSX.Element {
   const { t } = useI18n()
   const state = useSyncExternalStore(store.subscribe, store.getState)
   const status = state.status
@@ -86,6 +101,39 @@ export function BrowserPane({ store, onEmpty }: { store: BrowserStore; onEmpty: 
   const sawPagesRef = useRef(false)
   /** onEmpty at most once per mount (closePage and the transition share it). */
   const emptyFiredRef = useRef(false)
+
+  const { resolvedTheme } = useTheme()
+  // Guest pages follow the app theme: main injects Emulation.setEmulatedMedia
+  // per registered page and replays it on every registration, so this one
+  // call — on mount and on each resolvedTheme change — covers every current
+  // and future guest. Errors are swallowed across the bridge.
+  useEffect(() => {
+    void window.pi.browserTheme(resolvedTheme === 'dark' ? 'dark' : 'light')
+  }, [resolvedTheme])
+
+  // ⌘= (also ⌘+) / ⌘- / ⌘0 page zoom, Chromium parity. Registered ONLY while
+  // this pane's rail tab is the active one: the keep-alive layer stays
+  // mounted under every other tab and must not consume the shortcuts, and
+  // capture-phase preventDefault + stopPropagation keep the app's own ⌘
+  // handlers (and the composer's fields) out of the same keystroke. Fields
+  // keep their keys: isEditableTarget skips text-entry targets.
+  useEffect(() => {
+    if (!active) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey)) return
+      let next: number | null = null
+      if (event.key === '=' || event.key === '+') next = nextBrowserZoom(getBrowserZoom(), 1)
+      else if (event.key === '-') next = nextBrowserZoom(getBrowserZoom(), -1)
+      else if (event.key === '0') next = 1 // reset → 100%
+      if (next === null) return
+      if (isEditableTarget(event.target)) return
+      event.preventDefault()
+      event.stopPropagation()
+      setBrowserZoom(next)
+    }
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => window.removeEventListener('keydown', onKeyDown, true)
+  }, [active])
 
   // Workspace wiring keeps the store fed; this pane owns the poll (a closed
   // tab has no webviews to host, so pendingCreates may simply time out).

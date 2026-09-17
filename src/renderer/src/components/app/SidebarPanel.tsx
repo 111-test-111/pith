@@ -135,8 +135,9 @@ export const SIDEBAR_TABS: SidebarTabSpec[] = [
     // Never rendered through this registry: the pane content area below hosts
     // the browser pane itself in a keep-alive layer, because its webviews are
     // process-backed and die on unmount. A second instance here would
-    // double-host every page.
-    render: (props) => <BrowserPane store={props.browserStore} onEmpty={props.onBrowserEmpty} />
+    // double-host every page. (Were it ever rendered, this slot is by
+    // construction the active pane — hence `active`.)
+    render: (props) => <BrowserPane store={props.browserStore} onEmpty={props.onBrowserEmpty} active />
   },
   {
     id: 'files',
@@ -460,13 +461,15 @@ export function SidebarPanel({
                   process-backed webviews. Only closing the browser tab
                   destroys them (deliberate pi-web parity; the open-pages
                   snapshot re-materializes them on reopen). The registry's
-                  browser render above is therefore never called. */}
+                  browser render above is therefore never called. `active`
+                  threads `browserPaneLive` so the pane's global ⌘±/0 zoom
+                  shortcuts register only while the tab is on screen. */}
               {tabs.includes('browser') ? (
                 <div
                   aria-hidden={!browserPaneLive || undefined}
                   className={cn('absolute inset-0', !browserPaneLive && 'pointer-events-none opacity-0')}
                 >
-                  <BrowserPane store={pane.browserStore} onEmpty={pane.onBrowserEmpty} />
+                  <BrowserPane store={pane.browserStore} onEmpty={pane.onBrowserEmpty} active={browserPaneLive} />
                 </div>
               ) : null}
               {!hasTabs || pickerOpen ? (

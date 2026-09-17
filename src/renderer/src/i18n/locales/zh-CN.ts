@@ -443,6 +443,9 @@ const zhCN: Messages = {
   'browser.startHint': '输入 URL 以打开页面',
   'browser.recents': '最近打开',
   'browser.openRecents': '打开最近访问的地址',
+  'browser.zoomIn': '放大',
+  'browser.zoomOut': '缩小',
+  'browser.zoomReset': '重置缩放（⌘0）',
 
   'review.emptyBody': '某一轮里被修改或新建的文件会连同 diff 出现在这里——一次一轮，新的在前。',
   'review.prevTurn': '上一个有改动的轮次',

@@ -446,6 +446,9 @@ const en = {
   'browser.startHint': 'Enter a URL to open a page',
   'browser.recents': 'Recent',
   'browser.openRecents': 'Open a recent address',
+  'browser.zoomIn': 'Zoom in',
+  'browser.zoomOut': 'Zoom out',
+  'browser.zoomReset': 'Reset zoom (⌘0)',
 
   'review.emptyTitle': 'Nothing to review yet',
   'review.emptyBody':
