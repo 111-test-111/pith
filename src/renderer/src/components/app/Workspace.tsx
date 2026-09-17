@@ -79,6 +79,7 @@ import {
 import type { StreamingBehavior } from '@/lib/streaming-behavior'
 import { ChatView } from './ChatView'
 import { Composer } from './Composer'
+import { BROWSER_ANNOTATION_EVENT } from './BrowserAnnotate'
 import type { NewSessionContext } from './NewSession'
 import { EditMessageDialog, type EditMessagePayload } from './EditMessageDialog'
 import { SettingsPage } from './settings/SettingsPage'
@@ -292,6 +293,27 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
   /** Composer draft of the side chat; kept here so switching panel tabs (or
    * collapsing the rail) does not discard what was typed. */
   const [sideChatDraft, setSideChatDraft] = useState('')
+  /** Browser annotation → composer draft insert (Task 16). The MAIN
+   * composer's draft state is fully internal to Composer — there is no
+   * external setter and no shared store — so the narrowest intrusion is a
+   * one-way "append to draft" payload: Workspace owns the window-event
+   * subscription and hands Composer a fresh { text, seq } per annotation;
+   * Composer appends it with selectStarter's semantics (existing draft kept,
+   * \n\n separator) and focuses the field. The seq (not just the object)
+   * matters because two annotations can compose identical text — a value
+   * prop alone would not re-fire. */
+  const [composerAppend, setComposerAppend] = useState<{ text: string; seq: number } | null>(null)
+  const composerAppendSeqRef = useRef(0)
+  useEffect(() => {
+    const onAnnotation = (event: Event) => {
+      const detail = (event as CustomEvent<{ text?: unknown }>).detail
+      if (typeof detail?.text !== 'string' || detail.text.length === 0) return
+      composerAppendSeqRef.current += 1
+      setComposerAppend({ text: detail.text, seq: composerAppendSeqRef.current })
+    }
+    window.addEventListener(BROWSER_ANNOTATION_EVENT, onAnnotation)
+    return () => window.removeEventListener(BROWSER_ANNOTATION_EVENT, onAnnotation)
+  }, [])
   /** The turn the review tab should show — set by a transcript Review click. */
   const [reviewTurnId, setReviewTurnId] = useState<number | null>(null)
   /** The live side chat, for handlers that must not depend on its identity. */
@@ -1559,6 +1581,7 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
               onRecallQueue={handleRecallQueue}
               onModelChange={(model) => void handleModelChange(model)}
               onThinkingLevelChange={(level) => void handleThinkingChange(level)}
+              appendDraft={composerAppend}
             />
           </div>
 

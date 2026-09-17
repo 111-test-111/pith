@@ -469,6 +469,12 @@ const zhCN: Messages = {
   'browser.clearDataFailed': '清除浏览数据失败。',
   'browser.downloadReveal': '在文件夹中显示',
   'browser.downloadFailed': '下载失败',
+  'browser.annotateToggle': '页面批注',
+  'browser.annotateExit': 'Esc 退出',
+  'browser.annotateHint': '点击选择元素 · 点击高亮框取消选择',
+  'browser.annotateSubmit': '插入',
+  'browser.annotateCancel': '取消',
+  'browser.annotateNotePlaceholder': '备注（可选）',
 
   'review.emptyBody': '某一轮里被修改或新建的文件会连同 diff 出现在这里——一次一轮，新的在前。',
   'review.prevTurn': '上一个有改动的轮次',

@@ -665,6 +665,9 @@ export function BrowserPane({
               onNavChange={handleNavChange}
               onWebContentsId={registerWebContentsId}
               bindPageActions={bindPageActions}
+              // T16: the annotate mode's Esc gate and its inactive exit read
+              // this — same keep-alive rule as the pane's own shortcuts.
+              active={active}
               // T14 download indicator: pane-store driven, so it stays put
               // across page switches (the newest entry of the ring).
               download={state.downloads.length > 0 ? state.downloads[state.downloads.length - 1] : null}

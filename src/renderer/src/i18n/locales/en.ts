@@ -472,6 +472,12 @@ const en = {
   'browser.clearDataFailed': 'Failed to clear browsing data.',
   'browser.downloadReveal': 'Reveal in folder',
   'browser.downloadFailed': 'Download failed',
+  'browser.annotateToggle': 'Annotate page',
+  'browser.annotateExit': 'Esc to exit',
+  'browser.annotateHint': 'Click an element to select it · click its highlight to cancel',
+  'browser.annotateSubmit': 'Insert',
+  'browser.annotateCancel': 'Cancel',
+  'browser.annotateNotePlaceholder': 'Note (optional)',
 
   'review.emptyTitle': 'Nothing to review yet',
   'review.emptyBody':

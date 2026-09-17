@@ -99,6 +99,14 @@ interface ComposerProps {
   onRecallQueue: (stopping?: boolean) => Promise<RecalledItemDTO[]>
   onModelChange: (model: ModelDTO) => void
   onThinkingLevelChange: (level: ThinkingLevel) => void
+  /** Browser annotation insert (Task 16): Workspace subscribes to
+   * `pith:browser-annotation` and hands a fresh { text, seq } per
+   * annotation. The draft lives in THIS component's state, so this one-way
+   * append is the only external write path — same semantics as
+   * selectStarter (existing draft kept, \n\n separator), never an overwrite
+   * and never a submit on the user's behalf. seq keeps two identical texts
+   * firing. */
+  appendDraft?: { text: string; seq: number } | null
 }
 
 let attachmentSeq = 0
@@ -129,7 +137,8 @@ export function Composer({
   onQueue,
   onRecallQueue,
   onModelChange,
-  onThinkingLevelChange
+  onThinkingLevelChange,
+  appendDraft = null
 }: ComposerProps) {
   const { t } = useI18n()
   const [behavior] = useStreamingBehavior()
@@ -401,6 +410,23 @@ export function Composer({
       textarea.setSelectionRange(textarea.value.length, textarea.value.length)
     })
   }
+
+  // Browser annotation insert (Task 16): append the composed annotation text
+  // to the internal draft and put the caret at its end — the same
+  // keep-the-draft semantics as selectStarter. Keyed on the appendDraft
+  // object, so a repeated identical annotation still lands.
+  useEffect(() => {
+    if (!appendDraft) return
+    const text = appendDraft.text
+    setValue((current) => (current.trim() ? `${current.trimEnd()}\n\n${text}` : text))
+    setMention(null)
+    requestAnimationFrame(() => {
+      const textarea = textareaRef.current
+      if (!textarea) return
+      textarea.focus()
+      textarea.setSelectionRange(textarea.value.length, textarea.value.length)
+    })
+  }, [appendDraft])
 
   // ---- paste & drag/drop --------------------------------------------------
   const handlePaste = (event: ReactClipboardEvent<HTMLTextAreaElement>) => {

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { FocusEvent, JSX, MouseEvent } from 'react'
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Download, Globe, RefreshCw, X, ZoomIn, ZoomOut, type IconComponent } from '@/lib/icons'
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Download, Globe, PencilLine, RefreshCw, X, ZoomIn, ZoomOut, type IconComponent } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
 import { Input } from '@/components/motion/input'
 import { Tooltip } from '@/components/motion/tooltip'
@@ -33,6 +33,7 @@ import {
 } from '@/lib/browser/zoom'
 import { cn } from '@/lib/utils'
 import { BrowserOverlays } from './BrowserOverlays'
+import { BrowserAnnotate } from './BrowserAnnotate'
 
 /** Electron guest queries the pane needs — declared here because the renderer
  *  must not import Electron. The JSX element itself is @types/react's built-in
@@ -58,6 +59,21 @@ export interface BrowserWebviewElement {
   findInPage(text: string, options?: { forward?: boolean; findNext?: boolean; matchCase?: boolean }): number
   stopFindInPage(action: 'clearSelection' | 'keepSelection' | 'activateSelection'): void
   print(): Promise<void>
+  /** Annotation mode (Task 16): runs the elementFromPoint resolver inside
+   *  the LIVE guest document — the webview's execution channel always binds
+   *  the current document, unlike a service-side Page (pi-web measured trap). */
+  executeJavaScript(code: string): Promise<unknown>
+  /** Annotation wheel forwarding: host-pixel mouseWheel with PURE pixel
+   *  deltas — payloads carrying wheelTicks or precise-scrolling flags are
+   *  silently swallowed by guests. Synchronous on the webview element;
+   *  throws before dom-ready. */
+  sendInputEvent(event: { type: 'mouseWheel'; x: number; y: number; deltaX: number; deltaY: number }): void
+  /** Live document title — the annotation payload's <title> prefers it over
+   *  the pane's display meta. */
+  getTitle(): string
+  /** The element's box in the wrap (annotation coordinates are measured
+   *  against it — device mode pins the element, so it is never assumed). */
+  getBoundingClientRect(): DOMRect
 }
 
 /** One webview event's display patch, folded into the pane's localNav map. */
@@ -104,6 +120,11 @@ export interface BrowserPageViewProps {
    *  survives page switches because the pane owns the store ring, not this
    *  per-page view. */
   download?: BrowserDownloadInfo | null
+  /** True only while the browser pane's rail tab is the active one (threaded
+   *  from BrowserPane): the annotate mode's Esc exit listens only then, and
+   *  losing activity exits the mode — a hidden keep-alive page must not hold
+   *  a capture layer or consume keystrokes. */
+  active: boolean
 }
 
 /** Icon-only toolbar button (the FilesPane ToolButton pattern). `className`
@@ -253,7 +274,7 @@ function BrowserStartPage({ onOpen }: { onOpen: (raw: string) => boolean }): JSX
  *   input silently does nothing (pi-web's electron-webview-spike finding);
  *   background agent driving needs the opacity form.
  */
-export function BrowserPageView({ page, selected, displayUrl, onNavChange, onWebContentsId, bindPageActions, download }: BrowserPageViewProps) {
+export function BrowserPageView({ page, selected, displayUrl, onNavChange, onWebContentsId, bindPageActions, download, active }: BrowserPageViewProps) {
   const { t } = useI18n()
   const webviewRef = useRef<HTMLWebViewElement | null>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
@@ -406,6 +427,17 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, onWeb
   useEffect(() => {
     if (!selected) closeFind()
   }, [closeFind, selected])
+
+  // ---- 批注模式 (Task 16) ----
+  // Per-page selection-scoped view state, like the device state above: only
+  // the selected page renders the capture layer, and losing selection OR the
+  // pane's active rail tab exits the mode, so every newly selected page
+  // starts clean and a hidden keep-alive page never holds a capture layer.
+  const [annotating, setAnnotating] = useState(false)
+  const exitAnnotate = useCallback(() => setAnnotating(false), [])
+  useEffect(() => {
+    if (!selected || !active) setAnnotating(false)
+  }, [active, selected])
 
   const printPage = useCallback(() => {
     const wv = webviewRef.current as unknown as BrowserWebviewElement | null
@@ -651,6 +683,15 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, onWeb
           <ToolButton label={t('browser.back')} icon={ArrowLeft} onClick={() => navigate('back')} />
           <ToolButton label={t('browser.forward')} icon={ArrowRight} onClick={() => navigate('forward')} />
           <ToolButton label={t('browser.reload')} icon={RefreshCw} onClick={() => navigate('reload')} />
+          {/* T16 annotate toggle: active tint follows the download indicator's
+              re-tint convention; toggling off clears the selection because
+              BrowserAnnotate (which owns it) unmounts. */}
+          <ToolButton
+            label={t('browser.annotateToggle')}
+            icon={PencilLine}
+            className={annotating ? 'text-primary hover:text-primary' : undefined}
+            onClick={() => setAnnotating((v) => !v)}
+          />
           <Input
             value={urlDraft ?? displayUrl}
             onChange={setUrlDraft}
@@ -748,6 +789,16 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, onWeb
         ) : null}
         {selected && displayUrl === 'about:blank' ? (
           <BrowserStartPage onOpen={(raw) => loadUrl(raw) !== null} />
+        ) : null}
+        {selected && annotating ? (
+          <BrowserAnnotate
+            wv={webviewRef.current as unknown as BrowserWebviewElement}
+            wrapEl={wrapRef.current}
+            pageZoom={pageZoom}
+            active={active}
+            onExit={exitAnnotate}
+            page={{ url: displayUrl, title: page.title }}
+          />
         ) : null}
         {findOpen ? (
           <div
