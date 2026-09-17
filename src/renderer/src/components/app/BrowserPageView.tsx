@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { FocusEvent, JSX, MouseEvent } from 'react'
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Download, Globe, RefreshCw, X, ZoomIn, ZoomOut, type IconComponent } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
@@ -253,6 +253,10 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, bindP
   const { t } = useI18n()
   const webviewRef = useRef<HTMLWebViewElement | null>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
+  // The device frame RING (T14): a sibling that draws the bezel AROUND the
+  // pinned webview — never a border on the webview element itself, which
+  // (border-box) would shrink the guest below the pinned size.
+  const frameRef = useRef<HTMLDivElement | null>(null)
   // Initial src is taken once at mount: new pages / pendingCreates carry a
   // marker URL; a server page restored with its real URL re-mounts at the
   // marker so the guest registers under the SAME id again (the real URL is
@@ -414,8 +418,12 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, bindP
   // the annotation coordinate invariant "guest viewport == element" depends on
   // the element and the guest viewport staying the same surface (device.ts
   // header note), and CDP metrics would break it while changing the render
-  // shape. The applied size reaches this callback through a ref so it stays
-  // dependency-free (the ResizeObserver below never re-subscribes per edit).
+  // shape. The visible frame therefore lives on the ring SIBLING (frameRef),
+  // not on the element's own border — with Tailwind's border-box preflight a
+  // border here would make the pinned values the border box and hand the
+  // guest pinned − 2px per axis. The applied size reaches this callback
+  // through a ref so it stays dependency-free (the ResizeObserver below never
+  // re-subscribes per edit).
   const deviceSizeRef = useRef<{ width: number; height: number } | null>(null)
   const syncSize = useCallback(() => {
     const wrap = wrapRef.current
@@ -425,9 +433,19 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, bindP
     const height = wrap.clientHeight
     if (width === 0 || height === 0) return
     const pinned = deviceSizeRef.current
+    const frame = frameRef.current
     if (pinned) {
-      wv.style.width = `${Math.min(pinned.width, width)}px`
-      wv.style.height = `${Math.min(pinned.height, height)}px`
+      const pinWidth = Math.min(pinned.width, width)
+      const pinHeight = Math.min(pinned.height, height)
+      wv.style.width = `${pinWidth}px`
+      wv.style.height = `${pinHeight}px`
+      // The ring is written to pinned + 2 per axis (border-box), so its 1px
+      // border sits exactly outside the pinned element and the guest keeps
+      // the exact preset size. It renders only while a device is active.
+      if (frame) {
+        frame.style.width = `${pinWidth + 2}px`
+        frame.style.height = `${pinHeight + 2}px`
+      }
     } else {
       wv.style.width = `${width}px`
       wv.style.height = `${height}px`
@@ -442,8 +460,10 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, bindP
     return () => observer.disconnect()
   }, [syncSize])
   // A device change re-pins immediately (the ResizeObserver only fires on
-  // container resizes, not on this state change).
-  useEffect(() => {
+  // container resizes, not on this state change). A LAYOUT effect: it must
+  // size the freshly mounted frame ring before the first paint, or the ring
+  // flashes stretched over the whole container for one frame.
+  useLayoutEffect(() => {
     deviceSizeRef.current = deviceSize
     syncSize()
   }, [deviceSize, syncSize])
@@ -693,14 +713,29 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, bindP
           {...{ allowpopups: 'true' } as Record<string, string>}
           // Device mode (T14) swaps the full-fill layout for a pinned,
           // centered element inside the relative wrap (`absolute inset-0
-          // m-auto` centres the explicit pixel box syncSize writes) and adds
-          // the visible device frame (bezel look, all theme tokens).
+          // m-auto` centres the explicit pixel box syncSize writes). The
+          // visible device frame (bezel look, all theme tokens) lives on the
+          // ring sibling below — a border ON THIS ELEMENT would shrink the
+          // guest below the pinned size and dent the "guest viewport ==
+          // element" invariant Task 16's annotation overlay builds on.
           className={cn(
             deviceSize
-              ? 'absolute inset-0 m-auto rounded-card border border-border bg-background shadow-overlay'
+              ? 'absolute inset-0 m-auto rounded-card bg-background shadow-overlay'
               : 'h-full w-full'
           )}
         />
+        {/* T14 device frame: a ring AROUND the pinned element, never a border
+            on the webview itself — border-box sizing would hand the guest
+            preset − 2px per axis. syncSize writes the ring to pinned + 2 per
+            axis, so its border sits exactly outside the element;
+            pointer-events-none keeps it click-transparent. */}
+        {deviceSize ? (
+          <div
+            ref={frameRef}
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0 m-auto rounded-card border border-border"
+          />
+        ) : null}
         {selected && displayUrl === 'about:blank' ? (
           <BrowserStartPage onOpen={(raw) => loadUrl(raw) !== null} />
         ) : null}

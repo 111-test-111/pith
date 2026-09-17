@@ -82,6 +82,15 @@ export function BrowserOverlays({
 }): JSX.Element {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
+  // Synchronous mirror of `open`: the 清除数据 round trip may resolve after
+  // the user already dismissed the popover, and its handlers must see CLOSED
+  // at that moment — not after the next passive-effect flush. Every open/
+  // close path routes through setOpenTracked so the mirror is exact.
+  const openRef = useRef(open)
+  const setOpenTracked = useCallback((next: boolean) => {
+    openRef.current = next
+    setOpen(next)
+  }, [])
   const [view, setView] = useState<'menu' | 'history' | 'device'>('menu')
   const [triggerEl, setTriggerEl] = useState<HTMLButtonElement | null>(null)
   const triggerId = useId()
@@ -90,15 +99,15 @@ export function BrowserOverlays({
    *  the exit animation fades out what the user was actually looking at. */
   const handleOpenChange = useCallback((next: boolean) => {
     if (next) setView('menu')
-    setOpen(next)
-  }, [])
+    setOpenTracked(next)
+  }, [setOpenTracked])
 
   /** Close from a menu/history ACTION: the clicked row lives in the portaled
    *  content and is about to unmount, so hand focus back to the ⋮ first. */
   const closeOverlay = useCallback(() => {
     triggerEl?.focus({ preventScroll: true })
-    setOpen(false)
-  }, [triggerEl])
+    setOpenTracked(false)
+  }, [setOpenTracked, triggerEl])
 
   // ---- 清除数据 (T14): the ⋮ quick path beside Settings' row (T11). Same
   // browserClearData call — only the inline two-step confirm lives here. ----
@@ -125,7 +134,11 @@ export function BrowserOverlays({
 
   // Closing cancels both timers: the 5s confirm revert is moot while closed,
   // and the done auto-close must NOT fire after a manual close (it would
-  // yank focus back to the trigger through closeOverlay).
+  // yank focus back to the trigger through closeOverlay). A done timer armed
+  // AFTER this ran — the round trip resolving post-close — is fenced twice:
+  // the .then/.catch handlers in handleClearData skip arming when openRef
+  // reads closed, and this effect's cleanup (which runs when the menu
+  // reopens) cancels anything that still slipped through in between.
   useEffect(() => {
     if (open) return
     if (clearConfirmTimerRef.current !== null) {
@@ -137,6 +150,12 @@ export function BrowserOverlays({
       clearDoneTimerRef.current = null
     }
     setClearConfirming(false)
+    return () => {
+      if (clearDoneTimerRef.current !== null) {
+        window.clearTimeout(clearDoneTimerRef.current)
+        clearDoneTimerRef.current = null
+      }
+    }
   }, [open])
 
   // Unmount never leaves a trailing timer behind (same rule as the history
@@ -172,14 +191,25 @@ export function BrowserOverlays({
       .browserClearData()
       .then(
         () => {
+          // The popover may have closed while the round trip was in flight.
+          // The done note would be invisible anyway, but arming the
+          // auto-close would yank focus to the ⋮ trigger 3s after the user
+          // left — skip both when closed (the catch path is symmetric).
+          if (!openRef.current) return
           setClearDone(true)
           if (clearDoneTimerRef.current !== null) window.clearTimeout(clearDoneTimerRef.current)
           clearDoneTimerRef.current = window.setTimeout(() => {
             clearDoneTimerRef.current = null
+            // Defense in depth: a close that raced this timer cleared it
+            // above, but never close/focus a popover that is no longer open.
+            if (!openRef.current) return
             closeOverlayRef.current()
           }, CLEAR_DONE_CLOSE_MS)
         },
-        () => setClearFailed(true)
+        () => {
+          if (!openRef.current) return
+          setClearFailed(true)
+        }
       )
       .finally(() => setClearing(false))
   }, [clearConfirming, clearing])
@@ -195,11 +225,11 @@ export function BrowserOverlays({
       if (event.key !== 'Escape' || event.isComposing) return
       event.preventDefault()
       event.stopPropagation()
-      setOpen(false)
+      setOpenTracked(false)
     }
     window.addEventListener('keydown', onKeyDown, true)
     return () => window.removeEventListener('keydown', onKeyDown, true)
-  }, [open])
+  }, [open, setOpenTracked])
 
   // Ruling C: the menu is a growable list of entries; find/print close the
   // overlay and act, history swaps this panel's view in place.
