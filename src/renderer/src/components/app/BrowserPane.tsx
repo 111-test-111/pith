@@ -32,7 +32,7 @@ const displayPageUrl = (url: string): string => (parseMarkerUrl(url) ? 'about:bl
  */
 export function BrowserPane({ store, onEmpty }: { store: BrowserStore; onEmpty: () => void }): JSX.Element {
   const { t } = useI18n()
-  const state = useSyncExternalStore((cb) => store.subscribe(cb), () => store.getState())
+  const state = useSyncExternalStore(store.subscribe, store.getState)
   const status = state.status
   const [selectedPageId, setSelectedPageId] = useState<string | null>(null)
   /** Pages with a close round-trip in flight: their rows (and webviews) go
@@ -222,6 +222,7 @@ export function BrowserPane({ store, onEmpty }: { store: BrowserStore; onEmpty: 
                     <LabelTooltip content={url || undefined} wrap>
                       <TabsTrigger
                         value={page.id}
+                        indicatorClassName="bg-background shadow-xs ring-1 ring-border"
                         className={cn('h-7 min-h-0 pl-2.5 pr-7', isActive && 'text-foreground')}
                       >
                         {nav?.favicon ? (

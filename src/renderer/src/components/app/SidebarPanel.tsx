@@ -132,6 +132,10 @@ export const SIDEBAR_TABS: SidebarTabSpec[] = [
     labelKey: 'sidebar.browser',
     shortcutKey: 'sidebar.shortcutBrowser',
     icon: Globe,
+    // Never rendered through this registry: the pane content area below hosts
+    // the browser pane itself in a keep-alive layer, because its webviews are
+    // process-backed and die on unmount. A second instance here would
+    // double-host every page.
     render: (props) => <BrowserPane store={props.browserStore} onEmpty={props.onBrowserEmpty} />
   },
   {
@@ -397,6 +401,10 @@ export function SidebarPanel({
   // is open; activeTab alone does not change in that case.
   useEffect(() => pane.files.subscribeOpen(() => setPickerOpen(false)), [pane.files])
   const hasTabs = tabs.length > 0
+  /** The browser pane's keep-alive layer is interactive only while its tab is
+   *  the active one and the picker is closed; otherwise it stays mounted but
+   *  invisible (see the pane content area). */
+  const browserPaneLive = hasTabs && !pickerOpen && activeTab === 'browser'
 
   const openTab = (kind: SidebarTabKind) => {
     setPickerOpen(false)
@@ -442,11 +450,29 @@ export function SidebarPanel({
               />
             ) : null}
 
-            <div className="min-h-0 flex-1">
+            <div className="relative min-h-0 flex-1">
+              {/* The browser pane mounts at this one stable tree position for as
+                  long as its rail tab EXISTS. While another tab is active it
+                  lives in a hidden-but-painted layer — opacity, never
+                  display:none/visibility, because the embedded-browser iron
+                  rule keeps agent pages interactive/screenshotable at full
+                  speed — so switching rail tabs never unmounts its
+                  process-backed webviews. Only closing the browser tab
+                  destroys them (deliberate pi-web parity; the open-pages
+                  snapshot re-materializes them on reopen). The registry's
+                  browser render above is therefore never called. */}
+              {tabs.includes('browser') ? (
+                <div
+                  aria-hidden={!browserPaneLive || undefined}
+                  className={cn('absolute inset-0', !browserPaneLive && 'pointer-events-none opacity-0')}
+                >
+                  <BrowserPane store={pane.browserStore} onEmpty={pane.onBrowserEmpty} />
+                </div>
+              ) : null}
               {!hasTabs || pickerOpen ? (
                 <SidebarPicker onOpen={openTab} />
               ) : (
-                activeTab && (() => {
+                activeTab && activeTab !== 'browser' && (() => {
                   const agentPath = agentPathForTab(activeTab)
                   if (agentPath) {
                     return (

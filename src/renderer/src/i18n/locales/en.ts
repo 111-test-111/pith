@@ -386,7 +386,6 @@ const en = {
 
   // right sidebar panel
   'sidebar.title': 'Sidebar',
-  'sidebar.placeholder': 'Coming soon',
   'sidebar.newTab': 'New tab',
   'sidebar.closeTab': 'Close {label}',
   'sidebar.tabMenu': 'Tab actions',

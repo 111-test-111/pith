@@ -226,9 +226,11 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
   const [terminals] = useState(() => new TerminalStore())
   const [files] = useState(() => new FileBrowserStore())
   useEffect(() => () => terminals.dispose(), [terminals])
-  // The embedded browser's pages outlive their pane: the store (and the guest
-  // pages it mirrors) live as long as the workspace — closing the rail tab
-  // only hides them, like the file browser's tabs.
+  // The embedded browser's store lives as long as the workspace. Its pane is
+  // kept mounted across rail tab switches (SidebarPanel's hidden layer), so
+  // pages survive those; closing the browser tab unmounts the pane and
+  // destroys its guest pages — Task 8's open-pages snapshot restores them on
+  // reopen.
   const [browserStore] = useState(() => new BrowserStore())
   useEffect(() => {
     const unsubscribeState = window.pi.onBrowserState((status) => browserStore.applyStatus(status))

@@ -52,16 +52,17 @@ export class BrowserStore {
   private state: BrowserPaneState = EMPTY_STATE
   private listeners = new Set<() => void>()
 
-  getState(): BrowserPaneState {
-    return this.state
-  }
-
-  subscribe(cb: () => void): () => void {
+  // 绑定且稳定的引用（TerminalStore 同款的类字段箭头函数）：面板把
+  // store.subscribe / store.getState 直接交给 useSyncExternalStore——内联
+  // 箭头包装每次渲染都是新函数，React 会随之退订再重订。
+  subscribe = (cb: () => void): (() => void) => {
     this.listeners.add(cb)
     return () => {
       this.listeners.delete(cb)
     }
   }
+
+  getState = (): BrowserPaneState => this.state
 
   /** 服务端状态推送：同一引用（轮询反复派生的同值）不通知。 */
   applyStatus(status: BrowserStatusDTO): void {

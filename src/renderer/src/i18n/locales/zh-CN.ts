@@ -382,7 +382,6 @@ const zhCN: Messages = {
 
   // 右侧边栏面板
   'sidebar.title': '侧边栏',
-  'sidebar.placeholder': '即将推出',
   'sidebar.newTab': '新建标签页',
   'sidebar.closeTab': '关闭 {label}',
   'sidebar.tabMenu': '标签页操作',
