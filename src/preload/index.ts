@@ -300,8 +300,9 @@ const api = {
     subscribe('browser:popup', cb),
   onBrowserDownload: (cb: (payload: { path: string; filename: string; error?: string }) => void) =>
     subscribe('browser:download', cb),
-  /** Guest-focused ⌘±/0, intercepted by main before the guest zooms natively
-   *  (before-input-event); the pane routes them through the app zoom ladder. */
+  /** Guest-focused browser-owned keys (⌘±/0 zoom, ⌘F find, ⌘P print), intercepted
+   *  by main before the guest acts on them (before-input-event); the pane routes
+   *  zoom through the app ladder and f/p to the selected page's find/print. */
   onBrowserGuestShortcut: (cb: (payload: { key: string }) => void) =>
     subscribe('browser:guest-shortcut', cb),
 

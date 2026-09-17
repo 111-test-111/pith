@@ -11,7 +11,7 @@ import { HUMAN_OWNER, buildMarkerUrl, parseMarkerUrl } from '../../../../shared/
 import { readOpenBrowserPages, snapshotOpenPages, writeOpenBrowserPages } from '@/lib/browser/session'
 import { getBrowserZoom, nextBrowserZoom, setBrowserZoom } from '@/lib/browser/zoom'
 import type { BrowserPanePage, BrowserStore } from '@/lib/browser/store'
-import { BrowserPageView, isEditableTarget, type BrowserNavPatch, type LocalNavInfo } from './BrowserPageView'
+import { BrowserPageView, isEditableTarget, type BrowserNavPatch, type BrowserPageActions, type LocalNavInfo } from './BrowserPageView'
 import { LabelTooltip } from './LabelTooltip'
 import { MiddleEllipsis } from './MiddleEllipsis'
 
@@ -60,9 +60,9 @@ function applyNavPatch(
  * `localNav` map, fed by webview events (server meta is only the fallback).
  *
  * `active` (threaded by SidebarPanel's keep-alive layer) is true only while
- * this pane's rail tab is the one on screen: the pane-wide ⌘±/0 zoom
- * shortcuts register only then, so the hidden keep-alive layer never
- * consumes them.
+ * this pane's rail tab is the one on screen: the pane-wide ⌘±/0 zoom and
+ * ⌘F/⌘P find/print shortcuts register only then, so the hidden keep-alive
+ * layer never consumes them.
  */
 export function BrowserPane({
   store,
@@ -162,14 +162,60 @@ export function BrowserPane({
     return () => window.removeEventListener('keydown', onKeyDown, true)
   }, [active, handleZoomShortcut])
 
-  // Guest-focused ⌘±/0: keys typed into a webview guest never reach this
-  // window's keydown listeners, so main intercepts them on the guest contents
-  // (wiring.ts before-input-event, allowlist exactly the four zoom keys) and
-  // relays them here. No editable-target guard on this path — keys arriving
-  // from a guest mean the browser pane is effectively active, and Chromium
-  // zooms even while an input inside the page is focused.
+  // The selected page's find/print surface. BrowserPageView (only the
+  // selected one binds) registers its actions here, so the pane-level ⌘F/⌘P
+  // below and the guest relay act on the page on screen without the pane
+  // reaching into any webview element itself.
+  // T13: menu opens find via this path (⋮ entry → selectedPageActionsRef.current?.openFind()).
+  const selectedPageActionsRef = useRef<BrowserPageActions | null>(null)
+  const bindPageActions = useCallback((actions: BrowserPageActions | null) => {
+    selectedPageActionsRef.current = actions
+  }, [])
+
+  // ⌘F / ⌘P — browser-owned chrome (Ruling M): the selected page's find bar
+  // and print dialog. Same gate as the zoom shortcuts: only while this
+  // pane's rail tab is the active one, editable targets yield (the find
+  // field's own ⌘F = next match), capture-phase preventDefault +
+  // stopPropagation keep the app's own ⌘ handlers out of the same keystroke.
+  // Physical `code` spellings (KeyF/KeyP) are the fallback for non-US
+  // layouts, mirroring the zoom listener above.
   useEffect(() => {
-    return window.pi.onBrowserGuestShortcut(({ key }) => handleZoomShortcut(key))
+    if (!active) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey)) return
+      const key =
+        event.key === 'f' || event.key === 'p'
+          ? event.key
+          : event.code === 'KeyF'
+            ? 'f'
+            : event.code === 'KeyP'
+              ? 'p'
+              : null
+      if (key === null) return
+      if (isEditableTarget(event.target)) return
+      const actions = selectedPageActionsRef.current
+      if (!actions) return
+      event.preventDefault()
+      event.stopPropagation()
+      if (key === 'f') actions.openFind()
+      else actions.print()
+    }
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => window.removeEventListener('keydown', onKeyDown, true)
+  }, [active])
+
+  // Guest-focused browser-owned keys (Ruling M): ⌘±/0 zoom plus ⌘F find and
+  // ⌘P print, intercepted by main before the guest acts on them (wiring.ts
+  // before-input-event, allowlist exactly these six) and relayed here. No
+  // editable-target guard on this path — keys arriving from a guest mean the
+  // browser pane is effectively active, and browser-owned keys win even while
+  // a field inside the page is focused (Chromium parity).
+  useEffect(() => {
+    return window.pi.onBrowserGuestShortcut(({ key }) => {
+      if (handleZoomShortcut(key)) return
+      if (key === 'f') selectedPageActionsRef.current?.openFind()
+      else if (key === 'p') selectedPageActionsRef.current?.print()
+    })
   }, [handleZoomShortcut])
 
   // Workspace wiring keeps the store fed; this pane owns the poll (a closed
@@ -486,6 +532,7 @@ export function BrowserPane({
               selected={page.id === effectiveSelectedId}
               displayUrl={displayUrlOf(page, localNav[page.id])}
               onNavChange={handleNavChange}
+              bindPageActions={bindPageActions}
             />
           ))}
         </div>

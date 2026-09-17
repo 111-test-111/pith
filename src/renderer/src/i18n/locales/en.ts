@@ -449,6 +449,12 @@ const en = {
   'browser.zoomIn': 'Zoom in',
   'browser.zoomOut': 'Zoom out',
   'browser.zoomReset': 'Reset zoom (⌘0)',
+  'browser.findPlaceholder': 'Find in page',
+  'browser.findCount': '{x} / {y}',
+  'browser.findNext': 'Next match (Enter)',
+  'browser.findPrev': 'Previous match (Shift+Enter)',
+  'browser.findClose': 'Close find (Esc)',
+  'browser.print': 'Print page (⌘P)',
 
   'review.emptyTitle': 'Nothing to review yet',
   'review.emptyBody':

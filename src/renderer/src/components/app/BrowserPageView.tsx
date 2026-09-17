@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { FocusEvent, JSX, MouseEvent } from 'react'
-import { ArrowLeft, ArrowRight, Globe, RefreshCw, ZoomIn, ZoomOut, type IconComponent } from '@/lib/icons'
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Globe, RefreshCw, X, ZoomIn, ZoomOut, type IconComponent } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
 import { Input } from '@/components/motion/input'
 import { Tooltip } from '@/components/motion/tooltip'
@@ -49,6 +49,13 @@ export interface BrowserWebviewElement {
   reload(): void
   loadURL(url: string): Promise<void>
   setZoomFactor(factor: number): void
+  /** In-page find + print (Task 12) — the webview's own DOM API. `findNext:
+   *  true` is the reliable shape on webview guests: it continues an active
+   *  session (adjacent match) and starts one when none is active; the default
+   *  `findNext: false` can silently skip the found-in-page event. */
+  findInPage(text: string, options?: { forward?: boolean; findNext?: boolean; matchCase?: boolean }): number
+  stopFindInPage(action: 'clearSelection' | 'keepSelection' | 'activateSelection'): void
+  print(): Promise<void>
 }
 
 /** One webview event's display patch, folded into the pane's localNav map. */
@@ -65,6 +72,12 @@ export interface LocalNavInfo {
   favicon?: string
 }
 
+/** What the pane's browser-owned shortcuts can ask of the selected page. */
+export interface BrowserPageActions {
+  openFind: () => void
+  print: () => void
+}
+
 export interface BrowserPageViewProps {
   page: BrowserPanePage
   /** Whether the page strip has this page selected. */
@@ -73,6 +86,11 @@ export interface BrowserPageViewProps {
    *  drives the URL input and the start-page overlay. */
   displayUrl: string
   onNavChange: (id: string, patch: BrowserNavPatch) => void
+  /** Registers the SELECTED page's find/print surface with the pane, so the
+   *  pane-level ⌘F/⌘P shortcuts (and the guest relay) act on the page on
+   *  screen without reaching into any webview element. Called with null on
+   *  deselect/unmount. */
+  bindPageActions?: (actions: BrowserPageActions | null) => void
 }
 
 /** Icon-only toolbar button (the FilesPane ToolButton pattern). */
@@ -221,7 +239,7 @@ function BrowserStartPage({ onOpen }: { onOpen: (raw: string) => boolean }): JSX
  *   input silently does nothing (pi-web's electron-webview-spike finding);
  *   background agent driving needs the opacity form.
  */
-export function BrowserPageView({ page, selected, displayUrl, onNavChange }: BrowserPageViewProps) {
+export function BrowserPageView({ page, selected, displayUrl, onNavChange, bindPageActions }: BrowserPageViewProps) {
   const { t } = useI18n()
   const webviewRef = useRef<HTMLWebViewElement | null>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
@@ -266,6 +284,108 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange }: Bro
   const zoomOut = useCallback(() => {
     setBrowserZoom(nextBrowserZoom(getBrowserZoom(), -1))
   }, [])
+
+  // ---- In-page find (Task 12) ----
+  // The bar's state lives in THIS view's lifecycle: only the selected page
+  // renders it, and losing selection closes it (effect below), so switching
+  // pages never carries a bar or a stale counter across.
+  const [findOpen, setFindOpen] = useState(false)
+  const [findQuery, setFindQuery] = useState('')
+  /** Last finalUpdate counter from found-in-page (null = nothing to show). */
+  const [findCount, setFindCount] = useState<{ ordinal: number; matches: number } | null>(null)
+  const findInputRef = useRef<HTMLInputElement | null>(null)
+  // Mirrors for the code that must not depend on fresh renders: the
+  // found-in-page listener is attached once, and closeFind runs from effects.
+  const findOpenRef = useRef(false)
+  const lastFindTextRef = useRef('')
+
+  const openFind = useCallback(() => {
+    findOpenRef.current = true
+    setFindOpen(true)
+    // Already open (⌘F again): the field just takes focus. Freshly opened:
+    // the mount-focus effect below runs once the bar exists.
+    findInputRef.current?.focus()
+  }, [])
+
+  const closeFind = useCallback(() => {
+    findOpenRef.current = false
+    setFindOpen(false)
+    setFindCount(null)
+    lastFindTextRef.current = ''
+    const wv = webviewRef.current as unknown as BrowserWebviewElement | null
+    try { wv?.stopFindInPage('clearSelection') } catch { /* guest not ready */ }
+  }, [])
+
+  /** One find step against the guest. Changed query text tears the previous
+   *  session down first, so the fresh find starts from the top instead of
+   *  continuing the old one. */
+  const runFind = useCallback((text: string, backward = false) => {
+    const wv = webviewRef.current as unknown as BrowserWebviewElement | null
+    if (!wv || text.length === 0) return
+    const inputHadFocus = document.activeElement === findInputRef.current
+    try {
+      if (text !== lastFindTextRef.current) wv.stopFindInPage('clearSelection')
+      // findNext: true = continue-or-start (see BrowserWebviewElement above).
+      wv.findInPage(text, { forward: !backward, findNext: true })
+      lastFindTextRef.current = text
+    } catch { /* guest not ready — the next edit retries */ }
+    // findInPage can hand keyboard focus to the guest; take it straight back
+    // so typing in the field keeps flowing (only when the field had it).
+    if (inputHadFocus) findInputRef.current?.focus()
+  }, [])
+
+  const findStep = useCallback((direction: 1 | -1) => {
+    if (findQuery.length === 0) return
+    runFind(findQuery, direction === -1)
+  }, [findQuery, runFind])
+
+  // Debounced find (200ms after the last edit): non-empty runs findInPage,
+  // empty clears the selection and the counter. The timer cleanup means a
+  // close/query change can never leave a trailing findInPage behind, and a
+  // query Enter/⌘F already searched suppresses the still-pending timer.
+  useEffect(() => {
+    if (!findOpen) return
+    const text = findQuery
+    if (text.length === 0) {
+      const wv = webviewRef.current as unknown as BrowserWebviewElement | null
+      try { wv?.stopFindInPage('clearSelection') } catch { /* guest not ready */ }
+      lastFindTextRef.current = ''
+      setFindCount(null)
+      return
+    }
+    const timer = window.setTimeout(() => {
+      if (text === lastFindTextRef.current) return
+      runFind(text)
+    }, 200)
+    return () => window.clearTimeout(timer)
+  }, [findOpen, findQuery, runFind])
+
+  // Focus the field when the bar appears (⌘F / T13 menu) — after the mount,
+  // since openFind's direct focus() finds no field yet on the first frame.
+  useEffect(() => {
+    if (findOpen) findInputRef.current?.focus()
+  }, [findOpen])
+
+  // The bar belongs to the selected page: losing selection closes it (the
+  // guest's highlight is cleared with it).
+  useEffect(() => {
+    if (!selected) closeFind()
+  }, [closeFind, selected])
+
+  const printPage = useCallback(() => {
+    const wv = webviewRef.current as unknown as BrowserWebviewElement | null
+    if (!wv) return
+    try { void wv.print().catch(() => { /* a failed print is the guest's to render */ }) } catch { /* guest not ready */ }
+  }, [])
+
+  // Expose the selected page's find/print to the pane-level shortcuts (⌘F/⌘P
+  // and the guest relay). Only the SELECTED view binds, so the pane's actions
+  // always hit the page on screen. T13: menu opens find via this path.
+  useEffect(() => {
+    if (!selected) return
+    bindPageActions?.({ openFind, print: printPage })
+    return () => bindPageActions?.(null)
+  }, [bindPageActions, openFind, printPage, selected])
 
   // The guest follows the element layout, but under "display:none → visible"
   // and panel open/close animations it can end up stuck at a shrunken size
@@ -411,17 +531,30 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange }: Bro
         updateBrowserHistoryFaviconFor(lastNavUrlRef.current, favicon)
       }
     }
+    const onFoundInPage = (event: Event) => {
+      // The counter follows the FINAL payload of a request only (intermediate
+      // updates arrive while Chromium is still counting), and only while the
+      // bar is open — a payload landing after close must not resurrect it.
+      if (!findOpenRef.current) return
+      const result = (event as unknown as {
+        result?: { finalUpdate?: boolean; activeMatchOrdinal?: number; matches?: number }
+      }).result
+      if (!result?.finalUpdate) return
+      setFindCount({ ordinal: result.activeMatchOrdinal ?? 0, matches: result.matches ?? 0 })
+    }
     wv.addEventListener('dom-ready', onDomReady)
     wv.addEventListener('did-navigate', onNav)
     wv.addEventListener('did-navigate-in-page', onNavInPage)
     wv.addEventListener('page-title-updated', onTitle)
     wv.addEventListener('page-favicon-updated', onFavicon)
+    wv.addEventListener('found-in-page', onFoundInPage)
     return () => {
       wv.removeEventListener('dom-ready', onDomReady)
       wv.removeEventListener('did-navigate', onNav)
       wv.removeEventListener('did-navigate-in-page', onNavInPage)
       wv.removeEventListener('page-title-updated', onTitle)
       wv.removeEventListener('page-favicon-updated', onFavicon)
+      wv.removeEventListener('found-in-page', onFoundInPage)
     }
   }, [page.id, page.owner, onNavChange])
 
@@ -487,6 +620,56 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange }: Bro
         />
         {selected && displayUrl === 'about:blank' ? (
           <BrowserStartPage onOpen={(raw) => loadUrl(raw) !== null} />
+        ) : null}
+        {findOpen ? (
+          <div
+            data-browser-find
+            className="absolute right-2 top-2 z-10 flex h-9 items-center gap-0.5 rounded-control border border-border bg-background px-1 shadow-overlay"
+            onKeyDown={(event) => {
+              // Esc anywhere in the bar closes it; stopPropagation keeps the
+              // window-level Esc handling (Esc-to-stop) out of the same
+              // keystroke.
+              if (event.key !== 'Escape' || event.nativeEvent.isComposing) return
+              event.preventDefault()
+              event.stopPropagation()
+              closeFind()
+            }}
+          >
+            <Input
+              ref={findInputRef}
+              value={findQuery}
+              onChange={setFindQuery}
+              placeholder={t('browser.findPlaceholder')}
+              aria-label={t('browser.findPlaceholder')}
+              spellCheck={false}
+              autoComplete="off"
+              className="w-44 shrink-0"
+              classNames={{ field: 'h-7', input: 'h-full px-2 text-xs' }}
+              onKeyDown={(event) => {
+                if (event.nativeEvent.isComposing) return
+                if (event.key === 'Enter') {
+                  event.preventDefault()
+                  findStep(event.shiftKey ? -1 : 1)
+                } else if ((event.metaKey || event.ctrlKey) && event.key === 'f') {
+                  // ⌘F with the field focused = next match (the window-level
+                  // ⌘F yields to this editable target by design).
+                  event.preventDefault()
+                  event.stopPropagation()
+                  findStep(1)
+                }
+              }}
+            />
+            <span
+              role="status"
+              aria-live="polite"
+              className="w-16 shrink-0 text-center text-[10px] tabular-nums text-muted-foreground"
+            >
+              {findCount ? t('browser.findCount', { x: findCount.ordinal, y: findCount.matches }) : ''}
+            </span>
+            <ToolButton label={t('browser.findPrev')} icon={ArrowUp} onClick={() => findStep(-1)} />
+            <ToolButton label={t('browser.findNext')} icon={ArrowDown} onClick={() => findStep(1)} />
+            <ToolButton label={t('browser.findClose')} icon={X} onClick={closeFind} />
+          </div>
         ) : null}
       </div>
     </div>

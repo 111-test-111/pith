@@ -446,6 +446,12 @@ const zhCN: Messages = {
   'browser.zoomIn': '放大',
   'browser.zoomOut': '缩小',
   'browser.zoomReset': '重置缩放（⌘0）',
+  'browser.findPlaceholder': '页内查找',
+  'browser.findCount': '{x} / {y}',
+  'browser.findNext': '下一个匹配（Enter）',
+  'browser.findPrev': '上一个匹配（Shift+Enter）',
+  'browser.findClose': '关闭查找（Esc）',
+  'browser.print': '打印页面（⌘P）',
 
   'review.emptyBody': '某一轮里被修改或新建的文件会连同 diff 出现在这里——一次一轮，新的在前。',
   'review.prevTurn': '上一个有改动的轮次',
