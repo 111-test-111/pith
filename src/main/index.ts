@@ -2,7 +2,6 @@ import { app, BrowserWindow, screen } from 'electron'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { appendCdpSwitches, pickCdpPort } from './browser/cdp-port.ts'
-import { getBrowserService } from './browser/service.ts'
 import { installBrowserWiring } from './browser/wiring.ts'
 import { createPiManager, registerIpc } from './ipc'
 import { installMediaProtocol, registerMediaScheme } from './media-protocol'
@@ -97,15 +96,11 @@ function createWindow(): BrowserWindow {
 
   // Embedded browser wiring: per-contents window-open routing (this replaces the
   // window-level open-external handler that used to live below), guest input relay,
-  // download takeover and the permission allowlist for the browser partition. It
-  // reports false until the browser service is initialized in ipc.ts, before
-  // createWindow — the transitional no-op state stays visible. The branch also
-  // documents the config dependency: `treeshake: false` in electron.vite.config.ts
-  // is what keeps this wiring in the bundle (rollup 4's inter-procedural folding
-  // proves these electron-only effects "pure" and would delete them otherwise).
-  if (!installBrowserWiring(win, getBrowserService(), broadcast)) {
-    console.warn('[Pith] browser wiring skipped: browser service not initialized yet')
-  }
+  // download takeover and the permission allowlist for the browser partition. The
+  // wiring installs unconditionally; only the input relay is service-aware, and it
+  // looks the singleton up lazily via getBrowserService() — a designed no-op until
+  // the service initializes in ipc.ts (Task 5's registerIpc).
+  installBrowserWiring(win, broadcast)
 
   // Restore the maximized state the window was closed in. Reading bounds while
   // maximized or full screen yields the maximized rect, so persistence always

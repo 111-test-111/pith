@@ -6,8 +6,8 @@
  *   给每个 contents 挂 handler，按 contents 身份分流；壳窗口自身的 contents 在 install
  *   时已存在（created 事件已错过），显式补挂同一逻辑（保持既有 openExternal 行为逐字不变，
  *   壳窗口不得再有第二个 window-open handler）。
- * - 输入中继不经服务器：直接 bump service 的 interaction generation（guest 的旧
- *   snapshot ref 失效）。
+ * - 输入中继不经服务器：经 getBrowserService() 惰性取单例后 bump interaction
+ *   generation（guest 的旧 snapshot ref 失效）；service 初始化前为设计的 no-op。
  * - 下载只接管 browser 分区：自动落系统「下载」目录，重名 (n) 去重，完成/失败经 emit
  *   通知渲染层工具条。
  * 纯函数（decideBrowserPermission / classifyGuestPopup）与安装器分离——检查脚本在
@@ -18,7 +18,7 @@ import { createRequire } from 'node:module'
 import { basename, extname, join } from 'node:path'
 import type { BrowserWindow, WebContents } from 'electron'
 import { BROWSER_PARTITION, parseMarkerUrl } from '../../shared/browser.ts'
-import type { BrowserService } from './service.ts'
+import { getBrowserService } from './service.ts'
 
 const requireElectron = createRequire(import.meta.url)
 function electron(): typeof import('electron') {
@@ -48,13 +48,12 @@ export function classifyGuestPopup(url: string): 'marker' | 'shell' | 'guest' {
 /** 渲染层通知：ipc.ts 同款全窗口广播（index.ts 传入）。 */
 export type BrowserEmit = (channel: string, payload: unknown) => void
 
-// ---- 安装器状态（模块级）：web-contents-created 监听与会话接线只装一次；窗口/服务/emit
+// ---- 安装器状态（模块级）：web-contents-created 监听与会话接线只装一次；窗口/emit
 // 随每次 install 刷新——macOS 的 activate 路径会以新窗口再次走 createWindow，先装的
 // 监听闭包必须经模块变量读到当前值，而不是捕获首次的旧窗口。 ----
 let wiringInstalled = false
 let sessionWired = false
 let shellWin: BrowserWindow | null = null
-let activeService: BrowserService | null = null
 let activeEmit: BrowserEmit | null = null
 
 /** 伪造 marker 丢弃只记一次日志（恶意页面可能刷屏）。 */
@@ -95,13 +94,15 @@ function wireContents(contents: WebContents): void {
   })
   // 2. 输入中继：webview guest 的 keyDown/mouseDown/mouseWheel 节流 300ms 后 bump——
   // 人在 agent 页上的原生输入使旧 snapshot ref 失效（bump 按 webContentsId 找注册表行）。
+  // service 经 getBrowserService() 惰性取：调用点的单例是运行时读取的模块变量，
+  // 初始化前为设计的 no-op（不存在可被 tree-shaking 常量折叠的空参数）。
   if (contents.getType() !== 'webview') return
   contents.on('input-event', (_event, input) => {
     if (input.type !== 'keyDown' && input.type !== 'mouseDown' && input.type !== 'mouseWheel') return
     const now = Date.now()
     if (now - (relayedAt.get(contents.id) ?? 0) < INPUT_RELAY_THROTTLE_MS) return
     relayedAt.set(contents.id, now)
-    activeService?.bumpInteractionByWebContentsId(contents.id)
+    getBrowserService()?.bumpInteractionByWebContentsId(contents.id)
   })
   contents.once('destroyed', () => relayedAt.delete(contents.id))
 }
@@ -139,15 +140,14 @@ function wireBrowserSession(): void {
 }
 
 /**
- * 内嵌浏览器接线入口（createWindow 内调用）。service 未初始化时整个接线惰性 no-op——
- * service 的唯一初始化点在 ipc.ts（createWindow 之前），此后本调用即生效。
- * 返回是否真正接线（false = service 未初始化的过渡态，调用方分支上报，过渡态可见）。
- * 幂等：重复 install 只刷新窗口/服务/emit 引用，监听与会话接线不重复挂。
+ * 内嵌浏览器接线入口（createWindow 内调用），无条件安装：popup 路由 / 下载接管 /
+ * 权限白名单本就不依赖 service；输入中继经 getBrowserService() 惰性取单例——service
+ * 未初始化（唯一初始化点在 ipc.ts）时中继为设计的 no-op，调用点没有可被 tree-shaking
+ * 常量折叠的空参数。
+ * 幂等：重复 install 只刷新窗口/emit 引用，监听与会话接线不重复挂。
  */
-export function installBrowserWiring(win: BrowserWindow, service: BrowserService | null, emit: BrowserEmit): boolean {
-  if (!service) return false
+export function installBrowserWiring(win: BrowserWindow, emit: BrowserEmit): void {
   shellWin = win
-  activeService = service
   activeEmit = emit
   if (!wiringInstalled) {
     wiringInstalled = true
@@ -158,5 +158,4 @@ export function installBrowserWiring(win: BrowserWindow, service: BrowserService
   // activate 路径重复调用时 setWindowOpenHandler 是 setter：后挂的（读到当前 shellWin）生效。
   wireContents(win.webContents)
   wireBrowserSession()
-  return true
 }
