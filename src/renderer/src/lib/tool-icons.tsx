@@ -1,11 +1,14 @@
 import {
+  ArrowDownUp,
   Bot,
   BookDownload,
   BookSearch,
+  Camera,
   Chart,
   CircleHelp,
   CloudDownload,
   CommandLine,
+  Compass,
   Dashboard,
   Database,
   FileCode2,
@@ -17,16 +20,25 @@ import {
   FolderTree,
   Globe,
   InstallingUpdates,
+  Keyboard,
+  Layers,
+  ListChecks,
   ListTodo,
+  MousePointer2,
+  MousePointerClick,
   Plug,
+  ScanText,
   ScanSearch,
   Search,
   SourceCode,
+  SquareArrowOutUpRight,
   Stethoscope,
   Terminal,
   TextSearch,
+  Timer,
   Trash2,
   Wrench,
+  XSquare,
   type IconComponent
 } from '@/lib/icons'
 import { cn } from '@/lib/utils'
@@ -89,7 +101,23 @@ const TOOL_ICONS: Record<string, IconComponent> = {
   // namespace proxy (`mcp__context7`, …) share one MCP glyph; the proxies are
   // matched by prefix in `toolIconComponent` rather than listed here.
   mcp: Plug,
-  mcpScript: Plug
+  mcpScript: Plug,
+  // Embedded browser agent tools. `browser_navigate` takes the `Compass` so it
+  // stays distinct from web_search's `Globe`; one mapping per name even where
+  // the artwork is shared (type/press_key are both the keyboard, by design).
+  browser_navigate: Compass,
+  browser_pages: Layers,
+  browser_focus: SquareArrowOutUpRight,
+  browser_snapshot: ScanText,
+  browser_click: MousePointerClick,
+  browser_type: Keyboard,
+  browser_press_key: Keyboard,
+  browser_scroll: ArrowDownUp,
+  browser_wait_for: Timer,
+  browser_screenshot: Camera,
+  browser_close: XSquare,
+  browser_hover: MousePointer2,
+  browser_select: ListChecks
 }
 
 /** Namespace-proxy tools are named `<adapter>__<server>`. */

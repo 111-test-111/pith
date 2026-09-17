@@ -21,9 +21,14 @@ import {
 } from '../src/main/browser/tools-core.ts'
 // ---- Task 3：service（BrowserService + mock 级套件）----
 import {
-  BrowserService, BrowserHostUnavailableError, ConsentRequiredError, NavigationBlockedError,
+  BrowserService, BrowserHostUnavailableError, ConsentRequiredError, InvalidRefError,
+  NavigationBlockedError, PageGoneError, PageNotFoundError, SnapshotScopeError,
   StaleSnapshotError, __setBrowserServiceForTests, getBrowserService, initBrowserService,
 } from '../src/main/browser/service.ts'
+// ---- Task 10：agent 工具注册（错误映射 + 参数互斥预检，纯函数）----
+import {
+  APP_BROWSER_TOOL_NAMES, browserToolErrorText, createBrowserTools, validateNavigateParams,
+} from '../src/main/browser/tools.ts'
 // ---- Task 4：CDP 端口与接线纯函数 ----
 import { getCdpPort, pickCdpPort } from '../src/main/browser/cdp-port.ts'
 import { classifyGuestPopup, decideBrowserPermission } from '../src/main/browser/wiring.ts'
@@ -1138,6 +1143,56 @@ test('zoom-lifecycle source pin: dom-ready 内的 applyZoom( 必须先于 handsh
     `dom-ready 的 applyZoom(（偏移 ${applyZoomAt}）必须出现在 handshakeCompleteRef 闩锁检查（偏移 ${latchAt}）之前` +
       '——闩锁只管 browserSeen 注册，缩放重应用必须无条件先行，否则首个 marker→站点导航的 dom-ready 不再重应用缩放',
   )
+})
+
+// ---- Task 10：agent 工具（tools.ts 纯函数）----
+
+test('browser tool names: 13 个、与 tools-core 的 BROWSER_TOOL_NAMES 一致、无重复', () => {
+  assert.equal(APP_BROWSER_TOOL_NAMES.length, 13)
+  assert.deepEqual([...new Set(APP_BROWSER_TOOL_NAMES)], [...BROWSER_TOOL_NAMES])
+  const tools = createBrowserTools({ ownerId: 's1', service: {} })
+  assert.equal(tools.length, 13)
+  assert.deepEqual(tools.map((t) => t.name), [...BROWSER_TOOL_NAMES])
+  for (const tool of tools) {
+    assert.equal(tool.executionMode, 'sequential', `${tool.name} 必须顺序执行`)
+    assert.ok(tool.description.length > 0, `${tool.name} 缺描述`)
+  }
+  const navigate = tools.find((t) => t.name === 'browser_navigate')
+  assert.match(navigate.description, /untrusted data/, 'navigate 描述必须携带不可信数据声明')
+  const screenshot = tools.find((t) => t.name === 'browser_screenshot')
+  assert.match(screenshot.description, /JPEG/, 'screenshot 描述声明 JPEG')
+})
+
+test('browserToolErrorText：每个错误类 → 目标文本前缀', () => {
+  assert.match(browserToolErrorText(new ConsentRequiredError()),
+    /^consentRequired: .+open the Browser pane .+never confirm on the user's behalf\.$/)
+  assert.match(browserToolErrorText(new BrowserHostUnavailableError()),
+    /^browserHostUnavailable: .+retry once.+open the Browser tab/)
+  assert.match(browserToolErrorText(new NavigationBlockedError('file:///etc')),
+    /^navigationBlocked: .+Only http\/https and about:blank are supported\.$/)
+  assert.match(browserToolErrorText(new SnapshotScopeError('no match for selector')),
+    /^error: no match for selector$/)
+  assert.match(browserToolErrorText(new StaleSnapshotError('ref e5 stale')),
+    /^error: ref e5 stale$/)
+  assert.match(browserToolErrorText(new InvalidRefError('e99')),
+    /^error: invalid ref: e99$/)
+  assert.match(browserToolErrorText(new PageGoneError('p-1')),
+    /^error: page is gone: p-1 .+browser_navigate/)
+  assert.match(browserToolErrorText(new PageNotFoundError('p-2')),
+    /^error: unknown page: p-2$/)
+  // generic Error → 首行；非 Error → 原样抛出
+  assert.equal(browserToolErrorText(new Error('boom\nsecond line')), 'error: boom')
+  assert.throws(() => browserToolErrorText('bare string'))
+})
+
+test('validateNavigateParams：url/action 互斥、newPage 不与 action 同用、必须给其一', () => {
+  assert.equal(validateNavigateParams({ url: 'https://a.b/' }), null)
+  assert.equal(validateNavigateParams({ action: 'back' }), null)
+  assert.equal(validateNavigateParams({ url: 'https://a.b/', newPage: true }), null)
+  assert.match(validateNavigateParams({ url: 'https://a.b/', action: 'reload' }), /^error: /)
+  assert.match(validateNavigateParams({ action: 'back', newPage: true }), /^error: /)
+  assert.match(validateNavigateParams({}), /^error: /)
+  assert.match(validateNavigateParams({ newPage: true }), /^error: /)
 })
 
 // service 套件的挂起 promise（建页握手 waiter、autoMaterialize 轮询、notify 合并窗）

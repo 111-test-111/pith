@@ -5,6 +5,7 @@ import {
   RiAnticlockwise2Line,
   RiArrowDownLine,
   RiArrowDownSLine,
+  RiArrowUpDownLine,
   RiArrowGoBackLine,
   RiArrowLeftLine,
   RiArrowLeftSLine,
@@ -20,6 +21,7 @@ import {
   RiBookReadLine,
   RiBracesLine,
   RiBrainLine,
+  RiCameraLine,
   RiChat4Line,
   RiCheckboxBlankCircleLine,
   RiCheckboxCircleLine,
@@ -31,6 +33,8 @@ import {
   RiCompass3Line,
   RiComputerLine,
   RiContractUpDownLine,
+  RiCursorFill,
+  RiCursorLine,
   RiDashboardLine,
   RiDatabase2Line,
   RiDeleteBin6Line,
@@ -70,11 +74,13 @@ import {
   RiImageLine,
   RiInformationLine,
   RiKeyLine,
+  RiKeyboardLine,
   RiLayoutGridLine,
   RiLayoutLeftLine,
   RiLayoutRightLine,
   RiLightbulbLine,
   RiLinksLine,
+  RiListCheck2,
   RiLoader2Line,
   RiLoader4Line,
   RiLogoutBoxRLine,
@@ -109,10 +115,12 @@ import {
   RiStethoscopeLine,
   RiStopLargeLine,
   RiSubtractLine,
+  RiStackLine,
   RiSunLine,
   RiTerminalBoxLine,
   RiTerminalLine,
   RiTerminalWindowLine,
+  RiTimerLine,
   RiText,
   RiTextWrap,
   RiThumbDownLine,
@@ -174,6 +182,7 @@ function createIcon(name: string, glyph: RemixiconComponentType): IconComponent 
 export const AlertCircle = /* @__PURE__ */ createIcon('AlertCircle', RiAlertLine)
 export const AlertTriangle = /* @__PURE__ */ createIcon('AlertTriangle', RiErrorWarningLine)
 export const ArrowDown = /* @__PURE__ */ createIcon('ArrowDown', RiArrowDownLine)
+export const ArrowDownUp = /* @__PURE__ */ createIcon('ArrowDownUp', RiArrowUpDownLine)
 export const ArrowDownWideNarrow = /* @__PURE__ */ createIcon('ArrowDownWideNarrow', RiSortDesc)
 export const ArrowLeft = /* @__PURE__ */ createIcon('ArrowLeft', RiArrowLeftLine)
 export const ArrowRight = /* @__PURE__ */ createIcon('ArrowRight', RiArrowRightLine)
@@ -189,6 +198,7 @@ export const BookSearch = /* @__PURE__ */ createIcon('BookSearch', RiBookReadLin
 export const Bot = /* @__PURE__ */ createIcon('Bot', RiRobot2Line)
 export const Braces = /* @__PURE__ */ createIcon('Braces', RiBracesLine)
 export const Brain = /* @__PURE__ */ createIcon('Brain', RiBrainLine)
+export const Camera = /* @__PURE__ */ createIcon('Camera', RiCameraLine)
 export const Chart = /* @__PURE__ */ createIcon('Chart', RiBarChart2Line)
 export const Chat01 = /* @__PURE__ */ createIcon('Chat01', RiChat4Line)
 export const Check = /* @__PURE__ */ createIcon('Check', RiCheckLine)
@@ -241,9 +251,12 @@ export const ImageIcon = /* @__PURE__ */ createIcon('ImageIcon', RiImage2Line)
 export const ImagePlus = /* @__PURE__ */ createIcon('ImagePlus', RiImageAddLine)
 export const Info = /* @__PURE__ */ createIcon('Info', RiInformationLine)
 export const InstallingUpdates = /* @__PURE__ */ createIcon('InstallingUpdates', RiDownload2Line)
+export const Keyboard = /* @__PURE__ */ createIcon('Keyboard', RiKeyboardLine)
 export const KeyRound = /* @__PURE__ */ createIcon('KeyRound', RiKeyLine)
+export const Layers = /* @__PURE__ */ createIcon('Layers', RiStackLine)
 export const Lightbulb = /* @__PURE__ */ createIcon('Lightbulb', RiLightbulbLine)
 export const Link2 = /* @__PURE__ */ createIcon('Link2', RiLinksLine)
+export const ListChecks = /* @__PURE__ */ createIcon('ListChecks', RiListCheck2)
 export const ListTodo = /* @__PURE__ */ createIcon('ListTodo', RiTodoLine)
 export const Loader2 = /* @__PURE__ */ createIcon('Loader2', RiLoader2Line)
 export const LoaderCircle = /* @__PURE__ */ createIcon('LoaderCircle', RiLoader4Line)
@@ -259,6 +272,8 @@ export const Minus = /* @__PURE__ */ createIcon('Minus', RiSubtractLine)
 export const Monitor = /* @__PURE__ */ createIcon('Monitor', RiComputerLine)
 export const Moon = /* @__PURE__ */ createIcon('Moon', RiMoonLine)
 export const MoreHorizontal = /* @__PURE__ */ createIcon('MoreHorizontal', RiMoreLine)
+export const MousePointer2 = /* @__PURE__ */ createIcon('MousePointer2', RiCursorLine)
+export const MousePointerClick = /* @__PURE__ */ createIcon('MousePointerClick', RiCursorFill)
 export const MusicNote = /* @__PURE__ */ createIcon('MusicNote', RiMusic2Line)
 export const Palette = /* @__PURE__ */ createIcon('Palette', RiPaletteLine)
 export const PanelLeft = /* @__PURE__ */ createIcon('PanelLeft', RiLayoutLeftLine)
@@ -276,6 +291,7 @@ export const RefreshCw = /* @__PURE__ */ createIcon('RefreshCw', RiRefreshLine)
 export const Rewind = /* @__PURE__ */ createIcon('Rewind', RiRewindLine)
 export const RotateCcw = /* @__PURE__ */ createIcon('RotateCcw', RiAnticlockwise2Line)
 export const ScanSearch = /* @__PURE__ */ createIcon('ScanSearch', RiScan2Line)
+export const ScanText = /* @__PURE__ */ createIcon('ScanText', RiScan2Line)
 export const ScrollText = /* @__PURE__ */ createIcon('ScrollText', RiFilePaperLine)
 export const Search = /* @__PURE__ */ createIcon('Search', RiSearchLine)
 export const SearchX = /* @__PURE__ */ createIcon('SearchX', RiCloseCircleLine)
@@ -287,6 +303,7 @@ export const ShieldCheck = /* @__PURE__ */ createIcon('ShieldCheck', RiShieldChe
 export const Sparkles = /* @__PURE__ */ createIcon('Sparkles', RiSparkling2Line)
 export const SourceCode = /* @__PURE__ */ createIcon('SourceCode', RiCodeSSlashLine)
 export const Square = /* @__PURE__ */ createIcon('Square', RiStopLargeLine)
+export const SquareArrowOutUpRight = /* @__PURE__ */ createIcon('SquareArrowOutUpRight', RiExternalLinkLine)
 export const SquareTerminal = /* @__PURE__ */ createIcon('SquareTerminal', RiTerminalWindowLine)
 export const Stethoscope = /* @__PURE__ */ createIcon('Stethoscope', RiStethoscopeLine)
 export const Subtitle = /* @__PURE__ */ createIcon('Subtitle', RiClosedCaptioningLine)
@@ -299,6 +316,7 @@ export const Type = /* @__PURE__ */ createIcon('Type', RiText)
 export const WrapText = /* @__PURE__ */ createIcon('WrapText', RiTextWrap)
 export const ThumbsDown = /* @__PURE__ */ createIcon('ThumbsDown', RiThumbDownLine)
 export const ThumbsUp = /* @__PURE__ */ createIcon('ThumbsUp', RiThumbUpLine)
+export const Timer = /* @__PURE__ */ createIcon('Timer', RiTimerLine)
 export const Trash2 = /* @__PURE__ */ createIcon('Trash2', RiDeleteBin6Line)
 export const Undo2 = /* @__PURE__ */ createIcon('Undo2', RiArrowGoBackLine)
 export const User = /* @__PURE__ */ createIcon('User', RiUserLine)
@@ -306,6 +324,7 @@ export const WandSparkles = /* @__PURE__ */ createIcon('WandSparkles', RiMagicLi
 export const Wrench = /* @__PURE__ */ createIcon('Wrench', RiWrenchLine)
 export const X = /* @__PURE__ */ createIcon('X', RiCloseLine)
 export const XCircle = /* @__PURE__ */ createIcon('XCircle', RiCloseCircleLine)
+export const XSquare = /* @__PURE__ */ createIcon('XSquare', RiCloseCircleLine)
 export const Zap = /* @__PURE__ */ createIcon('Zap', RiFlashlightLine)
 export const ZoomIn = /* @__PURE__ */ createIcon('ZoomIn', RiZoomInLine)
 export const ZoomOut = /* @__PURE__ */ createIcon('ZoomOut', RiZoomOutLine)

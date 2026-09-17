@@ -1,4 +1,5 @@
 import { APP_BASH_TOOL_NAMES } from './bash-tools'
+import { APP_BROWSER_TOOL_NAMES } from '../browser/tools'
 import { TODO_TOOL_NAME } from './todo-protocol'
 
 import {
@@ -21,7 +22,7 @@ import type {
   ToolInfoDTO
 } from '../../shared/types'
 
-const APP_TOOL_NAMES: readonly string[] = [...APP_BASH_TOOL_NAMES, TODO_TOOL_NAME]
+const APP_TOOL_NAMES: readonly string[] = [...APP_BASH_TOOL_NAMES, TODO_TOOL_NAME, ...APP_BROWSER_TOOL_NAMES]
 
 /**
  * Settings → Tools / Extensions reads the *unfiltered* resource loader, so a

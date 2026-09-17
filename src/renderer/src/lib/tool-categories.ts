@@ -12,7 +12,7 @@ import type { MessageKey } from '@/i18n/locales/en'
  * before — so a newly installed extension's tool is categorized only once
  * someone opts it in here, mirroring `lib/tool-icons.tsx`.
  */
-export type ToolCategoryId = 'exploration' | 'terminal' | 'changes'
+export type ToolCategoryId = 'exploration' | 'terminal' | 'changes' | 'browser'
 
 export interface ToolCategory {
   id: ToolCategoryId
@@ -41,6 +41,20 @@ export const TOOL_CATEGORIES: readonly ToolCategory[] = [
     labelKey: 'tool.categoryChanges',
     icon: FileDiff,
     tools: ['edit', 'write']
+  },
+  {
+    id: 'browser',
+    labelKey: 'tool.categoryBrowser',
+    icon: Compass,
+    // The 13 embedded-browser agent tools (src/main/browser/tools.ts's
+    // APP_BROWSER_TOOL_NAMES, copied as literals — renderer code does not
+    // import from src/main).
+    tools: [
+      'browser_navigate', 'browser_pages', 'browser_focus', 'browser_snapshot',
+      'browser_click', 'browser_type', 'browser_press_key', 'browser_scroll',
+      'browser_wait_for', 'browser_screenshot', 'browser_close', 'browser_hover',
+      'browser_select'
+    ]
   }
 ]
 

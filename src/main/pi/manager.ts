@@ -22,6 +22,9 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'no
 import { dirname, join } from 'node:path'
 import { BashTaskManager } from '../bash/manager'
 import { createManagedBashTools, APP_BASH_TOOL_NAMES } from './bash-tools'
+import { APP_BROWSER_TOOL_NAMES, createBrowserTools } from '../browser/tools'
+import { getBrowserService } from '../browser/service'
+import { agentOwner } from '../../shared/browser'
 import { createSandboxFileTools, APP_FILE_TOOL_NAMES } from './file-tools'
 import { isSandboxMode, sandboxModeFromBranch, SANDBOX_MODE_ENTRY_TYPE } from '../sandbox/mode'
 import { sandboxStatus } from '../sandbox/broker'
@@ -323,6 +326,8 @@ export class PiManager {
     return loadSettings().sandboxMode
   }
   private subagentsEnabledFlag = loadSettings().subagentsEnabled !== false
+  /** Whether the 13 browser_* agent tools register into new sessions (Settings → General). */
+  private browserToolsFlag = loadSettings().browserAgentToolsEnabled === true
   private subagentMaxConcurrentSetting = loadSettings().subagentMaxConcurrent ?? MAX_CONCURRENT_SUBAGENTS_DEFAULT
   /** Ask-panel auto-settle deadline; read live by every ask_user_question call. */
   private askUserTimeoutMs = clampAskUserTimeoutSeconds(loadSettings().askUserTimeoutSeconds) * 1000
@@ -1053,6 +1058,10 @@ export class PiManager {
       managed.pendingStreamEvents.clear()
       if (this.sessions.get(managed.path) === managed) this.sessions.delete(managed.path)
       if (this.activeSession === managed) this.activeSession = null
+      // The session is gone: drop any browser pages still registered to it.
+      // Fire-and-forget — guest teardown is a renderer round trip and disposal
+      // must not wait on it.
+      void getBrowserService()?.closePagesForOwner(agentOwner(managed.session.sessionManager.getSessionId()))
     })()
     return managed.disposePromise
   }
@@ -1501,7 +1510,13 @@ export class PiManager {
           parentSessionPath: sessionManager.getSessionFile()!,
           profiles: () => listSubagentProfiles(sessionManager.getCwd()),
           canStart: () => (notifications?.canStart ?? false) && subagentState.notifications!.canStart
-        })] : [])]
+        })] : []),
+        // The embedded browser's agent tools. Registered in the CHILD path too:
+        // a subagent profile may name browser_* tools and the frozen ceiling
+        // admits them by name, so the names must exist to be activated.
+        ...(this.browserToolsFlag && getBrowserService()
+          ? createBrowserTools({ ownerId: sessionManager.getSessionId(), service: getBrowserService()! })
+          : [])]
     })
     if (!isChild) parentSessionRef.session = session
     if (!isChild) installSubagentResultHook(session)
@@ -1759,6 +1774,7 @@ export class PiManager {
         managed.session.setActiveToolsByName([...new Set([
           ...BUILTIN_TOOL_NAMES, ...APP_BASH_TOOL_NAMES, ...APP_FILE_TOOL_NAMES, TODO_TOOL_NAME, ASK_USER_TOOL_NAME,
           ...(managed.subagents ? [SUBAGENT_TOOL_NAME] : []),
+          ...(this.browserToolsFlag ? APP_BROWSER_TOOL_NAMES : []),
           ...loader.getExtensions().extensions.flatMap((extension) => [...extension.tools.keys()])
         ])])
       }
@@ -2164,6 +2180,12 @@ export class PiManager {
       await this.subagentRuntime.stopAll(managed.subagents)
       await this.disposeManaged(managed)
     }
+    // The file is about to leave the disk: drop its browser pages (fire-and-
+    // forget — the trash must not wait on guest teardown). An unmanaged session
+    // can still own pages registered before it was last closed.
+    void getBrowserService()?.closePagesForOwner(agentOwner(
+      managed ? managed.session.sessionManager.getSessionId() : SessionManager.open(path).getSessionId()
+    ))
     // Children are conversation sub-records of the deleted parent: stop them
     // (already done above) and trash their files with it, or they would be
     // orphaned — hidden from the sidebar but unreachable from any roster.
@@ -2713,9 +2735,18 @@ export class PiManager {
     return this.appendPrompt()
   }
 
-  /** Browser agent tools (browser_navigate / browser_snapshot / …). Registered
-   * per session when Task 10 lands; until then the switch is persisted only. */
-  async setBrowserAgentTools(_enabled: boolean): Promise<void> {}
+  /**
+   * Toggle the browser_* agent tools. The flag is read at session build (the
+   * customTools array and the active set both), and live sessions reload so a
+   * rebuilt runtime re-derives against it — the same walk as setAppendPrompt:
+   * an idle session reloads now, a streaming one defers to `agent_settled`
+   * (reloading mid-run would swap the extension runner under an in-flight
+   * request). ipc.ts persists the preference; this only applies it.
+   */
+  async setBrowserAgentTools(enabled: boolean): Promise<void> {
+    this.browserToolsFlag = enabled === true
+    await this.reloadLiveSessions()
+  }
 
   // ---- context files (AGENTS.md / CLAUDE.md) ----
 

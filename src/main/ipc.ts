@@ -162,8 +162,8 @@ export function registerIpc(pi: PiManager): () => boolean {
   ipcMain.handle('app:setBashMaxWaitMs', (_event, value: number) => pi.setBashMaxWaitMs(value))
   ipcMain.handle('app:setAskUserTimeoutSeconds', (_event, value: number) => pi.setAskUserTimeoutSeconds(value))
   ipcMain.handle('app:setSandboxMode', (_event, mode: SandboxMode) => pi.setSandboxMode(mode))
-  // The manager method itself is a stub until the browser tools land (Task 10);
-  // the persisted preference is owned here like the other app:set* switches.
+  // The preference is persisted here like the other app:set* switches; the
+  // manager applies the flag to sessions (build-time registration + live reload).
   ipcMain.handle('app:setBrowserAgentTools', (_event, enabled: boolean) => {
     saveSettings({ ...loadSettings(), browserAgentToolsEnabled: enabled })
     return pi.setBrowserAgentTools(enabled)

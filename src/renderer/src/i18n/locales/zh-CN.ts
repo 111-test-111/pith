@@ -906,6 +906,7 @@ const zhCN: Messages = {
   'tool.categoryExploration': '探索',
   'tool.categoryTerminal': '终端',
   'tool.categoryChanges': '变更',
+  'tool.categoryBrowser': '浏览器',
   'tool.groupCount': '{count} 个工具',
   'tool.groupStats': '{completed} 已完成，{failed} 失败',
   'tool.groupCancelled': '{count} 个已取消',

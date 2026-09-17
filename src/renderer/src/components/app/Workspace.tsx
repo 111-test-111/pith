@@ -109,12 +109,13 @@ import { TerminalStore } from '@/state/terminal-store'
 import { FileBrowserStore } from '@/state/file-browser-store'
 import { BrowserStore } from '@/lib/browser/store'
 import { subscribeBrowserPopups } from '@/lib/browser/popup'
+import { HUMAN_OWNER } from '../../../../shared/browser'
 import { FileNavigationProvider, type FileTarget } from '@/lib/file-navigation'
 import { AuthBridge } from './AuthBridge'
 import { AlertTriangle, Rewind } from '@/lib/icons'
 import { RewindDialog } from './RewindDialog'
 import { ConfirmDialog } from './ConfirmDialog'
-import type { AuthNotifyDTO, AuthPromptDTO } from '../../../../shared/types'
+import type { AuthNotifyDTO, AuthPromptDTO, BrowserStatusDTO } from '../../../../shared/types'
 
 interface WorkspaceProps {
   store: PiStore
@@ -232,10 +233,38 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
   // destroys its guest pages — Task 8's open-pages snapshot restores them on
   // reopen.
   const [browserStore] = useState(() => new BrowserStore())
+  /** The tab list as a ref: the browser-state subscription below registers
+   * once and must read the open state without re-subscribing per change. */
+  const sidePanelTabsRef = useRef<SidebarTabId[]>([])
+  /** Agent pendingCreate ids the auto-open has already reacted to — a
+   * deliberate close is not fought over the same pending batch (already-seen
+   * ids never reopen); a NEW pending create opens again. */
+  const browserAutoOpenedRef = useRef(new Set<string>())
+  /** Latest rail opener; `openSidePanelTab` is defined further down, so the
+   * subscription reads it through this ref. */
+  const openSidePanelTabRef = useRef<((kind: SidebarTabKind) => void) | null>(null)
   useEffect(() => {
-    const unsubscribeState = window.pi.onBrowserState((status) => browserStore.applyStatus(status))
+    sidePanelTabsRef.current = sidePanelTabs
+  }, [sidePanelTabs])
+  useEffect(() => {
+    const applyBrowserStatus = (status: BrowserStatusDTO) => {
+      browserStore.applyStatus(status)
+      // An agent-created page (browser_navigate & co.) needs a pane to host its
+      // guest webview: auto-open the browser tab while it is closed. Human
+      // pendingCreates never trigger this — the user is already driving.
+      const agentPending = status.pendingCreates.filter((p) => p.owner !== HUMAN_OWNER)
+      if (agentPending.length > 0) {
+        const open = !sidePanelTabsRef.current.includes('browser')
+          && agentPending.some((p) => !browserAutoOpenedRef.current.has(p.id))
+        for (const p of agentPending) browserAutoOpenedRef.current.add(p.id)
+        if (open) openSidePanelTabRef.current?.('browser')
+      } else {
+        browserAutoOpenedRef.current.clear()
+      }
+    }
+    const unsubscribeState = window.pi.onBrowserState(applyBrowserStatus)
     const unsubscribePopups = subscribeBrowserPopups(browserStore)
-    void window.pi.browserStatus().then((status) => browserStore.applyStatus(status)).catch(() => {})
+    void window.pi.browserStatus().then((status) => applyBrowserStatus(status)).catch(() => {})
     return () => {
       unsubscribeState()
       unsubscribePopups()
@@ -693,6 +722,11 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
     },
     [openSidePanelTabId, openSideChat, terminals, newTerminal]
   )
+  // The browser-state subscription registered earlier reads the opener through
+  // its ref — synced here, after the callback it wraps exists.
+  useEffect(() => {
+    openSidePanelTabRef.current = openSidePanelTab
+  })
 
   /**
    * A delegation's "open session" shows the child BESIDE the chat. Navigating

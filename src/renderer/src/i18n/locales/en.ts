@@ -934,6 +934,7 @@ const en = {
   'tool.categoryExploration': 'Exploration',
   'tool.categoryTerminal': 'Terminal',
   'tool.categoryChanges': 'Changes',
+  'tool.categoryBrowser': 'Browser',
   'tool.groupCount': '{count} tools',
   'tool.groupStats': '{completed} completed, {failed} failed',
   'tool.groupCancelled': '{count} cancelled',
