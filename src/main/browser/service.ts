@@ -15,7 +15,7 @@ import {
   type BrowserPagesState,
 } from './pages.ts'
 import {
-  createBrowserPageId, isAllowedNavigationUrl, parseMarkerUrl,
+  createBrowserPageId, isAllowedNavigationUrl, isSameDocumentUrl, parseMarkerUrl,
   type BrowserPageMeta, type ElementAtInfo,
 } from '../../shared/browser.ts'
 import { diffSnapshotLines, isAiRef, parseSnapshotRefs } from './tools-core.ts'
@@ -372,12 +372,14 @@ export class BrowserService {
   }
 
   /** pi-app 壳自身窗口的 URL（壳窗口永不进注册表；reconcile 与 registerPopup 共用）。
-   *  打包壳加载 file://（前缀判定）；dev 壳文档按构造时传入的 shellDocumentUrl 精确
-   *  匹配——不能按 http://localhost: 前缀泛配，否则 agent 打开的本地 dev server 页
-   *  （http://localhost:3000/）会被当成壳窗口，永远拿不到 runtime。 */
+   *  打包壳加载 file://（前缀判定）；dev 壳文档按构造时传入的 shellDocumentUrl 归一化
+   *  匹配（isSameDocumentUrl：无尾斜杠的 ELECTRON_RENDERER_URL vs 带尾斜杠的
+   *  page.url()，字符串精确匹配永不命中）——不能按 http://localhost: 前缀泛配，
+   *  否则 agent 打开的本地 dev server 页（http://localhost:3000/）会被当成壳窗口，
+   *  永远拿不到 runtime。 */
   private isShellWindowUrl(url: string): boolean {
     const shellDocumentUrl = this.deps.shellDocumentUrl
-    if (shellDocumentUrl !== undefined && url === shellDocumentUrl) return true
+    if (shellDocumentUrl !== undefined && isSameDocumentUrl(url, shellDocumentUrl)) return true
     return url.startsWith('file://')
   }
 
@@ -389,7 +391,7 @@ export class BrowserService {
     }
     // marker 登记：新 Page 且 URL 携带 marker → 按 marker 的 owner/pageId 登记
     // （id 用 marker 的 pageId，非 idGen）。无 marker 的一律跳过——壳窗口
-    // （shellDocumentUrl 精确/file://）、裸 about:blank 与其他外部 target 的归属不猜。
+    // （shellDocumentUrl 归一化/file://）、裸 about:blank 与其他外部 target 的归属不猜。
     // closingTargetIds 里的 id 是 close 在途的页——target 摘除有延迟，不得重登。
     // 仅有 state 登记（renderer 上报）而无 runtime 的同 id 页：target 浮现后在此升级。
     for (const page of present) {

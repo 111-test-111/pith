@@ -86,3 +86,20 @@ export interface ElementAtInfo {
   path: string
   box: { x: number; y: number; width: number; height: number }
 }
+
+/** 归一化比较两个文档 URL：剥 hash 与 query、去尾斜杠后比较。
+ *  dev 壳文档以无尾斜杠形态传入（ELECTRON_RENDERER_URL），而 page.url() 恒带尾斜杠——
+ *  字符串精确匹配永不命中（navigation.ts 的 isOwnDocument 同陷阱同解法）。 */
+export function isSameDocumentUrl(a: string, b: string): boolean {
+  const normalize = (value: string): string => {
+    try {
+      const url = new URL(value)
+      url.hash = ''
+      url.search = ''
+      return url.href.replace(/\/$/, '')
+    } catch {
+      return value.split('#')[0]
+    }
+  }
+  return normalize(a) === normalize(b)
+}

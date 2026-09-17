@@ -445,9 +445,10 @@ function makeDeps(ctx, extra = {}) {
   let granted = false
   return {
     cdpPort: 19222,
-    // 与 ipc.ts 的生产接线同形：dev 壳文档按精确 URL 排除（mockContext 的 5173 壳页），
-    // 不再按 localhost 前缀泛配——本地 dev server 页（13b）是普通 guest。
-    shellDocumentUrl: 'http://localhost:5173/',
+    // 与 ipc.ts 的生产接线同形：ELECTRON_RENDERER_URL 无尾斜杠，而 mockContext 的
+    // 5173 壳页带尾斜杠（= 真实 page.url() 形态）——归一化比较必须两侧等价（13/13c 盯住
+    // 这个契约），且不再按 localhost 前缀泛配——本地 dev server 页（13b）是普通 guest。
+    shellDocumentUrl: 'http://localhost:5173',
     consent: {
       get: () => granted,
       grant: () => { granted = true },
@@ -678,9 +679,9 @@ test('service: dispose 只丢引用——绝不调 browser.close()，未触发�
   assert.equal(stateCalls, 0, 'dispose 清理未触发的状态通知定时器')
 })
 
-// 13. 壳窗口排除（pi-app 判定：shellDocumentUrl 精确匹配 / file:// 前缀）
-test('service: 壳窗口（shellDocumentUrl 精确 / file://）与无 marker target 不进注册表', async () => {
-  const ctx = mockContext() // 自带 http://localhost:5173/ 壳窗口（= makeDeps 的 shellDocumentUrl）
+// 13. 壳窗口排除（pi-app 判定：shellDocumentUrl 归一化匹配 / file:// 前缀）
+test('service: 壳窗口（shellDocumentUrl 归一化 / file://）与无 marker target 不进注册表', async () => {
+  const ctx = mockContext() // 自带 http://localhost:5173/ 壳页（与 makeDeps 的生产形态无尾斜杠经归一化等价）
   ctx.pages.push(mockPage({ url: 'file:///Users/x/pi-app/out/main/index.mjs' }))
   // 非壳的 dev server 页：reconcile 只认 marker，仍不在此登记（页事件路径见 13b）
   ctx.pages.push(mockPage({ url: 'http://localhost:3000/' }))
@@ -710,6 +711,19 @@ test('service: 非壳 localhost 页（dev server）经页事件路径登记 runt
   assert.equal(svc.listPages()[0].owner, 'human')
   const snap = await svc.agentSnapshot('human')
   assert.match(snap.snapshot, /ref=e1/, 'runtime 已就位（agent 可驱动）')
+})
+
+// 13c. 壳文档的生产形态契约：ELECTRON_RENDERER_URL 无尾斜杠、page.url() 带尾斜杠——
+// 归一化比较必须两侧等价（makeDeps 用生产形态），且壳页经页事件路径（registerPopup）
+// 也不被收养。旧实现此处为永不命中的字符串精确匹配（终审 Ruling P）。
+test('service: 壳页（页事件路径）不被收养——shellDocumentUrl 无尾斜杠仍归一化命中', async () => {
+  const svc = await consentedService() // makeDeps: 'http://localhost:5173'（生产形态）
+  await svc.reconcileElectronTargets()
+  const shell = mockPage({ url: 'http://localhost:5173/' }) // page.url() 形态
+  svc.__ctx.pages.push(shell)
+  svc.__ctx.emit('page', shell)
+  await new Promise((r) => setTimeout(r, 10)) // registerPopup 的宏任务去重延迟
+  assert.equal(svc.listPages().length, 0, '壳页绝不进注册表（reconcile 与页事件路径同判）')
 })
 
 // 14. registerExternalPage：幂等 / 白名单外拒绝 / 关闭后不复活

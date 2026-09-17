@@ -20,7 +20,8 @@ import { MiddleEllipsis } from './MiddleEllipsis'
  *  WITHOUT a browser:state push, so this poll is what materializes pages the
  *  service is waiting on (agent page creation, the + button's createPage):
  *  rendering the pending row mounts its marker webview, which completes the
- *  registration. getStatus also kicks a best-effort reconcile each tick. */
+ *  registration. The service's own 1s reconcile keeps the registry fresh;
+ *  this poll only reads status. */
 const BROWSER_POLL_MS = 2_500
 
 /** Task 15: a local popup row awaiting its dom-ready handshake — NOT a server
