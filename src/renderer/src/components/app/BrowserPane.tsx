@@ -106,34 +106,71 @@ export function BrowserPane({
   // Guest pages follow the app theme: main injects Emulation.setEmulatedMedia
   // per registered page and replays it on every registration, so this one
   // call — on mount and on each resolvedTheme change — covers every current
-  // and future guest. Errors are swallowed across the bridge.
+  // and future guest. Errors are swallowed across the bridge. Skip until
+  // next-themes has resolved: resolvedTheme is undefined during its
+  // pre-resolution pass, and sending 'light' there would emulate the wrong
+  // scheme for one frame in a dark app.
   useEffect(() => {
+    if (!resolvedTheme) return
     void window.pi.browserTheme(resolvedTheme === 'dark' ? 'dark' : 'light')
   }, [resolvedTheme])
+
+  // ONE zoom action shared by both shortcut paths (the window capture listener
+  // below and the guest relay from main): key → ladder step. The store change
+  // fans out through the shared pageZoom subscription, so every mounted page
+  // view re-applies its guest's factor.
+  const handleZoomShortcut = useCallback((key: string): boolean => {
+    let next: number | null = null
+    if (key === '=' || key === '+') next = nextBrowserZoom(getBrowserZoom(), 1)
+    else if (key === '-') next = nextBrowserZoom(getBrowserZoom(), -1)
+    else if (key === '0') next = 1 // reset → 100%
+    if (next === null) return false
+    setBrowserZoom(next)
+    return true
+  }, [])
 
   // ⌘= (also ⌘+) / ⌘- / ⌘0 page zoom, Chromium parity. Registered ONLY while
   // this pane's rail tab is the active one: the keep-alive layer stays
   // mounted under every other tab and must not consume the shortcuts, and
   // capture-phase preventDefault + stopPropagation keep the app's own ⌘
   // handlers (and the composer's fields) out of the same keystroke. Fields
-  // keep their keys: isEditableTarget skips text-entry targets.
+  // keep their keys: isEditableTarget skips text-entry targets. Non-US
+  // layouts spell different characters over the same physical keys, so the
+  // physical `code` spellings (Equal/Minus/Digit0) are the fallback; numpad
+  // keys keep working through `key`.
   useEffect(() => {
     if (!active) return
     const onKeyDown = (event: KeyboardEvent) => {
       if (!(event.metaKey || event.ctrlKey)) return
-      let next: number | null = null
-      if (event.key === '=' || event.key === '+') next = nextBrowserZoom(getBrowserZoom(), 1)
-      else if (event.key === '-') next = nextBrowserZoom(getBrowserZoom(), -1)
-      else if (event.key === '0') next = 1 // reset → 100%
-      if (next === null) return
+      const key =
+        event.key === '=' || event.key === '+' || event.key === '-' || event.key === '0'
+          ? event.key
+          : event.code === 'Equal'
+            ? '='
+            : event.code === 'Minus'
+              ? '-'
+              : event.code === 'Digit0'
+                ? '0'
+                : null
+      if (key === null) return
       if (isEditableTarget(event.target)) return
       event.preventDefault()
       event.stopPropagation()
-      setBrowserZoom(next)
+      handleZoomShortcut(key)
     }
     window.addEventListener('keydown', onKeyDown, true)
     return () => window.removeEventListener('keydown', onKeyDown, true)
-  }, [active])
+  }, [active, handleZoomShortcut])
+
+  // Guest-focused ⌘±/0: keys typed into a webview guest never reach this
+  // window's keydown listeners, so main intercepts them on the guest contents
+  // (wiring.ts before-input-event, allowlist exactly the four zoom keys) and
+  // relays them here. No editable-target guard on this path — keys arriving
+  // from a guest mean the browser pane is effectively active, and Chromium
+  // zooms even while an input inside the page is focused.
+  useEffect(() => {
+    return window.pi.onBrowserGuestShortcut(({ key }) => handleZoomShortcut(key))
+  }, [handleZoomShortcut])
 
   // Workspace wiring keeps the store fed; this pane owns the poll (a closed
   // tab has no webviews to host, so pendingCreates may simply time out).

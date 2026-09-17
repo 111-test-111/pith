@@ -2,6 +2,7 @@
 // 内嵌浏览器移植的纯逻辑检查（无 Electron）。用法：node scripts/check-browser.mjs
 // （node ≥ 22.6 需 `node --experimental-strip-types` 跑 .ts import；≥ 23.6 直接跑。）
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import {
   BROWSER_MARKER_PREFIX, buildMarkerUrl, parseMarkerUrl,
   normalizeNavigationUrl, isAllowedNavigationUrl, agentOwner, HUMAN_OWNER,
@@ -1110,6 +1111,33 @@ test('popup: 无 window.pi 安全降级；有则转发 pushPopup 且退订移除
     stop()
     assert.equal(listeners.length, 0, '退订移除监听')
   })
+})
+
+// ---- Task 9 评审修复：zoom 生命周期的源码钉（pi-web 前身 BrowserTab.zoom-lifecycle.test.mjs）----
+// dom-ready 的缩放重应用是承重规则：guest 的 zoom factor 会在首个 marker→站点导航
+// 与后续跨域导航时被重置，所以每个 dom-ready 都必须先无条件重应用 zoom，再过一次
+// 性的 browserSeen 握手闩锁（闩锁只管注册）。真实 webview 的时序无法在纯 node 下
+// 跑，这里读渲染层源码按顺序钉住——谁把 applyZoom( 挪到闩锁之后，此测试立即失败
+// （附两个偏移量，便于定位）。
+test('zoom-lifecycle source pin: dom-ready 内的 applyZoom( 必须先于 handshakeCompleteRef 闩锁（源码顺序）', () => {
+  const source = readFileSync(
+    new URL('../src/renderer/src/components/app/BrowserPageView.tsx', import.meta.url),
+    'utf8',
+  )
+  const domReadyAt = source.indexOf('const onDomReady = () => {')
+  const onNavAt = source.indexOf('const onNav = (event: Event) => {')
+  assert.ok(domReadyAt !== -1, 'BrowserPageView 源码里找不到 dom-ready 处理器（const onDomReady = () => {）——源码钉需要随重构更新')
+  assert.ok(onNavAt > domReadyAt, 'onNav 应在 dom-ready 处理器之后（切片边界失效，源码钉需要随重构更新）')
+  const handler = source.slice(domReadyAt, onNavAt)
+  const applyZoomAt = handler.indexOf('applyZoom(')
+  const latchAt = handler.indexOf('handshakeCompleteRef')
+  assert.ok(applyZoomAt !== -1, 'dom-ready 处理器内必须有 applyZoom( 调用——删掉它，跨域导航后会以重置的缩放闪现')
+  assert.ok(latchAt !== -1, 'dom-ready 处理器内必须有 handshakeCompleteRef 闩锁检查（browserSeen 注册是一次性的）')
+  assert.ok(
+    applyZoomAt < latchAt,
+    `dom-ready 的 applyZoom(（偏移 ${applyZoomAt}）必须出现在 handshakeCompleteRef 闩锁检查（偏移 ${latchAt}）之前` +
+      '——闩锁只管 browserSeen 注册，缩放重应用必须无条件先行，否则首个 marker→站点导航的 dom-ready 不再重应用缩放',
+  )
 })
 
 // service 套件的挂起 promise（建页握手 waiter、autoMaterialize 轮询、notify 合并窗）

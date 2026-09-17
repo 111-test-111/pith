@@ -462,9 +462,13 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange }: Bro
           />
           <div className="flex shrink-0 items-center" data-browser-zoom>
             <ToolButton label={t('browser.zoomOut')} icon={ZoomOut} onClick={zoomOut} />
-            <span className="w-10 shrink-0 text-center text-xs tabular-nums text-muted-foreground">
-              {Math.round(pageZoom * 100)}%
-            </span>
+            {/* Read-only percent: a Tooltip (not dead text) gives ⌘0 its one
+                discoverability point — the label is the zoomReset copy. */}
+            <Tooltip content={t('browser.zoomReset')}>
+              <span className="w-10 shrink-0 cursor-default text-center text-xs tabular-nums text-muted-foreground">
+                {Math.round(pageZoom * 100)}%
+              </span>
+            </Tooltip>
             <ToolButton label={t('browser.zoomIn')} icon={ZoomIn} onClick={zoomIn} />
           </div>
         </div>

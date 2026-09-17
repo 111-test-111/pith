@@ -1,5 +1,5 @@
 /**
- * 内嵌浏览器的主进程接线：popup 路由 / guest 输入中继 / 下载接管 / 权限白名单。
+ * 内嵌浏览器的主进程接线：popup 路由 / guest 输入中继 / 缩放快捷键拦截 / 下载接管 / 权限白名单。
  * 移植自 pi-web electron/main.cjs 的 installPopupRouting / installInputRelay /
  * attachDownloadHandler（browser 分区）与权限白名单，按 pi-app 宿主形态精确改造：
  * - Electron 43 起 setWindowOpenHandler 只剩 webContents 级——经 web-contents-created
@@ -8,6 +8,9 @@
  *   壳窗口不得再有第二个 window-open handler）。
  * - 输入中继不经服务器：经 getBrowserService() 惰性取单例后 bump interaction
  *   generation（guest 的旧 snapshot ref 失效）；service 初始化前为设计的 no-op。
+ * - 缩放快捷键拦截：guest 持焦点时按键到不了壳窗口，⌘/Ctrl ± / 0 在
+ *   before-input-event 拦下（preventDefault 挡 guest 原生缩放）并经
+ *   browser:guest-shortcut 广播渲染层，由 BrowserPane 走同一条 zoom 阶梯。
  * - 下载只接管 browser 分区：自动落系统「下载」目录，重名 (n) 去重，完成/失败经 emit
  *   通知渲染层工具条。
  * 纯函数（decideBrowserPermission / classifyGuestPopup）与安装器分离——检查脚本在
@@ -104,7 +107,24 @@ function wireContents(contents: WebContents): void {
     relayedAt.set(contents.id, now)
     getBrowserService()?.bumpInteractionByWebContentsId(contents.id)
   })
-  contents.once('destroyed', () => relayedAt.delete(contents.id))
+  // 3. 缩放快捷键拦截：guest 持焦点时按键不会到达壳窗口（渲染层的 window keydown
+  // 收不到），Chromium 又会让 guest 自行原生缩放——与渲染层的 zoom 阶梯 desync。
+  // before-input-event 在 guest 处理之前拦下 ⌘/Ctrl + = / + / - / 0（allowlist 只有
+  // 这四键；⌘F/⌘P 的去留是 Task 12 的设计决定）：preventDefault 挡住 guest 原生
+  // 缩放，把按键广播给渲染层，BrowserPane 经 onBrowserGuestShortcut 订阅后走同一
+  // 条 setBrowserZoom 阶梯。
+  contents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown') return
+    if (!(input.meta || input.control)) return
+    if (input.key !== '=' && input.key !== '+' && input.key !== '-' && input.key !== '0') return
+    event.preventDefault()
+    activeEmit?.('browser:guest-shortcut', { key: input.key })
+  })
+  contents.once('destroyed', () => {
+    // 与输入中继同一处清理：before-input 监听随 emitter 销毁，这里再显式摘除 + 清节流表。
+    contents.removeAllListeners('before-input-event')
+    relayedAt.delete(contents.id)
+  })
 }
 
 /** browser 分区的会话接线（只装一次）：下载接管 + 权限白名单。 */

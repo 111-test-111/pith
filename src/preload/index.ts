@@ -295,6 +295,10 @@ const api = {
     subscribe('browser:popup', cb),
   onBrowserDownload: (cb: (payload: { path: string; filename: string }) => void) =>
     subscribe('browser:download', cb),
+  /** Guest-focused ⌘±/0, intercepted by main before the guest zooms natively
+   *  (before-input-event); the pane routes them through the app zoom ladder. */
+  onBrowserGuestShortcut: (cb: (payload: { key: string }) => void) =>
+    subscribe('browser:guest-shortcut', cb),
 
   onEvent: (listener: (event: PiEvent) => void) => subscribe('pi:event', listener),
   /** Side-chat stream (deltas and the terminal status of one exchange). */
