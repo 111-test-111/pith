@@ -749,6 +749,23 @@ const en = {
   'settings.skillPreviewTruncated': 'Preview truncated — open the file to read the rest.',
   'settings.skillReadFailed': 'Failed to read the skill file.',
 
+  // browser (embedded browser: agent tools, link routing, stored data)
+  'settings.browserTitle': 'Browser',
+  'settings.browserDesc':
+    'The embedded browser — agent tools, where chat links open, and its stored data.',
+  'settings.browserAgentTools': 'Agent browser tools',
+  'settings.browserAgentToolsHint':
+    'Lets the model drive the embedded browser. Requires the one-time confirmation in the Browser pane.',
+  'settings.browserOpenLinks': 'Open links in the embedded browser',
+  'settings.browserOpenLinksHint':
+    'Chat and markdown links open in the app’s browser instead of the system browser',
+  'settings.browserClearData': 'Clear browsing data',
+  'settings.browserClearDataHint':
+    'Clears the embedded browser’s cookies, storage and cache — login states included.',
+  'settings.browserClearDataConfirm': 'Click again to clear',
+  'settings.browserClearDataDone': 'Browsing data cleared.',
+  'settings.browserClearDataFailed': 'Failed to clear browsing data.',
+
   // usage (token activity + trends, ported from pi-web)
   'settings.usage': 'Usage',
   'settings.usageDesc':

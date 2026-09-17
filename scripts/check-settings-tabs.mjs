@@ -13,7 +13,7 @@
  *   change the element type at the same position, tearing the subtree down
  *   on every switch — a hidden Tools refetched the catalog on each leave).
  *
- * Real `SettingsPage` (titlebar, vertical tabs, all nine registered
+ * Real `SettingsPage` (titlebar, vertical tabs, all ten registered
  * sections) in isolated Electron against a mocked `window.pi`; no SDK, no
  * model calls, no network. Run after building is NOT required (vite serves
  * the source): `node scripts/check-settings-tabs.mjs`.
@@ -53,7 +53,8 @@ const count = (name, value) => { window.calls.push(name); return Promise.resolve
 const appInfo = {
   version: '9.9.9', checkpointsEnabled: true, startup: 'resume',
   subagentsEnabled: true, subagentMaxConcurrent: 4, bashMaxWaitMs: 10000,
-  sandboxMode: 'workspace-write', sandbox: { support: 'ready', backend: 'seatbelt' }
+  sandboxMode: 'workspace-write', sandbox: { support: 'ready', backend: 'seatbelt' },
+  browserConsent: true, browserAgentToolsEnabled: false
 };
 const catalog = {
   tools: [
@@ -78,6 +79,8 @@ window.pi = {
   appInfo: () => count('appInfo', appInfo),
   setStartup: (v) => count('setStartup', v),
   setSubagentsEnabled: (v) => count('setSubagentsEnabled', v),
+  setBrowserAgentTools: (v) => count('setBrowserAgentTools', v),
+  browserClearData: () => count('browserClearData', undefined),
   setSubagentMaxConcurrent: (v) => count('setSubagentMaxConcurrent', v),
   subagentProfiles: () => count('subagentProfiles', {
     profiles: [
@@ -256,7 +259,7 @@ app.on('window-all-closed',()=>app.quit());`
   //    data reads: nine panels, General populated, the rest empty.
   await pause(500)
   let panels = await evaluate('window.panels()')
-  assert.equal(panels.length, 9, 'all nine section panels exist in the DOM')
+  assert.equal(panels.length, 10, 'all ten section panels exist in the DOM')
   assert.equal(panels.filter((p) => !p.hidden).length, 1, 'exactly one panel is active')
   assert.ok(panels[0].inputs >= 2, 'General (first section) is the mounted one')
   assert.ok(panels.slice(1).every((p) => p.content === 0), 'unvisited panels render no section content (header scaffold only)')
@@ -294,7 +297,7 @@ app.on('window-all-closed',()=>app.quit());`
   //    the deactivated panels' subtrees are kept, not torn down.
   await evaluate(`window.openTab('Usage')`)
   panels = await evaluate('window.panels()')
-  assert.ok(!panels[8].hidden, 'Usage is the active panel')
+  assert.ok(!panels[9].hidden, 'Usage is the active panel')
   assert.ok((await evaluate('window.callsOf("usageStats")')) >= 1, 'usage fetched on first visit')
   assert.equal(await evaluate('window.callsOf("toolsCatalog")'), 2, 'a hidden Tools/Subagents panel does not refetch the catalog')
   assert.equal(await evaluate('window.callsOf("subagentProfiles")'), 1, 'a hidden Subagents panel does not refetch profiles')
@@ -310,6 +313,8 @@ app.on('window-all-closed',()=>app.quit());`
   // 7. Never-visited sections stay empty and silent through all of it.
   assert.equal(await evaluate('window.callsOf("providers")'), 0, 'Providers never mounted, never read')
   assert.equal(await evaluate('window.callsOf("appendPrompt")'), 0, 'Prompt never mounted, never read')
+  assert.equal(await evaluate('window.callsOf("setBrowserAgentTools")'), 0, 'Browser never mounted, never toggled')
+  assert.equal(await evaluate('window.callsOf("browserClearData")'), 0, 'Browser never mounted, never cleared')
 
   assert.deepEqual(exceptions, [], 'no renderer exceptions')
   console.log('PASS: settings tabs — lazy sections, switches never remount, drafts and stores survive')

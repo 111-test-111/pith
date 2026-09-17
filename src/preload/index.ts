@@ -80,6 +80,11 @@ const api = {
   rewindRecover: (path: string, operationId: string): Promise<RewindResult<RewindCommitDTO>> => ipcRenderer.invoke('rewind:recover', path, operationId),
   onRewind: (listener: (event: { sessionPath: string }) => void) => subscribe('pi:rewind', listener),
   setCheckpointsEnabled: (enabled: boolean): Promise<boolean> => ipcRenderer.invoke('app:setCheckpointsEnabled', enabled),
+  /** Toggles the browser_* agent tools for sessions (Settings → Browser). The
+   * preference persists app-wide; main applies it to new sessions and live
+   * reloads. */
+  setBrowserAgentTools: (enabled: boolean): Promise<void> =>
+    ipcRenderer.invoke('app:setBrowserAgentTools', enabled),
   setStartup: (mode: StartupSessionMode): Promise<StartupSessionMode> =>
     ipcRenderer.invoke('app:setStartup', mode),
   setWindowTheme: (theme: WindowTheme): void => ipcRenderer.send('window:setTheme', theme),
@@ -293,7 +298,7 @@ const api = {
   onBrowserState: (cb: (status: BrowserStatusDTO) => void) => subscribe('browser:state', cb),
   onBrowserPopup: (cb: (payload: { url: string; openerWebContentsId: number }) => void) =>
     subscribe('browser:popup', cb),
-  onBrowserDownload: (cb: (payload: { path: string; filename: string }) => void) =>
+  onBrowserDownload: (cb: (payload: { path: string; filename: string; error?: string }) => void) =>
     subscribe('browser:download', cb),
   /** Guest-focused ⌘±/0, intercepted by main before the guest zooms natively
    *  (before-input-event); the pane routes them through the app zoom ladder. */

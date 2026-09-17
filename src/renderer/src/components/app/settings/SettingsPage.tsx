@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
-import { ArrowLeft, Bot, Chart, GraduationCap, KeyRound, Palette, Puzzle, ScrollText, Settings2, Wrench } from '@/lib/icons'
+import { ArrowLeft, Bot, Chart, Globe, GraduationCap, KeyRound, Palette, Puzzle, ScrollText, Settings2, Wrench } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/motion/tabs'
 import { EASE_OUT } from '@/lib/ease'
@@ -14,6 +14,7 @@ import { ToolsSection } from './ToolsSection'
 import { SubagentsSection } from './SubagentsSection'
 import { ExtensionsSection } from './ExtensionsSection'
 import { SkillsSection } from './SkillsSection'
+import { BrowserSection } from './BrowserSection'
 import { UsageSection } from './UsageSection'
 import { WindowTitlebar } from '../WindowTitlebar'
 
@@ -92,6 +93,13 @@ const SECTIONS: {
     descriptionKey: 'settings.skillsDesc',
     icon: <GraduationCap className="size-4" />,
     render: () => <SkillsSection />
+  },
+  {
+    id: 'browser',
+    labelKey: 'settings.browserTitle',
+    descriptionKey: 'settings.browserDesc',
+    icon: <Globe className="size-4" />,
+    render: () => <BrowserSection />
   },
   {
     id: 'usage',

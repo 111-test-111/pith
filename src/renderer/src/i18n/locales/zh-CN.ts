@@ -726,6 +726,19 @@ const zhCN: Messages = {
   'settings.skillPreviewTruncated': '预览已截断 — 打开文件查看剩余内容。',
   'settings.skillReadFailed': '读取技能文件失败。',
 
+  // browser（内嵌浏览器：代理工具、链接路由、浏览数据）
+  'settings.browserTitle': '浏览器',
+  'settings.browserDesc': '内嵌浏览器 — 代理工具、聊天链接的打开方式与浏览数据。',
+  'settings.browserAgentTools': '代理浏览器工具',
+  'settings.browserAgentToolsHint': '允许模型驱动内嵌浏览器。需先在浏览器面板完成一次性确认。',
+  'settings.browserOpenLinks': '链接在内置浏览器打开',
+  'settings.browserOpenLinksHint': '聊天与 Markdown 链接在应用内置浏览器中打开，而非系统浏览器',
+  'settings.browserClearData': '清除浏览数据',
+  'settings.browserClearDataHint': '清除内嵌浏览器的 Cookie、存储与缓存 — 登录状态一并清除。',
+  'settings.browserClearDataConfirm': '再次点击确认清除',
+  'settings.browserClearDataDone': '浏览数据已清除。',
+  'settings.browserClearDataFailed': '清除浏览数据失败。',
+
   // usage (token activity + trends, ported from pi-web)
   'settings.usage': '用量',
   'settings.usageDesc': '跨全部 pi 会话的 Token 活动与用量趋势，聚合自共享的会话文件。',
