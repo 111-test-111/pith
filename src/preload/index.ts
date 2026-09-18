@@ -1,5 +1,13 @@
 import type { AskUserAnswer } from '../shared/ask-user'
-import type { BrowserPageMeta, ElementAtInfo } from '../shared/browser'
+import type {
+  BrowserDownloadInfo,
+  BrowserFocusGuestPayload,
+  BrowserGuestShortcutInfo,
+  BrowserPageMeta,
+  BrowserPopupInfo,
+  BrowserSeenPayload,
+  ElementAtInfo
+} from '../shared/browser'
 import type { RewindPatchDTO, RewindStatsDTO, RewindStatsTargetDTO } from '../shared/types'
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type {
@@ -277,14 +285,23 @@ const api = {
 
   // ---- Embedded browser (shared/browser.ts; the service lives in main) ----
   browserStatus: (): Promise<BrowserStatusDTO> => ipcRenderer.invoke('browser:status'),
+  /** Ensures the browser service's CDP connection exists (idempotent, cheap
+   *  once connected). Local-row restore must await this BEFORE materializing
+   *  marker webviews — a guest that predates the connection can never be
+   *  runtime-registered (iron 7). */
+  browserEnsureService: (): Promise<void> => ipcRenderer.invoke('browser:ensureService'),
   /** Grants the one-time consent, then resolves with the fresh status. */
   browserConsent: (): Promise<BrowserStatusDTO> => ipcRenderer.invoke('browser:consent'),
   browserCreatePage: (url?: string): Promise<BrowserPageMeta> =>
     ipcRenderer.invoke('browser:createPage', url),
   browserClosePage: (id: string): Promise<void> => ipcRenderer.invoke('browser:closePage', id),
+  /** Toolbar reload, driven by the service (`goto(currentUrl)` — the CDP
+   *  Page.reload command kills the guest). Resolves false only for a row the
+   *  service does not drive, where the caller falls back to the element API. */
+  browserReload: (id: string): Promise<boolean> => ipcRenderer.invoke('browser:reload', id),
   /** Registers a guest the service does not know yet (state-only until a
    * reconcile upgrades it to a full registration). */
-  browserSeen: (payload: { id: string; owner: string; url: string; webContentsId?: number; navigateTo?: string }): Promise<void> =>
+  browserSeen: (payload: BrowserSeenPayload): Promise<void> =>
     ipcRenderer.invoke('browser:seen', payload),
   /** Resolves the element under viewport coordinates (human annotation). */
   browserElementAt: (id: string, x: number, y: number): Promise<ElementAtInfo | null> =>
@@ -296,19 +313,25 @@ const api = {
    * renderer menu confirms twice. */
   browserClearData: (): Promise<void> => ipcRenderer.invoke('browser:clearData'),
   onBrowserState: (cb: (status: BrowserStatusDTO) => void) => subscribe('browser:state', cb),
-  onBrowserPopup: (cb: (payload: { url: string; openerWebContentsId: number }) => void) =>
+  onBrowserPopup: (cb: (payload: BrowserPopupInfo) => void) =>
     subscribe('browser:popup', cb),
-  onBrowserDownload: (cb: (payload: { path: string; filename: string; error?: string }) => void) =>
+  onBrowserDownload: (cb: (payload: BrowserDownloadInfo) => void) =>
     subscribe('browser:download', cb),
   /** Guest-focused browser-owned keys (⌘±/0 zoom, ⌘F find, ⌘P print), intercepted
    *  by main before the guest acts on them (before-input-event); the pane routes
    *  zoom through the app ladder and f/p to the selected page's find/print. */
-  onBrowserGuestShortcut: (cb: (payload: { key: string }) => void) =>
+  onBrowserGuestShortcut: (cb: (payload: BrowserGuestShortcutInfo) => void) =>
     subscribe('browser:guest-shortcut', cb),
   /** A pointer press inside a webview guest, relayed by main: guest input never
    *  reaches the host DOM, so host-side overlays use this as their outside-press
    *  (the ⋮ popover closes when the user clicks the page). */
   onBrowserGuestPointer: (cb: () => void) => subscribe('browser:guest-pointer', () => cb()),
+  /** main 的聚焦握手：agent 键盘动作前把对应 guest 的 `<webview>` 元素聚焦，然后必须 ack
+   *  （main 等到 ack 才派按键，见 BrowserService.focusGuestForKeys）。 */
+  onBrowserFocusGuest: (cb: (payload: BrowserFocusGuestPayload) => void) =>
+    subscribe('browser:focus-guest', cb),
+  browserFocusGuestDone: (requestId: number): Promise<void> =>
+    ipcRenderer.invoke('browser:focus-guest-done', requestId),
 
   onEvent: (listener: (event: PiEvent) => void) => subscribe('pi:event', listener),
   /** Side-chat stream (deltas and the terminal status of one exchange). */

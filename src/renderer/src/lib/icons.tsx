@@ -134,6 +134,7 @@ import {
   RiTodoLine,
   RiTreeLine,
   RiUnpinLine,
+  RiUploadLine,
   RiUserLine,
   RiWrenchLine,
   RiZoomInLine,
@@ -348,6 +349,7 @@ export const ThumbsUp = /* @__PURE__ */ createIcon('ThumbsUp', RiThumbUpLine)
 export const Timer = /* @__PURE__ */ createIcon('Timer', RiTimerLine)
 export const Trash2 = /* @__PURE__ */ createIcon('Trash2', RiDeleteBin6Line)
 export const Undo2 = /* @__PURE__ */ createIcon('Undo2', RiArrowGoBackLine)
+export const Upload = /* @__PURE__ */ createIcon('Upload', RiUploadLine)
 export const User = /* @__PURE__ */ createIcon('User', RiUserLine)
 export const WandSparkles = /* @__PURE__ */ createIcon('WandSparkles', RiMagicLine)
 export const Wrench = /* @__PURE__ */ createIcon('Wrench', RiWrenchLine)

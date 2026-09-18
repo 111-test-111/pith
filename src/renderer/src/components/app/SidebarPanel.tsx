@@ -77,8 +77,9 @@ export interface SidebarPaneProps {
   terminals: TerminalStore
   onNewTerminal: () => void
   onTerminalsEmpty: () => void
-  /** The embedded browser's store, owned by the workspace (pane unmount
-   *  keeps pages alive; only tab close folds the rail entry). */
+  /** The embedded browser's store, owned by the workspace (it outlives the
+   *  pane: an unmount kills the guests and the open-pages snapshot restores
+   *  them on the next mount); only tab close folds the rail entry. */
   browserStore: BrowserStore
   /** The browser's last page closed: the tab folds away (no extra teardown). */
   onBrowserEmpty: () => void
@@ -458,12 +459,16 @@ export function SidebarPanel({
                   display:none/visibility, because the embedded-browser iron
                   rule keeps agent pages interactive/screenshotable at full
                   speed — so switching rail tabs never unmounts its
-                  process-backed webviews. Only closing the browser tab
-                  destroys them (deliberate pi-web parity; the open-pages
-                  snapshot re-materializes them on reopen). The registry's
-                  browser render above is therefore never called. `active`
-                  threads `browserPaneLive` so the pane's global ⌘±/0 zoom
-                  shortcuts register only while the tab is on screen. */}
+                  process-backed webviews. Closing the browser tab OR folding
+                  the rail (AnimatePresence drops the whole aside) destroys
+                  them; the open-pages snapshot then re-materializes them on
+                  the next mount — the same strip in the pane's first commit,
+                  entries carrying their original owners (an agent page
+                  re-registers under `agent:<sessionId>`, so its session's
+                  tools find it again). The registry's browser render above is
+                  therefore never called. `active` threads `browserPaneLive`
+                  so the pane's global ⌘±/0 zoom shortcuts register only while
+                  the tab is on screen. */}
               {tabs.includes('browser') ? (
                 <div
                   aria-hidden={!browserPaneLive || undefined}

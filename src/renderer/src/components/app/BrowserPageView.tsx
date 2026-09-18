@@ -11,7 +11,8 @@ import {
   buildMarkerUrl,
   isAllowedNavigationUrl,
   normalizeNavigationUrl,
-  parseMarkerUrl
+  parseMarkerUrl,
+  type BrowserDownloadInfo
 } from '../../../../shared/browser.ts'
 import {
   getRecentUrls,
@@ -22,7 +23,7 @@ import {
   updateBrowserHistoryFaviconFor,
   updateBrowserHistoryTitleFor
 } from '@/lib/browser/session'
-import type { BrowserDownloadInfo, BrowserPanePage } from '@/lib/browser/store'
+import type { BrowserPanePage } from '@/lib/browser/store'
 import { INITIAL_DEVICE_STATE, resolveDeviceSize, type DeviceEmulationState } from '@/lib/browser/device'
 import {
   effectiveWebviewZoom,
@@ -49,13 +50,17 @@ export interface BrowserWebviewElement {
   canGoForward(): boolean
   goBack(): void
   goForward(): void
+  clearHistory(): void
   reload(): void
   loadURL(url: string): Promise<void>
   setZoomFactor(factor: number): void
   /** In-page find + print (Task 12) — the webview's own DOM API. `findNext:
-   *  true` is the reliable shape on webview guests: it continues an active
-   *  session (adjacent match) and starts one when none is active; the default
-   *  `findNext: false` can silently skip the found-in-page event. */
+   *  true` is the only shape that reports `found-in-page` on a webview guest
+   *  (measured: `false` yields no event at all, so the counter never renders),
+   *  and it also continues the live session — a step moves the active match by
+   *  exactly one. The ordinal it starts from follows Chromium's continuation
+   *  rule (it can be >1 when the document carries a selection), so the UI never
+   *  assumes a starting ordinal. */
   findInPage(text: string, options?: { forward?: boolean; findNext?: boolean; matchCase?: boolean }): number
   stopFindInPage(action: 'clearSelection' | 'keepSelection' | 'activateSelection'): void
   print(): Promise<void>
@@ -111,6 +116,14 @@ export interface BrowserPageViewProps {
    *  webContentsId, so the pane can keep its wcId → page-ownership map (popup
    *  owner inheritance). Optional; only the pane binds it. */
   onWebContentsId?: (webContentsId: number, id: string, owner: string) => void
+  /** 自愈台阶二（BrowserPane 的 marker 停滞升级）：变化即重挂本行的 webview
+ *  （key 变更销毁旧 guest），新 guest 重跑 marker 握手——旧 guest 对服务的 CDP
+ *  连接不可见（attach 竞态），重报救不回，只能换 target。 */
+  restart?: number
+  /** 恢复行的错峰 spawn（ms）：webview 元素立刻就位，src 延迟落地——同批一次性
+   *  挂载会以约一半概率弄死一个 guest（Invalid guestInstanceId），错峰从源头规
+   *  避；条面不受影响（行/URL/名字在恢复时即已画齐）。 */
+  spawnDelay?: number
   /** Registers the SELECTED page's find/print surface with the pane, so the
    *  pane-level ⌘F/⌘P shortcuts (and the guest relay) act on the page on
    *  screen without reaching into any webview element. Called with null on
@@ -127,12 +140,26 @@ export interface BrowserPageViewProps {
   active: boolean
 }
 
+/** A queued find step waits this long for the previous request to report.
+ *  Chromium's own find-next latency is ~3ms on a 3-match page and ~100ms on a
+ *  3000-match one (measured in check-browser-ui), so this only matters when a
+ *  payload never arrives at all. */
+const FIND_STEP_SETTLE_MS = 250
+/** Backlog cap for held-key repeats: queuing more than this would trail the
+ *  user's intent by seconds (each step costs a guest round trip). */
+const FIND_STEP_QUEUE_LIMIT = 10
+/** Beat between a request's payload and the next queued request. Firing the
+ *  next one in the same tick as the payload was measured to make one press in ~5
+ *  report an unchanged ordinal (Chromium is still settling the match it just
+ *  activated), so the queue waits before draining the next press. */
+const FIND_STEP_GRACE_MS = 120
+
 /** Icon-only toolbar button (the FilesPane ToolButton pattern). `className`
  *  lets a caller re-tint the glyph (the failed-download indicator). */
-function ToolButton({ label, icon: Icon, onClick, className, pressed }: { label: string; icon: IconComponent; onClick: () => void; className?: string; pressed?: boolean }) {
+function ToolButton({ label, icon: Icon, onClick, className, pressed, disabled }: { label: string; icon: IconComponent; onClick: () => void; className?: string; pressed?: boolean; disabled?: boolean }) {
   return (
     <Tooltip content={label}>
-      <Button variant="ghost" size="icon" className={cn('size-7 shrink-0', className)} aria-label={label} onClick={onClick}>
+      <Button variant="ghost" size="icon" className={cn('size-7 shrink-0', className)} aria-label={label} aria-pressed={pressed} onClick={onClick} disabled={disabled}>
         <Icon aria-hidden className="size-3.5" />
       </Button>
     </Tooltip>
@@ -182,6 +209,14 @@ const urlSelectAllProps = {
     }
   }
 } as const
+
+/** Rest-state address-bar text: the scheme and a leading www. are noise to
+ *  read (the omnibox convention). The FOCUSED field shows the full url. */
+function prettyBrowserUrl(url: string): string {
+  if (!url) return url
+  const stripped = url.replace(/^https?:\/\/(?:www\.)?/i, '')
+  return stripped.length > 0 ? stripped : url
+}
 
 /** Recents row label: hostname emphasized, path/search muted. */
 function recentUrlParts(url: string): { host: string; rest: string } {
@@ -274,7 +309,7 @@ function BrowserStartPage({ onOpen }: { onOpen: (raw: string) => boolean }): JSX
  *   input silently does nothing (pi-web's electron-webview-spike finding);
  *   background agent driving needs the opacity form.
  */
-export function BrowserPageView({ page, selected, displayUrl, onNavChange, onWebContentsId, bindPageActions, download, active }: BrowserPageViewProps) {
+export function BrowserPageView({ page, selected, displayUrl, onNavChange, onWebContentsId, bindPageActions, download, active, restart, spawnDelay }: BrowserPageViewProps) {
   const { t } = useI18n()
   const webviewRef = useRef<HTMLWebViewElement | null>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
@@ -292,16 +327,74 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, onWeb
   // The marker registration handshake is one-shot; re-apply-zoom (Task 9)
   // must NOT share this latch — every real document fires its own dom-ready.
   const handshakeCompleteRef = useRef(false)
+  // Guest remount (the pane's self-heal step two): a restarting row's webview
+  // is REMOUNTED (key change below) because its old guest is invisible to the
+  // service's CDP connection and can never register — the NEW guest must run
+  // the marker handshake again (the latch is one-shot per guest, not per row).
+  useEffect(() => {
+    if ((restart ?? 0) > 0) handshakeCompleteRef.current = false
+  }, [restart])
+  // Deferred spawn (restore rows): the element exists immediately, its src lands
+  // after spawnDelay — the strip paints at once while the guests are born one
+  // after another instead of in a batch (the dead-guest trigger).
+  const [srcReady, setSrcReady] = useState(!((spawnDelay ?? 0) > 0))
+  useEffect(() => {
+    if (srcReady || !((spawnDelay ?? 0) > 0)) return
+    const timer = window.setTimeout(() => setSrcReady(true), spawnDelay ?? 0)
+    return () => window.clearTimeout(timer)
+  }, [spawnDelay, srcReady])
   // Most recent committed url on this guest (marker loads excluded): the
   // page-title / page-favicon history backfills attach to it.
   const lastNavUrlRef = useRef('')
+  // Origin of the previous document. A REF, not an effect-local: the listener
+  // effect re-registers when its props change (a popup row turning into its
+  // server row changes `navigateTo`), and a reset local would classify the next
+  // same-site navigation as cross-site and clear the favicon for one beat.
+  const prevOriginRef = useRef('')
+  // The strip's current display url (localNav truth): the did-navigate handler
+  // reads it through this ref so its listener effect stays decoupled (the
+  // pageZoomRef pattern). Used to detect "navigating to the url we already
+  // show" — a snapshot-restore prewrite — whose title/favicon must survive.
+  const displayUrlRef = useRef(displayUrl)
+  useEffect(() => { displayUrlRef.current = displayUrl }, [displayUrl])
+  // History enablement for the toolbar's Back/Forward: the element's own
+  // canGoBack()/canGoForward(), refreshed on every committed navigation, so
+  // the buttons are clickable only when they are meaningful. The spawn jump
+  // (marker → first real url) would otherwise leave the marker as a history
+  // entry: canGoBack() true on a fresh tab, and Back navigates INTO the blank
+  // marker — the page empties and the title falls back to the raw url.
+  const [navFlags, setNavFlags] = useState({ back: false, forward: false })
+  // One-shot per guest (reset on remount): the FIRST committed real
+  // navigation clears the spawn-marker history entry.
+  const historyBaseClearedRef = useRef(false)
+  useEffect(() => {
+    if ((restart ?? 0) > 0) {
+      historyBaseClearedRef.current = false
+      setNavFlags({ back: false, forward: false })
+    }
+  }, [restart])
   // Draft semantics (Ruling I — binding): null = not editing, the input shows
   // the LIVE navigation url (displayUrl), so link clicks, redirects and
   // Back/Forward always flow through. A change (focus + typing) holds the
-  // draft; blur and a successful Enter submit both release it back to null.
+  // draft; blur releases it at once, a successful Enter submit holds it until
+  // the live url catches up (the effect below) so the field never flashes the
+  // previous url while the navigation commits.
   const [urlDraft, setUrlDraft] = useState<string | null>(null)
   const [urlError, setUrlError] = useState(false)
   const urlErrorTimerRef = useRef<number | null>(null)
+  // Whether the address bar holds DOM focus: while FOCUSED the field keeps
+  // the FULL url (the editing context — typing replaces it, selected); the
+  // rest state (unfocused) shows the trimmed form.
+  const urlFieldFocusedRef = useRef(false)
+  // A submitted draft releases once the LIVE navigation url reaches it: the
+  // field keeps showing the typed text through the load (blur releases at any
+  // time). While focused it stays in the full-url form; after release the
+  // unfocused field returns the trimmed display.
+  useEffect(() => {
+    if (urlDraft === null || displayUrl !== urlDraft) return
+    if (urlFieldFocusedRef.current) return
+    setUrlDraft(null)
+  }, [displayUrl, urlDraft])
 
   // Shared page zoom (pane-wide ladder state, persisted in localStorage): the
   // selected toolbar reads it here and every page view re-applies it to its
@@ -347,13 +440,22 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, onWeb
   // pages never carries a bar or a stale counter across.
   const [findOpen, setFindOpen] = useState(false)
   const [findQuery, setFindQuery] = useState('')
-  /** Last finalUpdate counter from found-in-page (null = nothing to show). */
-  const [findCount, setFindCount] = useState<{ ordinal: number; matches: number } | null>(null)
+  /** Last found-in-page payload; `final` marks the settled count. */
+  const [findCount, setFindCount] = useState<{ ordinal: number; matches: number; final: boolean } | null>(null)
   const findInputRef = useRef<HTMLInputElement | null>(null)
   // Mirrors for the code that must not depend on fresh renders: the
   // found-in-page listener is attached once, and closeFind runs from effects.
   const findOpenRef = useRef(false)
   const lastFindTextRef = useRef('')
+  const findQueryRef = useRef('')
+  /** Step queue: one find request in flight, further presses accumulate. */
+  const findQueueRef = useRef<{
+    pending: number
+    inFlight: boolean
+    timer: number | null
+  }>({ pending: 0, inFlight: false, timer: null })
+  const settleTimeoutRef = useRef<() => void>(() => {})
+  useEffect(() => { findQueryRef.current = findQuery }, [findQuery])
 
   const openFind = useCallback(() => {
     findOpenRef.current = true
@@ -363,14 +465,24 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, onWeb
     findInputRef.current?.focus()
   }, [])
 
+  /** Drop queued steps and any pending settle: the query they belonged to is
+   *  gone (bar closed, a new query replaced it, or the document navigated). */
+  const resetFindQueue = useCallback(() => {
+    const queue = findQueueRef.current
+    queue.pending = 0
+    queue.inFlight = false
+    if (queue.timer !== null) { window.clearTimeout(queue.timer); queue.timer = null }
+  }, [])
+
   const closeFind = useCallback(() => {
     findOpenRef.current = false
     setFindOpen(false)
     setFindCount(null)
     lastFindTextRef.current = ''
+    resetFindQueue()
     const wv = webviewRef.current as unknown as BrowserWebviewElement | null
     try { wv?.stopFindInPage('clearSelection') } catch { /* guest not ready */ }
-  }, [])
+  }, [resetFindQueue])
 
   /** One find step against the guest. Changed query text tears the previous
    *  session down first, so the fresh find starts from the top instead of
@@ -379,21 +491,97 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, onWeb
     const wv = webviewRef.current as unknown as BrowserWebviewElement | null
     if (!wv || text.length === 0) return
     const inputHadFocus = document.activeElement === findInputRef.current
+    const startsSession = text !== lastFindTextRef.current
     try {
-      if (text !== lastFindTextRef.current) wv.stopFindInPage('clearSelection')
-      // findNext: true = continue-or-start (see BrowserWebviewElement above).
+      // A changed query tears the previous session down so the fresh find does
+      // not resume mid-document; a follow-up step keeps the live session.
+      if (startsSession) {
+        // A new query supersedes whatever is still queued for the old one.
+        resetFindQueue()
+        wv.stopFindInPage('clearSelection')
+        // The old query's ordinal/total must not be read as this one's.
+        setFindCount(null)
+      }
+      // findNext: true is the only shape that emits `found-in-page` on a webview
+      // guest — measured in check-browser-ui: a session started with `false`
+      // produces NO event at all (so the counter stays blank), while `true`
+      // advances the live session and keeps reporting. Follow-up steps therefore
+      // send `true` as well; they CONTINUE the session rather than restarting it
+      // (the step ordinal is measured to move by exactly one).
       wv.findInPage(text, { forward: !backward, findNext: true })
       lastFindTextRef.current = text
     } catch { /* guest not ready — the next edit retries */ }
     // findInPage can hand keyboard focus to the guest; take it straight back
     // so typing in the field keeps flowing (only when the field had it).
     if (inputHadFocus) findInputRef.current?.focus()
+  }, [resetFindQueue])
+
+  /** Put ONE step on the wire (the queue's drain lands here). */
+  const sendFindStep = useCallback((direction: 1 | -1) => {
+    const queue = findQueueRef.current
+    const wv = webviewRef.current as unknown as BrowserWebviewElement | null
+    const text = findQueryRef.current
+    if (!wv || text.length === 0) { queue.pending = 0; queue.inFlight = false; return }
+    queue.inFlight = true
+    if (queue.timer !== null) window.clearTimeout(queue.timer)
+    queue.timer = window.setTimeout(() => { settleTimeoutRef.current() }, FIND_STEP_SETTLE_MS)
+    const inputHadFocus = document.activeElement === findInputRef.current
+    try {
+      // findNext: true is the only shape that emits `found-in-page` on a webview
+      // guest (measured: `false` produces no event at all, so the counter would
+      // stay blank) and it continues the live session — one step, one match.
+      wv.findInPage(text, { forward: direction === 1, findNext: true })
+    } catch { queue.inFlight = false }
+    if (inputHadFocus) findInputRef.current?.focus()
   }, [])
 
+  /**
+   * Drain one queued press. Only ONE request is ever in flight: Chromium drops
+   * find-next requests that arrive while a search is running (measured in
+   * check-browser-ui: a tight burst of 5 presses produced 3 payloads and
+   * advanced 2 matches), so rapid presses are queued here and sent one at a
+   * time rather than being silently coalesced away. Focus was never the cause —
+   * it stays in the field, measured flat, 3000-match and subframe fixtures.
+   */
+  const runFindSteps = useCallback(() => {
+    const queue = findQueueRef.current
+    if (queue.inFlight || queue.pending === 0) return
+    const direction = queue.pending > 0 ? 1 : -1
+    queue.pending -= direction
+    sendFindStep(direction)
+  }, [sendFindStep])
+
+  /**
+   * A request settled: its payload arrived, or nothing came back in time. The
+   * next queued press goes out after a beat — that gap is what keeps Chromium
+   * from collapsing the request, and it is the ONLY protection the queue can
+   * offer: the payload's ordinal is not a reliable liveness signal (measured: a
+   * paced burst on a 3-match page repeats one ordinal, while the same burst on a
+   * 3000-match page advances monotonically 3,4,5,6,7). Re-issuing on a repeated
+   * ordinal would therefore double-step a press that had already landed, and the
+   * highlight itself is not observable (Chromium paints find matches without
+   * leaving a DOM selection; the guest's `window.getSelection()` stays empty).
+   */
+  const confirmFindStep = useCallback(() => {
+    const queue = findQueueRef.current
+    if (queue.timer !== null) { window.clearTimeout(queue.timer); queue.timer = null }
+    if (!queue.inFlight) return
+    queue.inFlight = false
+    if (queue.pending === 0) return
+    queue.timer = window.setTimeout(() => { queue.timer = null; runFindSteps() }, FIND_STEP_GRACE_MS)
+  }, [runFindSteps])
+
+  /** No payload inside the settle window: release the queue for the next press. */
+  const settleTimeout = useCallback(() => { confirmFindStep() }, [confirmFindStep])
+  useEffect(() => { settleTimeoutRef.current = settleTimeout }, [settleTimeout])
+
+  /** A press on Enter/Shift+Enter or the △▽ buttons: queued, never dropped. */
   const findStep = useCallback((direction: 1 | -1) => {
-    if (findQuery.length === 0) return
-    runFind(findQuery, direction === -1)
-  }, [findQuery, runFind])
+    if (findQueryRef.current.length === 0) return
+    const queue = findQueueRef.current
+    queue.pending = Math.max(-FIND_STEP_QUEUE_LIMIT, Math.min(FIND_STEP_QUEUE_LIMIT, queue.pending + direction))
+    runFindSteps()
+  }, [runFindSteps])
 
   // Debounced find (200ms after the last edit): non-empty runs findInPage,
   // empty clears the selection and the counter. The timer cleanup means a
@@ -514,6 +702,9 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, onWeb
   }, [])
   useEffect(() => () => {
     if (urlErrorTimerRef.current !== null) window.clearTimeout(urlErrorTimerRef.current)
+    // A queued step's settle timer must not outlive the pane.
+    const queue = findQueueRef.current
+    if (queue.timer !== null) window.clearTimeout(queue.timer)
   }, [])
 
   /** User-typed url → normalized → whitelist-gated → guest loadURL. Returns
@@ -551,9 +742,16 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, onWeb
     } else if (action === 'forward') {
       if (wv.canGoForward()) wv.goForward()
     } else {
-      wv.reload()
+      // Reload is driven by the SERVICE for a page it owns: `goto(currentUrl)`,
+      // the measured-safe shape (iron 6 — the CDP Page.reload command kills a
+      // webview guest, or lands on the shell window). Only a row with no runtime
+      // (a state-only registration the service never attached to) falls back to
+      // the element's own reload, and that fallback is the service's answer.
+      void window.pi.browserReload(page.id)
+        .then((handled) => { if (!handled) wv.reload() })
+        .catch(() => { try { wv.reload() } catch { /* guest gone */ } })
     }
-  }, [])
+  }, [page.id])
 
   useEffect(() => {
     const wv = webviewRef.current
@@ -592,7 +790,6 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, onWeb
     // Origin of the previous document: a cross-site navigation clears the old
     // site's favicon (the new one arrives via page-favicon-updated); a
     // same-site navigation keeps it — re-clearing would just flash a blank.
-    let prevOrigin = ''
     const onNav = (event: Event) => {
       // Best-effort zoom re-apply: a committed navigation is the other moment
       // the guest may have reset its factor (applyZoom catches silently).
@@ -615,10 +812,34 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, onWeb
       }
       let origin = ''
       try { origin = new URL(raw).origin } catch { /* about:blank & friends */ }
-      const crossSite = origin !== prevOrigin
-      prevOrigin = origin
+      const crossSite = origin !== prevOriginRef.current
+      prevOriginRef.current = origin
+      // The spawn jump (marker → this url) is the handshake, not user
+      // history: clear it once so canGoBack()/canGoForward() describe real
+      // pages only — a fresh tab's Back stays disabled instead of navigating
+      // into the blank marker. Later navigations (links, address bar,
+      // Back/Forward itself) keep their entries.
+      try {
+        const guest = wv as unknown as BrowserWebviewElement
+        if (!historyBaseClearedRef.current) {
+          historyBaseClearedRef.current = true
+          guest.clearHistory()
+        }
+        setNavFlags({ back: guest.canGoBack(), forward: guest.canGoForward() })
+      } catch { /* guest gone — a remount resets the latch and the flags */ }
       // The new document's title hasn't arrived: fall back to the URL first.
-      onNavChange(page.id, { url: raw, title: '', favicon: crossSite ? null : undefined })
+      // Snapshot-restore prewrite: the strip already shows this exact url's
+      // title/favicon (carried through the fold) — navigating the guest there is
+      // not a document change the chrome should blank them for. Without this the
+      // favicon flickers (logo → generic → logo) and the title flashes to the raw
+      // url while the page reloads. A redirect lands on a DIFFERENT url and keeps
+      // the old reset semantics.
+      const sameTarget = raw === displayUrlRef.current
+      onNavChange(page.id, {
+        url: raw,
+        title: sameTarget ? undefined : '',
+        favicon: sameTarget ? undefined : (crossSite ? null : undefined)
+      })
     }
     const onNavInPage = (event: Event) => {
       const e = event as unknown as { url?: string; isMainFrame?: boolean }
@@ -630,6 +851,12 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, onWeb
       // a title that got there first. Deliberately NOT recorded: an SPA route
       // is not a real navigation.
       onNavChange(page.id, { url: e.url })
+      // An SPA route adds a history entry: Back to the previous route becomes
+      // meaningful — refresh the enablement too.
+      try {
+        const guest = wv as unknown as BrowserWebviewElement
+        setNavFlags({ back: guest.canGoBack(), forward: guest.canGoForward() })
+      } catch { /* guest gone */ }
     }
     const onTitle = (event: Event) => {
       const title = (event as unknown as { title?: string }).title ?? ''
@@ -647,15 +874,26 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, onWeb
       }
     }
     const onFoundInPage = (event: Event) => {
-      // The counter follows the FINAL payload of a request only (intermediate
-      // updates arrive while Chromium is still counting), and only while the
-      // bar is open — a payload landing after close must not resurrect it.
+      // Only while the bar is open — a payload landing after close must not
+      // resurrect it.
       if (!findOpenRef.current) return
       const result = (event as unknown as {
         result?: { finalUpdate?: boolean; activeMatchOrdinal?: number; matches?: number }
       }).result
-      if (!result?.finalUpdate) return
-      setFindCount({ ordinal: result.activeMatchOrdinal ?? 0, matches: result.matches ?? 0 })
+      if (!result) return
+      const ordinal = result.activeMatchOrdinal ?? 0
+      const matches = result.matches ?? 0
+      if (result.finalUpdate) {
+        setFindCount({ ordinal, matches, final: true })
+        // This request is done: a burst's next queued press may go out.
+        confirmFindStep()
+        return
+      }
+      // Intermediate payloads arrive while Chromium is still counting, so the
+      // TOTAL is only trusted once settled — but the active ordinal is already
+      // true at that point. Taking it immediately makes the readout track the
+      // highlight instead of lagging a whole count behind each step.
+      setFindCount((prev) => (prev ? { ...prev, ordinal, final: false } : { ordinal, matches, final: false }))
     }
     wv.addEventListener('dom-ready', onDomReady)
     wv.addEventListener('did-navigate', onNav)
@@ -671,7 +909,7 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, onWeb
       wv.removeEventListener('page-favicon-updated', onFavicon)
       wv.removeEventListener('found-in-page', onFoundInPage)
     }
-  }, [page.id, page.owner, page.navigateTo, onNavChange, onWebContentsId])
+  }, [page.id, page.owner, page.navigateTo, restart, onNavChange, onWebContentsId, confirmFindStep])
 
   // IRON RULE: an unselected agent page must never take `display: none` —
   // keep it hosted at full size, invisible and pointer-transparent.
@@ -684,8 +922,8 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, onWeb
     >
       {selected ? (
         <div className="flex h-11 shrink-0 items-center gap-1 border-b border-border/40 px-2" data-browser-toolbar>
-          <ToolButton label={t('browser.back')} icon={ArrowLeft} onClick={() => navigate('back')} />
-          <ToolButton label={t('browser.forward')} icon={ArrowRight} onClick={() => navigate('forward')} />
+          <ToolButton label={t('browser.back')} icon={ArrowLeft} onClick={() => navigate('back')} disabled={!navFlags.back} />
+          <ToolButton label={t('browser.forward')} icon={ArrowRight} onClick={() => navigate('forward')} disabled={!navFlags.forward} />
           <ToolButton label={t('browser.reload')} icon={RefreshCw} onClick={() => navigate('reload')} />
           {/* T16 annotate toggle: active tint follows the download indicator's
               re-tint convention; toggling off clears the selection because
@@ -698,25 +936,48 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, onWeb
             onClick={() => setAnnotating((v) => !v)}
           />
           <Input
-            value={urlDraft ?? displayUrl}
+            value={urlDraft ?? prettyBrowserUrl(displayUrl)}
             onChange={setUrlDraft}
             placeholder={t('browser.urlPlaceholder')}
             spellCheck={false}
             error={urlError}
             className="min-w-0 flex-1"
-            classNames={{ field: 'h-8', input: 'h-full px-2.5 font-mono text-xs' }}
+            classNames={{ field: 'h-8', input: 'h-full px-2.5 text-xs' }}
             onKeyDown={(event) => {
               if (event.key !== 'Enter' || event.nativeEvent.isComposing) return
               const url = loadUrl(urlDraft ?? displayUrl)
-              // Success RELEASES the draft: the field returns to the live
-              // navigation url (did-navigate updates it) instead of pinning
-              // the typed text over link clicks / redirects / Back-Forward.
-              // A failed parse keeps the draft — the user is still editing.
-              if (url !== null) setUrlDraft(null)
-              else flashUrlError()
+              // Success KEEPS the draft: releasing it here would flash the
+              // PREVIOUS live url (or about:blank) back into the field until
+              // did-navigate commits — the typed text vanishing and
+              // returning. The release effect above frees it the moment the
+              // live url catches up, after which the field follows link
+              // clicks / redirects / Back-Forward again. A failed parse keeps
+              // the draft — the user is still editing.
+              if (url === null) flashUrlError()
             }}
-            onBlur={() => setUrlDraft(null)}
-            {...urlSelectAllProps}
+            onFocus={() => {
+              urlFieldFocusedRef.current = true
+              // Focused = editing: swap to the FULL url (the rest state trims
+              // the scheme/www). The swap re-renders the value, so the
+              // select-all must land AFTER the commit — a synchronous select()
+              // would run on the trimmed text.
+              if (urlDraft === null) setUrlDraft(displayUrl)
+              requestAnimationFrame(() => {
+                const el = document.activeElement
+                if (el instanceof HTMLInputElement) el.select()
+              })
+            }}
+            onMouseDown={(e) => {
+              if (document.activeElement !== e.currentTarget) {
+                e.preventDefault()
+                e.currentTarget.focus()
+                e.currentTarget.select()
+              }
+            }}
+            onBlur={() => {
+              urlFieldFocusedRef.current = false
+              setUrlDraft(null)
+            }}
           />
           <div className="flex shrink-0 items-center" data-browser-zoom>
             <ToolButton label={t('browser.zoomOut')} icon={ZoomOut} onClick={zoomOut} />
@@ -759,8 +1020,9 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, onWeb
       ) : null}
       <div ref={wrapRef} className="relative min-h-0 flex-1">
         <webview
+          key={restart ?? 0}
           ref={webviewRef}
-          src={initialSrcRef.current}
+          src={srcReady ? initialSrcRef.current : undefined}
           partition={BROWSER_PARTITION}
           // allowpopups as a STRING spread (React strips boolean attributes on
           // unknown elements, so a `true` prop never reaches the DOM) — without
@@ -802,7 +1064,7 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, onWeb
             pageZoom={pageZoom}
             active={active}
             onExit={exitAnnotate}
-            page={{ url: displayUrl, title: page.title }}
+            page={{ id: page.id, url: displayUrl, title: page.title }}
           />
         ) : null}
         {findOpen ? (
@@ -846,9 +1108,11 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, onWeb
             <span
               role="status"
               aria-live="polite"
+              data-find-count
+              data-find-final={findCount?.final ? 'true' : 'false'}
               className="w-16 shrink-0 text-center text-[10px] tabular-nums text-muted-foreground"
             >
-              {findCount ? t('browser.findCount', { x: findCount.ordinal, y: findCount.matches }) : ''}
+              {findCount && findCount.matches > 0 ? t('browser.findCount', { x: findCount.ordinal, y: findCount.matches }) : ''}
             </span>
             <ToolButton label={t('browser.findPrev')} icon={ArrowUp} onClick={() => findStep(-1)} />
             <ToolButton label={t('browser.findNext')} icon={ArrowDown} onClick={() => findStep(1)} />

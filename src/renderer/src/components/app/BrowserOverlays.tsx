@@ -223,6 +223,9 @@ export function BrowserOverlays({
     if (!open) return
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || event.isComposing) return
+      // An open modal owns Escape (CenterMorphModal bails on defaultPrevented) —
+      // fencing it here would close the popover while the dialog stayed open.
+      if (document.querySelector('[aria-modal="true"]')) return
       event.preventDefault()
       event.stopPropagation()
       // Hand focus back to the trigger like closeOverlay does — a bare
@@ -431,7 +434,7 @@ function BrowserDevicePanel({
       {/* In-panel row list, not a nested Select: the vendored dropdown renders
           inline (no portal) and clips at this popover panel's edge. The list
           also gives 无 a real off switch instead of a disabled row. */}
-      <div className="flex flex-col gap-0.5" role="listbox" aria-label={t('browser.menuDevice')}>
+      <div className="flex flex-col gap-0.5" role="radiogroup" aria-label={t('browser.menuDevice')}>
         {[
           { id: DEVICE_NONE_ID, name: t('browser.deviceNone') },
           ...DEVICE_PRESETS.map((preset) => ({ id: preset.id, name: preset.name })),
@@ -443,7 +446,8 @@ function BrowserDevicePanel({
               key={row.id}
               variant="ghost"
               className={cn('h-7 justify-start px-2 text-xs', selected && 'bg-primary/5 text-primary')}
-              aria-pressed={selected}
+              role="radio"
+              aria-checked={selected}
               onClick={() => {
                 if (row.id === DEVICE_NONE_ID) {
                   onDeviceChange(INITIAL_DEVICE_STATE)

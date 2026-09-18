@@ -477,6 +477,12 @@ const en = {
   'browser.annotateSubmit': 'Insert',
   'browser.annotateCancel': 'Cancel',
   'browser.annotateNotePlaceholder': 'Note (optional)',
+  // The annotation payload becomes the user's own message, so its labels are
+  // user-visible text and live here rather than as literals in the component.
+  'browser.annotateHeader': '[Page annotation] {title} {url}',
+  'browser.annotateElement': 'Element: {tag} {path}',
+  'browser.annotateText': 'Text: {text}',
+  'browser.annotateNote': 'Note: {note}',
 
   'review.emptyTitle': 'Nothing to review yet',
   'review.emptyBody':

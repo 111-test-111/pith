@@ -46,14 +46,14 @@ export const TOOL_CATEGORIES: readonly ToolCategory[] = [
     id: 'browser',
     labelKey: 'tool.categoryBrowser',
     icon: Compass,
-    // The 13 embedded-browser agent tools (src/main/browser/tools.ts's
+    // The embedded-browser agent tools (src/main/browser/tools.ts's
     // APP_BROWSER_TOOL_NAMES, copied as literals — renderer code does not
     // import from src/main).
     tools: [
       'browser_navigate', 'browser_pages', 'browser_focus', 'browser_snapshot',
       'browser_click', 'browser_type', 'browser_press_key', 'browser_scroll',
       'browser_wait_for', 'browser_screenshot', 'browser_close', 'browser_hover',
-      'browser_select'
+      'browser_select', 'browser_upload'
     ]
   }
 ]

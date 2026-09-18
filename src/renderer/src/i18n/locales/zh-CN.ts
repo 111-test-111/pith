@@ -474,6 +474,10 @@ const zhCN: Messages = {
   'browser.annotateSubmit': '插入',
   'browser.annotateCancel': '取消',
   'browser.annotateNotePlaceholder': '备注（可选）',
+  'browser.annotateHeader': '[页面批注] {title} {url}',
+  'browser.annotateElement': '元素：{tag} {path}',
+  'browser.annotateText': '文本：{text}',
+  'browser.annotateNote': '备注：{note}',
 
   'review.emptyBody': '某一轮里被修改或新建的文件会连同 diff 出现在这里——一次一轮，新的在前。',
   'review.prevTurn': '上一个有改动的轮次',

@@ -37,6 +37,7 @@ import {
   TextSearch,
   Timer,
   Trash2,
+  Upload,
   Wrench,
   XSquare,
   type IconComponent
@@ -117,7 +118,8 @@ const TOOL_ICONS: Record<string, IconComponent> = {
   browser_screenshot: Camera,
   browser_close: XSquare,
   browser_hover: MousePointer2,
-  browser_select: ListChecks
+  browser_select: ListChecks,
+  browser_upload: Upload
 }
 
 /** Namespace-proxy tools are named `<adapter>__<server>`. */

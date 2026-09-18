@@ -1,4 +1,4 @@
-import { app, ipcMain, dialog, session, shell, BrowserWindow } from 'electron'
+import { app, ipcMain, dialog, session, shell, webContents, BrowserWindow } from 'electron'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { PiManager } from './pi/manager'
@@ -9,6 +9,7 @@ import { loadSettings, saveSettings } from './settings'
 import { getBrowserService, initBrowserService } from './browser/service'
 import { getCdpPort } from './browser/cdp-port'
 import { BROWSER_PARTITION, HUMAN_OWNER } from '../shared/browser'
+import type { BrowserFocusGuestPayload, BrowserSeenPayload } from '../shared/browser'
 import { sandboxStatus } from './sandbox/broker'
 import { setWindowTheme } from './window-chrome'
 import { listFileDirectory, readFileDocument, readFileGitDiff } from './file-browser'
@@ -76,11 +77,16 @@ export function registerIpc(pi: PiManager): () => boolean {
   // connect is lazy behind consent — target discovery rides the service's own
   // 1s reconcile poll plus the renderer's explicit pulls (pane createPage,
   // consent), never a status read.
+  // Agent 键盘动作前的「请渲染层聚焦 guest」握手：待应答表 + 序号 + ack 超时（见下方 focusGuest）。
+  const pendingGuestFocus = new Map<number, () => void>()
+  const GUEST_FOCUS_ACK_TIMEOUT_MS = 1_000
+  let focusGuestSeq = 0
+
   const browser = initBrowserService({
     cdpPort: getCdpPort(),
     // The shell window's own document, mirroring index.ts's loadURL/loadFile
-    // decision (same expression, same compiled __dirname): reconcile and
-    // registerPopup exclude it from the registry by exact match. registerIpc
+    // decision (same expression, same compiled __dirname): reconcile and the
+    // page-event path exclude it from the registry by exact match. registerIpc
     // runs before createWindow, but the loaded URL is deterministic from these
     // two inputs; exact matching (not a localhost prefix) is what keeps agent
     // pages like the user's dev server on http://localhost:3000/ registrable.
@@ -99,20 +105,65 @@ export function registerIpc(pi: PiManager): () => boolean {
       } catch {
         /* best-effort */
       }
+    },
+    // 键盘输入前把焦点交给 guest——**必须由渲染层把 `<webview>` 元素 focus**。
+    // 实测：壳窗口持焦点时，派给 guest 的按键会同时落到壳窗口 DOM，于是 agent 按一次
+    // Escape 就把本轮停掉（Escape 是 Composer 的停止键）；而 `webviewElement.focus()`
+    // 之后同样的按键壳窗口一个也收不到。main 侧 `webContents.focus()` 与 playwright 的
+    // `Page.bringToFront` 都**不动壳窗口的 DOM 焦点**（实测 activeElement 始终是 BUTTON），
+    // 所以这里发请求 + 等 ack（带超时兜底：页被关掉/面板未挂载时不会卡住键盘动作）。
+    focusGuest: async (webContentsId: number) => {
+      const target = BrowserWindow.getAllWindows().find((win) => !win.isDestroyed())
+      if (!target) return
+      webContents.fromId(webContentsId)?.focus()
+      const requestId = ++focusGuestSeq
+      const acked = new Promise<void>((resolve) => {
+        const timer = setTimeout(() => {
+          pendingGuestFocus.delete(requestId)
+          resolve()
+        }, GUEST_FOCUS_ACK_TIMEOUT_MS)
+        timer.unref?.()
+        pendingGuestFocus.set(requestId, () => {
+          clearTimeout(timer)
+          resolve()
+        })
+      })
+      const payload: BrowserFocusGuestPayload = { webContentsId, requestId }
+      target.webContents.send('browser:focus-guest', payload)
+      await acked
     }
   })
 
+  // 渲染层聚焦完 guest 后的 ack（main 等到它才派按键，见 BrowserFocusGuestPayload）。
+  ipcMain.handle('browser:focus-guest-done', (_event, requestId: number) => {
+    pendingGuestFocus.get(requestId)?.()
+    pendingGuestFocus.delete(requestId)
+  })
   // ---- Embedded browser: the renderer's only control surface for the service ----
   ipcMain.handle('browser:status', (): BrowserStatusDTO => browser.getStatus())
+  // Local-row restore (open-pages snapshot) needs the service's CDP connection
+  // to EXIST before its marker guests spawn (iron 7: a guest predating the
+  // connection is invisible to it — state-only forever, no runtime, so the
+  // pendingNavigate goto and the theme emulation never reach it). Cheap and
+  // idempotent: ensureStarted memoizes the connection; reconcile is the same
+  // pass the 1s tick runs.
+  ipcMain.handle('browser:ensureService', async (): Promise<void> => {
+    await browser.reconcileElectronTargets()
+  })
   ipcMain.handle('browser:consent', (): BrowserStatusDTO => {
     browser.grantConsent()
     return browser.getStatus()
   })
   ipcMain.handle('browser:createPage', (_event, url?: string) => browser.createPage(HUMAN_OWNER, url))
   ipcMain.handle('browser:closePage', (_event, id: string) => browser.closePage(id))
+  // Toolbar reload: the service drives it with goto(currentUrl) for a page it
+  // owns (the CDP Page.reload command kills the guest); false means the row has
+  // no runtime and the renderer falls back to the element's own API.
+  ipcMain.handle('browser:reload', (_event, id: string) => browser.reloadPageForId(id))
   // Renderer reports a guest the service does not know yet; the returned row
   // is irrelevant to it (fresh state arrives on browser:state).
-  ipcMain.handle('browser:seen', (_event, payload: { id: string; owner: string; url: string; webContentsId?: number; navigateTo?: string }) => {
+  ipcMain.handle('browser:seen', (_event, payload: BrowserSeenPayload) => {
+    if (!payload || typeof payload !== 'object') return
     browser.registerExternalPage(payload)
   })
   ipcMain.handle('browser:elementAt', (_event, id: string, x: number, y: number) => browser.resolveElementAt(id, x, y))

@@ -232,9 +232,11 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
   useEffect(() => () => terminals.dispose(), [terminals])
   // The embedded browser's store lives as long as the workspace. Its pane is
   // kept mounted across rail tab switches (SidebarPanel's hidden layer), so
-  // pages survive those; closing the browser tab unmounts the pane and
-  // destroys its guest pages — Task 8's open-pages snapshot restores them on
-  // reopen.
+  // pages survive those; closing the browser tab OR folding the rail unmounts
+  // the pane and destroys its guest pages — the open-pages snapshot then
+  // restores them on the next mount: owner-carrying entries (an agent page
+  // re-registers under its `agent:<sessionId>`), strip repainted in the pane's
+  // first commit, only the content reloads.
   const [browserStore] = useState(() => new BrowserStore())
   /** The tab list as a ref: the browser-state subscription below registers
    * once and must read the open state without re-subscribing per change. */

@@ -122,7 +122,7 @@ export interface BrowserAnnotateProps {
   /** Leave annotate mode entirely (toolbar toggle off / submit / Esc). */
   onExit: () => void
   /** Display truth for the composed annotation text. */
-  page: { url: string; title: string }
+  page: { id: string; url: string; title: string }
 }
 
 export function BrowserAnnotate({ wv, wrapEl, pageZoom, active, onExit, page }: BrowserAnnotateProps) {
@@ -191,15 +191,26 @@ export function BrowserAnnotate({ wv, wrapEl, pageZoom, active, onExit, page }: 
   const resolveElementAt = useCallback(
     async (guestX: number, guestY: number): Promise<BrowserElementInfo | null> => {
       const guest = wvRef.current
-      if (!guest) return null
+      if (guest) {
+        try {
+          const result: unknown = await guest.executeJavaScript(buildElementAtScript(guestX, guestY))
+          if (isElementInfo(result)) return result
+        } catch {
+          /* guest not ready / destroyed / mid-navigation — fall through */
+        }
+      }
+      // Fallback: the service resolves through its own CDP runtime. It can lag a
+      // renderer-driven navigation (which is why the live-document path above is
+      // primary), but it is the only channel left when the guest's own is
+      // unusable — and it is the reason `browser:elementAt` exists.
       try {
-        const result: unknown = await guest.executeJavaScript(buildElementAtScript(guestX, guestY))
-        return isElementInfo(result) ? result : null
+        const info = await window.pi.browserElementAt(page.id, Math.round(guestX), Math.round(guestY))
+        return info && isElementInfo(info) ? info : null
       } catch {
-        return null // guest not ready / destroyed / mid-navigation
+        return null
       }
     },
-    []
+    [page.id]
   )
 
   const resolveHover = useCallback(async () => {
@@ -247,6 +258,11 @@ export function BrowserAnnotate({ wv, wrapEl, pageZoom, active, onExit, page }: 
     if (!active) return
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return
+      // An open modal owns Escape: CenterMorphModal's own handler bails on
+      // `defaultPrevented`, so fencing the keystroke here would leave the dialog
+      // open while annotate mode exited underneath it (Esc-to-stop reserves
+      // [aria-modal="true"] the same way). Let the overlay close first.
+      if (document.querySelector('[aria-modal="true"]')) return
       if (isEditableTarget(event.target)) return
       event.preventDefault()
       event.stopPropagation()
@@ -370,12 +386,17 @@ export function BrowserAnnotate({ wv, wrapEl, pageZoom, active, onExit, page }: 
       /* guest not ready — the display fallbacks carry the payload */
     }
     if (!title) title = page.url
-    const lines = [`[页面批注] ${title} ${page.url}`, `元素: ${annotation.tag} ${annotation.path}`]
-    if (annotation.text) lines.push(`文本: ${annotation.text}`)
-    if (note) lines.push(`备注: ${note}`)
+    // The payload becomes the user's own message, so every label is localized
+    // (hard-coded prose here shipped a Chinese block to English users).
+    const lines = [
+      t('browser.annotateHeader', { title, url: page.url }),
+      t('browser.annotateElement', { tag: annotation.tag, path: annotation.path }),
+    ]
+    if (annotation.text) lines.push(t('browser.annotateText', { text: annotation.text }))
+    if (note) lines.push(t('browser.annotateNote', { note }))
     window.dispatchEvent(new CustomEvent(BROWSER_ANNOTATION_EVENT, { detail: { text: lines.join('\n') } }))
     exit()
-  }, [annotation, comment, page.title, page.url, exit])
+  }, [annotation, comment, page.title, page.url, exit, t])
 
   // Mount focus for the note field (after selection exists) — the vendored
   // Input renders the field inside a wrapper, so focus it like selectStarter.

@@ -82,14 +82,37 @@ export function upsertRecentUrl(list: string[], url: string, cap = BROWSER_RECEN
   return [url, ...list.filter((u) => u !== url)].slice(0, cap)
 }
 
-/** 打开页快照：仅 human 页、仅可记录 URL，保持打开顺序（限量）。 */
+/** 打开页快照条目：owner 随页保存——agent 页（`agent:<sessionId>`）也在快照里，
+ *  恢复时按原 owner 重新登记，其会话的工具经 activeByOwner 再次找到它。
+ *  title/favicon 让恢复后的条面立即显示折叠前的名字（内容加载完由页面事件刷新）；
+ *  url 缺省 = 空白页——about:blank 起始页也入册，条数与次序因此完全保持。 */
+export interface OpenBrowserPageEntry {
+  owner: string
+  /** 可导航目标（仅 http(s)，与恢复侧 navigateTo 的白名单一致）；空白页不带。 */
+  url?: string
+  title?: string
+  favicon?: string
+  /** 写在折叠时处于活动态的那一条上；恢复时优先重选它（无标记则选首行）。 */
+  selected?: true
+}
+
+/** 打开页快照：全 owner、全页面（空白页也入册，url 缺省），保持打开顺序与数量（限量）。
+ *  human 页与 agent 页同等入册——两类页在引擎层同构（同一分区、同一注册表），差的
+ *  只是 owner 命名空间；不可记录 URL（file: 等）恢复为空白页，条数仍保持。 */
 export function snapshotOpenPages(
-  pages: readonly { owner: string, url: string }[],
+  pages: readonly { owner: string, url: string, id?: string, title?: string, favicon?: string }[],
+  selectedId?: string | null,
   limit = OPEN_BROWSER_PAGES_LIMIT,
-): string[] {
+): OpenBrowserPageEntry[] {
   return pages
-    .filter((p) => p.owner === HUMAN_OWNER && isRecordableUrl(p.url))
-    .map((p) => p.url)
+    .map((p) => {
+      const entry: OpenBrowserPageEntry = { owner: p.owner }
+      if (isRecordableUrl(p.url)) entry.url = p.url
+      if (p.title) entry.title = p.title
+      if (p.favicon) entry.favicon = p.favicon
+      if (selectedId && p.id === selectedId) entry.selected = true
+      return entry
+    })
     .slice(0, limit)
 }
 
@@ -148,12 +171,45 @@ export function recordRecentUrl(url: string): void {
   for (const cb of recentsListeners) cb()
 }
 
-export function readOpenBrowserPages(): string[] {
-  return readList(OPEN_PAGES_KEY)
+/** 打开页快照读取：兼容旧格式（string[]，一律视作 human 页）与当前条目——
+ *  url 可缺（空白页）；selected/title/favicon 原样保留（丢了 selected 恢复就永远
+ *  落回首行）；坏条目/坏 JSON 静默降级。 */
+function readOpenPagesList(): OpenBrowserPageEntry[] {
+  try {
+    const raw = window.localStorage.getItem(OPEN_PAGES_KEY)
+    if (!raw) return []
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    const entries: OpenBrowserPageEntry[] = []
+    for (const item of parsed) {
+      if (typeof item === 'string') {
+        entries.push({ owner: HUMAN_OWNER, url: item })
+        continue
+      }
+      if (!item || typeof item !== 'object') continue
+      const record = item as { owner?: unknown; url?: unknown; title?: unknown; favicon?: unknown; selected?: unknown }
+      const hasUrl = typeof record.url === 'string'
+      const hasOwner = typeof record.owner === 'string' && record.owner.length > 0
+      if (!hasUrl && !hasOwner) continue
+      const entry: OpenBrowserPageEntry = { owner: hasOwner ? (record.owner as string) : HUMAN_OWNER }
+      if (hasUrl) entry.url = record.url as string
+      if (typeof record.title === 'string' && record.title) entry.title = record.title
+      if (typeof record.favicon === 'string' && record.favicon) entry.favicon = record.favicon
+      if (record.selected === true) entry.selected = true
+      entries.push(entry)
+    }
+    return entries
+  } catch {
+    return []
+  }
 }
 
-export function writeOpenBrowserPages(urls: readonly string[]): void {
-  writeList(OPEN_PAGES_KEY, urls.slice(0, OPEN_BROWSER_PAGES_LIMIT))
+export function readOpenBrowserPages(): OpenBrowserPageEntry[] {
+  return readOpenPagesList()
+}
+
+export function writeOpenBrowserPages(entries: readonly OpenBrowserPageEntry[]): void {
+  writeList(OPEN_PAGES_KEY, entries.slice(0, OPEN_BROWSER_PAGES_LIMIT))
 }
 
 // ---- 浏览历史（localStorage 适配 + 订阅）----

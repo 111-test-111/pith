@@ -326,7 +326,8 @@ export class PiManager {
     return loadSettings().sandboxMode
   }
   private subagentsEnabledFlag = loadSettings().subagentsEnabled !== false
-  /** Whether the 13 browser_* agent tools register into new sessions (Settings → General). */
+  /** Whether the 14 browser_* agent tools are in the ACTIVE set (the switch lives
+   *  in Settings → Browser; registration itself is service-gated at build). */
   private browserToolsFlag = loadSettings().browserAgentToolsEnabled === true
   private subagentMaxConcurrentSetting = loadSettings().subagentMaxConcurrent ?? MAX_CONCURRENT_SUBAGENTS_DEFAULT
   /** Ask-panel auto-settle deadline; read live by every ask_user_question call. */
@@ -1521,7 +1522,12 @@ export class PiManager {
         // existing session. Exposure is the active set's job — see
         // applyActiveTools.
         ...(getBrowserService()
-          ? createBrowserTools({ ownerId: sessionManager.getSessionId(), service: getBrowserService()! })
+          ? createBrowserTools({
+            ownerId: sessionManager.getSessionId(),
+            service: getBrowserService()!,
+            // Relative upload paths resolve here (the model usually holds workspace-relative paths).
+            cwd: sessionManager.getCwd()
+          })
           : [])]
     })
     if (!isChild) parentSessionRef.session = session
@@ -2757,7 +2763,7 @@ export class PiManager {
   }
 
   /**
-   * Toggle the browser_* agent tools. The 13 tools register whenever the
+   * Toggle the browser_* agent tools. The 14 tools register whenever the
    * browser service exists (service-gated at build — registration can never
    * change for a live session); this flag only decides the ACTIVE set, and
    * live sessions reach it through the setAppendPrompt reload walk: an idle

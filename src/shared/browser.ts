@@ -87,6 +87,56 @@ export interface ElementAtInfo {
   box: { x: number; y: number; width: number; height: number }
 }
 
+// ---- browser:* 事件与反向上报的载荷（main 发、renderer 收；共用一个形状，
+// 免得两侧各写一份内联类型后静默漂移）。 ----
+
+/**
+ * **标签形态**弹窗（target=_blank、⌘/Ctrl+点击、裸 window.open）经 `browser:popup` 转发的
+ * 载荷；owner 由 opener 继承。窗口形态的 window.open（带窗口 features）不在这里——主进程
+ * 直接 `allow` 出一个真 BrowserWindow，它不进面板注册表也不经事件面。
+ */
+export interface BrowserPopupInfo {
+  url: string
+  openerWebContentsId: number
+}
+
+/** 下载完成/失败（browser 分区的 will-download）。error 是主进程侧数据，
+ *  面板只显示本地化的失败文案，不透传这个串。 */
+export interface BrowserDownloadInfo {
+  path: string
+  filename: string
+  error?: string
+}
+
+/** guest 聚焦时被主进程拦下的浏览器自有按键（⌘±/0 / ⌘F / ⌘P）。 */
+export interface BrowserGuestShortcutInfo {
+  key: string
+}
+
+/** `browser:seen`：渲染层上报一个服务端还不知道的 guest（state-only 登记 +
+ *  wcId 映射 + agent popup 的待导航声明）。 */
+export interface BrowserSeenPayload {
+  id: string
+  owner: string
+  url: string
+  webContentsId?: number
+  navigateTo?: string
+}
+
+/**
+ * main → renderer：请把某个 guest 的 `<webview>` 元素聚焦，焦完回 `browser:focus-guest-done`。
+ *
+ * 为什么必须绕渲染层一圈：CDP 派给 guest 的按键**先交给窗口当前聚焦的 widget**——壳窗口持
+ * 焦点时它会同时出现在壳窗口 DOM，于是 agent 的 `Escape`（应用里的「停止本轮」）会把这一轮
+ * 停掉。实测只有 `webviewElement.focus()` 能让后续按键完全留在 guest；主进程侧
+ * `webContents.fromId(id).focus()` 与 `Page.bringToFront` 都**不动壳窗口的 DOM 焦点**，按键照漏。
+ * 键盘动作前等 ack，所以这个握手必须是可应答的（不是单向广播）。
+ */
+export interface BrowserFocusGuestPayload {
+  webContentsId: number
+  requestId: number
+}
+
 /** 归一化比较两个文档 URL：剥 hash 与 query、去尾斜杠后比较。
  *  dev 壳文档以无尾斜杠形态传入（ELECTRON_RENDERER_URL），而 page.url() 恒带尾斜杠——
  *  字符串精确匹配永不命中（navigation.ts 的 isOwnDocument 同陷阱同解法）。 */
