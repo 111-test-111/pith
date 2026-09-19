@@ -1409,7 +1409,14 @@ try {
   const restrictedProto = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(planController), 'restricted').get
   const activeRead = ceiling.session.agent.state.tools.find((tool) => tool.name === 'read')
   const readsBefore = probeCounts.execute
+  await ceiling.app.setSessionMode({ sessionPath: path, mode: 'plan' })
+  const safeRead = ceiling.session.agent.state.tools.find((tool) => tool.name === 'read')
   Object.defineProperty(planController, 'submissionLocked', { configurable: true, get: () => true })
+  await assert.rejects(
+    () => safeRead.execute('sealed-safe-read', { path: realFile }),
+    /plan submission/i,
+    'the replacement safe read bypassed the submission seal'
+  )
   await assert.rejects(
     () => activeRead.execute('sealed-read', { path: realFile }, undefined, undefined, { cwd: ceiling.project }),
     /plan submission/i,
@@ -1422,6 +1429,11 @@ try {
   const heldTransition = planController.transition(async () => { await transitionGate })
   assert.equal(planController.transitionBusy, true)
   await assert.rejects(
+    () => safeRead.execute('transition-safe-read', { path: realFile }),
+    /mode change/i,
+    'the replacement safe read bypassed the transition lock'
+  )
+  await assert.rejects(
     () => activeRead.execute('transition-read', { path: realFile }, undefined, undefined, { cwd: ceiling.project }),
     /mode change/i,
     'a tool executed while a mode transition held the lock'
@@ -1430,6 +1442,7 @@ try {
   await heldTransition
   assert.equal(planController.transitionBusy, false)
   assert.equal(probeCounts.execute, readsBefore, 'a refused execute still ran the real implementation')
+  await ceiling.app.setSessionMode({ sessionPath: path, mode: 'normal' })
 
   // 8) Partial/unavailable DSH: bash is not exposed and a held execute refuses
   //    BEFORE any task record (never a host fallback).

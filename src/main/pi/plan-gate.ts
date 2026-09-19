@@ -268,7 +268,7 @@ function createGate(options: PlanGateOptions): PlanGate {
         if (!allowedInPlan(name, provenance)) continue
         if (isSafeRead) {
           seen.add(name)
-          next.push({ name, tool: safeReads.get(name)!, provenance })
+          next.push({ name, tool: wrapped(safeReads.get(name)!, provenance), provenance })
           continue
         }
       }
