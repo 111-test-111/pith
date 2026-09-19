@@ -164,9 +164,15 @@ export async function createAgentSessionFromServices(options){
   runtime.getAvailableSnapshot = () => [model]
 
   const store = new PiStore()
+  /** Every `pi:event` payload the app emitted, in order — Task-2 metadata
+   * checks assert the sequence-free events themselves, not just the store. */
+  const events = []
   const app = new PiManager(
     (channel, event) => {
-      if (channel === 'pi:event') store.dispatch(event)
+      if (channel === 'pi:event') {
+        events.push(event)
+        store.dispatch(event)
+      }
     },
     (error) => {
       throw new Error(error)
@@ -189,6 +195,7 @@ export async function createAgentSessionFromServices(options){
     project,
     temporary,
     requests,
+    events,
     setRespond(fn) {
       respond = fn
     },

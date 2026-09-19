@@ -44,6 +44,8 @@ export class TaskNotifications {
       !delivery.drained && delivery.wakeAttempts < 3 && this.releasedCalls.has(delivery.task.toolCallId))
   }
   onWake?: () => void
+  /** Pending-set changes: the app's Plan metadata reads them as live facts. */
+  onPendingChanged?: () => void
   private userStops = new Set<string>()
 
   expectUserStop(id: string): void { this.userStops.add(id) }
@@ -55,6 +57,7 @@ export class TaskNotifications {
     if (this.ignoredTasks.delete(task.id) || !this.canStart || (task.status === 'cancelled' && !userStopped) || this.pending.has(task.id)) return
     this.tasks.retain(task.id)
     this.pending.set(task.id, { task, queued: false, drained: false, barrier: false, wakeAttempts: 0 })
+    this.onPendingChanged?.()
     this.flush()
   }
 
@@ -70,6 +73,7 @@ export class TaskNotifications {
       if (id && event.type === 'message_end') {
         this.pending.delete(id)
         this.tasks.release(id)
+        this.onPendingChanged?.()
       }
     }
     if (event.type === 'message_end' && message?.role === 'toolResult' && message.toolName === 'bash') {
@@ -161,12 +165,14 @@ export class TaskNotifications {
     this.pending.clear()
     clearTimeout(this.retry)
     this.retry = undefined
+    this.onPendingChanged?.()
   }
 
   resume(): void {
     this.paused = false
     this.failures = 0
     for (const delivery of this.pending.values()) delivery.wakeAttempts = 0
+    this.onPendingChanged?.()
   }
 
   holdWake(): void { this.idleWakeHolds++ }

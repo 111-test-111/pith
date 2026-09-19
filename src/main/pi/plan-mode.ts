@@ -1,0 +1,476 @@
+/**
+ * Plan Mode's session-level state machine: the working mode, the admission
+ * rules every entry point shares, and the live metadata the renderer reads.
+ *
+ * Three separations are load-bearing and easy to undo by accident:
+ *
+ * - **Mode is not sandbox.** `SessionMode` never joins `SandboxMode`. Plan
+ *   overlays `read-only` on the effective value (what the tools read) while the
+ *   session's stored/default choice stays what the user picked; leaving plan
+ *   restores that choice instead of guessing a new one.
+ * - **Restriction is fail-closed.** An unknown `pith_plan_mode` version folds to
+ *   `mode: normal` plus `unsupported: true`, so every restriction and admission
+ *   decision checks `unsupported` too — never `mode` alone. A record we cannot
+ *   explain stays restricted and cannot approve or execute anything.
+ * - **The lock is not a flag.** `transition()` takes the session lock
+ *   synchronously and admission (`checkWorkAdmission`, `beginWork`) refuses
+ *   while it is held, so a mode change cannot interleave with a prompt whose
+ *   preparation the SDK still considers idle.
+ *
+ * Business rules live here; PiManager only wires lifecycle and facts.
+ */
+import { randomUUID } from 'node:crypto'
+import type { SessionManager } from '@earendil-works/pi-coding-agent'
+import type { PlanBlocker, PlanStateDTO, SessionMode } from '../../shared/plan'
+import type { SandboxMode } from '../sandbox/types'
+import { PLAN_MODE_ENTRY, isCurrentPlan, reconstructPlan, type PlanBranchState } from './plan-protocol'
+import type { PlanStorage } from './plan-storage'
+
+/**
+ * The live facts a controller needs. Every field is app-owned (PiManager
+ * derives it from the SDK, the task manager and the notification owners); the
+ * controller never reaches into the SDK itself, so the same rules are testable
+ * without a model or a sandbox.
+ */
+export interface PlanLiveFacts {
+  /** Session initialization (extension startup) or a resource reload is running. */
+  initializing: boolean
+  closing: boolean
+  /** This session is a subagent child: it follows its parent and has no mode. */
+  child: boolean
+  /** A rewind recovery is unresolved for this session's workspace. */
+  recovery: boolean
+  /** The SDK is genuinely idle — never `agent_end` or `!isStreaming` alone. */
+  sdkIdle: boolean
+  /** Live/stopping bash processes owned by this session. */
+  tasks: number
+  /** Subagent runs that are starting, launching or live. */
+  subagents: number
+  /** Undelivered/timed-out notification deliveries still owed to the model. */
+  deliveries: number
+  /** Structured questions the user has not answered. */
+  questions: number
+  /** One-shot sandbox escalation requests awaiting an answer. */
+  escalations: number
+  /** User steering/follow-up messages still queued in the SDK. */
+  queuedMessages: number
+  /** The user's own stored sandbox choice (not the plan overlay). */
+  configuredSandboxMode: SandboxMode
+  /** Frozen/current parent plan restriction, for a subagent child. */
+  inheritedPlanRestriction: boolean
+  /** What a confined shell can enforce right now, for the read-only overlay. */
+  shellEnforcement: 'full' | 'partial' | 'unavailable'
+}
+
+/**
+ * Raised when work cannot be admitted or a mode change cannot be applied.
+ * `blockers` is the machine-readable reason list (`PlanActionResult.blockers`).
+ */
+export class PlanAdmissionError extends Error {
+  readonly blockers: PlanBlocker[]
+
+  constructor(message: string, blockers: readonly PlanBlocker[], cause?: unknown) {
+    super(message)
+    this.name = 'PlanAdmissionError'
+    this.blockers = [...blockers]
+    if (cause !== undefined) this.cause = cause
+  }
+}
+
+export interface PlanControllerOptions {
+  manager: SessionManager
+  storage: PlanStorage
+  facts: () => PlanLiveFacts
+  /** Called whenever the published metadata changed (the manager emits it). */
+  changed: () => void
+  /**
+   * Manager-allocated session-state clock. A managed rebuild of the same
+   * session path must continue the sequence rather than restart it: the
+   * renderer drops a `seq` it has already seen. Defaults to a process-wide
+   * per-path clock, which keeps a four-field construction usable.
+   */
+  nextSeq?: () => number
+}
+
+/** Fallback clock for callers that do not own a manager-level one. */
+const defaultClocks = new Map<string, number>()
+
+function nextDefaultSeq(path: string): number {
+  const next = (defaultClocks.get(path) ?? 0) + 1
+  defaultClocks.set(path, next)
+  return next
+}
+
+/**
+ * Which `code` an admission refusal reports. A caller (IPC, tool gate) renders
+ * it, so the most actionable reason wins; `blocked` is the generic fallback.
+ */
+const ERROR_CODE_PRIORITY: readonly PlanBlocker[] = [
+  'storage',
+  'unsupported-version',
+  'transition',
+  'child-session',
+  'closing',
+  'initializing',
+  'recovery',
+  'busy',
+  'tasks',
+  'subagents',
+  'deliveries',
+  'questions',
+  'escalations',
+  'queued-messages',
+  'not-plan',
+  'no-submission',
+  'stale-submission',
+  'already-submitted',
+  'sandbox-unavailable',
+  'sandbox-partial'
+]
+
+export function planErrorCode(blockers: readonly PlanBlocker[]): string {
+  return ERROR_CODE_PRIORITY.find((code) => blockers.includes(code)) ?? 'blocked'
+}
+
+export class PlanController {
+  private branchState: PlanBranchState
+  private seq: number
+  private publishedKey: string
+  /** The session lock. Taken and released synchronously around `operation`. */
+  private lock = false
+  /** In-flight work registrations that must be over before a mode change. */
+  private readonly reservations = new Set<symbol>()
+  /** App-owned user-turn registrations, the only key that opens the seal. */
+  private userReservations = 0
+  private sealed = false
+  private sealedToolCallId: string | null = null
+  private readonly nextSeq: () => number
+
+  constructor(private readonly options: PlanControllerOptions) {
+    const path = this.sessionPath()
+    this.nextSeq = options.nextSeq ?? (() => nextDefaultSeq(path))
+    // Seed from the manager clock so a rebuilt controller can never republish a
+    // sequence the renderer has already accepted.
+    this.seq = this.nextSeq()
+    this.branchState = reconstructPlan(options.manager.getBranch())
+    // No `build()` here: `facts` reads the session object that is still being
+    // constructed, so the first refresh/restore publishes the initial state.
+    this.publishedKey = ''
+  }
+
+  private sessionPath(): string {
+    return this.options.manager.getSessionFile() ?? `memory:${this.options.manager.getSessionId()}`
+  }
+
+  /** The folded state of the session's COMPLETE selected branch. */
+  get branch(): PlanBranchState {
+    return this.branchState
+  }
+
+  /** True while a mode transition holds the session lock. */
+  get transitionBusy(): boolean {
+    return this.lock
+  }
+
+  /**
+   * True after a successful `submit_plan` committed in the current planning
+   * turn. New background work must not pass it; a user turn lifts it.
+   */
+  get submissionLocked(): boolean {
+    return this.sealed
+  }
+
+  /** The tool call that sealed the turn (exempt from its own submit blockers). */
+  get submissionToolCallId(): string | null {
+    return this.sealedToolCallId
+  }
+
+  /**
+   * Fail-closed restriction: plan mode, an unexplained protocol version, or a
+   * parent's live/frozen plan restriction (subagent children).
+   */
+  get restricted(): boolean {
+    return this.isRestricted(this.build())
+  }
+
+  /** Current metadata. Blockers are read live; `seq` is the last published one. */
+  get snapshot(): PlanStateDTO {
+    return this.build()
+  }
+
+  /**
+   * Re-fold the complete selected branch and republish. Called at managed
+   * creation, after a reload, and after every branch move (resend's
+   * navigateTree, rewind apply/undo/redo) — the mode is a fact about the
+   * branch, so a stale live value would silently widen on the next reopen.
+   */
+  restore(): void {
+    this.branchState = reconstructPlan(this.options.manager.getBranch())
+    this.publish(this.build())
+  }
+
+  /** Republish only when the metadata actually changed. */
+  refresh(): void {
+    const next = this.build()
+    const key = this.contentKey(next)
+    if (key === this.publishedKey) return
+    this.publish(next)
+  }
+
+  /**
+   * Run an operation under the session lock. The lock is taken synchronously
+   * (before the first await) and the switch facts are checked while holding it,
+   * so prompt/queue/branch/task/child admission cannot interleave with the
+   * mode change. The operation should stay synchronous: that is what makes
+   * check → save → apply atomic in a single event-loop turn.
+   */
+  async transition<T>(operation: () => Promise<T>): Promise<T> {
+    if (this.lock) throw new PlanAdmissionError('A session mode change is already in progress', ['transition'])
+    this.lock = true
+    try {
+      const blockers = this.factBlockers(this.options.facts(), false)
+      if (blockers.length) throw new PlanAdmissionError('The session is not ready for a mode change', blockers)
+      return await operation()
+    } finally {
+      this.lock = false
+      this.refresh()
+    }
+  }
+
+  /**
+   * Switch this session's working mode. Durable before it is applied: the mode
+   * entry is appended and fsynced first, and a failure rolls the in-memory leaf
+   * back and publishes nothing.
+   */
+  async setMode(mode: SessionMode): Promise<PlanStateDTO> {
+    if (mode !== 'normal' && mode !== 'plan') throw new Error(`Unknown session mode: ${String(mode)}`)
+    await this.transition(async () => {
+      if (this.branchState.unsupported) {
+        throw new PlanAdmissionError('This session was written by a newer plan protocol version', ['unsupported-version'])
+      }
+      const manager = this.options.manager
+      const previousLeaf = manager.getLeafId()
+      const data = mode === 'plan'
+        ? { version: 1, mode: 'plan', planId: randomUUID(), via: 'toggle' }
+        : { version: 1, mode: 'normal' }
+      try {
+        this.options.storage.append(PLAN_MODE_ENTRY, data)
+      } catch (error) {
+        // The SDK records the entry in memory BEFORE its write throws. Move the
+        // leaf back so the failed entry cannot leak into a later fold or a
+        // rewritten file, and publish nothing: a mode we could not persist is
+        // not a mode we hold.
+        this.rollback(previousLeaf)
+        throw new PlanAdmissionError('The mode change could not be persisted', ['storage'], error)
+      }
+      // A mode change ends the previous planning cycle: its submission seal and
+      // recorded tool call must not survive into the new mode.
+      this.sealed = false
+      this.sealedToolCallId = null
+      this.branchState = reconstructPlan(manager.getBranch())
+      this.publish(this.build())
+    })
+    return this.build()
+  }
+
+  /**
+   * Entry guard for every path that starts new work (prompt, queue surgery,
+   * resend, a side-effecting tool, a process/child launch, a branch move).
+   * Refuses only while the session lock is held or the session is closing;
+   * kind-specific rules live in `beginWork` and in the restriction itself.
+   */
+  checkWorkAdmission(): void {
+    const facts = this.options.facts()
+    if (facts.closing) throw new PlanAdmissionError('The session is closing', ['closing'])
+    if (this.lock) throw new PlanAdmissionError('A session mode change is in progress', ['transition'])
+  }
+
+  /**
+   * Register in-flight work BEFORE the first await of its preparation, so a
+   * mode change cannot slip into the window where the SDK still reports idle
+   * (file reads, session materialization, reload barriers). The returned
+   * release is idempotent and belongs in a `finally`.
+   *
+   * `background` may not pass a sealed planning turn (the model is done); a
+   * `user` turn may always be requested, and only the app-owned user
+   * registration can lift that seal.
+   */
+  beginWork(kind: 'user' | 'background' | 'branch'): () => void {
+    this.checkWorkAdmission()
+    if (kind === 'background' && this.sealed) {
+      throw new PlanAdmissionError('This planning turn is already sealed by a plan submission', ['already-submitted'])
+    }
+    const token = Symbol(kind)
+    this.reservations.add(token)
+    if (kind === 'user') this.userReservations += 1
+    this.refresh()
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      this.reservations.delete(token)
+      if (kind === 'user') this.userReservations = Math.max(0, this.userReservations - 1)
+      this.refresh()
+    }
+  }
+
+  /**
+   * A committed user message is the authoritative new planning turn: it
+   * records the turn identity (what makes a submission current) and lifts the
+   * submission seal. The entry must exist on this session's manager and be a
+   * user message — an arbitrary id is not evidence.
+   */
+  observeCommittedUser(entryId: string): void {
+    const id = entryId.trim()
+    if (!id) return
+    const entry = this.options.manager.getEntry(id)
+    if (!entry || entry.type !== 'message') return
+    if ((entry.message as { role?: string } | undefined)?.role !== 'user') return
+    this.branchState = { ...this.branchState, planningTurnEntryId: id }
+    this.clearSeal()
+    this.refresh()
+  }
+
+  /**
+   * A successful `submit_plan` result was committed to the selected branch:
+   * seal the planning turn. Called only for a parsed, persisted submission.
+   */
+  observeCommittedSubmission(toolCallId: string): void {
+    const id = toolCallId.trim()
+    if (!id) return
+    this.sealed = true
+    this.sealedToolCallId = id
+    this.refresh()
+  }
+
+  /**
+   * The user's own turn actually started (the SDK admitted a user message).
+   * Requires an app-owned user registration from the current prompt path: an
+   * outside caller cannot lift the seal, and a preprocessing failure, an
+   * extension-handled request or a background wake never reaches this at all.
+   */
+  releaseSubmissionForUser(): void {
+    if (this.userReservations <= 0) return
+    this.clearSeal()
+  }
+
+  private clearSeal(): void {
+    if (!this.sealed) return
+    this.sealed = false
+    this.sealedToolCallId = null
+    this.refresh()
+  }
+
+  /**
+   * Roll the selected branch back over an entry the SDK appended in memory but
+   * failed to write. The stray entry stays off-branch, so every later fold
+   * (which reads `getBranch()`) ignores it.
+   */
+  private rollback(previousLeaf: string | null): void {
+    const manager = this.options.manager
+    if (manager.getLeafId() === previousLeaf) return
+    try {
+      if (previousLeaf) manager.branch(previousLeaf)
+      else manager.resetLeaf()
+    } catch {
+      // Nothing to roll back: the append never reached the in-memory tree.
+    }
+  }
+
+  private isRestricted(dto: PlanStateDTO): boolean {
+    return dto.mode === 'plan'
+  }
+
+  private build(): PlanStateDTO {
+    const facts = this.options.facts()
+    const restricted =
+      this.branchState.mode === 'plan' || this.branchState.unsupported || facts.inheritedPlanRestriction
+    return {
+      seq: this.seq,
+      // Reported mode follows the EFFECTIVE restriction, so the UI can never
+      // show a writable sandbox under a restriction it failed to notice; the
+      // specific reason (unsupported version, child session) rides blockers.
+      mode: restricted ? 'plan' : 'normal',
+      planId: this.branchState.planId,
+      latest: this.branchState.latest?.ref ?? null,
+      approval: this.branchState.approval,
+      configuredSandboxMode: facts.configuredSandboxMode,
+      effectiveSandboxMode: restricted ? 'read-only' : facts.configuredSandboxMode,
+      shellEnforcement: facts.shellEnforcement,
+      blockers: {
+        switch: this.factBlockers(facts, true),
+        submit: this.submitBlockers(facts),
+        approve: this.approveBlockers(facts)
+      }
+    }
+  }
+
+  /**
+   * Everything that must be quiet before the session may change mode. Submit
+   * and approve deliberately do NOT reuse this list: a submit happens INSIDE a
+   * tool call, so its own SDK busy state (and the call that carries it) can
+   * never be its own blocker.
+   */
+  private factBlockers(facts: PlanLiveFacts, includeTransition: boolean): PlanBlocker[] {
+    const blockers: PlanBlocker[] = []
+    if (facts.initializing) blockers.push('initializing')
+    if (facts.closing) blockers.push('closing')
+    if (facts.child) blockers.push('child-session')
+    if (facts.recovery) blockers.push('recovery')
+    if (includeTransition && this.lock) blockers.push('transition')
+    if (!facts.sdkIdle || this.reservations.size > 0) blockers.push('busy')
+    if (facts.tasks > 0) blockers.push('tasks')
+    if (facts.subagents > 0) blockers.push('subagents')
+    if (facts.deliveries > 0) blockers.push('deliveries')
+    if (facts.questions > 0) blockers.push('questions')
+    if (facts.escalations > 0) blockers.push('escalations')
+    if (facts.queuedMessages > 0) blockers.push('queued-messages')
+    if (this.options.storage.failed) blockers.push('storage')
+    if (this.branchState.unsupported) blockers.push('unsupported-version')
+    return blockers
+  }
+
+  /**
+   * Whether the model may submit a plan: the root session is really in plan,
+   * its identity is established, and no investigation is still outstanding.
+   * SDK busy and the current tool call are exempt (the submit IS the call).
+   */
+  private submitBlockers(facts: PlanLiveFacts): PlanBlocker[] {
+    const blockers: PlanBlocker[] = []
+    if (facts.initializing) blockers.push('initializing')
+    if (facts.closing) blockers.push('closing')
+    if (facts.child) blockers.push('child-session')
+    if (facts.recovery) blockers.push('recovery')
+    if (facts.tasks > 0) blockers.push('tasks')
+    if (facts.subagents > 0) blockers.push('subagents')
+    if (facts.deliveries > 0) blockers.push('deliveries')
+    if (facts.questions > 0) blockers.push('questions')
+    if (facts.escalations > 0) blockers.push('escalations')
+    if (this.options.storage.failed) blockers.push('storage')
+    if (this.branchState.unsupported) blockers.push('unsupported-version')
+    else if (this.branchState.mode !== 'plan') blockers.push('not-plan')
+    if (this.sealed) blockers.push('already-submitted')
+    return blockers
+  }
+
+  /** Whether the user may start executing the latest submission. */
+  private approveBlockers(facts: PlanLiveFacts): PlanBlocker[] {
+    const blockers = this.factBlockers(facts, true)
+    if (this.branchState.mode !== 'plan') blockers.push('not-plan')
+    if (!this.branchState.unsupported) {
+      if (!this.branchState.latest) blockers.push('no-submission')
+      else if (!isCurrentPlan(this.branchState)) blockers.push('stale-submission')
+    }
+    return blockers
+  }
+
+  private contentKey(dto: PlanStateDTO): string {
+    return JSON.stringify({ ...dto, seq: 0 })
+  }
+
+  private publish(dto: PlanStateDTO): void {
+    this.publishedKey = this.contentKey(dto)
+    this.seq = this.nextSeq()
+    this.options.changed()
+  }
+}

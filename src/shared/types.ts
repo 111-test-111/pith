@@ -715,6 +715,10 @@ export interface SessionSnapshotDTO {
   subagentParentPath?: string
   /** Last event incorporated into this snapshot. */
   eventSequence?: number
+  /** Plan Mode metadata: working mode, the plan overlay's effective sandbox,
+   * the latest submission/approval identity and the live blockers. Sequence-
+   * free; older sessions without the field are `normal` by default. */
+  plan?: PlanStateDTO
 }
 
 // ---- subagents (delegated child sessions) ----

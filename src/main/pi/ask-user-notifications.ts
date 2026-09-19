@@ -57,6 +57,9 @@ export class AskUserNotifications {
     return this.canStart && this.pending.size > 0
   }
 
+  /** Pending-set changes: the app's Plan metadata reads them as live facts. */
+  onPendingChanged?: () => void
+
   /** True while an automatic wake is still owed — the run is not really over. */
   get continuesAtSettled(): boolean {
     return this.canStart && [...this.pending.values()].some((delivery) =>
@@ -73,6 +76,7 @@ export class AskUserNotifications {
       drained: false,
       wakeAttempts: 0
     })
+    this.onPendingChanged?.()
     this.flush()
   }
 
@@ -84,14 +88,20 @@ export class AskUserNotifications {
       // Delivery is acknowledged by the SDK consuming it, not by the send
       // resolving: a steered message can still be dropped with the queue.
       if (delivery && event.type === 'message_start') delivery.drained = true
-      if (id && event.type === 'message_end') this.pending.delete(id)
+      if (id && event.type === 'message_end') {
+        this.pending.delete(id)
+        this.onPendingChanged?.()
+      }
     }
     if (event.type === 'agent_settled') {
       for (const delivery of [...this.pending.values()]) {
         // A settled boundary with no receipt means the branch no longer holds
         // the ask (rewind/resend): the answer would land on nothing. A receipt
         // that only arrives later still delivers — that is the fast-answer race.
-        if (!this.receiptPresent(delivery.toolCallId)) this.pending.delete(delivery.toolCallId)
+        if (!this.receiptPresent(delivery.toolCallId)) {
+          this.pending.delete(delivery.toolCallId)
+          this.onPendingChanged?.()
+        }
       }
     }
     this.flush()
@@ -156,6 +166,7 @@ export class AskUserNotifications {
     this.failures = 0
     clearTimeout(this.retry)
     this.retry = undefined
+    this.onPendingChanged?.()
   }
 
   resume(): void {
@@ -163,6 +174,7 @@ export class AskUserNotifications {
     this.paused = false
     this.failures = 0
     for (const delivery of this.pending.values()) delivery.wakeAttempts = 0
+    this.onPendingChanged?.()
     this.flush()
   }
 
@@ -179,6 +191,7 @@ export class AskUserNotifications {
     this.pending.clear()
     clearTimeout(this.retry)
     this.retry = undefined
+    this.onPendingChanged?.()
   }
 
   /** The asking tool's result is in the session's live branch. */

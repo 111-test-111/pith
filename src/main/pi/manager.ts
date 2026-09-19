@@ -44,6 +44,9 @@ import { RewindFailure, failure as rewindFailure } from '../rewind/types'
 import { ChangeScopes } from './change-scopes'
 import { TodoState, createTodoTool } from './todo'
 import { TODO_TOOL_NAME } from './todo-protocol'
+import { PlanController, PlanAdmissionError, planErrorCode, type PlanLiveFacts } from './plan-mode'
+import { PlanStorage } from './plan-storage'
+import { parsePlanSubmission } from './plan-protocol'
 import {
   MAX_CONCURRENT_SUBAGENTS_DEFAULT,
   MAX_CONCURRENT_SUBAGENTS_LIMIT,
@@ -112,6 +115,9 @@ import type {
   ModelRefDTO,
   ModelsConfigDTO,
   PiEvent,
+  PlanActionResult,
+  PlanModeRequest,
+  PlanStateDTO,
   ProviderDTO,
   ProviderModelDTO,
   PromptPayload,
@@ -191,6 +197,11 @@ function sanitizeSideChatHistory(history: SideChatHistoryEntry[] | undefined): S
     }))
 }
 
+/** Plan facts that move with the SDK's own lifecycle events. */
+const PLAN_FACT_EVENT_TYPES: ReadonlySet<string> = new Set([
+  'agent_start', 'agent_settled', 'turn_start', 'turn_end'
+])
+
 /** Drop functions/symbols and turn Dates into ISO strings before IPC. */
 function serialize(value: unknown): any {
   return JSON.parse(
@@ -264,6 +275,8 @@ interface ManagedSession {
   resourceLoader: ResourceLoader
   /** Subagent roster/runs for normal sessions; null on children. */
   subagents: SubagentParentState | null
+  /** Session mode, plan overlay, admission and live Plan metadata. */
+  plan: PlanController
   /** Present on subagent child sessions: linkage + frozen tool ceiling. The
    * child's initialization activates only the ceiling, never the full set. */
   subagentChild?: { parentPath: string; toolCeiling: readonly string[] }
@@ -338,7 +351,11 @@ export class PiManager {
 
   private get commandTasks(): BashTaskManager {
     return this.commandTasksInstance ??= new BashTaskManager(join(app.getPath('userData'), 'bash-tasks'),
-      (task) => this.emit('pi:bash-task', task),
+      (task) => {
+        this.emit('pi:bash-task', task)
+        // A live process count is a live Plan fact.
+        this.sessions.get(task.sessionPath)?.plan.refresh()
+      },
       (task) => {
         const managed = this.sessions.get(task.sessionPath)
         managed?.notifications.complete(task)
@@ -390,6 +407,11 @@ export class PiManager {
     const managed = this.sessions.get(sessionPath)
     if (!managed) throw new Error('No such session')
     if (managed.subagentChild) throw new Error('A subagent session follows its parent session')
+    // A mode change may not race this branch write.
+    managed.plan.checkWorkAdmission()
+    if (managed.plan.restricted) {
+      throw new Error('Plan mode fixes this session to read-only; leave Plan mode to change its sandbox mode')
+    }
     if (managed.sandboxMode !== mode) {
       managed.session.sessionManager.appendCustomEntry(SANDBOX_MODE_ENTRY_TYPE, { mode })
       managed.sandboxMode = mode
@@ -415,6 +437,8 @@ export class PiManager {
         requests: listPendingEscalations(managed.path)
       })
     )
+    // A pending escalation is a live Plan fact.
+    managed.plan.refresh()
   }
 
   /**
@@ -460,6 +484,8 @@ export class PiManager {
         requests: listPendingAskUser(managed.path)
       })
     )
+    // An unanswered question is a live Plan fact.
+    managed.plan.refresh()
   }
 
   /**
@@ -823,6 +849,8 @@ export class PiManager {
   private settingsManagerInstance: SettingsManager | null = null
   /** Navigation can request the same file while its extensions are loading. */
   private sessionBuilds = new Map<string, Promise<ManagedSession>>()
+  /** Per-session-file Plan metadata clock; survives a managed rebuild. */
+  private planSequences = new Map<string, number>()
   /** Every currently active or background-running SDK session, keyed by file. */
   private sessions = new Map<string, ManagedSession>()
   private activeSession: ManagedSession | null = null
@@ -1195,6 +1223,8 @@ export class PiManager {
       // The renderer sees the rich mirror (payload counts), never raw text.
       ;(routed as any).steering = managed.queueMirror.steering.map(dtoOf)
       ;(routed as any).followUp = managed.queueMirror.followUp.map(dtoOf)
+      // A queued user message is a live Plan fact.
+      managed.plan.refresh()
     } else if (event.type === 'agent_end') {
       managed.streaming = null
     } else if (event.type === 'agent_settled') {
@@ -1467,6 +1497,17 @@ export class PiManager {
     let askUserNotifications: AskUserNotifications | undefined
     const parentSessionRef: { session: import('@earendil-works/pi-coding-agent').AgentSession | null } = { session: null }
     const subagentState = isChild ? null : new SubagentParentState(sessionManager.getSessionId())
+    // Plan state exists before any tool is built: the tool gate reads
+    // `restricted` live on every call, so the controller must already be
+    // readable when createAgentSessionFromServices freezes customTools.
+    const planPath = sessionManager.getSessionFile() ?? `memory:${sessionManager.getSessionId()}`
+    const plan = new PlanController({
+      manager: sessionManager,
+      storage: new PlanStorage(sessionManager),
+      facts: () => this.planFacts(managed),
+      changed: () => this.publishPlanState(managed),
+      nextSeq: () => this.nextPlanSeq(planPath)
+    })
     // The mode the tools read per call. A subagent child follows its parent
     // session's live choice — a delegation must never run wider than the chat
     // that dispatched it — and its denials are final: the child has no
@@ -1595,6 +1636,7 @@ export class PiManager {
       askRecords,
       resourceLoader: fullServices.resourceLoader,
       subagents: subagentState,
+      plan,
       ...(isChild ? { subagentChild: { parentPath: role!.parentPath, toolCeiling: role!.resource.tools } } : {}),
       initializing: true,
       lifecyclePromise: null,
@@ -1631,6 +1673,10 @@ export class PiManager {
       if (!notifications?.canStart || !session.isIdle) return
       this.rebuildQueues(managed)
     })
+    // Pending deliveries are live Plan facts: a completion that is still owed
+    // to the model blocks a mode change even though the SDK reports idle.
+    notifications.onPendingChanged = () => managed.plan.refresh()
+    askUserNotifications.onPendingChanged = () => managed.plan.refresh()
     notifications.onWake = () => managed.changeScopes.continue()
     // Subagent children own no rewind recorder: they must never record
     // checkpoints (rewind points exist only before user turns), and their
@@ -1648,6 +1694,7 @@ export class PiManager {
         void run
       })
       subagentState.notifications = subagentNotifications
+      subagentNotifications.onPendingChanged = () => managed.plan.refresh()
       subagentNotifications.onSettledWithQueued = () => queueMicrotask(() => {
         if (!subagentNotifications.canStart || !session.isIdle) return
         this.rebuildQueues(managed)
@@ -1674,6 +1721,21 @@ export class PiManager {
       notifications!.observe(event)
       subagentState?.notifications?.observe(event)
       askUserNotifications!.observe(event)
+      // Plan metadata follows this session's live facts — never only model text.
+      if (PLAN_FACT_EVENT_TYPES.has(event.type)) managed.plan.refresh()
+      const message = 'message' in event ? event.message as ChatMessage : undefined
+      // A user message that actually started opens a new planning turn: it is
+      // the only thing that lifts a submission seal (an app-owned user work
+      // registration must be outstanding; a background wake never gets here).
+      if (event.type === 'message_start' && message?.role === 'user') managed.plan.releaseSubmissionForUser()
+      if (event.type === 'message_end') {
+        if (message?.role === 'user' && userEntryId) managed.plan.observeCommittedUser(userEntryId)
+        // Only a parsed, persisted submit_plan result seals the turn; a failed
+        // or malformed result stays an ordinary row.
+        if (message?.role === 'toolResult' && !message.isError && message.toolName === 'submit_plan' && parsePlanSubmission(message)) {
+          managed.plan.observeCommittedSubmission(message.toolCallId)
+        }
+      }
     }
     managed.unsubscribe = session.subscribe(event => {
       // User message persistence immediately follows SDK session listeners.
@@ -1682,6 +1744,9 @@ export class PiManager {
       if (event.type === 'message_end' && event.message.role === 'user') queueMicrotask(() => observeEvent(event))
       else observeEvent(event)
     })
+    // The mode is a fact about the selected branch: fold it (and publish) as
+    // soon as the session owns a listener, before extension startup finishes.
+    plan.restore()
     // Navigation only needs the restored transcript. A session_start hook can
     // wait on a file scan or network connection for many seconds; do not put
     // that wait on init/new/open. Subscribe first so startup events are kept.
@@ -1910,6 +1975,8 @@ export class PiManager {
           availableThinkingLevels: managed.session.getAvailableThinkingLevels(),
           contextUsage: this.contextUsageOf(managed)
         })
+        // Initialization ending is a Plan fact (the `initializing` blocker).
+        managed.plan.refresh()
       }
       const elapsed = Math.round(performance.now() - startedAt)
       if (elapsed >= 1000) console.warn(`[Pith] Session extension startup took ${elapsed}ms (${managed.path})`)
@@ -1929,8 +1996,106 @@ export class PiManager {
    * live falls back to the child's own branch fold.
    */
   private effectiveSandboxMode(managed: ManagedSession): SandboxMode {
+    // Plan only overlays the EFFECTIVE value. The stored/default choice is
+    // untouched, so leaving plan restores exactly what the user picked.
+    if (managed.plan.restricted) return 'read-only'
+    return this.resolvedSandboxMode(managed)
+  }
+
+  /** This session's own stored sandbox choice (children follow their parent). */
+  private resolvedSandboxMode(managed: ManagedSession): SandboxMode {
     const parentPath = managed.subagentChild?.parentPath
     return (parentPath ? this.sessions.get(parentPath)?.sandboxMode : undefined) ?? managed.sandboxMode
+  }
+
+  /**
+   * Live facts for one session's Plan controller. Every value is read at call
+   * time (never cached) so a pending question, notification or task changes the
+   * answer the moment it appears.
+   */
+  private planFacts(managed: ManagedSession): PlanLiveFacts {
+    const session = managed.session
+    const tasks = this.commandTasksInstance
+      ? this.commandTasksInstance.list(managed.path).filter((task) => task.status === 'running' || task.status === 'stopping').length
+      : 0
+    const configuredSandboxMode = this.resolvedSandboxMode(managed)
+    return {
+      initializing: managed.initializing || managed.lifecyclePromise !== null,
+      closing: this.closing || managed.disposing,
+      child: Boolean(managed.subagentChild),
+      recovery: managed.recoveryOnly || this.checkoutCoordinator.needsRecovery(managed.cwd),
+      sdkIdle: session.isIdle,
+      tasks,
+      subagents: managed.subagents?.hasLiveRuns ? 1 : 0,
+      deliveries:
+        (managed.notifications.hasPendingCompletions ? 1 : 0) +
+        (managed.askUser.hasPendingDeliveries ? 1 : 0) +
+        (managed.subagents?.notifications?.hasPendingDeliveries ? 1 : 0),
+      questions: listPendingAskUser(managed.path).length,
+      escalations: listPendingEscalations(managed.path).length,
+      queuedMessages: session.getSteeringMessages().length + session.getFollowUpMessages().length,
+      configuredSandboxMode,
+      // A child's plan restriction comes from its parent's LIVE mode (the
+      // frozen per-run copy is a later-task concern); a parent that is not
+      // live falls back to the child's own branch fold.
+      inheritedPlanRestriction: managed.subagentChild
+        ? (this.sessions.get(managed.subagentChild.parentPath)?.plan.restricted ?? false)
+        : false,
+      // `read-only` is what plan actually runs; `enforcement` is null when no
+      // runner is usable, which is a stated capability limit, not a switch veto.
+      shellEnforcement: sandboxStatus('read-only').enforcement ?? 'unavailable'
+    }
+  }
+
+  /**
+   * Per-path Plan metadata clock. A managed rebuild of the same session file
+   * continues this sequence; resetting it would let a fresh controller publish
+   * a `seq` the renderer already accepted and silently drop the update.
+   */
+  private nextPlanSeq(path: string): number {
+    const next = (this.planSequences.get(path) ?? 0) + 1
+    this.planSequences.set(path, next)
+    return next
+  }
+
+  /** Sequence-free Plan metadata ping (same rule as context_usage/subagents). */
+  private publishPlanState(managed: ManagedSession): void {
+    if (this.closing || managed.disposing) return
+    this.emit('pi:event', serialize({
+      type: 'plan_state_update',
+      sessionId: managed.session.sessionId,
+      sessionPath: managed.path,
+      plan: managed.plan.snapshot
+    }))
+  }
+
+  /** Plan metadata of one managed session, by explicit path. */
+  getPlanState(sessionPath: string): PlanStateDTO {
+    const managed = this.sessions.get(sessionPath)
+    if (!managed) throw new Error('No such session')
+    return managed.plan.snapshot
+  }
+
+  /**
+   * Switch one managed session's working mode. The request names its session
+   * explicitly; the active session is never consulted, so a concurrent switch
+   * elsewhere cannot retarget it.
+   */
+  async setSessionMode(request: PlanModeRequest): Promise<PlanActionResult<PlanStateDTO>> {
+    const mode = request?.mode
+    if (mode !== 'normal' && mode !== 'plan') return { ok: false, code: 'invalid-mode', blockers: [] }
+    const managed = this.sessions.get(request.sessionPath)
+    if (!managed) return { ok: false, code: 'no-session', blockers: [] }
+    if (managed.subagentChild) return { ok: false, code: 'child-session', blockers: ['child-session'] }
+    try {
+      const value = await managed.plan.setMode(mode)
+      return { ok: true, value }
+    } catch (error) {
+      if (error instanceof PlanAdmissionError) {
+        return { ok: false, code: planErrorCode(error.blockers), blockers: error.blockers }
+      }
+      throw error
+    }
   }
 
   /** Serialize one session's current state for the renderer. */
@@ -1978,6 +2143,7 @@ export class PiManager {
       subagents: managed.subagents?.snapshot() ?? [],
       subagentChild: Boolean(managed.subagentChild),
       ...(managed.subagentChild ? { subagentParentPath: managed.subagentChild.parentPath } : {}),
+      plan: managed.plan.snapshot,
       eventSequence: managed.eventSequence
     }
   }
@@ -2361,13 +2527,26 @@ export class PiManager {
       this.notifyError('This subagent session is read-only. Open its parent session to continue work.')
       return
     }
-    managed?.notifications.resume()
-    managed?.askUser?.resume()
-    managed?.subagents?.notifications?.resume()
     if (!managed || !session) {
       this.notifyError('Pi session is not initialized. Pick a working directory first.')
       return
     }
+    // A mode change owns the session while it is in flight; a prompt admitted
+    // then would race the branch write it is about to make.
+    try {
+      managed.plan.checkWorkAdmission()
+    } catch {
+      this.notifyError('A session mode change is in progress. Try again in a moment.')
+      return
+    }
+    managed.notifications.resume()
+    managed.askUser?.resume()
+    managed.subagents?.notifications?.resume()
+    // Register the preparation window BEFORE the first await (file reads,
+    // materialization, the lifecycle barrier): the SDK still reports idle here,
+    // and a mode switch must not slip in. A user turn may be requested while a
+    // planning turn is sealed; only its own message_start lifts that seal.
+    const releasePlanWork = managed.plan.beginWork('user')
     managed.notifications.holdWake()
     managed.askUser.holdWake()
     managed.subagents?.notifications?.holdWake()
@@ -2411,6 +2590,7 @@ export class PiManager {
       } catch (error) {
         this.emitSessionError(managed, error)
       } finally {
+        releasePlanWork()
         managed.notifications.releaseWake()
         managed.askUser.releaseWake()
         managed.subagents?.notifications?.releaseWake()
@@ -2493,6 +2673,13 @@ export class PiManager {
     const managed = this.activeSession
     if (!managed) return
     if (managed.subagentChild) return // read-only view: nothing to rebuild
+    // A mode change owns the session: rebuilding the queues inside it would
+    // race the branch write. The action is a no-op (nothing is lost).
+    try {
+      managed.plan.checkWorkAdmission()
+    } catch {
+      return
+    }
     this.rebuildQueues(managed, payload)
   }
 
@@ -2568,76 +2755,84 @@ export class PiManager {
     const session = managed?.session
     if (!managed || !session) throw new Error('No active session')
     if (managed.subagentChild) throw new Error('A subagent session is read-only')
-    await managed.lifecyclePromise
-    const release = await this.checkoutCoordinator.enter(managed.cwd, 'run', managed.path)
+    // Branch move + fresh user turn: reserve before the first await, and keep
+    // the user registration so the new turn can lift a submission seal.
+    const releasePlanWork = managed.plan.beginWork('user')
     try {
-      if (this.closing || managed.disposing) throw new Error('Session is shutting down')
-      if (session.isStreaming) throw new Error('Wait for the current response to finish')
-      // Rewinding a branch invalidates every old task notification — and every
-      // subagent run of the discarded branch: stop it NOW (awaited — the retry
-      // re-prompts immediately) and suppressed, so a late completion cannot
-      // wake the branch the user rewound to.
-      managed.notifications?.pause()
-      managed.subagents?.notifications?.pause()
-      await this.subagentRuntime.stopAll(managed.subagents)
-      await this.commandTasksInstance?.stopSession(managed.path)
-      session.clearQueue?.()
+      await managed.lifecyclePromise
+      const release = await this.checkoutCoordinator.enter(managed.cwd, 'run', managed.path)
+      try {
+        if (this.closing || managed.disposing) throw new Error('Session is shutting down')
+        if (session.isStreaming) throw new Error('Wait for the current response to finish')
+        // Rewinding a branch invalidates every old task notification — and every
+        // subagent run of the discarded branch: stop it NOW (awaited — the retry
+        // re-prompts immediately) and suppressed, so a late completion cannot
+        // wake the branch the user rewound to.
+        managed.notifications?.pause()
+        managed.subagents?.notifications?.pause()
+        await this.subagentRuntime.stopAll(managed.subagents)
+        await this.commandTasksInstance?.stopSession(managed.path)
+        session.clearQueue?.()
 
-      let text = payload.text
-      let images = payload.images
-      const entry = this.findMessageEntry(managed, 'user', payload.timestamp)
-      if (entry) {
-        // The plain retry path re-sends exactly what is stored (text, images and
-        // the already-inlined file blocks); the edit path sends the user's new
-        // text/images/files instead, so it must not be overwritten here.
-        if (!payload.edited) {
-          const content = Array.isArray(entry.message.content) ? entry.message.content : []
-          images = content.filter((part): part is ImageContent => part.type === 'image')
+        let text = payload.text
+        let images = payload.images
+        const entry = this.findMessageEntry(managed, 'user', payload.timestamp)
+        if (entry) {
+          // The plain retry path re-sends exactly what is stored (text, images and
+          // the already-inlined file blocks); the edit path sends the user's new
+          // text/images/files instead, so it must not be overwritten here.
+          if (!payload.edited) {
+            const content = Array.isArray(entry.message.content) ? entry.message.content : []
+            images = content.filter((part): part is ImageContent => part.type === 'image')
+          }
+          const sessionManager = session.sessionManager
+          if (sessionManager.getLeafId() === entry.id) {
+            // The user message is already the leaf — its run died before any
+            // assistant output — so navigateTree(targetId) would no-op. Rewind by
+            // hand the way it does internally: move the leaf to the parent (or
+            // reset to an empty root) and rebuild the agent's message list.
+            if (entry.parentId) sessionManager.branch(entry.parentId)
+            else sessionManager.resetLeaf()
+            session.agent.state.messages = sessionManager.buildSessionContext().messages
+          } else {
+            const result = await session.navigateTree(entry.id)
+            if (result.cancelled) throw new Error('Resend cancelled')
+            // navigateTree hands back the stored message text for the editor; an
+            // edit must keep the user's replacement text instead.
+            if (!payload.edited && result.editorText) text = result.editorText
+          }
+          // navigateTree (and the manual rewind) emit no AgentSession event; bump
+          // the sequence so the renderer cannot mistake the returned snapshot for
+          // one it already rendered.
+          managed.eventSequence += 1
+          managed.todos.restore()
+          managed.askRecords.restore()
+          // The branch moved, so the mode must be re-folded like the todos: the
+          // recorded mode is a fact about the SELECTED branch, and a stale live
+          // value here would silently widen on the next reopen.
+          managed.sandboxMode = sandboxModeFromBranch(sessionManager.getBranch(), this.defaultSandboxMode)
+          managed.plan.restore()
         }
-        const sessionManager = session.sessionManager
-        if (sessionManager.getLeafId() === entry.id) {
-          // The user message is already the leaf — its run died before any
-          // assistant output — so navigateTree(targetId) would no-op. Rewind by
-          // hand the way it does internally: move the leaf to the parent (or
-          // reset to an empty root) and rebuild the agent's message list.
-          if (entry.parentId) sessionManager.branch(entry.parentId)
-          else sessionManager.resetLeaf()
-          session.agent.state.messages = sessionManager.buildSessionContext().messages
-        } else {
-          const result = await session.navigateTree(entry.id)
-          if (result.cancelled) throw new Error('Resend cancelled')
-          // navigateTree hands back the stored message text for the editor; an
-          // edit must keep the user's replacement text instead.
-          if (!payload.edited && result.editorText) text = result.editorText
+        // Edited file references are re-inlined from disk (fresh content) — the
+        // retry path carries its blocks inside the stored text already.
+        if (payload.edited && payload.files?.length) {
+          const fileBlocks = await this.readFileBlocks(payload.files)
+          if (fileBlocks) text = text ? `${text}\n\n${fileBlocks}` : fileBlocks
         }
-        // navigateTree (and the manual rewind) emit no AgentSession event; bump
-        // the sequence so the renderer cannot mistake the returned snapshot for
-        // one it already rendered.
-        managed.eventSequence += 1
-        managed.todos.restore()
-        managed.askRecords.restore()
-        // The branch moved, so the mode must be re-folded like the todos: the
-        // recorded mode is a fact about the SELECTED branch, and a stale live
-        // value here would silently widen on the next reopen.
-        managed.sandboxMode = sandboxModeFromBranch(sessionManager.getBranch(), this.defaultSandboxMode)
-      }
-      // Edited file references are re-inlined from disk (fresh content) — the
-      // retry path carries its blocks inside the stored text already.
-      if (payload.edited && payload.files?.length) {
-        const fileBlocks = await this.readFileBlocks(payload.files)
-        if (fileBlocks) text = text ? `${text}\n\n${fileBlocks}` : fileBlocks
-      }
-      if (!text && !images.length) throw new Error('Nothing to resend')
+        if (!text && !images.length) throw new Error('Nothing to resend')
 
-      managed.notifications?.resume()
-      managed.subagents?.notifications?.resume()
-      managed.notifications?.holdWake()
-      managed.subagents?.notifications?.holdWake()
-      void session.prompt(text, { images }).catch((error) =>
-        this.emitSessionError(managed, error)
-      ).finally(() => { managed.notifications?.releaseWake(); managed.subagents?.notifications?.releaseWake() })
-      return this.snapshot()
-    } finally { release() }
+        managed.notifications?.resume()
+        managed.subagents?.notifications?.resume()
+        managed.notifications?.holdWake()
+        managed.subagents?.notifications?.holdWake()
+        void session.prompt(text, { images }).catch((error) =>
+          this.emitSessionError(managed, error)
+        ).finally(() => { managed.notifications?.releaseWake(); managed.subagents?.notifications?.releaseWake() })
+        return this.snapshot()
+      } finally { release() }
+    } finally {
+      releasePlanWork()
+    }
   }
 
   /**
@@ -3086,6 +3281,10 @@ export class PiManager {
         // (initializeSession receives the filtered one too), so disabled
         // extensions' tools are not re-activated here either.
         this.applyActiveTools(managed, this.filterExtensions(managed.resourceLoader))
+        // A reload re-derives the session from disk; re-fold the Plan branch so
+        // a mode/plan entry written outside this process is adopted (and an
+        // unknown version keeps the session restricted).
+        managed.plan.restore()
       }
       catch { /* Keep the existing resource-reload error policy. */ }
       finally { this.catalogCache = null }
@@ -3402,8 +3601,10 @@ export class PiManager {
     try { await file.sync() } finally { await file.close() }
     managed.todos.restore(); managed.askRecords.restore(); managed.changeScopes.restore(); managed.eventSequence += 1
     // Same rule as the todos above: the selected branch moved, so re-fold the
-    // sandbox mode instead of keeping the abandoned branch's value live.
+    // sandbox mode and the Plan state instead of keeping the abandoned
+    // branch's values live.
     managed.sandboxMode = sandboxModeFromBranch(manager.getBranch(), this.defaultSandboxMode)
+    managed.plan.restore()
   }
 
   rewindRestore(request: RewindRequest): Promise<RewindResult<RewindCommitDTO>> {

@@ -197,6 +197,16 @@ export class SubagentParentState {
     return this.runs.size
   }
 
+  /**
+   * Zero/non-zero admission fact for Plan mode: true while any run is
+   * starting, launching or live, even before it reaches `runs`. The three
+   * sources overlap on purpose (a launching run is also counted as starting);
+   * callers only ask whether the parent is quiet.
+   */
+  get hasLiveRuns(): boolean {
+    return this.startingCount > 0 || this.launching.size > 0 || this.runs.size > 0
+  }
+
   /** Roster payload for the renderer: newest first, patch-free (roster rows
    * re-serialize on every progress tick; see slimRunForRoster). */
   snapshot(): SubagentRunDTO[] {

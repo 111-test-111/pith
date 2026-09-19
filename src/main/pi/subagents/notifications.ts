@@ -45,6 +45,9 @@ export class SubagentNotifications {
 
   get canStart(): boolean { return !this.paused && !this.disposed }
 
+  /** Undelivered completion notices still owed to the parent session. */
+  get hasPendingDeliveries(): boolean { return this.pending.size > 0 }
+
   get continuesAtSettled(): boolean {
     return this.canStart && [...this.pending.values()].some((delivery) =>
       !delivery.drained && delivery.wakeAttempts < 3 && this.releasedCalls.has(delivery.run.parentToolCallId))
@@ -52,17 +55,21 @@ export class SubagentNotifications {
 
   onWake?: () => void
   onSettledWithQueued?: () => void
+  /** Pending-set changes: the app's Plan metadata reads them as live facts. */
+  onPendingChanged?: () => void
 
   /** Queue a finished background run's completion for delivery. */
   complete(run: SubagentRunDTO): void {
     if (!this.canStart || this.pending.has(run.runId)) return
     this.pending.set(run.runId, { run, queued: false, drained: false, barrier: false, wakeAttempts: 0 })
+    this.onPendingChanged?.()
     this.flush()
   }
 
   /** Drop a run's delivery (session is being rewound/stopped/disposed). */
   drop(runId: string): void {
     this.pending.delete(runId)
+    this.onPendingChanged?.()
   }
 
   observe(event: AgentSessionEvent): void {
@@ -74,7 +81,10 @@ export class SubagentNotifications {
       const runId = (message.details as { runId?: string } | undefined)?.runId
       const delivery = runId ? this.pending.get(runId) : undefined
       if (delivery && event.type === 'message_start') delivery.drained = true
-      if (runId && event.type === 'message_end') this.pending.delete(runId)
+      if (runId && event.type === 'message_end') {
+        this.pending.delete(runId)
+        this.onPendingChanged?.()
+      }
     }
     if (event.type === 'message_end' && message?.role === 'toolResult' && message.toolName === SUBAGENT_TOOL_NAME) {
       this.releasedCalls.add(message.toolCallId)
@@ -135,12 +145,14 @@ export class SubagentNotifications {
     this.pending.clear()
     clearTimeout(this.retry)
     this.retry = undefined
+    this.onPendingChanged?.()
   }
 
   resume(): void {
     this.paused = false
     this.failures = 0
     for (const delivery of this.pending.values()) delivery.wakeAttempts = 0
+    this.onPendingChanged?.()
   }
 
   holdWake(): void { this.idleWakeHolds++ }
