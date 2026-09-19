@@ -236,8 +236,9 @@ export function PromptInput({
                 size="icon"
                 disabled={disabled || loading}
                 aria-label="Add to prompt"
-                // local patch (pi-app): hard-edged icon button (square-style).
-                className="size-8 rounded-control"
+                // local patch (pi-app): capsule-by-design, so the shape token
+                // follows the UI style (see --app-radius-capsule in styles.css).
+                className="size-8 rounded-capsule"
               >
                 <motion.span
                   aria-hidden="true"
@@ -342,7 +343,8 @@ export function PromptInput({
               send doubles as queue-while-busy, like pi's TUI. */}
           {/* local patch (pi-app): the send control is a quiet glyph button, not
               a filled primary square — the shape only appears as a faded
-              primary wash on hover, so the composer's corner stays calm. */}
+              primary wash on hover, so the composer's corner stays calm. It is
+              capsule-by-design, so its shape token follows the UI style. */}
           <Button
             type={loading && !canQueue ? "button" : "submit"}
             variant="ghost"
@@ -350,7 +352,7 @@ export function PromptInput({
             disabled={loading && !canQueue ? !onStop : !canQueue && !canSubmit}
             aria-label={loading ? (canQueue ? "Queue message" : "Stop generating") : "Send prompt"}
             onClick={loading && !canQueue ? onStop : undefined}
-            className="size-8 rounded-control text-primary hover:bg-primary/10 hover:text-primary disabled:opacity-40"
+            className="size-8 rounded-capsule text-primary hover:bg-primary/10 hover:text-primary disabled:opacity-40"
           >
             <AnimatePresence initial={false} mode="popLayout">
               <motion.span

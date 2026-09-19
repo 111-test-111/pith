@@ -341,8 +341,9 @@ export function ApprovalCard({
                 type="button"
                 aria-label="Dismiss"
                 onClick={onDismiss}
-                // local patch (pi-app): hard-edged dismiss (square-style).
-                className="grid size-5 shrink-0 place-items-center rounded-control text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                // local patch (pi-app): capsule-by-design, so the shape token
+                // follows the UI style (see --app-radius-capsule in styles.css).
+                className="grid size-5 shrink-0 place-items-center rounded-capsule text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <X className="size-4" />
               </button>

@@ -221,10 +221,11 @@ app.on('window-all-closed',()=>app.quit());`)
       }
       assert.equal(await style('#status-dot', 'corner-shape'), 'superellipse(1)', '#status-dot: true circles stay circular')
       assert.equal(await evaluate('getComputedStyle(document.getElementById("pseudo"),"::before").cornerShape'), 'superellipse(1)', 'pseudo-element full-round utility')
-      // Square-style branch: the composer send control is hard-edged like
-      // every other control (the whole radius scale is 0); it keeps the
-      // squircle corner-shape and must not regress into a circle.
-      assert.equal(await evaluate(`(()=>{const e=document.querySelector('[aria-label="Send prompt"]'),s=getComputedStyle(e),r=e.getBoundingClientRect();return s.cornerShape==='superellipse(2)'&&parseFloat(s.borderTopLeftRadius)===0&&r.height>0})()`), true, 'composer send control is hard-edged')
+      // The composer's send control is capsule-by-design: the shape token
+      // collapses to 0px in the square style, so it stays hard-edged while
+      // carrying the round corner shape that the squircle style needs.
+      assert.equal(await evaluate(`(()=>{const e=document.querySelector('[aria-label="Send prompt"]'),s=getComputedStyle(e),r=e.getBoundingClientRect();return s.cornerShape==='superellipse(1)'&&parseFloat(s.borderTopLeftRadius)===0&&r.height>0})()`), true, 'composer send control collapses to a hard edge')
+      assert.equal(await evaluate('getComputedStyle(document.documentElement).getPropertyValue("--app-radius-capsule").trim()'), '0px', '--app-radius-capsule collapses in the square style')
       // Inline code carries its corner on the markdown element itself, so an
       // ancestor's descendant utility wins on specificity: the vendored bubble
       // and streaming chrome kept Tailwind's bare `rounded` (a literal 0.25rem,

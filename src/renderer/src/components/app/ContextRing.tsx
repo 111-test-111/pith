@@ -137,7 +137,7 @@ export function ContextRing({ usage, onOpen }: { usage: ContextUsageDTO | null; 
         size="icon"
         aria-label={t('context.label')}
         onClick={onOpen}
-        className="rounded-control"
+        className="rounded-capsule"
       >
         <svg width={14} height={14} viewBox="0 0 16 16" style={{ transform: 'rotate(-90deg)' }} aria-hidden="true">
           <circle cx={8} cy={8} r={radius} fill="none" strokeWidth={2.4} className="stroke-muted-foreground/30" />

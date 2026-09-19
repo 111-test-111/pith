@@ -513,7 +513,7 @@ export function Composer({
                     type="button"
                     aria-label={t('workspace.removeAttachment', { name: attachment.name })}
                     onClick={() => removeImage(attachment.id)}
-                    className="absolute -right-1.5 -top-1.5 grid size-5 place-items-center rounded-control bg-foreground text-background opacity-0 transition-opacity group-hover:opacity-100"
+                    className="absolute -right-1.5 -top-1.5 grid size-5 place-items-center rounded-capsule bg-foreground text-background opacity-0 transition-opacity group-hover:opacity-100"
                   >
                     <X className="size-3" />
                   </button>

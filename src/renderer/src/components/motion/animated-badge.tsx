@@ -149,9 +149,10 @@ export function AnimatedBadge({
       layout
       transition={{ type: "spring", stiffness: 420, damping: 30, mass: 0.7 }}
       className={cn(
-        // local patch (pi-app): hard-edged badge (square-style branch); the
+        // local patch (pi-app): capsule-by-design badge, so the shape token
+        // follows the UI style (see --app-radius-capsule in styles.css); the
         // pulse overlay inherits the same box instead of drawing a capsule.
-        "relative inline-flex shrink-0 items-center overflow-hidden whitespace-nowrap rounded-item border font-medium tabular-nums",
+        "relative inline-flex shrink-0 items-center overflow-hidden whitespace-nowrap rounded-capsule border font-medium tabular-nums",
         "transition-colors duration-300",
         STATUS_CLASS[status],
         SIZE_CLASS[size],

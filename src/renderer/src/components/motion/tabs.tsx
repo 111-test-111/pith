@@ -86,10 +86,10 @@ export function Tabs({
   );
 }
 
-// local patch (pi-app): pill tabs are hard-edged on the square-style
-// branch; the token resolves to 0 like every other step of the scale.
+// local patch (pi-app): pill tabs are capsule-by-design, so the shape token
+// follows the UI style (0px in the square style like every other scale step).
 const listClasses: Record<Variant, string> = {
-  pill: "inline-flex items-center gap-1 rounded-control bg-card p-1",
+  pill: "inline-flex items-center gap-1 rounded-capsule bg-card p-1",
   underline: "inline-flex items-center gap-1 border-b border-border",
   segment: "inline-flex items-center gap-0 rounded-lg bg-card p-0.5",
 };
@@ -145,7 +145,7 @@ export function TabsTrigger({
     );
   }
 
-  const radius = variant === "pill" ? "rounded-control" : "rounded-md";
+  const radius = variant === "pill" ? "rounded-capsule" : "rounded-md";
 
   return (
     <div className="relative">

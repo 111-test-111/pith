@@ -130,18 +130,25 @@ Expected: PASS — the activity panel's cells are a Class A capsule site, so the
 
 - [ ] **Step 6: Prove the square style did not move**
 
-The invariance claim is "these 16 sites render identically before and after". Prove it by toggling only the swap, not by reasoning:
+⚠️ **Superseded during execution — the `cmp` method below does not work on this fixture.** Measured: two runs of *identical* code differ by ~525,000 pixels in the dark galleries, because the fixture screenshots while the light→dark `transition-colors` is still running and the Loader dots animate forever. `cmp` therefore cannot attribute a difference to a code change. Use this method instead:
 
 ```bash
-PI_CORNERS_SCREENSHOT_DIR=/tmp/corners-after node scripts/check-corners.mjs
-git stash                        # only the 16 class swaps + the token/utility
-git stash show -p | grep -c rounded-capsule || true   # confirm what is stashed
-PI_CORNERS_SCREENSHOT_DIR=/tmp/corners-before node scripts/check-corners.mjs
-git stash pop
-for f in /tmp/corners-before/*.png; do cmp "$f" "/tmp/corners-after/$(basename "$f")" || echo "DIFFERS: $(basename "$f")"; done
+# Baseline on a clean tree, BEFORE any edit (or from an isolated tree):
+git worktree add --detach /tmp/pi-clean HEAD
+ln -s "$PWD/node_modules" /tmp/pi-clean/node_modules
+( cd /tmp/pi-clean && node scripts/check-corners.mjs )      # must PASS
+# …make the edits here, then:
+node scripts/check-corners.mjs                               # must PASS
 ```
 
-Expected: no `DIFFERS` line. Any difference in a capsule site is a bug in the swap, not an acceptable delta — the whole design rests on `0px` being what these sites already render.
+Compare with two controls in place, and accept the result only if the control also shows variance:
+
+1. Temporarily add a settle (`await pause(800)`) after each theme toggle in the screenshot path, run both trees, and revert the temporary edit afterwards (`git diff scripts/check-corners.mjs` must show only the Step 1 assertion change).
+2. Mask the Loader's animating region and require **0 differing pixels** everywhere else; a clean-vs-clean run of the two states is the noise floor to compare against.
+
+Acceptance: 0 differing pixels outside the animating Loader, and the composer send-control crop byte-identical. Record the numbers (including the noise floor) in the commit message. Raw `cmp` output on this fixture is not evidence either way.
+
+The check's own assertions (Step 1 and Step 5) remain the primary gate; the screenshots only pin the parts no assertion covers.
 
 - [ ] **Step 7: Update the corner policy in `AGENTS.md`**
 
@@ -458,7 +465,7 @@ PI_CORNERS_SCREENSHOT_DIR=/tmp/corners-squircle node scripts/check-corners.mjs
 npm run dev
 ```
 
-In the running app, switch to 超椭圆 and screenshot light + dark; look for surfaces that read wrong (the pre-square branch was never re-reviewed after the squaring commit). Record findings in the commit message. Do not silently "fix" anything outside this plan's scope — file it as a follow-up.
+In the running app, switch to 超椭圆 and screenshot light + dark; look for surfaces that read wrong (the pre-square branch was never re-reviewed after the squaring commit). Use Task 1 Step 6's corrected comparison method (settle the theme transition, mask the Loader, compare against a noise floor) — a raw `cmp` of two runs is not evidence. Specifically confirm the two sites Task 1 had to re-target: the heat-calendar activity cells (circles in the squircle style, per the pre-square app; if squares read better, that is a one-word change and a deliberate decision) and the composer send/attach controls. Record findings in the commit message. Do not silently "fix" anything outside this plan's scope — file it as a follow-up.
 
 - [ ] **Step 10: Rewrite the stale geometry docs**
 

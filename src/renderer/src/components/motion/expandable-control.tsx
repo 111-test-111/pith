@@ -119,12 +119,11 @@ export function ExpandableButton({
         aria-expanded={isExpanded}
         disabled={disabled}
         className={cn(
-          // local patch (pi-app): hard-edged trigger — the square-style branch
-          // replaces the vendored circle with the control radius token.
-          "relative inline-flex h-11 min-w-11 items-center overflow-hidden rounded-control border border-border bg-transparent p-1 pr-1 text-sm font-medium text-foreground outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50",
+          // local patch (pi-app): capsule-by-design trigger, so the shape
+          // token follows the UI style.
+          "relative inline-flex h-11 min-w-11 items-center overflow-hidden rounded-capsule border border-border bg-transparent p-1 pr-1 text-sm font-medium text-foreground outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50",
           className,
         )}
-        style={{ borderRadius: "var(--app-radius-control)" }}
         onClick={handleClick}
         whileTap={reduce || disabled ? undefined : { scale: 0.97 }}
         transition={transition}
@@ -196,11 +195,11 @@ export function ExpandableChip({
       <motion.div
         layout
         className={cn(
-          // local patch (pi-app): hard-edged chip surface (square-style branch).
-          "inline-flex h-10 items-center overflow-hidden rounded-control border border-border bg-transparent text-sm text-foreground has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-inset has-[:focus-visible]:ring-ring",
+          // local patch (pi-app): capsule-by-design chip surface, so the shape
+          // token follows the UI style.
+          "inline-flex h-10 items-center overflow-hidden rounded-capsule border border-border bg-transparent text-sm text-foreground has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-inset has-[:focus-visible]:ring-ring",
           className,
         )}
-        style={{ borderRadius: "var(--app-radius-control)" }}
         transition={transition}
       >
         <motion.button
@@ -243,8 +242,9 @@ export function ExpandableChip({
             aria-label={actionLabel}
             disabled={disabled || !isExpanded}
             className={cn(
-              // local patch (pi-app): hard-edged action (square-style branch).
-              "flex h-full w-8 shrink-0 items-center justify-center rounded-control text-muted-foreground outline-none transition-colors hover:text-foreground disabled:pointer-events-none",
+              // local patch (pi-app): capsule-by-design action, so the shape
+              // token follows the UI style.
+              "flex h-full w-8 shrink-0 items-center justify-center rounded-capsule text-muted-foreground outline-none transition-colors hover:text-foreground disabled:pointer-events-none",
               disabled && "opacity-50",
               actionClassName,
             )}

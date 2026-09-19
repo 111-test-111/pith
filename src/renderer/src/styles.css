@@ -39,6 +39,11 @@
   --app-radius-icon: var(--app-radius-item);
   --app-radius-card: 0px;
   --app-radius-window: 0px;
+  /* Capsule-by-design surfaces (avatars, icon controls, chips, badges, pill
+   * tabs, selection marks) take their shape from the UI style: collapsed to a
+   * right angle in the square style, a true capsule in the squircle style.
+   * `rounded-full` remains the always-circular token. */
+  --app-radius-capsule: 0px;
   --app-radius-full: 9999px;
   --radius: var(--app-radius-detail);
 
@@ -286,6 +291,10 @@
  * a rounded square at the 14px token instead of a circle. */
 @utility rounded-full {
   border-radius: var(--app-radius-full) !important;
+  corner-shape: round !important;
+}
+@utility rounded-capsule {
+  border-radius: var(--app-radius-capsule) !important;
   corner-shape: round !important;
 }
 @utility corner-round {

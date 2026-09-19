@@ -144,7 +144,7 @@ export function AppearanceSection({
                   aria-pressed={accent === preset.id}
                   onClick={() => onAccentChange(preset.id)}
                   className={cn(
-                    'grid size-8 place-items-center rounded-control transition-transform hover:scale-110',
+                    'grid size-8 place-items-center rounded-capsule transition-transform hover:scale-110',
                     accent === preset.id && 'ring-2 ring-foreground/60 ring-offset-2 ring-offset-background'
                   )}
                   style={{ background: preset.color }}
