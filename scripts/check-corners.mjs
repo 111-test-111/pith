@@ -30,6 +30,12 @@ async function guard(directory) {
     const text = await readFile(path, 'utf8')
     assert.doesNotMatch(text, /rounded(?:-[a-z]+)*-\[\d[^\]]*(?:px|rem|%)\]/, path + ': literal corner utility')
     assert.doesNotMatch(text, /border(?:TopLeft|TopRight|BottomLeft|BottomRight)?Radius:\s*(?:[1-9]\d*|["'][\d.]+px)/, path + ': literal radius')
+    // The CSS form. The camelCase assertion above cannot see `border-radius:2px`
+    // in a .css file, which is exactly how pdf-viewer.css's three literal 2px
+    // radii survived every previous geometry sweep. Percentages stay allowed: a
+    // `50%` radius is a genuine circle (a PDF's own radio widget, rounded-full's
+    // circular-arc fallback), not a scale value.
+    assert.doesNotMatch(text, /border-radius:\s*[1-9][\d.]*(?:px|rem)/, path + ': literal CSS radius')
     assert.doesNotMatch(text, /radius=\{[1-9]\d*\}/, path + ': numeric radius prop')
     assert.doesNotMatch(text, /["'`]inset\([^"'`]*\bround\s/, path + ': circular reveal mask overrides native geometry')
   }
