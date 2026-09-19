@@ -2,7 +2,7 @@ import type { AgentSession, AgentSessionEvent } from '@earendil-works/pi-coding-
 import { ASK_USER_ANSWER_TYPE } from '../../shared/ask-user'
 import type { AskUserToolDetails } from '../../shared/ask-user'
 import type { ChatMessage } from '../../shared/types'
-import { WakeLease, type WakeAdmission } from './wake-admission.ts'
+import { admitWakeRequest, type WakeAdmission } from './wake-admission.ts'
 
 /** The async outcome's details, as the transcript notice reads them. */
 export interface AskUserAnswerNotice {
@@ -65,8 +65,6 @@ export class AskUserNotifications {
    * mode transition). Unset means ungated — the session has no Plan owner.
    */
   admitWake?: WakeAdmission
-  /** Holds one admission reservation across the requests a flush pass admits. */
-  private readonly wake = new WakeLease(() => this.admitWake?.())
 
   /** True while an automatic wake is still owed — the run is not really over. */
   get continuesAtSettled(): boolean {
@@ -123,24 +121,25 @@ export class AskUserNotifications {
     const ready = [...this.pending.values()].filter((delivery) =>
       !delivery.queued && !delivery.drained && this.receiptPresent(delivery.toolCallId))
     if (!ready.length) return
-    // Ask the app BEFORE any wake, steer or append: a sealed planning turn or an
-    // in-flight mode transition defers the whole pass — the outcome stays owned,
-    // no wake attempt is spent, no retry loop is armed. A timed-out question is
-    // gated too: it is still background work entering the session.
-    if (!this.wake.reserve()) return
     if (!this.session.isStreaming && !this.session.isIdle) {
-      this.wake.settle()
       this.retry ??= setTimeout(() => { this.retry = undefined; this.flush() }, 100)
       return
     }
     for (const delivery of ready) {
-      if (!this.session.isStreaming && delivery.wantsWake) {
-        if (delivery.wakeAttempts >= 3) { this.wake.settle(); continue }
-        delivery.wakeAttempts++
-      }
-      delivery.queued = true
-      const answered = delivery.details.status === 'answered'
+      // Each outcome asks for its OWN live admission immediately before it
+      // touches the session: a sealed planning turn or an in-flight transition
+      // defers it (a timed-out question is background work too), a sibling's
+      // pending request never carries it, and nothing is spent first.
+      const release = admitWakeRequest(this.admitWake)
+      if (!release) return
+      let handedOff = false
       try {
+        if (!this.session.isStreaming && delivery.wantsWake) {
+          if (delivery.wakeAttempts >= 3) continue
+          delivery.wakeAttempts++
+        }
+        delivery.queued = true
+        const answered = delivery.details.status === 'answered'
         void this.session.sendCustomMessage({
           customType: ASK_USER_ANSWER_TYPE,
           content: `${answered
@@ -160,12 +159,16 @@ export class AskUserNotifications {
           if (++this.failures <= 3) {
             this.retry ??= setTimeout(() => { this.retry = undefined; this.flush() }, this.failures * 1000)
           }
-        }).finally(() => this.wake.settle())
-      } catch {
-        // A synchronous refusal never reached the session: repay the reservation
-        // and leave the outcome pending for the existing retry path.
-        delivery.queued = false
-        this.wake.settle()
+        }).finally(release)
+        handedOff = true
+      } finally {
+        // Every path that never reached the send promise (skipped attempt,
+        // synchronous throw) repays THIS request's admission and leaves the
+        // outcome pending for the existing retry path.
+        if (!handedOff) {
+          delivery.queued = false
+          release()
+        }
       }
     }
   }

@@ -48,6 +48,8 @@ await build({
   stdin: {
     contents: `export { PiManager } from './src/main/pi/manager';
 export { PlanController } from './src/main/pi/plan-mode';
+export { TaskNotifications } from './src/main/pi/task-notifications';
+export { admitWakeRequest } from './src/main/pi/wake-admission';
 export { PlanStorage } from './src/main/pi/plan-storage';
 export * from './src/main/pi/plan-protocol';
 export { PLAN_MAX_BYTES } from './src/shared/plan';
@@ -110,6 +112,8 @@ const {
   parsePlanSubmission,
   PlanController,
   PlanStorage,
+  TaskNotifications,
+  admitWakeRequest,
   SessionManager,
   ModelRuntime,
   PiManager,
@@ -553,6 +557,168 @@ assert.equal(secondDefault.snapshot.seq > afterDefault, true)
 
 console.log('PASS: PlanController admission facts, reservations and sequence')
 
+// -- per-delivery wake admission and reservation accounting ------------------
+
+// A controlled AgentSession stand-in: the OWNER, its pending/ack discipline and
+// the real PlanController gate are production code; only the SDK send promise
+// is scripted so settle order and synchronous throws are deterministic.
+const accountingManager = SessionManager.create(project, unitDir)
+const accountingFile = join(unitDir, 'wake-accounting.jsonl')
+accountingManager.setSessionFile(accountingFile)
+await writeFile(accountingFile, `${JSON.stringify(accountingManager.getHeader())}\n`, { flag: 'wx' })
+const accountingFacts = baseFacts()
+let accountingClock = 0
+let gateCalls = 0
+let admitted = 0
+let releases = 0
+const admissionGate = new PlanController({
+  manager: accountingManager,
+  storage: new PlanStorage(accountingManager),
+  facts: () => accountingFacts,
+  changed: () => {},
+  nextSeq: () => ++accountingClock
+})
+const sends = []
+const stubSession = {
+  sessionFile: 'memory:wake-accounting',
+  isStreaming: false,
+  isIdle: true,
+  sendCustomMessage: (message, options) => new Promise((resolve, reject) => {
+    sends.push({ message, options, resolve, reject })
+  })
+}
+let outputThrows = false
+const stubTasks = {
+  retain: () => {},
+  release: () => {},
+  list: () => [],
+  output: (_sessionPath, id) => {
+    if (outputThrows) throw new Error('output-failed')
+    return { task: { id, denied: false }, output: 'x', cursor: 0, truncated: false }
+  }
+}
+const accounting = new TaskNotifications(stubSession, stubTasks)
+accounting.admitWake = () => {
+  gateCalls += 1
+  try {
+    const release = admissionGate.beginWork('background')
+    admitted += 1
+    return () => { releases += 1; release() }
+  } catch {
+    return null
+  }
+}
+const accountingTask = (id, toolCallId) => ({
+  id,
+  sessionId: 'stub-session',
+  sessionPath: 'memory:wake-accounting',
+  toolCallId,
+  command: 'echo',
+  cwd: project,
+  status: 'completed',
+  background: true,
+  startedAt: Date.now(),
+  outputChars: 0,
+  logPath: join(unitDir, `${id}.log`),
+  logTruncated: false,
+  revision: 1
+})
+const armAccounting = (id, toolCallId) => {
+  accounting.observe({ type: 'message_end', message: { role: 'toolResult', toolName: 'bash', toolCallId, isError: false, content: [] } })
+  accounting.complete(accountingTask(id, toolCallId))
+}
+const flushMicrotasks = async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  await new Promise((resolve) => setTimeout(resolve, 0))
+}
+
+// TWO deliveries become ready for ONE flush pass (the session reports busy
+// while they are armed, so nothing is sent yet), and each asks for its OWN live
+// admission as it is sent.
+stubSession.isIdle = false
+armAccounting('acct-task-a', 'acct-a')
+armAccounting('acct-task-b', 'acct-b')
+assert.equal(sends.length, 0, 'a busy session was sent to anyway')
+assert.equal(gateCalls, 0, 'admission was consulted while the session was busy')
+stubSession.isIdle = true
+accounting.flush()
+assert.equal(gateCalls, 2, 'a held background lease carried a second delivery past the gate')
+assert.equal(admitted, 2)
+assert.equal(sends.length, 2)
+assert.equal(accounting.hasPendingCompletions, true)
+assert.equal(admissionGate.snapshot.blockers.switch.includes('busy'), true)
+
+// The admissionGate closes between per-delivery sends: the third delivery asks again and
+// is refused even though another request is still in flight.
+admissionGate.observeCommittedSubmission('seal-accounting')
+armAccounting('acct-task-c', 'acct-c')
+assert.equal(gateCalls, 3, 'a delivery did not ask for its own admission')
+assert.equal(admitted, 2, 'the denied delivery was admitted anyway')
+assert.equal(releases, 0, 'a denied delivery produced a release')
+assert.equal(sends.length, 2, 'a sealed delivery was sent using another request\'s admission')
+assert.equal(accounting.hasPendingCompletions, true)
+
+// Out-of-order settle: the first reservation releases while the second request
+// is still in flight, so the session stays busy and a transition is refused.
+sends[0].resolve()
+await flushMicrotasks()
+assert.equal(releases, 1)
+assert.equal(admissionGate.snapshot.blockers.switch.includes('busy'), true, 'the remaining request lost its reservation')
+await assert.rejects(admissionGate.transition(async () => {}), (error) => error.blockers.includes('busy'))
+
+// The last request settles: the second reservation goes with it, exactly once.
+sends[1].resolve()
+await flushMicrotasks()
+assert.equal(releases, 2)
+assert.equal(admissionGate.snapshot.blockers.switch.includes('busy'), false)
+assert.equal(releases <= admitted, true, 'released more reservations than were admitted')
+
+// Reopening the admission gate delivers the deferred third delivery exactly once.
+const accountingTicket = admissionGate.beginWork('user')
+admissionGate.releaseSubmissionForUser()
+accountingTicket()
+accounting.flush()
+assert.equal(sends.length, 3, 'the deferred delivery never went out after reopening')
+assert.equal(sends[2].message.details.taskId, 'acct-task-c')
+assert.equal(sends.filter((send) => send.message.details.taskId === 'acct-task-c').length, 1, 'the deferred delivery was sent twice')
+sends[2].resolve()
+await flushMicrotasks()
+assert.equal(releases, admitted, 'a release escaped after the deferred delivery settled')
+
+// A synchronous pre-send throw must repay its own reservation and leave the
+// delivery deliverable (not stranded as queued).
+outputThrows = true
+assert.throws(() => armAccounting('acct-task-d', 'acct-d'), /output-failed/)
+assert.equal(admissionGate.snapshot.blockers.switch.includes('busy'), false, 'a synchronous throw stranded a reservation')
+assert.equal(releases, admitted, 'a synchronous throw did not repay its admission')
+outputThrows = false
+accounting.flush()
+assert.equal(sends.length, 4, 'the delivery stranded by a synchronous throw never recovered')
+assert.equal(sends[3].message.details.taskId, 'acct-task-d')
+sends[3].resolve()
+await flushMicrotasks()
+assert.equal(releases, admitted, 'an extra release escaped after recovery')
+accounting.pause()
+
+// The helper itself: one request-local, idempotent release per admission.
+const helperOrder = []
+const releaseOne = admitWakeRequest(() => { helperOrder.push('admit-one'); return () => helperOrder.push('release-one') })
+const releaseTwo = admitWakeRequest(() => { helperOrder.push('admit-two'); return () => helperOrder.push('release-two') })
+assert.deepEqual(helperOrder, ['admit-one', 'admit-two'], 'each request must ask for its own admission')
+assert.equal(typeof releaseOne, 'function')
+releaseOne()
+releaseOne()
+assert.deepEqual(helperOrder, ['admit-one', 'admit-two', 'release-one'], 'a release must be idempotent and request-local')
+releaseTwo()
+assert.deepEqual(helperOrder, ['admit-one', 'admit-two', 'release-one', 'release-two'])
+assert.equal(admitWakeRequest(() => null), null, 'a denied request must defer')
+const ungated = admitWakeRequest(undefined)
+assert.equal(typeof ungated, 'function', 'an ungated owner still gets an inert release')
+ungated()
+ungated()
+
+console.log('PASS: per-delivery wake admission and reservation accounting')
+
 // -- the manager facade: isolated session, explicit path ---------------------
 
 const facade = await createPlanFixture({ respond: () => [{ type: 'text', text: 'ok' }] })
@@ -946,6 +1112,96 @@ try {
 }
 
 console.log('PASS: background wakes are admitted, deferred and delivered exactly once')
+
+// ---------------------------------------------------------------------------
+// Task 2 fix round 2: a held background lease must not carry a later delivery
+// ---------------------------------------------------------------------------
+
+const leases = await createPlanFixture({ respond: () => [{ type: 'text', text: 'ok' }] })
+try {
+  await planReady(leases)
+  const path = leases.managed.path
+  const plan = leases.managed.plan
+  const notifications = leases.managed.notifications
+  const completionRows = (taskId) => leases.session.messages.filter((message) =>
+    message.role === 'custom' && message.customType === 'bash_task_completion' && message.details?.taskId === taskId).length
+  const quietWindow = () => new Promise((resolve) => setTimeout(resolve, 80))
+  const bashTask = (toolCallId) => leases.app.listBashTasks(path).find((task) => task.toolCallId === toolCallId)
+  const finished = (toolCallId) => {
+    const task = bashTask(toolCallId)
+    return Boolean(task) && task.status !== 'running' && task.status !== 'stopping'
+  }
+
+  // Two real background commands: A finishes first, B later. A's wake run is
+  // kept live by a slow foreground command, so A's send promise stays pending.
+  // Scripted requests: 1 = launch both background commands, 2 = that turn's
+  // answer, 3 = completion A's wake run (kept live by a slow command). The
+  // wake request's own last message is a user turn (the custom message is
+  // folded into the request), so the script is keyed by request order and the
+  // slow tool's live run is asserted below.
+  let requestIndex = 0
+  let slowUsed = false
+  leases.setRespond(() => {
+    requestIndex += 1
+    if (requestIndex === 1) {
+      return [
+        { type: 'toolCall', id: 'lease-a-call', name: 'bash', arguments: { command: 'sleep 1.2; echo a', mode: 'background' } },
+        { type: 'toolCall', id: 'lease-b-call', name: 'bash', arguments: { command: 'sleep 3; echo b', mode: 'background' } }
+      ]
+    }
+    if (requestIndex === 2) return [{ type: 'text', text: 'ok' }]
+    if (!slowUsed) {
+      slowUsed = true
+      return [{ type: 'toolCall', id: 'slow-lease', name: 'bash', arguments: { command: 'sleep 2.5; echo slow', mode: 'blocking', waitMs: 5000 } }]
+    }
+    return [{ type: 'text', text: 'ok' }]
+  })
+  leases.app.prompt({ text: 'launch two background checks', images: [], files: [] })
+  await until(
+    () => bashTask('lease-a-call') && bashTask('lease-b-call') && leases.session.isIdle && leases.managed.lifecyclePromise === null,
+    'the background commands never started'
+  )
+  const taskA = bashTask('lease-a-call')
+  const taskB = bashTask('lease-b-call')
+
+  // A completes while unsealed: its completion is admitted and its model run
+  // stays pending behind the slow command.
+  await until(() => completionRows(taskA.id) === 1, 'completion A was never delivered')
+  await until(
+    () => leases.session.isStreaming && 'slow-lease' in leases.managed.toolRuns,
+    'wake run A never went live'
+  )
+  // Seal AFTER A's admission stage, while A's request is still in flight.
+  plan.observeCommittedSubmission('submit-lease-1')
+  assert.equal(plan.submissionLocked, true)
+
+  // B is the same owner's second result. It must ask for its own admission —
+  // A's still-pending request must not carry it across the seal.
+  await until(() => finished('lease-b-call'), 'command B never finished')
+  await quietWindow()
+  assert.equal(completionRows(taskB.id), 0, 'a sealed planning turn received the second same-owner completion')
+  assert.equal(notifications.hasPendingCompletions, true, 'the sealed completion B was dropped')
+  await until(() => leases.session.isIdle && leases.managed.lifecyclePromise === null, 'wake run A did not settle')
+  await quietWindow()
+  assert.equal(completionRows(taskB.id), 0, 'the deferred completion B was delivered while sealed')
+  assert.equal(notifications.hasPendingCompletions, true, 'the deferred completion B was lost')
+
+  // A genuinely admitted user turn reopens the seal and delivers B exactly once.
+  const beforeReopen = leases.requests.length
+  leases.app.prompt({ text: 'continue', images: [], files: [] })
+  await until(() => leases.requests.length > beforeReopen, 'the reopening turn never reached the model')
+  await until(() => completionRows(taskB.id) === 1, 'the deferred completion B was not delivered')
+  await until(
+    () => leases.session.isIdle && leases.managed.lifecyclePromise === null && !notifications.hasPendingCompletions,
+    'the delivery turn did not settle'
+  )
+  await quietWindow()
+  assert.equal(completionRows(taskB.id), 1, 'completion B was delivered more than once')
+} finally {
+  await leases.close()
+}
+
+console.log('PASS: a held background lease never carries a later delivery')
 
 await rm(temporary, { recursive: true, force: true })
 console.log('PASS: all plan-mode checks')

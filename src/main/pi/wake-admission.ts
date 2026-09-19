@@ -16,46 +16,26 @@
 export type WakeAdmission = () => (() => void) | null
 
 /**
- * One admission reservation per request a flush pass admits, released when the
- * last admitted request settled — so the reservation covers the request's
- * ADMISSION window (an idle `sendCustomMessage` with `triggerTurn` awaits its
- * run), not just the synchronous call site.
+ * Ask the app for ONE request's admission.
  *
- * Inert without a gate: when the configured admission returns `undefined`
- * (no Plan controller owns the session) `reserve()` succeeds and `settle()`
- * only drops the counter, so unwired owners behave exactly as before.
+ * Returns a request-local, idempotent release that the caller must invoke when
+ * that request is settled (sent, skipped, refused synchronously or abandoned),
+ * or `null` when the wake must be deferred. Every delivery asks again right
+ * before its own wake/steer side effect: a sibling's still-pending request must
+ * never carry a later one across a seal or a transition that closed in between,
+ * and no request may release another request's admission.
+ *
+ * With no gate configured (a session that owns no Plan controller) it returns
+ * an inert release, so unwired owners behave exactly as before.
  */
-export class WakeLease {
-  private release: (() => void) | null = null
-  private outstanding = 0
-  /** The session's admission gate, read live so a late wiring still applies. */
-  private readonly admit?: () => (() => void) | null | undefined
-
-  constructor(admit?: () => (() => void) | null | undefined) {
-    this.admit = admit
-  }
-
-  /** Reserve one admitted request. `false` = denied: defer, spend nothing. */
-  reserve(): boolean {
-    if (this.admit) {
-      if (!this.release) {
-        const release = this.admit()
-        if (release === null) return false
-        // `undefined` = this session has no gate; keep the lease inert.
-        if (release !== undefined) this.release = release
-      }
-    }
-    this.outstanding += 1
-    return true
-  }
-
-  /** One reserved request settled (admitted, refused or abandoned). */
-  settle(): void {
-    if (this.outstanding === 0) return
-    this.outstanding -= 1
-    if (this.outstanding > 0) return
-    const release = this.release
-    this.release = null
-    release?.()
+export function admitWakeRequest(admit?: WakeAdmission): (() => void) | null {
+  if (!admit) return () => {}
+  const release = admit()
+  if (!release) return null
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    release()
   }
 }
