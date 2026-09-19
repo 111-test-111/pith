@@ -181,6 +181,42 @@ const canonicalWorkspace = await realpath(workspace)
   assert.match(await readFile(target, 'utf8'), /there/, 'the same tool instance applies the newly switched mode on its next call')
 }
 
+// ------------------------------------------------------- Plan denial wording
+{
+  const cwd = join(temporary, 'plan-wording')
+  await mkdir(cwd, { recursive: true })
+  const target = join(cwd, 'file.txt')
+  await writeFile(target, 'one\ntwo\n', 'utf8')
+
+  // Plan denies without ever offering a wider mode: the model must not be told
+  // to escalate or to change a setting.
+  const [planEdit] = createSandboxFileTools({ cwd, getMode: () => 'read-only', isPlanRestricted: () => true })
+  await assert.rejects(
+    () => planEdit.execute('plan-call', { path: target, edits: [{ oldText: 'one', newText: 'edited' }] }, undefined, undefined, { cwd }),
+    (error) => {
+      assert.match(String(error.message), /\[plan:/i, 'a Plan denial must name Plan')
+      assert.match(String(error.message), /file access denied/i, 'a Plan denial must still explain the policy')
+      assert.equal(/escalation available/i.test(String(error.message)), false, 'Plan offered the escalation lever')
+      assert.equal(/change the mode|full access|settings/i.test(String(error.message)), false, 'Plan suggested changing the sandbox')
+      return true
+    },
+    'a Plan file denial was not Plan-specific'
+  )
+  assert.match(await readFile(target, 'utf8'), /one/, 'the Plan denial changed the file')
+
+  // Ordinary mode keeps its existing denial text — no Plan marker leaks in.
+  const [ordinaryEdit] = createSandboxFileTools({ cwd, getMode: () => 'read-only' })
+  await assert.rejects(
+    () => ordinaryEdit.execute('ordinary-call', { path: target, edits: [{ oldText: 'one', newText: 'edited' }] }, undefined, undefined, { cwd }),
+    (error) => {
+      assert.match(String(error.message), /SANDBOX_FILE_DENIED/i, 'ordinary wording changed')
+      assert.equal(/\[plan:/i.test(String(error.message)), false, 'ordinary mode leaked a Plan marker')
+      return true
+    },
+    'the ordinary denial changed'
+  )
+}
+
 // --------------------------------------------------------- one-shot escalation
 {
   const cwd = join(temporary, 'escalation')
@@ -337,6 +373,35 @@ if (runner === null) {
   const readOnlyRuns = await run('echo readable', 'read-only')
   assert.equal(readOnlyRuns.task.status, 'succeeded', 'read-only still runs commands and reads')
   assert.equal(readOnlyRuns.output.includes('readable'), true, 'read-only output is delivered')
+
+  // Plan's effective mode IS this read-only profile: the path classes the Plan
+  // fixture relies on, plus DSH's deliberate /dev/null write exception.
+  const roWorkspaceFile = join(workspace, 'ro-matrix.txt')
+  const roTempFile = join(await realpath(tmpdir()), 'pith-sandbox-check-ro-temp.txt')
+  const roOutsideFile = join(homedir(), '.pith-sandbox-check-ro-outside')
+  const roInterpFile = join(workspace, 'ro-interp.txt')
+  const roLinkTarget = join(temporary, 'ro-link-target.txt')
+  await writeFile(roLinkTarget, 'seed', 'utf8')
+  await symlink(roLinkTarget, join(workspace, 'ro-escape'))
+  const roMatrix = [
+    `printf no > ${JSON.stringify(roWorkspaceFile)}`,
+    `printf no > ${JSON.stringify(roTempFile)}`,
+    `printf no > ${JSON.stringify(roOutsideFile)}`,
+    `printf no > ${JSON.stringify(join(workspace, 'ro-escape', 'via-link.txt'))}`,
+    `${JSON.stringify(process.execPath)} -e "require('fs').writeFileSync(${JSON.stringify(roInterpFile)},'no')"`,
+    'printf ok > /dev/null && echo devnull-ok',
+    'echo ro-matrix-done'
+  ].join('; ')
+  const roResult = await run(roMatrix, 'read-only')
+  const exists = (path) => spawnSync('/bin/test', ['-e', path]).status === 0
+  assert.equal(roResult.output.includes('ro-matrix-done'), true, `the read-only shell did not run: ${JSON.stringify(roResult.output)}`)
+  assert.equal(roResult.output.includes('devnull-ok'), true, `read-only stopped a /dev/null write: ${JSON.stringify(roResult.output)}`)
+  assert.equal(exists(roWorkspaceFile), false, 'read-only wrote the workspace file')
+  assert.equal(exists(roTempFile), false, 'read-only wrote the temp directory')
+  assert.equal(exists(roOutsideFile), false, 'read-only wrote outside the workspace')
+  assert.equal(exists(roInterpFile), false, 'an interpreter escaped the read-only file policy')
+  assert.equal(await readFile(roLinkTarget, 'utf8'), 'seed', 'a symlink escaped the read-only file policy')
+  assert.equal(exists(join(workspace, 'ro-escape', 'via-link.txt')), false, 'the symlink target was written')
 
   const leaked = await run('printenv CHECK_SECRET_TOKEN || echo absent', 'workspace-write')
   assert.equal(leaked.output.includes('leak'), false, 'a confined shell does not inherit credential-shaped variables')

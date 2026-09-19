@@ -2,7 +2,7 @@ import { getAgentDir, getShellConfig, type AgentSessionServices, type ToolDefini
 import { Type } from 'typebox'
 import { delimiter, join } from 'node:path'
 import { BashTaskManager, taskIsLive } from '../bash/manager'
-import { escalationHintMarker, SANDBOX_ESCALATION_PROPERTIES, sandboxDenialMarker } from '../sandbox/escalation'
+import { escalationHintMarker, PLAN_ESCALATION_REFUSED, PLAN_SHELL_UNAVAILABLE, planFileDenialMarker, SANDBOX_ESCALATION_PROPERTIES, sandboxDenialMarker } from '../sandbox/escalation'
 import type { SandboxMode } from '../sandbox/types'
 import type { BashTaskDTO } from '../../shared/types'
 
@@ -45,6 +45,14 @@ export function createManagedBashTools(options: {
   maxWaitMs: () => number
   /** Read live: the user can change the mode between two calls. */
   sandboxMode: () => SandboxMode
+  /** Live Plan-mode read, for Plan-specific denial wording (no escalation hint). */
+  isPlanRestricted?: () => boolean
+  /**
+   * Live read-only shell capability for Plan. `full` may start a confined
+   * command; `partial`/`unavailable` refuse BEFORE `tasks.start` and never fall
+   * back to the host. Read per call, like the mode itself.
+   */
+  planShellEnforcement?: () => 'full' | 'partial' | 'unavailable'
   /** Ask for a strictly wider mode for this one command; absent means no
    * approval channel, so a denial is final. */
   escalate?: (input: {
@@ -66,6 +74,17 @@ export function createManagedBashTools(options: {
     executionMode: 'sequential',
     async execute(toolCallId, args, signal, onUpdate, ctx) {
       if (signal?.aborted || !options.canStart()) throw new Error('Command cancelled before launch')
+      const restricted = options.isPlanRestricted?.() === true
+      // Plan's shell is a hard capability, not a mode request: no full
+      // enforcement means no process at all (a held execute reference included).
+      if (restricted) {
+        if (args.sandbox_permissions !== undefined || args.justification !== undefined) {
+          throw new Error(PLAN_ESCALATION_REFUSED)
+        }
+        if ((options.planShellEnforcement?.() ?? 'unavailable') !== 'full') {
+          throw new Error(PLAN_SHELL_UNAVAILABLE)
+        }
+      }
       const shell = getShellConfig(services.settingsManager.getShellPath())
       const prefix = services.settingsManager.getShellCommandPrefix()
       const env = { ...process.env }
@@ -118,8 +137,9 @@ export function createManagedBashTools(options: {
         const content = [{ type: 'text' as const, text: JSON.stringify({ ...current, output: output.output, cursor: output.cursor, truncated: output.truncated,
           ...(current.background && taskIsLive(current) ? { guidance: PENDING_GUIDANCE } : {}),
           // A denial is a policy outcome with a way forward; say so, or the model
-          // just retries the same command.
-          ...(current.denied ? { sandbox: `${sandboxDenialMarker(mode)}\n${escalationHintMarker('command')}` } : {}) }) }]
+          // just retries the same command. In Plan the way forward is never a
+          // wider mode, so the escalation hint is replaced.
+          ...(current.denied ? { sandbox: `${sandboxDenialMarker(mode)}\n${restricted ? planFileDenialMarker('command') : escalationHintMarker('command')}` } : {}) }) }]
         update()
         if (!taskIsLive(current) && current.status !== 'succeeded') throw new Error(content[0].text)
         return { content, details: details(current) }
@@ -136,6 +156,7 @@ export function createManagedBashTools(options: {
     promptSnippet: 'List, inspect output/progress, or terminate this session\'s background shell tasks.',
     executionMode: 'sequential',
     async execute(_id, args) {
+      const restricted = options.isPlanRestricted?.() === true
       if (args.action === 'list') return {
         content: [{ type: 'text', text: JSON.stringify(tasks.list(sessionPath)) }], details: undefined
       }
@@ -147,7 +168,7 @@ export function createManagedBashTools(options: {
         // Same contract as the inline result: a denial explains itself and
         // names the escalation lever, in the mode the command ran under.
         ...(output.task.denied && output.task.sandboxMode
-          ? { sandbox: `${sandboxDenialMarker(output.task.sandboxMode)}\n${escalationHintMarker('command')}` }
+          ? { sandbox: `${sandboxDenialMarker(output.task.sandboxMode)}\n${restricted ? planFileDenialMarker('command') : escalationHintMarker('command')}` }
           : {}) }) }], details: details(output.task) }
     }
   } satisfies ToolDefinition<typeof taskParameters>]

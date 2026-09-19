@@ -24,7 +24,7 @@ import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { buildSandboxPolicy, writableRoots } from '../sandbox/policy'
 import { isSandboxPathWithin, resolveSandboxPath } from '../sandbox/paths'
-import { escalationHintMarker, SANDBOX_ESCALATION_PROPERTIES, sandboxDenialMarker } from '../sandbox/escalation'
+import { escalationHintMarker, PLAN_ESCALATION_REFUSED, planFileDenialMarker, SANDBOX_ESCALATION_PROPERTIES, sandboxDenialMarker } from '../sandbox/escalation'
 import { SandboxFileDeniedError, type SandboxMode } from '../sandbox/types'
 
 export const APP_FILE_TOOL_NAMES = ['edit', 'write'] as const
@@ -36,6 +36,11 @@ type WriteToolDefinition = ReturnType<typeof createWriteToolDefinition>
 export interface SandboxFileToolOptions {
   cwd: string
   getMode: () => SandboxMode
+  /**
+   * Live Plan-mode read: a denial is a Plan outcome, not a wider-mode request,
+   * so the hint must not offer escalation. Read per call, like the mode itself.
+   */
+  isPlanRestricted?: () => boolean
   /**
    * Ask for a strictly wider mode for this one call. Omitted means this app has
    * no approval channel: the call then runs under the session's mode and a
@@ -101,7 +106,9 @@ function writeOperations(cwd: string, mode: SandboxMode): WriteOperations {
 
 /**
  * A sandbox denial must read as a policy outcome with a way forward, not as a
- * bare path error the model simply retries.
+ * bare path error the model simply retries. Ordinary mode is unchanged; Plan's
+ * denial is raised in `execute` BEFORE the SDK's own edit/write wrapper (which
+ * collapses the operations error into a plain message) can swallow the reason.
  */
 function withHint(error: unknown, mode: SandboxMode): never {
   if (error instanceof SandboxFileDeniedError) {
@@ -110,8 +117,21 @@ function withHint(error: unknown, mode: SandboxMode): never {
   throw error
 }
 
+/**
+ * Plan's file-effect refusal. Raised without touching the filesystem or asking
+ * the approval channel, so an edit/write reference held from before Plan (or a
+ * call whose schema carries escalation parameters) cannot mutate anything.
+ */
+function planFileDenied(input: EscalationInput): never {
+  if (input.sandbox_permissions !== undefined || input.justification !== undefined) {
+    throw new Error(PLAN_ESCALATION_REFUSED)
+  }
+  throw new Error(`${sandboxDenialMarker('read-only')}\n${planFileDenialMarker('operation')}`)
+}
+
 export function createSandboxFileTools(options: SandboxFileToolOptions): ToolDefinition<any, any, any>[] {
   const { cwd, getMode, escalate } = options
+  const inPlan = () => options.isPlanRestricted?.() === true
 
   /** One answer per call: the approval is for this call, not for the session. */
   const modeForCall = async (
@@ -138,6 +158,7 @@ export function createSandboxFileTools(options: SandboxFileToolOptions): ToolDef
     executionMode: 'sequential' as const,
     async execute(toolCallId: string, params: unknown, signal?: AbortSignal, onUpdate?: unknown, context?: unknown) {
       const input = params as EscalationInput
+      if (inPlan()) planFileDenied(input)
       const mode = await modeForCall('edit', toolCallId, input, signal)
       try {
         return await createEditToolDefinition(cwd, { operations: editOperations(cwd, mode) }).execute(
@@ -161,6 +182,7 @@ export function createSandboxFileTools(options: SandboxFileToolOptions): ToolDef
     executionMode: 'sequential' as const,
     async execute(toolCallId: string, params: unknown, signal?: AbortSignal, onUpdate?: unknown, context?: unknown) {
       const input = params as EscalationInput
+      if (inPlan()) planFileDenied(input)
       const mode = await modeForCall('write', toolCallId, input, signal)
       try {
         return await createWriteToolDefinition(cwd, { operations: writeOperations(cwd, mode) }).execute(

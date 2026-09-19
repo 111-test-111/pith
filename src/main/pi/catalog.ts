@@ -220,10 +220,28 @@ function setTool(
 }
 
 /**
+ * One entry of the session's EFFECTIVE tool view (see `plan-gate.ts`). The
+ * catalog uses these for active rows so it describes the implementation the
+ * model actually calls, never the registry's same-name definition — SDK
+ * `ToolInfo` is raw registration data, not authority over a replacement.
+ */
+export interface EffectiveCatalogTool {
+  name: string
+  description: string
+  parameters: unknown
+  promptGuidelines?: string[]
+  provenance: 'safe-read' | 'app' | 'reviewed-extension' | 'unreviewed'
+}
+
+/**
  * Build the catalog for one workspace. `sessionTools`/`activeToolNames` come
  * from the live session (built-ins, enabled extension tools — including ones
  * registered lazily during `session_start`); the extension list comes from the
  * real loader and therefore covers disabled ones too.
+ *
+ * `effectiveTools` is the gate's materialized view. When it names an active
+ * tool, its metadata wins; a `safe-read` row is labelled as the app's own
+ * read-only implementation instead of the extension whose name it replaced.
  *
  * `knownTools` is the manager's snapshot of tools an extension had while it was
  * still enabled, used to keep a disabled lazy extension's tools listed.
@@ -234,7 +252,8 @@ export function buildToolCatalog(
   activeToolNames: string[],
   disabledExtensions: Set<string>,
   packages: Map<string, PackageResources>,
-  knownTools: Map<string, ToolInfoDTO[]>
+  knownTools: Map<string, ToolInfoDTO[]>,
+  effectiveTools: readonly EffectiveCatalogTool[] = []
 ): ToolCatalogDTO {
   const extensions = loader.getExtensions().extensions.filter((extension) => !extension.hidden)
   const active = new Set(activeToolNames)
@@ -346,6 +365,21 @@ export function buildToolCatalog(
 
   for (const info of infos.values()) {
     info.toolNames = [...(perExtension.get(info.id)?.keys() ?? [])]
+  }
+
+  // The effective view is the last word for ACTIVE rows: a Plan safe-read
+  // replacement is not the extension/builtin definition that shares its name.
+  const effective = new Map(effectiveTools.map((tool) => [tool.name, tool]))
+  for (const dto of tools) {
+    if (!dto.active) continue
+    const view = effective.get(dto.name)
+    if (!view) continue
+    dto.description = view.description ?? dto.description
+    dto.parameters = plain(view.parameters)
+    dto.promptGuidelines = view.promptGuidelines ? [...view.promptGuidelines] : undefined
+    if (view.provenance === 'safe-read') {
+      dto.source = { kind: 'builtin', label: 'plan-safe-read' }
+    }
   }
 
   const skillsResult = loader.getSkills()

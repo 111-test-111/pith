@@ -1,0 +1,360 @@
+/**
+ * Plan Mode's runtime tool ceiling: the app-owned adapter that decides which
+ * tools the model can actually call and which implementation answers a call.
+ *
+ * Three facts make this module worth its own file:
+ *
+ * - **Identity, not names.** `appDefinitions` is the exact `ToolDefinition[]`
+ *   handed to the SDK as `customTools`. A registry entry is only `app`-owned
+ *   when `session.getToolDefinition(name) === that definition`, so an extension
+ *   that wins a name cannot be laundered into the Plan allow-list, and the
+ *   execute wrapper calls the implementation object captured at materialization
+ *   time — never a fresh same-name lookup.
+ * - **Whole objects, not names.** For `read`/`grep`/`find`/`ls` Plan installs
+ *   the app's own `createReadOnlyTools` objects (schema, description,
+ *   prepareArguments and execute together), so a same-name extension override
+ *   cannot keep its implementation by name.
+ * - **Fail closed.** Provenance that is not `safe-read`, a captured app
+ *   definition, or an explicitly reviewed extension definition is
+ *   `unreviewed`, and an `unreviewed` tool never passes Plan. The reviewed
+ *   registry starts empty on purpose: an unaudited `web_search`/`web_fetch` is
+ *   absent, not silently trusted.
+ *
+ * The ceiling is enforced at three points, all reading live state:
+ * `setActiveToolsByName` (what the model can see), `beforeToolCall` (what may
+ * start, including after an awaited hook), and the wrapped `execute` (a
+ * re-activated or old-schema reference). It is not a prompt or a name filter.
+ */
+import type { AgentSession, ToolDefinition } from '@earendil-works/pi-coding-agent'
+import { createReadOnlyTools } from '@earendil-works/pi-coding-agent'
+import { APP_BASH_TOOL_NAMES } from './bash-tools'
+import { TODO_TOOL_NAME } from './todo-protocol'
+import { AGENT_STEER_TOOL_NAME, MESSAGE_PARENT_TOOL_NAME, SUBAGENT_TOOL_NAME } from './subagents/protocol'
+import { ASK_USER_TOOL_NAME } from '../../shared/ask-user'
+import type { PlanController } from './plan-mode'
+import { PLAN_ESCALATION_REFUSED, PLAN_SHELL_UNAVAILABLE } from '../sandbox/escalation'
+
+/** The SDK's own read-only tool objects; the only trusted read implementations. */
+export type PlanTool = ReturnType<typeof createReadOnlyTools>[number]
+
+/**
+ * Why a tool is in the effective view. `unreviewed` is the explicit "we did not
+ * audit this implementation" bucket (SDK built-ins in normal mode, extension,
+ * MCP, browser and code-execution tools); it is normal-mode-only by
+ * construction, because Plan never admits it.
+ */
+export type PlanToolProvenance = 'safe-read' | 'app' | 'reviewed-extension' | 'unreviewed'
+
+export interface EffectivePlanTool {
+  name: string
+  tool: PlanTool
+  definition?: ToolDefinition
+  provenance: PlanToolProvenance
+}
+
+export interface PlanGateOptions {
+  session: AgentSession
+  cwd: string
+  controller: PlanController
+  /** The app-owned definitions registered as the session's `customTools`. */
+  appDefinitions: readonly ToolDefinition[]
+  /** Frozen role ceiling (subagent children); undefined means no ceiling. */
+  roleCeiling: () => readonly string[] | undefined
+}
+
+export interface PlanGate {
+  /** Recompute the effective view from the CURRENT registry and live mode. */
+  refresh(): void
+  /**
+   * Replace the app-AUTHORITATIVE active set (settings / role ceiling). Used by
+   * the manager instead of the raw setter, so the SDK's own registry walk —
+   * which feeds the FILTERED effective names back as "previous active" — can
+   * never narrow the base that leaving Plan restores.
+   */
+  setAppActiveTools(names: readonly string[]): void
+  /** The last materialized effective view (catalog / capability readout). */
+  tools(): readonly EffectivePlanTool[]
+  /** Restore the session's own setter and hook chain. */
+  dispose(): void
+}
+
+/**
+ * The reviewed-extension registry. Entries are exact `ToolDefinition`
+ * identities audited in this repository — an extension's `source === 'sdk'`, a
+ * file basename or a tool-name prefix is not evidence, and nothing here is
+ * trusted by name. It is intentionally EMPTY: until a concrete adapter is
+ * reviewed, `web_search`/`web_fetch` (and every other extension tool) stay
+ * absent from Plan rather than being labelled reviewed.
+ */
+export const REVIEWED_EXTENSION_TOOLS: readonly ToolDefinition[] = []
+
+/**
+ * The names Plan substitutes with the app's own read-only implementations. The
+ * replacement is keyed on the `createReadOnlyTools` objects, not on these
+ * strings: a same-name extension definition never survives the swap.
+ */
+const SAFE_READ_NAMES = ['read', 'grep', 'find', 'ls'] as const
+
+/** Derived from the SDK's own session type (pi-agent-core is not a direct dep). */
+type BeforeHook = NonNullable<AgentSession['agent']['beforeToolCall']>
+type BeforeContext = Parameters<BeforeHook>[0]
+type BeforeResult = Awaited<ReturnType<BeforeHook>>
+
+/** App tools the Plan ceiling may expose, by name, once identity is proven. */
+const PLAN_APP_TOOLS: ReadonlySet<string> = new Set([
+  ...APP_BASH_TOOL_NAMES,
+  ASK_USER_TOOL_NAME,
+  TODO_TOOL_NAME,
+  SUBAGENT_TOOL_NAME,
+  AGENT_STEER_TOOL_NAME,
+  MESSAGE_PARENT_TOOL_NAME,
+  // Registered in a later task; the name is allow-listed here so the ceiling
+  // does not have to change when it exists.
+  'submit_plan'
+])
+
+/** A child may investigate and report, never re-dispatch or submit a parent plan. */
+const CHILD_FORBIDDEN_TOOLS: ReadonlySet<string> = new Set([
+  SUBAGENT_TOOL_NAME,
+  AGENT_STEER_TOOL_NAME,
+  'submit_plan'
+])
+
+/** Escalation inputs must be refused in Plan, whether or not they are valid. */
+function requestsEscalation(params: unknown): boolean {
+  if (!params || typeof params !== 'object') return false
+  const record = params as Record<string, unknown>
+  return record.sandbox_permissions !== undefined || record.justification !== undefined
+}
+
+const installed = new WeakMap<AgentSession, PlanGate>()
+
+/**
+ * Install (once per session) the tool ceiling on a root or child session. Must
+ * run after the rewind recorder and the subagent result hook and before
+ * `bindExtensions`, so the lazy `session_start` registrations are filtered by
+ * the same rule as the initial set.
+ */
+export function installPlanGate(options: PlanGateOptions): PlanGate {
+  const existing = installed.get(options.session)
+  if (existing) return existing
+  const gate = createGate(options)
+  installed.set(options.session, gate)
+  return gate
+}
+
+function createGate(options: PlanGateOptions): PlanGate {
+  const { session, controller } = options
+  const safeReads = new Map(
+    createReadOnlyTools(options.cwd)
+      .filter((tool) => (SAFE_READ_NAMES as readonly string[]).includes(tool.name as string))
+      .map((tool) => [tool.name as string, tool])
+  )
+  const appDefinitions = new Map<string, ToolDefinition>()
+  for (const definition of options.appDefinitions) {
+    if (definition && typeof definition.name === 'string') appDefinitions.set(definition.name, definition)
+  }
+
+  const originalSet = session.setActiveToolsByName
+  const previousBefore = session.agent.beforeToolCall
+  /** The app's authoritative active set (settings / role ceiling). */
+  let appNames: string[] = dedupe(session.getActiveToolNames())
+  /**
+   * Tools the SDK activated that the app did not list (lazy registrations).
+   * They are NOT part of the app's policy, so a reload/"app re-apply" clears
+   * them; they exist so a dynamically registered tool survives a Plan round
+   * trip instead of only appearing in Plan's filtered view.
+   */
+  let extras: string[] = []
+  let effective: EffectivePlanTool[] = []
+  let disposed = false
+
+  /**
+   * Identity-based provenance. `unreviewed` is a real answer, not a placeholder:
+   * it is what keeps an unaudited definition out of Plan.
+   */
+  const classify = (name: string): PlanToolProvenance => {
+    const definition = session.getToolDefinition(name)
+    if (!definition) return 'unreviewed'
+    if (appDefinitions.get(name) === definition) return 'app'
+    if (REVIEWED_EXTENSION_TOOLS.includes(definition)) return 'reviewed-extension'
+    return 'unreviewed'
+  }
+
+  const child = (): boolean => options.roleCeiling() !== undefined
+
+  /** May this name run in the current restricted state? */
+  const allowedInPlan = (name: string, provenance: PlanToolProvenance): boolean => {
+    if (provenance === 'safe-read') return true
+    if (provenance === 'unreviewed') return false
+    if (provenance === 'app') {
+      if (!PLAN_APP_TOOLS.has(name)) return false
+      if (child() && CHILD_FORBIDDEN_TOOLS.has(name)) return false
+    }
+    if (name === 'bash' && (controller.snapshot.shellEnforcement ?? 'unavailable') !== 'full') return false
+    return true
+  }
+
+  /**
+   * Deny a specific call right now: admission (lock/closing), the submission
+   * seal, and — under Plan — the name/provenance ceiling plus escalation
+   * parameters (refused before any approval exists).
+   */
+  const checkCall = (name: string, params: unknown, provenance: PlanToolProvenance): string | null => {
+    try {
+      controller.checkWorkAdmission()
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error)
+    }
+    if (controller.submissionLocked) {
+      return 'This planning turn is already sealed by a plan submission; no further tools run until the user sends a new message.'
+    }
+    if (!controller.restricted) return null
+    if (!allowedInPlan(name, provenance)) {
+      return name === 'bash'
+        ? PLAN_SHELL_UNAVAILABLE
+        : `[plan: the "${name}" tool is not available] Keep investigating with the read-only tools, or submit a complete plan for the user to approve.`
+    }
+    if (requestsEscalation(params)) return PLAN_ESCALATION_REFUSED
+    return null
+  }
+
+  /** Call-time provenance must reflect the effective view, not the raw registry. */
+  const provenanceForCall = (name: string): PlanToolProvenance => {
+    if (controller.restricted && safeReads.has(name)) return 'safe-read'
+    return classify(name)
+  }
+
+  /** Wrap the captured implementation so a stale reference still rechecks. */
+  const wrapped = (tool: PlanTool, provenance: PlanToolProvenance): PlanTool => {
+    // The registry's AgentTool carries the extension context as a 5th argument
+    // that its declared type omits; keep it so app/extension tools still run
+    // with their own context.
+    const execute = tool.execute as unknown as (
+      toolCallId: string,
+      params: unknown,
+      signal?: AbortSignal,
+      onUpdate?: unknown,
+      ctx?: unknown
+    ) => Promise<unknown>
+    const wrappedExecute = async (
+      toolCallId: string,
+      params: unknown,
+      signal?: AbortSignal,
+      onUpdate?: unknown,
+      ctx?: unknown
+    ): Promise<unknown> => {
+      const denial = checkCall(tool.name, params, provenance)
+      if (denial) throw new Error(denial)
+      return execute(toolCallId, params, signal, onUpdate, ctx)
+    }
+    return { ...tool, execute: wrappedExecute } as unknown as PlanTool
+  }
+
+  const materialize = (): void => {
+    const ceiling = options.roleCeiling()
+    const restricted = controller.restricted
+    const registry = session.agent.state.tools
+    const next: EffectivePlanTool[] = []
+    const seen = new Set<string>()
+    for (const tool of registry) {
+      const name = tool.name
+      if (seen.has(name)) continue
+      if (ceiling && !ceiling.includes(name)) continue
+      const isSafeRead = restricted && safeReads.has(name)
+      const provenance: PlanToolProvenance = isSafeRead ? 'safe-read' : classify(name)
+      const definition = isSafeRead ? undefined : session.getToolDefinition(name)
+      if (restricted) {
+        if (!allowedInPlan(name, provenance)) continue
+        if (isSafeRead) {
+          seen.add(name)
+          next.push({ name, tool: safeReads.get(name)!, provenance })
+          continue
+        }
+      }
+      seen.add(name)
+      next.push({ name, tool: wrapped(tool, provenance), ...(definition ? { definition } : {}), provenance })
+    }
+    effective = next
+    session.agent.state.tools = next.map((entry) => entry.tool)
+  }
+
+  const apply = (): void => {
+    if (disposed) return
+    const present = new Set(session.getAllTools().map((tool) => tool.name))
+    const wanted = dedupe([...appNames, ...extras]).filter((name) => present.has(name))
+    originalSet.call(session, wanted)
+    materialize()
+  }
+
+  /**
+   * The SDK's own setter. Its `previousActiveToolNames` comes from
+   * `getActiveToolNames()`, i.e. the materialized (possibly Plan-filtered)
+   * view, so its list must never replace the app's base: only the names it
+   * genuinely ADDS are remembered, and the base is rebuilt from `appNames`.
+   */
+  const setter = (names: string[]): void => {
+    if (disposed) return
+    const previous = new Set(effective.map((entry) => entry.name))
+    for (const name of names) {
+      if (typeof name !== 'string') continue
+      if (previous.has(name) || appNames.includes(name) || extras.includes(name)) continue
+      // Only non-app definitions are remembered here: an app tool (edit/write,
+      // browser_*) is governed solely by the app list, so a reload walk that
+      // re-activates a disabled one can never smuggle it back into the base.
+      if (classify(name) === 'app' || safeReads.has(name)) continue
+      extras.push(name)
+    }
+    apply()
+  }
+  session.setActiveToolsByName = setter
+
+  const beforeToolCall = async (context: BeforeContext, signal?: AbortSignal): Promise<BeforeResult> => {
+    const name = context.toolCall.name
+    const first = checkCall(name, context.args, provenanceForCall(name))
+    if (first) return { block: true, reason: first }
+    const result = await previousBefore?.(context, signal)
+    if (result?.block) return result
+    // An awaited hook is exactly the window a mode change can enter: re-check
+    // live state before the tool is prepared for execution.
+    const changed = checkCall(name, context.args, provenanceForCall(name))
+    return changed ? { block: true, reason: changed } : result
+  }
+  session.agent.beforeToolCall = beforeToolCall
+
+  // Materialize immediately: a session reopened in Plan must never expose the
+  // registry's full set even for the first few ms before bindExtensions.
+  materialize()
+
+  return {
+    refresh: () => apply(),
+    setAppActiveTools: (names: readonly string[]) => {
+      if (disposed) return
+      appNames = dedupe(names)
+      // `extras` is deliberately NOT cleared: it holds only non-app definitions
+      // the SDK activated on its own (lazy registrations the loader does not
+      // list), and those must survive an app re-apply. App-owned names can
+      // never be in it, so a settings change still takes full effect.
+      apply()
+    },
+    tools: () => effective,
+    dispose: () => {
+      if (disposed) return
+      disposed = true
+      if (session.setActiveToolsByName === setter) session.setActiveToolsByName = originalSet
+      if (session.agent.beforeToolCall === beforeToolCall) session.agent.beforeToolCall = previousBefore
+      installed.delete(session)
+    }
+  }
+}
+
+function dedupe(names: readonly string[]): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const name of names) {
+    if (typeof name !== 'string' || seen.has(name)) continue
+    seen.add(name)
+    out.push(name)
+  }
+  return out
+}

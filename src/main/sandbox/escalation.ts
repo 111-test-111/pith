@@ -26,6 +26,24 @@ export function escalationHintMarker(subject: 'command' | 'operation'): string {
 }
 
 /**
+ * Plan-mode wording for a file-effect denial. It must NOT read as an invitation
+ * to escalate or to change a setting: Plan mode deliberately has no elevation
+ * path, and the model's only correct moves are to keep investigating read-only
+ * or to leave implementation to the user's next turn.
+ */
+export function planFileDenialMarker(subject: 'command' | 'operation'): string {
+  return `[plan: ${subject === 'command' ? 'shell commands' : 'file changes'} are read-only while Plan mode is active; escalate requests are refused without asking the user]`
+}
+
+/** A held/re-activated bash or file call in Plan: rejected before any approval. */
+export const PLAN_ESCALATION_REFUSED =
+  '[plan: elevated file access is unavailable] sandbox_permissions and justification are refused in Plan mode without asking the user. Keep investigating read-only, or leave Plan mode before implementing.'
+
+/** Plan shell with no full-enforcement DSH runner: refuse, never fall back to the host. */
+export const PLAN_SHELL_UNAVAILABLE =
+  '[plan: no full-enforcement read-only shell] Plan mode cannot run shell commands on this host, and it never falls back to unconfined execution. File investigation and plan authoring still work.'
+
+/**
  * Flat object schema: `Type.Intersect` serializes as allOf, which some model
  * adapters discard, leaving the tool looking parameterless.
  */

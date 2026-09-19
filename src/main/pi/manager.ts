@@ -28,7 +28,7 @@ import { agentOwner } from '../../shared/browser'
 import { createSandboxFileTools, APP_FILE_TOOL_NAMES } from './file-tools'
 import { isSandboxMode, sandboxModeFromBranch, SANDBOX_MODE_ENTRY_TYPE } from '../sandbox/mode'
 import { sandboxStatus } from '../sandbox/broker'
-import { resolveEscalatedMode } from '../sandbox/escalation'
+import { resolveEscalatedMode, PLAN_ESCALATION_REFUSED } from '../sandbox/escalation'
 import { clearSessionEscalations, listPendingEscalations, respondToEscalation } from '../sandbox/pending'
 import { clearSessionAskUserRequests, clearSubagentAskUserRequests, createAskUserTool, engageAskUser as engageAskUserRequest, listPendingAskUser, respondAskUserRequest } from './ask-user'
 import type { AskUserAnswer } from '../../shared/ask-user'
@@ -45,6 +45,7 @@ import { ChangeScopes } from './change-scopes'
 import { TodoState, createTodoTool } from './todo'
 import { TODO_TOOL_NAME } from './todo-protocol'
 import { PlanController, PlanAdmissionError, planErrorCode, type PlanLiveFacts } from './plan-mode'
+import { installPlanGate, type PlanGate } from './plan-gate'
 import { PlanStorage } from './plan-storage'
 import { parsePlanSubmission } from './plan-protocol'
 import {
@@ -277,6 +278,8 @@ interface ManagedSession {
   subagents: SubagentParentState | null
   /** Session mode, plan overlay, admission and live Plan metadata. */
   plan: PlanController
+  /** The runtime tool ceiling (setter adapter + hook chain + execute recheck). */
+  gate?: PlanGate
   /** Present on subagent child sessions: linkage + frozen tool ceiling. The
    * child's initialization activates only the ceiling, never the full set. */
   subagentChild?: { parentPath: string; toolCeiling: readonly string[] }
@@ -455,6 +458,17 @@ export class PiManager {
       signal?: AbortSignal
     }
   ): Promise<SandboxMode> {
+    // Plan is checked BEFORE the approval channel: a call with escalation
+    // parameters is refused outright (no pending question, no way to grant),
+    // and an ordinary call runs the forced read-only overlay. The session's
+    // stored choice is untouched — leaving Plan restores exactly what the user
+    // picked.
+    if (managed.plan.restricted) {
+      if (input.sandboxPermissions !== undefined || input.justification !== undefined) {
+        return Promise.reject(new Error(PLAN_ESCALATION_REFUSED))
+      }
+      return Promise.resolve('read-only')
+    }
     return resolveEscalatedMode({
       sessionId: managed.session.sessionId,
       sessionPath: managed.path,
@@ -1079,6 +1093,10 @@ export class PiManager {
     if (managed.disposePromise) return managed.disposePromise
     managed.disposing = true
     managed.rewind?.dispose()
+    // Put the session's own tool setter and hook chain back before disposal,
+    // so an SDK path that reaches the session during teardown sees its own
+    // methods rather than a gate whose effective view is being discarded.
+    managed.gate?.dispose()
     managed.reloadPending = false
     // Disposal owns the whole subtree: a parent being deleted or the app
     // quitting aborts its subagent runs (suppressed — they must not wake) and
@@ -1505,7 +1523,14 @@ export class PiManager {
       manager: sessionManager,
       storage: new PlanStorage(sessionManager),
       facts: () => this.planFacts(managed),
-      changed: () => this.publishPlanState(managed),
+      // Every published mode/plan change re-materializes the effective tool
+      // view: entering/leaving Plan must change what the model can call NOW,
+      // not only after the next registry rebuild. The base names stay the app's
+      // last authoritative set, re-read from the CURRENT registry by refresh().
+      changed: () => {
+        this.publishPlanState(managed)
+        managed.gate?.refresh()
+      },
       nextSeq: () => this.nextPlanSeq(planPath)
     })
     // The mode the tools read per call. A subagent child follows its parent
@@ -1520,101 +1545,113 @@ export class PiManager {
       justification: unknown
       signal?: AbortSignal
     }): Promise<SandboxMode> => this.escalateFor(managed, input)
+    // The app-owned definitions are captured once, in the same array handed to
+    // the SDK as `customTools`. The Plan gate proves an app tool by IDENTITY
+    // against this array; it never re-looks-up a same-name definition, so a
+    // foreign implementation cannot be laundered into the app ceiling.
+    const customTools = [
+      ...createManagedBashTools({ tasks: this.commandTasks, services,
+        sessionId: sessionManager.getSessionId(), sessionPath: sessionManager.getSessionFile()!,
+        maxWaitMs: () => this.bashMaxWaitMs, sandboxMode: liveSandboxMode,
+        // Live Plan reads: the shell capability and the denial wording both
+        // come from the session's own Plan state, per call.
+        isPlanRestricted: () => managed.plan.restricted,
+        planShellEnforcement: () => managed.plan.snapshot.shellEnforcement,
+        ...(isChild ? {} : { escalate: escalateForTools }),
+        canStart: () => (notifications?.canStart ?? false) && this.planToolAdmitted(managed) }),
+      // The file sandbox replaces the SDK's own edit/write so every mutation
+      // passes the DSH path policy; reads are untouched.
+      ...createSandboxFileTools({
+        cwd: services.cwd,
+        getMode: liveSandboxMode,
+        isPlanRestricted: () => managed.plan.restricted,
+        ...(isChild ? {} : { escalate: escalateForTools })
+      }),
+      createTodoTool(todos, () => (notifications?.canStart ?? false) && this.planToolAdmitted(managed)),
+      // ask_user_question suspends on the pending registry until the user
+      // answers. A subagent child has no composer of its own, so its
+      // questions register under the PARENT's path with a source badge —
+      // the parent's panel answers them and the child's call resolves.
+      createAskUserTool({
+        ownerPath: isChild ? role!.parentPath : (sessionManager.getSessionFile() ?? `memory:${sessionManager.getSessionId()}`),
+        ...(isChild ? {
+          source: {
+            kind: 'subagent' as const,
+            sessionPath: sessionManager.getSessionFile() ?? `memory:${sessionManager.getSessionId()}`,
+            ...(role!.profile ? { profile: role!.profile } : {})
+          }
+        } : {}),
+        onChanged: () => {
+          if (isChild) {
+            const owner = this.sessions.get(role!.parentPath)
+            if (owner) this.publishAskUser(owner)
+          } else {
+            this.publishAskUser(managed)
+          }
+        },
+        canStart: () => (notifications?.canStart ?? false) && this.planToolAdmitted(managed),
+        // Read live, so changing the deadline in Settings applies to the
+        // next question without rebuilding any session.
+        timeoutMs: () => this.askUserTimeoutMs,
+        // An async question is answered long after its call returned; the
+        // outcome goes through this session's own outbox so it is steered
+        // into the conversation the ask belongs to (a child's own, not the
+        // parent's, even though the parent's panel answered it).
+        deliverAsync: (delivery) => askUserNotifications?.settle(delivery)
+      }),
+      // Children never see the delegation tool — recursion is excluded at
+      // both the ceiling (allowlist) and the customTools layer.
+      ...(subagentState && this.subagentsEnabledFlag ? [
+        createSubagentTool({
+          runtime: this.subagentRuntime, state: subagentState, parentSessionRef,
+          parentSessionPath: sessionManager.getSessionFile()!,
+          profiles: () => listSubagentProfiles(sessionManager.getCwd()),
+          canStart: () => (notifications?.canStart ?? false) && subagentState.notifications!.canStart && this.planToolAdmitted(managed),
+          canReuse: () => this.subagentReuseFlag && !this.closing,
+          canSteer: () => this.subagentCommsFlag && !this.closing
+        }),
+        // Parent-side steering, registered beside the delegation tool and
+        // NEVER flag-gated here: the active set (applyActiveTools) exposes
+        // it only while subagent communications are enabled, so the live
+        // toggle works through the same reload walk the browser tools use.
+        createAgentSteerTool({
+          runtime: this.subagentRuntime, state: subagentState,
+          canSteer: () => this.subagentCommsFlag && !this.closing
+        })
+      ] : []),
+      // Child-side messaging: the runtime injects message_parent into the
+      // frozen ceiling only while communications are enabled, but the
+      // definition must exist for that name to activate — registration
+      // itself is unconditional for children.
+      ...(isChild ? [createMessageParentTool({
+        canUse: () => this.subagentCommsFlag && !this.closing,
+        deliver: (text) => this.deliverSubagentMessage(role!.parentPath, sessionManager, text)
+      })] : []),
+      // The embedded browser's agent tools. Registered in the CHILD path too:
+      // a subagent profile may name browser_* tools and the frozen ceiling
+      // admits them by name, so the names must exist to be activated.
+      // Gated on the SERVICE, never on browserToolsFlag: customTools is
+      // frozen at build (the SDK reuses the array on every registry
+      // rebuild) and setActiveToolsByName silently drops unknown names, so
+      // flag-gating here would leave the live toggle a no-op for every
+      // existing session. Exposure is the active set's job — see
+      // applyActiveTools.
+      ...(getBrowserService()
+        ? createBrowserTools({
+          ownerId: sessionManager.getSessionId(),
+          service: getBrowserService()!,
+          // Relative upload paths resolve here (the model usually holds workspace-relative paths).
+          cwd: sessionManager.getCwd()
+        })
+        : [])
+    ]
     const { session } = await createAgentSessionFromServices({ services, sessionManager,
       ...(isChild ? {
         tools: role!.resource.tools,
         ...(role!.model ? { model: role!.model } : {}),
         ...(role!.resource.thinkingLevel ? { thinkingLevel: role!.resource.thinkingLevel as any } : {})
       } : {}),
-      customTools: [...createManagedBashTools({ tasks: this.commandTasks, services,
-        sessionId: sessionManager.getSessionId(), sessionPath: sessionManager.getSessionFile()!,
-        maxWaitMs: () => this.bashMaxWaitMs, sandboxMode: liveSandboxMode,
-        ...(isChild ? {} : { escalate: escalateForTools }),
-        canStart: () => notifications?.canStart ?? false }),
-        // The file sandbox replaces the SDK's own edit/write so every mutation
-        // passes the DSH path policy; reads are untouched.
-        ...createSandboxFileTools({
-          cwd: services.cwd,
-          getMode: liveSandboxMode,
-          ...(isChild ? {} : { escalate: escalateForTools })
-        }),
-        createTodoTool(todos, () => notifications?.canStart ?? false),
-        // ask_user_question suspends on the pending registry until the user
-        // answers. A subagent child has no composer of its own, so its
-        // questions register under the PARENT's path with a source badge —
-        // the parent's panel answers them and the child's call resolves.
-        createAskUserTool({
-          ownerPath: isChild ? role!.parentPath : (sessionManager.getSessionFile() ?? `memory:${sessionManager.getSessionId()}`),
-          ...(isChild ? {
-            source: {
-              kind: 'subagent' as const,
-              sessionPath: sessionManager.getSessionFile() ?? `memory:${sessionManager.getSessionId()}`,
-              ...(role!.profile ? { profile: role!.profile } : {})
-            }
-          } : {}),
-          onChanged: () => {
-            if (isChild) {
-              const owner = this.sessions.get(role!.parentPath)
-              if (owner) this.publishAskUser(owner)
-            } else {
-              this.publishAskUser(managed)
-            }
-          },
-          canStart: () => notifications?.canStart ?? false,
-          // Read live, so changing the deadline in Settings applies to the
-          // next question without rebuilding any session.
-          timeoutMs: () => this.askUserTimeoutMs,
-          // An async question is answered long after its call returned; the
-          // outcome goes through this session's own outbox so it is steered
-          // into the conversation the ask belongs to (a child's own, not the
-          // parent's, even though the parent's panel answered it).
-          deliverAsync: (delivery) => askUserNotifications?.settle(delivery)
-        }),
-        // Children never see the delegation tool — recursion is excluded at
-        // both the ceiling (allowlist) and the customTools layer.
-        ...(subagentState && this.subagentsEnabledFlag ? [
-          createSubagentTool({
-            runtime: this.subagentRuntime, state: subagentState, parentSessionRef,
-            parentSessionPath: sessionManager.getSessionFile()!,
-            profiles: () => listSubagentProfiles(sessionManager.getCwd()),
-            canStart: () => (notifications?.canStart ?? false) && subagentState.notifications!.canStart,
-            canReuse: () => this.subagentReuseFlag && !this.closing,
-            canSteer: () => this.subagentCommsFlag && !this.closing
-          }),
-          // Parent-side steering, registered beside the delegation tool and
-          // NEVER flag-gated here: the active set (applyActiveTools) exposes
-          // it only while subagent communications are enabled, so the live
-          // toggle works through the same reload walk the browser tools use.
-          createAgentSteerTool({
-            runtime: this.subagentRuntime, state: subagentState,
-            canSteer: () => this.subagentCommsFlag && !this.closing
-          })
-        ] : []),
-        // Child-side messaging: the runtime injects message_parent into the
-        // frozen ceiling only while communications are enabled, but the
-        // definition must exist for that name to activate — registration
-        // itself is unconditional for children.
-        ...(isChild ? [createMessageParentTool({
-          canUse: () => this.subagentCommsFlag && !this.closing,
-          deliver: (text) => this.deliverSubagentMessage(role!.parentPath, sessionManager, text)
-        })] : []),
-        // The embedded browser's agent tools. Registered in the CHILD path too:
-        // a subagent profile may name browser_* tools and the frozen ceiling
-        // admits them by name, so the names must exist to be activated.
-        // Gated on the SERVICE, never on browserToolsFlag: customTools is
-        // frozen at build (the SDK reuses the array on every registry
-        // rebuild) and setActiveToolsByName silently drops unknown names, so
-        // flag-gating here would leave the live toggle a no-op for every
-        // existing session. Exposure is the active set's job — see
-        // applyActiveTools.
-        ...(getBrowserService()
-          ? createBrowserTools({
-            ownerId: sessionManager.getSessionId(),
-            service: getBrowserService()!,
-            // Relative upload paths resolve here (the model usually holds workspace-relative paths).
-            cwd: sessionManager.getCwd()
-          })
-          : [])]
+      customTools
     })
     if (!isChild) parentSessionRef.session = session
     if (!isChild) installSubagentResultHook(session)
@@ -1776,6 +1813,18 @@ export class PiManager {
     // The mode is a fact about the selected branch: fold it (and publish) as
     // soon as the session owns a listener, before extension startup finishes.
     plan.restore()
+    // Install the runtime tool ceiling once per session, after the rewind
+    // recorder and the subagent result hook and BEFORE bindExtensions: the
+    // lazy session_start registrations must be filtered by the same rule as
+    // the initial active set, and a session reopened in Plan must never expose
+    // the full registry, not even for the first event-loop turn.
+    managed.gate = installPlanGate({
+      session,
+      cwd: managed.cwd,
+      controller: plan,
+      appDefinitions: customTools,
+      roleCeiling: () => managed.subagentChild?.toolCeiling
+    })
     // Navigation only needs the restored transcript. A session_start hook can
     // wait on a file scan or network connection for many seconds; do not put
     // that wait on init/new/open. Subscribe first so startup events are kept.
@@ -1961,19 +2010,31 @@ export class PiManager {
       // Children activate ONLY their frozen ceiling: the normal path below
       // re-activates every built-in + extension tool, which would silently
       // widen a profile's tool restriction.
-      managed.session.setActiveToolsByName([...managed.subagentChild.toolCeiling])
+      this.setActiveTools(managed, [...managed.subagentChild.toolCeiling])
       return
     }
     // An SDK tools allowlist would also hide extension tools. Activate the
     // complete set after lazy registration, deduplicating app overrides.
     // The delegation tool is gated by its setting here (its customTool is
     // registered at build; the runtime re-checks dispatch live).
-    managed.session.setActiveToolsByName([...new Set([
+    this.setActiveTools(managed, [...new Set([
       ...BUILTIN_TOOL_NAMES, ...APP_BASH_TOOL_NAMES, ...APP_FILE_TOOL_NAMES, TODO_TOOL_NAME, ASK_USER_TOOL_NAME,
       ...(managed.subagents ? [SUBAGENT_TOOL_NAME, ...(this.subagentCommsFlag ? [AGENT_STEER_TOOL_NAME] : [])] : []),
       ...(this.browserToolsFlag ? APP_BROWSER_TOOL_NAMES : []),
       ...loader.getExtensions().extensions.flatMap((extension) => [...extension.tools.keys()])
     ])])
+  }
+
+  /**
+   * Apply an app-authoritative active set through the Plan gate when one is
+   * installed. The gate keeps its own base separate from the SDK's registry
+   * walk, so this is a full replacement (settings changes apply), while a lazy
+   * registration the SDK activated can never narrow the base leaving Plan
+   * restores.
+   */
+  private setActiveTools(managed: ManagedSession, names: readonly string[]): void {
+    if (managed.gate) managed.gate.setAppActiveTools(names)
+    else managed.session.setActiveToolsByName([...names])
   }
 
   private async initializeSession(managed: ManagedSession, loader: ResourceLoader): Promise<void> {
@@ -2074,6 +2135,23 @@ export class PiManager {
       // runner is usable, which is a stated capability limit, not a switch veto.
       shellEnforcement: sandboxStatus('read-only').enforcement ?? 'unavailable'
     }
+  }
+
+  /**
+   * Live admission for a tool that creates a process, task or child. The gate's
+   * beforeToolCall already refuses a sealed/transitioning turn; this is the
+   * second layer for a call that was prepared before the state changed (an
+   * awaited argument hook included). It only refuses — no task is stopped and
+   * no queue is cleared to pass the check.
+   */
+  private planToolAdmitted(managed: ManagedSession): boolean {
+    try {
+      managed.plan.checkWorkAdmission()
+    } catch {
+      return false
+    }
+    if (managed.plan.submissionLocked) return false
+    return !managed.plan.snapshot.blockers.switch.includes('storage')
   }
 
   /**
@@ -3140,7 +3218,17 @@ export class PiManager {
     // snapshot forever.
     const sessionTools = session?.getAllTools() ?? []
     const registeredTools = sessionTools.map((tool) => tool.name).sort().join('\u0001')
-    const key = `${managed.path}\u0000${[...this.disabledExtensions].sort().join('\u0000')}\u0000${registeredTools}`
+    const activeToolNames = session?.getActiveToolNames() ?? []
+    // The effective view is part of the cache key: leaving/entering Plan must
+    // invalidate a catalog that still describes the other mode's active rows.
+    const effectiveTools = (managed.gate?.tools() ?? []).map((entry) => ({
+      name: entry.name,
+      description: entry.tool.description ?? '',
+      parameters: entry.tool.parameters,
+      ...(entry.definition?.promptGuidelines ? { promptGuidelines: [...entry.definition.promptGuidelines] } : {}),
+      provenance: entry.provenance
+    }))
+    const key = `${managed.path}\u0000${[...this.disabledExtensions].sort().join('\u0000')}\u0000${registeredTools}\u0000${activeToolNames.join(',')}\u0000${effectiveTools.map((tool) => `${tool.name}:${tool.provenance}`).join(',')}`
     if (this.catalogCache?.key === key) return this.catalogCache.value
     const packages = await loadPackageResources(cwd, getAgentDir()).catch(
       () => new Map<string, PackageResources>()
@@ -3148,10 +3236,11 @@ export class PiManager {
     const value = buildToolCatalog(
       loader,
       sessionTools,
-      session?.getActiveToolNames() ?? [],
+      activeToolNames,
       this.disabledExtensions,
       packages,
-      this.knownExtensionTools
+      this.knownExtensionTools,
+      effectiveTools
     )
     this.catalogCache = { key, value }
     return value
