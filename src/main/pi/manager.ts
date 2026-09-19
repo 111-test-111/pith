@@ -47,7 +47,9 @@ import { TODO_TOOL_NAME } from './todo-protocol'
 import { PlanController, PlanAdmissionError, planErrorCode, type PlanLiveFacts } from './plan-mode'
 import { installPlanGate, type PlanGate } from './plan-gate'
 import { PlanStorage } from './plan-storage'
-import { parsePlanSubmission } from './plan-protocol'
+import { parsePlanSubmission, reconstructPlan } from './plan-protocol'
+import { createPlanSubmissionTool } from './plan-submission'
+import { createPlanContextExtension, installPlanStreamOverlay } from './plan-context'
 import {
   MAX_CONCURRENT_SUBAGENTS_DEFAULT,
   MAX_CONCURRENT_SUBAGENTS_LIMIT,
@@ -119,6 +121,8 @@ import type {
   PlanActionResult,
   PlanModeRequest,
   PlanStateDTO,
+  PlanDocumentRequest,
+  PlanDocumentDTO,
   ProviderDTO,
   ProviderModelDTO,
   PromptPayload,
@@ -280,6 +284,7 @@ interface ManagedSession {
   plan: PlanController
   /** The runtime tool ceiling (setter adapter + hook chain + execute recheck). */
   gate?: PlanGate
+  disposePlanStream?: () => void
   /** Present on subagent child sessions: linkage + frozen tool ceiling. The
    * child's initialization activates only the ceiling, never the full set. */
   subagentChild?: { parentPath: string; toolCeiling: readonly string[] }
@@ -1030,7 +1035,7 @@ export class PiManager {
     return this.modelRuntime
   }
 
-  private async servicesFor(cwd: string, todos: TodoState, recoveryOnly = false, subagent?: { appendSystemPrompt?: string; extensions?: boolean }): Promise<AgentSessionServices> {
+  private async servicesFor(cwd: string, todos: TodoState, recoveryOnly = false, subagent?: { appendSystemPrompt?: string; extensions?: boolean }, planContext?: ReturnType<typeof createPlanContextExtension>): Promise<AgentSessionServices> {
     // A loader owns mutable extension closures and an ExtensionRuntime whose
     // actions bind to ONE session. Sharing it by cwd lets another session's
     // bind/reload/dispose overwrite or invalidate a still-live MCP context.
@@ -1046,7 +1051,7 @@ export class PiManager {
         // extension runtimes would multiply MCP hosts per workspace. A
         // recovery-only session never loads extensions at all.
         noExtensions: recoveryOnly || (subagent !== undefined && subagent.extensions !== true),
-        extensionFactories: [todos.extension()],
+        extensionFactories: [todos.extension(), ...(planContext ? [planContext] : [])],
         ...(subagent?.appendSystemPrompt ? { appendSystemPrompt: [subagent.appendSystemPrompt] } : {}),
         // Children inherit AGENTS.md per the same live app setting — a
         // delegated implementer must still know the project's rules.
@@ -1097,6 +1102,7 @@ export class PiManager {
     // so an SDK path that reaches the session during teardown sees its own
     // methods rather than a gate whose effective view is being discarded.
     managed.gate?.dispose()
+    managed.disposePlanStream?.()
     managed.reloadPending = false
     // Disposal owns the whole subtree: a parent being deleted or the app
     // quitting aborts its subagent runs (suppressed — they must not wake) and
@@ -1507,7 +1513,9 @@ export class PiManager {
     const askRecords = new AskUserRecords(sessionManager)
     const fullServices = await this.servicesFor(
       sessionManager.getCwd(), todos, recoveryOnly,
-      isChild ? { appendSystemPrompt: role!.resource.appendSystemPrompt, extensions: role!.resource.extensions } : undefined
+      isChild ? { appendSystemPrompt: role!.resource.appendSystemPrompt, extensions: role!.resource.extensions } : undefined,
+      createPlanContextExtension({ restricted: () => managed.plan.restricted, isChild: () => isChild,
+        toolNames: () => managed.gate?.tools().map(t => t.name) ?? [] })
     )
     const services = { ...fullServices, resourceLoader: this.filterExtensions(fullServices.resourceLoader) }
     let notifications: TaskNotifications | undefined
@@ -1567,6 +1575,7 @@ export class PiManager {
         isPlanRestricted: () => managed.plan.restricted,
         ...(isChild ? {} : { escalate: escalateForTools })
       }),
+      createPlanSubmissionTool(plan),
       createTodoTool(todos, () => (notifications?.canStart ?? false) && this.planToolAdmitted(managed)),
       // ask_user_question suspends on the pending registry until the user
       // answers. A subagent child has no composer of its own, so its
@@ -1790,26 +1799,24 @@ export class PiManager {
       // Plan metadata follows this session's live facts — never only model text.
       if (PLAN_FACT_EVENT_TYPES.has(event.type)) managed.plan.refresh()
       const message = 'message' in event ? event.message as ChatMessage : undefined
-      // A user message that actually started opens a new planning turn: it is
-      // the only thing that lifts a submission seal (an app-owned user work
-      // registration must be outstanding; a background wake never gets here).
-      if (event.type === 'message_start' && message?.role === 'user') managed.plan.releaseSubmissionForUser()
-      if (event.type === 'message_end') {
-        if (message?.role === 'user' && userEntryId) managed.plan.observeCommittedUser(userEntryId)
-        // Only a parsed, persisted submit_plan result seals the turn; a failed
-        // or malformed result stays an ordinary row.
-        if (message?.role === 'toolResult' && !message.isError && message.toolName === 'submit_plan' && parsePlanSubmission(message)) {
-          managed.plan.observeCommittedSubmission(message.toolCallId)
-        }
-      }
+
     }
-    managed.unsubscribe = session.subscribe(event => {
-      // User message persistence immediately follows SDK session listeners.
-      // Route on the microtask boundary so the DTO carries its actual entry
-      // identity, including two identical messages created in one millisecond.
-      if (event.type === 'message_end' && event.message.role === 'user') queueMicrotask(() => observeEvent(event))
-      else observeEvent(event)
+    const unsubscribeSession = session.subscribe(event => {
+      // Committed user/tool results are routed only after SDK persistence.
+      if (event.type === 'message_end' && (event.message.role === 'user' || event.message.role === 'toolResult')) return
+      observeEvent(event)
     })
+    const unsubscribeCommitted = session.agent.subscribe(event => {
+      if (event.type === 'message_start' && event.message.role === 'user') plan.releaseSubmissionForUser()
+      if (event.type !== 'message_end' || (event.message.role !== 'user' && event.message.role !== 'toolResult')) return
+      const leaf = session.sessionManager.getLeafEntry()
+      if (leaf?.type !== 'message' || leaf.message !== event.message) throw new Error('plan-message-not-persisted')
+      if (event.message.role === 'user') plan.observeCommittedUser(leaf.id)
+      else if (parsePlanSubmission(event.message)) plan.observeCommittedSubmission(event.message.toolCallId)
+      observeEvent(event)
+    })
+    managed.unsubscribe = () => { unsubscribeSession(); unsubscribeCommitted() }
+    managed.disposePlanStream = installPlanStreamOverlay(session, () => plan.restricted)
     // The mode is a fact about the selected branch: fold it (and publish) as
     // soon as the session owns a listener, before extension startup finishes.
     plan.restore()
@@ -2018,7 +2025,7 @@ export class PiManager {
     // The delegation tool is gated by its setting here (its customTool is
     // registered at build; the runtime re-checks dispatch live).
     this.setActiveTools(managed, [...new Set([
-      ...BUILTIN_TOOL_NAMES, ...APP_BASH_TOOL_NAMES, ...APP_FILE_TOOL_NAMES, TODO_TOOL_NAME, ASK_USER_TOOL_NAME,
+      ...BUILTIN_TOOL_NAMES, ...APP_BASH_TOOL_NAMES, ...APP_FILE_TOOL_NAMES, TODO_TOOL_NAME, ASK_USER_TOOL_NAME, 'submit_plan',
       ...(managed.subagents ? [SUBAGENT_TOOL_NAME, ...(this.subagentCommsFlag ? [AGENT_STEER_TOOL_NAME] : [])] : []),
       ...(this.browserToolsFlag ? APP_BROWSER_TOOL_NAMES : []),
       ...loader.getExtensions().extensions.flatMap((extension) => [...extension.tools.keys()])
@@ -2203,6 +2210,19 @@ export class PiManager {
       }
       throw error
     }
+  }
+
+  readPlanDocument(request: PlanDocumentRequest): PlanActionResult<PlanDocumentDTO> {
+    const managed = this.sessions.get(request?.sessionPath)
+    if (!managed) return { ok: false, code: 'no-session', blockers: [] }
+    const branch = managed.session.sessionManager.getBranch()
+    const index = branch.findIndex(entry => entry.id === request.submissionEntryId)
+    const document = index >= 0 ? reconstructPlan(branch.slice(0, index + 1)).latest : null
+    if (!document || document.ref.submissionEntryId !== request.submissionEntryId ||
+        document.ref.planId !== request.planId || document.ref.revision !== request.revision) {
+      return { ok: false, code: 'stale-submission', blockers: ['stale-submission'] }
+    }
+    return { ok: true, value: document }
   }
 
   /** Serialize one session's current state for the renderer. */

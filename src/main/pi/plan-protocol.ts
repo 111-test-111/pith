@@ -170,7 +170,10 @@ export function reconstructPlan(branch: readonly unknown[]): PlanBranchState {
         const details = parsePlanSubmission(message)
         if (!details) continue
         // Only accept submissions that match the current plan identity and mode.
-        if (state.mode !== 'plan' || details.planId !== state.planId) continue
+        if (state.mode !== 'plan' || details.planId !== state.planId ||
+            details.planningTurnEntryId !== state.planningTurnEntryId ||
+            details.hash !== hashOfPlan(details.plan) ||
+            details.revision !== (state.latest?.ref.revision ?? 0) + 1) continue
         // The approval identity must come from the persisted entry; a record
         // without a nonempty one has no authoritative source, so skip it.
         const entryId = text(recordEntry.id)?.trim()

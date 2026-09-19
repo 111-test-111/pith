@@ -156,6 +156,27 @@ function createGate(options: PlanGateOptions): PlanGate {
   }
 
   const originalSet = session.setActiveToolsByName
+  const previousStop = session.agent.shouldStopAfterTurn
+  const previousPrompt = session.agent.prompt
+  const promptRun: typeof previousPrompt = async (...args) => {
+    controller.checkWorkAdmission()
+    const messages = Array.isArray(args[0]) ? args[0] : [args[0]]
+    const userOpening = messages.some(m => typeof m === 'string' || m.role === 'user')
+    if (controller.submissionLocked && !userOpening) throw new Error('plan-already-submitted')
+    return Reflect.apply(previousPrompt, session.agent, args)
+  }
+  session.agent.prompt = promptRun
+  const previousContinue = session.agent.continue
+  // SDK 0.85.1 also drains queues in AgentSession._handlePostAgentRun AFTER
+  // shouldStopAfterTurn. A sealed loop must leave those queues intact. The
+  // public continuation adapter declines that drain; the outer loop consumes
+  // its last-assistant marker and settles normally on its next check.
+  const continueRun: typeof previousContinue = async (...args) => {
+    if (controller.submissionLocked) return
+    controller.checkWorkAdmission()
+    return previousContinue.apply(session.agent, args)
+  }
+  session.agent.continue = continueRun
   const previousBefore = session.agent.beforeToolCall
   /** The app's authoritative active set (settings / role ceiling). */
   let appNames: string[] = dedupe(session.getActiveToolNames())
@@ -209,6 +230,7 @@ function createGate(options: PlanGateOptions): PlanGate {
     if (controller.submissionLocked) {
       return 'This planning turn is already sealed by a plan submission; no further tools run until the user sends a new message.'
     }
+    if (name === 'submit_plan' && (!controller.restricted || child())) return 'submit_plan requires a root planning session.'
     if (!controller.restricted) return null
     if (!allowedInPlan(name, provenance)) {
       return name === 'bash'
@@ -259,6 +281,7 @@ function createGate(options: PlanGateOptions): PlanGate {
     const seen = new Set<string>()
     for (const tool of registry) {
       const name = tool.name
+      if (name === 'submit_plan' && (!restricted || child())) continue
       if (seen.has(name)) continue
       if (ceiling && !ceiling.includes(name)) continue
       const isSafeRead = restricted && safeReads.has(name)
@@ -310,6 +333,8 @@ function createGate(options: PlanGateOptions): PlanGate {
   session.setActiveToolsByName = setter
 
   const beforeToolCall = async (context: BeforeContext, signal?: AbortSignal): Promise<BeforeResult> => {
+    const batch = context.assistantMessage.content.filter(b => b.type === 'toolCall')
+    if (batch.length > 1 && batch.some(b => b.name === 'submit_plan')) return { block: true, reason: 'submit_plan must be the only tool in its batch.' }
     const name = context.toolCall.name
     const first = checkCall(name, context.args, provenanceForCall(name))
     if (first) return { block: true, reason: first }
@@ -321,6 +346,8 @@ function createGate(options: PlanGateOptions): PlanGate {
     return changed ? { block: true, reason: changed } : result
   }
   session.agent.beforeToolCall = beforeToolCall
+  const stop: typeof previousStop = async (context, signal) => controller.submissionLocked || (await previousStop?.(context, signal)) === true
+  session.agent.shouldStopAfterTurn = stop
 
   // Materialize immediately: a session reopened in Plan must never expose the
   // registry's full set even for the first few ms before bindExtensions.
@@ -343,6 +370,9 @@ function createGate(options: PlanGateOptions): PlanGate {
       disposed = true
       if (session.setActiveToolsByName === setter) session.setActiveToolsByName = originalSet
       if (session.agent.beforeToolCall === beforeToolCall) session.agent.beforeToolCall = previousBefore
+      if (session.agent.shouldStopAfterTurn === stop) session.agent.shouldStopAfterTurn = previousStop
+      if (session.agent.prompt === promptRun) session.agent.prompt = previousPrompt
+      if (session.agent.continue === continueRun) session.agent.continue = previousContinue
       installed.delete(session)
     }
   }

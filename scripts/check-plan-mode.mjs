@@ -1,5 +1,6 @@
 /** Plan Mode Task 1 checks: protocol fold, durable storage boundary, offline fixture. */
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { copyFile, mkdtemp, mkdir, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
@@ -144,7 +145,7 @@ const details = {
   revision: 1,
   planningTurnEntryId: 'u1',
   plan: '# Plan\nRead, then change.',
-  hash: 'a'.repeat(64)
+  hash: createHash('sha256').update('# Plan\nRead, then change.').digest('hex')
 }
 const result = {
   id: 's1',
@@ -195,7 +196,7 @@ assert.equal(isCurrentPlan(reconstructPlan([enter, user, wrongTurn])), false)
 const paddedPlan = '\n\n# Plan\nRead, then change.\n\n'
 const paddedResult = {
   ...result,
-  message: { ...result.message, details: { ...details, plan: paddedPlan } }
+  message: { ...result.message, details: { ...details, plan: paddedPlan, hash: createHash('sha256').update(paddedPlan).digest('hex') } }
 }
 assert.equal(parsePlanSubmission(paddedResult.message)?.plan, paddedPlan)
 assert.equal(reconstructPlan([enter, user, paddedResult]).latest.markdown, paddedPlan)
@@ -333,6 +334,11 @@ async function planReady(fixture) {
   )
 }
 
+// These tests isolate wake/admission accounting; real commit verification is covered by check-plan-submission.
+function sealForAdmissionTests(controller, id) {
+  controller.sealed = true; controller.sealedToolCallId = id; controller.refresh()
+}
+
 const branchIds = (manager) => manager.getBranch().map((entry) => entry.id)
 
 // -- admission facts table over a real SessionManager ------------------------
@@ -467,7 +473,7 @@ assert.equal(unsupportedManager.getBranch().some((entry) => entry.type === 'cust
 
 assert.equal(controller.submissionLocked, false)
 assert.equal(controller.snapshot.blockers.submit.includes('already-submitted'), false)
-controller.observeCommittedSubmission('tool-call-1')
+sealForAdmissionTests(controller, 'tool-call-1')
 assert.equal(controller.submissionLocked, true)
 assert.equal(controller.snapshot.blockers.submit.includes('already-submitted'), true)
 assert.throws(() => controller.beginWork('background'), (error) => error.blockers.includes('already-submitted'))
@@ -485,13 +491,13 @@ assert.equal(controller.snapshot.blockers.submit.includes('already-submitted'), 
 // A committed user message is proof an admitted user turn started: it opens a
 // new planning turn and lifts the seal.
 const committedUser = unitManager.appendMessage({ role: 'user', content: 'revise please', timestamp: Date.now() })
-controller.observeCommittedSubmission('tool-call-2')
+sealForAdmissionTests(controller, 'tool-call-2')
 assert.equal(controller.submissionLocked, true)
 controller.observeCommittedUser(committedUser)
 assert.equal(controller.submissionLocked, false)
 assert.equal(controller.branch.planningTurnEntryId, committedUser, 'the committed planning turn was not recorded')
 // A fabricated identity is not evidence.
-controller.observeCommittedSubmission('tool-call-3')
+sealForAdmissionTests(controller, 'tool-call-3')
 controller.observeCommittedUser('not-an-entry')
 assert.equal(controller.submissionLocked, true)
 assert.throws(() => controller.beginWork('background'), (error) => error.blockers.includes('already-submitted'))
@@ -650,7 +656,7 @@ assert.equal(admissionGate.snapshot.blockers.switch.includes('busy'), true)
 
 // The admissionGate closes between per-delivery sends: the third delivery asks again and
 // is refused even though another request is still in flight.
-admissionGate.observeCommittedSubmission('seal-accounting')
+sealForAdmissionTests(admissionGate, 'seal-accounting')
 armAccounting('acct-task-c', 'acct-c')
 assert.equal(gateCalls, 3, 'a delivery did not ask for its own admission')
 assert.equal(admitted, 2, 'the denied delivery was admitted anyway')
@@ -983,7 +989,7 @@ try {
   )
   const backgroundTask = wakes.app.listBashTasks(path).find((task) => task.toolCallId === 'wake-bash-1')
   await until(() => wakes.session.isIdle && wakes.managed.lifecyclePromise === null, 'the launching turn did not settle')
-  plan.observeCommittedSubmission('submit-tool-call-1')
+  sealForAdmissionTests(plan, 'submit-tool-call-1')
   assert.equal(plan.submissionLocked, true)
   // The command finishes while the planning turn is sealed: the completion must
   // stay owned by the app (retained, no request, no custom row).
@@ -1038,7 +1044,7 @@ try {
   assert.equal(wakes.requests.length, beforeTransition, 'a timed-out question was allowed to start a run')
 
   // 3) A background subagent completion obeys the seal too.
-  plan.observeCommittedSubmission('submit-tool-call-3')
+  sealForAdmissionTests(plan, 'submit-tool-call-3')
   subagentNotifications.observe({ type: 'message_end', message: { role: 'toolResult', toolName: 'agent', toolCallId: 'agent-tool-call-1', isError: false, content: [] } })
   subagentNotifications.complete({
     runId: 'wake-run-1',
@@ -1090,7 +1096,7 @@ try {
     'the slow tool never started'
   )
   assert.equal(wakes.session.isStreaming, true)
-  plan.observeCommittedSubmission('submit-tool-call-live')
+  sealForAdmissionTests(plan, 'submit-tool-call-live')
   askUser.settle({
     toolCallId: 'ask-tool-call-live',
     details: { kind: 'pi-app-ask-user', status: 'cancelled', reason: 'timeout', questions: [], answers: null },
@@ -1172,7 +1178,7 @@ try {
     'wake run A never went live'
   )
   // Seal AFTER A's admission stage, while A's request is still in flight.
-  plan.observeCommittedSubmission('submit-lease-1')
+  sealForAdmissionTests(plan, 'submit-lease-1')
   assert.equal(plan.submissionLocked, true)
 
   // B is the same owner's second result. It must ask for its own admission —
@@ -1710,4 +1716,5 @@ try {
 console.log('PASS: Plan gate preserves the normal base across a lazy registration')
 
 await rm(temporary, { recursive: true, force: true })
+await (await import('./lib/check-plan-submission.mjs')).checkPlanSubmission()
 console.log('PASS: all plan-mode checks')

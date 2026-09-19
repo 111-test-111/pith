@@ -205,3 +205,19 @@ export async function createAgentSessionFromServices(options){
     }
   }
 }
+
+export async function submitFixturePlan(f, markdown = '# Plan\n1. Inspect.\n2. Implement.\n3. Verify.') {
+  await f.managed.lifecyclePromise
+  if (f.app.getPlanState(f.managed.path).mode !== 'plan') {
+    const entered = await f.app.setSessionMode({ sessionPath: f.managed.path, mode: 'plan' })
+    if (!entered.ok) throw new Error(entered.code)
+  }
+  const next = f.requests.length + 1
+  f.setRespond(n => n === next
+    ? [{ type: 'toolCall', id: `fixture-plan-${n}`, name: 'submit_plan', arguments: { plan: markdown } }]
+    : [{ type: 'text', text: 'Done' }])
+  await f.session.prompt('Prepare the implementation plan')
+  const state = f.app.getPlanState(f.managed.path)
+  if (!state.latest) throw new Error('fixture-plan-not-submitted')
+  return state.latest
+}

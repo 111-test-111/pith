@@ -23,7 +23,8 @@ import { randomUUID } from 'node:crypto'
 import type { SessionManager } from '@earendil-works/pi-coding-agent'
 import type { PlanBlocker, PlanStateDTO, SessionMode } from '../../shared/plan'
 import type { SandboxMode } from '../sandbox/types'
-import { PLAN_MODE_ENTRY, isCurrentPlan, reconstructPlan, type PlanBranchState } from './plan-protocol'
+import { PLAN_MODE_ENTRY, isCurrentPlan, parsePlanSubmission, reconstructPlan, type PlanBranchState } from './plan-protocol'
+import { normalizePlan } from './plan-submission'
 import type { PlanStorage } from './plan-storage'
 
 /**
@@ -221,6 +222,7 @@ export class PlanController {
    */
   restore(): void {
     this.branchState = reconstructPlan(this.options.manager.getBranch())
+    this.sealed = isCurrentPlan(this.branchState)
     this.publish(this.build())
   }
 
@@ -299,6 +301,9 @@ export class PlanController {
    */
   checkWorkAdmission(): void {
     const facts = this.options.facts()
+    if (this.options.storage.failed) throw new PlanAdmissionError('plan-storage-locked', ['storage'])
+    if (this.branchState.unsupported) throw new PlanAdmissionError('plan-unsupported-version', ['unsupported-version'])
+    if (facts.recovery) throw new PlanAdmissionError('plan-recovery-required', ['recovery'])
     if (facts.closing) throw new PlanAdmissionError('The session is closing', ['closing'])
     if (this.lock) throw new PlanAdmissionError('A session mode change is in progress', ['transition'])
   }
@@ -355,7 +360,22 @@ export class PlanController {
    */
   observeCommittedSubmission(toolCallId: string): void {
     const id = toolCallId.trim()
-    if (!id) return
+    const entry = this.options.manager.getBranch().findLast(e => e.type === 'message' && e.message.role === 'toolResult' && e.message.toolCallId === id)
+    if (!entry || entry.type !== 'message') throw new Error('plan-submission-not-persisted')
+    const details = parsePlanSubmission(entry.message)
+    if (!details) return
+    try {
+      const normalized = normalizePlan(details.plan)
+      if (normalized.hash !== details.hash || normalized.plan !== details.plan ||
+          details.planId !== this.branchState.planId || details.planningTurnEntryId !== this.branchState.planningTurnEntryId ||
+          details.revision !== (this.branchState.latest?.ref.revision ?? 0) + 1) throw new Error('invalid-plan-submission')
+      this.options.storage.sync()
+      this.branchState = reconstructPlan(this.options.manager.getBranch())
+    } catch (error) {
+      this.options.storage.failed = true
+      this.refresh()
+      throw error
+    }
     this.sealed = true
     this.sealedToolCallId = id
     this.refresh()
@@ -504,7 +524,7 @@ export class PlanController {
    * admission transition to the app (see `onWakeOpened`).
    */
   private backgroundWakeOpen(): boolean {
-    return !this.lock && !this.sealed && !this.options.facts().closing
+    return !this.lock && !this.sealed && !this.options.storage.failed && !this.branchState.unsupported && !this.options.facts().closing
   }
 
   private trackWakeAdmission(): void {
