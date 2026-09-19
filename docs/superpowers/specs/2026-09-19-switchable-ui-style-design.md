@@ -133,20 +133,28 @@ Every site must be re-read from the **current** file before editing, not from th
 
 ### 4.4 Selection-control marks
 
-**Owner decision (asked and answered):** the circular point is **only** for the squircle style; the square style keeps today's square point.
+**Owner decisions, in order — the second supersedes the first:**
 
-So the on-state point joins the style dimension through the same token, with no per-style conditionals:
+1. The circular selection point is for the **squircle style only**; the square style keeps its square point.
+2. In the squircle style the checkbox **frame is a circle too**, and its selected state becomes a **check mark** — the check is what tells it apart from the radio, whose mark stays a dot.
 
-| Site | Today | After |
+The implemented design (commit `225291a`):
+
+| Site | Square style | Squircle style |
 | --- | --- | --- |
-| `motion/checkbox.tsx:99` — the `mark="square"` point | `className="size-1.5 bg-primary"` (no radius class, deliberately) | `className="size-1.5 rounded-capsule bg-primary"` |
-| `motion/radio.tsx:140` — the radio point | `className="size-1.5 rounded-control bg-primary"` | `className="size-1.5 rounded-capsule bg-primary"` |
+| checkbox frame (`motion/checkbox.tsx`) | `rounded-control` → right angle | `rounded-control` → a circle (the 14px control step on this 14px box) |
+| checkbox on-state mark | the `size-1.5` point (`rounded-capsule`, so 0px) | the check glyph (`AnimatedIcon`, HugeIcons geometry in that pack) in `currentColor` on the outlined frame |
+| radio frame (`motion/radio.tsx`) | `rounded-control` → right angle | `rounded-control` → a circle |
+| radio on-state mark | `size-1.5 rounded-capsule` → right angle | a fully circular point |
 
-Consequences to verify on the screenshot pass rather than assume:
+What fell out of it, and the rules future work must keep:
 
-- **The frames are a separate question.** Both controls' boxes are `size-3.5` (14px) with `rounded-control`; under the squircle preset `--app-radius-control` is 14px, which on a 14×14 box renders a **full circle** — so the squircle checkbox becomes a circle-frame-with-dot and the radio likewise. That is not a restoration (the pre-square control was a 20px box with a 10px radius, a *rounded square*), so the screenshot pass decides explicitly between (a) accepting the circle and (b) pinning the frames to `rounded-inner`/`rounded-item` so they stay rounded squares. Record the outcome in the plan's follow-up notes; do not let it happen silently.
-- **`data-checkbox-square` becomes a lie in one style.** It is currently the check's hook for the mark. Rename it to `data-checkbox-mark` and update every reference (`check-corners.mjs`, `check-tools-settings`-family checks, `check-ask-user-ui`) in the same commit, so the hook stops naming a shape.
-- The square style must remain pixel-identical: `rounded-capsule` is `0px` there, which is exactly what "no radius class" and `rounded-control` resolve to today.
+- **Exactly one style read outside the tokens.** Frames and the radio's mark ride the token scale; only the checkbox's *which mark* consults `uiStyle` (`pointMark = square && uiStyle === 'square'`), because a check glyph and a point are different subtrees. An earlier revision pinned the checkbox frame to `rounded-detail` to separate the two controls by *shape*; the owner replaced that with the mark-based separation, so the frame is back on the control step and both frames are circles in the squircle style.
+- **`data-checkbox-mark` sits on whichever mark renders** (the point `<span>` or the check `<svg>`), so a check can query "the on-state mark" without naming a shape. It replaced `data-checkbox-square`.
+- **The frame's on-state treatment stays keyed on the `mark` VARIANT, not the style:** `square` is an outlined frame with an open interior, `check` (multi-select lists, the session-search filter) is the filled accent box. That is why the squircle check draws in `currentColor` rather than white-on-primary, and why `mark="check"` behaviour was left untouched.
+- **The square style stays pixel-identical:** `rounded-capsule` is 0px there and the point is still the point.
+- **A check fixture must drive the STORE, not the attribute.** `useUiStyle()` reads the store, so writing only `data-corners` moves the CSS while React keeps drawing the other style's mark — `check-corners.mjs` therefore sets the preset through `window.setUiStyle`, which the fixture exposes from `lib/ui-style.ts`. That is why `setUiStyle` owns the DOM write and `App`'s layout effect covers only the boot case.
+- **The pinned invariant:** in the squircle style the checkbox's mark must be a check glyph (`<svg>` with a drawn `<path>`) while the radio's stays the dot (`<span>`), asserted in one place with a message that names both. The earlier "the two frames must differ" invariant is gone, because both frames are circles there.
 
 ### 4.5 Literal radii in `pdf-viewer.css`
 
