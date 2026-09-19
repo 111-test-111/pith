@@ -764,5 +764,188 @@ try {
 
 console.log('PASS: notification-driven metadata and the durable storage failure latch')
 
+// ---------------------------------------------------------------------------
+// Task 2 fix round 1: background wakes obey the submission seal and the lock
+// ---------------------------------------------------------------------------
+
+const wakes = await createPlanFixture({ respond: () => [{ type: 'text', text: 'ok' }] })
+try {
+  await planReady(wakes)
+  const path = wakes.managed.path
+  const plan = wakes.managed.plan
+  const notifications = wakes.managed.notifications
+  const askUser = wakes.managed.askUser
+  const subagentNotifications = wakes.managed.subagents.notifications
+  assert.notEqual(subagentNotifications, null, 'the parent session has no subagent notification owner')
+
+  const completionRows = (taskId) => wakes.session.messages.filter((message) =>
+    message.role === 'custom' && message.customType === 'bash_task_completion' && message.details?.taskId === taskId).length
+  const askRows = (toolCallId) => wakes.session.messages.filter((message) =>
+    message.role === 'custom' && message.customType === 'ask_user_answer' && message.details?.toolCallId === toolCallId).length
+  const subagentRows = (runId) => wakes.session.messages.filter((message) =>
+    message.role === 'custom' && message.customType === 'subagent_completion' && message.details?.runId === runId).length
+  const quietWindow = () => new Promise((resolve) => setTimeout(resolve, 80))
+  const wakeSettled = async () => {
+    await until(
+      () => wakes.session.isIdle && wakes.managed.lifecyclePromise === null &&
+        !notifications.hasPendingCompletions && !askUser.hasPendingDeliveries && !subagentNotifications.hasPendingDeliveries,
+      'the wake turn did not settle'
+    )
+    await quietWindow()
+  }
+  /** Settle the SDK run without requiring every pending set to be empty. */
+  const wakeSettledPhase = async () => {
+    await until(() => wakes.session.isIdle && wakes.managed.lifecyclePromise === null, 'the run did not settle')
+    await quietWindow()
+  }
+  // 1) Sealed planning turn: a real finished background command is retained,
+  // never steered in, and no model request happens. The command is launched
+  // through the SDK (so the notification owner holds a real task record), the
+  // plan is sealed while it still runs, and only the completion arrives sealed.
+  let bashArmed = true
+  wakes.setRespond(() => {
+    if (bashArmed) {
+      bashArmed = false
+      return [{ type: 'toolCall', id: 'wake-bash-1', name: 'bash', arguments: { command: 'sleep 1.5; echo done', mode: 'background' } }]
+    }
+    return [{ type: 'text', text: 'ok' }]
+  })
+  wakes.app.prompt({ text: 'run the background check', images: [], files: [] })
+  await until(
+    () => wakes.app.listBashTasks(path).some((task) => task.toolCallId === 'wake-bash-1' && (task.status === 'running' || task.status === 'stopping')),
+    'the background command never started'
+  )
+  const backgroundTask = wakes.app.listBashTasks(path).find((task) => task.toolCallId === 'wake-bash-1')
+  await until(() => wakes.session.isIdle && wakes.managed.lifecyclePromise === null, 'the launching turn did not settle')
+  plan.observeCommittedSubmission('submit-tool-call-1')
+  assert.equal(plan.submissionLocked, true)
+  // The command finishes while the planning turn is sealed: the completion must
+  // stay owned by the app (retained, no request, no custom row).
+  await until(
+    () => !wakes.app.listBashTasks(path).some((task) => task.status === 'running' || task.status === 'stopping'),
+    'the background command never finished'
+  )
+  await quietWindow()
+  const beforeSealed = wakes.requests.length
+  await quietWindow()
+  assert.equal(completionRows(backgroundTask.id), 0, 'a sealed planning turn received a background completion')
+  assert.equal(wakes.requests.length, beforeSealed, 'a sealed planning turn woke the model')
+  assert.equal(notifications.hasPendingCompletions, true, 'a sealed planning turn dropped its pending completion')
+
+  // A genuinely admitted user turn reopens the seal and delivers exactly once.
+  wakes.setRespond(() => [{ type: 'text', text: 'ok' }])
+  const firstTurn = wakes.requests.length
+  wakes.app.prompt({ text: 'continue please', images: [], files: [] })
+  await until(() => wakes.requests.length > firstTurn, 'the reopening user turn never reached the model')
+  await wakeSettled()
+  assert.equal(plan.submissionLocked, false, 'the admitted user turn did not open the seal')
+  assert.equal(completionRows(backgroundTask.id), 1, 'the deferred completion was not delivered exactly once')
+
+  // 2) A mode transition defers wakes too (denied, not dropped): the ask owner
+  // needs no task record, so the transition window is the only variable.
+  wakes.session.messages.push({
+    role: 'toolResult',
+    toolName: 'ask_user_question',
+    toolCallId: 'ask-tool-call-1',
+    isError: false,
+    content: [],
+    timestamp: Date.now()
+  })
+  let releaseTransition
+  const transitionGate = new Promise((resolve) => { releaseTransition = resolve })
+  const held = plan.transition(async () => { await transitionGate })
+  assert.equal(plan.transitionBusy, true)
+  const beforeTransition = wakes.requests.length
+  askUser.settle({
+    toolCallId: 'ask-tool-call-1',
+    details: { kind: 'pi-app-ask-user', status: 'cancelled', reason: 'timeout', questions: [], answers: null },
+    text: 'no answer was given'
+  })
+  await quietWindow()
+  assert.equal(askUser.hasPendingDeliveries, true, 'a mode transition dropped the pending ask outcome')
+  assert.equal(askRows('ask-tool-call-1'), 0, 'a custom request slipped into a mode transition')
+  assert.equal(wakes.requests.length, beforeTransition, 'a wake ran while a mode transition held the session')
+  releaseTransition()
+  await held
+  await wakeSettled()
+  assert.equal(askRows('ask-tool-call-1'), 1, 'the ask outcome deferred by a transition was not delivered exactly once')
+  assert.equal(wakes.requests.length, beforeTransition, 'a timed-out question was allowed to start a run')
+
+  // 3) A background subagent completion obeys the seal too.
+  plan.observeCommittedSubmission('submit-tool-call-3')
+  subagentNotifications.observe({ type: 'message_end', message: { role: 'toolResult', toolName: 'agent', toolCallId: 'agent-tool-call-1', isError: false, content: [] } })
+  subagentNotifications.complete({
+    runId: 'wake-run-1',
+    sessionId: 'child-session',
+    sessionPath: join(wakes.temporary, 'child-session.jsonl'),
+    parentToolCallId: 'agent-tool-call-1',
+    profile: 'explore',
+    description: 'Explore the repository',
+    task: 'explore',
+    runInBackground: true,
+    status: 'completed',
+    createdAt: new Date().toISOString(),
+    result: 'findings',
+    seq: 1
+  })
+  await quietWindow()
+  assert.equal(subagentNotifications.hasPendingDeliveries, true, 'a sealed planning turn dropped its pending subagent completion')
+  assert.equal(subagentRows('wake-run-1'), 0, 'a sealed planning turn received a subagent completion')
+  const subagentTurn = wakes.requests.length
+  wakes.app.prompt({ text: 'and now', images: [], files: [] })
+  await until(() => wakes.requests.length > subagentTurn, 'the subagent reopening turn never reached the model')
+  await wakeSettled()
+  assert.equal(subagentRows('wake-run-1'), 1, 'the deferred subagent completion was not delivered exactly once')
+
+  // 4) A LIVE steer is gated too: the outcome lands while the sealed run is
+  // still streaming, so it must defer instead of steering into the open turn.
+  wakes.session.messages.push({
+    role: 'toolResult',
+    toolName: 'ask_user_question',
+    toolCallId: 'ask-tool-call-live',
+    isError: false,
+    content: [],
+    timestamp: Date.now()
+  })
+  let liveArmed = true
+  wakes.setRespond(() => {
+    if (liveArmed) {
+      liveArmed = false
+      return [{ type: 'toolCall', id: 'live-bash-1', name: 'bash', arguments: { command: 'sleep 1; echo live', mode: 'blocking', waitMs: 5000 } }]
+    }
+    return [{ type: 'text', text: 'ok' }]
+  })
+  wakes.app.prompt({ text: 'run a slow check', images: [], files: [] })
+  // The seal must land AFTER this turn's own user message committed (a real
+  // submit is a tool result mid-run): an admitted user turn legitimately opens
+  // the seal, so sealing before its message_start would test nothing.
+  await until(
+    () => wakes.session.messages.some((message) => message.role === 'user') && 'live-bash-1' in wakes.managed.toolRuns,
+    'the slow tool never started'
+  )
+  assert.equal(wakes.session.isStreaming, true)
+  plan.observeCommittedSubmission('submit-tool-call-live')
+  askUser.settle({
+    toolCallId: 'ask-tool-call-live',
+    details: { kind: 'pi-app-ask-user', status: 'cancelled', reason: 'timeout', questions: [], answers: null },
+    text: 'no answer was given'
+  })
+  await quietWindow()
+  assert.equal(askUser.hasPendingDeliveries, true, 'a sealed live turn dropped the pending outcome')
+  assert.equal(askRows('ask-tool-call-live'), 0, 'a custom request steered into a sealed live turn')
+  await wakeSettledPhase()
+  assert.equal(askRows('ask-tool-call-live'), 0, 'a sealed run that settled still received the deferred outcome')
+  wakes.setRespond(() => [{ type: 'text', text: 'ok' }])
+  const liveTurn = wakes.requests.length
+  wakes.app.prompt({ text: 'now continue', images: [], files: [] })
+  await until(() => wakes.requests.length > liveTurn, 'the live reopening turn never reached the model')
+  await wakeSettled()
+  assert.equal(askRows('ask-tool-call-live'), 1, 'the live-steer outcome was not delivered exactly once after reopen')
+} finally {
+  await wakes.close()
+}
+
+console.log('PASS: background wakes are admitted, deferred and delivered exactly once')
+
 await rm(temporary, { recursive: true, force: true })
 console.log('PASS: all plan-mode checks')

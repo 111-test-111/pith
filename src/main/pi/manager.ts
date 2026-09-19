@@ -1677,6 +1677,34 @@ export class PiManager {
     // to the model blocks a mode change even though the SDK reports idle.
     notifications.onPendingChanged = () => managed.plan.refresh()
     askUserNotifications.onPendingChanged = () => managed.plan.refresh()
+    // Background wakes ask this session's controller for admission BEFORE they
+    // touch the session: a sealed planning turn or an in-flight mode transition
+    // defers them (pending stays owned, no attempt spent, no retry armed).
+    const admitWake = (): (() => void) | null => {
+      try {
+        return managed.plan.beginWork('background')
+      } catch {
+        return null
+      }
+    }
+    notifications.admitWake = admitWake
+    askUserNotifications.admitWake = admitWake
+    // Admission opened again (a real user turn lifted the seal, a transition
+    // ended): give the deferred completions their turn, coalesced and OUTSIDE
+    // the admission call, so a flush can never re-enter the gate that opened it.
+    let wakeFlushScheduled = false
+    const flushDeferredWakes = (): void => {
+      if (wakeFlushScheduled) return
+      wakeFlushScheduled = true
+      queueMicrotask(() => {
+        wakeFlushScheduled = false
+        if (this.closing || managed.disposing) return
+        notifications?.flush()
+        askUserNotifications?.flush()
+        subagentState?.notifications?.flush()
+      })
+    }
+    plan.onWakeOpened = flushDeferredWakes
     notifications.onWake = () => managed.changeScopes.continue()
     // Subagent children own no rewind recorder: they must never record
     // checkpoints (rewind points exist only before user turns), and their
@@ -1695,6 +1723,7 @@ export class PiManager {
       })
       subagentState.notifications = subagentNotifications
       subagentNotifications.onPendingChanged = () => managed.plan.refresh()
+      subagentNotifications.admitWake = admitWake
       subagentNotifications.onSettledWithQueued = () => queueMicrotask(() => {
         if (!subagentNotifications.canStart || !session.isIdle) return
         this.rebuildQueues(managed)

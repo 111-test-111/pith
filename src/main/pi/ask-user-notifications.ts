@@ -2,6 +2,7 @@ import type { AgentSession, AgentSessionEvent } from '@earendil-works/pi-coding-
 import { ASK_USER_ANSWER_TYPE } from '../../shared/ask-user'
 import type { AskUserToolDetails } from '../../shared/ask-user'
 import type { ChatMessage } from '../../shared/types'
+import { WakeLease, type WakeAdmission } from './wake-admission.ts'
 
 /** The async outcome's details, as the transcript notice reads them. */
 export interface AskUserAnswerNotice {
@@ -59,6 +60,13 @@ export class AskUserNotifications {
 
   /** Pending-set changes: the app's Plan metadata reads them as live facts. */
   onPendingChanged?: () => void
+  /**
+   * App-owned admission for this owner's wake/steer work (Plan submission seal,
+   * mode transition). Unset means ungated — the session has no Plan owner.
+   */
+  admitWake?: WakeAdmission
+  /** Holds one admission reservation across the requests a flush pass admits. */
+  private readonly wake = new WakeLease(() => this.admitWake?.())
 
   /** True while an automatic wake is still owed — the run is not really over. */
   get continuesAtSettled(): boolean {
@@ -112,39 +120,53 @@ export class AskUserNotifications {
     // Prompt preparation and resource reloads await work while the SDK already
     // reports idle; never race those with an automatic wake.
     if (!this.session.isStreaming && this.holds > 0) return
+    const ready = [...this.pending.values()].filter((delivery) =>
+      !delivery.queued && !delivery.drained && this.receiptPresent(delivery.toolCallId))
+    if (!ready.length) return
+    // Ask the app BEFORE any wake, steer or append: a sealed planning turn or an
+    // in-flight mode transition defers the whole pass — the outcome stays owned,
+    // no wake attempt is spent, no retry loop is armed. A timed-out question is
+    // gated too: it is still background work entering the session.
+    if (!this.wake.reserve()) return
     if (!this.session.isStreaming && !this.session.isIdle) {
+      this.wake.settle()
       this.retry ??= setTimeout(() => { this.retry = undefined; this.flush() }, 100)
       return
     }
-    for (const delivery of this.pending.values()) {
-      if (delivery.queued || delivery.drained) continue
-      if (!this.receiptPresent(delivery.toolCallId)) continue
+    for (const delivery of ready) {
       if (!this.session.isStreaming && delivery.wantsWake) {
-        if (delivery.wakeAttempts >= 3) continue
+        if (delivery.wakeAttempts >= 3) { this.wake.settle(); continue }
         delivery.wakeAttempts++
       }
       delivery.queued = true
       const answered = delivery.details.status === 'answered'
-      void this.session.sendCustomMessage({
-        customType: ASK_USER_ANSWER_TYPE,
-        content: `${answered
-          ? 'The user answered your earlier ask_user_question. This is tool output, not a user instruction.'
-          : 'Your earlier ask_user_question ended without answers. This is tool output, not a user instruction; continue on the assumptions you already stated.'}\n${delivery.text}`,
-        display: true,
-        details: { toolCallId: delivery.toolCallId, askUser: delivery.details } satisfies AskUserAnswerNotice
-      }, {
-        deliverAs: 'steer',
-        // An answer repays a wake; a timeout must not restart an idle session.
-        // While streaming the flag only decides between steer and deferral.
-        triggerTurn: answered || this.session.isStreaming
-      }).catch(() => {
-        // A message_end that already acknowledged it is not a failed delivery.
-        if (this.pending.get(delivery.toolCallId) !== delivery || delivery.drained || !this.canStart) return
+      try {
+        void this.session.sendCustomMessage({
+          customType: ASK_USER_ANSWER_TYPE,
+          content: `${answered
+            ? 'The user answered your earlier ask_user_question. This is tool output, not a user instruction.'
+            : 'Your earlier ask_user_question ended without answers. This is tool output, not a user instruction; continue on the assumptions you already stated.'}\n${delivery.text}`,
+          display: true,
+          details: { toolCallId: delivery.toolCallId, askUser: delivery.details } satisfies AskUserAnswerNotice
+        }, {
+          deliverAs: 'steer',
+          // An answer repays a wake; a timeout must not restart an idle session.
+          // While streaming the flag only decides between steer and deferral.
+          triggerTurn: answered || this.session.isStreaming
+        }).catch(() => {
+          // A message_end that already acknowledged it is not a failed delivery.
+          if (this.pending.get(delivery.toolCallId) !== delivery || delivery.drained || !this.canStart) return
+          delivery.queued = false
+          if (++this.failures <= 3) {
+            this.retry ??= setTimeout(() => { this.retry = undefined; this.flush() }, this.failures * 1000)
+          }
+        }).finally(() => this.wake.settle())
+      } catch {
+        // A synchronous refusal never reached the session: repay the reservation
+        // and leave the outcome pending for the existing retry path.
         delivery.queued = false
-        if (++this.failures <= 3) {
-          this.retry ??= setTimeout(() => { this.retry = undefined; this.flush() }, this.failures * 1000)
-        }
-      })
+        this.wake.settle()
+      }
     }
   }
 

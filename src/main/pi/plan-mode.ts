@@ -144,9 +144,24 @@ export class PlanController {
   private userReservations = 0
   private sealed = false
   private sealedToolCallId: string | null = null
+  /** Last observed wake admission, so the app is told only when it OPENS. */
+  private wakeWasOpen = true
   private readonly nextSeq: () => number
 
-  constructor(private readonly options: PlanControllerOptions) {
+  /** The session's own manager/storage/facts; a plain field, not a parameter
+   *  property, so this module stays loadable by Node's type-stripping checks. */
+  private readonly options: PlanControllerOptions
+
+  /**
+   * Called when background wakes become admissible again — a genuinely admitted
+   * user turn lifted the submission seal, or a mode transition ended. The app
+   * then re-flushes the notification owners so deferred completions are
+   * delivered through their ordinary acknowledge discipline.
+   */
+  onWakeOpened?: () => void
+
+  constructor(options: PlanControllerOptions) {
+    this.options = options
     const path = this.sessionPath()
     this.nextSeq = options.nextSeq ?? (() => nextDefaultSeq(path))
     // Seed from the manager clock so a rebuilt controller can never republish a
@@ -227,6 +242,7 @@ export class PlanController {
   async transition<T>(operation: () => Promise<T>): Promise<T> {
     if (this.lock) throw new PlanAdmissionError('A session mode change is already in progress', ['transition'])
     this.lock = true
+    this.trackWakeAdmission()
     try {
       const blockers = this.factBlockers(this.options.facts(), false)
       if (blockers.length) throw new PlanAdmissionError('The session is not ready for a mode change', blockers)
@@ -234,6 +250,7 @@ export class PlanController {
     } finally {
       this.lock = false
       this.refresh()
+      this.trackWakeAdmission()
     }
   }
 
@@ -269,6 +286,7 @@ export class PlanController {
       this.sealedToolCallId = null
       this.branchState = reconstructPlan(manager.getBranch())
       this.publish(this.build())
+      this.trackWakeAdmission()
     })
     return this.build()
   }
@@ -341,6 +359,7 @@ export class PlanController {
     this.sealed = true
     this.sealedToolCallId = id
     this.refresh()
+    this.trackWakeAdmission()
   }
 
   /**
@@ -359,6 +378,9 @@ export class PlanController {
     this.sealed = false
     this.sealedToolCallId = null
     this.refresh()
+    // A sealed planning turn may have deferred background wakes: opening the
+    // seal is the app's cue to deliver them (never dropped, never doubled).
+    this.trackWakeAdmission()
   }
 
   /**
@@ -472,5 +494,23 @@ export class PlanController {
     this.publishedKey = this.contentKey(dto)
     this.seq = this.nextSeq()
     this.options.changed()
+    this.trackWakeAdmission()
+  }
+
+  /**
+   * Whether a background wake would be admitted right now. This is the exact
+   * predicate of `beginWork('background')` (no lock, no submission seal, not
+   * closing); it exists separately so the controller can report an OPEN
+   * admission transition to the app (see `onWakeOpened`).
+   */
+  private backgroundWakeOpen(): boolean {
+    return !this.lock && !this.sealed && !this.options.facts().closing
+  }
+
+  private trackWakeAdmission(): void {
+    const open = this.backgroundWakeOpen()
+    if (open === this.wakeWasOpen) return
+    this.wakeWasOpen = open
+    if (open) this.onWakeOpened?.()
   }
 }
