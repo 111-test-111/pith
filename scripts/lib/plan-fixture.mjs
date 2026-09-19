@@ -1,11 +1,15 @@
 /** Real SDK + app fixture for offline Plan Mode tests. No model/network calls. */
 import { mkdtemp, mkdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { build } from 'esbuild'
 
-const repoRoot = resolve('/Users/jcy/githubs/pi-app/.worktrees/plan-mode')
+/**
+ * Repository root, derived from this fixture's own location (scripts/lib/ is two
+ * levels below it) so the check runs on any clone, worktree or CI checkout.
+ */
+export const planRepoRoot = fileURLToPath(new URL('../..', import.meta.url))
 const sdk = fileURLToPath(import.meta.resolve('@earendil-works/pi-coding-agent'))
 
 /**
@@ -34,7 +38,7 @@ export { PlanStorage } from './src/main/pi/plan-storage';
 export * from './src/main/pi/plan-protocol';
 export { PiStore } from './src/renderer/src/state/pi-store';
 export { SessionManager, ModelRuntime, SettingsManager, setPlanFixtureStream, registerPlanFixtureExtensionFactories } from '@earendil-works/pi-coding-agent';`,
-      resolveDir: repoRoot
+      resolveDir: planRepoRoot
     },
     bundle: true,
     platform: 'node',

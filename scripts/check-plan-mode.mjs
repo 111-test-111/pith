@@ -1,14 +1,13 @@
 /** Plan Mode Task 1 checks: protocol fold, durable storage boundary, offline fixture. */
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { copyFile, mkdtemp, mkdir, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { build } from 'esbuild'
 
-import { createPlanFixture } from './lib/plan-fixture.mjs'
+import { createPlanFixture, planRepoRoot } from './lib/plan-fixture.mjs'
 
-const cwd = resolve('/Users/jcy/githubs/pi-app/.worktrees/plan-mode')
 const temporary = await mkdtemp(join(tmpdir(), 'pith-plan-mode-'))
 const agentDir = join(temporary, 'agent')
 const project = join(temporary, 'project')
@@ -23,13 +22,35 @@ await mkdir(project)
 await mkdir(sessions)
 await mkdir(userData)
 
+// ---------------------------------------------------------------------------
+// Portability: the repo root follows each script's own location, never cwd or
+// a path baked in for one machine/worktree.
+// ---------------------------------------------------------------------------
+const portableDir = await mkdtemp(join(tmpdir(), 'pith-plan-portable-'))
+try {
+  await mkdir(join(portableDir, 'scripts', 'lib'), { recursive: true })
+  // Keep bare-specifier resolution working for the relocated copy.
+  await symlink(join(planRepoRoot, 'node_modules'), join(portableDir, 'node_modules'), 'dir')
+  await copyFile(
+    fileURLToPath(new URL('./lib/plan-fixture.mjs', import.meta.url)),
+    join(portableDir, 'scripts', 'lib', 'plan-fixture.mjs')
+  )
+  const relocated = await import(pathToFileURL(join(portableDir, 'scripts', 'lib', 'plan-fixture.mjs')).href)
+  assert.equal(await realpath(relocated.planRepoRoot), await realpath(portableDir))
+} finally {
+  await rm(portableDir, { recursive: true, force: true })
+}
+
+console.log('PASS: repo root resolves from the script location, not a baked path')
+
 await build({
   stdin: {
     contents: `export { PiManager } from './src/main/pi/manager';
 export { PlanStorage } from './src/main/pi/plan-storage';
 export * from './src/main/pi/plan-protocol';
+export { PLAN_MAX_BYTES } from './src/shared/plan';
 export { SessionManager, ModelRuntime, SettingsManager } from '@earendil-works/pi-coding-agent';`,
-    resolveDir: cwd
+    resolveDir: planRepoRoot
   },
   bundle: true,
   platform: 'node',
@@ -78,6 +99,7 @@ export function createAgentSessionServices(options){
 })
 
 const {
+  PLAN_MAX_BYTES,
   PLAN_MODE_ENTRY,
   PLAN_APPROVAL_ENTRY,
   PLAN_SUBMISSION_KIND,
@@ -160,6 +182,33 @@ const wrongTurn = {
   }
 }
 assert.equal(isCurrentPlan(reconstructPlan([enter, user, wrongTurn])), false)
+
+// The persisted toolResult body is authoritative: trimming decides emptiness
+// only, and the original bytes are what get stored and hashed.
+const paddedPlan = '\n\n# Plan\nRead, then change.\n\n'
+const paddedResult = {
+  ...result,
+  message: { ...result.message, details: { ...details, plan: paddedPlan } }
+}
+assert.equal(parsePlanSubmission(paddedResult.message)?.plan, paddedPlan)
+assert.equal(reconstructPlan([enter, user, paddedResult]).latest.markdown, paddedPlan)
+
+// The bound measures the raw submitted UTF-8 bytes, not a trimmed body whose
+// whitespace padding still crossed the limit.
+const paddedOverLimit = `${' '.repeat(PLAN_MAX_BYTES)}é`
+assert.equal(Buffer.byteLength(paddedOverLimit.trim(), 'utf8') <= PLAN_MAX_BYTES, true)
+assert.equal(
+  parsePlanSubmission({ ...result.message, details: { ...details, plan: paddedOverLimit } }),
+  null
+)
+
+// A submission with no persisted entry ID has no authoritative source: skip it,
+// and never fabricate an identity that changes between folds.
+const noIdResult = { ...result, id: undefined }
+assert.equal(reconstructPlan([enter, user, noIdResult]).latest, null)
+assert.equal(reconstructPlan([enter, user, { ...result, id: '   ' }]).latest, null)
+const firstFold = reconstructPlan([enter, user, noIdResult])
+assert.deepEqual(reconstructPlan([enter, user, noIdResult]), firstFold)
 
 const enterUnsupported = {
   id: 'm2',

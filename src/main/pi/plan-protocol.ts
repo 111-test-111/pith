@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto'
+import { createHash } from 'node:crypto'
 import type { PlanApprovalDTO, PlanDocumentDTO, PlanSubmissionRef, SessionMode } from '../../shared/plan'
 import { PLAN_MAX_BYTES } from '../../shared/plan'
 
@@ -45,10 +45,12 @@ const hex64 = (value: unknown): string | undefined => {
 const boundedPlan = (value: unknown): string | undefined => {
   const s = text(value)
   if (!s) return undefined
+  // Trim decides emptiness only; the persisted body is stored untouched and the
+  // bound measures its raw UTF-8 bytes.
   const trimmed = s.trim()
   if (!trimmed) return undefined
-  if (Buffer.byteLength(trimmed, 'utf8') > PLAN_MAX_BYTES) return undefined
-  return trimmed
+  if (Buffer.byteLength(s, 'utf8') > PLAN_MAX_BYTES) return undefined
+  return s
 }
 
 export function parsePlanSubmission(value: unknown): PlanSubmissionDetails | null {
@@ -169,7 +171,10 @@ export function reconstructPlan(branch: readonly unknown[]): PlanBranchState {
         if (!details) continue
         // Only accept submissions that match the current plan identity and mode.
         if (state.mode !== 'plan' || details.planId !== state.planId) continue
-        const entryId = text(recordEntry.id)?.trim() ?? randomUUID()
+        // The approval identity must come from the persisted entry; a record
+        // without a nonempty one has no authoritative source, so skip it.
+        const entryId = text(recordEntry.id)?.trim()
+        if (!entryId) continue
         const submittedAt = typeof message.timestamp === 'number' ? message.timestamp : (typeof recordEntry.timestamp === 'number' ? recordEntry.timestamp : 0)
         state.latest = { ref: refOf(details, entryId, submittedAt), markdown: details.plan }
       }
