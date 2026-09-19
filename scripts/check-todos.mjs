@@ -25,6 +25,17 @@ export { buildToolCatalog } from './src/main/pi/catalog';`, resolveDir: resolve(
     plugins: [{ name: 'isolated-profile', setup(builder) {
       builder.onResolve({ filter: /^@earendil-works\/pi-coding-agent$/ }, () => ({ path: 'sdk', namespace: 'fixture' }))
       builder.onResolve({ filter: /^electron$/ }, () => ({ path: 'electron', namespace: 'fixture' }))
+      builder.onResolve({ filter: /^playwright-core(\/|$)|^chromium-bidi(\/|$)/ }, (args) => {
+        // Keep the test bundle out of the embedded browser's heavy optional
+        // dependency graph. The browser service is loaded for its type surface
+        // but never exercised in this check, so an absolute external boundary
+        // is enough (matches how the SDK is handled above).
+        try {
+          return { path: fileURLToPath(import.meta.resolve(args.path)), external: true }
+        } catch {
+          return { path: args.path, external: true }
+        }
+      })
       builder.onResolve({ filter: /^\// }, (args) => args.path === sdk ? { path: sdk, external: true } : undefined)
       builder.onLoad({ filter: /^electron$/, namespace: 'fixture' }, () => ({ contents: `export const app={getPath:()=>${JSON.stringify(temporary)}};export const shell={};` }))
       builder.onLoad({ filter: /^sdk$/, namespace: 'fixture' }, () => ({ contents: `
