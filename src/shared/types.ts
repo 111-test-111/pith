@@ -19,7 +19,7 @@ import type {
   PlanSubmissionRef,
   SessionMode
 } from './plan'
-import { PLAN_MAX_BYTES } from './plan'
+import { PLAN_MAX_BYTES } from './plan.ts'
 
 export type WindowTheme = 'light' | 'dark' | 'system'
 
