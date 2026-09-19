@@ -287,7 +287,7 @@ interface ManagedSession {
   disposePlanStream?: () => void
   /** Present on subagent child sessions: linkage + frozen tool ceiling. The
    * child's initialization activates only the ceiling, never the full set. */
-  subagentChild?: { parentPath: string; toolCeiling: readonly string[] }
+  subagentChild?: { parentPath: string; toolCeiling: readonly string[]; planRestricted?: true }
   initializing: boolean
   lifecyclePromise: Promise<void> | null
   disposePromise: Promise<void> | null
@@ -931,8 +931,13 @@ export class PiManager {
       subagentsEnabled: () => this.subagentsEnabledFlag && !this.closing,
       subagentReuseEnabled: () => this.subagentReuseFlag && !this.closing,
       subagentCommsEnabled: () => this.subagentCommsFlag && !this.closing,
+      planRestricted: path => this.sessions.get(path)?.plan.restricted ?? false,
       commandTasks: () => this.commandTasks,
-      acquireRunLease: (cwd, sessionPath) => this.checkoutCoordinator.acquire(cwd, 'subagent', sessionPath),
+      acquireRunLease: (cwd, sessionPath) => {
+        const managed = this.sessions.get(sessionPath)
+        if (managed && !this.planToolAdmitted(managed)) throw new Error('plan-subagent-admission-blocked')
+        return this.checkoutCoordinator.acquire(cwd, 'subagent', sessionPath)
+      },
       createChildSession: (options) => this.createSubagentChildSession(options),
       emitSubagents: (sessionId, sessionPath, runs) => {
         // Sequence-free metadata ping (same rule as context_usage): roster
@@ -1683,7 +1688,7 @@ export class PiManager {
       resourceLoader: fullServices.resourceLoader,
       subagents: subagentState,
       plan,
-      ...(isChild ? { subagentChild: { parentPath: role!.parentPath, toolCeiling: role!.resource.tools } } : {}),
+      ...(isChild ? { subagentChild: { parentPath: role!.parentPath, toolCeiling: role!.resource.tools, planRestricted: role!.resource.planRestricted } } : {}),
       initializing: true,
       lifecyclePromise: null,
       disposePromise: null,
@@ -1895,6 +1900,10 @@ export class PiManager {
     if (!managed.subagentChild || managed.subagentChild.parentPath !== options.parentSessionPath) {
       throw new Error('Subagent session does not belong to this parent')
     }
+    managed.subagentChild.toolCeiling = managed.subagentChild.toolCeiling.filter(name => options.resource.tools.includes(name))
+    if (options.resource.planRestricted) managed.subagentChild.planRestricted = true
+    managed.plan.restore()
+    this.setActiveTools(managed, managed.subagentChild.toolCeiling)
     // A stopped child kept open for viewing has paused its own bash owner.
     // Resume is the sole write admission for that view and reopens this owner.
     managed.notifications.resume()
@@ -2136,7 +2145,7 @@ export class PiManager {
       // frozen per-run copy is a later-task concern); a parent that is not
       // live falls back to the child's own branch fold.
       inheritedPlanRestriction: managed.subagentChild
-        ? (this.sessions.get(managed.subagentChild.parentPath)?.plan.restricted ?? false)
+        ? (managed.subagentChild.planRestricted === true || (this.sessions.get(managed.subagentChild.parentPath)?.plan.restricted ?? false))
         : false,
       // `read-only` is what plan actually runs; `enforcement` is null when no
       // runner is usable, which is a stated capability limit, not a switch veto.

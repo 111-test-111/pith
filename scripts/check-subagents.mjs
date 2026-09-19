@@ -687,12 +687,14 @@ console.log('check-subagents: all assertions passed')
     // Subagent communications default OFF here (the shipped default);
     // flipping it is a per-test, restorable action read live by the host.
     let commsEnabled = false
+    let planRestricted = false
     const makeHost = (childSession) => ({
       isClosing: () => false,
       maxConcurrentSubagents: () => 4,
       subagentsEnabled: () => true,
       subagentReuseEnabled: () => true,
       subagentCommsEnabled: () => commsEnabled,
+      planRestricted: () => planRestricted,
       commandTasks: () => null,
       acquireRunLease: (_cwd, sessionPath) => { leases.add(sessionPath); return () => leases.delete(sessionPath) },
       createChildSession: async (options) => {
@@ -789,6 +791,29 @@ console.log('check-subagents: all assertions passed')
       assert.equal(runs[0].start.parentToolCallId, 'call-9', 'the model path records its own dispatch tool call (readChildRuns is newest-first)')
       assert.equal(runs[0].start.description, 'Second half')
       assert.equal(runs[0].start.runInBackground, false)
+    }
+
+    // Plan resume narrows the frozen resource, including a cold read.
+    {
+      const session = fakeSession({ getLastAssistantText: () => 'investigated' })
+      const runtime = new SubagentRuntime(makeHost(session))
+      const state = new SubagentParentState('parent-session')
+      const first = await (await runtime.start(state, baseRequest({ profile: { ...profile, tools: ['read', 'write'] } }))).completion
+      const original = runtime.readChildRuns(first.sessionPath)[0].start.resource
+      assert(original.tools.includes('write'))
+      planRestricted = true
+      const narrowParent = { ...parentSession, getActiveToolNames: () => ['read', 'submit_plan'] }
+      await (await runtime.resume(state, narrowParent, first.sessionId, 'Investigate only')).completion
+      const reopened = runtime.readChildRuns(first.sessionPath)[0].start.resource
+      assert.equal(reopened.planRestricted, true)
+      assert.deepEqual(reopened.tools, ['read'])
+      assert(original.tools.includes('write'), 'historical resource was mutated')
+      planRestricted = false
+      await (await runtime.resume(state, parentSession, first.sessionId, 'Continue investigation')).completion
+      const frozen = runtime.readChildRuns(first.sessionPath)[0].start.resource
+      assert.equal(frozen.planRestricted, true)
+      assert.deepEqual(frozen.tools, ['read'])
+      childPaths.push(first.sessionPath)
     }
 
     // --- 2) Startup cancellation: an aborted signal never reaches creation ---

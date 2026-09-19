@@ -120,6 +120,7 @@ export interface SubagentHost {
   subagentReuseEnabled(): boolean
   /** Settings → Subagents: parent↔child steering is enabled. */
   subagentCommsEnabled(): boolean
+  planRestricted(parentSessionPath: string): boolean
   commandTasks(): BashTaskManager | null
   /**
    * Register a run lease so rewind restores and foreign snapshots cannot
@@ -314,7 +315,8 @@ export class SubagentRuntime {
       // Extension tools only exist in a child whose loader loads extensions;
       // decide from the frozen ceiling and persist it with the run so a
       // reopened child restores the same decision.
-      const needsExtensions = ceilingNeedsExtensions(ceiling, request.parentSession.getAllTools())
+      const planRestricted = this.host.planRestricted(request.parentSessionPath)
+      const needsExtensions = !planRestricted && ceilingNeedsExtensions(ceiling, request.parentSession.getAllTools())
       const task = `${request.task}${loadSubagentInputFiles(request.inputFiles, cwd)}`
       const inherit = request.inheritContext ?? request.profile.inheritContext
       const { spec } = await this.host.resolveModelSpec(request.modelSpec ?? request.profile.model, request.parentSession)
@@ -329,6 +331,7 @@ export class SubagentRuntime {
       ].filter(Boolean).join('\n\n')
       const resource: SubagentRunStartData['resource'] = {
         tools: ceiling,
+        ...(planRestricted ? { planRestricted: true as const } : {}),
         ...(needsExtensions ? { extensions: true as const } : {}),
         ...(spec ? { model: spec } : {}),
         ...(thinking ? { thinkingLevel: thinking } : {}),
@@ -409,12 +412,22 @@ export class SubagentRuntime {
       releaseCreationLease = this.host.acquireRunLease(cwd, current.start.parentSessionPath)
       if (controller.signal.aborted) throw new SubagentError('Subagent cancelled before launch')
       const runId = randomUUID()
+      const parentActive = new Set(parentSession.getActiveToolNames())
+      const planRestricted = current.start.resource.planRestricted === true || this.host.planRestricted(current.start.parentSessionPath)
+      const tools = current.start.resource.tools.filter(name =>
+        (parentActive.has(name) || (name === MESSAGE_PARENT_TOOL_NAME && this.host.subagentCommsEnabled())) &&
+        !(SUBAGENT_EXCLUDED_TOOLS as readonly string[]).includes(name))
+      const { extensions: _extensions, ...previousResource } = current.start.resource
+      const resource: SubagentRunStartData['resource'] = { ...previousResource, tools,
+        ...(planRestricted ? { planRestricted: true as const } : {}),
+        ...(!planRestricted && ceilingNeedsExtensions(tools, parentSession.getAllTools()) ? { extensions: true as const } : {}) }
+      if (!tools.length) throw new SubagentError('The resumed subagent has no tools within the current parent ceiling')
       const child = await this.host.createChildSession({
         mode: 'reopen', cwd,
         parentSessionPath: current.start.parentSessionPath,
         parentSessionId: parentSession.sessionId,
         runId,
-        resource: current.start.resource,
+        resource,
         profile: current.start.profile,
         sessionPath: rosterEntry.sessionPath
       })

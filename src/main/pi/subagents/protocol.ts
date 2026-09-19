@@ -29,7 +29,7 @@ export const AGENT_STEER_TOOL_NAME = 'agent_steer'
 export const MESSAGE_PARENT_TOOL_NAME = 'message_parent'
 /** Tools a subagent session must never see, regardless of its profile:
  * delegation recursion and the parent-only steering tool. */
-export const SUBAGENT_EXCLUDED_TOOLS = [SUBAGENT_TOOL_NAME, AGENT_STEER_TOOL_NAME] as const
+export const SUBAGENT_EXCLUDED_TOOLS = [SUBAGENT_TOOL_NAME, AGENT_STEER_TOOL_NAME, 'submit_plan'] as const
 
 /** Data persisted with a `pith_subagent_run` entry. */
 export interface SubagentRunStartData {
@@ -48,6 +48,7 @@ export interface SubagentRunStartData {
    * the child session is reopened later. */
   resource: {
     tools: string[]
+    planRestricted?: true
     /** True when the frozen ceiling names at least one tool the parent
      * attributes to an extension: the child then loads extensions so those
      * tools can register (the create allowlist admits them by name). Absent
@@ -117,6 +118,8 @@ function parseStart(data: unknown): SubagentRunStartData | null {
     createdAt: asString(record.createdAt) ?? new Date(0).toISOString(),
     resource: {
       tools,
+      ...(resource.planRestricted === true ? { planRestricted: true as const } : {}),
+      ...(resource.extensions === true ? { extensions: true as const } : {}),
       model: asString(resource.model),
       thinkingLevel: asString(resource.thinkingLevel),
       maxTurns: asNumber(resource.maxTurns),
