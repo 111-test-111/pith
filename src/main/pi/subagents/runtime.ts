@@ -19,6 +19,7 @@ import {
   SUBAGENT_RUN_TYPE,
   SUBAGENT_DISPATCH_TYPE,
   SUBAGENT_TOOL_NAME,
+  MESSAGE_PARENT_TOOL_NAME,
   type DiskSubagentRun,
   type SubagentRunResultData,
   type SubagentRunStartData
@@ -76,6 +77,19 @@ export interface StartSubagentRequest {
   inputFiles?: string[]
 }
 
+/** Model-driven overrides for a continuation: the fresh dispatch's tool
+ * call id (receipt barrier + dispatch record), the new description and the
+ * new background choice. The panel's IPC path passes none — the stored run's
+ * own values apply. */
+export interface ResumeSubagentOptions {
+  parentToolCallId?: string
+  description?: string
+  runInBackground?: boolean
+  /** The continuing tool call's abort signal (a foreground dispatch): wired
+   * for the run's WHOLE lifetime, exactly like `start`'s external signal. */
+  foregroundSignal?: AbortSignal
+}
+
 /** Handle to a live child ManagedSession, produced by the host (PiManager). */
 export interface ChildSessionHandle {
   session: AgentSession
@@ -102,6 +116,10 @@ export interface SubagentHost {
   isClosing(): boolean
   maxConcurrentSubagents(): number
   subagentsEnabled(): boolean
+  /** Settings → Subagents: the parent model may continue finished children. */
+  subagentReuseEnabled(): boolean
+  /** Settings → Subagents: parent↔child steering is enabled. */
+  subagentCommsEnabled(): boolean
   commandTasks(): BashTaskManager | null
   /**
    * Register a run lease so rewind restores and foreign snapshots cannot
@@ -274,6 +292,15 @@ export class SubagentRuntime {
         : request.profile.tools.filter((tool) => parentActive.has(tool)))
         .filter((tool) => !(SUBAGENT_EXCLUDED_TOOLS as readonly string[]).includes(tool))
       if (!ceiling.length) throw new SubagentError(`Profile "${request.profile.name}" resolves to an empty tool set for this session`)
+      // Communications are a primitive, not a workspace capability: while
+      // subagent communications are enabled, every child can message its
+      // parent regardless of the profile's own tool list. Injected BEFORE the
+      // resource snapshot is frozen, so a reopened child restores the same
+      // decision (and the tool must exist in the ceiling to be activated —
+      // the child's active set is exactly its frozen ceiling).
+      if (this.host.subagentCommsEnabled() && !ceiling.includes(MESSAGE_PARENT_TOOL_NAME)) {
+        ceiling.push(MESSAGE_PARENT_TOOL_NAME)
+      }
       // Extension tools only exist in a child whose loader loads extensions;
       // decide from the frozen ceiling and persist it with the run so a
       // reopened child restores the same decision.
@@ -336,8 +363,12 @@ export class SubagentRuntime {
    * Continue a finished child session under a fresh runId. Shares the start
    * path's admission (slot + lease + enabled checks + cancellation) and
    * re-applies the dispatched turn limit from the persisted resource snapshot.
+   *
+   * Returns the same `{ run, completion }` shape as `start` so the model's
+   * `continue_session_id` path can emit its receipt from the initial DTO;
+   * the panel's IPC action ignores the value.
    */
-  async resume(state: SubagentParentState, parentSession: AgentSession, sessionId: string, message: string): Promise<SubagentRunDTO> {
+  async resume(state: SubagentParentState, parentSession: AgentSession, sessionId: string, message: string, options: ResumeSubagentOptions = {}): Promise<{ run: SubagentRunDTO; completion: Promise<SubagentRunDTO> }> {
     if (this.host.isClosing()) throw new SubagentError('Application is shutting down')
     if (!this.host.subagentsEnabled()) throw new SubagentError('Subagents are disabled in Settings')
     const text = message.trim()
@@ -357,6 +388,8 @@ export class SubagentRuntime {
     const releaseSlot = state.reserve(this.host.maxConcurrentSubagents())
     state.resuming.add(sessionId)
     const controller = new AbortController()
+    const onSignalAbort = () => controller.abort()
+    options.foregroundSignal?.addEventListener('abort', onSignalAbort, { once: true })
     state.starting.add(controller)
     let launchSettled: () => void
     const launchDone = new Promise<void>((resolve) => { launchSettled = resolve })
@@ -378,21 +411,22 @@ export class SubagentRuntime {
       const releaseRunLease = await this.leaseChild(child)
       releaseCreationLease()
       releaseCreationLease = null
-      const { completion } = await this.trackRun(state, child, {
-        parentToolCallId: current.start.parentToolCallId,
+      const { run, completion } = await this.trackRun(state, child, {
+        parentToolCallId: options.parentToolCallId ?? current.start.parentToolCallId,
         profile: current.start.profile,
-        description: current.start.description,
+        description: options.description ?? current.start.description,
         task: current.start.task,
-        runInBackground: current.start.runInBackground,
+        runInBackground: options.runInBackground ?? current.start.runInBackground,
         maxTurns: current.start.resource.maxTurns,
         createdAt: current.start.createdAt
-      }, releaseRunLease, controller.signal, undefined, text, parentSession.sessionManager)
-      return completion
+      }, releaseRunLease, controller.signal, options.foregroundSignal, text, parentSession.sessionManager)
+      return { run, completion }
     } finally {
       state.resuming.delete(sessionId)
       state.starting.delete(controller)
       state.launching.delete(launchDone)
       launchSettled!()
+      options.foregroundSignal?.removeEventListener('abort', onSignalAbort)
       releaseCreationLease?.()
       releaseSlot()
     }

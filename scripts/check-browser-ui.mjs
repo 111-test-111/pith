@@ -153,8 +153,35 @@ try {
   // Unique download filename: a same-named file in the user's real Downloads
   // must never collide (the handler dedupes only when it exists at that moment).
   const downloadName = `browser-check-${process.pid}-${Date.now()}.txt`
+  // keep-alive leg state: the heartbeat page pings /tick every 350ms; the
+  // server counts pings and tracks the highest n — continuity of n across a
+  // rail fold proves the page INSTANCE survived (a reload would restart n at 1).
+  let tickCount = 0
+  let tickLastN = 0
   const fixture = createServer((request, response) => {
     const url = new URL(request.url ?? '/', 'http://fixture.test')
+    if (url.pathname === '/tick') {
+      tickCount += 1
+      tickLastN = Math.max(tickLastN, Number(url.searchParams.get('n') ?? 0) || 0)
+      response.writeHead(200, { 'Content-Type': 'text/plain' })
+      response.end('ok')
+      return
+    }
+    if (url.pathname === '/tick-count') {
+      response.writeHead(200, { 'Content-Type': 'application/json' })
+      response.end(JSON.stringify({ count: tickCount, lastN: tickLastN }))
+      return
+    }
+    if (url.pathname === '/keepalive') {
+      response.writeHead(200, { 'Content-Type': 'text/html' })
+      response.end(`<!doctype html><html><head><title>Keep-alive heartbeat</title></head><body><main>
+        <h1 style="padding:30px;font-size:24px">Keep-alive heartbeat page</h1>
+      </main><script>
+        window.__n = 0
+        setInterval(() => { window.__n += 1; fetch('/tick?n=' + window.__n) }, 350)
+      </script></body></html>`)
+      return
+    }
     if (url.pathname === '/download.txt') {
       response.writeHead(200, {
         'Content-Type': 'text/plain',
@@ -1148,6 +1175,94 @@ try {
   await evaluate(`window.pi.browserClosePage(${JSON.stringify(restoredAgentId)})`)
   await eventually(async () => (await stripRows()) === rowsBeforeFold - 1, 'agent row removed again', 10_000)
 
+  // ================= Keep-alive across rail folds (ui, Settings pref) ========
+  // The keep-alive pref (Settings → Browser, localStorage `pi-app:browser-keep-alive`,
+  // default OFF): with it on, folding the rail keeps the pane's aside mounted at
+  // width 0/opacity 0 — the webviews survive the fold exactly as they survive a
+  // rail TAB switch, in-progress page activity never pauses, and the expand is
+  // the identical DOM (no snapshot restore, no reload). The heartbeat page
+  // proves liveness server-side: its ticks continue while folded and the
+  // counter's continuity proves the page instance never reloaded. Pref off
+  // (including flipped off WHILE folded) takes the ordinary exit path again.
+  {
+    const tickState = async () => (await fetch(`${fixtureUrl}tick-count`)).json()
+    // urlField is declared below for the history leg; this block runs first, so
+    // it owns its local read (same expression).
+    const toolbarUrl = () => evaluate('document.querySelector("[data-browser-toolbar] input")?.value')
+    const keepAliveRowLabel = 'Keep pages alive when the panel is folded'
+    const setKeepAliveThroughSettings = async (enabled) => {
+      await click('button[aria-label="Settings"]')
+      await eventually(() => evaluate('Boolean(document.querySelector(".z-40 [role=tab]"))'), 'settings page renders', 10_000)
+      // Scope to the settings overlay: the workspace's own rail strip has its
+      // own tabs (one of them also labelled “Browser”).
+      await evaluate(`[...document.querySelectorAll('[role="tab"]')].filter((t) => t.closest('.z-40')).find((t) => t.textContent.trim() === 'Browser')?.click()`)
+      await eventually(() => evaluate('Boolean(document.querySelector("[data-browser-section]"))'), 'browser section renders', 10_000)
+      await evaluate(`[...document.querySelectorAll('[data-browser-section] [aria-label]')].find((el) => el.getAttribute('aria-label') === ${JSON.stringify(keepAliveRowLabel)})?.click()`)
+      await eventually(() => evaluate(`(localStorage.getItem("pi-app:browser-keep-alive") ?? "") === ${enabled ? '"true"' : '"false"'}`), `the pref row wrote localStorage (${enabled ? 'on' : 'off'})`, 10_000)
+      await click('button[aria-label="Back to chat"]')
+      await eventually(() => evaluate('!document.querySelector(".z-40")'), 'settings closed', 10_000)
+    }
+
+    await setUrl(`${fixtureUrl}keepalive`)
+    await eventually(() => evaluate('Boolean(document.querySelector("[data-browser-toolbar] input")) && document.querySelector("[data-browser-toolbar] input").value.includes("keepalive")'), 'keepalive url in the toolbar', 10_000)
+    await new Promise((resolve) => setTimeout(resolve, 900))
+    const ticksBeforeFold = await tickState()
+    assert.ok(ticksBeforeFold.count >= 2, `heartbeat page is ticking (saw ${ticksBeforeFold.count})`)
+    // Probe EVERY webview, not just the selected one: the whole pane must keep
+    // its nodes through the fold.
+    await evaluate('[...document.querySelectorAll("[data-browser-page] webview")].forEach((w, i) => w.setAttribute("data-fold-probe", String(i)))')
+    const rowsBeforeKeepFold = await stripRows()
+    const labelsBeforeKeepFold = await evaluate('[...document.querySelectorAll("[data-browser-tab]")].map((r) => r.textContent.trim())')
+    const urlBeforeKeepFold = await toolbarUrl()
+
+    await setKeepAliveThroughSettings(true)
+    await click('button[aria-label="Toggle sidebar"]')
+    await eventually(() => evaluate('Boolean(document.querySelector("[data-panel=right]")) && document.querySelector("[data-panel=right]").getBoundingClientRect().width < 2'), 'the folded rail KEEPS the aside mounted at width ~0 (pref on)', 5_000)
+    assert.equal(await evaluate('Boolean(document.querySelector("[data-browser-pane]"))'), true, 'the browser pane stays mounted through the fold')
+    assert.equal(
+      await evaluate('[...document.querySelectorAll("[data-browser-page] webview")].every((w) => w.getAttribute("data-fold-probe") !== null)'),
+      true,
+      'every webview node survives the fold'
+    )
+    assert.equal(await evaluate('document.querySelector("[data-panel=right]").getAttribute("aria-hidden")'), 'true', 'the folded aside is aria-hidden')
+    // In-progress activity must not pause: the heartbeat keeps ticking while folded.
+    await new Promise((resolve) => setTimeout(resolve, 1_400))
+    const ticksWhileFolded = await tickState()
+    assert.ok(ticksWhileFolded.count >= ticksBeforeFold.count + 3, `the folded page kept running — activity not paused (count ${ticksBeforeFold.count} → ${ticksWhileFolded.count})`)
+    assert.ok(ticksWhileFolded.lastN > ticksBeforeFold.lastN, 'the heartbeat counter is continuous (same page instance, not a fresh one)')
+
+    await click('button[aria-label="Toggle sidebar"]')
+    await eventually(() => evaluate('Boolean(document.querySelector("[data-browser-pane]")) && document.querySelector("[data-panel=right]").getBoundingClientRect().width > 100'), 'rail expands with the same pane', 10_000)
+    assert.equal(
+      await evaluate('[...document.querySelectorAll("[data-browser-page] webview")].every((w) => w.getAttribute("data-fold-probe") !== null)'),
+      true,
+      'expand found the identical webview nodes — no restore, no reload'
+    )
+    assert.equal(await stripRows(), rowsBeforeKeepFold, 'same row count after the fold→expand cycle')
+    assert.equal(
+      JSON.stringify(await evaluate('[...document.querySelectorAll("[data-browser-tab]")].map((r) => r.textContent.trim())')),
+      JSON.stringify(labelsBeforeKeepFold),
+      'same strip labels after the cycle'
+    )
+    assert.equal(await toolbarUrl(), urlBeforeKeepFold, 'same page selected with the same url after the cycle')
+    // A tick lands every 350ms — poll for the next one instead of racing it
+    // (the expand animation + the DOM assertions above can finish inside one
+    // tick interval).
+    await eventually(async () => (await tickState()).lastN > ticksWhileFolded.lastN, 'the same page instance keeps ticking after the expand (never reloaded)', 3_000)
+
+    // Pref OFF takes the exit path again: a folded held-alive aside unmounts
+    // the moment the pref flips (default behavior restored), and the next
+    // expand goes through the snapshot restore (fresh page ids).
+    await click('button[aria-label="Toggle sidebar"]')
+    await eventually(() => evaluate('Boolean(document.querySelector("[data-panel=right]")) && document.querySelector("[data-panel=right]").getBoundingClientRect().width < 2'), 'folded again under keep-alive', 5_000)
+    await setKeepAliveThroughSettings(false)
+    await eventually(() => evaluate('!document.querySelector("[data-panel=right]")'), 'turning the pref off while folded unmounts the held aside', 10_000)
+    await click('button[aria-label="Toggle sidebar"]')
+    await eventually(() => evaluate('Boolean(document.querySelector("[data-browser-pane]"))'), 'pane remounts through the restore path', 10_000)
+    await new Promise((resolve) => setTimeout(resolve, 1_200))
+    pass('ui', 'keep-alive pref: a folded rail keeps the pane mounted — same webview nodes, page activity unpaused, expand pixel-identical; pref off while folded unmounts it again')
+  }
+
   // ================= Back/Forward enablement + address-bar no-flash (ui) =====
   // A fresh tab's Back must be disabled: the spawn jump (marker → first real
   // url) is the handshake, not history — clearHistory erases it at the first
@@ -1544,7 +1659,7 @@ try {
   const liveRules = [...assertedIronRules].filter((rule) => results.iron.some((line) => line.startsWith(`${rule}.`) && !line.includes('[source-assertion]')))
   console.log(`SUMMARY group1 iron: ${results.iron.length}/13 re-proven (${liveRules.length} live [${liveRules.join(',')}], ${13 - liveRules.length} explicit [source-assertion]; none silently dropped)`)
   console.log(`SUMMARY group2 flow: ${results.flow.length} assertions green (attach, marker handshake, human nav + recents/history, guest Playwright primitives, file upload, download interception, popup routing, zoom dom-ready reapply)`)
-  console.log(`SUMMARY group3 ui: ${results.ui.length} assertions green (pane entry + driven consent grant, find bar, annotate end-to-end, keep-alive, link-event reaction, strip close + last-page closes the rail tab, rail fold)`)
+  console.log(`SUMMARY group3 ui: ${results.ui.length} assertions green (pane entry + driven consent grant, find bar, annotate end-to-end, keep-alive, link-event reaction, strip close + last-page closes the rail tab, rail fold, keep-alive fold pref)`)
   console.log('TRIMS/SUBSTITUTIONS:')
   for (const trim of trims) console.log(`  - ${trim}`)
   console.log('PASS check-browser-ui')

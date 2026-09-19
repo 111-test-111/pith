@@ -10,9 +10,11 @@
  * - Profiles: list/detail from `subagents:profiles` — scope badge, file path,
  *   frontmatter fields, system prompt preview.
  * - Tool editor: SDK built-ins + extension tools from the shared catalog, the
- *   MCP family collapsed into ONE row, profile-carried unknown names preserved
- *   on save, empty selection blocked, Reset returning to the saved state, and
- *   the save payload in canonical order.
+ *   MCP family collapsed into ONE row, every namespaced family in a section
+ *   collapsed into one tri-state row (select-all/clear in one gesture, members
+ *   still individually checkable), profile-carried unknown names preserved on
+ *   save, empty selection blocked, Reset returning to the saved state, and the
+ *   save payload in canonical order.
  * - Annotations: `tool_preset` resolution states read on screen.
  * - Both locales; no renderer exceptions.
  *
@@ -39,6 +41,8 @@ const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 const ENABLE_LABEL = 'Subagents'
 const CONCURRENCY_LABEL = 'Concurrent delegations'
+const REUSE_LABEL = 'Reuse finished subagents'
+const COMMS_LABEL = 'Parent–subagent communication'
 
 const fixture = `<!doctype html><html><head><style>
 body { margin: 0; background: var(--background); }
@@ -56,7 +60,7 @@ window.failCreate = false;
 const count = (name, value) => { window.calls.push([name, value]); return Promise.resolve(value) };
 const appInfo = {
   version: '9.9.9', checkpointsEnabled: true, startup: 'resume',
-  subagentsEnabled: true, subagentMaxConcurrent: 4, bashMaxWaitMs: 10000,
+  subagentsEnabled: true, subagentMaxConcurrent: 4, subagentReuseEnabled: false, subagentCommsEnabled: false, bashMaxWaitMs: 10000,
   sandboxMode: 'workspace-write', sandbox: { support: 'ready', backend: 'seatbelt' }
 };
 const catalog = {
@@ -69,6 +73,9 @@ const catalog = {
     { name: 'find', description: 'Find files.', parameters: { type: 'object' }, source: { kind: 'builtin', label: 'Built-in' }, active: true, disabledByExtension: false },
     { name: 'ls', description: 'List a directory.', parameters: { type: 'object' }, source: { kind: 'builtin', label: 'Built-in' }, active: true, disabledByExtension: false },
     { name: 'todo_write', description: 'Write the todo list.', parameters: { type: 'object' }, source: { kind: 'builtin', label: 'Built-in' }, active: true, disabledByExtension: false },
+    { name: 'browser_navigate', description: 'Open a page.', parameters: { type: 'object' }, source: { kind: 'builtin', label: 'Built-in' }, active: true, disabledByExtension: false },
+    { name: 'browser_click', description: 'Click an element.', parameters: { type: 'object' }, source: { kind: 'builtin', label: 'Built-in' }, active: true, disabledByExtension: false },
+    { name: 'browser_type', description: 'Type into a field.', parameters: { type: 'object' }, source: { kind: 'builtin', label: 'Built-in' }, active: true, disabledByExtension: false },
     { name: 'ctx_one', description: 'Extension tool one.', parameters: { type: 'object' }, source: { kind: 'extension', extensionId: '/ext/ctx', label: 'context-mode' }, active: true, disabledByExtension: false },
     { name: 'ctx_two', description: 'Extension tool two.', parameters: { type: 'object' }, source: { kind: 'extension', extensionId: '/ext/ctx', label: 'context-mode' }, active: true, disabledByExtension: false },
     { name: 'ffgrep', description: 'pi-fff grep.', parameters: { type: 'object' }, source: { kind: 'extension', extensionId: '/ext/fff', label: 'pi-fff' }, active: true, disabledByExtension: false },
@@ -99,6 +106,8 @@ window.pi = {
   setStartup: (v) => count('setStartup', v),
   setSubagentsEnabled: (v) => count('setSubagentsEnabled', v),
   setSubagentMaxConcurrent: (v) => count('setSubagentMaxConcurrent', v),
+  setSubagentReuseEnabled: (v) => count('setSubagentReuseEnabled', v),
+  setSubagentCommsEnabled: (v) => count('setSubagentCommsEnabled', v),
   subagentProfiles: () => count('subagentProfiles', listDTO()),
   createSubagentProfile: (payload) => {
     if (window.failCreate) return Promise.reject(new Error('disk on fire'));
@@ -133,6 +142,11 @@ window.radioOf = (text) => [...document.querySelectorAll('[data-subagents-sectio
 window.toolBox = (label) => document.querySelector('[data-subagent-tool="' + label + '"] button[role=checkbox]');
 window.boxState = (label) => { const b = window.toolBox(label); return b ? b.getAttribute('aria-checked') : null };
 window.checkedTools = () => [...document.querySelectorAll('[data-subagent-tool]')].filter((row) => row.querySelector('button[role=checkbox]').getAttribute('aria-checked') === 'true').map((row) => row.dataset.subagentTool);
+window.familyBox = (prefix) => document.querySelector('[data-subagent-tool-family="' + prefix + '"] button[role=checkbox]');
+window.familyState = (prefix) => { const b = window.familyBox(prefix); return b ? b.getAttribute('aria-checked') : null };
+window.familyCount = (prefix) => document.querySelector('[data-subagent-tool-family="' + prefix + '"] [data-subagent-tool-family-count]')?.textContent.trim();
+window.familyToggle = (prefix) => document.querySelector('[data-subagent-tool-family="' + prefix + '"] [data-subagent-tool-family-toggle]');
+window.familyMembers = (prefix) => [...document.querySelectorAll('[data-subagent-tool-family="' + prefix + '"] [data-subagent-tool]')].map((r) => r.dataset.subagentTool);
 window.callsOf = (name) => window.calls.filter((c) => c[0] === name).length;
 window.type = (label, value) => {
   const el = document.querySelector('input[aria-label="' + label + '"], textarea[aria-label="' + label + '"]');
@@ -274,7 +288,7 @@ app.on('window-all-closed',()=>app.quit());`
   const order = await evaluate(`[...document.querySelectorAll('[role=tab]')].map((t) => t.textContent.trim())`)
   assert.deepEqual(
     order,
-    ['General', 'Prompt', 'Appearance', 'Providers', 'Tools', 'Subagents', 'Extensions', 'Skills', 'Usage'],
+    ['General', 'Prompt', 'Appearance', 'Providers', 'Tools', 'Subagents', 'Extensions', 'Skills', 'Browser', 'Usage'],
     'the Subagents entry follows Tools in the registry order'
   )
   assert.equal(await evaluate(`!!document.querySelector('button[role=checkbox][aria-label="${ENABLE_LABEL}"]')`), false, 'General no longer renders the subagents enable checkbox')
@@ -286,13 +300,25 @@ app.on('window-all-closed',()=>app.quit());`
   assert.ok(await evaluate(`!!document.querySelector('[data-subagents-section]')`), 'the section renders')
   assert.equal(await evaluate(`document.querySelector('input[aria-label="${CONCURRENCY_LABEL}"]')?.value`), '4', 'the concurrency field shows the saved value')
   assert.equal(await evaluate(`document.querySelector('button[role=checkbox][aria-label="${ENABLE_LABEL}"]').getAttribute('aria-checked')`), 'true', 'the switch is on')
+  assert.equal(await evaluate(`document.querySelector('button[role=checkbox][aria-label="${REUSE_LABEL}"]')?.getAttribute('aria-checked')`), 'false', 'the reuse switch defaults off')
+  assert.equal(await evaluate(`document.querySelector('button[role=checkbox][aria-label="${COMMS_LABEL}"]')?.getAttribute('aria-checked')`), 'false', 'the communications switch defaults off')
   await evaluate(`document.querySelector('button[role=checkbox][aria-label="${ENABLE_LABEL}"]').click()`)
   await frame()
   assert.deepEqual((await evaluate('window.calls')).find((c) => c[0] === 'setSubagentsEnabled')?.[1], false, 'turning it off reaches the setter')
   assert.equal(await evaluate(`document.querySelector('input[aria-label="${CONCURRENCY_LABEL}"]').disabled`), true, 'the limit disables while subagents are off')
+  assert.equal(await evaluate(`document.querySelector('button[role=checkbox][aria-label="${REUSE_LABEL}"]').disabled`), true, 'reuse disables while subagents are off')
+  assert.equal(await evaluate(`document.querySelector('button[role=checkbox][aria-label="${COMMS_LABEL}"]').disabled`), true, 'communications disables while subagents are off')
   await evaluate(`document.querySelector('button[role=checkbox][aria-label="${ENABLE_LABEL}"]').click()`)
   await frame()
   assert.equal(await evaluate(`document.querySelector('input[aria-label="${CONCURRENCY_LABEL}"]').disabled`), false, 'and re-enables with it')
+  await evaluate(`document.querySelector('button[role=checkbox][aria-label="${REUSE_LABEL}"]').click()`)
+  await evaluate(`document.querySelector('button[role=checkbox][aria-label="${COMMS_LABEL}"]').click()`)
+  await frame()
+  assert.deepEqual(
+    (await evaluate('window.calls')).filter((c) => c[0] === 'setSubagentReuseEnabled' || c[0] === 'setSubagentCommsEnabled'),
+    [['setSubagentReuseEnabled', true], ['setSubagentCommsEnabled', true]],
+    'both switches reach their own setters'
+  )
   await evaluate(`window.typeConcurrent('99')`)
   await frame()
   assert.equal(await evaluate(`document.querySelector('input[aria-label="${CONCURRENCY_LABEL}"]').value`), '16', 'the limit still clamps on blur')
@@ -310,7 +336,7 @@ app.on('window-all-closed',()=>app.quit());`
   // Switching to explicit starts from everything; Reset returns to the saved state.
   await evaluate(`window.radioOf('Choose tools').click()`)
   await frame()
-  assert.equal(await evaluate(`window.checkedTools().length`), 12, 'explicit mode starts from the full universe (8 built-ins + 3 extensions + MCP as one)')
+  assert.equal(await evaluate(`window.checkedTools().length`), 15, 'explicit mode starts from the full universe (11 built-ins + 3 extensions + MCP as one)')
   assert.equal(await evaluate(`document.querySelector('[data-subagent-tools-reset]').disabled`), false, 'an edit in progress can be reset')
   await evaluate(`document.querySelector('[data-subagent-tools-reset]').click()`)
   await frame()
@@ -362,6 +388,87 @@ app.on('window-all-closed',()=>app.quit());`
   await evaluate(`document.querySelector('[data-subagent-tools-reset]').click()`)
   await frame()
   assert.equal(await evaluate(`window.checkedTools().join(',')`), 'read,grep,find,ls,legacy-tool', 'reset restores the saved set')
+
+  // 4b. Same-series tools collapse into ONE family row inside their section:
+  //     a tri-state checkbox for the whole series beside its disclosure, with
+  //     every member still individually checkable underneath.
+  const families = await evaluate(`(()=>{const inSection=(section)=>[...document.querySelectorAll('[data-subagent-tool-group="'+section+'"] [data-subagent-tool-family]')].map((f)=>f.dataset.subagentToolFamily);return {builtin:inSection('builtin'),extension:inSection('extension'),unknown:inSection('unknown'),mcp:inSection('mcp')}})()`)
+  assert.deepEqual(families.extension, ['ctx'], 'the extension section groups ctx_* into one family row')
+  assert.deepEqual(families.builtin, ['browser'], 'a namespaced app tool family groups under the built-ins')
+  assert.deepEqual(families.unknown, [], 'the unknown group has no family of its own')
+  assert.deepEqual(families.mcp, [], 'the MCP whole is deliberately not a family (the gateway reaches every server)')
+  assert.equal(await evaluate(`!!document.querySelector('[data-subagent-tool="ffgrep"]').closest('[data-subagent-tool-family]')`), false, 'a lone prefix member stays a plain row')
+  assert.equal(await evaluate(`!!document.querySelector('[data-subagent-tool="MCP"]').closest('[data-subagent-tool-family]')`), false, 'the MCP row is not nested in a family')
+  assert.deepEqual(await evaluate(`window.familyMembers('ctx')`), ['ctx_one', 'ctx_two'], 'the family holds its members')
+  assert.deepEqual(await evaluate(`window.familyMembers('browser')`), ['browser_click', 'browser_navigate', 'browser_type'], 'in the section sort order, not reshuffled')
+  assert.equal(
+    await evaluate(`getComputedStyle(document.querySelector('[data-subagent-tool-family="ctx"] [data-subagent-tool-family-label]')).fontFamily`),
+    await evaluate(`getComputedStyle(document.querySelector('[data-subagent-tool="ctx_one"] label > span')).fontFamily`),
+    'the family name wears the UI font, exactly like the tool rows it collapses'
+  )
+
+  // Collapsed by default: the rows are mounted (so a save never loses them)
+  // but the panel has no height until the disclosure is opened.
+  assert.equal(await evaluate(`window.familyToggle('ctx').getAttribute('aria-expanded')`), 'false', 'a family starts collapsed')
+  assert.equal(await evaluate(`document.querySelector('[data-subagent-tool-family-members="ctx"]').style.height`), '0px', 'the collapsed panel takes no height')
+  assert.equal(await evaluate(`window.familyState('ctx')`), 'false', 'a family with nothing selected reads unchecked')
+  assert.equal(await evaluate(`window.familyCount('ctx')`), '0/2', 'the row counts what is selected out of what it holds')
+
+  await evaluate(`window.familyToggle('ctx').click()`)
+  await frame()
+  assert.equal(await evaluate(`window.familyToggle('ctx').getAttribute('aria-expanded')`), 'true', 'the disclosure opens the members')
+  assert.equal(await evaluate(`document.querySelector('[data-subagent-tool-family-members="ctx"]').style.height`), 'auto', 'an open family shows its members')
+  // The reveal is instant: one frame after the press the panel already sits at
+  // its rest clip, so nothing is tweening the rows below it around. (Chrome
+  // normalizes `inset(0 0 0% 0)` to three tokens, so this reads the bottom
+  // inset rather than string-matching the whole value.)
+  const restClip = await evaluate(`(()=>{const c=getComputedStyle(document.querySelector('[data-subagent-tool-family-members="ctx"]')).clipPath;const m=/inset\(([^)]+)\)/.exec(c);return m?m[1].trim().split(/\\s+/):null})()`)
+  assert.ok(restClip, 'the open panel carries a clip-path')
+  assert.equal(restClip[2], '0%', 'the family reveal does not animate')
+  // And the row itself is a quiet toggle: pressing it must not pulse it.
+  const pressedTransform = await evaluate(`(()=>{const b=window.familyToggle('ctx');b.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerId:1,isPrimary:true,button:0}));const t=b.style.transform;b.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,pointerId:1,isPrimary:true,button:0}));return t})()`)
+  assert.equal(/scale\(/.test(pressedTransform), false, 'the family toggle has no press spring')
+
+  // The family checkbox is one gesture for the whole series.
+  await evaluate(`window.familyBox('ctx').click()`)
+  await frame()
+  assert.equal(await evaluate(`window.boxState('ctx_one')`), 'true', 'the family checkbox selects a member')
+  assert.equal(await evaluate(`window.boxState('ctx_two')`), 'true', 'and every other member with it')
+  assert.equal(await evaluate(`window.familyState('ctx')`), 'true', 'the family row follows')
+  assert.equal(await evaluate(`window.familyCount('ctx')`), '2/2', 'and its count follows')
+  assert.equal(await evaluate(`window.checkedTools().includes('ffgrep')`), false, 'a sibling family row is untouched')
+
+  // Selecting members one by one is the same path, one click deeper: a partial
+  // family must read MIXED, not "off" and not "on".
+  await evaluate(`window.toolBox('ctx_one').click()`)
+  await frame()
+  assert.equal(await evaluate(`window.boxState('ctx_two')`), 'true', 'unchecking one member leaves its sibling alone')
+  assert.equal(await evaluate(`window.familyState('ctx')`), 'mixed', 'a partial family reads as a mixed box')
+  assert.equal(await evaluate(`document.querySelector('[data-subagent-tool-family="ctx"]').dataset.familyState`), 'some', 'and reports its partial state for checks')
+  assert.equal(await evaluate(`window.familyCount('ctx')`), '1/2', 'with an honest count')
+  await evaluate(`window.toolBox('ctx_one').click()`)
+  await frame()
+  assert.equal(await evaluate(`window.familyState('ctx')`), 'true', 're-selecting it restores the full box')
+
+  // A family clears in one gesture too, and a browser family rides the same
+  // path into the saved CSV.
+  await evaluate(`window.familyBox('ctx').click()`)
+  await frame()
+  assert.equal(await evaluate(`window.checkedTools().join(',')`), 'read,grep,find,ls,legacy-tool', 'the family checkbox clears the whole series')
+  assert.equal(await evaluate(`window.familyState('ctx')`), 'false', 'and the row is unchecked again')
+  await evaluate(`window.familyBox('browser').click()`)
+  await frame()
+  assert.equal(await evaluate(`document.querySelector('[data-subagent-tools-save]').disabled`), false, 'a family selection enables Save')
+  await evaluate(`document.querySelector('[data-subagent-tools-save]').click()`)
+  await frame()
+  assert.deepEqual(
+    (await evaluate(`window.calls.filter((c) => c[0] === 'setSubagentProfileTools').map((c) => c[1])`)).at(-1),
+    { filePath: '/proj/.pi/agents/explore.md', tools: ['browser_click', 'browser_navigate', 'browser_type', 'read', 'grep', 'find', 'ls', 'legacy-tool'] },
+    'every member of a checked family reaches the payload, in canonical order'
+  )
+  await evaluate(`document.querySelector('[data-subagent-tools-reset]').click()`)
+  await frame()
+  assert.equal(await evaluate(`window.checkedTools().join(',')`), 'read,grep,find,ls,legacy-tool', 'reset drops the family selection with the rest of the draft')
 
   // 5. A failing save keeps the draft and reports.
   await evaluate(`window.toolBox('MCP').click()`)
@@ -469,6 +576,8 @@ app.on('window-all-closed',()=>app.quit());`
   await evaluate(`window.openTab('子代理')`)
   await frame()
   assert.ok(await evaluate(`!!document.querySelector('[data-subagents-section]')`), 'the section opens under its Chinese label')
+  assert.ok(await evaluate(`document.querySelector('[data-subagents-section]').textContent.includes('复用已完成的子代理')`), 'the reuse switch label is localized')
+  assert.ok(await evaluate(`document.querySelector('[data-subagents-section]').textContent.includes('主-子代理通信')`), 'the communications switch label is localized')
   await evaluate(`window.profileRow('explore').click()`)
   await frame()
   assert.ok(await evaluate(`document.querySelector('[data-subagents-section]').textContent.includes('内置工具')`), 'the built-in group title is localized')
@@ -482,7 +591,7 @@ app.on('window-all-closed',()=>app.quit());`
   await screenshot('subagents-dark-zh')
 
   assert.deepEqual(exceptions, [], 'no renderer exceptions')
-  console.log('PASS: subagent settings — section owns the switch + limit, profiles list/edit with MCP-as-one and unknown preservation, both locales')
+  console.log('PASS: subagent settings — section owns the switch + limit, profiles list/edit with MCP-as-one, per-section tool families (select-all / clear / mixed), unknown preservation, both locales')
 } finally {
   try {
     ws?.close()

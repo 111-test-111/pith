@@ -8,6 +8,14 @@ import { isDefaultWorkspace } from './pi/default-workspace'
 import { loadSettings, saveSettings } from './settings'
 import { getBrowserService, initBrowserService } from './browser/service'
 import { getCdpPort } from './browser/cdp-port'
+import {
+  browserImportRecordPath,
+  clearImportedCookies,
+  discoverChrome,
+  importChromeCookies,
+  makeSessionApply,
+  readImportStatus
+} from './browser/import-cookies'
 import { BROWSER_PARTITION, HUMAN_OWNER } from '../shared/browser'
 import type { BrowserFocusGuestPayload, BrowserSeenPayload } from '../shared/browser'
 import { sandboxStatus } from './sandbox/broker'
@@ -21,6 +29,9 @@ import { MAX_CONCURRENT_SUBAGENTS_DEFAULT } from './pi/subagents/runtime'
 import type { AskUserAnswer } from '../shared/ask-user'
 import type {
   AppInfoDTO,
+  BrowserImportDiscoveryDTO,
+  BrowserImportResultDTO,
+  BrowserImportStatusDTO,
   BrowserStatusDTO,
   FileBrowserRequest,
   RewindRequest,
@@ -190,6 +201,37 @@ export function registerIpc(pi: PiManager): () => boolean {
     await ses.clearAuthCache()
   })
 
+  // ---- Chrome 登录态导入（Settings → Browser）。逻辑全在 import-cookies.ts；
+  // 这里只把 partition session 接进去（解密/读取永不触碰渲染层）。 ----
+  ipcMain.handle('browser:importSources', (): BrowserImportDiscoveryDTO => ({
+    ...discoverChrome(),
+    // 两条引导路：dev/preview（未打包，进程是仓库里的 Electron.app，FDA 列表
+    // 看不见）→ 授启动终端即可；正式安装（已打包，FDA 列表可见）→ 直接勾选 app。
+    devMode: !app.isPackaged
+  }))
+  // discovery 把根目录分类：blocked（macOS 应用数据保护拦住了读取，引导用户去授
+  // 「完全磁盘访问」）/ none / absent / ok —— 渲染层据此显示引导而非误导性的「未找到」。
+  ipcMain.handle('browser:openPrivacySettings', () => {
+    void shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles')
+  })
+  ipcMain.handle('browser:importCookies', (_event, profileId: unknown): Promise<BrowserImportResultDTO> => {
+    const ses = session.fromPartition(BROWSER_PARTITION)
+    return importChromeCookies({
+      profileId: typeof profileId === 'string' ? profileId : '',
+      recordPath: browserImportRecordPath(app.getPath('userData')),
+      apply: makeSessionApply((detail) => ses.cookies.set(detail))
+    }).then(({ result }) => result)
+  })
+  ipcMain.handle('browser:importStatus', (): BrowserImportStatusDTO =>
+    readImportStatus(browserImportRecordPath(app.getPath('userData')))
+  )
+  ipcMain.handle('browser:clearImported', async (): Promise<{ removed: number; failed: number }> => {
+    const ses = session.fromPartition(BROWSER_PARTITION)
+    return clearImportedCookies(browserImportRecordPath(app.getPath('userData')), (url, name) =>
+      ses.cookies.remove(url, name)
+    )
+  })
+
   ipcMain.handle('app:info', (): AppInfoDTO => {
     const settings = loadSettings()
     return {
@@ -203,6 +245,8 @@ export function registerIpc(pi: PiManager): () => boolean {
       startup: settings.startup,
       subagentsEnabled: settings.subagentsEnabled !== false,
       subagentMaxConcurrent: settings.subagentMaxConcurrent ?? MAX_CONCURRENT_SUBAGENTS_DEFAULT,
+      subagentReuseEnabled: settings.subagentReuseEnabled === true,
+      subagentCommsEnabled: settings.subagentCommsEnabled === true,
       askUserTimeoutSeconds: settings.askUserTimeoutSeconds,
       browserConsent: settings.browserConsent === true,
       browserAgentToolsEnabled: settings.browserAgentToolsEnabled === true,
@@ -265,6 +309,8 @@ export function registerIpc(pi: PiManager): () => boolean {
   ipcMain.handle('subagents:action', (_event, payload: SubagentActionPayload) => pi.subagentAction(payload))
   ipcMain.handle('subagents:setEnabled', (_event, enabled: boolean) => pi.setSubagentsEnabled(enabled))
   ipcMain.handle('subagents:setMaxConcurrent', (_event, value: number) => pi.setSubagentMaxConcurrent(value))
+  ipcMain.handle('subagents:setReuseEnabled', (_event, enabled: boolean) => pi.setSubagentReuseEnabled(enabled))
+  ipcMain.handle('subagents:setCommsEnabled', (_event, enabled: boolean) => pi.setSubagentCommsEnabled(enabled))
   ipcMain.handle('subagents:profiles', () => pi.subagentProfiles())
   ipcMain.handle(
     'subagents:createProfile',

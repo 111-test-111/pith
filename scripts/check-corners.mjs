@@ -56,6 +56,8 @@ import {Tooltip} from '/src/components/motion/tooltip.tsx';
 import {Loader} from '/src/components/motion/loader.tsx';
 import {PromptInput} from '/src/components/agents/prompt-input.tsx';
 import {MessageBubble,MessageBubbleContent} from '/src/components/agents/message-bubble.tsx';
+import {StreamingResponse} from '/src/components/agents/streaming-response.tsx';
+import {Markdown} from '/src/lib/markdown.tsx';
 import {TurnWrittenFiles} from '/src/components/app/TurnWrittenFiles.tsx';
 import {I18nProvider} from '/src/i18n/index.tsx';
 import {synthesizeWritePatch} from '/src/lib/diff.ts';
@@ -83,6 +85,14 @@ function Fixture(){
     h('div',{className:'lab-section'},selectControl)),
    h('section',null,h('div',{className:'lab-label'},'Transcript and layers'),
     h(MessageBubble,{align:'end'},h(MessageBubbleContent,null,'Apply continuous corners across the interface.')),
+    // Inline code is the one markdown element whose radius is authored on the
+    // element itself (lib/markdown.tsx), so it is the one that can be overridden
+    // by an ancestor's descendant utility — the transcript chain is the shape
+    // the reader actually sees.
+    h('div',{id:'md-case',className:'lab-section'},h('div',{className:'lab-label'},'Markdown inline code'),
+     h(MessageBubble,{variant:'soft'},h(MessageBubbleContent,null,
+      h(StreamingResponse,null,h(Markdown,null,'Inline \`code\` inside the streaming chain.')))),
+     h('div',{id:'md-plain'},h(Markdown,null,'Inline \`code\` in plain markdown.'))),
     h('div',{className:'lab-row'},
      h(CenterMorphModal,{open:modal,onOpenChange:setModal},
       h(CenterMorphModalTrigger,null,h(Button,{'data-trigger':'modal',variant:'secondary'},'Open dialog')),
@@ -215,6 +225,19 @@ app.on('window-all-closed',()=>app.quit());`)
       // every other control (the whole radius scale is 0); it keeps the
       // squircle corner-shape and must not regress into a circle.
       assert.equal(await evaluate(`(()=>{const e=document.querySelector('[aria-label="Send prompt"]'),s=getComputedStyle(e),r=e.getBoundingClientRect();return s.cornerShape==='superellipse(2)'&&parseFloat(s.borderTopLeftRadius)===0&&r.height>0})()`), true, 'composer send control is hard-edged')
+      // Inline code carries its corner on the markdown element itself, so an
+      // ancestor's descendant utility wins on specificity: the vendored bubble
+      // and streaming chrome kept Tailwind's bare `rounded` (a literal 0.25rem,
+      // not a theme token) as `[&_code]:rounded`, which quietly re-rounded every
+      // inline code box in the transcript while plain markdown stayed square.
+      const detailRadius = await evaluate('getComputedStyle(document.documentElement).getPropertyValue("--app-radius-detail").trim()')
+      for (const selector of ['#md-case [data-slot="message-bubble"] code', '#md-plain code']) {
+        assert.equal(await style(selector, 'border-top-left-radius'), detailRadius, selector + ': inline code takes the theme detail radius')
+        assert.equal(await style(selector, 'border-bottom-right-radius'), detailRadius, selector + ': every inline code corner')
+        assert.equal(await style(selector, 'corner-shape'), 'superellipse(2)', selector + ': continuous corner shape')
+        assert.notEqual(await style(selector, 'background-color'), 'rgba(0, 0, 0, 0)', selector + ': inline code paints its own box')
+        assert.equal(await evaluate(`(()=>{const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();return r.width>0&&r.height>0})()`), true, selector + ': inline code has a box')
+      }
       // The progressive fallback changes paint, never the controls' layout.
       const bounds = await evaluate(`JSON.stringify([...document.querySelectorAll('#primary,.lab-field,#segment')].map(e=>{const r=e.getBoundingClientRect();return [r.x,r.y,r.width,r.height]}))`)
       await evaluate('document.documentElement.style.setProperty("--app-corner-shape","round")')

@@ -1,14 +1,18 @@
 import { SDK_BUILTIN_TOOL_NAMES, type ToolInfoDTO } from '../../../shared/types'
+import { TOOL_GROUP_MIN_SIZE, toolPrefix } from './tool-groups'
 
 /**
  * Pure grouping for the subagent profile tool picker (Settings → Subagents).
  *
  * The universe is the shared tools catalog — SDK built-ins, app tools and
  * every extension tool, one row per name, exactly what Settings → Tools
- * shows — with one deliberate collapse: the MCP family (the `mcp` gateway,
+ * shows — with two collapsible levels: the MCP family (the `mcp` gateway,
  * `mcpScript` and every `mcp__<server>` proxy) answers ONE checkbox, because
- * the gateway alone reaches every server. When no live session exists to read
- * a catalog from, the SDK built-ins alone stand in so the editor still works.
+ * the gateway alone reaches every server; and a namespaced family inside a
+ * section (`ctx_*`, `browser_*`, `web_*`) becomes one row with a tri-state
+ * checkbox that selects the whole family or opens to pick members one by one.
+ * When no live session exists to read a catalog from, the SDK built-ins alone
+ * stand in so the editor still works.
  *
  * Names a profile already carries that the current universe does not register
  * are never dropped silently: they surface in their own group and survive a
@@ -29,13 +33,78 @@ export interface SubagentToolOption {
   meta?: string
 }
 
+/** One expanded `prefix_*` family inside a section. */
+export interface SubagentToolFamily {
+  kind: 'family'
+  prefix: string
+  options: SubagentToolOption[]
+}
+
+/** One plain row inside a section. */
+export interface SubagentToolRow {
+  kind: 'option'
+  option: SubagentToolOption
+}
+
+export type SubagentToolEntry = SubagentToolFamily | SubagentToolRow
+
 export interface SubagentToolGroups {
   /** The single MCP entry, or null when no family member exists anywhere. */
   mcp: SubagentToolOption | null
-  builtin: SubagentToolOption[]
-  extension: SubagentToolOption[]
+  builtin: SubagentToolEntry[]
+  extension: SubagentToolEntry[]
   /** Profile-carried names no current session registers (preserved on save). */
-  unknown: SubagentToolOption[]
+  unknown: SubagentToolEntry[]
+}
+
+/**
+ * Nest namespaced tools into one entry per family, IN PLACE: the first member
+ * of a family emits the family entry (holding its members in their existing
+ * relative order) and the rest are skipped. Unlike Settings → Tools' list,
+ * which lifts families to the head of an otherwise unsorted catalog, every
+ * section here is already ordered by the SDK's own built-in order and by name
+ * — so nesting where the family already sits keeps the canonical CSV order
+ * byte-identical to the pre-family output and repeated saves never churn.
+ */
+export function toToolEntries(
+  options: SubagentToolOption[],
+  minSize = TOOL_GROUP_MIN_SIZE
+): SubagentToolEntry[] {
+  const buckets = new Map<string, SubagentToolOption[]>()
+  for (const option of options) {
+    const prefix = familyOf(option)
+    if (!prefix) continue
+    const bucket = buckets.get(prefix)
+    if (bucket) bucket.push(option)
+    else buckets.set(prefix, [option])
+  }
+  const entries: SubagentToolEntry[] = []
+  const emitted = new Set<string>()
+  for (const option of options) {
+    const prefix = familyOf(option)
+    const bucket = prefix ? buckets.get(prefix) : undefined
+    if (!prefix || !bucket || bucket.length < minSize) {
+      entries.push({ kind: 'option', option })
+      continue
+    }
+    if (emitted.has(prefix)) continue
+    emitted.add(prefix)
+    entries.push({ kind: 'family', prefix, options: bucket })
+  }
+  return entries
+}
+
+/** The `prefix_` segment of a single-name row, else null. The MCP whole is
+ * many names by construction and is never a family inside a section. */
+function familyOf(option: SubagentToolOption): string | null {
+  const name = option.names[0]
+  if (option.names.length !== 1 || !name) return null
+  return toolPrefix(name)
+}
+
+/** Every option an entry list carries, in render order. */
+export function optionsOf(entries: SubagentToolEntry[]): SubagentToolOption[] {
+  return entries.flatMap((entry) => (entry.kind === 'family' ? entry.options : [entry.option]))
 }
 
 const byLabel = (a: SubagentToolOption, b: SubagentToolOption) => a.label.localeCompare(b.label)
@@ -87,13 +156,15 @@ export function subagentToolGroups(universe: ToolInfoDTO[], profileTools: 'all' 
 
   return {
     mcp: mcpNames.length ? { names: mcpNames, label: 'MCP' } : null,
-    builtin: [...builtin.values()].sort(
-      (a, b) =>
-        SDK_BUILTIN_TOOL_NAMES.indexOf(a.label) - SDK_BUILTIN_TOOL_NAMES.indexOf(b.label) ||
-        a.label.localeCompare(b.label)
+    builtin: toToolEntries(
+      [...builtin.values()].sort(
+        (a, b) =>
+          SDK_BUILTIN_TOOL_NAMES.indexOf(a.label) - SDK_BUILTIN_TOOL_NAMES.indexOf(b.label) ||
+          a.label.localeCompare(b.label)
+      )
     ),
-    extension: [...extension.values()].sort(byLabel),
-    unknown
+    extension: toToolEntries([...extension.values()].sort(byLabel)),
+    unknown: toToolEntries(unknown)
   }
 }
 
@@ -102,10 +173,10 @@ export function subagentToolGroups(universe: ToolInfoDTO[], profileTools: 'all' 
  * profile-carried unknowns — a stable order so repeated saves don't churn. */
 export function canonicalToolNames(groups: SubagentToolGroups): string[] {
   return [
-    ...groups.builtin.flatMap((option) => option.names),
-    ...groups.extension.flatMap((option) => option.names),
+    ...optionsOf(groups.builtin).flatMap((option) => option.names),
+    ...optionsOf(groups.extension).flatMap((option) => option.names),
     ...(groups.mcp?.names ?? []),
-    ...groups.unknown.flatMap((option) => option.names)
+    ...optionsOf(groups.unknown).flatMap((option) => option.names)
   ]
 }
 

@@ -43,6 +43,7 @@ import type { TerminalStore } from '@/state/terminal-store'
 import type { SideChatStore } from '@/state/side-chat-store'
 import type { PiStore } from '@/state/pi-store'
 import type { BrowserStore } from '@/lib/browser/store'
+import { useBrowserKeepAlivePref } from '@/lib/browser/keep-alive'
 import type { SubagentRunDTO } from '../../../../shared/types'
 
 /** Fallback width before the workspace has applied the user's panel layout. */
@@ -397,16 +398,39 @@ export function SidebarPanel({
 }: SidebarPanelProps) {
   const { t } = useI18n()
   const reduce = useReducedMotion()
+  const { browserKeepAlive } = useBrowserKeepAlivePref()
   /** The add button's picker, shown over the pane area (never over the strip). */
   const [pickerOpen, setPickerOpen] = useState(false)
   // A conversation link also reveals an already-active file while the + picker
   // is open; activeTab alone does not change in that case.
   useEffect(() => pane.files.subscribeOpen(() => setPickerOpen(false)), [pane.files])
   const hasTabs = tabs.length > 0
-  /** The browser pane's keep-alive layer is interactive only while its tab is
-   *  the active one and the picker is closed; otherwise it stays mounted but
-   *  invisible (see the pane content area). */
-  const browserPaneLive = hasTabs && !pickerOpen && activeTab === 'browser'
+  /** Keep-alive across rail FOLDS (Settings → Browser): with the pref on and a
+   *  browser tab present, a folded rail keeps this aside mounted at width 0 /
+   *  opacity 0 instead of exiting — the same opacity form the rail-tab
+   *  keep-alive layer already uses, so the webviews (and their guests)
+   *  survive the fold exactly as they survive a tab switch. The inner column
+   *  keeps its fixed width, so the fold CLIPS and never resizes: in-progress
+   *  page activity never pauses and the expand is pixel-identical. Closing the
+   *  browser tab, or turning the pref off, still takes the exit path below. */
+  const browserHoldAlive = !open && browserKeepAlive && tabs.includes('browser')
+  /** The browser pane's keep-alive layer is interactive only while the rail is
+   *  OPEN, its tab is the active one and the picker is closed; otherwise it
+   *  stays mounted but invisible (see the pane content area). */
+  const browserPaneLive = open && hasTabs && !pickerOpen && activeTab === 'browser'
+  const asideRef = useRef<HTMLElement | null>(null)
+  // A fold that KEEPS the pane mounted must not leave DOM focus inside the
+  // invisible aside — keystrokes aimed at the chat would land in a webview
+  // nobody can see. Blur whatever the pane held; an exiting fold needs no
+  // help (its DOM goes away and focus falls back to the body).
+  useEffect(() => {
+    if (open || !browserHoldAlive) return
+    const host = asideRef.current
+    const active = document.activeElement
+    if (host && active instanceof HTMLElement && host.contains(active) && active !== document.body) {
+      active.blur()
+    }
+  }, [open, browserHoldAlive])
 
   const openTab = (kind: SidebarTabKind) => {
     setPickerOpen(false)
@@ -415,20 +439,31 @@ export function SidebarPanel({
 
   return (
     <AnimatePresence initial={false}>
-      {open ? (
+      {open || browserHoldAlive ? (
         <motion.aside
+          ref={asideRef}
           key="sidebar-panel"
           aria-label={t('sidebar.title')}
+          aria-hidden={!open || undefined}
           data-panel="right"
-          initial={{ width: 0, opacity: 0 }}
-          animate={{ width: resizing ? 'var(--panel-right)' : width, opacity: 1 }}
-          exit={{ width: 0, opacity: 0 }}
+          initial={{ width: 0, opacity: 0, borderLeftWidth: 0 }}
+          animate={{
+            width: open ? (resizing ? 'var(--panel-right)' : width) : 0,
+            opacity: open ? 1 : 0,
+            // A kept-alive fold parks the aside at width 0 for good — a
+            // border-box width of 0 would still paint the 1px left rule, so
+            // the rule collapses with the panel. Animating the WIDTH (never
+            // the colour) keeps the theme token intact.
+            borderLeftWidth: open ? 1 : 0
+          }}
+          exit={{ width: 0, opacity: 0, borderLeftWidth: 0 }}
           transition={
             reduce || resizing ? { duration: 0 } : { duration: DURATION.base, ease: EASE_OUT }
           }
           className={cn(
             'relative shrink-0 overflow-hidden border-l bg-background',
-            edgeActive ? 'border-primary' : 'border-border'
+            edgeActive ? 'border-primary' : 'border-border',
+            !open && 'pointer-events-none'
           )}
         >
           <div
@@ -459,16 +494,17 @@ export function SidebarPanel({
                   display:none/visibility, because the embedded-browser iron
                   rule keeps agent pages interactive/screenshotable at full
                   speed — so switching rail tabs never unmounts its
-                  process-backed webviews. Closing the browser tab OR folding
-                  the rail (AnimatePresence drops the whole aside) destroys
-                  them; the open-pages snapshot then re-materializes them on
-                  the next mount — the same strip in the pane's first commit,
+                  process-backed webviews. Closing the browser tab unmounts it;
+                  folding the rail does too UNLESS the keep-alive pref holds
+                  the folded aside mounted (see browserHoldAlive above) — the
+                  open-pages snapshot re-materializes pages on the next mount
+                  in that case: the same strip in the pane's first commit,
                   entries carrying their original owners (an agent page
                   re-registers under `agent:<sessionId>`, so its session's
                   tools find it again). The registry's browser render above is
                   therefore never called. `active` threads `browserPaneLive`
-                  so the pane's global ⌘±/0 zoom shortcuts register only while
-                  the tab is on screen. */}
+                  so the pane's global shortcuts register only while the tab
+                  is on screen. */}
               {tabs.includes('browser') ? (
                 <div
                   aria-hidden={!browserPaneLive || undefined}

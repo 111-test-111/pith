@@ -831,6 +831,21 @@ export interface SubagentActionPayload {
   message?: string
 }
 
+/** Details carried by a `subagent_message` custom message: which child sent
+ * the message and its text. The renderer's quiet tool row reads the same
+ * fields the model-facing prose in the message content carries. Shared by
+ * the main-process protocol and the renderer's transcript row. */
+export interface SubagentMessageDetails {
+  kind: 'pi-app-subagent-message'
+  /** Child session id the message came from. */
+  sessionId: string
+  runId?: string
+  description: string
+  profile: string
+  message: string
+  sentAt: string
+}
+
 export type TodoStatus = 'pending' | 'in_progress' | 'completed' | 'cancelled'
 
 export interface TodoItemDTO {
@@ -937,6 +952,55 @@ export interface SandboxStatusDTO {
  * webview guest (marker URL). Same shape the service's pendingCreates carries. */
 export interface BrowserPendingCreateDTO { id: string; owner: string; createdAt: number }
 
+// ---- Chrome 登录态导入（Settings → Browser；清单 = <userData>/browser-import.json） ----
+
+/** 可导入的 Chrome 档案（目录名 + 显示名）。 */
+export interface BrowserImportSourceDTO {
+  id: string
+  label: string
+}
+
+/** 档案发现结果：`ok` 可导入；`blocked` 被 macOS 应用数据保护拦住（引导授权）；
+ *  `none` 装了 Chrome 但没有带 cookie 库的档案；`absent` 没装。 */
+export interface BrowserImportDiscoveryDTO {
+  status: 'ok' | 'blocked' | 'none' | 'absent'
+  profiles: BrowserImportSourceDTO[]
+  /** 是否 dev 模式（含 preview，进程都是仓库里的 Electron.app）：blocked 引导
+   *  走两条路 —— dev 授「完全磁盘访问」给启动终端即可，正式安装则直接勾选 pi-app。 */
+  devMode: boolean
+}
+
+export type BrowserImportErrorCode =
+  | 'chrome-not-found'
+  | 'profile-not-found'
+  | 'keychain'
+  | 'database'
+  /** macOS 应用数据保护（TCC）拦住了对 Chrome 目录的读取 —— 引导用户授「完全磁盘访问」。 */
+  | 'permission'
+
+/** 一次导入的结果。code 只在 ok=false 时有值；计数无论成败都尽力填充。 */
+export interface BrowserImportResultDTO {
+  ok: boolean
+  code?: BrowserImportErrorCode
+  total: number
+  imported: number
+  failed: number
+  /** 第一条写入失败的技术性错误消息（英文，仅诊断展示，可缺省）。 */
+  firstError?: string
+  skippedExpired: number
+  /** v20/损坏/空身份等「跳过不导」的合计。 */
+  skippedUndecryptable: number
+}
+
+/** 已导入清单的读数；present=false 表示没有可清除的导入。 */
+export interface BrowserImportStatusDTO {
+  present: boolean
+  source?: 'chrome'
+  profileLabel?: string
+  importedAt?: number
+  cookieCount: number
+}
+
 /** Embedded browser registry readout (`browser:status` / `browser:state`).
  * `available` stays true in this host: pages are renderer-hosted webviews and
  * the service always answers. */
@@ -963,6 +1027,12 @@ export interface AppInfoDTO {
   startup: StartupSessionMode
   /** Whether subagent delegation is enabled. */
   subagentsEnabled: boolean
+  /** Whether the model may continue finished subagent sessions
+   * (the `agent` tool's `continue_session_id`). */
+  subagentReuseEnabled: boolean
+  /** Whether parent↔child subagent steering is enabled (`agent_steer` /
+   * `message_parent`). */
+  subagentCommsEnabled: boolean
   /** Per-parent limit on concurrently running subagent delegations. */
   subagentMaxConcurrent: number
   /**

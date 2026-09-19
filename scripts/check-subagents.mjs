@@ -387,13 +387,20 @@ const entriesOf = (...records) => records.map((record, index) => ({
   const started = { run: { runId: 'r1', sessionId: 'c1', sessionPath: '/c.jsonl', parentToolCallId: 'tc', profile: 'scout',
       description: 'd', task: 't', runInBackground: true, status: 'running', createdAt: new Date().toISOString(), seq: 1 },
     completion: Promise.resolve({ status: 'completed', runId: 'r1', sessionId: 'c1', description: 'd', profile: 'scout' }) }
+  let reuseAllowed = false
+  const resumed = []
   const tool = createSubagentTool({
-    runtime: { start: async (_state, request) => { dispatched.push(request.profile); return started } },
-    state: {},
+    runtime: {
+      start: async (_state, request) => { dispatched.push(request.profile); return started },
+      resume: async (_state, _session, sessionId, message, options) => { resumed.push({ sessionId, message, options }); return started }
+    },
+    state: { roster: new Map([['c1', { sessionId: 'c1', profile: 'scout', status: 'completed' }]]) },
     parentSessionRef: { session: { getActiveToolNames: () => [] } },
     parentSessionPath: '/p.jsonl',
     profiles: () => roster,
-    canStart: () => true
+    canStart: () => true,
+    canReuse: () => reuseAllowed,
+    canSteer: () => false
   })
   assert.match(tool.description, /scout profile/, 'the roster renders')
   await tool.execute('tc1', { subagent_type: 'scout', prompt: 'p', description: 'd', run_in_background: true }, undefined, undefined)
@@ -408,6 +415,71 @@ const entriesOf = (...records) => records.map((record, index) => ({
   let vanished = false
   try { await tool.execute('tc3', { subagent_type: 'scout', prompt: 'p', description: 'd', run_in_background: true }, undefined, undefined) } catch { vanished = true }
   assert.ok(vanished, 'a removed/disabled profile stops dispatching immediately')
+
+  // --- continue_session_id: reuse is its own switch, and a continuation
+  //     carries the NEW dispatch's identity into resume() ---
+  let reuseRefused = false
+  try { await tool.execute('tc4', { subagent_type: 'scout', prompt: 'second half', description: 'Follow-up', continue_session_id: 'c1' }, undefined, undefined) } catch (error) {
+    reuseRefused = /disabled in Settings/.test(String(error?.message))
+  }
+  assert.ok(reuseRefused, 'continuing an existing subagent is refused while reuse is off')
+  reuseAllowed = true
+  await tool.execute('tc5', { subagent_type: 'scout', prompt: 'second half now', description: 'Follow-up', continue_session_id: 'c1' }, undefined, undefined)
+  assert.equal(resumed.length, 1)
+  assert.equal(resumed[0].sessionId, 'c1')
+  assert.equal(resumed[0].message, 'second half now')
+  assert.equal(resumed[0].options.parentToolCallId, 'tc5', 'the continuation records the NEW tool call (receipt barrier + dispatch record)')
+  assert.equal(resumed[0].options.description, 'Follow-up')
+  assert.equal(resumed[0].options.runInBackground, false, 'a continuation without run_in_background follows the tool contract: foreground')
+  let mismatched = false
+  try { await tool.execute('tc6', { subagent_type: 'reviewer', prompt: 'x', description: 'd', continue_session_id: 'c1' }, undefined, undefined) } catch (error) {
+    mismatched = /profile "scout"/.test(String(error?.message))
+  }
+  assert.ok(mismatched, 'a continuation names the profile the child was actually created with')
+}
+
+// --- agent_steer / message_parent: the communications tools ---
+{
+  const { createAgentSteerTool, createMessageParentTool } = await import('../src/main/pi/subagents/tools.ts')
+  let steered = null
+  let allowSteer = true
+  const steerTool = createAgentSteerTool({
+    runtime: { steer: (_state, sessionId, message) => { if (sessionId !== 'live') throw new Error('Subagent is not running'); steered = { sessionId, message } } },
+    state: {},
+    canSteer: () => allowSteer
+  })
+  let result = await steerTool.execute('t1', { session_id: 'live', message: 'wrap up now and report' }, undefined, undefined)
+  assert.equal(steered.sessionId, 'live')
+  assert.equal(steered.message, 'wrap up now and report')
+  assert.match(result.content[0].text, /queued/, 'a delivered steer says so')
+  assert.equal(result.details.delivered, true)
+  result = await steerTool.execute('t2', { session_id: 'finished', message: 'x' }, undefined, undefined)
+  assert.match(result.content[0].text, /Not delivered/, 'a finished subagent cannot be steered')
+  assert.equal(result.details.delivered, false)
+  allowSteer = false
+  let steerRefused = false
+  try { await steerTool.execute('t3', { session_id: 'live', message: 'x' }, undefined, undefined) } catch { steerRefused = true }
+  assert.ok(steerRefused, 'steering is refused while the setting is off')
+
+  let delivered = null
+  const parentTool = createMessageParentTool({
+    deliver: async (message) => { delivered = message; return { delivered: true } },
+    canUse: () => true
+  })
+  result = await parentTool.execute('t4', { message: 'halfway done; is X in scope?' }, undefined, undefined)
+  assert.equal(delivered, 'halfway done; is X in scope?')
+  assert.match(result.content[0].text, /delivered/)
+  assert.equal(result.details.delivered, true)
+  const failing = createMessageParentTool({
+    deliver: async () => ({ delivered: false, reason: 'the parent session is stopped' }),
+    canUse: () => true
+  })
+  result = await failing.execute('t5', { message: 'hello?' }, undefined, undefined)
+  assert.match(result.content[0].text, /could not receive/, 'a dropped message says so and tells the child to continue')
+  assert.equal(result.details.delivered, false)
+  let emptyRefused = false
+  try { await parentTool.execute('t6', { message: '   ' }, undefined, undefined) } catch { emptyRefused = true }
+  assert.ok(emptyRefused, 'an empty message is refused')
 }
 
 // --- starter profiles: the marker beside the files heals a drifted agent dir
@@ -612,16 +684,25 @@ console.log('check-subagents: all assertions passed')
     const emits = []
     const completionsDelivered = []
     const childPaths = []
+    // Subagent communications default OFF here (the shipped default);
+    // flipping it is a per-test, restorable action read live by the host.
+    let commsEnabled = false
     const makeHost = (childSession) => ({
       isClosing: () => false,
       maxConcurrentSubagents: () => 4,
       subagentsEnabled: () => true,
+      subagentReuseEnabled: () => true,
+      subagentCommsEnabled: () => commsEnabled,
       commandTasks: () => null,
       acquireRunLease: (_cwd, sessionPath) => { leases.add(sessionPath); return () => leases.delete(sessionPath) },
       createChildSession: async (options) => {
-        // Real child file with the real parentSession header link.
-        const manager = SessionManager.create(options.cwd, sessionsDir, { parentSession: options.parentSessionPath })
-        materialize(manager)
+        // Real child file with the real parentSession header link; a reopen
+        // continues the EXISTING child file instead of creating another.
+        const manager = options.mode === 'reopen'
+          ? SessionManager.open(options.sessionPath)
+          : SessionManager.create(options.cwd, sessionsDir, { parentSession: options.parentSessionPath })
+        if (options.mode === 'reopen') manager.setSessionFile(options.sessionPath)
+        else materialize(manager)
         // The fake session's scripted messages live in the REAL branch too —
         // the runtime extracts written files (and status) from the persisted
         // branch, exactly like a real AgentSession would.
@@ -665,6 +746,49 @@ console.log('check-subagents: all assertions passed')
       assert.equal(runs[0].start.parentSessionPath, parent.getSessionFile())
       assert.equal(runs[0].result?.status, 'completed')
       assert.deepEqual(runs[0].start.resource.tools.sort(), ['grep', 'read'])
+    }
+
+    // --- 1b) message_parent injection follows the communications flag ---
+    {
+      const session = fakeSession({ getLastAssistantText: () => 'done' })
+      const runtime = new SubagentRuntime(makeHost(session))
+      const state = new SubagentParentState('parent-session')
+      const off = await (await runtime.start(state, baseRequest())).completion
+      childPaths.push(off.sessionPath)
+      assert.ok(!runtime.readChildRuns(off.sessionPath)[0].start.resource.tools.includes('message_parent'),
+        'communications off: the ceiling stays exactly the profile set')
+
+      commsEnabled = true
+      try {
+        const runtimeOn = new SubagentRuntime(makeHost(fakeSession({ getLastAssistantText: () => 'done' })))
+        const stateOn = new SubagentParentState('parent-session')
+        const on = await (await runtimeOn.start(stateOn, baseRequest())).completion
+        childPaths.push(on.sessionPath)
+        assert.ok(runtimeOn.readChildRuns(on.sessionPath)[0].start.resource.tools.includes('message_parent'),
+          'communications on: every dispatched ceiling gains message_parent (frozen into the run record)')
+      } finally { commsEnabled = false }
+    }
+
+    // --- 1c) resume() shares start's { run, completion } shape and honors
+    //         the model-driven overrides ---
+    {
+      const session = fakeSession({ getLastAssistantText: () => 'continued.' })
+      const runtime = new SubagentRuntime(makeHost(session))
+      const state = new SubagentParentState('parent-session')
+      const first = await (await runtime.start(state, baseRequest())).completion
+      childPaths.push(first.sessionPath)
+      const resumed = await runtime.resume(state, parentSession, first.sessionId, 'now do the second half', {
+        parentToolCallId: 'call-9', description: 'Second half', runInBackground: false
+      })
+      assert.equal(resumed.run.sessionId, first.sessionId, 'the continuation reopens the same child session')
+      const finished = await resumed.completion
+      childPaths.push(finished.sessionPath)
+      assert.equal(finished.status, 'completed')
+      const runs = runtime.readChildRuns(first.sessionPath)
+      assert.equal(runs.length, 2, 'a resume appends a fresh run record to the child file')
+      assert.equal(runs[0].start.parentToolCallId, 'call-9', 'the model path records its own dispatch tool call (readChildRuns is newest-first)')
+      assert.equal(runs[0].start.description, 'Second half')
+      assert.equal(runs[0].start.runInBackground, false)
     }
 
     // --- 2) Startup cancellation: an aborted signal never reaches creation ---

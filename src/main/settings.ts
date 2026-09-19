@@ -47,6 +47,12 @@ export interface AppSettings {
   /** Subagent delegation enabled; the `agent` tool is registered at session
    * build and dispatch is re-checked live. */
   subagentsEnabled: boolean
+  /** The parent model may continue a finished subagent session under a fresh
+   * run (the `agent` tool's `continue_session_id` parameter). */
+  subagentReuseEnabled: boolean
+  /** Parent↔child steering: the `agent_steer` tool on parents, the
+   * `message_parent` tool injected into child ceilings. */
+  subagentCommsEnabled: boolean
   /** Max simultaneous subagent runs per parent session (starting + active). */
   subagentMaxConcurrent: number
   /** Seconds an unanswered ask_user_question panel waits before it closes
@@ -74,6 +80,8 @@ const defaults: AppSettings = {
   disabledExtensions: [],
   windowBounds: null,
   subagentsEnabled: true,
+  subagentReuseEnabled: false,
+  subagentCommsEnabled: false,
   subagentMaxConcurrent: 4,
   askUserTimeoutSeconds: ASK_USER_DEFAULT_TIMEOUT_S,
   sandboxMode: DEFAULT_SANDBOX_MODE,

@@ -12,6 +12,9 @@ import type { RewindPatchDTO, RewindStatsDTO, RewindStatsTargetDTO } from '../sh
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type {
   AppInfoDTO,
+  BrowserImportDiscoveryDTO,
+  BrowserImportResultDTO,
+  BrowserImportStatusDTO,
   BrowserStatusDTO,
   RewindResult,
   RewindListDTO,
@@ -141,6 +144,8 @@ const api = {
   peekSession: (path: string): Promise<SessionSnapshotDTO> => ipcRenderer.invoke('pi:peekSession', path),
   subagentAction: (payload: SubagentActionPayload): Promise<void> => ipcRenderer.invoke('subagents:action', payload),
   setSubagentsEnabled: (enabled: boolean): Promise<boolean> => ipcRenderer.invoke('subagents:setEnabled', enabled),
+  setSubagentReuseEnabled: (enabled: boolean): Promise<boolean> => ipcRenderer.invoke('subagents:setReuseEnabled', enabled),
+  setSubagentCommsEnabled: (enabled: boolean): Promise<boolean> => ipcRenderer.invoke('subagents:setCommsEnabled', enabled),
   setSubagentMaxConcurrent: (value: number): Promise<number> =>
     ipcRenderer.invoke('subagents:setMaxConcurrent', value),
   /** Every subagent profile visible in the active workspace (Settings →
@@ -312,6 +317,15 @@ const api = {
   /** Wipes the browser partition's storage (login states included); the
    * renderer menu confirms twice. */
   browserClearData: (): Promise<void> => ipcRenderer.invoke('browser:clearData'),
+  /** Chrome 登录态导入（Settings → Browser）：档案列表 / 导入 / 清单读数 / 清除已导入。
+   *  解密只在 main；渲染层拿到的是计数与错误码，不碰 cookie 值。 */
+  browserImportSources: (): Promise<BrowserImportDiscoveryDTO> => ipcRenderer.invoke('browser:importSources'),
+  browserOpenPrivacySettings: (): Promise<void> => ipcRenderer.invoke('browser:openPrivacySettings'),
+  browserImportCookies: (profileId: string): Promise<BrowserImportResultDTO> =>
+    ipcRenderer.invoke('browser:importCookies', profileId),
+  browserImportStatus: (): Promise<BrowserImportStatusDTO> => ipcRenderer.invoke('browser:importStatus'),
+  browserClearImported: (): Promise<{ removed: number; failed: number }> =>
+    ipcRenderer.invoke('browser:clearImported'),
   onBrowserState: (cb: (status: BrowserStatusDTO) => void) => subscribe('browser:state', cb),
   onBrowserPopup: (cb: (payload: BrowserPopupInfo) => void) =>
     subscribe('browser:popup', cb),

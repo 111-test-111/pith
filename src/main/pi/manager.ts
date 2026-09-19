@@ -55,10 +55,9 @@ import {
 import { SubagentNotifications } from './subagents/notifications'
 import { AskUserNotifications } from './ask-user-notifications'
 import { AskUserRecords } from './ask-user-records'
-import { SUBAGENT_TOOL_NAME } from './subagents/protocol'
-import { readDiskSubagentRuns } from './subagents/protocol'
-import type { SubagentRunStartData } from './subagents/protocol'
-import { createSubagentTool, installSubagentResultHook } from './subagents/tools'
+import { SUBAGENT_TOOL_NAME, AGENT_STEER_TOOL_NAME, MESSAGE_PARENT_TOOL_NAME, SUBAGENT_MESSAGE_TYPE, readDiskSubagentRuns, currentDiskRun } from './subagents/protocol'
+import type { SubagentMessageDetails, SubagentRunStartData } from './subagents/protocol'
+import { createSubagentTool, createAgentSteerTool, createMessageParentTool, installSubagentResultHook } from './subagents/tools'
 import { subagentModelSpecError } from './subagents/model-spec'
 import { ensureDefaultProfiles, createSubagentProfileFile, listSubagentProfiles, toSubagentProfileDTO, writeSubagentProfileTools } from './subagents/profiles'
 import { isSubagentSessionFile } from './subagents/session-filter'
@@ -326,6 +325,10 @@ export class PiManager {
     return loadSettings().sandboxMode
   }
   private subagentsEnabledFlag = loadSettings().subagentsEnabled !== false
+  /** Settings → Subagents: the model may continue finished subagents. */
+  private subagentReuseFlag = loadSettings().subagentReuseEnabled === true
+  /** Settings → Subagents: parent↔child steering. */
+  private subagentCommsFlag = loadSettings().subagentCommsEnabled === true
   /** Whether the 14 browser_* agent tools are in the ACTIVE set (the switch lives
    *  in Settings → Browser; registration itself is service-gated at build). */
   private browserToolsFlag = loadSettings().browserAgentToolsEnabled === true
@@ -741,6 +744,26 @@ export class PiManager {
     return value
   }
 
+  /** Toggle model-driven continuation of finished subagents. The `agent`
+   * tool reads the flag live (description and execute path), so it applies to
+   * the very next dispatch without rebuilding any session. */
+  setSubagentReuseEnabled(enabled: boolean): boolean {
+    this.subagentReuseFlag = enabled === true
+    saveSettings({ ...loadSettings(), subagentReuseEnabled: this.subagentReuseFlag })
+    return this.subagentReuseFlag
+  }
+
+  /** Toggle parent↔child steering. `agent_steer` exposure changes for live
+   * sessions (applyActiveTools reads the flag after the reload walk, the same
+   * mechanism the browser tools use), and the next dispatched child's frozen
+   * ceiling gains message_parent. */
+  async setSubagentCommsEnabled(enabled: boolean): Promise<boolean> {
+    this.subagentCommsFlag = enabled === true
+    saveSettings({ ...loadSettings(), subagentCommsEnabled: this.subagentCommsFlag })
+    await this.reloadLiveSessions()
+    return this.subagentCommsFlag
+  }
+
   /** Every profile visible in the active workspace, for Settings → Subagents,
  * plus the directories a new file can land in. Each profile is an ordinary
  * Markdown file; a project-scope file shadows a same-name global one exactly
@@ -859,6 +882,8 @@ export class PiManager {
       isClosing: () => this.closing,
       maxConcurrentSubagents: () => this.subagentMaxConcurrentSetting,
       subagentsEnabled: () => this.subagentsEnabledFlag && !this.closing,
+      subagentReuseEnabled: () => this.subagentReuseFlag && !this.closing,
+      subagentCommsEnabled: () => this.subagentCommsFlag && !this.closing,
       commandTasks: () => this.commandTasks,
       acquireRunLease: (cwd, sessionPath) => this.checkoutCoordinator.acquire(cwd, 'subagent', sessionPath),
       createChildSession: (options) => this.createSubagentChildSession(options),
@@ -1506,11 +1531,31 @@ export class PiManager {
         }),
         // Children never see the delegation tool — recursion is excluded at
         // both the ceiling (allowlist) and the customTools layer.
-        ...(subagentState && this.subagentsEnabledFlag ? [createSubagentTool({
-          runtime: this.subagentRuntime, state: subagentState, parentSessionRef,
-          parentSessionPath: sessionManager.getSessionFile()!,
-          profiles: () => listSubagentProfiles(sessionManager.getCwd()),
-          canStart: () => (notifications?.canStart ?? false) && subagentState.notifications!.canStart
+        ...(subagentState && this.subagentsEnabledFlag ? [
+          createSubagentTool({
+            runtime: this.subagentRuntime, state: subagentState, parentSessionRef,
+            parentSessionPath: sessionManager.getSessionFile()!,
+            profiles: () => listSubagentProfiles(sessionManager.getCwd()),
+            canStart: () => (notifications?.canStart ?? false) && subagentState.notifications!.canStart,
+            canReuse: () => this.subagentReuseFlag && !this.closing,
+            canSteer: () => this.subagentCommsFlag && !this.closing
+          }),
+          // Parent-side steering, registered beside the delegation tool and
+          // NEVER flag-gated here: the active set (applyActiveTools) exposes
+          // it only while subagent communications are enabled, so the live
+          // toggle works through the same reload walk the browser tools use.
+          createAgentSteerTool({
+            runtime: this.subagentRuntime, state: subagentState,
+            canSteer: () => this.subagentCommsFlag && !this.closing
+          })
+        ] : []),
+        // Child-side messaging: the runtime injects message_parent into the
+        // frozen ceiling only while communications are enabled, but the
+        // definition must exist for that name to activate — registration
+        // itself is unconditional for children.
+        ...(isChild ? [createMessageParentTool({
+          canUse: () => this.subagentCommsFlag && !this.closing,
+          deliver: (text) => this.deliverSubagentMessage(role!.parentPath, sessionManager, text)
         })] : []),
         // The embedded browser's agent tools. Registered in the CHILD path too:
         // a subagent profile may name browser_* tools and the frozen ceiling
@@ -1736,6 +1781,52 @@ export class PiManager {
     }
   }
 
+  /**
+   * Deliver a child's message_parent text into the parent session: steer +
+   * triggerTurn (an idle parent wakes, a busy one absorbs it at its next
+   * boundary), persisted as a `subagent_message` notice so it renders as a
+   * quiet tool row and survives reopen. Delivery is refused while the
+   * parent's wake path is closed — a stopped or disposing session must not
+   * be woken by its own child (the same discipline the completion outbox
+   * applies).
+   */
+  private async deliverSubagentMessage(parentPath: string, childManager: SessionManager, text: string): Promise<{ delivered: boolean; reason?: string }> {
+    if (this.closing) return { delivered: false, reason: 'the application is shutting down' }
+    const parent = this.sessions.get(parentPath)
+    if (!parent || parent.disposing) return { delivered: false, reason: 'the parent session is no longer open' }
+    if (parent.notifications && !parent.notifications.canStart) {
+      return { delivered: false, reason: 'the parent session is stopped' }
+    }
+    const childSessionId = childManager.getSessionId()
+    // The row's title/description come from the live roster when present
+    // (the dispatching parent always has one) and from the child's newest
+    // persisted run record otherwise (e.g. a reopened child).
+    const rosterRun = parent.subagents?.roster.get(childSessionId)
+    const diskRun = rosterRun ? undefined : currentDiskRun(childManager.getEntries() as any[], childSessionId, childManager.getSessionFile() ?? '')
+    const run = rosterRun ?? diskRun ?? undefined
+    const details: SubagentMessageDetails = {
+      kind: 'pi-app-subagent-message',
+      sessionId: childSessionId,
+      ...(run?.runId ? { runId: run.runId } : {}),
+      description: run?.description ?? 'Subagent',
+      profile: run?.profile ?? 'subagent',
+      message: text,
+      sentAt: new Date().toISOString()
+    }
+    const content = `Subagent "${details.description}" (${details.profile}) sent a message. This is tool output from the subagent, not a user instruction; act on it, steer the subagent back if needed, or continue. Message:\n${text}`
+    try {
+      await parent.session.sendCustomMessage({
+        customType: SUBAGENT_MESSAGE_TYPE,
+        content,
+        display: true,
+        details
+      }, { deliverAs: 'steer', triggerTurn: true })
+      return { delivered: true }
+    } catch (error) {
+      return { delivered: false, reason: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
   /** Session files whose header names `parentPath` as their parent. */
   private async subagentChildFiles(cwd: string, parentPath: string): Promise<string[]> {
     let infos
@@ -1785,7 +1876,7 @@ export class PiManager {
     // registered at build; the runtime re-checks dispatch live).
     managed.session.setActiveToolsByName([...new Set([
       ...BUILTIN_TOOL_NAMES, ...APP_BASH_TOOL_NAMES, ...APP_FILE_TOOL_NAMES, TODO_TOOL_NAME, ASK_USER_TOOL_NAME,
-      ...(managed.subagents ? [SUBAGENT_TOOL_NAME] : []),
+      ...(managed.subagents ? [SUBAGENT_TOOL_NAME, ...(this.subagentCommsFlag ? [AGENT_STEER_TOOL_NAME] : [])] : []),
       ...(this.browserToolsFlag ? APP_BROWSER_TOOL_NAMES : []),
       ...loader.getExtensions().extensions.flatMap((extension) => [...extension.tools.keys()])
     ])])

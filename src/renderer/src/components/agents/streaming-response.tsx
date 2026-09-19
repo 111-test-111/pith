@@ -182,7 +182,14 @@ export function StreamingResponse({
       <div
         aria-live={announce ? "polite" : "off"}
         className={cn(
-          "text-sm leading-6 text-foreground/90 [&_a]:font-medium [&_a]:underline [&_a]:underline-offset-4 [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[0.9em] [&_ol]:my-3 [&_ol]:list-decimal [&_ol]:space-y-1 [&_ol]:pl-5 [&_p+p]:mt-3 [&_pre:not([data-code-block-pre])]:my-3 [&_pre:not([data-code-block-pre])]:overflow-x-auto [&_pre:not([data-code-block-pre])]:rounded-xl [&_pre:not([data-code-block-pre])]:border [&_pre:not([data-code-block-pre])]:border-border [&_pre:not([data-code-block-pre])]:bg-muted/45 [&_pre:not([data-code-block-pre])]:p-3 [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_pre_code]:rounded-none [&_pre_code]:text-[1em] [&_ul]:my-3 [&_ul]:list-disc [&_ul]:space-y-1 [&_ul]:pl-5",
+          // local patch (pi-app): inline code takes the theme's detail radius.
+          // The vendored descendant utility pinned a literal 0.25rem radius
+          // (Tailwind's bare radius step, not a token), and an ancestor's
+          // descendant utility beats the markdown element's own token class on
+          // specificity, so every inline code box in the transcript stayed
+          // rounded. Kept out of this comment: the literal utility name —
+          // Tailwind's scanner reads comments and would generate it again.
+          "text-sm leading-6 text-foreground/90 [&_a]:font-medium [&_a]:underline [&_a]:underline-offset-4 [&_code]:rounded-detail [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[0.9em] [&_ol]:my-3 [&_ol]:list-decimal [&_ol]:space-y-1 [&_ol]:pl-5 [&_p+p]:mt-3 [&_pre:not([data-code-block-pre])]:my-3 [&_pre:not([data-code-block-pre])]:overflow-x-auto [&_pre:not([data-code-block-pre])]:rounded-xl [&_pre:not([data-code-block-pre])]:border [&_pre:not([data-code-block-pre])]:border-border [&_pre:not([data-code-block-pre])]:bg-muted/45 [&_pre:not([data-code-block-pre])]:p-3 [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_pre_code]:rounded-none [&_pre_code]:text-[1em] [&_ul]:my-3 [&_ul]:list-disc [&_ul]:space-y-1 [&_ul]:pl-5",
           contentClassName,
         )}
       >

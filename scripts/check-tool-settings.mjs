@@ -235,10 +235,15 @@ app.on('window-all-closed',()=>app.quit());`)
   })()`)
   // The description sits in the same framed card as the parameters, and the
   // fade belongs to the inner viewport — the card's own border must stay crisp.
+  // Its corner follows the app's own scale, so this reads the parameters frame
+  // (identical card markup) as the reference and the token the radius class
+  // resolves to — never a literal, which a design round-trip would falsify.
   const descriptionCard = () => evaluate(`(() => {
     const card = document.querySelector('[data-tool-description]');
     if (!card) return null;
     const style = getComputedStyle(card);
+    const parameters = document.querySelector('[data-tool-parameters]');
+    const root = getComputedStyle(document.documentElement);
     const viewport = card.querySelector('[data-fade-scroll]');
     const chips = document.querySelector('[data-tool-detail-name]').parentElement;
     const label = document.querySelector('[data-tool-description-label]');
@@ -250,6 +255,11 @@ app.on('window-all-closed',()=>app.quit());`)
       gapBelow: getComputedStyle(label).marginBottom,
       border: style.borderTopWidth + ' ' + style.borderTopStyle,
       corner: style.borderTopLeftRadius,
+      parametersCorner: parameters ? getComputedStyle(parameters).borderTopLeftRadius : null,
+      scaleToken: [
+        root.getPropertyValue('--app-radius-item').trim(),
+        root.getPropertyValue('--radius-xl').trim()
+      ],
       surface: style.backgroundColor,
       mask: style.maskImage,
       viewportMask: viewport ? getComputedStyle(viewport).maskImage : null
@@ -307,6 +317,31 @@ app.on('window-all-closed',()=>app.quit());`)
   )
   await screenshot('collapsed-light')
 
+  // --- one honest line under the list: an extension can register its tools on
+  //     its first agent turn, so a fresh launch genuinely cannot list them
+  const hint = await evaluate(`(() => {
+    const el = document.querySelector('[data-tools-lazy-hint]');
+    if (!el) return null;
+    const list = document.querySelector('[role=tablist]');
+    return {
+      text: el.textContent.trim(),
+      insideList: !!el.closest('[role=tablist]'),
+      afterList: !!(list.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING),
+      control: !!el.querySelector('button, a, [role=button], input'),
+      listColumn: el.parentElement === list.parentElement
+    };
+  })()`)
+  assert.ok(hint, 'the tools list carries the lazily-registered-tools note')
+  assert.equal(
+    hint.text,
+    'Extensions that register their tools on first use appear here after a session has run once.',
+    'the note says what is actually missing and when it arrives'
+  )
+  assert.equal(hint.insideList, false, 'the note is not a tab row')
+  assert.equal(hint.afterList, true, 'it sits under the list')
+  assert.equal(hint.listColumn, true, 'in the list column, not the detail pane')
+  assert.equal(hint.control, false, 'and is plain text, not a control')
+
   // --- expansion reveals the whole family, and selection keeps it open
   await clickGroup('ctx')
   await pause(400) // the reveal is a 220ms height/clip animation
@@ -333,7 +368,11 @@ app.on('window-all-closed',()=>app.quit());`)
   assert.ok(card.gapAbove >= 18, `the label is separated from the tool-name row (got ${card.gapAbove}px)`)
   assert.equal(card.gapBelow, '8px', 'the label keeps the same gap above its frame as the parameters label')
   assert.equal(card.border, '1px solid', 'the description sits in a visible frame like the parameters')
-  assert.notEqual(card.corner, '0px', 'the frame keeps the shared card corner')
+  assert.equal(card.corner, card.parametersCorner, 'the description frame and the parameters frame share one corner')
+  assert.ok(
+    card.scaleToken.includes(card.corner),
+    `the frame takes the app's own corner scale (${card.corner} vs --app-radius-item ${card.scaleToken[0]} / --radius-xl ${card.scaleToken[1]})`
+  )
   assert.notEqual(card.surface, 'rgba(0, 0, 0, 0)', 'the frame paints a surface')
   assert.equal(card.mask, 'none', 'the fade belongs to the inner viewport, never to the frame')
   assert.match(card.viewportMask, /gradient/, 'the scrolling description is the masked element')
@@ -404,6 +443,10 @@ app.on('window-all-closed',()=>app.quit());`)
     'ctx 工具 · 6', 'the Chinese label renders'
   )
   assert.equal((await descriptionCard()).label, '描述', 'the description label is translated')
+  assert.ok(
+    (await evaluate(`document.querySelector('[data-tools-lazy-hint]').textContent`)).includes('首次使用时才注册工具'),
+    'the note is translated too'
+  )
   await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] })
   await evaluate('document.documentElement.classList.add("dark")')
   await clickGroup('ctx')

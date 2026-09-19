@@ -82,56 +82,64 @@ export function ToolsSection() {
       variant="pill"
       className="grid gap-4 sm:grid-cols-[14rem_minmax(0,1fr)] sm:items-start"
     >
-      <TabsList className="flex h-max flex-col items-stretch gap-1 rounded-2xl p-1.5 sm:sticky sm:top-0">
-        {entries.map((entry) => {
-          if (entry.kind === 'tool') return <ToolTab key={entry.tool.name} tool={entry.tool} />
+      <div className="flex h-max flex-col gap-2 sm:sticky sm:top-0">
+        <TabsList className="flex flex-col items-stretch gap-1 rounded-2xl p-1.5">
+          {entries.map((entry) => {
+            if (entry.kind === 'tool') return <ToolTab key={entry.tool.name} tool={entry.tool} />
 
-          const open = openOverrides[entry.prefix] ?? entry.prefix === openPrefix
-          const allDisabled = entry.tools.every((tool) => tool.disabledByExtension)
-          const panelId = `tool-group-${entry.prefix}`
-          return (
-            <div key={`group:${entry.prefix}`} className="flex flex-col gap-1">
-              <Button
-                variant="ghost"
-                size="sm"
-                aria-expanded={open}
-                aria-controls={panelId}
-                aria-label={t('settings.toolGroupAria', {
-                  prefix: entry.prefix,
-                  count: entry.tools.length
-                })}
-                onClick={() =>
-                  setOpenOverrides((prev) => ({ ...prev, [entry.prefix]: !open }))
-                }
-                className="w-full justify-start gap-1.5 px-2"
-              >
-                <ChevronRight
-                  className={cn(
-                    'size-3.5 shrink-0 text-muted-foreground/70 transition-transform duration-150',
-                    open && 'rotate-90'
-                  )}
-                />
-                <span
-                  className={cn(
-                    'min-w-0 truncate font-mono text-xs',
-                    allDisabled && 'line-through opacity-50'
-                  )}
+            const open = openOverrides[entry.prefix] ?? entry.prefix === openPrefix
+            const allDisabled = entry.tools.every((tool) => tool.disabledByExtension)
+            const panelId = `tool-group-${entry.prefix}`
+            return (
+              <div key={`group:${entry.prefix}`} className="flex flex-col gap-1">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  aria-expanded={open}
+                  aria-controls={panelId}
+                  aria-label={t('settings.toolGroupAria', {
+                    prefix: entry.prefix,
+                    count: entry.tools.length
+                  })}
+                  onClick={() =>
+                    setOpenOverrides((prev) => ({ ...prev, [entry.prefix]: !open }))
+                  }
+                  className="w-full justify-start gap-1.5 px-2"
                 >
-                  {entry.prefix}
-                </span>
-                <span className="ml-auto shrink-0 rounded-item bg-muted px-1.5 text-[10px] font-medium tabular-nums text-muted-foreground" data-tool-group-count>
-                  {entry.tools.length}
-                </span>
-              </Button>
-              <AgentDisclosure id={panelId} open={open} className="flex flex-col gap-1 pl-2">
-                {entry.tools.map((tool) => (
-                  <ToolTab key={tool.name} tool={tool} />
-                ))}
-              </AgentDisclosure>
-            </div>
-          )
-        })}
-      </TabsList>
+                  <ChevronRight
+                    className={cn(
+                      'size-3.5 shrink-0 text-muted-foreground/70 transition-transform duration-150',
+                      open && 'rotate-90'
+                    )}
+                  />
+                  <span
+                    className={cn(
+                      'min-w-0 truncate font-mono text-xs',
+                      allDisabled && 'line-through opacity-50'
+                    )}
+                  >
+                    {entry.prefix}
+                  </span>
+                  <span className="ml-auto shrink-0 rounded-item bg-muted px-1.5 text-[10px] font-medium tabular-nums text-muted-foreground" data-tool-group-count>
+                    {entry.tools.length}
+                  </span>
+                </Button>
+                <AgentDisclosure id={panelId} open={open} className="flex flex-col gap-1 pl-2">
+                  {entry.tools.map((tool) => (
+                    <ToolTab key={tool.name} tool={tool} />
+                  ))}
+                </AgentDisclosure>
+              </div>
+            )
+          })}
+        </TabsList>
+        {/* One line, because the list is genuinely incomplete on a fresh launch:
+            an extension's tools can be registered on its first agent turn
+            (`before_agent_start`), so nothing here can list them yet. */}
+        <p data-tools-lazy-hint className="px-1 text-[11px] leading-4 text-muted-foreground/70">
+          {t('settings.toolsLazyHint')}
+        </p>
+      </div>
 
       {ordered.map((tool) =>
         tool.name === current.name ? (
@@ -244,7 +252,7 @@ function ToolDetail({ tool }: { tool: ToolInfoDTO }) {
           </span>
         </div>
         {fields.length > 0 ? (
-          <div className="divide-y divide-border/60 rounded-xl border border-border/70 bg-card">
+          <div data-tool-parameters className="divide-y divide-border/60 rounded-xl border border-border/70 bg-card">
             {fields.map((field) => (
               <div
                 key={field.name}

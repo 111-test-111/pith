@@ -704,6 +704,7 @@ const en = {
   'settings.toolsEmpty': 'No tools available.',
   'settings.toolsLoadFailed': 'Failed to load the tool catalog.',
   'settings.toolsRetry': 'Retry',
+  'settings.toolsLazyHint': 'Extensions that register their tools on first use appear here after a session has run once.',
   'settings.toolSourceBuiltin': 'Built-in',
   'settings.toolActive': 'Active',
   'settings.toolInactive': 'Inactive',
@@ -793,12 +794,44 @@ const en = {
   'settings.browserOpenLinks': 'Open links in the embedded browser',
   'settings.browserOpenLinksHint':
     'Chat and markdown links open in the app’s browser instead of the system browser',
+  'settings.browserKeepAlive': 'Keep pages alive when the panel is folded',
+  'settings.browserKeepAliveHint':
+    'Folding the side panel keeps browser pages running instead of unloading them — in-progress page activity is never interrupted, and expanding restores them exactly as they were.',
   'settings.browserClearData': 'Clear browsing data',
   'settings.browserClearDataHint':
     'Clears the embedded browser’s cookies, storage and cache — login states included.',
   'settings.browserClearDataConfirm': 'Click again to clear',
   'settings.browserClearDataDone': 'Browsing data cleared.',
   'settings.browserClearDataFailed': 'Failed to clear browsing data.',
+  'settings.browserImport': 'Import login state from Chrome',
+  'settings.browserImportHint':
+    'Copies Chrome cookies into the embedded browser, so its pages (agent-driven ones included) carry your Chrome logins. Some sessions (Google accounts) are device-bound and may need signing in again; macOS asks for keychain access once.',
+  'settings.browserImportProfiles': 'Chrome profile',
+  'settings.browserImportAction': 'Import',
+  'settings.browserImportNone': 'No Chrome profiles found on this Mac.',
+  'settings.browserImportAbsent': 'Chrome is not installed on this Mac.',
+  'settings.browserImportBlocked':
+    'macOS privacy protection is hiding Chrome’s data from pi-app.',
+  'settings.browserOpenPrivacySettings': 'Open Privacy Settings',
+  'settings.browserImportFdaDev':
+    'Dev mode launches pi-app from a terminal: grant Full Disk Access to that terminal app (Terminal, iTerm…) and restart pi-app — no need to add the Electron app itself.',
+  'settings.browserImportFdaInstalled':
+    'Enable Full Disk Access for pi-app in System Settings, then restart the app and retry.',
+  'settings.browserImportErrPermission':
+    'macOS blocked reading Chrome’s cookies. Grant Full Disk Access in System Settings, then restart the app.',
+  'settings.browserImportDone': 'Imported {count} cookies from Chrome.',
+  'settings.browserImportSkipped': '{count} cookies skipped (expired or unreadable).',
+  'settings.browserImportFailedNote': '{count} cookies could not be written ({error}).',
+  'settings.browserImportErrKeychain': 'macOS keychain access was denied, so Chrome cookies could not be decrypted.',
+  'settings.browserImportErrNoChrome': 'No Chrome profiles found on this Mac.',
+  'settings.browserImportErrProfile': 'That Chrome profile could not be read.',
+  'settings.browserImportErrDb': 'Chrome’s cookie database could not be read.',
+  'settings.browserClearImport': 'Clear imported login state',
+  'settings.browserClearImportHint': 'Removes only the cookies imported from Chrome — everything else stays.',
+  'settings.browserClearImportHintActive': 'Imported from {profile} · {count} cookies',
+  'settings.browserClearImportConfirm': 'Click again to remove',
+  'settings.browserClearImportDone': 'Removed {count} imported cookies.',
+  'settings.browserClearImportFailed': 'Failed to remove imported cookies.',
 
   // usage (token activity + trends, ported from pi-web)
   'settings.usage': 'Usage',
@@ -1063,6 +1096,11 @@ const en = {
   "subagent.concurrency": "Concurrent delegations",
   "subagent.concurrencyDesc": "How many subagent runs may execute at the same time for one parent session (1–16).",
   "subagent.concurrencyFailed": "Could not save the concurrency limit.",
+  "subagent.reuseTitle": "Reuse finished subagents",
+  "subagent.reuseDesc": "Let the model continue a finished subagent with the agent tool's continue_session_id — keeping its context, tools and model — instead of always starting a fresh one.",
+  "subagent.commsTitle": "Parent–subagent communication",
+  "subagent.commsDesc": "Steering both ways: the model gets agent_steer to redirect running subagents (adjust goals, request progress, wrap up now), and subagents get message_parent to report or ask mid-task. Subagent messages appear as quiet tool rows; parent steers appear as user bubbles in the subagent's transcript.",
+  "subagent.messageTitle": "Subagent message · {description}",
   "subagent.delegationGroup": "Delegation",
   "subagent.profilesGroup": "Profiles",
   "subagent.profilesDesc": "Every subagent is an ordinary Markdown profile — global files live in ~/.pi/agent/agents, project files in .pi/agents, and a project file shadows a same-name global one.",
@@ -1093,6 +1131,7 @@ const en = {
   "subagent.toolsGroupExtension": "Extension tools",
   "subagent.toolsGroupUnknown": "Not registered in this workspace",
   "subagent.toolsMcpMeta": "The MCP gateway, its scripting tool and every server, as one whole",
+  "subagent.toolsFamilyAria": "Select every {prefix} tool ({count})",
   "subagent.toolsSave": "Save",
   "subagent.toolsReset": "Reset",
   "subagent.toolsSaveFailed": "Could not save the tool set.",

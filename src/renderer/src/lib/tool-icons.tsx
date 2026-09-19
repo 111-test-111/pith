@@ -26,10 +26,12 @@ import {
   ListTodo,
   MousePointer2,
   MousePointerClick,
+  MessageSquareText,
   Plug,
   ScanText,
   ScanSearch,
   Search,
+  Send,
   SourceCode,
   SquareArrowOutUpRight,
   Stethoscope,
@@ -65,6 +67,11 @@ const TOOL_ICONS: Record<string, IconComponent> = {
   todo_write: ListTodo,
   ask_user_question: CircleHelp,
   agent: Bot,
+  // Subagent communications (Settings → Subagents): the parent steering a
+  // running child is a send; a child's message up to its parent is the
+  // text-filled speech bubble.
+  agent_steer: Send,
+  message_parent: MessageSquareText,
   powershell: Terminal,
   read: FileText,
   edit: FilePen,

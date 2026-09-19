@@ -1,5 +1,5 @@
 import type { SessionEntry } from '@earendil-works/pi-coding-agent'
-import type { SubagentRunDTO, SubagentRunStatus, SubagentWrittenFileDTO } from '../../../shared/types'
+import type { SubagentMessageDetails, SubagentRunDTO, SubagentRunStatus, SubagentWrittenFileDTO } from '../../../shared/types'
 
 /** Persistence + wire protocol for subagent runs. Shared by runtime, manager
  * and the disk reader below; deliberately free of Electron imports so the
@@ -15,10 +15,21 @@ export const SUBAGENT_RESULT_TYPE = 'pith_subagent_result'
 export const SUBAGENT_DISPATCH_TYPE = 'pith_subagent_dispatch'
 /** Custom message type the parent receives when a background run completes. */
 export const SUBAGENT_COMPLETION_TYPE = 'subagent_completion'
+/** Custom message type the parent receives when a running child sends it a
+ * message through the `message_parent` tool (subagent communications). */
+export const SUBAGENT_MESSAGE_TYPE = 'subagent_message'
 
 export const SUBAGENT_TOOL_NAME = 'agent'
-/** Tools a subagent session must never see, regardless of its profile. */
-export const SUBAGENT_EXCLUDED_TOOLS = [SUBAGENT_TOOL_NAME] as const
+/** Parent-side steering tool (Settings → Subagents → communications). */
+export const AGENT_STEER_TOOL_NAME = 'agent_steer'
+/** Child-side tool that sends a message up to the parent session. Injected
+ * into every child ceiling while subagent communications are enabled, so it
+ * is available regardless of the profile's own tool list — it is a
+ * communication primitive, not a capability over the workspace. */
+export const MESSAGE_PARENT_TOOL_NAME = 'message_parent'
+/** Tools a subagent session must never see, regardless of its profile:
+ * delegation recursion and the parent-only steering tool. */
+export const SUBAGENT_EXCLUDED_TOOLS = [SUBAGENT_TOOL_NAME, AGENT_STEER_TOOL_NAME] as const
 
 /** Data persisted with a `pith_subagent_run` entry. */
 export interface SubagentRunStartData {
@@ -65,6 +76,11 @@ export interface SubagentRunResultData {
   writtenFiles?: SubagentWrittenFileDTO[]
   writtenFilesScope?: 'run'
 }
+
+/** Details carried by a `subagent_message` custom message live in
+ * shared/types.ts (the renderer's quiet tool row reads the same fields the
+ * model-facing prose in the message content carries). */
+export type { SubagentMessageDetails }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null

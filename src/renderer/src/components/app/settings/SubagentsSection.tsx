@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import { FileText, FolderOpen, Plus, RefreshCw } from '@/lib/icons'
+import { ChevronRight, FileText, FolderOpen, Plus, RefreshCw } from '@/lib/icons'
+import { AgentDisclosure } from '@/components/agents/agent-disclosure'
 import { Button } from '@/components/motion/button'
 import { Input } from '@/components/motion/input'
 import { Checkbox } from '@/components/motion/checkbox'
@@ -14,6 +15,7 @@ import {
   canonicalToolNames,
   sameTools,
   subagentToolGroups,
+  type SubagentToolEntry,
   type SubagentToolGroups,
   type SubagentToolOption
 } from '@/lib/subagent-tools'
@@ -63,6 +65,11 @@ export function SubagentsSection() {
   const [concurrentDraft, setConcurrentDraft] = useState<string | null>(null)
   const [savingConcurrent, setSavingConcurrent] = useState(false)
   const [concurrentError, setConcurrentError] = useState(false)
+  // --- reuse + communication switches (default off; both need delegation) ---
+  const [reuseEnabled, setReuseEnabled] = useState(false)
+  const [savingReuse, setSavingReuse] = useState(false)
+  const [commsEnabled, setCommsEnabled] = useState(false)
+  const [savingComms, setSavingComms] = useState(false)
   const saveConcurrent = (value: number) => {
     setSubagentConcurrent(value)
     setSavingConcurrent(true)
@@ -116,6 +123,8 @@ export function SubagentsSection() {
         (info) => {
           setSubagentsEnabled(info.subagentsEnabled !== false)
           setSubagentConcurrent(info.subagentMaxConcurrent ?? 4)
+          setReuseEnabled(info.subagentReuseEnabled === true)
+          setCommsEnabled(info.subagentCommsEnabled === true)
         },
         () => {}
       )
@@ -169,15 +178,18 @@ export function SubagentsSection() {
         : new Set(active.selected)
     setDraft({ mode, selected: next })
   }
-  const toggleOption = (option: SubagentToolOption, on: boolean) => {
+  const toggleOptions = (options: SubagentToolOption[], on: boolean) => {
     if (!active) return
     const next = new Set(active.selected)
-    for (const name of option.names) {
-      if (on) next.add(name)
-      else next.delete(name)
+    for (const option of options) {
+      for (const name of option.names) {
+        if (on) next.add(name)
+        else next.delete(name)
+      }
     }
     setDraft({ mode: active.mode, selected: next })
   }
+  const toggleOption = (option: SubagentToolOption, on: boolean) => toggleOptions([option], on)
   const saveTools = () => {
     if (!current || !dirty || emptySelection) return
     setSavingTools(true)
@@ -247,6 +259,40 @@ export function SubagentsSection() {
         {concurrentError ? (
           <p role="alert" className="px-4 text-xs text-destructive">{t('subagent.concurrencyFailed')}</p>
         ) : null}
+        <div data-subagent-reuse-row>
+          <SettingsRow label={t('subagent.reuseTitle')} description={t('subagent.reuseDesc')}>
+            <Checkbox
+              mark="square"
+              checked={reuseEnabled}
+              disabled={!subagentsEnabled || savingReuse}
+              onCheckedChange={(value) => {
+                setSavingReuse(true)
+                void window.pi
+                  .setSubagentReuseEnabled(value)
+                  .then(setReuseEnabled, () => {})
+                  .finally(() => setSavingReuse(false))
+              }}
+              aria-label={t('subagent.reuseTitle')}
+            />
+          </SettingsRow>
+        </div>
+        <div data-subagent-comms-row>
+          <SettingsRow label={t('subagent.commsTitle')} description={t('subagent.commsDesc')}>
+            <Checkbox
+              mark="square"
+              checked={commsEnabled}
+              disabled={!subagentsEnabled || savingComms}
+              onCheckedChange={(value) => {
+                setSavingComms(true)
+                void window.pi
+                  .setSubagentCommsEnabled(value)
+                  .then(setCommsEnabled, () => {})
+                  .finally(() => setSavingComms(false))
+              }}
+              aria-label={t('subagent.commsTitle')}
+            />
+          </SettingsRow>
+        </div>
       </SettingsGroup>
 
       <section>
@@ -364,6 +410,7 @@ export function SubagentsSection() {
                   hasDraft={draft !== null}
                   onMode={chooseMode}
                   onToggle={toggleOption}
+                  onToggleMany={toggleOptions}
                   onSave={saveTools}
                   onReset={() => setDraft(null)}
                 />
@@ -391,6 +438,7 @@ function ProfileDetail({
   hasDraft,
   onMode,
   onToggle,
+  onToggleMany,
   onSave,
   onReset
 }: {
@@ -406,6 +454,8 @@ function ProfileDetail({
   hasDraft: boolean
   onMode: (mode: 'all' | 'explicit') => void
   onToggle: (option: SubagentToolOption, on: boolean) => void
+  /** One whole family in one gesture (the family row's checkbox). */
+  onToggleMany: (options: SubagentToolOption[], on: boolean) => void
   onSave: () => void
   onReset: () => void
 }) {
@@ -522,35 +572,39 @@ function ProfileDetail({
                 <ToolGroup
                   id="mcp"
                   title="MCP"
-                  options={groups.mcp ? [groups.mcp] : []}
+                  entries={groups.mcp ? [{ kind: 'option', option: groups.mcp }] : []}
                   meta={groups.mcp ? t('subagent.toolsMcpMeta') : undefined}
                   selected={active.selected}
                   disabled={saving}
                   onToggle={onToggle}
+                  onToggleMany={onToggleMany}
                 />
                 <ToolGroup
                   id="builtin"
                   title={t('subagent.toolsGroupBuiltin')}
-                  options={groups.builtin}
+                  entries={groups.builtin}
                   selected={active.selected}
                   disabled={saving}
                   onToggle={onToggle}
+                  onToggleMany={onToggleMany}
                 />
                 <ToolGroup
                   id="extension"
                   title={t('subagent.toolsGroupExtension')}
-                  options={groups.extension}
+                  entries={groups.extension}
                   selected={active.selected}
                   disabled={saving}
                   onToggle={onToggle}
+                  onToggleMany={onToggleMany}
                 />
                 <ToolGroup
                   id="unknown"
                   title={t('subagent.toolsGroupUnknown')}
-                  options={groups.unknown}
+                  entries={groups.unknown}
                   selected={active.selected}
                   disabled={saving}
                   onToggle={onToggle}
+                  onToggleMany={onToggleMany}
                 />
               </div>
             </FadeScroll>
@@ -756,56 +810,184 @@ function CreateProfileForm({
 
 /** The row wrapper keeps each option a flex item so the meta note (an
  * extension's package label) sits on the same line as the name, and the
- * group's own shared note rides under the title. */
+ * group's own shared note rides under the title.
+ *
+ * An option whose name carries a shared `prefix_` family (`ctx_*`,
+ * `browser_*`, `web_*`) is replaced by ONE family row: a tri-state checkbox
+ * that selects or clears the whole family in one gesture, beside a quiet
+ * disclosure that opens the individual checkboxes. Selecting members one by
+ * one is the same path as before, one click deeper; the collapsed form is
+ * what keeps a 14-tool family from burying the rest of the picker. The MCP
+ * whole is deliberately NOT a family: the gateway alone reaches every server,
+ * so per-server toggles would offer a distinction that does not exist. */
 function ToolGroup({
   id,
   title,
-  options,
+  entries,
   meta,
   selected,
   disabled,
-  onToggle
+  onToggle,
+  onToggleMany
 }: {
   id: 'mcp' | 'builtin' | 'extension' | 'unknown'
   title: string
-  options: SubagentToolOption[]
+  entries: SubagentToolEntry[]
   /** One shared meta line for the whole group's entries (the MCP note). */
   meta?: string
   selected: Set<string>
   disabled: boolean
   onToggle: (option: SubagentToolOption, on: boolean) => void
+  onToggleMany: (options: SubagentToolOption[], on: boolean) => void
 }) {
-  if (!options.length) return null
+  if (!entries.length) return null
   return (
     <div data-subagent-tool-group={id}>
       <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">
         {title}
       </p>
       <div className="space-y-0.5">
-        {options.map((option) => {
-          const checked = option.names.every((name) => selected.has(name))
-          return (
-            <div key={option.label} data-subagent-tool={option.label} className="flex items-center gap-2 py-0.5">
-              <Checkbox
-                mark="square"
-                checked={checked}
-                disabled={disabled}
-                onCheckedChange={(value) => onToggle(option, value === true)}
-                aria-label={option.label}
-                label={option.label}
-              />
-              {option.meta ? (
-                <span className="min-w-0 truncate text-xs text-muted-foreground">
-                  {option.meta}
-                </span>
-              ) : null}
-            </div>
+        {entries.map((entry) =>
+          entry.kind === 'family' ? (
+            <ToolFamily
+              key={`${id}:${entry.prefix}`}
+              id={`${id}:${entry.prefix}`}
+              prefix={entry.prefix}
+              options={entry.options}
+              selected={selected}
+              disabled={disabled}
+              onToggle={onToggle}
+              onToggleMany={onToggleMany}
+            />
+          ) : (
+            <ToolOption key={entry.option.label} option={entry.option} selected={selected} disabled={disabled} onToggle={onToggle} />
           )
-        })}
+        )}
       </div>
       {meta ? (
         <p className="mt-1 px-1 text-[11px] leading-4 text-muted-foreground/70">{meta}</p>
       ) : null}
+    </div>
+  )
+}
+
+/** One tool row: a checkbox with its name, plus the extension label when the
+ * catalog knows one. */
+function ToolOption({
+  option,
+  selected,
+  disabled,
+  onToggle
+}: {
+  option: SubagentToolOption
+  selected: Set<string>
+  disabled: boolean
+  onToggle: (option: SubagentToolOption, on: boolean) => void
+}) {
+  const checked = option.names.every((name) => selected.has(name))
+  return (
+    <div data-subagent-tool={option.label} className="flex items-center gap-2 py-0.5">
+      <Checkbox
+        mark="square"
+        checked={checked}
+        disabled={disabled}
+        onCheckedChange={(value) => onToggle(option, value === true)}
+        aria-label={option.label}
+        label={option.label}
+      />
+      {option.meta ? (
+        <span className="min-w-0 truncate text-xs text-muted-foreground">{option.meta}</span>
+      ) : null}
+    </div>
+  )
+}
+
+/** A `prefix_*` family: selection for the whole series beside its disclosure. */
+function ToolFamily({
+  id,
+  prefix,
+  options,
+  selected,
+  disabled,
+  onToggle,
+  onToggleMany
+}: {
+  id: string
+  prefix: string
+  options: SubagentToolOption[]
+  selected: Set<string>
+  disabled: boolean
+  onToggle: (option: SubagentToolOption, on: boolean) => void
+  onToggleMany: (options: SubagentToolOption[], on: boolean) => void
+}) {
+  const { t } = useI18n()
+  const [open, setOpen] = useState(false)
+  const total = options.length
+  const chosen = options.filter((option) => option.names.every((name) => selected.has(name))).length
+  const all = chosen === total
+  const panelId = `subagent-tool-family-${id.replace(/[^a-z0-9]+/gi, '-')}`
+  // Only a label every member agrees on can speak for the family.
+  const meta = options.every((option) => option.meta === options[0].meta) ? options[0].meta : undefined
+  return (
+    <div data-subagent-tool-family={prefix} data-family-state={all ? 'all' : chosen > 0 ? 'some' : 'none'}>
+      <div className="flex items-center gap-2 py-0.5">
+        <Checkbox
+          mark="square"
+          checked={all}
+          indeterminate={!all && chosen > 0}
+          disabled={disabled}
+          onCheckedChange={(value) => onToggleMany(options, value === true)}
+          aria-label={t('subagent.toolsFamilyAria', { prefix, count: total })}
+        />
+        <Button
+          variant="ghost"
+          size="sm"
+          data-subagent-tool-family-toggle
+          aria-expanded={open}
+          aria-controls={panelId}
+          disabled={disabled}
+          // A quiet toggle: the vendored press/hover spring reads as a bounce on
+          // a row whose whole job is to reveal the rows below it, so both are
+          // cancelled (the same treatment the task panels' toggles use).
+          whileHover={undefined}
+          whileTap={undefined}
+          onClick={() => setOpen((prev) => !prev)}
+          className="min-w-0 flex-1 justify-start gap-1.5 px-1"
+        >
+          <ChevronRight
+            className={cn(
+              'size-3.5 shrink-0 text-muted-foreground/70 transition-transform duration-150',
+              open && 'rotate-90'
+            )}
+          />
+          {/* The family name wears the UI font, exactly like the tool rows it
+              collapses — the leaf rows' own labels are UI-font too, and a
+              monospace prefix beside them read as a different kind of row. */}
+          <span data-subagent-tool-family-label className="min-w-0 truncate text-xs">{prefix}</span>
+          {meta ? (
+            <span className="min-w-0 truncate text-xs text-muted-foreground">{meta}</span>
+          ) : null}
+          <span
+            data-subagent-tool-family-count
+            className="ml-auto shrink-0 rounded-item bg-muted px-1.5 text-[10px] font-medium tabular-nums text-muted-foreground"
+          >
+            {chosen}/{total}
+          </span>
+        </Button>
+      </div>
+      <AgentDisclosure
+        id={panelId}
+        open={open}
+        // The reveal is instant on purpose: a picker row that slides its
+        // neighbours around while the pointer is still on it reads as a jump.
+        transition={{ duration: 0 }}
+        className="space-y-0.5 pl-3"
+        data-subagent-tool-family-members={prefix}
+      >
+        {options.map((option) => (
+          <ToolOption key={option.label} option={option} selected={selected} disabled={disabled} onToggle={onToggle} />
+        ))}
+      </AgentDisclosure>
     </div>
   )
 }

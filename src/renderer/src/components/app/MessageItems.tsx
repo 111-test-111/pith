@@ -1,5 +1,5 @@
 import { BashTaskRow } from './BashTaskView'
-import { SubagentCompletionRow } from './SubagentView'
+import { SubagentCompletionRow, SubagentMessageRow, subagentMessageDetailsOf } from './SubagentView'
 import {
   Fragment,
   memo,
@@ -321,6 +321,13 @@ export const CustomItem = memo(function CustomItem({ message }: { message: Custo
   if (message.customType === 'bash_task_completion' && task) return <BashTaskRow task={task} completion />
   const subagent = (message.details as { subagent?: SubagentRunDTO } | undefined)?.subagent
   if (message.customType === 'subagent_completion' && subagent) return <SubagentCompletionRow run={subagent} />
+  // A running subagent's message to its parent: the same quiet tool-row
+  // treatment a completion notice gets — it is steering data the model
+  // consumed, not a conversation card.
+  if (message.customType === 'subagent_message') {
+    const fromSubagent = subagentMessageDetailsOf(message.details)
+    if (fromSubagent) return <SubagentMessageRow details={fromSubagent} />
+  }
   // An async question's outcome is tool data for the model: it stays out of the
   // transcript — the Q&A record panel is where the user reads it.
   if (message.customType === 'ask_user_answer') return null

@@ -1,11 +1,11 @@
 import { memo, useEffect, useRef, useState } from 'react'
 import { ToolResult } from '@/components/agents/tool-result'
 import { Button } from '@/components/motion/button'
-import { Bot, FileDiff } from '@/lib/icons'
+import { Bot, FileDiff, MessageSquareText } from '@/lib/icons'
 import { formatTime } from '@/lib/format'
 import { useI18n } from '@/i18n'
 import { useCappedListFade } from '@/lib/hooks/use-capped-list-fade'
-import { SUBAGENT_READ_ONLY_TOOLS, type SubagentRunDTO } from '../../../../shared/types'
+import { SUBAGENT_READ_ONLY_TOOLS, type SubagentMessageDetails, type SubagentRunDTO } from '../../../../shared/types'
 
 /**
  * The in-turn completion row for a background subagent, mirroring how a
@@ -47,6 +47,55 @@ export const SubagentCompletionRow = memo(function SubagentCompletionRow({ run }
             ) : null}
             {run.result ? <p className="whitespace-pre-wrap break-words text-xs">{run.result}</p> : null}
           </div>
+        ) : null}
+      </ToolResult>
+    </div>
+  )
+})
+
+/** Normalize persisted `subagent_message` details (they cross the wire as
+ * plain records): anything without the marker kind or a message body is not
+ * one of ours, so the row never guesses at a half-shaped payload. */
+export function subagentMessageDetailsOf(details: unknown): SubagentMessageDetails | null {
+  if (!details || typeof details !== 'object') return null
+  const record = details as Record<string, unknown>
+  if (record.kind !== 'pi-app-subagent-message') return null
+  const sessionId = typeof record.sessionId === 'string' ? record.sessionId : ''
+  const message = typeof record.message === 'string' ? record.message : ''
+  if (!sessionId || !message) return null
+  return {
+    kind: 'pi-app-subagent-message',
+    sessionId,
+    ...(typeof record.runId === 'string' && record.runId ? { runId: record.runId } : {}),
+    description: typeof record.description === 'string' && record.description ? record.description : 'Subagent',
+    profile: typeof record.profile === 'string' && record.profile ? record.profile : 'subagent',
+    message,
+    sentAt: typeof record.sentAt === 'string' && record.sentAt ? record.sentAt : new Date(0).toISOString()
+  }
+}
+
+/** A running subagent's message to its parent, mirroring the completion
+ * notice: a quiet tool row attached to the running turn — never a
+ * conversation card (the parent model consumed the same payload as steering
+ * data). */
+export const SubagentMessageRow = memo(function SubagentMessageRow({ details }: { details: SubagentMessageDetails }) {
+  const { t } = useI18n()
+  const [open, setOpen] = useState(false)
+  const sentAt = Date.parse(details.sentAt)
+  return (
+    <div data-subagent-message={details.sessionId} data-subagent-message-sent={details.sentAt}>
+      <ToolResult animateChanges={false} lazyContent open={open} onOpenChange={setOpen}
+        title={t('subagent.messageTitle', { description: details.description })}
+        status="success"
+        icon={<MessageSquareText aria-hidden="true" className="size-4" />}
+        meta={[
+          details.profile,
+          ...(Number.isFinite(sentAt) ? [formatTime(sentAt)] : [])
+        ].filter(Boolean).join(' · ')}
+        copyText={details.message}
+        collapseOnComplete={false}>
+        {open ? (
+          <p className="whitespace-pre-wrap break-words text-xs">{details.message}</p>
         ) : null}
       </ToolResult>
     </div>
