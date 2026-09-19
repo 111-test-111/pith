@@ -9,7 +9,7 @@ import type { IconPack } from './ui-style'
  * Defaults to the square style's pack so an isolated render (a check fixture,
  * a preview) never needs the provider.
  */
-const IconPackContext = createContext<IconPack>('remix')
+const IconPackContext = createContext<IconPack>('carbon')
 
 export function IconPackProvider({ pack, children }: { pack: IconPack; children: ReactNode }) {
   return <IconPackContext.Provider value={pack}>{children}</IconPackContext.Provider>

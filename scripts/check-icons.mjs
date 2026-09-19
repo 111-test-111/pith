@@ -24,9 +24,38 @@ const providers = [...providerMap.matchAll(/^  (?:'([^']+)'|([\w]+)): /gm)].map(
 
 // PACKS — both packs must render every semantic export. The adapter's icon-pack
 // context selects the artwork; this check flips it live and asserts each pass.
+// The packs differ in artwork style (Carbon fill, HugeIcons stroke) and Carbon
+// does not share one grid: its utility glyphs (arrows, carets, search, settings,
+// user, view, upload, …) are drawn on 16 and a few on 20, the rest on 32, so the
+// square pack asserts that each glyph keeps the view box ITS module declares —
+// which is what proves the adapter passes the artwork through untouched instead
+// of rescaling it onto one grid.
 // (The former "no @hugeicons dependency" guard was removed by explicit owner
 // decision — the reason is recorded in AGENTS.md.)
-const PACKS = ['remix', 'hugeicons']
+const PACKS = ['carbon', 'hugeicons']
+const HUGE_VIEW_BOX = '0 0 24 24'
+// The pack table is the only place mapping a semantic name to Carbon's export.
+const carbonExportOf = {}
+for (const [, name, ident] of source.matchAll(/^  (\w+): \{ carbon: Carbon\.([\w]+), huge: /gm)) {
+  carbonExportOf[name] = ident
+}
+assert.equal(Object.keys(carbonExportOf).length, expectedNames.length, 'every export has a Carbon glyph')
+/** The view box each Carbon module actually draws, read from the installed
+ * package. 84 of Carbon's components pick their artwork by the `size` prop
+ * (defaulting to 16) and fall back to a canonical drawing otherwise; the adapter
+ * deliberately does NOT forward `size` — it passes the box as width/height,
+ * because the app styles 454 icon call sites with Tailwind size classes and only
+ * a dozen with a numeric size, so Carbon's 16px-drawn artwork is the right
+ * default. That makes the drawn artwork the `size === 16` branch when the module
+ * has one, and otherwise the unconditional final return. */
+const declaredViewBox = {}
+for (const [name, ident] of Object.entries(carbonExportOf)) {
+  const module = await readFile(join(repo, 'node_modules/@carbon/icons-react/es', `${ident}.js`), 'utf8')
+  const matches = [...module.matchAll(/viewBox: "([^"]+)"/g)]
+  assert(matches.length, `carbon: ${ident} declares a view box`)
+  const sixteen = /if \(size === 16[\s\S]{0,600}?viewBox: "([^"]+)"/.exec(module)
+  declaredViewBox[name] = sixteen ? sixteen[1] : matches[matches.length - 1][1]
+}
 
 const fixture = `<!doctype html><html><head><style>
 body{margin:0!important}main{padding:20px;max-width:1200px;margin:auto}h2{font-size:14px;margin:0 0 12px}
@@ -48,7 +77,7 @@ import '/src/styles.css';
 const h=React.createElement;const providers=${JSON.stringify(providers)};
 function Fixture(){
  const [checked,setChecked]=React.useState(false),[mixed,setMixed]=React.useState(false);
- const [pack,setPack]=React.useState('remix');
+ const [pack,setPack]=React.useState('carbon');
  const ref=React.useRef(null);window.controls={setChecked,setMixed,setPack};
  React.useEffect(()=>{window.iconRef=ref;window.fixtureReady=true},[]);
  return h(IconPackProvider,{pack},
@@ -121,7 +150,7 @@ try {
       assert.equal(icon.pack,pack,pack+': '+icon.name+' rendered by the active pack')
       assert.equal(icon.width,24,pack+': '+icon.name+' width')
       assert.equal(icon.height,24,pack+': '+icon.name+' height')
-      assert.equal(icon.viewBox,'0 0 24 24',pack+': '+icon.name+' viewBox')
+      assert.equal(icon.viewBox,pack==='carbon'?declaredViewBox[icon.name]:HUGE_VIEW_BOX,pack+': '+icon.name+' keeps its own view box')
       assert.equal(icon.hidden,'true',pack+': '+icon.name+' is decorative by default')
       assert(icon.paths>0,pack+': '+icon.name+' draws real geometry')
       assert.doesNotMatch(icon.box,/NaN|null/,pack+': '+icon.name+' has no NaN/null geometry')
@@ -135,9 +164,10 @@ try {
       const paths=await evaluate(`document.querySelectorAll('[data-sample="${arrow}"][data-size="24"] path').length`)
       assert.ok(paths>=1,pack+': '+arrow+' renders line artwork')
     }
-    if(pack==='remix'){
-      assert.equal(await evaluate('document.querySelector("#props-icon").getAttribute("stroke-width")'),null,'remix: stroke-only props are dropped')
-      assert.equal(await evaluate('document.querySelector("#props-icon").getAttribute("fill")'),'currentColor','remix: line artwork follows currentColor')
+    if(pack==='carbon'){
+      assert.equal(await evaluate('document.querySelector("#props-icon").getAttribute("stroke-width")'),null,'carbon: stroke-only props are dropped')
+      assert.equal(await evaluate('document.querySelector("#props-icon").getAttribute("fill")'),'currentColor','carbon: fill artwork follows currentColor')
+      assert.equal(await evaluate('document.querySelector("#props-icon").getAttribute("viewBox")'),declaredViewBox.Search,'carbon: keeps the artwork\'s own view box')
     }else{
       assert.equal(await evaluate('document.querySelector("#props-icon").getAttribute("stroke-width")'),'3','hugeicons: the requested stroke width is applied')
       assert.equal(await evaluate('document.querySelector("#props-icon").getAttribute("stroke")'),'currentColor','hugeicons: stroke follows currentColor')
@@ -147,16 +177,16 @@ try {
       assert.equal(await evaluate('document.querySelector("#css-icon").getAttribute("stroke-width")'),'1.5','hugeicons: the default stroke is 1.5')
     }
   }
-  assert.notEqual(signatures.remix,signatures.hugeicons,'the two packs draw different artwork')
+  assert.notEqual(signatures.carbon,signatures.hugeicons,'the two packs draw different artwork')
   // Live switch: the same tree, flipped in place, must change the drawn artwork
   // and flip back — that is what proves no reload/remount is involved.
-  await setPack('remix')
-  const remixPath=await evaluate('document.querySelector("#props-icon path").getAttribute("d")')
+  await setPack('carbon')
+  const carbonPath=await evaluate('document.querySelector("#props-icon path").getAttribute("d")')
   await setPack('hugeicons')
   const hugePath=await evaluate('document.querySelector("#props-icon path").getAttribute("d")')
-  assert.notEqual(remixPath,hugePath,'flipping the pack changes the drawn path live')
-  await setPack('remix')
-  assert.equal(await evaluate('document.querySelector("#props-icon path").getAttribute("d")'),remixPath,'flipping back restores the Remix artwork')
+  assert.notEqual(carbonPath,hugePath,'flipping the pack changes the drawn path live')
+  await setPack('carbon')
+  assert.equal(await evaluate('document.querySelector("#props-icon path").getAttribute("d")'),carbonPath,'flipping back restores the Carbon artwork')
   console.log('PASS: all '+expectedNames.length+' icons in both packs, live pack switch, native SVG props, CSS sizing, ref and accessibility')
 
   await evaluate('document.querySelector("#checkbox button").click()')
@@ -200,7 +230,7 @@ try {
       }
     }
   }
-  await setPack('remix')
+  await setPack('carbon')
   assert.deepEqual(exceptions,[],'No renderer exceptions')
   console.log('PASS: '+loaded.length+' provider aliases, SVG asset decoding, both packs in light/dark themes')
 } finally {

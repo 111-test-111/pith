@@ -25,12 +25,12 @@
     "dist:linux": "npm run build && electron-builder --linux"
   },
   "dependencies": {
+    "@carbon/icons-react": "^11.88.0",
     "@earendil-works/pi-coding-agent": "^0.85.1",
     "@floating-ui/react": "^0.27.20",
     "@hugeicons/core-free-icons": "^4.3.4",
     "@lobehub/icons-static-svg": "^1.95.0",
     "@paper-design/shaders-react": "^0.0.80",
-    "@remixicon/react": "^4.9.0",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/addon-webgl": "^0.19.0",
     "@xterm/xterm": "^6.0.0",

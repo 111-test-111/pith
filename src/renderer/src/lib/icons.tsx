@@ -6,148 +6,7 @@ import {
   type RefAttributes,
   type SVGProps
 } from 'react'
-import {
-  RiAddLine,
-  RiAlertLine,
-  RiAnticlockwise2Line,
-  RiArrowDownLine,
-  RiArrowDownSLine,
-  RiArrowUpDownLine,
-  RiArrowGoBackLine,
-  RiArrowLeftLine,
-  RiArrowLeftSLine,
-  RiArrowRightLine,
-  RiArrowRightSLine,
-  RiArrowRightUpLine,
-  RiArrowUpLine,
-  RiArrowUpSLine,
-  RiAttachmentLine,
-  RiBarChart2Line,
-  RiBookOpenLine,
-  RiBookmarkLine,
-  RiBookReadLine,
-  RiBracesLine,
-  RiBrainLine,
-  RiCameraLine,
-  RiChat4Line,
-  RiCheckboxBlankCircleLine,
-  RiCheckboxCircleLine,
-  RiCheckLine,
-  RiClosedCaptioningLine,
-  RiCloseCircleLine,
-  RiCloseLargeLine,
-  RiCloseLine,
-  RiCodeSSlashLine,
-  RiCompass3Line,
-  RiComputerLine,
-  RiContractUpDownLine,
-  RiCursorFill,
-  RiCursorLine,
-  RiDashboardLine,
-  RiDatabase2Line,
-  RiDeleteBin6Line,
-  RiDownload2Line,
-  RiDownloadCloud2Line,
-  RiDownloadLine,
-  RiEdit2Line,
-  RiEditLine,
-  RiErrorWarningLine,
-  RiExpandUpDownLine,
-  RiExternalLinkLine,
-  RiEyeLine,
-  RiEyeOffLine,
-  RiFileAddLine,
-  RiFileCodeLine,
-  RiFileCopyLine,
-  RiFileDownloadLine,
-  RiFileEditLine,
-  RiFilePaperLine,
-  RiFileSearchLine,
-  RiFileTextLine,
-  RiFileTransferLine,
-  RiFlashlightLine,
-  RiFolderAddLine,
-  RiFolderLine,
-  RiFolderOpenLine,
-  RiFolderReceivedLine,
-  RiFontSize2,
-  RiFullscreenExitLine,
-  RiFullscreenLine,
-  RiGitBranchLine,
-  RiGitPullRequestLine,
-  RiGlobalLine,
-  RiGraduationCapLine,
-  RiHistoryLine,
-  RiImage2Line,
-  RiImageAddLine,
-  RiImageLine,
-  RiInformationLine,
-  RiKeyLine,
-  RiKeyboardLine,
-  RiLayoutGridLine,
-  RiLayoutLeftLine,
-  RiLayoutRightLine,
-  RiLightbulbLine,
-  RiLinksLine,
-  RiListCheck2,
-  RiLoader2Line,
-  RiLoader4Line,
-  RiLogoutBoxRLine,
-  RiMagicLine,
-  RiMoonLine,
-  RiMoreLine,
-  RiMusic2Line,
-  RiNotification3Line,
-  RiPaletteLine,
-  RiPlug2Line,
-  RiPrinterLine,
-  RiPlugLine,
-  RiProhibitedLine,
-  RiPushpinLine,
-  RiPuzzleLine,
-  RiQuestionLine,
-  RiRecordCircleLine,
-  RiRefreshLine,
-  RiRewindLine,
-  RiRobot2Line,
-  RiScan2Line,
-  RiScanLine,
-  RiSearch2Line,
-  RiSearchLine,
-  RiSendPlane2Line,
-  RiSettings4Line,
-  RiSettingsLine,
-  RiShapesLine,
-  RiShieldCheckLine,
-  RiSkipForwardLine,
-  RiSmartphoneLine,
-  RiSortAsc,
-  RiSortDesc,
-  RiSparkling2Line,
-  RiStethoscopeLine,
-  RiStopLargeFill,
-  RiSubtractLine,
-  RiStackLine,
-  RiSunLine,
-  RiTerminalBoxLine,
-  RiTerminalLine,
-  RiTerminalWindowLine,
-  RiTimerLine,
-  RiText,
-  RiTextWrap,
-  RiThumbDownLine,
-  RiThumbUpLine,
-  RiTimeLine,
-  RiTodoLine,
-  RiTreeLine,
-  RiUnpinLine,
-  RiUploadLine,
-  RiUserLine,
-  RiWrenchLine,
-  RiZoomInLine,
-  RiZoomOutLine,
-  type RemixiconComponentType,
-} from '@remixicon/react'
+import * as Carbon from '@carbon/icons-react'
 import {
   Alert01Icon,
   AlertCircleIcon,
@@ -302,26 +161,94 @@ import {
 import { useIconPack } from './icon-pack'
 
 /**
- * App and beUI glyphs share this entry point, and it is a two-pack table:
- * Remix Icon's line family (24×24, fill artwork) for the square interface
- * style and HugeIcons' stroke-rounded family for the squircle style. Call
- * sites keep their semantic names and never choose a pack — `iconPackOf(uiStyle)`
- * feeds `lib/icon-pack.tsx`'s context and this file renders whichever glyph
- * the context names. Several names predate the current packs' spelling of the
- * same shape, and a handful only ever had a nearest-neighbour, so their
- * nearest-neighbour choices are recorded here rather than at a call site:
+ * App and beUI glyphs share this entry point, and it is a two-pack table: IBM
+ * Carbon's line family for the square interface style (fill artwork, 16/20/32
+ * grids — see below) and HugeIcons' stroke-rounded family for the squircle style
+ * (24×24, stroke artwork). Call sites keep their semantic names and never choose
+ * a pack — `iconPackOf(uiStyle)` feeds `lib/icon-pack.tsx`'s context and this
+ * file renders whichever glyph the context names.
  *
- *   BookDownload → file-download, Diff → file-transfer, Monitor → computer,
- *   ListTodo → todo, MoreVertical → the horizontal ellipsis rotated a quarter
- *   turn (Remix only; HugeIcons has its own ⋮), Chart → a column chart,
- *   BookSearch → a book with a magnifier, InstallingUpdates → the pack's own
- *   update mark, Type → a bare "T" (a modality marker, distinct from
- *   TextFont's size mark), XSquare → a square cancel, Rewind → the pack's own
- *   rewind mark.
+ * The Carbon glyphs are named through a namespace import (`Carbon.Terminal_3270`)
+ * rather than a named import list, because the package's own export names
+ * collide with this file's semantic exports (`FolderTree`, `Globe`, `Search`,
+ * `User`, `ZoomIn`, … would each merge two declarations). The table row is what
+ * records which glyph a name takes; the build tree-shakes the rest away.
  *
- * Two packs share one prop surface: `strokeWidth` and `absoluteStrokeWidth`
- * are accepted everywhere, dropped by Remix (fill artwork has no stroke to
- * scale) and applied by HugeIcons (stroke artwork, default 1.5).
+ * Carbon does not draw on one grid: its utility glyphs are 16×16 (the arrows,
+ * the carets, search, settings, user, view, upload, download, launch, …), a few
+ * are 20×20 (`Checkmark`, `Time`) and the rest 32×32. 84 of its components also
+ * pick their artwork by a `size` prop and default to 16, so the adapter passes
+ * the box as width/height and never forwards `size`: every glyph draws the
+ * artwork Carbon designs for 16px, which is what the app's Tailwind-sized icons
+ * (`size-3.5`, `size-4`) actually are. A glyph whose view box is not 32×32 is
+ * therefore expected, not a mistake — `scripts/check-icons.mjs` reads the view
+ * box each module draws and asserts the adapter passes it through untouched.
+ *
+ * The square pack is Carbon because Carbon draws on a square grid with
+ * right-angled joins, which is what that style is for. Wherever Carbon carries
+ * both a round and a square mark the SQUARE one wins — `Info` →
+ * `InformationSquare`, `AlertCircle` → `WarningSquare`, the success marks →
+ * `CheckboxChecked`/`CheckboxCheckedFilled`, the two overflow marks →
+ * `OverflowMenu*`, the two side panels → `OpenPanelLeft`/`OpenPanelRight`, the
+ * stop mark → `SquareSolid` — and the round glyphs that remain are the ones
+ * Carbon draws no square form of (`DotMark` for the status dot, `Help` for the
+ * circled question mark, `ColorPalette`, and Carbon's two circle-X marks).
+ *
+ * Most names are Carbon's own for the same concept; the rest are semantic
+ * matches rather than spelling matches, and each deliberate choice is recorded
+ * here rather than at a call site:
+ *
+ *   Braces → Json (tool-call arguments are JSON), Ban → SquareSlash (Carbon's
+ *   `NotAvailable` is two dashes in this version of the set, not a crossed-out
+ *   circle), Puzzle → Extensions (Settings), Sparkles → MagicWand,
+ *   WandSparkles → MagicWandFilled, ShieldCheck → Security, Bell → Notification,
+ *   ScrollText → DocumentBlank (the prompt file), FilePlus2 → DocumentAdd,
+ *   FileCode2 → Script, FilePen/Pencil/PencilLine → Edit/Pen/PenFountain,
+ *   FileText → Document, BookOpenText → Book, BookDownload → DocumentDownload,
+ *   BookSearch → SearchAdvanced, FileSearch → SearchLocate,
+ *   FileSearch2 → SearchLocateMirror, TextSearch → TextMining,
+ *   ScanSearch → Scan, ScanText → ScanAlt, ListTodo → Task,
+ *   ListChecks → ListChecked, ChevronsDownUp → CollapseAll,
+ *   ChevronsUpDown → ChevronSort, MoreVertical/MoreHorizontal →
+ *   OverflowMenuVertical/Horizontal (Carbon has a real ⋮ and ⋯, so the square
+ *   style needs no rotation), Monitor → Screen, Chart → ChartBar,
+ *   Database → DataBase, FolderInput → FolderMoveTo, FolderKanban → Folders,
+ *   Globe → Earth and Globe2 → Globe, GitFork → DirectionFork,
+ *   GitPullRequest → PullRequest, ArrowDownUp → ArrowsVertical,
+ *   ArrowUpNarrowWide/ArrowDownWideNarrow → SortAscending/SortDescending,
+ *   ExternalLink → Launch, Rewind → SkipBackOutline,
+ *   FastForward → SkipForwardOutline, RefreshCw → Renew, RotateCcw → Reset,
+ *   Clock → Time, Clock3 → TimeFilled, InstallingUpdates → Upgrade,
+ *   Type → LetterTt (the text-modality mark, distinct from TextFont's size
+ *   mark), CircleHelp → Help, CircleCheck → CheckboxChecked,
+ *   CheckCircle2 → CheckboxCheckedFilled, CircleX → MisuseOutline,
+ *   XCircle → Misuse, MessageSquare → Chat, MessageSquareText → Comments,
+ *   MessageSquareDashed → ChatOff, MessageCirclePlus → AddComment,
+ *   Wrench → Tools, Palette → ColorPalette, MusicNote → Music,
+ *   Stethoscope → Stethoscope, GraduationCap → Education,
+ *   Subtitle → ClosedCaption, PanelLeft/PanelRight →
+ *   OpenPanelLeft/OpenPanelRight, Paperclip → Attachment, Smartphone → Mobile,
+ *   Trash2 → TrashCan, Zap → Flash, Ban → NotAvailable,
+ *   SquareTerminal → Terminal_3270 and CommandLine → PromptSession, because
+ *   Carbon ships no bare terminal glyph and the three terminal names must stay
+ *   distinguishable from the plain `Terminal`, KeyRound → ApiKey (Carbon's
+ *   `Key` is the letters "KEY"), Eye/EyeOff →
+ *   View/ViewOff, LogOut → Logout, Maximize2/Minimize2 → Maximize/Minimize,
+ *   MousePointer2/MousePointerClick → Cursor_1/Cursor_2, Lightbulb → Idea,
+ *   Brain → MachineLearningModel (Carbon's `Brainstorm` draws a flow diagram,
+ *   not a head, and its `MachineLearning` is deprecated in favour of this one),
+ *   ImagePlus → DropPhoto
+ *   (Carbon has no image-add), Diff and FileDiff → FileDiff, CircleAlert →
+ *   the same WarningSquare as AlertCircle, ImageIcon → the same Image as
+ *   Image, and Loader2/LoaderCircle → the same CircleDash.
+ *
+ * Where Carbon carries no equivalent at all the nearest glyph is used, and it
+ * is listed here so the next reader does not go looking for a better one:
+ * XSquare → Close (there is no square cancel, and `CloseFilled` would duplicate
+ * the `XCircle` mark), PinOff → PinFilled, SearchX → the same Search as
+ * Search, MessageSquarePlus → the same AddComment as MessageCirclePlus. Carbon
+ * also flags its own `Ai` and `MachineLearning` components as removed in the
+ * next major version, which is why neither is used here.
  */
 export type IconProps = Omit<SVGProps<SVGSVGElement>, 'ref'> & {
   size?: string | number
@@ -335,171 +262,172 @@ export type IconComponent = ForwardRefExoticComponent<IconProps & RefAttributes<
  * adapter keeps ref forwarding, the a11y default and prop passthrough. */
 type HugeGlyph = ReadonlyArray<readonly [string, Record<string, string | number>]>
 
-/** The Remix components are typed as ComponentClass though they render as
- * plain function components; loose type for the one render-time cast below. */
-type RemixGlyph = (props: Record<string, unknown>) => ReactElement
+/** Carbon's generated components are `forwardRef` components typed as
+ * `CarbonIconType`; loose type for the one render-time cast below. */
+type CarbonGlyph = (props: Record<string, unknown>) => ReactElement
 
 /** The pack table: exactly one glyph per pack per semantic name. Adding a name
  * means adding a row here and an export below — nothing else. */
 const GLYPHS = {
-  AlertCircle: { remix: RiAlertLine, huge: AlertCircleIcon },
-  AlertTriangle: { remix: RiErrorWarningLine, huge: Alert01Icon },
-  ArrowDown: { remix: RiArrowDownLine, huge: ArrowDown02Icon },
-  ArrowDownUp: { remix: RiArrowUpDownLine, huge: ArrowUpDownIcon },
-  ArrowDownWideNarrow: { remix: RiSortDesc, huge: ArrowDownWideNarrowIcon },
-  ArrowLeft: { remix: RiArrowLeftLine, huge: ArrowLeft02Icon },
-  ArrowRight: { remix: RiArrowRightLine, huge: ArrowRight02Icon },
-  ArrowUp: { remix: RiArrowUpLine, huge: ArrowUp02Icon },
-  ArrowUpNarrowWide: { remix: RiSortAsc, huge: ArrowUpNarrowWideIcon },
-  ArrowUpRight: { remix: RiArrowRightUpLine, huge: ArrowUpRight01Icon },
-  Ban: { remix: RiProhibitedLine, huge: BanIcon },
-  Bell: { remix: RiNotification3Line, huge: Notification01Icon },
-  BookDownload: { remix: RiFileDownloadLine, huge: BookDownloadIcon },
-  BookOpenText: { remix: RiBookOpenLine, huge: BookOpenTextIcon },
-  Bookmark: { remix: RiBookmarkLine, huge: Bookmark01Icon },
-  BookSearch: { remix: RiBookReadLine, huge: BookSearchIcon },
-  Bot: { remix: RiRobot2Line, huge: BotIcon },
-  Braces: { remix: RiBracesLine, huge: BracesIcon },
-  Brain: { remix: RiBrainLine, huge: BrainIcon },
-  Camera: { remix: RiCameraLine, huge: Camera01Icon },
-  Chart: { remix: RiBarChart2Line, huge: Chart01Icon },
-  Chat01: { remix: RiChat4Line, huge: Chat01Icon },
-  Check: { remix: RiCheckLine, huge: CheckIcon },
-  CheckCircle2: { remix: RiCheckboxCircleLine, huge: CheckmarkCircle02Icon },
-  ChevronDown: { remix: RiArrowDownSLine, huge: ChevronDownIcon },
-  ChevronLeft: { remix: RiArrowLeftSLine, huge: ChevronLeftIcon },
-  ChevronRight: { remix: RiArrowRightSLine, huge: ChevronRightIcon },
-  ChevronUp: { remix: RiArrowUpSLine, huge: ChevronUpIcon },
-  ChevronsDownUp: { remix: RiContractUpDownLine, huge: ChevronsDownUpIcon },
-  ChevronsUpDown: { remix: RiExpandUpDownLine, huge: UnfoldMoreIcon },
-  Circle: { remix: RiRecordCircleLine, huge: CircleIcon },
-  CircleAlert: { remix: RiAlertLine, huge: AlertCircleIcon },
-  CircleCheck: { remix: RiCheckboxCircleLine, huge: CheckmarkCircle02Icon },
-  CircleHelp: { remix: RiQuestionLine, huge: HelpCircleIcon },
-  CircleX: { remix: RiCloseCircleLine, huge: CircleXIcon },
-  Clock: { remix: RiTimeLine, huge: Clock01Icon },
-  Clock3: { remix: RiTimeLine, huge: Clock03Icon },
-  CloudDownload: { remix: RiDownloadCloud2Line, huge: CloudDownloadIcon },
-  CommandLine: { remix: RiTerminalBoxLine, huge: CommandLineIcon },
-  Compass: { remix: RiCompass3Line, huge: CompassIcon },
-  Copy: { remix: RiFileCopyLine, huge: CopyIcon },
-  Dashboard: { remix: RiDashboardLine, huge: DashboardSquare01Icon },
-  Database: { remix: RiDatabase2Line, huge: Database02Icon },
-  Diff: { remix: RiFileTransferLine, huge: DiffIcon },
-  Download: { remix: RiDownloadLine, huge: Download01Icon },
-  ExternalLink: { remix: RiExternalLinkLine, huge: ExternalLinkIcon },
-  Eye: { remix: RiEyeLine, huge: EyeIcon },
-  EyeOff: { remix: RiEyeOffLine, huge: EyeOffIcon },
-  FastForward: { remix: RiSkipForwardLine, huge: FastForwardIcon },
-  FileCode2: { remix: RiFileCodeLine, huge: FileCodeIcon },
-  FileDiff: { remix: RiFileTransferLine, huge: FileDiffIcon },
-  FilePen: { remix: RiFileEditLine, huge: FilePenIcon },
-  FilePlus2: { remix: RiFileAddLine, huge: FileAddIcon },
-  FileSearch: { remix: RiFileSearchLine, huge: FileSearchIcon },
-  FileSearch2: { remix: RiFileSearchLine, huge: FileSearchCornerIcon },
-  FileText: { remix: RiFileTextLine, huge: FileTextIcon },
-  Folder: { remix: RiFolderLine, huge: Folder01Icon },
-  FolderInput: { remix: RiFolderReceivedLine, huge: FolderInputIcon },
-  FolderKanban: { remix: RiLayoutGridLine, huge: FolderKanbanIcon },
-  FolderOpen: { remix: RiFolderOpenLine, huge: FolderOpenIcon },
-  FolderPlus: { remix: RiFolderAddLine, huge: FolderAddIcon },
-  FolderTree: { remix: RiTreeLine, huge: FolderTreeIcon },
-  GitFork: { remix: RiGitBranchLine, huge: GitForkIcon },
-  GitPullRequest: { remix: RiGitPullRequestLine, huge: GitPullRequestIcon },
-  Globe: { remix: RiGlobalLine, huge: Globe02Icon },
-  Globe2: { remix: RiGlobalLine, huge: GlobalIcon },
-  GraduationCap: { remix: RiGraduationCapLine, huge: GraduationCapIcon },
-  History: { remix: RiHistoryLine, huge: HistoryIcon },
-  Image: { remix: RiImageLine, huge: Image01Icon },
-  ImageIcon: { remix: RiImage2Line, huge: Image01Icon },
-  ImagePlus: { remix: RiImageAddLine, huge: ImagePlusIcon },
-  Info: { remix: RiInformationLine, huge: InfoIcon },
-  InstallingUpdates: { remix: RiDownload2Line, huge: InstallingUpdates01Icon },
-  Keyboard: { remix: RiKeyboardLine, huge: KeyboardIcon },
-  KeyRound: { remix: RiKeyLine, huge: KeyRoundIcon },
-  Layers: { remix: RiStackLine, huge: Layers01Icon },
-  Lightbulb: { remix: RiLightbulbLine, huge: LightbulbIcon },
-  Link2: { remix: RiLinksLine, huge: Link02Icon },
-  ListChecks: { remix: RiListCheck2, huge: ListChecksIcon },
-  ListTodo: { remix: RiTodoLine, huge: ListTodoIcon },
-  Loader2: { remix: RiLoader2Line, huge: LoaderCircleIcon },
-  LoaderCircle: { remix: RiLoader4Line, huge: LoaderCircleIcon },
-  LogOut: { remix: RiLogoutBoxRLine, huge: LogOutIcon },
-  Maximize2: { remix: RiFullscreenLine, huge: ArrowExpand01Icon },
-  MessageCirclePlus: { remix: RiChat4Line, huge: MessageCirclePlusIcon },
-  MessageSquare: { remix: RiChat4Line, huge: MessageSquareIcon },
-  MessageSquareDashed: { remix: RiChat4Line, huge: MessageSquareDashedIcon },
-  MessageSquarePlus: { remix: RiChat4Line, huge: MessageSquarePlusIcon },
-  MessageSquareText: { remix: RiChat4Line, huge: MessageSquareTextIcon },
-  Minimize2: { remix: RiFullscreenExitLine, huge: ArrowShrink01Icon },
-  Minus: { remix: RiSubtractLine, huge: MinusSignIcon },
-  Monitor: { remix: RiComputerLine, huge: MonitorIcon },
-  Moon: { remix: RiMoonLine, huge: Moon02Icon },
-  MoreHorizontal: { remix: RiMoreLine, huge: MoreHorizontalIcon },
-  MousePointer2: { remix: RiCursorLine, huge: MousePointer01Icon },
-  MousePointerClick: { remix: RiCursorFill, huge: MousePointerClickIcon },
-  MusicNote: { remix: RiMusic2Line, huge: MusicNote01Icon },
-  Palette: { remix: RiPaletteLine, huge: PaletteIcon },
-  Printer: { remix: RiPrinterLine, huge: PrinterIcon },
-  PanelLeft: { remix: RiLayoutLeftLine, huge: PanelLeftIcon },
-  PanelRight: { remix: RiLayoutRightLine, huge: PanelRightIcon },
-  Paperclip: { remix: RiAttachmentLine, huge: PaperclipIcon },
-  Pencil: { remix: RiEditLine, huge: PencilIcon },
-  PencilLine: { remix: RiEdit2Line, huge: PencilLineIcon },
-  Pin: { remix: RiPushpinLine, huge: PinIcon },
-  PinOff: { remix: RiUnpinLine, huge: PinOffIcon },
-  Plug: { remix: RiPlugLine, huge: PlugIcon },
-  PlugZap: { remix: RiPlug2Line, huge: PlugZapIcon },
-  Plus: { remix: RiAddLine, huge: PlusIcon },
-  Puzzle: { remix: RiPuzzleLine, huge: PuzzleIcon },
-  RefreshCw: { remix: RiRefreshLine, huge: RefreshCwIcon },
-  Rewind: { remix: RiRewindLine, huge: RewindIcon },
-  RotateCcw: { remix: RiAnticlockwise2Line, huge: RotateCcwIcon },
-  ScanSearch: { remix: RiScan2Line, huge: ScanSearchIcon },
-  ScanText: { remix: RiScanLine, huge: ScanTextIcon },
-  ScrollText: { remix: RiFilePaperLine, huge: ScrollTextIcon },
-  Search: { remix: RiSearchLine, huge: Search01Icon },
-  SearchX: { remix: RiCloseCircleLine, huge: SearchXIcon },
-  Send: { remix: RiSendPlane2Line, huge: SendIcon },
-  Settings: { remix: RiSettingsLine, huge: Settings01Icon },
-  Smartphone: { remix: RiSmartphoneLine, huge: SmartPhone01Icon },
-  Settings2: { remix: RiSettings4Line, huge: Settings02Icon },
-  Shapes: { remix: RiShapesLine, huge: GeometricShapes01Icon },
-  ShieldCheck: { remix: RiShieldCheckLine, huge: ShieldCheckIcon },
-  Sparkles: { remix: RiSparkling2Line, huge: SparklesIcon },
-  SourceCode: { remix: RiCodeSSlashLine, huge: SourceCodeIcon },
-  // A stop mark is a SOLID block: the line variant's ring path fills its own
-  // outline, which renders as a hollow square however it is filled. The
-  // HugeIcons side is stroke artwork; the call site's `fill-current` fills it
-  // there, so both packs show the same solid square.
-  Square: { remix: RiStopLargeFill, huge: SquareIcon },
-  SquareArrowOutUpRight: { remix: RiExternalLinkLine, huge: SquareArrowOutUpRightIcon },
-  SquareTerminal: { remix: RiTerminalWindowLine, huge: SquareTerminalIcon },
-  Stethoscope: { remix: RiStethoscopeLine, huge: StethoscopeIcon },
-  Subtitle: { remix: RiClosedCaptioningLine, huge: SubtitleIcon },
-  Sun: { remix: RiSunLine, huge: Sun01Icon },
-  Terminal: { remix: RiTerminalLine, huge: TerminalIcon },
-  TextFont: { remix: RiFontSize2, huge: TextFontIcon },
-  TextSearch: { remix: RiSearch2Line, huge: TextSearchIcon },
-  Type: { remix: RiText, huge: TypeIcon },
-  WrapText: { remix: RiTextWrap, huge: TextWrapIcon },
-  ThumbsDown: { remix: RiThumbDownLine, huge: ThumbsDownIcon },
-  ThumbsUp: { remix: RiThumbUpLine, huge: ThumbsUpIcon },
-  Timer: { remix: RiTimerLine, huge: Timer01Icon },
-  Trash2: { remix: RiDeleteBin6Line, huge: Delete02Icon },
-  Undo2: { remix: RiArrowGoBackLine, huge: Undo02Icon },
-  Upload: { remix: RiUploadLine, huge: Upload01Icon },
-  User: { remix: RiUserLine, huge: UserIcon },
-  WandSparkles: { remix: RiMagicLine, huge: WandSparklesIcon },
-  Wrench: { remix: RiWrenchLine, huge: Wrench01Icon },
-  X: { remix: RiCloseLine, huge: XIcon },
-  XCircle: { remix: RiCloseCircleLine, huge: CancelCircleIcon },
-  XSquare: { remix: RiCloseLargeLine, huge: CancelSquareIcon },
-  Zap: { remix: RiFlashlightLine, huge: ZapIcon },
-  ZoomIn: { remix: RiZoomInLine, huge: ZoomInIcon },
-  ZoomOut: { remix: RiZoomOutLine, huge: ZoomOutIcon },
-  MoreVertical: { remix: RiMoreLine, huge: MoreVerticalIcon },
-} satisfies Record<string, { remix: unknown; huge: HugeGlyph }>
+  AlertCircle: { carbon: Carbon.WarningSquare, huge: AlertCircleIcon },
+  AlertTriangle: { carbon: Carbon.WarningAlt, huge: Alert01Icon },
+  ArrowDown: { carbon: Carbon.ArrowDown, huge: ArrowDown02Icon },
+  ArrowDownUp: { carbon: Carbon.ArrowsVertical, huge: ArrowUpDownIcon },
+  ArrowDownWideNarrow: { carbon: Carbon.SortDescending, huge: ArrowDownWideNarrowIcon },
+  ArrowLeft: { carbon: Carbon.ArrowLeft, huge: ArrowLeft02Icon },
+  ArrowRight: { carbon: Carbon.ArrowRight, huge: ArrowRight02Icon },
+  ArrowUp: { carbon: Carbon.ArrowUp, huge: ArrowUp02Icon },
+  ArrowUpNarrowWide: { carbon: Carbon.SortAscending, huge: ArrowUpNarrowWideIcon },
+  ArrowUpRight: { carbon: Carbon.ArrowUpRight, huge: ArrowUpRight01Icon },
+  Ban: { carbon: Carbon.SquareSlash, huge: BanIcon },
+  Bell: { carbon: Carbon.Notification, huge: Notification01Icon },
+  BookDownload: { carbon: Carbon.DocumentDownload, huge: BookDownloadIcon },
+  BookOpenText: { carbon: Carbon.Book, huge: BookOpenTextIcon },
+  Bookmark: { carbon: Carbon.Bookmark, huge: Bookmark01Icon },
+  BookSearch: { carbon: Carbon.SearchAdvanced, huge: BookSearchIcon },
+  Bot: { carbon: Carbon.Bot, huge: BotIcon },
+  Braces: { carbon: Carbon.Json, huge: BracesIcon },
+  Brain: { carbon: Carbon.MachineLearningModel, huge: BrainIcon },
+  Camera: { carbon: Carbon.Camera, huge: Camera01Icon },
+  Chart: { carbon: Carbon.ChartBar, huge: Chart01Icon },
+  Chat01: { carbon: Carbon.Chat, huge: Chat01Icon },
+  Check: { carbon: Carbon.Checkmark, huge: CheckIcon },
+  CheckCircle2: { carbon: Carbon.CheckboxCheckedFilled, huge: CheckmarkCircle02Icon },
+  ChevronDown: { carbon: Carbon.ChevronDown, huge: ChevronDownIcon },
+  ChevronLeft: { carbon: Carbon.ChevronLeft, huge: ChevronLeftIcon },
+  ChevronRight: { carbon: Carbon.ChevronRight, huge: ChevronRightIcon },
+  ChevronUp: { carbon: Carbon.ChevronUp, huge: ChevronUpIcon },
+  ChevronsDownUp: { carbon: Carbon.CollapseAll, huge: ChevronsDownUpIcon },
+  ChevronsUpDown: { carbon: Carbon.ChevronSort, huge: UnfoldMoreIcon },
+  Circle: { carbon: Carbon.DotMark, huge: CircleIcon },
+  CircleAlert: { carbon: Carbon.WarningSquare, huge: AlertCircleIcon },
+  CircleCheck: { carbon: Carbon.CheckboxChecked, huge: CheckmarkCircle02Icon },
+  CircleHelp: { carbon: Carbon.Help, huge: HelpCircleIcon },
+  CircleX: { carbon: Carbon.MisuseOutline, huge: CircleXIcon },
+  Clock: { carbon: Carbon.Time, huge: Clock01Icon },
+  Clock3: { carbon: Carbon.TimeFilled, huge: Clock03Icon },
+  CloudDownload: { carbon: Carbon.CloudDownload, huge: CloudDownloadIcon },
+  CommandLine: { carbon: Carbon.PromptSession, huge: CommandLineIcon },
+  Compass: { carbon: Carbon.Compass, huge: CompassIcon },
+  Copy: { carbon: Carbon.Copy, huge: CopyIcon },
+  Dashboard: { carbon: Carbon.Dashboard, huge: DashboardSquare01Icon },
+  Database: { carbon: Carbon.DataBase, huge: Database02Icon },
+  Diff: { carbon: Carbon.FileDiff, huge: DiffIcon },
+  Download: { carbon: Carbon.Download, huge: Download01Icon },
+  ExternalLink: { carbon: Carbon.Launch, huge: ExternalLinkIcon },
+  Eye: { carbon: Carbon.View, huge: EyeIcon },
+  EyeOff: { carbon: Carbon.ViewOff, huge: EyeOffIcon },
+  FastForward: { carbon: Carbon.SkipForwardOutline, huge: FastForwardIcon },
+  FileCode2: { carbon: Carbon.Script, huge: FileCodeIcon },
+  FileDiff: { carbon: Carbon.FileDiff, huge: FileDiffIcon },
+  FilePen: { carbon: Carbon.Edit, huge: FilePenIcon },
+  FilePlus2: { carbon: Carbon.DocumentAdd, huge: FileAddIcon },
+  FileSearch: { carbon: Carbon.SearchLocate, huge: FileSearchIcon },
+  FileSearch2: { carbon: Carbon.SearchLocateMirror, huge: FileSearchCornerIcon },
+  FileText: { carbon: Carbon.Document, huge: FileTextIcon },
+  Folder: { carbon: Carbon.Folder, huge: Folder01Icon },
+  FolderInput: { carbon: Carbon.FolderMoveTo, huge: FolderInputIcon },
+  FolderKanban: { carbon: Carbon.Folders, huge: FolderKanbanIcon },
+  FolderOpen: { carbon: Carbon.FolderOpen, huge: FolderOpenIcon },
+  FolderPlus: { carbon: Carbon.FolderAdd, huge: FolderAddIcon },
+  FolderTree: { carbon: Carbon.FolderTree, huge: FolderTreeIcon },
+  GitFork: { carbon: Carbon.DirectionFork, huge: GitForkIcon },
+  GitPullRequest: { carbon: Carbon.PullRequest, huge: GitPullRequestIcon },
+  Globe: { carbon: Carbon.Earth, huge: Globe02Icon },
+  Globe2: { carbon: Carbon.Globe, huge: GlobalIcon },
+  GraduationCap: { carbon: Carbon.Education, huge: GraduationCapIcon },
+  History: { carbon: Carbon.History, huge: HistoryIcon },
+  Image: { carbon: Carbon.Image, huge: Image01Icon },
+  ImageIcon: { carbon: Carbon.Image, huge: Image01Icon },
+  ImagePlus: { carbon: Carbon.DropPhoto, huge: ImagePlusIcon },
+  Info: { carbon: Carbon.InformationSquare, huge: InfoIcon },
+  InstallingUpdates: { carbon: Carbon.Upgrade, huge: InstallingUpdates01Icon },
+  Keyboard: { carbon: Carbon.Keyboard, huge: KeyboardIcon },
+  KeyRound: { carbon: Carbon.ApiKey, huge: KeyRoundIcon },
+  Layers: { carbon: Carbon.Layers, huge: Layers01Icon },
+  Lightbulb: { carbon: Carbon.Idea, huge: LightbulbIcon },
+  Link2: { carbon: Carbon.Link, huge: Link02Icon },
+  ListChecks: { carbon: Carbon.ListChecked, huge: ListChecksIcon },
+  ListTodo: { carbon: Carbon.Task, huge: ListTodoIcon },
+  Loader2: { carbon: Carbon.CircleDash, huge: LoaderCircleIcon },
+  LoaderCircle: { carbon: Carbon.CircleDash, huge: LoaderCircleIcon },
+  LogOut: { carbon: Carbon.Logout, huge: LogOutIcon },
+  Maximize2: { carbon: Carbon.Maximize, huge: ArrowExpand01Icon },
+  MessageCirclePlus: { carbon: Carbon.AddComment, huge: MessageCirclePlusIcon },
+  MessageSquare: { carbon: Carbon.Chat, huge: MessageSquareIcon },
+  MessageSquareDashed: { carbon: Carbon.ChatOff, huge: MessageSquareDashedIcon },
+  MessageSquarePlus: { carbon: Carbon.AddComment, huge: MessageSquarePlusIcon },
+  MessageSquareText: { carbon: Carbon.Comments, huge: MessageSquareTextIcon },
+  Minimize2: { carbon: Carbon.Minimize, huge: ArrowShrink01Icon },
+  Minus: { carbon: Carbon.Subtract, huge: MinusSignIcon },
+  Monitor: { carbon: Carbon.Screen, huge: MonitorIcon },
+  Moon: { carbon: Carbon.Moon, huge: Moon02Icon },
+  MoreHorizontal: { carbon: Carbon.OverflowMenuHorizontal, huge: MoreHorizontalIcon },
+  MousePointer2: { carbon: Carbon.Cursor_1, huge: MousePointer01Icon },
+  MousePointerClick: { carbon: Carbon.Cursor_2, huge: MousePointerClickIcon },
+  MusicNote: { carbon: Carbon.Music, huge: MusicNote01Icon },
+  Palette: { carbon: Carbon.ColorPalette, huge: PaletteIcon },
+  Printer: { carbon: Carbon.Printer, huge: PrinterIcon },
+  PanelLeft: { carbon: Carbon.OpenPanelLeft, huge: PanelLeftIcon },
+  PanelRight: { carbon: Carbon.OpenPanelRight, huge: PanelRightIcon },
+  Paperclip: { carbon: Carbon.Attachment, huge: PaperclipIcon },
+  Pencil: { carbon: Carbon.Pen, huge: PencilIcon },
+  PencilLine: { carbon: Carbon.PenFountain, huge: PencilLineIcon },
+  Pin: { carbon: Carbon.Pin, huge: PinIcon },
+  PinOff: { carbon: Carbon.PinFilled, huge: PinOffIcon },
+  Plug: { carbon: Carbon.Plug, huge: PlugIcon },
+  PlugZap: { carbon: Carbon.PlugFilled, huge: PlugZapIcon },
+  Plus: { carbon: Carbon.Add, huge: PlusIcon },
+  Puzzle: { carbon: Carbon.Extensions, huge: PuzzleIcon },
+  RefreshCw: { carbon: Carbon.Renew, huge: RefreshCwIcon },
+  Rewind: { carbon: Carbon.SkipBackOutline, huge: RewindIcon },
+  RotateCcw: { carbon: Carbon.Reset, huge: RotateCcwIcon },
+  ScanSearch: { carbon: Carbon.Scan, huge: ScanSearchIcon },
+  ScanText: { carbon: Carbon.ScanAlt, huge: ScanTextIcon },
+  ScrollText: { carbon: Carbon.DocumentBlank, huge: ScrollTextIcon },
+  Search: { carbon: Carbon.Search, huge: Search01Icon },
+  SearchX: { carbon: Carbon.Search, huge: SearchXIcon },
+  Send: { carbon: Carbon.Send, huge: SendIcon },
+  Settings: { carbon: Carbon.Settings, huge: Settings01Icon },
+  Smartphone: { carbon: Carbon.Mobile, huge: SmartPhone01Icon },
+  Settings2: { carbon: Carbon.SettingsAdjust, huge: Settings02Icon },
+  Shapes: { carbon: Carbon.Shapes, huge: GeometricShapes01Icon },
+  ShieldCheck: { carbon: Carbon.Security, huge: ShieldCheckIcon },
+  Sparkles: { carbon: Carbon.MagicWand, huge: SparklesIcon },
+  SourceCode: { carbon: Carbon.Code, huge: SourceCodeIcon },
+  // A stop mark is a SOLID block: Carbon's outlined `Stop` is a ring drawn as
+  // fill artwork, which renders as a hollow square however it is filled, so the
+  // square style takes `SquareSolid` (Carbon's own 2px grid corner rounding
+  // included). The HugeIcons side is stroke artwork; the call site's
+  // `fill-current` fills it there, so both packs show the same solid square.
+  Square: { carbon: Carbon.SquareSolid, huge: SquareIcon },
+  SquareArrowOutUpRight: { carbon: Carbon.Launch, huge: SquareArrowOutUpRightIcon },
+  SquareTerminal: { carbon: Carbon.Terminal_3270, huge: SquareTerminalIcon },
+  Stethoscope: { carbon: Carbon.Stethoscope, huge: StethoscopeIcon },
+  Subtitle: { carbon: Carbon.ClosedCaption, huge: SubtitleIcon },
+  Sun: { carbon: Carbon.Sun, huge: Sun01Icon },
+  Terminal: { carbon: Carbon.Terminal, huge: TerminalIcon },
+  TextFont: { carbon: Carbon.TextFont, huge: TextFontIcon },
+  TextSearch: { carbon: Carbon.TextMining, huge: TextSearchIcon },
+  Type: { carbon: Carbon.LetterTt, huge: TypeIcon },
+  WrapText: { carbon: Carbon.TextWrap, huge: TextWrapIcon },
+  ThumbsDown: { carbon: Carbon.ThumbsDown, huge: ThumbsDownIcon },
+  ThumbsUp: { carbon: Carbon.ThumbsUp, huge: ThumbsUpIcon },
+  Timer: { carbon: Carbon.Timer, huge: Timer01Icon },
+  Trash2: { carbon: Carbon.TrashCan, huge: Delete02Icon },
+  Undo2: { carbon: Carbon.Undo, huge: Undo02Icon },
+  Upload: { carbon: Carbon.Upload, huge: Upload01Icon },
+  User: { carbon: Carbon.User, huge: UserIcon },
+  WandSparkles: { carbon: Carbon.MagicWandFilled, huge: WandSparklesIcon },
+  Wrench: { carbon: Carbon.Tools, huge: Wrench01Icon },
+  X: { carbon: Carbon.Close, huge: XIcon },
+  XCircle: { carbon: Carbon.Misuse, huge: CancelCircleIcon },
+  XSquare: { carbon: Carbon.Close, huge: CancelSquareIcon },
+  Zap: { carbon: Carbon.Flash, huge: ZapIcon },
+  ZoomIn: { carbon: Carbon.ZoomIn, huge: ZoomInIcon },
+  ZoomOut: { carbon: Carbon.ZoomOut, huge: ZoomOutIcon },
+  MoreVertical: { carbon: Carbon.OverflowMenuVertical, huge: MoreVerticalIcon },
+} satisfies Record<string, { carbon: Carbon.CarbonIconType; huge: HugeGlyph }>
 
 const HUGE_STROKE = 1.5
 
@@ -544,8 +472,19 @@ function createIcon(name: keyof typeof GLYPHS): IconComponent {
       )
     }
     // Fill artwork: stroke-only props are accepted for call-site compat and
-    // dropped, because there is no stroke geometry to scale.
-    const Glyph = pair.remix as RemixGlyph
+    // dropped, because there is no stroke geometry to scale. Carbon's own
+    // `Icon` wrapper already sets fill="currentColor" and focusable="false",
+    // keeps `aria-hidden` (unless the call site labelled the glyph, which turns
+    // it into an image with a role), forwards the ref and passes unknown props
+    // through, so the artwork's view box is the only difference from the
+    // hugeicons branch above.
+    //
+    // `size` is deliberately NOT forwarded: 84 of Carbon's components pick
+    // their artwork by it and default to 16, and the app styles 454 icon call
+    // sites with Tailwind size classes against a dozen that pass a number, so
+    // Carbon's 16px-drawn artwork is the right artwork for this interface. The
+    // box is ours (width/height), the drawing is Carbon's default.
+    const Glyph = pair.carbon as CarbonGlyph
     return createElement(Glyph, {
       ref,
       'data-app-icon': name,
@@ -656,10 +595,9 @@ export const Minus = /* @__PURE__ */ createIcon('Minus')
 export const Monitor = /* @__PURE__ */ createIcon('Monitor')
 export const Moon = /* @__PURE__ */ createIcon('Moon')
 export const MoreHorizontal = /* @__PURE__ */ createIcon('MoreHorizontal')
-// Remix packs no vertical ellipsis: the ⋮ is the horizontal glyph rotated a
-// quarter turn, which only the Remix artwork needs — HugeIcons has its own
-// vertical glyph. Both keep the same wrapper contract (a11y default, compat
-// props dropped) plus the one transform.
+// Both packs now carry a real vertical ellipsis (Carbon's OverflowMenuVertical,
+// HugeIcons' MoreVertical), so this is an ordinary row: the square style no
+// longer rotates the horizontal glyph a quarter turn to get one.
 export const MoreVertical = /* @__PURE__ */ createIcon('MoreVertical')
 export const MousePointer2 = /* @__PURE__ */ createIcon('MousePointer2')
 export const MousePointerClick = /* @__PURE__ */ createIcon('MousePointerClick')

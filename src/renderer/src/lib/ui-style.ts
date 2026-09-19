@@ -20,16 +20,19 @@ import { useSyncExternalStore } from 'react'
 const STORAGE_KEY = 'pi-app:ui-style'
 export const UI_STYLES = ['square', 'squircle'] as const
 export type UiStyle = (typeof UI_STYLES)[number]
-export type IconPack = 'remix' | 'hugeicons'
+export type IconPack = 'carbon' | 'hugeicons'
 const DEFAULT: UiStyle = 'square'
 
 function isStyle(value: string | null): value is UiStyle {
   return value === 'square' || value === 'squircle'
 }
 
-/** The icon pack is derived, never stored: one preference, two dimensions. */
+/** The icon pack is derived, never stored: one preference, two dimensions.
+ * The square style's pack is IBM Carbon — squarely drawn artwork for the
+ * squarely drawn interface; the squircle style keeps HugeIcons' stroke-rounded
+ * family. */
 export function iconPackOf(style: UiStyle): IconPack {
-  return style === 'squircle' ? 'hugeicons' : 'remix'
+  return style === 'squircle' ? 'hugeicons' : 'carbon'
 }
 
 /** Write both derived attributes. Idempotent; safe to call on every change. */

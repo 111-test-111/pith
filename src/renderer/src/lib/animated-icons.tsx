@@ -10,13 +10,14 @@ import {
 import { useIconPack } from './icon-pack'
 import type { IconPack } from './ui-style'
 
-// The animated marks carry geometry of their own, one column per pack: the
-// square style draws the marks this branch already shipped (read out of the
-// pack's own rendered components), and the squircle style draws HugeIcons'
-// stroke-rounded line art, so the marks never sit beside a different pack's
-// artwork. Keep beUI's stroke drawing and presence transitions, and keep the
-// tag per node: the completion mark is a ring plus a check, so rendering
-// everything as `<path>` would drop it.
+// The animated marks are STROKE geometry: the call sites draw them in with a
+// `pathLength` transition, so they have to be outlines rather than filled
+// artwork. Carbon's square-style glyphs are fill artwork on a 32 grid, so the
+// square column keeps the app-drawn stroke marks this branch already shipped;
+// the squircle column draws HugeIcons' stroke-rounded line art. Both keep
+// beUI's stroke drawing and presence transitions, and keep the tag per node:
+// the completion mark is a ring plus a check, so rendering everything as
+// `<path>` would drop it.
 type Node = { tag: 'path'; d: string } | { tag: 'circle'; cx: number; cy: number; r: number }
 
 /** One HugeIcons glyph: an SVG tag and its attributes, in document order. */
@@ -34,7 +35,7 @@ function hugeNodes(glyph: HugeGlyph): Node[] {
 }
 
 const artwork = {
-  remix: {
+  carbon: {
     check: [{ tag: 'path', d: 'M20 6 9 17l-5-5' }],
     minus: [{ tag: 'path', d: 'M5 12h14' }],
     cancel: [
@@ -61,7 +62,7 @@ const MOTION_TAGS = {
   circle: motion.circle
 } as const
 
-type Artwork = keyof (typeof artwork)['remix']
+type Artwork = keyof (typeof artwork)['carbon']
 type DrawProps = Pick<SVGMotionProps<SVGPathElement>, 'initial' | 'animate' | 'transition'>
 
 export function IconPaths({ icon, ...props }: { icon: Artwork } & SVGMotionProps<SVGPathElement>) {
