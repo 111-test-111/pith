@@ -146,7 +146,7 @@ export function reconstructPlan(branch: readonly unknown[], onSubmission?: (entr
           if (data.via !== 'approve') state.approval = null
         }
       } else if (recordEntry.customType === PLAN_APPROVAL_ENTRY) {
-        if (data.version !== 1) continue
+        if (data.version !== 1) { state.unsupported = true; continue }
         const approvalId = text(data.approvalId)?.trim()
         const status = text(data.status)
         const ref = refFrom(data.ref)

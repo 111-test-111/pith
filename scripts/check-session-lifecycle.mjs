@@ -37,6 +37,7 @@ export * from './src/main/shutdown';`, resolveDir: resolve('.') },
     bundle: true, platform: 'node', format: 'esm', outfile,
     plugins: [{ name: 'isolated-sdk', setup(builder) {
       builder.onResolve({ filter: /^@earendil-works\/pi-coding-agent$/ }, () => ({ path: 'sdk', namespace: 'fixture' }))
+      builder.onResolve({ filter: /^playwright-core(\/|$)/ }, args => ({ path: fileURLToPath(import.meta.resolve(args.path)), external: true }))
       builder.onResolve({ filter: /^electron$/ }, () => ({ path: 'electron', namespace: 'fixture' }))
       builder.onResolve({ filter: /^\// }, (args) => args.path === sdk ? { path: sdk, external: true } : undefined)
       builder.onLoad({ filter: /^electron$/, namespace: 'fixture' }, () => ({ contents:

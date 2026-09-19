@@ -30,6 +30,7 @@ export { CheckoutCoordinator } from './src/main/rewind/coordinator';`, resolveDi
       builder.onResolve({ filter: /^@earendil-works\/pi-coding-agent$/ }, () => ({
         path: fileURLToPath(import.meta.resolve('@earendil-works/pi-coding-agent')), external: true
       }))
+      builder.onResolve({ filter: /^playwright-core(\/|$)/ }, args => ({ path: fileURLToPath(import.meta.resolve(args.path)), external: true }))
       builder.onResolve({ filter: /^electron$/ }, () => ({ path: 'electron', namespace: 'fixture' }))
       builder.onLoad({ filter: /.*/, namespace: 'fixture' }, () => ({ contents:
         `export const app = { getPath() { return ${JSON.stringify(temporary)} } }; export const shell = {};` }))
@@ -150,6 +151,7 @@ export { CheckoutCoordinator } from './src/main/rewind/coordinator';`, resolveDi
     const routed = []
     app.emit = (_channel, event) => { routed.push(event) }
     app.sessions = new Map()
+    app.planSequences = new Map()
     app.sessionBuilds = new Map()
     app.disabledExtensions = new Set()
     app.navigationEpoch = 0
@@ -170,7 +172,7 @@ export { CheckoutCoordinator } from './src/main/rewind/coordinator';`, resolveDi
     session.agent.streamFunction = (_model, context, options) => {
       const names = context.tools.map((tool) => tool.name)
       assert.equal(names.length, new Set(names).size, `model request has duplicate tools: ${names}`)
-      return respond(++calls, context, options, { session, outbox, path })
+      return respond(++calls, context, options, { session, outbox, path, managed })
     }
     return { session, outbox, path, events, routed, app, calls: () => calls }
   }
@@ -269,9 +271,12 @@ export { CheckoutCoordinator } from './src/main/rewind/coordinator';`, resolveDi
   await reloading
   await until(() => reloadRace.calls() === 3 && !reloadRace.session.isStreaming, 'wake after resource reload')
 
-  const late = await setup('late-end', (n) => n === 1
+  const late = await setup('late-end', (n, _context, _options, state) => n === 1
     ? stream(message([call('late-task', nodeCommand('setTimeout(()=>console.log("LATE_DONE"),50)'), 'background')]))
-    : stream(message(text('handled late result')), 100))
+    : stream(message(text('handled late result')), 0, async () => {
+      const task = tasks.list(state.path).find(t => t.toolCallId === 'late-task')
+      await tasks.wait(state.path, task.id)
+    }))
   outboxes.delete(late.path)
   let enqueuedAtEnd = false
   late.session.subscribe((event) => {
@@ -289,10 +294,12 @@ export { CheckoutCoordinator } from './src/main/rewind/coordinator';`, resolveDi
     'an end-hook continuation cannot expose a transient settled file list')
 
   let completedInSettle = false
-  const settleExtension = { ...extension, tools: new Map(), handlers: new Map([['agent_settled', [() => {
+  const settleExtension = { ...extension, tools: new Map(), handlers: new Map([['agent_settled', [async () => {
     if (completedInSettle) return
     completedInSettle = true
-    const task = tasks.list(heldSettle.path)[0]
+    const pending = tasks.list(heldSettle.path)[0]
+    await tasks.wait(heldSettle.path, pending.id)
+    const task = tasks.get(heldSettle.path, pending.id)
     assert.equal(task.status, 'succeeded')
     heldSettle.outbox.complete(task)
   }]]]) }
@@ -323,7 +330,7 @@ export { CheckoutCoordinator } from './src/main/rewind/coordinator';`, resolveDi
       app.emit = () => {}
       const image = { type: 'image', mimeType: 'image/png', data: 'fixture-image' }
       const item = { text: 'keep user payload', originalText: 'keep user payload', images: [image], filePaths: ['/fixture/file'] }
-      const managed = { session: state.session, notifications: state.outbox, path: state.path, cwd: temporary, queueMirror: { steering: [], followUp: [item] }, pendingQueuePayloads: [], pendingStreamEvents: new Map(), eventSequence: 0 }
+      const managed = { plan: state.managed.plan, askUser: state.managed.askUser, session: state.session, notifications: state.outbox, path: state.path, cwd: temporary, queueMirror: { steering: [], followUp: [item] }, pendingQueuePayloads: [], pendingStreamEvents: new Map(), eventSequence: 0 }
       app.activeSession = managed
       app.queueAction({ action: 'promote', kind: 'followUp', index: 0 })
       assert.equal(managed.queueMirror.steering[0].images[0].data, image.data)
@@ -332,7 +339,7 @@ export { CheckoutCoordinator } from './src/main/rewind/coordinator';`, resolveDi
     return stream(message(text('queue handled')))
   })
   await queue.session.prompt('queue race')
-  assert(cleared)
+  assert(cleared, JSON.stringify(queue.session.messages.at(-1)))
   assert.equal(queue.session.messages.filter((m) => m.role === 'custom').length, 1)
   assert(queue.session.messages.some((m) => m.role === 'user' && JSON.stringify(m).includes('fixture-image')))
   const queueRounds = queue.app.snapshotOf(queue.app.activeSession).messages.filter((m) => m.role === 'assistant')

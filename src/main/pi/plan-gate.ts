@@ -109,8 +109,7 @@ const PLAN_APP_TOOLS: ReadonlySet<string> = new Set([
   SUBAGENT_TOOL_NAME,
   AGENT_STEER_TOOL_NAME,
   MESSAGE_PARENT_TOOL_NAME,
-  // Registered in a later task; the name is allow-listed here so the ceiling
-  // does not have to change when it exists.
+  // Only the root's app-owned submission definition is admitted.
   'submit_plan'
 ])
 
@@ -184,9 +183,9 @@ function createGate(options: PlanGateOptions): PlanGate {
   let appNames: string[] = dedupe(session.getActiveToolNames())
   /**
    * Tools the SDK activated that the app did not list (lazy registrations).
-   * They are NOT part of the app's policy, so a reload/"app re-apply" clears
-   * them; they exist so a dynamically registered tool survives a Plan round
-   * trip instead of only appearing in Plan's filtered view.
+   * They are NOT app-owned names. Preserve them across app re-application so
+   * a dynamically registered extension tool survives a Plan round trip; its
+   * definition still has to pass provenance checks in the restricted view.
    */
   let extras: string[] = []
   let effective: EffectivePlanTool[] = []

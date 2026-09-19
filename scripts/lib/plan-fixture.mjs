@@ -18,7 +18,7 @@ const sdk = fileURLToPath(import.meta.resolve('@earendil-works/pi-coding-agent')
  * The fake stream is installed inside the mocked createAgentSessionFromServices
  * so it exists before PiManager takes ownership of the session.
  */
-export async function createPlanFixture({ respond: initialRespond, extensionFactories = [] } = {}) {
+export async function createPlanFixture({ respond: initialRespond, extensionFactories = [], withRewind = false, keepRecentTokens = 20000 } = {}) {
   const temporary = await mkdtemp(join(tmpdir(), 'pith-plan-mode-'))
   const agentDir = join(temporary, 'agent')
   const project = join(temporary, 'project')
@@ -74,7 +74,7 @@ export function createAgentSessionServices(options){
   return create({
     ...options,
     agentDir:getAgentDir(),
-    settingsManager:SettingsManager.inMemory({compaction:{enabled:false},retry:{enabled:false}}),
+    settingsManager:SettingsManager.inMemory({compaction:{enabled:false,keepRecentTokens:${keepRecentTokens}},retry:{enabled:false}}),
     resourceLoaderOptions:{
       ...options.resourceLoaderOptions,
       noExtensions:true,
@@ -95,6 +95,8 @@ export async function createAgentSessionFromServices(options){
       }
     }]
   })
+
+  if (withRewind) await build({ entryPoints: [join(planRepoRoot, 'src/main/rewind/worker.ts')], outfile: join(temporary, 'rewind-worker.mjs'), bundle: true, platform: 'node', format: 'esm' })
 
   const {
     PiManager,

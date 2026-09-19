@@ -558,8 +558,11 @@ export class PiManager {
     if (!managed) throw new Error('No such session')
     if (managed.subagentChild) throw new Error('A subagent session follows its parent session')
     if (managed.session.isStreaming) throw new Error('Stop the running turn before compacting')
-    await managed.session.compact()
-    return this.snapshotOf(managed)
+    const release = managed.plan.beginWork('branch')
+    try {
+      await managed.session.compact()
+      return this.snapshotOf(managed)
+    } finally { release() }
   }
 
   /**
@@ -579,8 +582,11 @@ export class PiManager {
     const managed = this.sessions.get(sessionPath)
     if (!managed) throw new Error('No such session')
     if (managed.session.isStreaming) throw new Error('Stop the running turn before reloading')
-    await this.reloadLiveSessions()
-    return this.snapshotOf(managed)
+    const release = managed.plan.beginWork('branch')
+    try {
+      await this.reloadLiveSessions()
+      return this.snapshotOf(managed)
+    } finally { release() }
   }
 
   // ---- subagents (delegated child sessions) ----
@@ -1270,7 +1276,7 @@ export class PiManager {
         // Applied out of band: reload() emits no prompt-related event, so the
         // renderer's transcript is unaffected; only the next turn's system
         // prompt differs.
-        void this.reloadManagedSession(managed)
+        void this.reloadManagedSession(managed).catch(() => { managed.reloadPending = true })
       }
     }
 
@@ -1810,8 +1816,6 @@ export class PiManager {
       askUserNotifications!.observe(event)
       // Plan metadata follows this session's live facts — never only model text.
       if (PLAN_FACT_EVENT_TYPES.has(event.type)) managed.plan.refresh()
-      const message = 'message' in event ? event.message as ChatMessage : undefined
-
     }
     const unsubscribeSession = session.subscribe(event => {
       // Committed user/tool results are routed only after SDK persistence.
@@ -2158,9 +2162,8 @@ export class PiManager {
       escalations: listPendingEscalations(managed.path).length,
       queuedMessages: session.getSteeringMessages().length + session.getFollowUpMessages().length,
       configuredSandboxMode,
-      // A child's plan restriction comes from its parent's LIVE mode (the
-      // frozen per-run copy is a later-task concern); a parent that is not
-      // live falls back to the child's own branch fold.
+      // A child keeps its frozen restriction and also follows the parent's
+      // LIVE mode. A missing parent never widens the frozen restriction.
       inheritedPlanRestriction: managed.subagentChild
         ? (managed.subagentChild.planRestricted === true || (this.sessions.get(managed.subagentChild.parentPath)?.plan.restricted ?? false))
         : false,
@@ -2996,6 +2999,7 @@ export class PiManager {
           // value here would silently widen on the next reopen.
           managed.sandboxMode = sandboxModeFromBranch(sessionManager.getBranch(), this.defaultSandboxMode)
           managed.plan.restore()
+          managed.planApproval?.recover()
         }
         // Edited file references are re-inlined from disk (fresh content) — the
         // retry path carries its blocks inside the stored text already.
@@ -3030,44 +3034,47 @@ export class PiManager {
     const managed = this.activeSession
     if (!managed) throw new Error('No active session')
     if (managed.subagentChild) throw new Error('A subagent session is read-only')
-    const entry = this.findMessageEntry(managed, 'assistant', timestamp)
-    if (!entry) throw new Error('Message not found')
-    const sessionManager = managed.session.sessionManager
-    const file = sessionManager.getSessionFile()
-    if (!file || !existsSync(file)) throw new Error('The session has not been saved yet')
+    const release = managed.plan.beginWork('branch')
+    try {
+      const entry = this.findMessageEntry(managed, 'assistant', timestamp)
+      if (!entry) throw new Error('Message not found')
+      const sessionManager = managed.session.sessionManager
+      const file = sessionManager.getSessionFile()
+      if (!file || !existsSync(file)) throw new Error('The session has not been saved yet')
 
-    // The SDK switches the receiver's file/id/branch when forking. Keep the
-    // live source manager untouched, or it will append to the fork even after
-    // that fork is deleted (recreating a message-only file without a header).
-    const forkedPath = SessionManager.open(file).createBranchedSession(entry.id)
-    if (!forkedPath) throw new Error('Failed to create the forked session')
+      // The SDK switches the receiver's file/id/branch when forking. Keep the
+      // live source manager untouched, or it will append to the fork even after
+      // that fork is deleted (recreating a message-only file without a header).
+      const forkedPath = SessionManager.open(file).createBranchedSession(entry.id)
+      if (!forkedPath) throw new Error('Failed to create the forked session')
 
-    let baseLabel = managed.session.sessionName?.trim() || null
-    if (!baseLabel) {
-      for (const candidate of sessionManager.buildContextEntries()) {
-        if (candidate.type !== 'message') continue
-        const message = candidate.message as { role?: string; content?: unknown }
-        if (message.role !== 'user') continue
-        const content = message.content
-        baseLabel =
-          (typeof content === 'string'
-            ? content
-            : Array.isArray(content)
-              ? (content as { type: string; text?: string }[])
-                  .filter((part) => part.type === 'text')
-                  .map((part) => part.text ?? '')
-                  .join('\n')
-              : ''
-          )
-            ?.trim()
-            .slice(0, 80) || null
-        break
+      let baseLabel = managed.session.sessionName?.trim() || null
+      if (!baseLabel) {
+        for (const candidate of sessionManager.buildContextEntries()) {
+          if (candidate.type !== 'message') continue
+          const message = candidate.message as { role?: string; content?: unknown }
+          if (message.role !== 'user') continue
+          const content = message.content
+          baseLabel =
+            (typeof content === 'string'
+              ? content
+              : Array.isArray(content)
+                ? (content as { type: string; text?: string }[])
+                    .filter((part) => part.type === 'text')
+                    .map((part) => part.text ?? '')
+                    .join('\n')
+                : ''
+            )
+              ?.trim()
+              .slice(0, 80) || null
+          break
+        }
       }
-    }
 
-    const navigationEpoch = ++this.navigationEpoch
-    await this.buildSession(SessionManager.open(forkedPath), true, navigationEpoch)
-    return { snapshot: this.snapshot(), baseLabel }
+      const navigationEpoch = ++this.navigationEpoch
+      await this.buildSession(SessionManager.open(forkedPath), true, navigationEpoch)
+      return { snapshot: this.snapshot(), baseLabel }
+    } finally { release() }
   }
 
   abort(): void {
@@ -3458,6 +3465,7 @@ export class PiManager {
    */
   private async reloadManagedSession(managed: ManagedSession): Promise<void> {
     if (this.closing || managed.disposing) return
+    const releasePlanWork = managed.plan.beginWork('branch')
     managed.notifications.holdWake()
     managed.askUser.holdWake()
     managed.subagents?.notifications?.holdWake()
@@ -3481,6 +3489,7 @@ export class PiManager {
         // a mode/plan entry written outside this process is adopted (and an
         // unknown version keeps the session restricted).
         managed.plan.restore()
+        managed.planApproval?.recover()
       }
       catch { /* Keep the existing resource-reload error policy. */ }
       finally { this.catalogCache = null }
@@ -3492,6 +3501,7 @@ export class PiManager {
       managed.notifications.releaseWake()
       managed.askUser.releaseWake()
       managed.subagents?.notifications?.releaseWake()
+      releasePlanWork()
     }
   }
 
@@ -3686,6 +3696,7 @@ export class PiManager {
    * Undefined means nothing blocks.
    */
   private rewindBusyReason(managed: ManagedSession): RewindBusyReason | undefined {
+    if (managed.plan.transitionBusy) return 'work'
     if (managed.session.getSteeringMessages().length || managed.session.getFollowUpMessages().length) return 'queued'
     const blockers = this.checkoutCoordinator.restoreBlockers(managed.cwd)
     if (blockers.recovery) return 'recovery'
@@ -3801,63 +3812,72 @@ export class PiManager {
     // branch's values live.
     managed.sandboxMode = sandboxModeFromBranch(manager.getBranch(), this.defaultSandboxMode)
     managed.plan.restore()
+    managed.planApproval?.recover()
   }
 
   rewindRestore(request: RewindRequest): Promise<RewindResult<RewindCommitDTO>> {
     return this.rewindResult(async () => {
       const managed = this.rewindSession(request.sessionPath)
       if (!['files', 'conversation', 'all'].includes(request.mode)) throw new RewindFailure('missing')
-      await managed.lifecyclePromise
-      await managed.rewind?.idle()
-      return this.checkoutCoordinator.withExclusive(managed.cwd, 'restore', async () => {
-        const { session } = managed
-        if (!session.isIdle || managed.disposing || this.closing || session.getSteeringMessages().length || session.getFollowUpMessages().length) throw new RewindFailure('busy')
-        const known = this.rewindPreviews.get(request.token)
-        const list = await this.rewindClient.call('list', managed.cwd, session.sessionId)
-        const prior = list.operations.find(operation => operation.id === request.operationId)
-        if (prior?.status === 'committed') {
-          const verified = await this.rewindClient.call('prepare', managed.cwd, session.sessionId, request.token, request.mode, request.operationId, null, null, managed.path)
-          return { operation: verified, ...(this.activeSession === managed ? { snapshot: this.snapshot() } : {}) }
-        }
-        if (!known || known.path !== managed.path) throw new RewindFailure('expired')
-        if (known.file && request.mode !== 'files') throw new RewindFailure('unsupported')
-        if (request.mode !== 'conversation' && known.uncovered?.length && request.skipUncovered !== true) throw new RewindFailure('uncovered', known.uncovered.map(item => item.path))
-        const before = session.sessionManager.getLeafId()
-        if (before !== known.leaf) throw new RewindFailure('changed')
-        if (known.target !== null && !session.sessionManager.getEntry(known.target)) throw new RewindFailure('missing')
-        managed.notifications.pause()
-        managed.askUser.pause()
-        managed.subagents?.notifications?.pause()
-        // Awaited: the restore's exclusive window must not collide with the
-        // runs' coordinator leases (a restore would read as busy forever).
-        await this.subagentRuntime.stopAll(managed.subagents)
-        const operation = await this.rewindClient.call('prepare', managed.cwd, session.sessionId, request.token,
-          request.mode, request.operationId, before, request.mode === 'files' ? before : known.target, managed.path,
-          { uncovered: known.uncovered ?? [], confirmed: request.skipUncovered === true })
-        try {
-          if (request.mode !== 'files') await this.rewindLeaf(managed, known.target, operation.id)
-          const committed = await this.rewindClient.call('finish', managed.cwd, session.sessionId, operation.id, true)
-          this.emit('pi:rewind', { sessionPath: managed.path })
-          void this.fileIndex?.refresh(true).catch(() => {})
-          return { operation: committed, ...(this.activeSession === managed ? { snapshot: this.snapshot() } : {}) }
-        } catch (error) {
-          // A worker crash may leave either phase complete. Preserve the journal
-          // and recover through the same operation, never issue another restore.
+      let releasePlanWork: () => void
+      try { releasePlanWork = managed.plan.beginWork('branch') }
+      catch (error) {
+        if (error instanceof PlanAdmissionError) throw new RewindFailure('busy')
+        throw error
+      }
+      try {
+        await managed.lifecyclePromise
+        await managed.rewind?.idle()
+        return await this.checkoutCoordinator.withExclusive(managed.cwd, 'restore', async () => {
+          const { session } = managed
+          if (!session.isIdle || managed.disposing || this.closing || session.getSteeringMessages().length || session.getFollowUpMessages().length) throw new RewindFailure('busy')
+          const known = this.rewindPreviews.get(request.token)
+          const list = await this.rewindClient.call('list', managed.cwd, session.sessionId)
+          const prior = list.operations.find(operation => operation.id === request.operationId)
+          if (prior?.status === 'committed') {
+            const verified = await this.rewindClient.call('prepare', managed.cwd, session.sessionId, request.token, request.mode, request.operationId, null, null, managed.path)
+            return { operation: verified, ...(this.activeSession === managed ? { snapshot: this.snapshot() } : {}) }
+          }
+          if (!known || known.path !== managed.path) throw new RewindFailure('expired')
+          if (known.file && request.mode !== 'files') throw new RewindFailure('unsupported')
+          if (request.mode !== 'conversation' && known.uncovered?.length && request.skipUncovered !== true) throw new RewindFailure('uncovered', known.uncovered.map(item => item.path))
+          const before = session.sessionManager.getLeafId()
+          if (before !== known.leaf) throw new RewindFailure('changed')
+          if (known.target !== null && !session.sessionManager.getEntry(known.target)) throw new RewindFailure('missing')
+          managed.notifications.pause()
+          managed.askUser.pause()
+          managed.subagents?.notifications?.pause()
+          // Awaited: the restore's exclusive window must not collide with the
+          // runs' coordinator leases (a restore would read as busy forever).
+          await this.subagentRuntime.stopAll(managed.subagents)
+          const operation = await this.rewindClient.call('prepare', managed.cwd, session.sessionId, request.token,
+            request.mode, request.operationId, before, request.mode === 'files' ? before : known.target, managed.path,
+            { uncovered: known.uncovered ?? [], confirmed: request.skipUncovered === true })
           try {
-            const observed = await this.rewindClient.call('list', managed.cwd, session.sessionId)
-            const saved = observed.operations.find(candidate => candidate.id === operation.id)
-            // A committed journal wins over a lost IPC response. Compensating
-            // only the conversation here would split an already committed pair.
-            if (saved?.status === 'committed') {
-              this.emit('pi:rewind', { sessionPath: managed.path })
-              return { operation: saved, ...(this.activeSession === managed ? { snapshot: this.snapshot() } : {}) }
-            }
-            if (request.mode !== 'files') await this.rewindLeaf(managed, before, operation.id)
-            await this.rewindClient.call('finish', managed.cwd, session.sessionId, operation.id, false)
-          } catch { throw new RewindFailure('recovery', [], operation.id) }
-          throw error
-        }
-      })
+            if (request.mode !== 'files') await this.rewindLeaf(managed, known.target, operation.id)
+            const committed = await this.rewindClient.call('finish', managed.cwd, session.sessionId, operation.id, true)
+            this.emit('pi:rewind', { sessionPath: managed.path })
+            void this.fileIndex?.refresh(true).catch(() => {})
+            return { operation: committed, ...(this.activeSession === managed ? { snapshot: this.snapshot() } : {}) }
+          } catch (error) {
+            // A worker crash may leave either phase complete. Preserve the journal
+            // and recover through the same operation, never issue another restore.
+            try {
+              const observed = await this.rewindClient.call('list', managed.cwd, session.sessionId)
+              const saved = observed.operations.find(candidate => candidate.id === operation.id)
+              // A committed journal wins over a lost IPC response. Compensating
+              // only the conversation here would split an already committed pair.
+              if (saved?.status === 'committed') {
+                this.emit('pi:rewind', { sessionPath: managed.path })
+                return { operation: saved, ...(this.activeSession === managed ? { snapshot: this.snapshot() } : {}) }
+              }
+              if (request.mode !== 'files') await this.rewindLeaf(managed, before, operation.id)
+              await this.rewindClient.call('finish', managed.cwd, session.sessionId, operation.id, false)
+            } catch { throw new RewindFailure('recovery', [], operation.id) }
+            throw error
+          }
+        })
+      } finally { releasePlanWork() }
     }).then(result => {
       if ('error' in result && result.error.code === 'recovery') {
         const managed = this.sessions.get(request.sessionPath)

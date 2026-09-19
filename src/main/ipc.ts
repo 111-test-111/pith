@@ -1,7 +1,7 @@
 import { app, ipcMain, dialog, session, shell, webContents, BrowserWindow } from 'electron'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { exportPlan } from './pi/plan-export'
+import { registerPlanIpc } from './pi/plan-ipc'
 import { PiManager } from './pi/manager'
 import { TerminalManager } from './terminal/manager'
 import { registerQuitHandler } from './shutdown'
@@ -30,8 +30,6 @@ import { MAX_CONCURRENT_SUBAGENTS_DEFAULT } from './pi/subagents/runtime'
 import type { AskUserAnswer } from '../shared/ask-user'
 import type {
   AppInfoDTO,
-  PlanModeRequest,
-  PlanDocumentRequest,
   BrowserImportDiscoveryDTO,
   BrowserImportResultDTO,
   BrowserImportStatusDTO,
@@ -278,12 +276,7 @@ export function registerIpc(pi: PiManager): () => boolean {
   })
   // The live mode belongs to a session, not to the app: the composer switches
   // this session's mode and gets the refreshed snapshot back.
-  ipcMain.handle('plan:export', (_e, request: PlanDocumentRequest) => exportPlan(request, r => pi.readPlanDocument(r), defaultPath => dialog.showSaveDialog({ defaultPath, filters: [{ name: 'Markdown', extensions: ['md'] }] })))
-  ipcMain.handle('plan:setMode', (_e, request: PlanModeRequest) => pi.setSessionMode(request))
-  ipcMain.handle('plan:state', (_e, path: string) => pi.getPlanState(path))
-  ipcMain.handle('plan:document', (_e, request: PlanDocumentRequest) => pi.readPlanDocument(request))
-  ipcMain.handle('plan:approve', (_e, request: PlanDocumentRequest) => pi.approvePlan(request))
-  ipcMain.handle('plan:resetApproval', (_e, request: PlanDocumentRequest) => pi.resetPlanApproval(request))
+  registerPlanIpc(pi)
   ipcMain.handle('sandbox:setMode', (_event, sessionPath: string, mode: SandboxMode) =>
     pi.setSessionSandboxMode(sessionPath, mode))
   // Manual compaction, the app's equivalent of `/compact`.

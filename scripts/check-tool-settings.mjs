@@ -334,7 +334,7 @@ app.on('window-all-closed',()=>app.quit());`)
   assert.ok(hint, 'the tools list carries the lazily-registered-tools note')
   assert.equal(
     hint.text,
-    'Extensions that register their tools on first use appear here after a session has run once.',
+    'Tools from some extensions appear here after their first use.',
     'the note says what is actually missing and when it arrives'
   )
   assert.equal(hint.insideList, false, 'the note is not a tab row')
@@ -444,7 +444,7 @@ app.on('window-all-closed',()=>app.quit());`)
   )
   assert.equal((await descriptionCard()).label, '描述', 'the description label is translated')
   assert.ok(
-    (await evaluate(`document.querySelector('[data-tools-lazy-hint]').textContent`)).includes('首次使用时才注册工具'),
+    (await evaluate(`document.querySelector('[data-tools-lazy-hint]').textContent`)).trim() === '部分扩展的工具会在首次使用后出现在这里。',
     'the note is translated too'
   )
   await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] })

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
-import { existsSync, readFileSync } from 'node:fs'
+import fs, { existsSync, readFileSync } from 'node:fs'
+import { syncBuiltinESMExports } from 'node:module'
 import { join } from 'node:path'
 import { createPlanFixture, submitFixturePlan } from './plan-fixture.mjs'
 export async function checkPlanApproval() {
@@ -90,5 +91,67 @@ export async function checkPlanApproval() {
     assert.equal(broken.requests.length, before)
     assert.equal(broken.app.getPlanState(broken.managed.path).effectiveSandboxMode, 'read-only')
   } finally { await broken.close() }
+  await checkApprovalFailures()
   console.log('PASS: approval version binding, durable opening and idempotence')
+}
+
+async function checkApprovalFailures() {
+  // Throw at each approval fsync: requested, Normal transition, and started.
+  // Replace the native boundary only inside this isolated fixture, then restore it.
+  for (const at of [1, 2, 3]) {
+    const f = await createPlanFixture()
+    const nativeSync = fs.fsyncSync
+    try {
+      const ref = await submitFixturePlan(f)
+      const request = { sessionPath: f.managed.path, ...ref }
+      const before = f.requests.length
+      let count = 0
+      fs.fsyncSync = fd => { if (++count === at) throw new Error('injected-fsync'); return nativeSync(fd) }
+      syncBuiltinESMExports()
+      const result = await f.app.approvePlan(request)
+      assert.equal(result.ok, false, `fsync ${at} falsely accepted`)
+      assert(result.blockers.includes('storage'))
+      assert.equal(f.requests.length, before, 'failed durable admission reached the model')
+      assert.throws(() => f.managed.plan.checkWorkAdmission())
+      assert.equal((await f.app.approvePlan(request)).ok, false, 'a failed started append cannot become an idempotent success')
+    } finally { fs.fsyncSync = nativeSync; syncBuiltinESMExports(); await f.close() }
+  }
+  let hold = false, entered, resume
+  const inputStarted = new Promise(r => { entered = r })
+  const inputReleased = new Promise(r => { resume = r })
+  const stopped = await createPlanFixture({ extensionFactories: [pi => pi.on('input', async () => {
+    if (hold) { entered(); await inputReleased }
+  })] })
+  try {
+    const ref = await submitFixturePlan(stopped)
+    hold = true
+    const before = stopped.requests.length
+    const opening = stopped.app.approvePlan({ sessionPath: stopped.managed.path, ...ref })
+    await inputStarted
+    stopped.app.abort()
+    assert.equal((await opening).ok, false)
+    resume()
+    await stopped.managed.planApproval.execution
+    assert.equal(stopped.requests.length, before, 'late input completion resurrected a stopped approval')
+    assert.equal(stopped.app.getPlanState(stopped.managed.path).mode, 'plan')
+  } finally { resume(); await stopped.close() }
+
+  const accepted = await createPlanFixture({ withRewind: true })
+  try {
+    const ref = await submitFixturePlan(accepted)
+    accepted.setRespond(() => { throw new Error('injected-model-failure-after-admission') })
+    const request = { sessionPath: accepted.managed.path, ...ref }
+    const result = await accepted.app.approvePlan(request)
+    assert(result.ok, JSON.stringify(result))
+    await accepted.session.waitForIdle()
+    await accepted.managed.rewind.idle()
+    const list = await accepted.app.rewindList(accepted.managed.path)
+    assert(!list.error, JSON.stringify(list))
+    assert.equal(list.value.checkpoints.filter(c => c.messageEntryId === result.value.executionEntryId).length, 1)
+    const before = accepted.requests.length
+    assert((await accepted.app.approvePlan(request)).ok)
+    assert.equal(accepted.requests.length, before, 'started execution was silently retried')
+    assert.equal(accepted.app.getPlanState(accepted.managed.path).approval.status, 'started')
+  } finally { await accepted.close() }
+  console.log('PASS: approval fsync failures, Stop during async input, accepted model failure and exact user checkpoint')
 }

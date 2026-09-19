@@ -241,6 +241,7 @@ const approval = {
 const approvedState = reconstructPlan([enter, user, result, approval])
 assert.equal(approvedState.approval?.approvalId, 'ap1')
 assert.equal(approvedState.approval?.status, 'requested')
+assert.equal(reconstructPlan([enter, user, result, { ...approval, data: { ...approval.data, version: 99 } }]).unsupported, true)
 
 console.log('PASS: protocol fold/parser')
 
@@ -1720,4 +1721,5 @@ await (await import('./lib/check-plan-submission.mjs')).checkPlanSubmission()
 await (await import('./lib/check-plan-approval.mjs')).checkPlanApproval()
 await (await import('./lib/check-plan-state.mjs')).checkPlanState()
 await (await import('./lib/check-plan-cards.mjs')).checkPlanCards()
+await (await import('./lib/check-plan-lifecycle.mjs')).checkPlanLifecycle()
 console.log('PASS: all plan-mode checks')

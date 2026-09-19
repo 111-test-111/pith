@@ -44,6 +44,8 @@ export class PlanApprovalController {
 
   async approve(request: PlanApproveRequest): Promise<PlanActionResult<PlanApprovalDTO>> {
     const { controller, session, storage } = this.host
+    if (storage.failed) return { ok: false, code: 'storage', blockers: ['storage'] }
+    if (controller.branch.unsupported) return { ok: false, code: 'unsupported-version', blockers: ['unsupported-version'] }
     const previous = controller.branch.approval
     if (previous?.status === 'started' && matches(previous.ref, request) &&
         session.sessionManager.getBranch().some(e => e.id === previous.executionEntryId)) return { ok: true, value: previous }

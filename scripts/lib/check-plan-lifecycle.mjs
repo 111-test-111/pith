@@ -1,0 +1,111 @@
+import assert from 'node:assert/strict'
+import { SessionManager } from '@earendil-works/pi-coding-agent'
+import { randomUUID } from 'node:crypto'
+import { join } from 'node:path'
+import { readFile } from 'node:fs/promises'
+import { createPlanFixture, submitFixturePlan } from './plan-fixture.mjs'
+
+const deferred = () => { let resolve; return { promise: new Promise(r => { resolve = r }), resolve: () => resolve() } }
+export async function checkPlanLifecycle() {
+  const f = await createPlanFixture()
+  try {
+    await f.managed.lifecyclePromise
+    await f.session.prompt('Seed a saved session')
+    const timestamp = f.session.messages.find(m => m.role === 'assistant').timestamp
+    const barrier = deferred()
+    const transition = f.managed.plan.transition(() => barrier.promise)
+    try {
+      await assert.rejects(f.app.compactSession(f.managed.path), e => e.blockers?.includes('transition'))
+      await assert.rejects(f.app.reloadSession(f.managed.path), e => e.blockers?.includes('transition'))
+      await assert.rejects(f.app.forkFromMessage(timestamp), e => e.blockers?.includes('transition'))
+      const result = await f.app.rewindRestore({ sessionPath: f.managed.path, token: 'unreached', operationId: 'unreached', mode: 'conversation' })
+      assert.equal(result.error?.code, 'busy', 'rewind must refuse before reaching the worker during a Plan transition')
+    } finally { barrier.resolve(); await transition }
+
+    const compactBarrier = deferred()
+    const original = f.session.compact
+    f.session.compact = () => compactBarrier.promise
+    const compacting = f.app.compactSession(f.managed.path)
+    try {
+      const result = await f.app.setSessionMode({ sessionPath: f.managed.path, mode: 'plan' })
+      assert.equal(result.ok, false, 'mode change must refuse during compaction preparation')
+      assert(result.blockers.includes('busy'))
+    } finally { compactBarrier.resolve(); await compacting; f.session.compact = original }
+  } finally { await f.close() }
+  await checkRestoration()
+  console.log('PASS: compaction/reload/fork/rewind share the Plan transition admission boundary')
+}
+
+async function checkRestoration() {
+  const f = await createPlanFixture({ withRewind: true, keepRecentTokens: 1 })
+  const value = result => { assert(!result.error, JSON.stringify(result)); return result.value }
+  try {
+    const ref = await submitFixturePlan(f)
+    const saved = SessionManager.open(f.managed.path)
+    assert(saved.getBranch().some(e => e.id === ref.submissionEntryId))
+    await f.managed.rewind.idle()
+    assert.equal(value(await f.app.rewindList(f.managed.path)).error, undefined)
+    const originalSeq = f.app.getPlanState(f.managed.path).seq
+    await f.app.disposeManaged(f.managed)
+    const cold = await f.app.buildSession(SessionManager.open(f.managed.path))
+    await cold.lifecyclePromise
+    assert(f.app.getPlanState(cold.path).seq > originalSeq)
+    assert.equal(f.app.getPlanState(cold.path).latest.hash, ref.hash)
+    assert(cold.plan.submissionLocked)
+    assert(!cold.session.getActiveToolNames().includes('write'))
+    assert(f.app.snapshot().messages.some(m => m.planSubmission?.submissionEntryId === ref.submissionEntryId))
+    // Keep a newer turn so the SDK can cut away the original submission.
+    f.setRespond(() => [{ type: 'text', text: 'Additional investigation completed.' }])
+    await cold.session.prompt('Investigate alternatives')
+    f.setRespond(() => [{ type: 'text', text: 'Summary retaining the planning decision.' }])
+    const before = f.requests.length
+    const compacted = await f.app.compactSession(cold.path)
+    assert(f.requests.length > before, 'manual compaction must exercise the real SDK summary stream')
+    assert.match(f.requests.at(-1).systemPrompt, /Current working mode: Plan Mode/)
+    assert(compacted.messages.some(m => m.role === 'compactionSummary'))
+    assert.equal(compacted.plan.latest.hash, ref.hash)
+    assert(f.app.readPlanDocument({ sessionPath: cold.path, ...ref }).ok)
+
+    const after = cold.session.messages.findLast(m => m.role === 'assistant').timestamp
+    const fork = await f.app.forkFromMessage(after)
+    assert.equal(fork.snapshot.plan.mode, 'plan')
+    assert.equal(fork.snapshot.plan.latest.hash, ref.hash)
+    assert(!f.app.activeSession.session.getActiveToolNames().includes('write'))
+    const forkPath = fork.snapshot.sessionPath
+    assert.notEqual(forkPath, cold.path)
+    await f.app.activeSession.lifecyclePromise
+    // Forking must not repoint the original manager or overwrite its document.
+    assert.equal(cold.session.sessionManager.getSessionFile(), cold.path)
+    assert((await readFile(cold.path, 'utf8')).includes(ref.hash))
+
+    f.app.activateSession(cold)
+    const current = f.app.getPlanState(cold.path)
+    assert((await f.app.setSessionMode({ sessionPath: cold.path, mode: 'normal' })).ok)
+    await cold.session.prompt('This turn starts in Normal')
+    await cold.rewind.idle()
+    const checkpoints = value(await f.app.rewindList(cold.path)).checkpoints
+    const cp = checkpoints.find(c => c.messageEntryId === ref.planningTurnEntryId)
+    assert(cp)
+    const restore = async (id, action) => {
+      const preview = value(await f.app.rewindPreview(cold.path, id, action))
+      return value(await f.app.rewindRestore({ sessionPath: cold.path, token: preview.token, mode: 'conversation', operationId: randomUUID() }))
+    }
+    const restored = await restore(cp.id)
+    assert.equal(f.app.getPlanState(cold.path).mode, 'plan')
+    assert.equal(f.app.getPlanState(cold.path).latest, null)
+    const undone = await restore(restored.operation.id, 'undo')
+    assert.equal(f.app.getPlanState(cold.path).mode, 'normal')
+    assert.equal(f.app.getPlanState(cold.path).latest.hash, current.latest.hash)
+    await restore(undone.operation.id, 'redo')
+    assert.equal(f.app.getPlanState(cold.path).mode, 'plan')
+    assert.equal(f.app.getPlanState(cold.path).latest, null)
+
+    // A sibling session in the same checkout keeps its own mode and tools.
+    const sibling = await f.app.buildSession(SessionManager.create(f.project, join(f.temporary, 'sessions')))
+    await sibling.lifecyclePromise
+    assert.equal(sibling.plan.snapshot.mode, 'normal')
+    assert(sibling.session.getActiveToolNames().includes('write'))
+    assert.equal(cold.plan.snapshot.effectiveSandboxMode, 'read-only')
+  } finally { await f.close() }
+  console.log('PASS: real cold restore, compaction stream, fork, rewind/undo/redo and same-checkout session isolation')
+}

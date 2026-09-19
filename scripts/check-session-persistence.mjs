@@ -35,26 +35,33 @@ const verify = async (manager) => {
 try {
   const outfile = join(temp, 'manager.mjs')
   await build({
-    stdin: { contents: "export { PiManager } from './src/main/pi/manager'; export { TodoState } from './src/main/pi/todo'; export { CheckoutCoordinator } from './src/main/rewind/coordinator';", resolveDir: resolve('.') }, bundle: true, platform: 'node', format: 'esm', outfile,
+    stdin: { contents: "export { PiManager } from './src/main/pi/manager'; export { TodoState } from './src/main/pi/todo'; export { CheckoutCoordinator } from './src/main/rewind/coordinator'; export { PlanController } from './src/main/pi/plan-mode'; export { PlanStorage } from './src/main/pi/plan-storage';", resolveDir: resolve('.') }, bundle: true, platform: 'node', format: 'esm', outfile,
     plugins: [{ name: 'isolated-runtime', setup(builder) {
       builder.onResolve({ filter: /^@earendil-works\/pi-coding-agent$/ }, () => ({
         path: fileURLToPath(import.meta.resolve('@earendil-works/pi-coding-agent')), external: true
       }))
+      builder.onResolve({ filter: /^playwright-core(\/|$)/ }, args => ({ path: fileURLToPath(import.meta.resolve(args.path)), external: true }))
       builder.onResolve({ filter: /^electron$/ }, () => ({ path: 'electron', namespace: 'fixture' }))
       builder.onLoad({ filter: /.*/, namespace: 'fixture' }, () => ({
         contents: 'export const app = { getPath() { throw Error("Unexpected app access") } }; export const shell = {};'
       }))
     } }]
   })
-  const { PiManager, TodoState, CheckoutCoordinator } = await import(pathToFileURL(outfile).href)
+  const { PiManager, TodoState, CheckoutCoordinator, PlanController, PlanStorage } = await import(pathToFileURL(outfile).href)
+  const planFor = manager => new PlanController({ manager, storage: new PlanStorage(manager), changed() {}, facts: () => ({
+    initializing: false, closing: false, child: false, recovery: false, sdkIdle: true,
+    tasks: 0, subagents: 0, deliveries: 0, questions: 0, escalations: 0, queuedMessages: 0,
+    configuredSandboxMode: 'workspace-write', inheritedPlanRestriction: false, shellEnforcement: 'unavailable'
+  }) })
   // Skip the runtime constructor; execute the real methods against real SDK
   // managers, replacing only model activation and renderer snapshots.
   const app = Object.create(PiManager.prototype)
   app.checkoutCoordinator = new CheckoutCoordinator()
+  Object.defineProperty(app, 'subagentRuntime', { value: { stopAll: async () => {} } })
   app.navigationEpoch = 0
   app.snapshot = () => ({ sessionPath: app.activeSession.path })
   app.buildSession = async (sessionManager) => {
-    app.activeSession = { todos: new TodoState(sessionManager), path: sessionManager.getSessionFile(), session: { sessionManager } }
+    app.activeSession = { plan: planFor(sessionManager), todos: new TodoState(sessionManager), path: sessionManager.getSessionFile(), session: { sessionManager } }
     return app.activeSession
   }
 
@@ -69,7 +76,7 @@ try {
   const before = await readFile(original, 'utf8')
   const originalId = source.getSessionId()
   const originalLeaf = source.getLeafId()
-  const managed = { cwd: temp, todos: new TodoState(source), path: original, session: {
+  const managed = { cwd: temp, plan: planFor(source), askRecords: { restore() {} }, todos: new TodoState(source), path: original, session: {
     sessionManager: source, isStreaming: false,
     agent: { state: { messages: source.buildSessionContext().messages } },
     prompt: async (text) => { source.appendMessage(user(text, 6)) }

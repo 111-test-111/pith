@@ -298,8 +298,9 @@ export class PlanController {
   /**
    * Entry guard for every path that starts new work (prompt, queue surgery,
    * resend, a side-effecting tool, a process/child launch, a branch move).
-   * Refuses only while the session lock is held or the session is closing;
-   * kind-specific rules live in `beginWork` and in the restriction itself.
+   * Refuses a held transition lock, closing, storage/version failure or an
+   * unresolved recovery. Kind-specific rules live in `beginWork` and in the
+   * restriction itself.
    */
   checkWorkAdmission(): void {
     const facts = this.options.facts()

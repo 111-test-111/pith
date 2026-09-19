@@ -33,8 +33,10 @@ exportPlan:async request=>{window.exports.push(request);return {ok:true,value:{c
 window.store=new PiStore();
 const submission={role:'toolResult',toolName:'submit_plan',toolCallId:'plan-call',timestamp:2000,isError:false,content:[{type:'text',text:markdown}],details:{kind:'pi-app-plan-submission',version:1,planId:'p1',revision:1,planningTurnEntryId:'u1',plan:markdown,hash},planSubmission:window.reference};
 const full=[{role:'user',content:'Design this',timestamp:1000},{role:'assistant',timestamp:1500,stopReason:'toolUse',content:[{type:'thinking',thinking:'Investigating the implementation.'},{type:'toolCall',id:'plan-call',name:'submit_plan',arguments:{plan:markdown}}]},submission];
-let sequence=0;
-window.setTranscript=(kind='full')=>{window.store.applySnapshot({sessionPath:'/fixture.jsonl',sessionId:'fixture',cwd:'/tmp',projectless:false,model:null,thinkingLevel:'off',isStreaming:false,eventSequence:++sequence,plan:window.plan,messages:kind==='full'?full:[{role:'compactionSummary',summary:'Older investigation',tokensBefore:100,timestamp:3000},{role:'user',content:'Later conversation',timestamp:4000}]})};
+let sequence=0, currentPath='/fixture.jsonl';
+window.switchSession=path=>{currentPath=path;window.setTranscript()};
+Object.defineProperty(navigator,'clipboard',{value:{writeText:async text=>{window.copiedText=text}},configurable:true});
+window.setTranscript=(kind='full')=>{window.store.applySnapshot({sessionPath:currentPath,sessionId:'fixture',cwd:'/tmp',projectless:false,model:null,thinkingLevel:'off',isStreaming:false,eventSequence:++sequence,plan:window.plan,messages:kind==='full'?full:[{role:'compactionSummary',summary:'Older investigation',tokensBefore:100,timestamp:3000},{role:'user',content:'Later conversation',timestamp:4000}]})};
 const cards=new URLSearchParams(location.search).has('cards');
 if(cards){window.plan={...window.plan,mode:'plan',effectiveSandboxMode:'read-only',planId:'p1',latest:window.reference};window.setTranscript()}
 function App(){const [plan,setPlan]=React.useState(window.plan);const [busy,setBusy]=React.useState(false);window.setBusy=setBusy; window.setPlan=p=>{window.plan=p;setPlan(p);window.store.dispatch({type:'plan_state_update',sessionPath:'/fixture.jsonl',plan:p})};
@@ -94,11 +96,30 @@ try {
       }
     }
   }
+  for (const locale of ['en', 'zh-CN']) {
+    await page.goto(url + '?locale=' + locale + '&cards=1')
+    const card = page.locator('[data-plan-card="s1"]')
+    await card.getByText('Reviewable plan', { exact: true }).waitFor()
+    for (const corners of ['square', 'squircle']) for (const dark of [false, true]) {
+      await page.evaluate(({ corners, dark }) => { document.documentElement.dataset.corners = corners; document.documentElement.classList.toggle('dark', dark) }, { corners, dark })
+      // Let the real theme transition finish before retaining visual evidence.
+      await page.waitForTimeout(250)
+      const bounds = await card.boundingBox()
+      assert(bounds && bounds.width > 600 && bounds.height > 150)
+      assert.equal(await card.getByRole('button', { name: locale === 'en' ? 'Start execution' : '开始执行', exact: true }).isEnabled(), true)
+      if (process.env.PI_PLAN_SCREENSHOT_DIR) await page.screenshot({ path: join(process.env.PI_PLAN_SCREENSHOT_DIR, `card-${locale}-${corners}-${dark ? 'dark' : 'light'}.png`) })
+    }
+  }
   await page.goto(url + '?locale=en&cards=1')
   const card = page.locator('[data-plan-card="s1"]')
   await card.getByText('Reviewable plan', { exact: true }).waitFor()
   assert.equal(await card.count(), 1)
   assert.equal(await card.isVisible(), true, 'a prose-free submission was hidden inside the process fold')
+  await card.getByRole('button', { name: 'Copy', exact: true }).click()
+  await page.waitForFunction(() => window.copiedText?.includes('1. Inspect the repository.'))
+  await page.evaluate(() => window.setPlan({ ...window.plan, seq: 10, blockers: { ...window.plan.blockers, approve: ['deliveries'] } }))
+  assert.equal(await card.getByRole('button', { name: 'Start execution' }).isEnabled(), false)
+  await page.evaluate(() => window.setPlan({ ...window.plan, seq: 11, blockers: { ...window.plan.blockers, approve: [] } }))
   await card.getByRole('button', { name: 'Revise plan' }).click()
   assert.equal(await page.evaluate(() => window.refines), 1)
   assert.equal(await page.locator('textarea').inputValue(), '')
@@ -116,6 +137,20 @@ try {
   await page.evaluate(() => window.setPlan({ ...window.plan, seq: 20, mode: 'normal', effectiveSandboxMode: 'workspace-write' }))
   await page.waitForFunction(() => ![...document.querySelectorAll('[data-plan-card] button')].some(b => b.textContent.includes('Start execution')))
   if (process.env.PI_PLAN_SCREENSHOT_DIR) await page.screenshot({path:join(process.env.PI_PLAN_SCREENSHOT_DIR,'plan-card.png')})
+  // A late failure from the prior session may not replace the current document.
+  await page.evaluate(() => {
+    const read = window.pi.readPlanDocument;
+    window.pi.readPlanDocument = request => request.sessionPath === '/slow.jsonl'
+      ? new Promise(resolve => { window.finishSlow = resolve }) : read(request);
+    window.switchSession('/slow.jsonl');
+  })
+  await page.waitForFunction(() => !!window.finishSlow)
+  await page.evaluate(() => window.switchSession('/fast.jsonl'))
+  await card.getByText('Reviewable plan', { exact: true }).waitFor()
+  await page.evaluate(() => window.finishSlow({ ok: false, code: 'storage', blockers: ['storage'] }))
+  await page.evaluate(() => new Promise(requestAnimationFrame))
+  assert.equal(await card.getByRole('alert').count(), 0)
   assert.deepEqual(errors, [])
   console.log('PASS: Plan picker, read-only permissions, drafts, slash interception, locales, style/theme matrix and plan card/recovery actions')
 } finally { await app?.close(); await server?.close(); await rm(temporary, { recursive: true, force: true }) }
+await (await import('./lib/check-plan-ipc.mjs')).checkPlanIpc()
