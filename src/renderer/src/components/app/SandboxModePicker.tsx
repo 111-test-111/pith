@@ -57,12 +57,14 @@ export function SandboxModePicker({
   status,
   sessionPath,
   disabled,
+  planRestricted,
   onSnapshot
 }: {
   mode: SandboxMode
   status: SandboxStatusDTO | null
   sessionPath: string | null
   disabled?: boolean
+  planRestricted?: boolean
   onSnapshot: (snapshot: SessionSnapshotDTO) => void
 }) {
   const { t } = useI18n()
@@ -84,7 +86,7 @@ export function SandboxModePicker({
     <Select
       value={mode}
       onValueChange={switchMode}
-      disabled={disabled || !sessionPath}
+      disabled={disabled || planRestricted || !sessionPath}
       className="w-auto"
     >
       <SelectTrigger

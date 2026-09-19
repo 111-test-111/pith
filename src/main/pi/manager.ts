@@ -2680,7 +2680,13 @@ export class PiManager {
    * Send a prompt. Image attachments go straight to the model; referenced
    * local files are read here and inlined as `<file path>` blocks.
    */
-  prompt(payload: PromptPayload): void {
+  prompt(payload: PromptPayload): void | Promise<PlanActionResult<PlanStateDTO>> {
+    if (payload.text.trim() === '/plan') {
+      if (payload.images.length || payload.files.length) return Promise.resolve({ ok: false, code: 'plan-command-attachments', blockers: [] })
+      const target = this.activeSession
+      if (!target) return Promise.resolve({ ok: false, code: 'no-session', blockers: [] })
+      return this.setSessionMode({ sessionPath: target.path, mode: target.plan.snapshot.mode === 'plan' ? 'normal' : 'plan' })
+    }
     const managed = this.activeSession
     const session = managed?.session
     if (this.closing || managed?.disposing) return

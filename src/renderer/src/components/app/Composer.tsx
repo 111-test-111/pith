@@ -20,6 +20,7 @@ import {
 } from '@/lib/streaming-behavior'
 import type {
   ContextUsageDTO,
+  PlanStateDTO, SessionMode,
   FileHitDTO,
   ImageContent,
   ModelDTO,
@@ -31,6 +32,8 @@ import { DEFAULT_SANDBOX_MODE, type SandboxMode, type SandboxStatusDTO, type Ses
 import { FileMention, type MentionState } from './FileMention'
 import { PreviewThumb } from './ImagePreview'
 import { ModelPicker } from './ModelPicker'
+import { SessionModePicker } from './SessionModePicker'
+import { parsePlanCommand, planErrorKey } from '@/lib/plan-submissions'
 import { SandboxModePicker } from './SandboxModePicker'
 import { ContextRing } from './ContextRing'
 import { QueuePanel } from './QueuePanel'
@@ -79,6 +82,8 @@ interface ComposerProps {
    * rail exists, which leaves the ring a plain readout. */
   onOpenContext?: () => void
   /** This session's DSH file-sandbox mode, and what the host can enforce. */
+  plan?: PlanStateDTO | null
+  onPlanState?: (path: string, state: PlanStateDTO) => void
   sandboxMode?: SandboxMode
   sandbox?: SandboxStatusDTO | null
   sessionPath?: string | null
@@ -128,6 +133,8 @@ export function Composer({
   escapeStopsRun = true,
   contextUsage,
   onOpenContext,
+  plan = null,
+  onPlanState,
   sandboxMode = DEFAULT_SANDBOX_MODE,
   sandbox = null,
   sessionPath = null,
@@ -141,6 +148,25 @@ export function Composer({
   appendDraft = null
 }: ComposerProps) {
   const { t } = useI18n()
+  const [modePending, setModePending] = useState(false)
+  const [modeError, setModeError] = useState<string | null>(null)
+  const currentPath = useRef(sessionPath)
+  currentPath.current = sessionPath
+  useEffect(() => { setModeError(null); setModePending(false) }, [sessionPath])
+  const changeMode = async (mode: SessionMode): Promise<boolean> => {
+    if (!sessionPath || modePending) return false
+    const blocked = initializing ? 'initializing' : readOnly ? 'child-session' : busy ? 'busy' : plan?.blockers.switch[0]
+    if (blocked) { setModeError(blocked); return false }
+    setModePending(true); setModeError(null)
+    try {
+      const result = await window.pi.setSessionMode({ sessionPath, mode })
+      if (result.ok) onPlanState?.(sessionPath, result.value)
+      if (currentPath.current !== sessionPath) return false
+      if (!result.ok) { setModeError(result.code); return false }
+      return true
+    } catch { if (currentPath.current === sessionPath) setModeError('unknown'); return false }
+    finally { if (currentPath.current === sessionPath) setModePending(false) }
+  }
   const [behavior] = useStreamingBehavior()
   const [value, setValue] = useState('')
   const [images, setImages] = useState<ImageAttachment[]>([])
@@ -243,8 +269,15 @@ export function Composer({
   /** Send when idle; queue against the running turn when busy. The behavior
    * override is how Cmd/Ctrl+Enter submits the inverse of the preference. */
   const dispatch = (sendBehavior: StreamingBehavior) => {
-    if (initializing || readOnly) return
     const text = value.trim()
+    if (parsePlanCommand(text)) {
+      if (images.length || files.length) { setModeError('plan-command-attachments'); return }
+      void changeMode(plan?.mode === 'plan' ? 'normal' : 'plan').then(changed => {
+        if (changed) setValue(current => parsePlanCommand(current) ? '' : current)
+      })
+      return
+    }
+    if (initializing || readOnly) return
     if (!text && !images.length && !files.length) return
     const payload = {
       text,
@@ -482,6 +515,8 @@ export function Composer({
             onRecall={() => void handleRecall()}
           />
 
+          {modeError && <p role="alert" className="mb-2 text-xs text-destructive">{t(planErrorKey(modeError))}</p>}
+          {plan?.mode === 'plan' && plan.shellEnforcement !== 'full' && <p className="mb-2 text-xs text-muted-foreground">{t('plan.shellUnavailable')}</p>}
           {/* A disabled composer with no explanation reads as a bug: an opened
               subagent child says why, and where the work actually continues. */}
           {readOnly ? (
@@ -593,11 +628,13 @@ export function Composer({
                   {/* The sandbox mode sits with the send cluster, left of the
                       context ring: it is the permission the next submitted turn
                       runs under. */}
+                  <SessionModePicker state={plan} disabled={busy || initializing || readOnly || modePending || !sessionPath} onChange={mode => void changeMode(mode)} />
                   <SandboxModePicker
-                    mode={sandboxMode}
+                    mode={plan?.effectiveSandboxMode ?? sandboxMode}
                     status={sandbox}
                     sessionPath={sessionPath}
                     disabled={busy || initializing || readOnly}
+                    planRestricted={plan?.mode === 'plan'}
                     onSnapshot={(snapshot) => onSandboxSnapshot?.(snapshot)}
                   />
                   {initializing ? (

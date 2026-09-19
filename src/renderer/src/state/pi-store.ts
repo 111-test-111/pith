@@ -4,6 +4,7 @@ import type {
   ContextUsageDTO,
   ModelRefDTO,
   PiEvent,
+  PlanStateDTO,
   RewindErrorDTO,
   QueuedItemDTO,
   SessionSnapshotDTO,
@@ -54,6 +55,7 @@ export interface PiState {
   model: ModelRefDTO | null
   thinkingLevel: ThinkingLevel
   /** This session's DSH file-sandbox mode, folded from its own branch. */
+  plan: PlanStateDTO | null
   sandboxMode: SandboxMode
   /** What the host can enforce for that mode right now. */
   sandbox: SandboxStatusDTO | null
@@ -100,6 +102,7 @@ export interface PiShellState {
   /** Levels the current model supports; cycles through these only. */
   availableThinkingLevels: ThinkingLevel[]
   /** This session's DSH file-sandbox mode and what the host can enforce. */
+  plan: PlanStateDTO | null
   sandboxMode: SandboxMode
   sandbox: SandboxStatusDTO | null
   /** Pending escalation questions for this session, oldest first. */
@@ -193,6 +196,7 @@ const initialState: PiState = {
   sessionPath: null,
   model: null,
   thinkingLevel: 'medium',
+  plan: null,
   sandboxMode: DEFAULT_SANDBOX_MODE,
   sandbox: null,
   escalations: [],
@@ -217,6 +221,7 @@ function shellOf(state: PiState, availableThinkingLevels: ThinkingLevel[]): PiSh
     model: state.model,
     thinkingLevel: state.thinkingLevel,
     availableThinkingLevels,
+    plan: state.plan,
     sandboxMode: state.sandboxMode,
     sandbox: state.sandbox,
     escalations: state.escalations,
@@ -273,6 +278,14 @@ export class PiStore {
   private sessionStates = new Map<string, PiState>()
   /** Events may beat an openSession IPC response; retain them without
    * rendering and replay only those newer than the returned snapshot. */
+  private planStates = new Map<string, PlanStateDTO>()
+  private mergePlanState(path: string | null, next?: PlanStateDTO | null): PlanStateDTO | null {
+    if (!path) return null
+    const previous = this.planStates.get(path)
+    const merged = next && (!previous || next.seq > previous.seq) ? next : previous
+    if (merged) this.planStates.set(path, merged)
+    return merged ?? null
+  }
   private pendingEvents = new Map<string, PiEvent[]>()
 
   getState = (): PiState => this.state
@@ -307,12 +320,13 @@ export class PiStore {
 
   applySnapshot(snapshot: SessionSnapshotDTO): void {
     const sessionPath = snapshot.sessionPath ?? null
+    const plan = this.mergePlanState(sessionPath, snapshot.plan)
     const previousCached = sessionPath ? this.sessionStates.get(sessionPath) : undefined
     const snapshotSequence = snapshot.eventSequence ?? 0
     // Roster revisions are independent of transcript revisions, and belong
     // only to this session. Never merge the outgoing chat into an incoming one.
     const subagents = mergeRoster(previousCached?.subagents ?? [], snapshot.subagents ?? [])
-    const cached = previousCached ? { ...previousCached, subagents } : undefined
+    const cached = previousCached ? { ...previousCached, subagents, plan } : undefined
     if (cached) this.sessionStates.set(sessionPath!, cached)
     // A readiness/event push can overtake an IPC snapshot of a cached session.
     // Keep the newer projection (including its sequence), then replay any
@@ -344,6 +358,7 @@ export class PiStore {
       // The mode is a fact about the session, not about this render: an
       // unchanged snapshot still carries the newest value, and a session that
       // never recorded one keeps what we last saw.
+      plan,
       sandboxMode: snapshot.sandboxMode ?? cached?.sandboxMode ?? DEFAULT_SANDBOX_MODE,
       sandbox: snapshot.sandbox ?? cached?.sandbox ?? null,
       isStreaming: snapshot.isStreaming,
@@ -451,8 +466,8 @@ export class PiStore {
     const cached = this.sessionStates.get(sessionPath)
     if (!cached) return false
     const prev = this.state
-    this.state = cached
-    this.shellState = shellOf(cached, this.availableThinkingLevels)
+    this.state = { ...cached, plan: this.mergePlanState(sessionPath, cached.plan) }
+    this.shellState = shellOf(this.state, this.availableThinkingLevels)
     for (const listener of this.listeners) listener()
 
     const pending = this.pendingEvents.get(sessionPath) ?? []
@@ -475,6 +490,13 @@ export class PiStore {
   }
 
   dispatch(event: PiEvent): void {
+    if (event.type === 'plan_state_update' && event.sessionPath && event.plan) {
+      const plan = this.mergePlanState(event.sessionPath, event.plan)
+      const cached = this.sessionStates.get(event.sessionPath)
+      if (cached) this.sessionStates.set(event.sessionPath, { ...cached, plan })
+      if (event.sessionPath === this.state.sessionPath && plan !== this.state.plan) this.set({ plan })
+      return
+    }
     // Events from background sessions are intentionally retained by the main
     // process, but only the visible session is allowed to update this view.
     if (event.sessionPath && event.sessionPath !== this.state.sessionPath) {

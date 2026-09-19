@@ -1718,4 +1718,5 @@ console.log('PASS: Plan gate preserves the normal base across a lazy registratio
 await rm(temporary, { recursive: true, force: true })
 await (await import('./lib/check-plan-submission.mjs')).checkPlanSubmission()
 await (await import('./lib/check-plan-approval.mjs')).checkPlanApproval()
+await (await import('./lib/check-plan-state.mjs')).checkPlanState()
 console.log('PASS: all plan-mode checks')

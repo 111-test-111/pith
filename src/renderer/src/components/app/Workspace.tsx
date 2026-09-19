@@ -1594,6 +1594,8 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
               readOnlyParentPath={shell.subagentParentPath}
               onOpenSession={(path) => void openSession(path)}
               escapeStopsRun={!settingsOpen && !authPrompt}
+              plan={shell.plan}
+              onPlanState={(path, plan) => store.dispatch({ type: 'plan_state_update', sessionPath: path, plan })}
               sandboxMode={shell.sandboxMode}
               sandbox={shell.sandbox}
               sessionPath={shell.sessionPath}

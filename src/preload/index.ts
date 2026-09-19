@@ -12,6 +12,7 @@ import type { RewindPatchDTO, RewindStatsDTO, RewindStatsTargetDTO } from '../sh
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type {
   AppInfoDTO,
+  PlanModeRequest, PlanDocumentRequest, PlanStateDTO, PlanDocumentDTO, PlanApprovalDTO, PlanActionResult,
   BrowserImportDiscoveryDTO,
   BrowserImportResultDTO,
   BrowserImportStatusDTO,
@@ -120,6 +121,11 @@ const api = {
     ipcRenderer.invoke('app:setAskUserTimeoutSeconds', value),
   setSandboxMode: (mode: SandboxMode): Promise<SandboxMode> => ipcRenderer.invoke('app:setSandboxMode', mode),
   /** Change one session's mode; resolves with that session's fresh snapshot. */
+  setSessionMode: (request: PlanModeRequest): Promise<PlanActionResult<PlanStateDTO>> => ipcRenderer.invoke('plan:setMode', request),
+  getPlanState: (path: string): Promise<PlanStateDTO> => ipcRenderer.invoke('plan:state', path),
+  readPlanDocument: (request: PlanDocumentRequest): Promise<PlanActionResult<PlanDocumentDTO>> => ipcRenderer.invoke('plan:document', request),
+  approvePlan: (request: PlanDocumentRequest): Promise<PlanActionResult<PlanApprovalDTO>> => ipcRenderer.invoke('plan:approve', request),
+  resetPlanApproval: (request: PlanDocumentRequest): Promise<PlanActionResult<PlanStateDTO>> => ipcRenderer.invoke('plan:resetApproval', request),
   setSessionSandboxMode: (sessionPath: string, mode: SandboxMode): Promise<SessionSnapshotDTO> =>
     ipcRenderer.invoke('sandbox:setMode', sessionPath, mode),
   /** Compact one session's context on demand (the CLI's `/compact`). */
