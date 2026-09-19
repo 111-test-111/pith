@@ -19,14 +19,15 @@ The square look stays the current branch's look; the squircle look is a *restore
 
 **Goals**
 
-- A user-selectable UI style covering radius scale, capsule-by-design affordances, and the icon pack.
+- A user-selectable UI style covering radius scale, capsule-by-design affordances, selection-control marks, and the icon pack.
 - A mechanism that does not fork every call site: a geometry change must be a token/preset change, as it already is.
 - Both styles pinned by the existing checks, so neither rots.
 - Fix the geometry-policy debt that a second preset would otherwise encode: literal radii in `pdf-viewer.css`, and `guard()`'s blind spot for CSS-form literals.
 
 **Non-goals (explicit)**
 
-- Restoring the vendored `Switch`, or reverting the selection controls' identity (square mark, 14px box, hard-edged radios). Those came from `aede034`, *after* the squaring commit, and stay the same in both styles for now. If the squircle style should also restore the 20px check mark and `Switch`, that is a separate follow-up — the token design below does not preclude it.
+- Restoring the vendored `Switch`: every on/off control stays the `mark`-based checkbox in both styles (there are zero `Switch` call sites).
+- Restoring the vendored 20px box with the 9px check glyph. **Owner decision:** the squircle mark is a *fully circular point*, not the check glyph, and the square style keeps its square point (see §4.4).
 - Per-project or per-session style.
 - The native window's own corner radius (`roundedCorners`) — untouched.
 - `components/previews/**` (not shipped).
@@ -93,7 +94,7 @@ New utility next to `rounded-full` (`styles.css:288`), with the same `!important
 Two rules, and they are the whole policy:
 
 - `rounded-full` = **always** a true circle (status/legend dots, activity indicators, loader artwork, ripples, favicon avatars).
-- `rounded-capsule` = **the shape follows the style** (avatars, icon-size controls, chips, badges, pill tabs, attachment/remove badges).
+- `rounded-capsule` = **the shape follows the style** (avatars, icon-size controls, chips, badges, pill tabs, attachment/remove badges, and the selection-control marks in §4.4).
 
 ### 4.3 The three classes of de-capsuled surfaces
 
@@ -128,7 +129,24 @@ Every site must be re-read from the **current** file before editing, not from th
 
 **Class C — icon import source only, geometry untouched (5 files):** `motion/adaptive-stepper.tsx`, `motion/command-palette.tsx`, `motion/context-menu.tsx`, `motion/multi-select/list.tsx`, `motion/multi-select/trigger.tsx`.
 
-### 4.4 Literal radii in `pdf-viewer.css`
+### 4.4 Selection-control marks
+
+**Owner decision (asked and answered):** the circular point is **only** for the squircle style; the square style keeps today's square point.
+
+So the on-state point joins the style dimension through the same token, with no per-style conditionals:
+
+| Site | Today | After |
+| --- | --- | --- |
+| `motion/checkbox.tsx:99` — the `mark="square"` point | `className="size-1.5 bg-primary"` (no radius class, deliberately) | `className="size-1.5 rounded-capsule bg-primary"` |
+| `motion/radio.tsx:140` — the radio point | `className="size-1.5 rounded-control bg-primary"` | `className="size-1.5 rounded-capsule bg-primary"` |
+
+Consequences to verify on the screenshot pass rather than assume:
+
+- **The frames are a separate question.** Both controls' boxes are `size-3.5` (14px) with `rounded-control`; under the squircle preset `--app-radius-control` is 14px, which on a 14×14 box renders a **full circle** — so the squircle checkbox becomes a circle-frame-with-dot and the radio likewise. That is not a restoration (the pre-square control was a 20px box with a 10px radius, a *rounded square*), so the screenshot pass decides explicitly between (a) accepting the circle and (b) pinning the frames to `rounded-inner`/`rounded-item` so they stay rounded squares. Record the outcome in the plan's follow-up notes; do not let it happen silently.
+- **`data-checkbox-square` becomes a lie in one style.** It is currently the check's hook for the mark. Rename it to `data-checkbox-mark` and update every reference (`check-corners.mjs`, `check-tools-settings`-family checks, `check-ask-user-ui`) in the same commit, so the hook stops naming a shape.
+- The square style must remain pixel-identical: `rounded-capsule` is `0px` there, which is exactly what "no radius class" and `rounded-control` resolve to today.
+
+### 4.5 Literal radii in `pdf-viewer.css`
 
 `pdf-viewer.css` is the only CSS in the app with literal radii and it is also invisible to `guard()`:
 
@@ -136,7 +154,7 @@ Every site must be re-read from the **current** file before editing, not from th
 - Leave the two `border-radius:50%` rules (PDF radio widgets, 353/432): those draw a *document's* form control, not app chrome.
 - Extend `guard()` in `check-corners.mjs` to also reject CSS-form literals (`border-radius:\s*[1-9]`), which is what let these survive in the first place.
 
-### 4.5 State and wiring
+### 4.6 State and wiring
 
 New `src/renderer/src/lib/ui-style.ts`, modelled on `lib/sidebar-glass.ts` (subscribable store + localStorage, lazily initialized so import never touches storage):
 
@@ -158,7 +176,7 @@ Wiring, mirroring accent exactly:
 - The icon pack additionally needs to reach every glyph in the tree (Welcome/boot phase included, portals included), so `App.tsx` wraps its subtree in an `IconPackProvider` fed by the same store — see §5.3. Prop-drilling is deliberately not used for that half.
 - `Workspace` → `SettingsPage` → `AppearanceSection` receive `uiStyle`/`onUiStyleChange` the same way `accent` does (`App.tsx:113`, `Workspace.tsx:126/169`, `SettingsPage.tsx:23/59`).
 
-### 4.6 Settings UI and i18n
+### 4.7 Settings UI and i18n
 
 A new `SettingsGroup` in `AppearanceSection`, using the same control family the theme/locale rows use (`RadioGroup` + `RadioGroupItem`, hard-edged per the corner policy), two options:
 
@@ -218,7 +236,7 @@ Two icon packs in the renderer bundle is the one real unknown, and HugeIcons' fr
 
 Both styles must be pinned, or the style nobody uses rots. Per repo convention, in addition to `npm run typecheck && npm run build`:
 
-- **`check-corners.mjs`** — parameterize over both presets: square asserts `0px` everywhere in the scale, squircle asserts the recovered values on the same selectors; the existing live-token, portal, animation-frame, geometry and a11y assertions run under both; the selection-control hard-edge assertion holds in both (they are `rounded-control`, not capsule). Add a `rounded-capsule` assertion per preset (square → 0px, squircle → capsule). Extend `guard()` per §4.4.
+- **`check-corners.mjs`** — parameterize over both presets: square asserts `0px` everywhere in the scale, squircle asserts the recovered values on the same selectors; the existing live-token, portal, animation-frame, geometry and a11y assertions run under both; the selection-control hard-edge assertion holds in both (they are `rounded-control`, not capsule). Add a `rounded-capsule` assertion per preset (square → 0px, squircle → capsule) over a capsule site (the composer send control is the natural one) **and** over the selection marks of §4.4 (square style → `0px`, squircle → a point whose radius is half its box; the frame's geometry is asserted separately once §4.4's screenshot decision is made). Extend `guard()` per §4.5.
 - **`check-icons.mjs`** — remove the two `@hugeicons` assertions; assert **every** export renders in **both** packs (24×24, real geometry, no `NaN`, decorative/labelled a11y, ref forwarding), that stroke props are dropped for Remix and applied for HugeIcons, and that switching the pack flips the rendered artwork live.
 - **Shared-path regressions** required by AGENTS.md whenever global geometry changes: `check-window-chrome.mjs`, `check-bash-task-ui.mjs`, `check-written-file-preview.mjs`, `check-terminal.mjs`, plus `check-usage-heatmap.mjs` (the activity cells are Class A).
 - **Docs, in the same change:** `AGENTS.md`'s corner-scale paragraph (`:38`) and `README.md:19` are already stale against the square values; rewrite them to describe the preset model, the `rounded-capsule` rule, and the icon-pack switch. `check-icons`' "no HugeIcons" guard is removed *because* the owner overturned it, and that reasoning belongs in `AGENTS.md` so nobody restores the guard by reflex.
@@ -238,8 +256,8 @@ Both styles must be pinned, or the style nobody uses rots. Per repo convention, 
 
 Steps 1–3 (the geometry half) are independently shippable and independently verifiable. If step 4's bundle measurement in §5.6 fails, the style preset still lands with the square style's icon pack in both modes — the feature degrades, it does not block.
 
-1. `refactor(geometry): rounded-capsule token + Class A/C call sites` — pixel-identical in the default style; checks still green.
+1. `refactor(geometry): rounded-capsule token + Class A call sites` — pixel-identical in the default style; checks still green.
 2. `feat(settings): uiStyle preference (data-corners preset + Appearance row + i18n)` — squircle reachable for the first time; screenshots.
-3. `test(corners): parameterize check-corners over both presets; guard() covers CSS literals; pdf-viewer literal radii mapped`.
+3. `feat(controls): selection marks follow the style (circular point in squircle only)` + `test(corners): guard() covers CSS literals; pdf-viewer literal radii mapped`.
 4. `feat(icons): two-pack adapter + HugeIcons mapping + animated marks` — includes the bundle measurement and the `lucide-react` removal.
 5. `test(icons): both packs asserted; @hugeicons guard removed` + `docs: AGENTS.md/README geometry rewrite`.
