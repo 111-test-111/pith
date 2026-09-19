@@ -114,7 +114,7 @@ Two rules, and they are the whole policy:
 | `app/EditMessageDialog.tsx` | size-5 remove badge, size-4 dismiss |
 | `app/settings/AppearanceSection.tsx` | size-8 accent swatch |
 | `app/settings/ExtensionsSection.tsx` | size-4 remove control |
-| `app/settings/usage/TokenActivityPanel.tsx` | activity cell, tooltip wrapper |
+| `app/settings/usage/TokenActivityPanel.tsx` | **stale entry — do not use.** Its radius classes moved to the vendored `charts/heat-calendar/grid.tsx` in `5c66d8f`, and the file carries no radius class at all now |
 | `motion/animated-badge.tsx` | badge capsule + inner `rounded-inherit` |
 | `motion/animated-toast-stack.tsx` | icon tile, action pill, dismiss |
 | `motion/button/metallic.tsx` | `size === 'icon'` |
@@ -124,6 +124,8 @@ Two rules, and they are the whole policy:
 The vendored files keep their `// local patch (pi-app):` markers, updated to say the shape now comes from the preset.
 
 Every site must be re-read from the **current** file before editing, not from the diff: later commits have touched several of these files.
+
+**Pinned during execution:** the activity cells' live site is `charts/heat-calendar/grid.tsx` (cell hit area + cell visual), not the `TokenActivityPanel.tsx` row above. Evidence for the shape choice: at `397f6ed^` the panel's OWN cells were `rounded-full` — circles were the live squircle look — while the vendored grid has carried `rounded-detail` since it landed. So `rounded-capsule` restores the panel's own pre-square look; 4px squares in the squircle style stay a one-word alternative if they read better with data on screen.
 
 **Class B — already preset-correct, no change (2 files):** `agents/ai-sidebar.tsx` (2px drop strips) and `motion/loader.tsx` (progress bar). `rounded-detail` and a full circle clamp to the same 1–2px on a 1–2px-tall element, so these two read identically in both styles.
 
