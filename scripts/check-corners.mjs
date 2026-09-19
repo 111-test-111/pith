@@ -66,9 +66,15 @@ import {StreamingResponse} from '/src/components/agents/streaming-response.tsx';
 import {Markdown} from '/src/lib/markdown.tsx';
 import {TurnWrittenFiles} from '/src/components/app/TurnWrittenFiles.tsx';
 import {I18nProvider} from '/src/i18n/index.tsx';
+import {setUiStyle} from '/src/lib/ui-style.ts';
 import {synthesizeWritePatch} from '/src/lib/diff.ts';
 import '/src/styles.css';
 const h=React.createElement;
+// The checkbox's mark is chosen from the STORE (useUiStyle), not from
+// data-corners, so the preset sweep must drive the store — writing the attribute
+// directly would turn the frame into a circle while React kept drawing the
+// square style's point.
+window.setUiStyle=setUiStyle;
 const file={filePath:'/fixture/theme.ts',displayPath:'src/theme.ts',added:2,patch:synthesizeWritePatch('theme.ts','export const appearance = "continuous";\\nexport const nativeCorners = true;')};
 function Fixture(){
  const [modal,setModal]=React.useState(false),[popover,setPopover]=React.useState(false),[instant,setInstant]=React.useState(false);
@@ -254,7 +260,7 @@ app.on('window-all-closed',()=>app.quit());`)
         squircle: { detail: '4px', inner: '10px', item: '14px', card: '20px', window: '28px', capsule: '9999px' }
       }
       for (const [preset, expected] of Object.entries(CORNER_PRESETS)) {
-        await evaluate(`document.documentElement.dataset.corners = ${JSON.stringify(preset)}`)
+        await evaluate(`window.setUiStyle(${JSON.stringify(preset)})`)
         await pause(150)
         for (const [token, value] of Object.entries(expected)) {
           assert.equal(
@@ -269,49 +275,56 @@ app.on('window-all-closed',()=>app.quit());`)
           preset + ': the capsule site ' + (preset === 'square' ? 'stays a right angle' : 'is a full capsule') + ' (got ' + sendRadius + ')'
         )
         assert.equal(await style('[aria-label="Send prompt"]', 'corner-shape'), 'superellipse(1)', preset + ': the capsule keeps a round corner shape')
-        // Selection controls, pinned per preset. The frames stay on the radius
-        // scale and their on-state marks are capsule-by-design: a square point
-        // in the square style, a fully circular point in the squircle style.
-        // The checkbox frame is deliberately on the DETAIL step and NOT on the
-        // control step — 14px on this 14px box would turn the frame into a full
-        // circle, which is the radio's shape, so the two controls would read
-        // the same. `#point-checkbox` is the fixture's point-select control
-        // (`mark="square"`), targeted by id so a `mark="check"` box could
-        // never satisfy the assertion silently.
+        // Selection controls, pinned per preset. Both frames take the CONTROL
+        // step: hard-edged in the square style, a full circle in the squircle
+        // style (the control step is 14px on this 14px box). The MARK is what
+        // keeps the two controls tellable apart there — the checkbox draws the
+        // check glyph, the radio keeps its dot. `#point-checkbox` is the
+        // fixture's point-select control (`mark="square"`), targeted by id so a
+        // `mark="check"` box could never satisfy the assertion silently.
         const boxOf = selector => evaluate('(()=>{const r=document.querySelector(' + JSON.stringify(selector) + ').getBoundingClientRect();return Math.min(r.width,r.height)})()')
+        const radiusOf = selector => style(selector, 'border-top-left-radius').then(parseFloat)
         const checkboxBox = await boxOf('#point-checkbox')
-        const checkboxFrameRadius = parseFloat(await style('#point-checkbox', 'border-top-left-radius'))
+        const checkboxFrameRadius = await radiusOf('#point-checkbox')
         assert.equal(checkboxBox, 14, preset + ': the point-select checkbox keeps its text-sized 14px frame')
         assert.equal(await style('#point-checkbox', 'corner-shape'), 'superellipse(2)', preset + ': continuous checkbox frame')
         assert.ok(
-          preset === 'square' ? checkboxFrameRadius === 0 : checkboxFrameRadius >= 4 && checkboxFrameRadius < checkboxBox / 2,
-          preset + ': the checkbox frame stays a rounded SQUARE, never a circle (radius ' + checkboxFrameRadius + ', box ' + checkboxBox + ')'
+          preset === 'square' ? checkboxFrameRadius === 0 : checkboxFrameRadius >= checkboxBox / 2,
+          preset + ': the checkbox frame is ' + (preset === 'square' ? 'a right angle' : 'a circle') + ' (radius ' + checkboxFrameRadius + ', box ' + checkboxBox + ')'
         )
         const radioBox = await boxOf('[role="radio"]')
-        const radioFrameRadius = parseFloat(await style('[role="radio"]', 'border-top-left-radius'))
+        const radioFrameRadius = await radiusOf('[role="radio"]')
         assert.equal(await style('[role="radio"]', 'corner-shape'), 'superellipse(2)', preset + ': continuous radio frame')
         assert.ok(
           preset === 'square' ? radioFrameRadius === 0 : radioFrameRadius >= radioBox / 2,
           preset + ': the radio frame is a circle in the squircle style (radius ' + radioFrameRadius + ', box ' + radioBox + ')'
         )
-        for (const markSelector of ['[data-checkbox-mark]', '[role="radio"] > span']) {
-          const markBox = await boxOf(markSelector)
-          const markRadius = parseFloat(await style(markSelector, 'border-top-left-radius'))
-          assert.equal(await style(markSelector, 'corner-shape'), 'superellipse(1)', preset + ': the selection mark carries the round corner shape (' + markSelector + ')')
-          assert.ok(
-            preset === 'square' ? markRadius === 0 : markRadius >= markBox / 2,
-            preset + ': ' + markSelector + ' is ' + (preset === 'square' ? 'a square point' : 'a fully circular point') + ' (radius ' + markRadius + ', box ' + markBox + ')'
-          )
-        }
-        // The invariant this task exists to protect: in the squircle style a
-        // checkbox must stay tellable apart from the radio beside it.
+        // The two marks: the radio's dot is a `<span>` in both styles; the
+        // checkbox's mark is the point (`<span>`) in the square style and the
+        // check glyph (`<svg>` carrying a drawn `<path>`) in the squircle style.
+        const checkboxMark = await evaluate('(()=>{const m=document.querySelector("[data-checkbox-mark]"),r=m.getBoundingClientRect();return {tag:m.tagName.toLowerCase(),radius:parseFloat(getComputedStyle(m).borderTopLeftRadius),box:Math.min(r.width,r.height),paths:m.tagName.toLowerCase()==="svg"?[...m.querySelectorAll("path")].filter(p=>(p.getAttribute("d")||"").trim()).length:0}})()')
+        const radioMarkSelector = '[role="radio"] > span'
+        const radioMark = await evaluate('(()=>{const m=document.querySelector(' + JSON.stringify(radioMarkSelector) + '),r=m.getBoundingClientRect();return {tag:m.tagName.toLowerCase(),radius:parseFloat(getComputedStyle(m).borderTopLeftRadius),box:Math.min(r.width,r.height)}})()')
+        assert.equal(radioMark.tag, 'span', preset + ': the radio mark is its dot')
+        assert.equal(await style('[role="radio"] > span', 'corner-shape'), 'superellipse(1)', preset + ': the radio mark carries the round corner shape')
         assert.ok(
-          preset !== 'squircle' || checkboxFrameRadius < radioFrameRadius,
-          preset + ': the checkbox frame must stay distinguishable from the radio frame — checkbox radius ' + checkboxFrameRadius + ' must be strictly smaller than radio radius ' + radioFrameRadius
+          preset === 'square' ? radioMark.radius === 0 : radioMark.radius >= radioMark.box / 2,
+          preset + ': the radio mark is ' + (preset === 'square' ? 'a square point' : 'a fully circular point') + ' (radius ' + radioMark.radius + ', box ' + radioMark.box + ')'
+        )
+        // The square style is unchanged: the checkbox mark is still the point.
+        if (preset === 'square') {
+          assert.equal(checkboxMark.tag, 'span', 'square: the point-select checkbox draws the point')
+          assert.equal(checkboxMark.radius, 0, 'square: the point stays a right angle')
+        }
+        // The invariant this change exists to protect, in ONE assertion: the
+        // checkbox and the radio must stay tellable apart by the mark they draw.
+        assert.ok(
+          preset !== 'squircle' || (checkboxMark.tag === 'svg' && checkboxMark.paths >= 1 && radioMark.tag === 'span'),
+          preset + ': the checkbox and the radio must stay distinguishable by their mark — in the squircle style the checkbox mark must be the check glyph (svg + non-empty path) while the radio mark must stay the dot (span); got checkbox <' + checkboxMark.tag + '> with ' + checkboxMark.paths + ' drawn path(s) and radio <' + radioMark.tag + '>'
         )
         await screenshot(`${theme}-${reduced ? 'reduced' : 'motion'}-${preset}-gallery`)
       }
-      await evaluate('delete document.documentElement.dataset.corners')
+      await evaluate("window.setUiStyle('square')")
       await pause(150)
 
       // The dialog is portalled outside #root. Check entry frames, focus trap,

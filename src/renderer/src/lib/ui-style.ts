@@ -62,7 +62,14 @@ function get(): UiStyle {
   return current
 }
 
-function set(next: UiStyle): void {
+/**
+ * Apply a style: store, persistence, the derived DOM attributes, listeners.
+ * Exported as a plain function (not only through the hook) so a consumer that
+ * renders the components without mounting `App` — the geometry check fixture,
+ * for one — can drive BOTH the store and `<html>` from one call. Writing the
+ * DOM here as well keeps the store and the tokens from ever disagreeing.
+ */
+export function setUiStyle(next: UiStyle): void {
   if (get() === next) return
   current = next
   try {
@@ -70,11 +77,12 @@ function set(next: UiStyle): void {
   } catch {
     /* persistence is best-effort; the in-memory value still applies */
   }
+  applyUiStyle(next)
   for (const listener of listeners) listener()
 }
 
 /** Subscribable interface-style preference shared by the app shell and Settings. */
-export function useUiStyle(): [UiStyle, (next: UiStyle) => void] {
+export function useUiStyle(): [UiStyle, typeof setUiStyle] {
   const style = useSyncExternalStore(
     (listener) => {
       listeners.add(listener)
@@ -82,5 +90,5 @@ export function useUiStyle(): [UiStyle, (next: UiStyle) => void] {
     },
     get
   )
-  return [style, set]
+  return [style, setUiStyle]
 }

@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 
 // local patch (pi-app): animate Lucide artwork through the shared SVG adapter.
 import { AnimatedIcon } from "@/lib/animated-icons";
+import { useUiStyle } from "@/lib/ui-style";
 
 export interface CheckboxProps {
   checked: boolean;
@@ -21,8 +22,9 @@ export interface CheckboxProps {
   "aria-describedby"?: string;
   // local patch (pi-app): the mark the box draws when it is on. `check` is the
   // list-selection glyph (multi-select, filters); `square` is the app's on/off
-  // control — it replaced every `Switch`, so "selected = on" is a primary point
-  // inset in the frame instead of a check.
+  // control — it replaced every `Switch`. Its on-state follows the interface
+  // style: a primary point in the square style, the check glyph in the squircle
+  // style, which is how it stays distinguishable from the radio's dot.
   mark?: 'check' | 'square';
 }
 
@@ -41,8 +43,14 @@ export function Checkbox({
   const autoId = useId();
   const id = idProp ?? autoId;
   const reduce = useReducedMotion();
+  const [uiStyle] = useUiStyle();
   const showMark = checked || indeterminate;
   const square = mark === 'square';
+  // local patch (pi-app): the on-state mark follows the interface style. The
+  // square style keeps the point; the squircle style draws the check glyph,
+  // which is what keeps this control distinguishable from the radio, whose
+  // mark stays a dot. (Both controls' frames are circles in that style.)
+  const pointMark = square && uiStyle === 'square';
 
   return (
     <label
@@ -70,12 +78,11 @@ export function Checkbox({
         className={cn(
           // local patch (pi-app): text-sized (14px box, 9px mark) rather than
           // the vendored 20px one, which read heavier than the line it marks.
-          // The frame is pinned to the DETAIL step, NOT to `rounded-control`:
-          // the control step is 14px in the squircle style, which on this 14px
-          // box would turn the frame into a full circle — and with the mark also
-          // circular the checkbox would be indistinguishable from the radio,
-          // whose frame is meant to be a circle.
-          "inline-flex size-3.5 shrink-0 items-center justify-center rounded-detail border-2 outline-none transition-colors duration-200",
+          // The frame takes the CONTROL step: hard-edged in the square style, a
+          // circle in the squircle style (the control step is 14px on this 14px
+          // box). The squircle checkbox is told apart from the radio by the MARK
+          // it draws — the check glyph versus the radio's dot — not by its frame.
+          "inline-flex size-3.5 shrink-0 items-center justify-center rounded-control border-2 outline-none transition-colors duration-200",
           "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
           "disabled:cursor-not-allowed disabled:opacity-60",
           showMark
@@ -88,16 +95,16 @@ export function Checkbox({
             : "border-muted-foreground/50 bg-background hover:border-muted-foreground",
         )}
       >
-        {square ? (
+        {pointMark ? (
           <AnimatePresence initial={false}>
             {showMark ? (
               <motion.span
                 key="square"
                 data-checkbox-mark
-                // local patch (pi-app): the point-selection mark takes the
-                // capsule token, so it is a square point in the square style
-                // and a fully circular point in the squircle style (see
-                // --app-radius-capsule in styles.css).
+                // local patch (pi-app): the point-selection mark is a square
+                // point in the square style (`--app-radius-capsule` is 0px
+                // there). The squircle style does not render this branch at all:
+                // `pointMark` is true only in the square style.
                 className="size-1.5 rounded-capsule bg-primary"
                 initial={reduce ? { opacity: 1 } : { opacity: 0 }}
                 animate={{ opacity: 1 }}
@@ -115,6 +122,7 @@ export function Checkbox({
               <AnimatedIcon
                 icon={indeterminate ? "minus" : "check"}
                 key={indeterminate ? "indeterminate" : "checked"}
+                data-checkbox-mark
                 width="9"
                 height="9"
                 viewBox="0 0 24 24"
