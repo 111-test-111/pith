@@ -8,7 +8,8 @@ import { Workspace } from './components/app/Workspace'
 import { PiStore } from './state/pi-store'
 import { useNotificationSoundEvents } from './lib/notification-sounds'
 import { I18nProvider, useI18n } from './i18n'
-import { applyUiStyle, useUiStyle } from './lib/ui-style'
+import { applyUiStyle, iconPackOf, useUiStyle } from './lib/ui-style'
+import { IconPackProvider } from './lib/icon-pack'
 import type { SessionSnapshotDTO } from '../../shared/types'
 
 const ACCENT_KEY = 'pi-app:accent'
@@ -130,13 +131,19 @@ function AppInner() {
 }
 
 /** The providers wrap the whole app so every string — including the boot
- * splash — resolves through the same dictionary, and any pane can raise
- * transient feedback through the one toast stack. */
+ * splash — resolves through the same dictionary, any pane can raise transient
+ * feedback through the one toast stack, and every glyph renders from the pack
+ * the interface style picked. The `useUiStyle` subscription here is separate
+ * from `AppInner`'s on purpose: the pack must wrap every consumer, including
+ * the boot/Welcome phase and every portal. */
 export default function App() {
+  const [uiStyle] = useUiStyle()
   return (
     <I18nProvider>
       <ToastProvider>
-        <AppInner />
+        <IconPackProvider pack={iconPackOf(uiStyle)}>
+          <AppInner />
+        </IconPackProvider>
       </ToastProvider>
     </I18nProvider>
   )

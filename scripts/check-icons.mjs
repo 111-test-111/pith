@@ -1,8 +1,9 @@
 /** Real SVG adapter/interaction checks in isolated Electron. No SDK or user data.
- * PI_ICONS_SCREENSHOT_DIR retains the light/dark icon and control galleries. */
+ * PI_ICONS_SCREENSHOT_DIR retains the light/dark icon and control galleries of
+ * both packs. */
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, readdir, writeFile, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -20,15 +21,12 @@ const expectedNames = [...source.matchAll(/export const (\w+) =/g)].map(match =>
 const providersSource = await readFile(join(repo, 'src/renderer/src/components/app/ProviderIcon.tsx'), 'utf8')
 const providerMap = providersSource.match(/const PROVIDER_ICONS[^=]+=[^{]*\{([\s\S]+?)\n\}/)[1]
 const providers = [...providerMap.matchAll(/^  (?:'([^']+)'|([\w]+)): /gm)].map(match => match[1] || match[2])
-async function guard(dir) {
-  for (const entry of await readdir(dir, { withFileTypes: true })) {
-    const path = join(dir, entry.name)
-    if (entry.isDirectory()) { await guard(path); continue }
-    if (/\.(tsx?|json)$/.test(path)) assert.doesNotMatch(await readFile(path, 'utf8'), /@hugeicons/i, path)
-  }
-}
-await guard(join(repo, 'src'))
-assert.doesNotMatch(await readFile(join(repo, 'package-lock.json'), 'utf8'), /@hugeicons/i, 'No transitive icon pack')
+
+// PACKS — both packs must render every semantic export. The adapter's icon-pack
+// context selects the artwork; this check flips it live and asserts each pass.
+// (The former "no @hugeicons dependency" guard was removed by explicit owner
+// decision — the reason is recorded in AGENTS.md.)
+const PACKS = ['remix', 'hugeicons']
 
 const fixture = `<!doctype html><html><head><style>
 body{margin:0!important}main{padding:20px;max-width:1200px;margin:auto}h2{font-size:14px;margin:0 0 12px}
@@ -39,6 +37,7 @@ body{margin:0!important}main{padding:20px;max-width:1200px;margin:auto}h2{font-s
 </style></head><body><div id="root"></div><script type="module">
 import React from 'react';import {createRoot} from 'react-dom/client';
 import * as icons from '/src/lib/icons.tsx';
+import {IconPackProvider} from '/src/lib/icon-pack.tsx';
 import {Checkbox} from '/src/components/motion/checkbox.tsx';
 import {Input} from '/src/components/motion/input.tsx';
 import {Button,StatefulButton} from '/src/components/motion/button';
@@ -49,11 +48,13 @@ import '/src/styles.css';
 const h=React.createElement;const providers=${JSON.stringify(providers)};
 function Fixture(){
  const [checked,setChecked]=React.useState(false),[mixed,setMixed]=React.useState(false);
- const ref=React.useRef(null);window.controls={setChecked,setMixed};
+ const [pack,setPack]=React.useState('remix');
+ const ref=React.useRef(null);window.controls={setChecked,setMixed,setPack};
  React.useEffect(()=>{window.iconRef=ref;window.fixtureReady=true},[]);
- return h('main',null,
- h('h2',null,'Remix Icon · line · 12 / 16 / 24 px'),
- h('div',{id:'gallery'},Object.entries(icons).map(([name,Icon])=>h('div',{key:name,className:'cell'},
+ return h(IconPackProvider,{pack},
+ h('main',null,
+ h('h2',null,pack+' pack · 12 / 16 / 24 px'),
+ h('div',{id:'gallery','data-pack':pack},Object.entries(icons).map(([name,Icon])=>h('div',{key:name,className:'cell'},
    h('div',{className:'samples'},...[12,16,24].map(size=>h(Icon,{key:size,size,'data-sample':name,'data-size':size}))),h('span',{className:'label'},name)))),
  h('div',{className:'row'},h('div',{id:'checkbox'},h(Checkbox,{checked,indeterminate:mixed,onCheckedChange:setChecked,label:'Checkbox'})),
  h(Input,{success:true,defaultValue:'Input success','aria-label':'Success example'}),
@@ -66,7 +67,7 @@ function Fixture(){
  {id:'complete',title:'Completed',status:'completed'},
  {id:'cancelled',title:'Cancelled',status:'cancelled'}]})),
  h('div',{style:{width:300}},h(TodoList,{title:'Complete',defaultOpen:true,items:[{id:'done',title:'Finished',status:'completed'}]}))),
- h('h2',null,'Provider brands · bundled SVG'),h('div',{id:'brands'},...providers.map(providerId=>h(ProviderIcon,{key:providerId,providerId,size:22}))));
+ h('h2',null,'Provider brands · bundled SVG'),h('div',{id:'brands'},...providers.map(providerId=>h(ProviderIcon,{key:providerId,providerId,size:22})))));
 }
 createRoot(document.getElementById('root')).render(h(Fixture));
 </script></body></html>`
@@ -104,19 +105,59 @@ try {
   let ready=false
   for(let i=0;i<240&&!ready;i++){ready=await evaluate('!!window.fixtureReady');if(!ready)await pause(50)}
   assert(ready,'Fixture mounted')
-  const rendered=await evaluate(`Array.from(document.querySelectorAll('#gallery svg[data-size="24"]')).map(svg=>({name:svg.dataset.sample,width:svg.getBoundingClientRect().width,height:svg.getBoundingClientRect().height,viewBox:svg.getAttribute('viewBox'),hidden:svg.getAttribute('aria-hidden'),paths:svg.querySelectorAll('path,circle,rect,line,polyline,polygon,ellipse').length,box:JSON.stringify([svg.getBBox().x,svg.getBBox().y,svg.getBBox().width,svg.getBBox().height])}))`)
-  assert.deepEqual(rendered.map(icon=>icon.name).sort(),expectedNames)
-  for(const icon of rendered){assert.equal(icon.width,24,icon.name);assert.equal(icon.height,24,icon.name);assert.equal(icon.viewBox,'0 0 24 24',icon.name);assert.equal(icon.hidden,'true',icon.name);assert(icon.paths>0,icon.name);assert.doesNotMatch(icon.box,/NaN|null/,icon.name)}
-  assert.equal(await evaluate('window.iconRef.current===document.querySelector("#props-icon")'),true,'Forward SVG ref')
-  assert.equal(await evaluate('document.querySelector("#props-icon").getAttribute("aria-hidden")'),null,'Named SVG remains accessible')
-  assert.equal(await evaluate('document.querySelector("#props-icon").getAttribute("stroke-width")'),null,'Stroke-only props are dropped for line artwork')
-  assert.equal(await evaluate('document.querySelector("#props-icon").getAttribute("fill")'),'currentColor','Line artwork follows currentColor')
-  assert.equal(await evaluate('document.querySelector("#css-icon").getBoundingClientRect().width'),16,'Tailwind size overrides SVG size')
-  for(const arrow of ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight']){
-    const paths=await evaluate(`document.querySelectorAll('[data-sample="${arrow}"][data-size="24"] path').length`)
-    assert.ok(paths>=1,'Directional arrow renders fill artwork: '+arrow)
+  const setPack=async pack=>{
+    await evaluate(`window.controls.setPack(${JSON.stringify(pack)})`)
+    for(let i=0;i<40;i++){if(await evaluate('document.querySelector("#gallery").dataset.pack')===pack)break;await pause(25)}
+    assert.equal(await evaluate('document.querySelector("#gallery").dataset.pack'),pack,pack+': active pack reflected in the fixture')
+    await pause(60)
   }
-  console.log('PASS: all '+expectedNames.length+' icons, native SVG props, CSS sizing, ref and accessibility')
+  const gallery=async()=>evaluate(`Array.from(document.querySelectorAll('#gallery svg[data-size="24"]')).map(svg=>({name:svg.dataset.sample,pack:svg.closest('[data-pack]').dataset.pack,width:svg.getBoundingClientRect().width,height:svg.getBoundingClientRect().height,viewBox:svg.getAttribute('viewBox'),hidden:svg.getAttribute('aria-hidden'),paths:svg.querySelectorAll('path,circle,rect,line,polyline,polygon,ellipse').length,box:JSON.stringify([svg.getBBox().x,svg.getBBox().y,svg.getBBox().width,svg.getBBox().height]),html:svg.outerHTML}))`)
+  const signatures={}
+  for(const pack of PACKS){
+    await setPack(pack)
+    const rendered=await gallery()
+    assert.deepEqual(rendered.map(icon=>icon.name).sort(),expectedNames,pack+': every export renders')
+    for(const icon of rendered){
+      assert.equal(icon.pack,pack,pack+': '+icon.name+' rendered by the active pack')
+      assert.equal(icon.width,24,pack+': '+icon.name+' width')
+      assert.equal(icon.height,24,pack+': '+icon.name+' height')
+      assert.equal(icon.viewBox,'0 0 24 24',pack+': '+icon.name+' viewBox')
+      assert.equal(icon.hidden,'true',pack+': '+icon.name+' is decorative by default')
+      assert(icon.paths>0,pack+': '+icon.name+' draws real geometry')
+      assert.doesNotMatch(icon.box,/NaN|null/,pack+': '+icon.name+' has no NaN/null geometry')
+      assert.doesNotMatch(icon.html,/NaN|null/,pack+': '+icon.name+' has no NaN/null attribute')
+    }
+    signatures[pack]=rendered.map(icon=>icon.html).join('')
+    assert.equal(await evaluate('window.iconRef.current===document.querySelector("#props-icon")'),true,pack+': forwards the SVG ref')
+    assert.equal(await evaluate('document.querySelector("#props-icon").getAttribute("aria-hidden")'),null,pack+': a named SVG stays accessible')
+    assert.equal(await evaluate('document.querySelector("#css-icon").getBoundingClientRect().width'),16,pack+': Tailwind size overrides the SVG size')
+    for(const arrow of ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight']){
+      const paths=await evaluate(`document.querySelectorAll('[data-sample="${arrow}"][data-size="24"] path').length`)
+      assert.ok(paths>=1,pack+': '+arrow+' renders line artwork')
+    }
+    if(pack==='remix'){
+      assert.equal(await evaluate('document.querySelector("#props-icon").getAttribute("stroke-width")'),null,'remix: stroke-only props are dropped')
+      assert.equal(await evaluate('document.querySelector("#props-icon").getAttribute("fill")'),'currentColor','remix: line artwork follows currentColor')
+    }else{
+      assert.equal(await evaluate('document.querySelector("#props-icon").getAttribute("stroke-width")'),'3','hugeicons: the requested stroke width is applied')
+      assert.equal(await evaluate('document.querySelector("#props-icon").getAttribute("stroke")'),'currentColor','hugeicons: stroke follows currentColor')
+      assert.equal(await evaluate('document.querySelector("#props-icon").getAttribute("stroke-linecap")'),'round','hugeicons: round caps')
+      assert.equal(await evaluate('document.querySelector("#props-icon").getAttribute("stroke-linejoin")'),'round','hugeicons: round joins')
+      assert.equal(await evaluate('document.querySelector("#props-icon").getAttribute("fill")'),'none','hugeicons: stroke artwork is unfilled')
+      assert.equal(await evaluate('document.querySelector("#css-icon").getAttribute("stroke-width")'),'1.5','hugeicons: the default stroke is 1.5')
+    }
+  }
+  assert.notEqual(signatures.remix,signatures.hugeicons,'the two packs draw different artwork')
+  // Live switch: the same tree, flipped in place, must change the drawn artwork
+  // and flip back — that is what proves no reload/remount is involved.
+  await setPack('remix')
+  const remixPath=await evaluate('document.querySelector("#props-icon path").getAttribute("d")')
+  await setPack('hugeicons')
+  const hugePath=await evaluate('document.querySelector("#props-icon path").getAttribute("d")')
+  assert.notEqual(remixPath,hugePath,'flipping the pack changes the drawn path live')
+  await setPack('remix')
+  assert.equal(await evaluate('document.querySelector("#props-icon path").getAttribute("d")'),remixPath,'flipping back restores the Remix artwork')
+  console.log('PASS: all '+expectedNames.length+' icons in both packs, live pack switch, native SVG props, CSS sizing, ref and accessibility')
 
   await evaluate('document.querySelector("#checkbox button").click()')
   await pause(80)
@@ -125,7 +166,7 @@ try {
   assert.equal(await evaluate('document.querySelector("#checkbox button").getAttribute("aria-checked")'),'true')
   assert.notEqual(await evaluate('document.querySelector("#checkbox svg path").getAttribute("stroke-dasharray")'),during,'beUI check still draws in')
   assert.ok((await evaluate('document.querySelector("#checkbox svg path").getAttribute("d")')).length>0,'Animated check keeps its draw-in geometry')
-  assert.ok((await evaluate('document.querySelector("#css-icon path").getAttribute("d")')).length>0,'Static check renders Remix line artwork')
+  assert.ok((await evaluate('document.querySelector("#css-icon path").getAttribute("d")')).length>0,'Static check renders line artwork')
   await evaluate('window.controls.setMixed(true)');await pause(400)
   assert.equal(await evaluate('document.querySelector("#checkbox button").getAttribute("aria-checked")'),'mixed')
   assert.equal(await evaluate('document.querySelector("#checkbox svg").dataset.appIcon'),'minus')
@@ -142,22 +183,26 @@ try {
   const loaded=await evaluate(`Promise.all(Array.from(document.querySelectorAll('[data-provider-icon]')).map(async element=>{const source=getComputedStyle(element).maskImage.slice(5,-2);const image=new Image();image.src=source;await image.decode();return {id:element.dataset.providerIcon,width:image.naturalWidth,height:image.naturalHeight}}))`)
   assert.equal(loaded.length,providers.length)
   assert(loaded.every(image=>image.width>0&&image.height>0),'All bundled provider masks decode')
-  for(const theme of ['light','dark']){
-    await evaluate(`document.documentElement.classList.toggle('dark',${theme==='dark'});document.documentElement.style.colorScheme='${theme}'`)
-    await pause(200)
-    assert.equal(await evaluate(`getComputedStyle(document.querySelector('[data-provider-icon]')).backgroundColor===getComputedStyle(document.querySelector('[data-provider-icon]')).color`),true,'Brand inherits theme color')
-    if(process.env.PI_ICONS_SCREENSHOT_DIR){
-      await mkdir(process.env.PI_ICONS_SCREENSHOT_DIR,{recursive:true})
-      const {cssContentSize}=await send('Page.getLayoutMetrics')
-      const screenshot=await send('Page.captureScreenshot',{captureBeyondViewport:true,clip:{x:0,y:0,width:cssContentSize.width,height:cssContentSize.height,scale:1}})
-      await writeFile(join(process.env.PI_ICONS_SCREENSHOT_DIR,theme+'.png'),Buffer.from(screenshot.data,'base64'))
-      await evaluate('document.querySelector("#brands").scrollIntoView({block:"end"})')
-      await writeFile(join(process.env.PI_ICONS_SCREENSHOT_DIR,theme+'-controls.png'),Buffer.from((await send('Page.captureScreenshot')).data,'base64'))
-      await evaluate('window.scrollTo(0,0)')
+  for(const pack of PACKS){
+    await setPack(pack)
+    for(const theme of ['light','dark']){
+      await evaluate(`document.documentElement.classList.toggle('dark',${theme==='dark'});document.documentElement.style.colorScheme='${theme}'`)
+      await pause(200)
+      assert.equal(await evaluate(`getComputedStyle(document.querySelector('[data-provider-icon]')).backgroundColor===getComputedStyle(document.querySelector('[data-provider-icon]')).color`),true,'Brand inherits theme color')
+      if(process.env.PI_ICONS_SCREENSHOT_DIR){
+        await mkdir(process.env.PI_ICONS_SCREENSHOT_DIR,{recursive:true})
+        const {cssContentSize}=await send('Page.getLayoutMetrics')
+        const screenshot=await send('Page.captureScreenshot',{captureBeyondViewport:true,clip:{x:0,y:0,width:cssContentSize.width,height:cssContentSize.height,scale:1}})
+        await writeFile(join(process.env.PI_ICONS_SCREENSHOT_DIR,theme+'-'+pack+'.png'),Buffer.from(screenshot.data,'base64'))
+        await evaluate('document.querySelector("#brands").scrollIntoView({block:"end"})')
+        await writeFile(join(process.env.PI_ICONS_SCREENSHOT_DIR,theme+'-'+pack+'-controls.png'),Buffer.from((await send('Page.captureScreenshot')).data,'base64'))
+        await evaluate('window.scrollTo(0,0)')
+      }
     }
   }
+  await setPack('remix')
   assert.deepEqual(exceptions,[],'No renderer exceptions')
-  console.log('PASS: '+loaded.length+' provider aliases, SVG asset decoding, light/dark themes; no Lucide dependency')
+  console.log('PASS: '+loaded.length+' provider aliases, SVG asset decoding, both packs in light/dark themes')
 } finally {
   ws?.close()
   if(child && child.exitCode === null && child.signalCode === null) await new Promise(resolve=>{

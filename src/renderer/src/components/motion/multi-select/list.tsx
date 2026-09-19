@@ -1,8 +1,8 @@
 "use client";
 // beui.dev/components/motion/multi-select
 
-// local patch (pi-app): glyphs come from the app's Remix Icon adapter on
-// the square-style branch instead of native lucide-react.
+// local patch (pi-app): glyphs come from the app's icon adapter
+// (lib/icons.tsx), which renders the pack the interface style selects.
 import { Check } from "@/lib/icons";
 import { motion } from "motion/react";
 import {

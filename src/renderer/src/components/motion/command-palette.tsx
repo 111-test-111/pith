@@ -2,8 +2,8 @@
 // beui.dev/components/blocks/command-palette
 
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-// local patch (pi-app): glyphs come from the app's Remix Icon adapter on
-// the square-style branch instead of native lucide-react.
+// local patch (pi-app): glyphs come from the app's icon adapter
+// (lib/icons.tsx), which renders the pack the interface style selects.
 import { Search, type IconComponent } from "@/lib/icons";
 import {
   type ReactNode,
