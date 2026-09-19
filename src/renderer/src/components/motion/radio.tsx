@@ -122,10 +122,13 @@ export function RadioGroupItem({
         transition={SPRING_PRESS}
         data-state={selected ? "checked" : "unchecked"}
         className={cn(
-          // local patch (pi-app): square-style branch — the single-choice mark is
-          // hard-edged like every other control, not a circle, and it is sized
-          // to the label's own text (14px box, 6px mark) rather than the
-          // vendored 20px box, which read heavier than the line it marks.
+          // local patch (pi-app): text-sized (14px box, 6px mark) rather than
+          // the vendored 20px box, which read heavier than the line it marks.
+          // The frame stays on `rounded-control`: a single-choice control IS a
+          // circle in the squircle style, and the frame is what carries that.
+          // Only the point is capsule-by-design — a square point in the square
+          // style, a circular one in the squircle style (see
+          // --app-radius-capsule in styles.css).
           "relative inline-flex size-3.5 shrink-0 items-center justify-center rounded-control border-2 outline-none transition-colors duration-200",
           "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
           "disabled:cursor-not-allowed disabled:opacity-60",
@@ -137,7 +140,7 @@ export function RadioGroupItem({
         {selected ? (
           <motion.span
             layoutId={layoutId}
-            className="size-1.5 rounded-control bg-primary"
+            className="size-1.5 rounded-capsule bg-primary"
             transition={reduce ? { duration: 0 } : SPRING_LAYOUT}
           />
         ) : null}

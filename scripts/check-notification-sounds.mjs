@@ -190,7 +190,7 @@ window.__disabled = (label) => { const box = window.__row(label); return box ? b
 window.__checked = (label) => {
   const box = window.__row(label);
   if (!box) return null;
-  const mark = box.querySelector('[data-checkbox-square]');
+  const mark = box.querySelector('[data-checkbox-mark]');
   return { state: box.getAttribute('data-state'), mark: !!mark };
 };
 window.__clickToggle = (label) => { const box = window.__row(label); if (!box) return null; box.click(); return true; };

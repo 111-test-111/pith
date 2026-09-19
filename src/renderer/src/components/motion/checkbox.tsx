@@ -68,10 +68,14 @@ export function Checkbox({
           checked ? "checked" : indeterminate ? "indeterminate" : "unchecked"
         }
         className={cn(
-          // local patch (pi-app): square-style branch — hard-edged like every
-          // other control, and text-sized (14px box, 9px mark) rather than the
-          // vendored 20px one, which read heavier than the line it marks.
-          "inline-flex size-3.5 shrink-0 items-center justify-center rounded-control border-2 outline-none transition-colors duration-200",
+          // local patch (pi-app): text-sized (14px box, 9px mark) rather than
+          // the vendored 20px one, which read heavier than the line it marks.
+          // The frame is pinned to the DETAIL step, NOT to `rounded-control`:
+          // the control step is 14px in the squircle style, which on this 14px
+          // box would turn the frame into a full circle — and with the mark also
+          // circular the checkbox would be indistinguishable from the radio,
+          // whose frame is meant to be a circle.
+          "inline-flex size-3.5 shrink-0 items-center justify-center rounded-detail border-2 outline-none transition-colors duration-200",
           "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
           "disabled:cursor-not-allowed disabled:opacity-60",
           showMark
@@ -89,10 +93,12 @@ export function Checkbox({
             {showMark ? (
               <motion.span
                 key="square"
-                data-checkbox-square
-                // A true square at every corner preset: the point-selection
-                // mark is the one glyph that must not follow the radius scale.
-                className="size-1.5 bg-primary"
+                data-checkbox-mark
+                // local patch (pi-app): the point-selection mark takes the
+                // capsule token, so it is a square point in the square style
+                // and a fully circular point in the squircle style (see
+                // --app-radius-capsule in styles.css).
+                className="size-1.5 rounded-capsule bg-primary"
                 initial={reduce ? { opacity: 1 } : { opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}

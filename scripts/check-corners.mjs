@@ -77,7 +77,7 @@ function Fixture(){
    h('section',null,h('div',{className:'lab-label'},'Controls'),
     h('div',{className:'lab-row'},h(Button,{id:'primary',ripple:true},'Continue'),h(Button,{variant:'secondary'},'Cancel'),h(Button,{variant:'ghost',size:'icon','aria-label':'Icon control'},'+')),
     h(Input,{label:'Project name',defaultValue:'Pith',classNames:{field:'lab-field'}}),
-    h('div',{className:'lab-row'},h(Checkbox,{mark:'square',checked,onCheckedChange:setChecked,'aria-label':'Enable feature'}),
+    h('div',{className:'lab-row'},h(Checkbox,{id:'point-checkbox',mark:'square',checked,onCheckedChange:setChecked,'aria-label':'Enable feature'}),
      h(RadioGroup,{defaultValue:'on',orientation:'horizontal'},h(RadioGroupItem,{value:'on',label:'Enabled'})),
      h('span',{id:'status-dot',className:'size-1.5 rounded-full bg-primary'}),
      h('span',{id:'pseudo','data-drop':'before',className:'data-[drop=before]:before:rounded-full'}),h(Loader,{variant:'dots',size:16})),
@@ -211,14 +211,6 @@ app.on('window-all-closed',()=>app.quit());`)
       for (const selector of ['#primary', '.lab-field', '#segment [aria-selected="true"]', '[data-slot="message-bubble"] .rounded-inherit']) {
         assert.equal(await style(selector, 'corner-shape'), 'superellipse(2)', selector + ': continuous corners')
       }
-      // Square-style branch: the selection controls (the point-select checkbox
-      // that replaced every switch, single choice) are hard-edged like every
-      // other control — only genuinely circular geometry keeps `rounded-full`'s
-      // shape (status/legend dots, loader artwork).
-      for (const selector of ['[role="checkbox"]', '[role="checkbox"] > span', '[role="radio"]', '[role="radio"] > span']) {
-        assert.equal(await style(selector, 'corner-shape'), 'superellipse(2)', selector + ': continuous selection control')
-        assert.equal(await style(selector, 'border-top-left-radius'), '0px', selector + ': hard edge')
-      }
       assert.equal(await style('#status-dot', 'corner-shape'), 'superellipse(1)', '#status-dot: true circles stay circular')
       assert.equal(await evaluate('getComputedStyle(document.getElementById("pseudo"),"::before").cornerShape'), 'superellipse(1)', 'pseudo-element full-round utility')
       // The composer's send control is capsule-by-design: the shape token
@@ -271,6 +263,46 @@ app.on('window-all-closed',()=>app.quit());`)
           preset + ': the capsule site ' + (preset === 'square' ? 'stays a right angle' : 'is a full capsule') + ' (got ' + sendRadius + ')'
         )
         assert.equal(await style('[aria-label="Send prompt"]', 'corner-shape'), 'superellipse(1)', preset + ': the capsule keeps a round corner shape')
+        // Selection controls, pinned per preset. The frames stay on the radius
+        // scale and their on-state marks are capsule-by-design: a square point
+        // in the square style, a fully circular point in the squircle style.
+        // The checkbox frame is deliberately on the DETAIL step and NOT on the
+        // control step — 14px on this 14px box would turn the frame into a full
+        // circle, which is the radio's shape, so the two controls would read
+        // the same. `#point-checkbox` is the fixture's point-select control
+        // (`mark="square"`), targeted by id so a `mark="check"` box could
+        // never satisfy the assertion silently.
+        const boxOf = selector => evaluate('(()=>{const r=document.querySelector(' + JSON.stringify(selector) + ').getBoundingClientRect();return Math.min(r.width,r.height)})()')
+        const checkboxBox = await boxOf('#point-checkbox')
+        const checkboxFrameRadius = parseFloat(await style('#point-checkbox', 'border-top-left-radius'))
+        assert.equal(checkboxBox, 14, preset + ': the point-select checkbox keeps its text-sized 14px frame')
+        assert.equal(await style('#point-checkbox', 'corner-shape'), 'superellipse(2)', preset + ': continuous checkbox frame')
+        assert.ok(
+          preset === 'square' ? checkboxFrameRadius === 0 : checkboxFrameRadius >= 4 && checkboxFrameRadius < checkboxBox / 2,
+          preset + ': the checkbox frame stays a rounded SQUARE, never a circle (radius ' + checkboxFrameRadius + ', box ' + checkboxBox + ')'
+        )
+        const radioBox = await boxOf('[role="radio"]')
+        const radioFrameRadius = parseFloat(await style('[role="radio"]', 'border-top-left-radius'))
+        assert.equal(await style('[role="radio"]', 'corner-shape'), 'superellipse(2)', preset + ': continuous radio frame')
+        assert.ok(
+          preset === 'square' ? radioFrameRadius === 0 : radioFrameRadius >= radioBox / 2,
+          preset + ': the radio frame is a circle in the squircle style (radius ' + radioFrameRadius + ', box ' + radioBox + ')'
+        )
+        for (const markSelector of ['[data-checkbox-mark]', '[role="radio"] > span']) {
+          const markBox = await boxOf(markSelector)
+          const markRadius = parseFloat(await style(markSelector, 'border-top-left-radius'))
+          assert.equal(await style(markSelector, 'corner-shape'), 'superellipse(1)', preset + ': the selection mark carries the round corner shape (' + markSelector + ')')
+          assert.ok(
+            preset === 'square' ? markRadius === 0 : markRadius >= markBox / 2,
+            preset + ': ' + markSelector + ' is ' + (preset === 'square' ? 'a square point' : 'a fully circular point') + ' (radius ' + markRadius + ', box ' + markBox + ')'
+          )
+        }
+        // The invariant this task exists to protect: in the squircle style a
+        // checkbox must stay tellable apart from the radio beside it.
+        assert.ok(
+          preset !== 'squircle' || checkboxFrameRadius < radioFrameRadius,
+          preset + ': the checkbox frame must stay distinguishable from the radio frame — checkbox radius ' + checkboxFrameRadius + ' must be strictly smaller than radio radius ' + radioFrameRadius
+        )
         await screenshot(`${theme}-${reduced ? 'reduced' : 'motion'}-${preset}-gallery`)
       }
       await evaluate('delete document.documentElement.dataset.corners')
