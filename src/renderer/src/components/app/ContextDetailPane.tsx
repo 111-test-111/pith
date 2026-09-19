@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { AlertCircle, Chart, RefreshCw } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
-import { RunningLoader } from './RunningLoader'
-import { LabelTooltip } from './LabelTooltip'
 import { cn } from '@/lib/utils'
 import { useI18n } from '@/i18n'
 import type { MessageKey } from '@/i18n/locales/en'
@@ -136,14 +134,10 @@ export function ContextDetailPane({ store }: { store: PiStore }) {
     )
   }
 
-  if (!detail) {
-    return (
-      <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
-        <RunningLoader variant="spinner" size={20} label={t('contextDetail.loading')} className="text-primary" />
-        <p className="text-sm text-muted-foreground">{t('contextDetail.loading')}</p>
-      </div>
-    )
-  }
+  // No loading state: the readout paints the pane in one step. The transitional
+  // centered "reading…" row is what the owner is testing against the diagonal
+  // reveal, so while `detail` is absent the pane stays empty.
+  if (!detail) return null
 
   const usage = detail.usage
   const breakdown = detail.breakdown
@@ -179,22 +173,8 @@ export function ContextDetailPane({ store }: { store: PiStore }) {
       ) : null}
 
       {/* Two columns of label-over-value cells, the recipe the rest of the app's
-          readouts use. The session name spans both: it is the one field that can
-          be long enough to wrap. */}
+          readouts use. */}
       <div className="mt-4 grid grid-cols-2 gap-x-6 gap-y-4">
-        <Stat
-          className="col-span-2"
-          label={t('contextDetail.session')}
-          value={
-            detail.title ? (
-              <LabelTooltip content={detail.title}>
-                <span className="block truncate">{detail.title}</span>
-              </LabelTooltip>
-            ) : (
-              t('contextDetail.untitled')
-            )
-          }
-        />
         <Stat label={t('contextDetail.messages')} value={formatCount(detail.totalMessages, locale)} />
         <Stat label={t('contextDetail.thinking')} value={detail.thinkingLevel ?? NONE} />
         <Stat label={t('contextDetail.provider')} value={detail.provider ?? NONE} />

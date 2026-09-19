@@ -100,13 +100,15 @@ try {
   await evaluate(`document.fonts.ready`)
   await pause(200)
 
-  // 1. The pane asks for the readout and shows a loading state until it lands —
-  //    the fixture never answers on its own, so this is the pre-answer frame.
+  // 1. The pane asks for the readout and paints NOTHING until it lands —
+  //    the transitional "reading…" row is gone, so the fixture never answering
+  //    leaves a silent pane. (The rail's own text is the tab strip's "Context"
+  //    label; the pane content area itself must hold no row.)
   assert.equal(await evaluate(`window.calls.length`), 1, 'opening the tab reads the context once')
-  assert.match(
-    await evaluate(`document.querySelector('#rail-wrap').textContent`),
-    /Reading session context/,
-    'the pane says it is reading before the readout arrives'
+  assert.equal(
+    await evaluate(`document.querySelectorAll('#rail-wrap [data-context-stat], #rail-wrap p, #rail-wrap button[aria-label="Retry"]').length`),
+    0,
+    'the pane paints no row before the readout arrives'
   )
 
   await evaluate('window.answer()')
@@ -116,7 +118,7 @@ try {
   //    counts (never `53.5k`), one decimal on the estimated percent, two on the
   //    cache rate and up to four on the cost.
   const stats = Object.fromEntries(await evaluate('window.stats()'))
-  assert.equal(stats.Session, 'Context pane fixture session', 'the session name is shown')
+  assert.equal(stats.Session, undefined, 'the session name row is gone')
   assert.equal(stats.Provider, 'anthropic')
   assert.equal(stats.Model, 'claude-sonnet-4-5')
   assert.equal(stats.Thinking, 'high')
@@ -143,7 +145,7 @@ try {
   //    breakdown is an estimate whose residue is the system prompt.
   const notes = await evaluate(`[...document.querySelectorAll('#rail-wrap [data-context-note], #rail-wrap section p')].map(n=>n.textContent.trim())`)
   assert.ok(
-    notes.some((note) => /whole session file/.test(note)),
+    notes.some((note) => /whole session/.test(note)),
     'the cumulative note explains the counting basis: ' + JSON.stringify(notes)
   )
   assert.ok(
@@ -195,8 +197,8 @@ try {
   const zh = await evaluate(`document.querySelector('#rail-wrap').textContent`)
   assert.match(zh, /上下文细分/, 'the breakdown heading is translated')
   assert.match(zh, /系统与其他/, 'and so is the residue bucket')
-  assert.match(zh, /整个会话文件的累计值/, 'and the cumulative note')
-  assert.equal(await evaluate(`window.stat('会话')`), 'Context pane fixture session', 'the grid is translated too')
+  assert.match(zh, /整个会话的累计值/, 'and the cumulative note')
+  assert.equal(await evaluate(`window.stat('消息数')`), '32', 'the grid is translated too')
   await evaluate(`window.setLocale('en')`)
   await pause(150)
 

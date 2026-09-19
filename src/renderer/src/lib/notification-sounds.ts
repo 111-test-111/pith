@@ -8,8 +8,9 @@ import type { PiEvent } from '../../../shared/types'
  * told apart without looking at the screen:
  *
  * - `turnComplete` — a rising three-note bell: the run is over and idle.
- * - `askUser`      — two short pings on one pitch: the agent is blocked on the
- *                    user (an ask_user_question set is waiting for an answer).
+ * - `askUser`      — three crisp pings on one high pitch: the agent is blocked
+ *                    on the user (an ask_user_question set is waiting for an
+ *                    answer).
  *
  * They are synthesized with Web Audio instead of shipping audio files: two
  * short cues cost a handful of oscillator schedules, need no binary asset in
@@ -44,8 +45,8 @@ export interface NotificationTone {
 /**
  * The cue tables. Pitches are read as intervals rather than names:
  * `turnComplete` walks up a major triad (C5–E5–G5) so it can only read as an
- * ending that went well, while `askUser` repeats one A5 so it reads as a call
- * for attention instead of a sentence. The ask pings are also shorter and
+ * ending that went well, while `askUser` repeats one A6 so it reads as a bright
+ * call for attention instead of a sentence. The ask pings are also shorter and
  * triangle-waved, which keeps them distinct from the completion bell even
  * when the master volume is low.
  */
@@ -56,16 +57,17 @@ export const NOTIFICATION_SOUNDS: Record<NotificationSoundKind, readonly Notific
     { frequency: 783.99, at: 0.18, duration: 0.9, wave: 'sine', gain: 1 }
   ],
   askUser: [
-    { frequency: 880, at: 0, duration: 0.2, wave: 'triangle', gain: 1 },
-    { frequency: 880, at: 0.24, duration: 0.32, wave: 'triangle', gain: 0.85 }
+    { frequency: 1760, at: 0, duration: 0.12, wave: 'triangle', gain: 1 },
+    { frequency: 1760, at: 0.18, duration: 0.12, wave: 'triangle', gain: 1 },
+    { frequency: 1760, at: 0.42, duration: 0.28, wave: 'triangle', gain: 0.9 }
   ]
 }
 
 /** Every cue the app can play, in the order Settings lists them. */
 export const NOTIFICATION_SOUND_KINDS: readonly NotificationSoundKind[] = ['turnComplete', 'askUser']
 
-/** Quiet on purpose: a cue should be noticed, not startling. */
-const MASTER_GAIN = 0.22
+/** Loud enough to be heard over other system audio, but not startling. */
+const MASTER_GAIN = 0.75
 /** Short fade-in — a hard gate on an oscillator clicks. */
 const ATTACK_SECONDS = 0.012
 /** `exponentialRampToValueAtTime` cannot reach zero; this is silence for it. */

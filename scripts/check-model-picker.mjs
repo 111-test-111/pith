@@ -1,10 +1,13 @@
 /**
- * The composer's model picker is a `Select` — the same pick-one control as the
- * sandbox-mode picker beside it: a panel anchored to its trigger, which stays
- * on the trigger through layout moves that report no resize or scroll. This
- * runs the real picker in isolated Electron and checks the compact trigger, the
- * two-stage flow, the level change, the model row itself (inputs accepted, no
- * step hint) and that the panel cannot drift. No model calls, no user data.
+ * The composer's model and thinking-level pickers are two adjacent `Select`s —
+ * the same pick-one control as the sandbox-mode picker beside them: panels
+ * anchored to their triggers, which stay on the trigger through layout moves
+ * that report no resize or scroll. This runs the real pickers in isolated
+ * Electron and checks the split (the model trigger carries no level suffix,
+ * the level picker exists only for a reasoning model with a real choice, and
+ * it is disabled while a model switch's snapshot is in flight), the model row
+ * itself (inputs accepted, no step hint) and that the panels cannot drift. No
+ * model calls, no user data.
  */
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
@@ -27,7 +30,7 @@ import {I18nProvider,useI18n} from '/src/i18n/index.tsx';
 import {ModelPicker} from '/src/components/app/ModelPicker.tsx';
 import '/src/styles.css';
 localStorage.setItem('pi-app:locale','en');
-window.changes=[];window.levelChanges=[];
+window.changes=[];window.levelChanges=[];window.modelDelay=0;
 const models=[
  {providerId:'p1',providerName:'Provider One',id:'m1',name:'Model One',reasoning:true,available:true,contextWindow:128000,input:['text','image']},
  {providerId:'p1',providerName:'Provider One',id:'m2',name:'Model Two',reasoning:false,available:true,contextWindow:64000,input:['text']},
@@ -37,17 +40,21 @@ function Fixture(){
  const [value,setValue]=React.useState('p1/m1');
  const [level,setLevel]=React.useState('off');
  const [levels,setLevels]=React.useState(['off','high']);
+ // The onChange stand-in mirrors handleModelChange: the model (and its own
+ // level list) arrive one snapshot round trip later, after a controllable
+ // delay — exactly the window in which the level list still describes the
+ // PREVIOUS model and must not be pickable.
+ const pick=(m)=>{window.changes.push(m.id);return new Promise(r=>setTimeout(()=>{setValue(m.providerId+'/'+m.id);setLevels(m.reasoning?['off','high','max']:['off']);r()},window.modelDelay))};
  // The stage stands in for the composer: a centred, max-width-bounded box whose
- // picker is a shrink-to-fit flex item (the composer's leading-action row), so a
- // width change moves the trigger WITHOUT resizing it — exactly the way
+ // pickers are shrink-to-fit flex items (the composer's leading-action row), so
+ // a width change moves the triggers WITHOUT resizing them — exactly the way
  // Workspace.resizePanels writes the panel widths as CSS variables during a
  // drag, with no window resize and no scroll event to observe.
  return React.createElement('div',{id:'stage',style:{width:640,padding:24}},
   React.createElement('div',{id:'box',style:{width:'100%',maxWidth:592,margin:'0 auto',display:'flex',alignItems:'center',gap:8,paddingLeft:12}},
    React.createElement('span',{id:'leading',style:{width:28,height:28,flexShrink:0,borderRadius:8,background:'#ddd'}}),
    React.createElement(ModelPicker,{models,value,thinkingLevel:level,availableThinkingLevels:levels,
-    onChange:(m)=>{window.changes.push(m.id);setValue(m.providerId+'/'+m.id);setLevels(['off','high','max'])},
-    onThinkingLevelChange:(l)=>{window.levelChanges.push(l);setLevel(l)}})))}
+    onChange:pick,onThinkingLevelChange:(l)=>{window.levelChanges.push(l);setLevel(l)}})))}
 window.setStageWidth=(maxWidth)=>{document.getElementById('box').style.maxWidth=maxWidth+'px'};
 createRoot(document.getElementById('root')).render(React.createElement(I18nProvider,null,React.createElement(Fixture)));
 window.fixtureReady=true;
@@ -90,24 +97,47 @@ try {
   await send('Runtime.enable')
   const waitFor = async (expression) => { for (let i = 0; i < 150; i++) { if (await evaluate(`Boolean(${expression})`)) return; await pause(100) } throw new Error('Timed out: ' + expression + '\n' + JSON.stringify(exceptions)) }
 
-  await waitFor('window.fixtureReady && document.querySelector("[aria-haspopup=listbox]")')
-  assert.match(await evaluate(`document.querySelector('[aria-haspopup=listbox]').textContent`), /Model One · Off/, 'the compact trigger shows the model and level')
+  // The two adjacent triggers of the split picker.
+  const MODEL = `document.querySelector('button[aria-haspopup=listbox][aria-label="Choose model"]')`
+  const LEVEL = `document.querySelector('button[aria-haspopup=listbox][aria-label="Thinking level"]')`
+  await waitFor('window.fixtureReady && document.querySelector("button[aria-haspopup=listbox]")')
+  assert(await evaluate(`Boolean(${MODEL})`), 'the model trigger exists')
+  assert(await evaluate(`Boolean(${LEVEL})`), 'the thinking trigger exists beside it')
+  assert.doesNotMatch(await evaluate(`${MODEL}.textContent`), /·/, 'the model trigger carries no level suffix')
+  assert.match(await evaluate(`${MODEL}.textContent`), /Model One/, 'it states the active model')
+  assert.match(await evaluate(`${LEVEL}.textContent`), /Off/, 'the thinking trigger states the active level')
 
-  // The picker is a `Select` (the sandbox-mode picker beside it, Settings →
-  // Providers' default-model row): a list you choose from, with no field to
-  // type in, and a panel the layout anchors to the trigger.
-  const openPicker = async () => {
-    await evaluate(`document.querySelector('[aria-haspopup=listbox]').click()`)
-    await waitFor(`document.querySelector('[role=listbox]')?.getAttribute('aria-hidden')==='false'`)
+  // Adjacent: the thinking trigger starts right where the model trigger ends,
+  // on the same band — two neighbours, not one control.
+  const adjacency = await evaluate(`(()=>{const m=${MODEL}.getBoundingClientRect();const l=${LEVEL}.getBoundingClientRect();return {gap:Math.round(l.left-m.right),band:Math.abs(l.top-m.top)}})()`)
+  assert.ok(adjacency.gap >= 0 && adjacency.gap <= 16, `the thinking trigger sits beside the model trigger (${JSON.stringify(adjacency)})`)
+  assert.ok(adjacency.band <= 6, `and on the same band (${JSON.stringify(adjacency)})`)
+
+  // Both pickers are `Select`s (the sandbox-mode picker beside them, Settings →
+  // Providers' default-model row): lists you choose from, with no field to
+  // type in, and panels the layout anchors to the trigger.
+  const openPicker = async (trigger) => {
+    await evaluate(`${trigger}.click()`)
+    await waitFor(`document.getElementById(${trigger}.getAttribute('aria-controls')).getAttribute('aria-hidden')==='false'`)
     await pause(150)
   }
   // The Select keeps every item mounted while closed (their labels are what the
   // trigger reads), so a reading of the list has to scope itself to the OPEN panel.
-  const options = () => evaluate(`Array.from(document.querySelector('[role=listbox][aria-hidden="false"]').querySelectorAll('[role=option]')).map(o=>o.textContent.trim())`)
-  const listState = () => evaluate(`document.querySelector('[role=listbox]').getAttribute('aria-hidden')`)
+  const openOptions = () => evaluate(`Array.from(document.querySelector('[role=listbox][aria-hidden="false"]').querySelectorAll('[role=option]')).map(o=>o.textContent.trim())`)
+  const listState = (trigger) => evaluate(`document.getElementById(${trigger}.getAttribute('aria-controls')).getAttribute('aria-hidden')`)
 
-  await openPicker()
-  assert.equal((await options()).length, 3, 'all available models are listed')
+  // The level picker lists the ACTIVE model's levels and reports a pick.
+  await openPicker(LEVEL)
+  assert.deepEqual(await openOptions(), ['Off', 'High'], 'the level picker lists the supported levels of the active model')
+  await evaluate(`[...document.querySelectorAll('[role=option]')].find(o=>o.textContent.trim()==='High').click()`)
+  await pause(300)
+  assert.equal(await listState(LEVEL), 'true', 'choosing a level closes the panel')
+  assert.deepEqual(await evaluate('window.levelChanges'), ['high'], 'the level change is reported')
+  assert.match(await evaluate(`${LEVEL}.textContent`), /High/, 'the trigger reflects the new level')
+
+  // The model panel itself.
+  await openPicker(MODEL)
+  assert.equal((await openOptions()).length, 3, 'all available models are listed')
   assert.equal(
     await evaluate(`Boolean(document.querySelector('[role=listbox][aria-hidden="false"]').querySelector('input,textarea,[contenteditable]'))`),
     false,
@@ -115,7 +145,7 @@ try {
   )
 
   // A model row states the inputs it accepts, and carries no step hint: the
-  // picker's second stage opens on a reasoning model by itself.
+  // level choice is the picker beside it, not a second stage of this one.
   const rowFacts = await evaluate(`(()=>{
     const rows=[...document.querySelector('[role=listbox][aria-hidden="false"]').querySelectorAll('[role=option]')];
     const fact=(name)=>{
@@ -144,50 +174,50 @@ try {
     0,
     'no expand/step hint is drawn in a model row (the only other glyph is the selection check)'
   )
-  assert.equal(
-    rowFacts.one.height,
-    rowFacts.two.height,
-    'a two-input row is no taller than a one-input row'
-  )
+  assert.equal(rowFacts.one.height, rowFacts.two.height, 'a two-input row is no taller than a one-input row')
   assert.equal(rowFacts.two.height, rowFacts.three.height, 'every model row keeps one height')
 
-  // Picking a reasoning model keeps the panel open and swaps in its levels.
+  // A model switch keeps the level list of the model being LEFT until the
+  // snapshot lands — so the level picker is disabled for that flight, and a
+  // non-reasoning target drops it entirely once it does.
+  await evaluate(`window.modelDelay=400`)
+  await evaluate(`[...document.querySelectorAll('[role=option]')].find(o=>o.textContent.includes('Model Three')).click()`)
+  await pause(120)
+  assert.equal(await listState(MODEL), 'true', 'picking a model closes the model panel — there is no second stage')
+  assert.deepEqual(await evaluate('window.changes'), ['m3'], 'the model is reported once')
+  assert.ok(await evaluate(`Boolean(${LEVEL})`), 'the level trigger still shows during the flight')
+  assert.ok(await evaluate(`${LEVEL}.disabled`), 'and is disabled while the levels of the new model are in flight')
+  await waitFor(`!document.querySelector('button[aria-haspopup=listbox][aria-label="Thinking level"]')`)
+  assert.match(await evaluate(`${MODEL}.textContent`), /Model Three/, 'the trigger follows the non-reasoning model')
+  await evaluate(`window.modelDelay=0`)
+
+  // A reasoning model brings the level picker back, enabled, with ITS levels.
+  await openPicker(MODEL)
   await evaluate(`[...document.querySelectorAll('[role=option]')].find(o=>o.textContent.includes('Model One')).click()`)
-  await pause(300)
-  assert.equal(await listState(), 'false', 'the panel stays open for the thinking step')
-  assert.deepEqual(await evaluate('window.changes'), ['m1'], 'picking a model reports it once')
-  assert.deepEqual(await options(), ['Off', 'High', 'Max'], 'the supported thinking levels replace the model list')
-  await evaluate(`[...document.querySelectorAll('[role=option]')].find(o=>o.textContent.trim()==='High').click()`)
-  await pause(300)
-  assert.equal(await listState(), 'true', 'choosing a level closes the panel')
-  assert.deepEqual(await evaluate('window.levelChanges'), ['high'], 'the level change is reported')
-  assert.match(await evaluate(`document.querySelector('[aria-haspopup=listbox]').textContent`), /Model One · High/, 'the trigger reflects the new level')
+  await waitFor(`${MODEL}.textContent.includes('Model One')`)
+  await waitFor(`document.querySelector('button[aria-haspopup=listbox][aria-label="Thinking level"]')`)
+  assert.ok(!(await evaluate(`${LEVEL}.disabled`)), 'the level picker is enabled once the snapshot has landed')
+  assert.match(await evaluate(`${LEVEL}.textContent`), /High/, 'it states the level the session kept')
+  await openPicker(LEVEL)
+  assert.deepEqual(await openOptions(), ['Off', 'High', 'Max'], 'the level list follows the new model')
 
-  // A non-reasoning model has no second step.
-  await openPicker()
-  await evaluate(`[...document.querySelectorAll('[role=option]')].find(o=>o.textContent.includes('Model Two')).click()`)
-  await pause(300)
-  assert.equal(await listState(), 'true', 'a non-reasoning model closes immediately')
-  assert.deepEqual(await evaluate('window.changes'), ['m1', 'm2'], 'the second model is reported')
-  assert.match(await evaluate(`document.querySelector('[aria-haspopup=listbox]').textContent`), /Model Two/, 'the trigger follows the non-reasoning model')
-
-  // The panel is ANCHORED to the trigger, not parked at a stored viewport
-  // measurement: a moving composer must carry it along, and every open must
+  // The panels are ANCHORED to their triggers, not parked at a stored viewport
+  // measurement: a moving composer must carry them along, and every open must
   // land in the same place. Only the side is decided in JS; the position is the
   // layout's own, which is what makes it impossible to drift.
-  const panelPlacement = () => evaluate(`(()=>{
-    const trigger=document.querySelector('[aria-haspopup=listbox]');
+  const panelPlacement = (trigger) => evaluate(`(()=>{
+    const trigger=${trigger};
     const t=trigger.getBoundingClientRect();
-    const panel=document.querySelector('[role=listbox]');
+    const panel=document.getElementById(trigger.getAttribute('aria-controls'));
     const p=panel.getBoundingClientRect();
     const box=document.getElementById('box').getBoundingClientRect();
     return {dx:Math.round(p.left-t.left),dy:Math.round(p.top-t.bottom),
       panelWidth:Math.round(p.width),triggerWidth:Math.round(t.width),triggerLeft:Math.round(t.left),
       boxLeft:Math.round(box.left),position:getComputedStyle(panel).position,side:panel.dataset.side||''};
   })()`)
-  const closePicker = async () => {
+  const closePicker = async (trigger) => {
     await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'}))`)
-    await waitFor(`document.querySelector('[role=listbox]')?.getAttribute('aria-hidden')==='true'`)
+    await waitFor(`document.getElementById(${trigger}.getAttribute('aria-controls')).getAttribute('aria-hidden')==='true'`)
     await pause(150)
   }
   const show = (placement) => JSON.stringify(placement)
@@ -197,19 +227,25 @@ try {
   // assertion is "attached to the trigger's bottom edge, never floated away".
   const underTrigger = (placement, label) =>
     assert.ok(placement.dy >= 0 && placement.dy <= 14, `${label} (${show(placement)})`)
-  await openPicker()
-  const atRest = await panelPlacement()
-  flushLeftEdge(atRest, "the panel starts on the trigger's left edge")
+  await openPicker(MODEL)
+  const atRest = await panelPlacement(MODEL)
+  flushLeftEdge(atRest, "the model panel starts on the trigger's left edge")
   underTrigger(atRest, 'and hangs off its bottom edge')
-  await closePicker()
+  assert.equal(atRest.panelWidth, 320, 'the model panel keeps its own width')
+  await closePicker(MODEL)
+  await openPicker(LEVEL)
+  const levelAtRest = await panelPlacement(LEVEL)
+  flushLeftEdge(levelAtRest, "the level panel starts on its own trigger's left edge")
+  underTrigger(levelAtRest, 'and hangs off its bottom edge')
+  assert.equal(levelAtRest.panelWidth, 176, 'the level panel keeps its own width')
 
   // Narrow the composer exactly the way Workspace.resizePanels moves it (a CSS
   // width write, no window resize, no scroll), then open again: the panel must
   // not remember where the trigger used to be.
   await evaluate(`window.setStageWidth(496)`)
   await pause(100)
-  await openPicker()
-  const shifted = await panelPlacement()
+  await openPicker(MODEL)
+  const shifted = await panelPlacement(MODEL)
   assert.notEqual(shifted.triggerLeft, atRest.triggerLeft, 'the fixture really moved the trigger')
   assert.equal(shifted.triggerWidth, atRest.triggerWidth, 'and left its width alone')
   flushLeftEdge(shifted, 'a moved composer takes the panel with it (no stale anchor)')
@@ -219,16 +255,15 @@ try {
   // follows the trigger live instead of waiting for a resize or scroll event.
   await evaluate(`window.setStageWidth(560)`)
   await pause(120)
-  const followed = await panelPlacement()
+  const followed = await panelPlacement(MODEL)
   flushLeftEdge(followed, 'an open panel follows its trigger')
   underTrigger(followed, 'vertically too')
-  assert.equal(followed.panelWidth, 320, `the anchored panel keeps its own width (${show(followed)})`)
   assert.equal(followed.position, 'absolute', 'the panel belongs to the layout, not to a portal')
-  await closePicker()
+  await closePicker(MODEL)
   await evaluate(`window.setStageWidth(592)`)
 
   assert.deepEqual(exceptions, [], 'no uncaught renderer exceptions')
-  console.log('PASS: model picker — pick-one Select anchored to its trigger, per-row input badges, no step hint, two-stage thinking step, level + model changes')
+  console.log('PASS: model picker — adjacent model and thinking Selects anchored to their triggers, per-row input badges, no step hint, flight-disabled level list')
 } finally {
   ws?.close()
   if (child && child.exitCode === null) { const exited = new Promise((r) => child.once('exit', r)); child.kill(); await exited }

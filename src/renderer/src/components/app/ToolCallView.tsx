@@ -397,14 +397,31 @@ export const ToolCallView = memo(function ToolCallView({ call, result, run, cwd 
       // the call wrote — the same all-insertion patch the turn's changed-files
       // list derives. A real `details.patch` still wins if a future SDK adds
       // one.
-      const diff = patchOf(result, run)?.patch ?? synthesizeWritePatch(path, content) ?? undefined
+      //
+      // That patch is the call's INTENT, not an outcome, so only a successful
+      // result may render it. A denied write (empty `details`, `isError`) would
+      // otherwise paint a green all-insertion diff under the "applied" check for
+      // a file the sandbox refused — and, because this branch returns before the
+      // output, hide the denial, which is the only useful thing the row has to
+      // show. A running call keeps its plain "Writing file…" row for the same
+      // reason: `arguments.content` is streamed in full before the file exists,
+      // so a growing diff there is a promise, not a fact. (`edit` never had
+      // this loophole: its diff comes only from `details.patch`, which a denial
+      // does not carry.)
+      const applied = result !== undefined && !result.isError
+      const diff = applied
+        ? patchOf(result, run)?.patch ?? synthesizeWritePatch(path, content) ?? undefined
+        : undefined
       if (typeof diff === 'string' && diff) {
         return (
           <LazyDiff
             tool="write"
             file={fileToolLabel('write', path, cwd)}
             diff={diff}
-            status={status === 'running' ? 'streaming' : 'complete'}
+            // Only reachable once a result landed, so this diff is always
+            // settled: it must not spin, auto-open, auto-scroll or defer its
+            // colors the way a streaming diff does.
+            status="complete"
           />
         )
       }
@@ -425,7 +442,10 @@ export const ToolCallView = memo(function ToolCallView({ call, result, run, cwd 
           {renderOutput(
             status === 'running'
               ? t('tool.writingFile')
-              : output || placeholder(t('tool.wrote', { file: basename(path) }))
+              // A failed call wrote nothing, so it must not claim "Wrote x" when
+              // the result carries no text of its own; `placeholder` still
+              // reports a call the turn never got to start.
+              : output || placeholder(status === 'error' ? t('tool.noOutput') : t('tool.wrote', { file: basename(path) }))
           )}
         </ToolResult>
       )

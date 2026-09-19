@@ -691,6 +691,10 @@ export interface AssistantGroupProps extends ToolContext {
   spinnerSeed?: string
   /** Opens the review tab on this turn (its first assistant message id). */
   onReview?: (turnId: number) => void
+  /** Opens Rewind on the user message that opened the turn's change scope,
+   * preselected files-only — the changed-files card's Undo action. The anchor
+   * is bound by the caller (ChatView closes over the scope's prompt). */
+  onUndoFiles?: () => void
 }
 
 /**
@@ -718,7 +722,8 @@ function assistantGroupPropsEqual(prev: AssistantGroupProps, next: AssistantGrou
     prev.failure !== next.failure ||
     prev.actionsAlwaysVisible !== next.actionsAlwaysVisible ||
     prev.spinnerSeed !== next.spinnerSeed ||
-    prev.onReview !== next.onReview
+    prev.onReview !== next.onReview ||
+    prev.onUndoFiles !== next.onUndoFiles
   ) {
     return false
   }
@@ -870,6 +875,7 @@ export const AssistantGroup = memo(function AssistantGroup({
   cwd,
   spinnerSeed,
   onReview,
+  onUndoFiles,
   toolResults,
   toolRuns
 }: AssistantGroupProps) {
@@ -991,6 +997,7 @@ export const AssistantGroup = memo(function AssistantGroup({
       <TurnWrittenFiles
         files={writtenFiles}
         onReview={onReview ? () => onReview(writtenReviewId ?? turnTimestamp) : undefined}
+        onUndo={onUndoFiles}
       />
     ) : null
   const writtenFilesInFooter = showTurnActions && Boolean(writtenFilesNode)

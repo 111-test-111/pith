@@ -40,8 +40,8 @@ function modeTone(mode: SandboxMode, unenforceable: boolean): string {
 }
 
 /**
- * The session's DSH file-sandbox mode, at the bottom of the composer next to the
- * model picker.
+ * The session's DSH file-sandbox mode, in the composer's bottom-right cluster
+ * beside the context ring — the permission the next submitted turn runs under.
  *
  * A dropdown, but every entry leads with a glyph of its own: the eye, the file
  * and pen, the warning triangle. The trigger shows the selected mode's glyph so
@@ -102,7 +102,7 @@ export function SandboxModePicker({
           </span>
         </span>
       </SelectTrigger>
-      <SelectContent className="left-0 right-auto w-72">
+      <SelectContent className="right-0 left-auto w-72">
         {SANDBOX_MODES.map((option) => {
           const OptionIcon = MODE_ICON[option]
           return (

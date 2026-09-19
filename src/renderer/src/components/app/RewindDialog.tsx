@@ -198,11 +198,20 @@ function DiffRow({ path, preview, change, neighbors, collapsed, layoutKey, onTog
 }
 
 /** The preview is the confirmation surface. Its token identifies the exact
- * disk plan; changing a mode never silently refreshes that plan. */
-export function RewindDialog({ sessionPath, messageTimestamp, messageEntryId, onClose, onCommitted }: {
+ * disk plan; changing a mode never silently refreshes that plan.
+ *
+ * An anchored open (`messageEntryId` names one user turn) lands ON that turn's
+ * before-turn checkpoint instead of listing it for a second click, and
+ * `initialMode` preselects the restore mode the entry point stands for — the
+ * user bubble's Rewind is conversation-only, the changed-files list's Undo is
+ * files-only. The preference rides only that first automatic selection; a
+ * manual click afterwards keeps the ordinary defaults, and the user can still
+ * switch modes in the toolbar. */
+export function RewindDialog({ sessionPath, messageTimestamp, messageEntryId, initialMode, onClose, onCommitted }: {
   sessionPath: string | null
   messageTimestamp?: number
   messageEntryId?: string
+  initialMode?: RewindMode
   onClose: () => void
   onCommitted: (value: RewindCommitDTO) => void
 }) {
@@ -236,6 +245,9 @@ export function RewindDialog({ sessionPath, messageTimestamp, messageEntryId, on
   const allCollapsed = !!preview?.changes.length && preview.changes.every(change => collapsed[changeKey(change)])
   const epoch = useRef(0)
   const operation = useRef<{ key: string; id: string } | undefined>(undefined)
+  /** One automatic selection per anchored open; the interval reloads `list`
+   * with a fresh identity, so the guard is a ref and not a dep comparison. */
+  const autoSelected = useRef(false)
   const busy = useRef(false)
   busy.current = executing
   useLayoutEffect(() => {
@@ -264,14 +276,15 @@ export function RewindDialog({ sessionPath, messageTimestamp, messageEntryId, on
     } catch { if (generation === epoch.current) setError({ code: 'storage' }) }
   }, [sessionPath])
   useEffect(() => {
-    ++epoch.current; setConfirming(false); setFilePreview(undefined); setLoading(false); setFileLoading(false); setList(undefined); setPreview(undefined); setError(undefined); setSuccess(undefined); setMode('conversation')
+    ++epoch.current; setConfirming(false); setFilePreview(undefined); setLoading(false); setFileLoading(false); setList(undefined); setPreview(undefined); setError(undefined); setSuccess(undefined); setMode(initialMode ?? 'conversation')
+    autoSelected.current = false
     operation.current = undefined
     if (!sessionPath) return
     void load()
     const unsubscribe = window.pi.onRewind(event => { if (event.sessionPath === sessionPath && !busy.current) void load() })
     const timer = setInterval(() => { if (!busy.current) void load() }, 2000)
     return () => { ++epoch.current; unsubscribe(); clearInterval(timer) }
-  }, [sessionPath, load])
+  }, [sessionPath, messageEntryId, initialMode, load])
   const select = async (id: string, action?: 'undo' | 'redo', actionMode?: RewindMode) => {
     if (!sessionPath || executing) return
     const generation = ++epoch.current
@@ -285,6 +298,16 @@ export function RewindDialog({ sessionPath, messageTimestamp, messageEntryId, on
     } catch { if (generation === epoch.current) setError({ code: 'storage' }) }
     finally { if (generation === epoch.current) setLoading(false) }
   }
+  // The anchored open selects its checkpoint by itself. `files`/`all` ride
+  // along as the preselected mode; `conversation` is the ordinary default and
+  // stays unnamed so `conversationUnavailable` can still fall back to `files`.
+  useEffect(() => {
+    if (!sessionPath || messageEntryId === undefined || autoSelected.current || !list) return
+    const target = list.checkpoints.find(cp => cp.trigger === 'before-turn' && cp.messageEntryId === messageEntryId)
+    if (!target) return
+    autoSelected.current = true
+    void select(target.id, undefined, initialMode === 'files' || initialMode === 'all' ? initialMode : undefined)
+  }, [sessionPath, messageEntryId, initialMode, list])
   const requestFile = async (file: string) => {
     if (!sessionPath || !preview || loading || fileLoading || executing) return
     const generation = ++epoch.current

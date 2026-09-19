@@ -134,12 +134,12 @@ app.whenReady().then(()=>{
   assert.ok(await evaluate(`${projectList}.getBoundingClientRect().height > 60`))
   await screenshot('panel-open-dark')
 
-  // The panel floats OVER the composer. The composer's own controls row (the
-  // model trigger) is z-20 too, and an equal z-index is settled by document
-  // order — the row comes later, so it painted across the panel's lower half.
+  // The panel floats OVER the composer. Its input surface (the textarea) is
+  // the overlap region the panel must paint above — the earlier probe targeted
+  // the Combobox model trigger, which the Select migration removed.
   const overlay = await evaluate(`(()=>{
     const list=${projectList};
-    const trigger=document.querySelector('[data-state][class*="cursor-text"]');
+    const trigger=document.querySelector('textarea');
     const t=trigger.getBoundingClientRect(), l=list.getBoundingClientRect();
     const top=Math.max(t.top,l.top), bottom=Math.min(t.bottom,l.bottom);
     const left=Math.max(t.left,l.left), right=Math.min(t.right,l.right);

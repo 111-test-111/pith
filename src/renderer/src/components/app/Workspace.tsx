@@ -65,6 +65,7 @@ import type {
   ModelDTO,
   ModelRefDTO,
   RecalledItemDTO,
+  RewindMode,
   SessionSnapshotDTO,
   SessionSummaryDTO,
   ThinkingLevel,
@@ -329,13 +330,19 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
   const sideChatRef = useRef<SideChatStore | null>(null)
   const [authPrompt, setAuthPrompt] = useState<AuthPromptDTO | null>(null)
   const [authNotify, setAuthNotify] = useState<AuthNotifyDTO[]>([])
-  const [rewindTarget, setRewindTarget] = useState<{ path: string; messageTimestamp?: number; messageEntryId?: string } | null>(null)
+  const [rewindTarget, setRewindTarget] = useState<{ path: string; messageTimestamp?: number; messageEntryId?: string; mode?: RewindMode } | null>(null)
   const [rewindWarning, setRewindWarning] = useState(false)
   const closeRewind = useCallback(() => setRewindTarget(null), [])
-  const rewindMessage = useCallback((message: UserMsg) => {
+  /** One anchored open shared by both entry points: the message names the
+   * checkpoint, the mode is what the entry point stands for. */
+  const openRewindAt = useCallback((message: UserMsg, mode: RewindMode) => {
     const path = store.getShell().sessionPath
-    if (path) setRewindTarget({ path, messageTimestamp: message.timestamp, messageEntryId: message.sessionEntryId })
+    if (path) setRewindTarget({ path, messageTimestamp: message.timestamp, messageEntryId: message.sessionEntryId, mode })
   }, [store])
+  const rewindMessage = useCallback((message: UserMsg) => openRewindAt(message, 'conversation'), [openRewindAt])
+  /** The changed-files list's Undo: the same checkpoint, but the restore is
+   * preselected to files-only — the workspace writes go, the chat stays. */
+  const undoFilesTurn = useCallback((message: UserMsg) => openRewindAt(message, 'files'), [openRewindAt])
   useEffect(() => {
     const path = shell.sessionPath
     setRewindWarning(false)
@@ -1539,6 +1546,7 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
                 onResend={handleResend}
                 onEditMessage={handleEditMessage}
                 onRewindMessage={rewindMessage}
+                onUndoFiles={undoFilesTurn}
                 onFork={handleFork}
                 onReview={openReview}
                 onOpenSession={openAgentPane}
@@ -1666,7 +1674,7 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
         onUiStyleChange={onUiStyleChange}
       />
 
-      <RewindDialog sessionPath={rewindTarget?.path ?? null} messageTimestamp={rewindTarget?.messageTimestamp} messageEntryId={rewindTarget?.messageEntryId} onClose={closeRewind} onCommitted={value => {
+      <RewindDialog sessionPath={rewindTarget?.path ?? null} messageTimestamp={rewindTarget?.messageTimestamp} messageEntryId={rewindTarget?.messageEntryId} initialMode={rewindTarget?.mode} onClose={closeRewind} onCommitted={value => {
         if (value.snapshot?.sessionPath === store.getShell().sessionPath) store.applySnapshot(value.snapshot)
         setScrollResetKey(previous => previous + 1)
         // A conversation restore re-decides what the sidebar shows for this

@@ -3,18 +3,16 @@
 
 // local patch (pi-app): use the shared Lucide icon adapter.
 import {
-  Ban,
   Braces,
   Check,
   ChevronDown,
-  CircleCheck,
-  CircleX,
   Copy,
-  LoaderCircle,
   RotateCcw,
   SquareTerminal,
   Wrench,
 } from "@/lib/icons";
+// local patch (pi-app): the row's status mark is app-drawn, not a pack glyph.
+import { StatusRing } from "@/lib/status-ring";
 import { motion, useReducedMotion } from "motion/react";
 import {
   type ReactNode,
@@ -111,6 +109,12 @@ function KindIcon({ kind }: { kind: ToolResultKind }) {
   return <Wrench className="size-4" />;
 }
 
+// local patch (pi-app): the status mark is the app's own pure circle
+// (`lib/status-ring`) instead of a pack glyph. The square pack answers
+// `CircleCheck` with Carbon's square `CheckboxChecked` and `Ban` with
+// `SquareSlash`, so these little rings squared off in 直角 mode while the rows
+// beside them (todo, sidebar) stayed round. Settings controls still follow the
+// pack; a status ring never does.
 function StatusIcon({
   status,
   reduce,
@@ -118,12 +122,7 @@ function StatusIcon({
   status: ToolResultStatus;
   reduce: boolean;
 }) {
-  if (status === "running") {
-    return <LoaderCircle className={cn("size-3", !reduce && "animate-spin")} />;
-  }
-  if (status === "success") return <CircleCheck className="size-3" />;
-  if (status === "error") return <CircleX className="size-3" />;
-  return <Ban className="size-3" />;
+  return <StatusRing status={status} reduce={reduce} className="size-3" />;
 }
 
 function ToolResultAction({

@@ -159,10 +159,13 @@ const WrittenFileRow = memo(function WrittenFileRow({
 })
 
 export const TurnWrittenFiles = memo(function TurnWrittenFiles({
-  files, onReview
+  files, onReview, onUndo
 }: {
   files: WrittenFile[]
   onReview?: () => void
+  /** Opens Rewind on the scope's opening user message, preselected files-only.
+   * Absent in read-only views (or when the anchor was compacted away). */
+  onUndo?: () => void
 }) {
   const { t } = useI18n()
   const contentId = useId()
@@ -341,9 +344,11 @@ export const TurnWrittenFiles = memo(function TurnWrittenFiles({
                 <ChevronDown aria-hidden="true" className={cn('size-3.5 transition-transform', expanded && 'rotate-180')} />
               </Button>
             ) : null}
-            <Button variant="ghost" size="sm">
-              {t('tool.filesUndo')}<Rewind aria-hidden="true" className="size-3.5" />
-            </Button>
+            {onUndo ? (
+              <Button variant="ghost" size="sm" onClick={onUndo}>
+                {t('tool.filesUndo')}<Rewind aria-hidden="true" className="size-3.5" />
+              </Button>
+            ) : null}
             <Button variant="ghost" size="sm" onClick={onReview}>{t('tool.filesReview')}</Button>
           </span>
         </div>

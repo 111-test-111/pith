@@ -126,7 +126,7 @@ try {
   // 2. One list holds the workspace's actions, the projects and the sessions,
   //    each under its own localized group heading.
   const initial = await evaluate('window.dialogText()')
-  for (const expected of ['Actions', 'Projects', 'Sessions', 'Terminal', 'New chat', 'Compact conversation', 'proj-a', 'Fix the parser']) {
+  for (const expected of ['Actions', 'Projects', 'Sessions', 'Terminal', 'New chat', 'Summarize conversation', 'proj-a', 'Fix the parser']) {
     assert.ok(initial.includes(expected), `the initial list holds "${expected}": ${initial.slice(0, 200)}`)
   }
   assert.ok((await evaluate('window.options()')).length >= 10, 'actions, projects and sessions are all listed')
@@ -149,7 +149,7 @@ try {
   await pause(300)
   await evaluate(`window.query('compact')`)
   await pause(250)
-  assert.match((await evaluate('window.options()'))[0].text, /Compact conversation/, 'compaction is a command')
+  assert.match((await evaluate('window.options()'))[0].text, /Summarize conversation/, 'compaction is a command')
   await evaluate('window.pressEnter()')
   await pause(350)
   assert.deepEqual(await evaluate('window.calls').then((calls) => calls.at(-1)), ['compact'], 'the compaction command dispatched')

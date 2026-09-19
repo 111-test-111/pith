@@ -757,7 +757,7 @@ try {
   })()`)
   assert.ok(failedCompaction, 'a failed compaction renders an error row: ' + JSON.stringify(failedCompaction))
   assert.equal(failedCompaction.busy, 'false')
-  assert.match(failedCompaction.text, /Compact context/, 'the row names the job')
+  assert.match(failedCompaction.text, /Summarize context/, 'the row names the job')
   assert.match(failedCompaction.text, /context window exhausted/, 'the reason is readable without a click: ' + failedCompaction.text)
   assert.equal(await rowCount('#turn-fixture [data-turn-failure]'), 0, 'a compaction failure is not turn prose')
   assert.equal(await rowCount('#turn-fixture [data-turn-notice]'), 0, 'and not the framed retry status row either')
@@ -805,7 +805,7 @@ try {
   assert.ok(settled, 'the settled compaction renders its summary row: ' + JSON.stringify(settled))
   assert.equal(settled.open, 'false', 'a summary stays collapsed until it is asked for')
   assert.equal(settled.hasBody, false, 'the summary body is not mounted while collapsed')
-  assert.match(settled.text, /Compact context/, `the row names the job: ${settled.text}`)
+  assert.match(settled.text, /Summarize context/, `the row names the job: ${settled.text}`)
   assert.match(settled.text, /120\.0k tokens summarized/, `the row carries the size it summarized: ${settled.text}`)
   assert.ok(settled.height < 60, `the row is one tool row tall: ${settled.height}`)
   assert.ok(

@@ -107,7 +107,7 @@ try {
   //    follow-up can also be promoted now.
   assert.equal(rows[0].controls.length, 1, 'a queued steer only offers remove: ' + JSON.stringify(rows[0]))
   assert.equal(rows[1].controls.length, 2, 'a follow-up offers steer-now and remove: ' + JSON.stringify(rows[1]))
-  assert.ok(rows[1].controls.some((control) => control.label === 'Steer now'), 'the follow-up keeps its promote action')
+  assert.ok(rows[1].controls.some((control) => control.label === 'Send now'), 'the follow-up keeps its promote action')
 
   // 4. Both locales: the row geometry must not depend on the translated prose.
   await evaluate(`window.setLocale('zh-CN')`)

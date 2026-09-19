@@ -1,12 +1,16 @@
 /**
- * The composer's two pickers — the model and the sandbox mode — are the same
- * `Select`: a panel the LAYOUT anchors to its trigger (`absolute left-0
- * top-full`), so it cannot drift off the trigger, be clipped away, or hide
- * behind the landing cards. This runs the real built app in isolated Electron
- * (synthetic IPC, no model calls, no user data) on the landing screen and
- * checks both panels' geometry, stacking and no-typing rule, plus a panel drag
- * — the composer move that reports neither a window resize nor a scroll, which
- * is what let the old portalled model panel float away from its trigger.
+ * The composer's three pickers — the model, its thinking level and the sandbox
+ * mode — are the same `Select`: a panel the LAYOUT anchors to its trigger
+ * (`absolute` against the trigger's own box), so it cannot drift off the
+ * trigger, be clipped away, or hide behind the landing cards. The model and
+ * thinking pickers lead the composer's row; the sandbox picker lives in the
+ * bottom-right send cluster, left of the context ring, and aligns its panel
+ * to the trigger's RIGHT edge (a left-aligned panel there would run past the
+ * window). This runs the real built app in isolated Electron (synthetic IPC,
+ * no model calls, no user data) on the landing screen and checks all three
+ * panels' geometry, stacking and no-typing rule, plus a panel drag — the
+ * composer move that reports neither a window resize nor a scroll, which is
+ * what let the old portalled model panel float away from its trigger.
  *
  * Run after `npm run build`. PI_PICKER_SCREENSHOT_DIR retains the views.
  */
@@ -112,12 +116,26 @@ app.whenReady().then(()=>{
   // The left sidebar's strip is `data-panel-handle="right"` (it grows rightward).
   await waitFor(`document.querySelector('textarea') && document.querySelector('[data-panel-handle]')`)
 
-  // The two composer triggers, told apart by what they carry: the model's name,
-  // and the sandbox glyph.
+  // The three composer triggers, told apart by what they carry: the model's
+  // name, the thinking level's label, and the sandbox glyph.
   const MODEL = `[...document.querySelectorAll('button[aria-haspopup=listbox]')].find(b=>b.textContent.includes('DeepSeek V4.1 Flash'))`
+  const THINKING = `document.querySelector('button[aria-haspopup=listbox]:has(svg[data-app-icon="Brain"])')`
   const SANDBOX = `document.querySelector('button[aria-haspopup=listbox]:has([data-sandbox-mode-icon])')`
   assert(await evaluate(`Boolean(${MODEL})`), 'the model trigger is in the composer')
+  assert(await evaluate(`Boolean(${THINKING})`), 'the thinking trigger is beside it')
   assert(await evaluate(`Boolean(${SANDBOX})`), 'the sandbox trigger is in the composer')
+
+  // The layout the split implies: model, then its thinking level, leading the
+  // composer's row; the sandbox picker in the bottom-right send cluster (right
+  // of the textarea's middle, left of the send button).
+  const leftOf = (trigger) => evaluate(`(${trigger}).getBoundingClientRect().left`)
+  const [modelLeft, thinkingLeft, sandboxLeft] = [await leftOf(MODEL), await leftOf(THINKING), await leftOf(SANDBOX)]
+  const composerArea = await evaluate(`(()=>{const r=document.querySelector('textarea').getBoundingClientRect();return {left:r.left,right:r.right}})()`)
+  assert.ok(modelLeft < thinkingLeft && thinkingLeft < sandboxLeft, `model, thinking, sandbox read left to right (${[modelLeft, thinkingLeft, sandboxLeft]})`)
+  assert.ok(
+    sandboxLeft > composerArea.left + (composerArea.right - composerArea.left) / 2,
+    `the sandbox picker sits in the right half of the composer (sandbox ${Math.round(sandboxLeft)}, composer ${Math.round(composerArea.left)}–${Math.round(composerArea.right)})`
+  )
 
   // Every claim about a panel, measured in one pass: where it sits relative to
   // its trigger, whether it is the topmost thing at its own point (a panel
@@ -135,9 +153,9 @@ app.whenReady().then(()=>{
       if (p.left < r.left - 0.5 || p.right > r.right + 0.5 || p.top < r.top - 0.5 || p.bottom > r.bottom + 0.5)
         clippers.push((a.className || a.tagName).toString().slice(0, 60))
     }
-    return { dx: Math.round(p.left - t.left), dy: Math.round(p.top - t.bottom),
+    return { dx: Math.round(p.left - t.left), dr: Math.round(p.right - t.right), dy: Math.round(p.top - t.bottom),
       panelWidth: Math.round(p.width), panelHeight: Math.round(p.height),
-      triggerLeft: Math.round(t.left), triggerWidth: Math.round(t.width),
+      triggerLeft: Math.round(t.left), triggerWidth: Math.round(t.width), triggerRight: Math.round(t.right),
       position: getComputedStyle(panel).position, topmost: !!hit && panel.contains(hit),
       clippers, hasInput: !!panel.querySelector('input,textarea,[contenteditable]') }
   }`)
@@ -145,14 +163,18 @@ app.whenReady().then(()=>{
   const isOpen = (trigger) => evaluate(`document.getElementById(${trigger}.getAttribute('aria-controls')).getAttribute('aria-hidden') === 'false'`)
   const show = (value) => JSON.stringify(value)
 
-  // Both composer pickers: the same control, the same anchoring, no typing.
-  for (const [name, trigger, width] of [['model', MODEL, 320], ['sandbox', SANDBOX, 288]]) {
+  // All three composer pickers: the same control, the same anchoring, no
+  // typing. Model and thinking align their panels to the trigger's LEFT edge;
+  // the sandbox picker's trigger sits at the composer's right edge, so its
+  // panel aligns to the trigger's RIGHT edge instead.
+  for (const [name, trigger, width, align] of [['model', MODEL, 320, 'left'], ['thinking', THINKING, 176, 'left'], ['sandbox', SANDBOX, 288, 'right']]) {
     await click(trigger)
     await waitFor(`document.getElementById(${trigger}.getAttribute('aria-controls')).getAttribute('aria-hidden') === 'false'`)
     await pause(500)
     const measured = await facts(trigger)
-    assert.ok(Math.abs(measured.dx) <= 1, `${name}: the panel starts on the trigger's left edge (${show(measured)})`)
-    assert.ok(measured.dy >= 0 && measured.dy <= 14, `${name}: and hangs off its bottom edge (${show(measured)})`)
+    if (align === 'left') assert.ok(Math.abs(measured.dx) <= 1, `${name}: the panel starts on the trigger's left edge (${show(measured)})`)
+    else assert.ok(Math.abs(measured.dr) <= 1, `${name}: the panel's right edge lands on the trigger's right edge (${show(measured)})`)
+    assert.ok(measured.dy >= -14 && measured.dy <= 14, `${name}: and sits against its trigger's edge (${show(measured)})`)
     assert.equal(measured.position, 'absolute', `${name}: the panel belongs to the layout, not to a portal`)
     assert.equal(measured.panelWidth, width, `${name}: the panel keeps its own width (${show(measured)})`)
     assert.equal(measured.topmost, true, `${name}: the panel is painted above the landing content (${show(measured)})`)
@@ -203,7 +225,7 @@ app.whenReady().then(()=>{
   await screenshot('after-panel-drag')
 
   assert.deepEqual(exceptions, [], 'no uncaught renderer exceptions')
-  console.log('PASS: composer pickers — the model and sandbox Selects are anchored to their triggers, unclipped and on top, with no field to type in, and follow a panel drag')
+  console.log('PASS: composer pickers — model, thinking and sandbox Selects anchored to their triggers (sandbox right-aligned in the send cluster), unclipped and on top, with no field to type in, and following a panel drag')
 } finally {
   ws?.close()
   if (child && child.exitCode === null) { const exited = new Promise((r) => child.once('exit', r)); child.kill(); await exited }

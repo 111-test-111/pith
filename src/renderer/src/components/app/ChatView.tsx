@@ -158,6 +158,7 @@ export const ChatView = memo(function ChatView({
   onResend,
   onEditMessage,
   onRewindMessage,
+  onUndoFiles,
   onFork,
   onReview,
   onOpenSession
@@ -178,6 +179,9 @@ export const ChatView = memo(function ChatView({
    * itself — the dialog's Resend press does). */
   onEditMessage?: (message: UserMsg) => void
   onRewindMessage?: (message: UserMsg) => void
+  /** Open Rewind on the user message that opened a turn's change scope,
+   * preselected files-only — the changed-files card's Undo action. */
+  onUndoFiles?: (message: UserMsg) => void
   /** Fork the session at an assistant message; opens the fork. */
   onFork?: (message: AssistantMsg) => void
   /** Open the review tab on a turn — the changed-files card's Review action.
@@ -318,6 +322,7 @@ export const ChatView = memo(function ChatView({
   // applies to the hover rows applies to the menu.
   const menuEdit = state.subagentChild ? undefined : onEditMessage
   const menuRewind = state.subagentChild ? undefined : onRewindMessage
+  const undoFiles = state.subagentChild ? undefined : onUndoFiles
   const menuResend = state.subagentChild ? undefined : onResend
   const menuFork = state.subagentChild ? undefined : onFork
 
@@ -369,6 +374,10 @@ export const ChatView = memo(function ChatView({
         : turn.assistants
     const scopeId = turn.assistants[0]?.changeScopeId ?? turn.key
     const changes = changeScopes.get(scopeId)
+    // The scope's opening prompt anchors the checkpoint that covers every file
+    // in the cumulative list (a steer reuses the same scope); `prompt` is null
+    // when a compaction removed it, and the Undo action is simply absent.
+    const undoTarget = changes?.prompt ?? null
     // Retry rewinds to the user message that opened this turn's exchange;
     // scanning stops at a summary (its user message may be compacted away).
     // Fork keeps everything up to the turn's last round.
@@ -396,6 +405,7 @@ export const ChatView = memo(function ChatView({
         toolRuns={state.toolRuns}
         spinnerSeed={spinnerSeed}
         onReview={onReview}
+        onUndoFiles={undoTarget && undoFiles ? () => undoFiles(undoTarget) : undefined}
       />
     )
   }

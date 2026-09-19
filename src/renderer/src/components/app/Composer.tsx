@@ -586,8 +586,13 @@ export function Composer({
                     onThinkingLevelChange={onThinkingLevelChange}
                     disabled={busy || initializing || readOnly}
                   />
-                  {/* The sandbox mode sits with the model because both are
-                      session-scoped choices the next tool call obeys. */}
+                </span>
+              }
+              contextIndicator={
+                <span className="flex items-center gap-1">
+                  {/* The sandbox mode sits with the send cluster, left of the
+                      context ring: it is the permission the next submitted turn
+                      runs under. */}
                   <SandboxModePicker
                     mode={sandboxMode}
                     status={sandbox}
@@ -595,15 +600,15 @@ export function Composer({
                     disabled={busy || initializing || readOnly}
                     onSnapshot={(snapshot) => onSandboxSnapshot?.(snapshot)}
                   />
+                  {initializing ? (
+                    <LabelTooltip content={t('composer.initializing')}>
+                      <span role="status" aria-label={t('composer.initializing')} className="grid size-7 place-items-center text-muted-foreground">
+                        <Loader2 aria-hidden="true" className="size-3.5 animate-spin" />
+                      </span>
+                    </LabelTooltip>
+                  ) : <ContextRing usage={contextUsage ?? null} onOpen={onOpenContext} />}
                 </span>
               }
-              contextIndicator={initializing ? (
-                <LabelTooltip content={t('composer.initializing')}>
-                  <span role="status" aria-label={t('composer.initializing')} className="grid size-7 place-items-center text-muted-foreground">
-                    <Loader2 aria-hidden="true" className="size-3.5 animate-spin" />
-                  </span>
-                </LabelTooltip>
-              ) : <ContextRing usage={contextUsage ?? null} onOpen={onOpenContext} />}
               actions={[
                 {
                   value: 'attach-image',

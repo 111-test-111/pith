@@ -21,7 +21,7 @@ import {Button} from '/src/components/motion/button/index.tsx';
 import {I18nProvider,useI18n} from '/src/i18n/index.tsx';import '/src/styles.css';
 localStorage.setItem('pi-app:locale','en');
 window.outside=false;window.statsReads=0;window.filePreviews=[];window.binaryIndex=false;window.large=false;window.patchReads=0;window.restores=[];window.commitMode='success';window.operations=[];window.previewActions={};window.pending=[];window.busy=false;window.busyReason=undefined;window.listError=undefined;window.empty=false;let listener;
-const cp={id:'checkpoint',sessionId:'session',timestamp:1700000000000,trigger:'before-turn',entryId:'before',description:'Fixture change',files:2,bytes:30,excluded:[],branch:'main',messageTimestamp:42};
+const cp={id:'checkpoint',sessionId:'session',timestamp:1700000000000,trigger:'before-turn',entryId:'before',messageEntryId:'msg-1',description:'Fixture change',files:2,bytes:30,excluded:[],branch:'main',messageTimestamp:42};
 window.checkpoint=cp;
 window.statsBatches=[];window.failTotals=false;window.statsDelay=0;window.deck=false;window.patchDelay=0;window.patchFiles=[];window.mixedCoverage=false;window.filePreviewDelay=0;
 window.pi={configuredModels:async()=>[{providerId:'fixture',providerName:'Fixture provider',id:'source',name:'Fixture source',reasoning:true,input:['text'],contextWindow:32768,maxTokens:4096}],
@@ -35,7 +35,7 @@ rewindPatch:async(path,token,file,area)=>{window.patchReads++;window.patchFiles.
 rewindRestore:async request=>{window.restores.push(request);if(window.commitMode==='hold')await new Promise(resolve=>window.releaseRestore=resolve);if(window.commitMode==='changed')return{error:{code:'changed',paths:['file.txt']}};const source=window.previewActions[request.token];const op={undoOf:source?.action==='undo'?source.id:undefined,redoOf:source?.action==='redo'?source.id:undefined,skipped:request.skipUncovered&&request.mode!=='conversation'?[{path:'/project/Workspace.tsx',reason:'outside-workspace'}]:undefined,file:request.token.startsWith('single-')?'file.txt':undefined,id:request.operationId,timestamp:Date.now(),sessionId:'session',targetId:'checkpoint',mode:request.mode,status:'committed',beforeEntryId:'before',afterEntryId:'after',canUndo:source?.action!=='undo',canRedo:source?.action==='undo'};window.operations=[op,...window.operations.map(previous=>({...previous,canUndo:false,canRedo:false}))];return{value:{operation:op}}},
 rewindRecover:async()=>{window.pending=[];window.busy=false;return{value:{operation:{id:'recover',timestamp:Date.now(),status:'rolled-back'}}}},openPath:async()=>''};
 window.refresh=()=>listener?.({sessionPath:'/fixture/session'});
-function Fixture(){const [open,setOpen]=React.useState(false);const [editorTarget,setEditorTarget]=React.useState(null);window.setEditorTarget=setEditorTarget;const {setLocale}=useI18n();window.setLocale=setLocale;window.setOpen=setOpen;return React.createElement('div',{className:'p-8'},React.createElement(Button,{id:'open',onClick:()=>setOpen(true)},'Open rewind'),React.createElement(RewindDialog,{sessionPath:open?'/fixture/session':null,onClose:React.useCallback(()=>setOpen(false),[]),onCommitted:()=>{}}),React.createElement(ModelEditorDialog,{target:editorTarget,providerId:'fixture',mutate:()=>{throw new Error('Unexpected config write')},flush:async()=>{},onClose:()=>setEditorTarget(null)}));}
+function Fixture(){const [open,setOpen]=React.useState(false);const [anchor,setAnchor]=React.useState(null);const [editorTarget,setEditorTarget]=React.useState(null);window.setEditorTarget=setEditorTarget;const {setLocale}=useI18n();window.setLocale=setLocale;window.setOpen=value=>{setOpen(value);if(!value)setAnchor(null)};window.openAnchored=mode=>{setAnchor({messageTimestamp:42,messageEntryId:'msg-1',initialMode:mode});setOpen(true)};return React.createElement('div',{className:'p-8'},React.createElement(Button,{id:'open',onClick:()=>setOpen(true)},'Open rewind'),React.createElement(RewindDialog,{sessionPath:open?'/fixture/session':null,messageTimestamp:anchor?.messageTimestamp,messageEntryId:anchor?.messageEntryId,initialMode:anchor?.initialMode,onClose:React.useCallback(()=>{setOpen(false);setAnchor(null)},[]),onCommitted:()=>{}}),React.createElement(ModelEditorDialog,{target:editorTarget,providerId:'fixture',mutate:()=>{throw new Error('Unexpected config write')},flush:async()=>{},onClose:()=>setEditorTarget(null)}));}
 createRoot(document.getElementById('root')).render(React.createElement(React.StrictMode,null,React.createElement(I18nProvider,null,React.createElement(Fixture))));
 </script></body></html>`
 let child, ws, server
@@ -261,7 +261,7 @@ try {
   await evaluate(`window.busyReason='terminal';window.refresh()`)
   await until(`/interactive terminal is open/.test(document.querySelector('[data-rewind-error="busy"]')?.innerText||'')`)
   await evaluate(`window.busyReason='work';window.refresh()`)
-  await until(`/is writing this checkout/.test(document.querySelector('[data-rewind-error="busy"]')?.innerText||'')`)
+  await until(`/is changing files in this folder/.test(document.querySelector('[data-rewind-error="busy"]')?.innerText||'')`)
   await evaluate(`window.busyReason='recovery';window.refresh()`)
   await until(`/unfinished recovery/.test(document.querySelector('[data-rewind-error="busy"]')?.innerText||'')`)
   await evaluate(`window.busyReason=undefined;window.refresh()`)
@@ -277,9 +277,9 @@ try {
   await until(`!!document.querySelector('[data-rewind-checkpoint]')`)
   console.log('PASS: deduplicated busy/capture notices, one named busy reason and an honest empty state after a failed capture')
   await evaluate('window.binaryIndex=true');await select()
-  await until(`document.body.innerText.includes('Binary contents or index metadata')`)
+  await until(`document.body.innerText.includes('Binary contents or metadata')`)
   await until(`document.querySelector('[data-rewind-totals]')?.textContent==='Total+1−11 binary entries'`)
-  assert(!await evaluate(`document.body.innerText.includes('Only file type, permissions or index metadata changes.')`),'binary index is not labelled metadata-only')
+  assert(!await evaluate(`document.body.innerText.includes('Only file type, permissions or metadata changed.')`),'binary index is not labelled metadata-only')
   await evaluate('window.binaryIndex=false')
   await evaluate('window.large=true;window.patchReads=0;window.previewStart=performance.now()')
   await select()
@@ -377,7 +377,7 @@ try {
   const restoresBeforeFile = await evaluate('window.restores.length')
   await evaluate(`document.querySelector('[data-rewind-file-restore]').click()`)
   await pause(60);await assertPreviewRetained()
-  await until(`document.body.innerText.includes('Restore this working file to the start of the selected turn?')`)
+  await until(`document.body.innerText.includes('Restore this file to the start of the selected turn?')`)
   assert.equal(await evaluate('window.restores.length'),restoresBeforeFile,'single-file action also requires overwrite confirmation')
   assert(await evaluate(`document.querySelector('[role="dialog"][aria-modal="true"]').textContent.includes('file.txt')`),'confirmation names the exact file')
   await pause(200)
@@ -391,7 +391,7 @@ try {
   await evaluate('window.filePreviewDelay=0')
   assert.equal(await evaluate('window.restores.length'),restoresBeforeFile)
   await evaluate(`document.querySelector('[data-rewind-file-restore]').click()`)
-  await until(`document.body.innerText.includes('Restore this working file to the start of the selected turn?')`)
+  await until(`document.body.innerText.includes('Restore this file to the start of the selected turn?')`)
   await clickText('Force restore with backup')
   await until(`window.restores.length===${restoresBeforeFile+1}&&!!document.querySelector('[data-review-file-header]')`)
   assert.equal(await evaluate('window.restores.at(-1).mode'),'files','single-file action ignores the whole-checkpoint conversation mode')
@@ -401,13 +401,13 @@ try {
   await evaluate('window.outside=true');await select('files')
   await until(`!!document.querySelector('[data-rewind-uncovered]')`)
   assert(await evaluate(`document.body.innerText.includes('/project/Workspace.tsx')`))
-  assert(!await evaluate(`document.body.innerText.includes('No file or staging changes.')`),'outside edits are not reported as no changes')
+  assert(!await evaluate(`document.body.innerText.includes('No file changes.')`),'outside edits are not reported as no changes')
   assert(await evaluate(`document.querySelector('[data-rewind-restore]').disabled`))
   await setMode('all')
   assert(!await evaluate(`document.querySelector('[data-rewind-restore]').disabled`),'combined restore can explicitly skip all uncovered files and restore its conversation')
   await evaluate(`document.querySelector('[data-rewind-restore]').click()`)
   await until(`!!document.querySelector('[data-rewind-partial-confirm]')`)
-  assert(await evaluate(`document.querySelector('[role="dialog"][aria-modal="true"]').textContent.includes('replace 0 file or staging changes')`),'zero covered changes are stated honestly')
+  assert(await evaluate(`document.querySelector('[role="dialog"][aria-modal="true"]').textContent.includes('replace 0 file changes')`),'zero covered changes are stated honestly')
   await clickText('Cancel')
   const uncovered = await send('Page.captureScreenshot',{format:'png'})
   await writeFile(join(temporary,'rewind-uncovered.png'),Buffer.from(uncovered.data,'base64'))
@@ -537,6 +537,22 @@ try {
   console.log('PASS: compact history rows, pointer/keyboard preview, Undo/Redo identity, passive older entries, long paths and independent skipped-file details')
   await evaluate(`window.setOpen(false);window.setLocale('en')`);await until(`!document.querySelector('[data-rewind-panel]')`)
   assert.equal(await evaluate('document.body.style.overflow'),'')
+  // The two anchored entrances — the user bubble's 回退 (conversation) and the
+  // changed-files card's Undo (files) — land ON their checkpoint with the
+  // entry point's mode preselected, without a second click, and never execute.
+  const restoresBeforeAnchored = await evaluate('window.restores.length')
+  await evaluate(`window.openAnchored('files')`)
+  await until(`!!document.querySelector('[data-rewind-checkpoint][aria-pressed="true"]')`)
+  await until(`!!document.querySelector('[data-rewind-restore]:not(:disabled)')`)
+  await until(`!!document.querySelector('[data-review-diff]')`)
+  assert.equal(await evaluate(`document.querySelector('[data-rewind-restore]').dataset.rewindSelectedMode`),'files','the changed-files Undo opens the checkpoint preselected to files-only restore')
+  await evaluate(`window.setOpen(false)`);await until(`!document.querySelector('[data-rewind-panel]')`)
+  await evaluate(`window.openAnchored('conversation')`)
+  await until(`document.querySelector('[data-rewind-restore]')?.dataset.rewindSelectedMode==='conversation'`)
+  await until(`!!document.querySelector('[data-rewind-checkpoint][aria-pressed="true"]')`)
+  assert.equal(await evaluate('window.restores.length'),restoresBeforeAnchored,'anchored opens select and preselect, never execute')
+  await evaluate(`window.setOpen(false)`);await until(`!document.querySelector('[data-rewind-panel]')`)
+  console.log('PASS: anchored opens auto-select their checkpoint and preselect conversation/files restore modes')
   await send('Emulation.setDeviceMetricsOverride',{width:1100,height:1000,deviceScaleFactor:1,mobile:false})
   await evaluate(`window.setEditorTarget({kind:'new'})`)
   await until(`document.body.innerText.includes('Add model')`);await pause(300)

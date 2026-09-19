@@ -1,7 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { Brain, ChevronLeft, Loader2 } from '@/lib/icons'
+import { useMemo, useState } from 'react'
+import { Brain } from '@/lib/icons'
 import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/motion/select'
-import { Tooltip } from '@/components/motion/tooltip'
 import { useI18n } from '@/i18n'
 import type { MessageKey } from '@/i18n/locales/en'
 import { ProviderIcon } from './ProviderIcon'
@@ -40,22 +39,22 @@ interface ModelPickerProps {
 const modelKey = (model: { providerId: string; id: string }) => `${model.providerId}/${model.id}`
 
 /**
- * Two-stage composer picker: the model list first, then — for a reasoning
- * model — the thinking levels that model actually supports, with a back row to
- * return to the list. The trigger carries both ("Model · High").
+ * Two adjacent pickers: one chooses the model, the one beside it chooses the
+ * thinking level of THAT model. Both are `Select`s, the same primitive as the
+ * sandbox-mode picker beside them and Settings → Providers' default-model row:
+ * the panels hang off their triggers in the layout (`absolute left-0
+ * top-full`), so they cannot drift away — a portalled panel positioned from
+ * coordinates measured on mount could, since the composer moves in ways no
+ * window resize or scroll reports (see `SelectContent`). Picking is a choice
+ * from a list, so there is no search field: a trigger states its current
+ * value, never a query.
  *
- * A `Select`, the same primitive as the sandbox-mode picker beside it and as
- * Settings → Providers' default-model row: the panel hangs off the trigger in
- * the layout (`absolute left-0 top-full`), so it cannot drift away from it —
- * a portalled panel positioned from coordinates measured on mount could, since
- * the composer moves in ways no window resize or scroll reports (see
- * `SelectContent`). Picking is a choice from a list, so there is no search
- * field: the trigger always states the active model, never a query.
- *
- * The level list is the session's SDK-authoritative `availableThinkingLevels`,
- * so it only exists for the active model: after picking a model the panel waits
- * one IPC round trip for the snapshot, instead of guessing from a hardcoded
- * list or re-deriving `thinkingLevelMap`.
+ * The level picker exists only for a reasoning model with more than the single
+ * "off" level — a non-reasoning model had no level UI before the split either.
+ * Its list is the session's SDK-authoritative `availableThinkingLevels`, which
+ * arrives one IPC round trip after a model switch; until the snapshot lands
+ * the list still describes the PREVIOUS model, so the picker is disabled for
+ * that window instead of offering levels the new model does not support.
  */
 export function ModelPicker({
   models,
@@ -68,11 +67,14 @@ export function ModelPicker({
 }: ModelPickerProps) {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
-  /** Model key whose thinking levels the panel is currently showing. */
-  const [levelsFor, setLevelsFor] = useState<string | null>(null)
-  /** Set right before a model row is picked: the vendored Select closes on
-   * every item click, but the model step has to keep the panel open. */
-  const keepOpenRef = useRef(false)
+  const [levelOpen, setLevelOpen] = useState(false)
+  /**
+   * Model key whose snapshot is in flight. Cleared in a render-phase adjust
+   * the moment `value` becomes that key (the snapshot landed); the ref-free
+   * state keeps the level picker's disabled state honest in that exact render.
+   */
+  const [pendingModel, setPendingModel] = useState<string | null>(null)
+  if (pendingModel !== null && pendingModel === value) setPendingModel(null)
 
   const grouped = useMemo(() => {
     const byProvider = new Map<string, { providerName: string; models: ModelDTO[] }>()
@@ -98,155 +100,115 @@ export function ModelPicker({
     () => models.find((m) => modelKey(m) === value) ?? null,
     [models, value]
   )
-  // Levels belong to the active model; while the model switch is in flight the
-  // list would still describe the previous one.
-  const levelsReady = levelsFor !== null && levelsFor === value
-
-  // A reasoning model whose level map leaves nothing but "off" has no second
-  // step — close instead of showing a one-item list.
-  useEffect(() => {
-    if (levelsFor && levelsReady && availableThinkingLevels.length <= 1) {
-      setLevelsFor(null)
-      setOpen(false)
-    }
-  }, [levelsFor, levelsReady, availableThinkingLevels.length])
-
-  const levelSuffix = current?.reasoning ? ` · ${levelLabel(t, thinkingLevel)}` : ''
 
   const handleValueChange = (next: string) => {
-    if (levelsFor) {
-      onThinkingLevelChange(next as ThinkingLevel)
-      setLevelsFor(null)
-      return
-    }
     const model = models.find((m) => modelKey(m) === next)
     if (!model) return
-    // Non-reasoning models have exactly one level ("off"); nothing to choose.
-    if (!model.reasoning) {
-      void Promise.resolve(onChange(model))
-      return
-    }
-    keepOpenRef.current = true
-    setLevelsFor(modelKey(model))
-    void Promise.resolve(onChange(model)).catch(() => {
-      setLevelsFor(null)
-      setOpen(false)
-    })
+    setPendingModel(modelKey(model))
+    setLevelOpen(false)
+    void Promise.resolve(onChange(model)).catch(() => setPendingModel(null))
   }
 
-  return (
-    <Select
-      open={open}
-      onOpenChange={(next) => {
-        if (!next && keepOpenRef.current) {
-          keepOpenRef.current = false
-          return
-        }
-        setOpen(next)
-        if (!next) setLevelsFor(null)
-      }}
-      value={levelsFor ? thinkingLevel : (value ?? undefined)}
-      onValueChange={handleValueChange}
-      disabled={disabled}
-      className="w-auto"
-    >
-      <SelectTrigger
-        aria-label={t('model.choose')}
-        className="h-8 w-auto min-w-0 gap-1.5 rounded-control border-0 bg-transparent px-2.5 text-xs hover:bg-muted"
-      >
-        <span className="flex min-w-0 items-center gap-1.5 whitespace-nowrap">
-          {current ? (
-            <ProviderIcon providerId={current.providerId} name={current.providerName} size={14} />
-          ) : null}
-          <span className="max-w-44 truncate">
-            {current ? `${current.name}${levelSuffix}` : t('model.choose')}
-          </span>
-        </span>
-      </SelectTrigger>
+  const switching = pendingModel !== null
+  const showLevels = Boolean(current?.reasoning && availableThinkingLevels.length > 1)
 
-      <SelectContent className="left-0 right-auto w-80">
-        <div className="max-h-80 overflow-y-auto">
-          {levelsFor ? (
-            <>
-              <div className="flex items-center gap-1 px-1.5 pb-0.5 pt-1">
-                <Tooltip content={t('model.backToModels')}>
-                  <button
-                    type="button"
-                    aria-label={t('model.backToModels')}
-                    onClick={() => setLevelsFor(null)}
-                    className="grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+  return (
+    <>
+      <Select
+        open={open}
+        onOpenChange={setOpen}
+        value={value ?? undefined}
+        onValueChange={handleValueChange}
+        disabled={disabled}
+        className="w-auto"
+      >
+        <SelectTrigger
+          aria-label={t('model.choose')}
+          className="h-8 w-auto min-w-0 gap-1.5 rounded-control border-0 bg-transparent px-2.5 text-xs hover:bg-muted"
+        >
+          <span className="flex min-w-0 items-center gap-1.5 whitespace-nowrap">
+            {current ? (
+              <ProviderIcon providerId={current.providerId} name={current.providerName} size={14} />
+            ) : null}
+            <span className="max-w-44 truncate">
+              {current ? current.name : t('model.choose')}
+            </span>
+          </span>
+        </SelectTrigger>
+
+        <SelectContent className="left-0 right-auto w-80">
+          <div className="max-h-80 overflow-y-auto">
+            {grouped.map((group, index) => (
+              <div key={group.providerId}>
+                {index > 0 ? <div aria-hidden className="mx-1 my-1 h-px bg-border" /> : null}
+                <div className="flex items-center gap-1.5 px-2.5 pb-0.5 pt-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                  <ProviderIcon providerId={group.providerId} name={group.providerName} size={12} />
+                  <span className="truncate">{group.providerName}</span>
+                  <span className="ml-auto font-normal normal-case">{group.models.length}</span>
+                </div>
+                {group.models.map((model) => (
+                  <SelectItem
+                    key={modelKey(model)}
+                    value={modelKey(model)}
+                    className="py-1.5"
                   >
-                    <ChevronLeft className="size-3.5" />
-                  </button>
-                </Tooltip>
-                <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-foreground">
-                  {current?.name ?? levelsFor}
-                </span>
-                {/* Keep the section label on one line: a long model name
-                    truncates instead of wrapping it. */}
-                <span className="ml-auto flex shrink-0 items-center gap-1 whitespace-nowrap pr-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                  <Brain aria-hidden="true" className="size-3 shrink-0" />
-                  {t('model.thinkingTitle')}
-                </span>
-              </div>
-              {levelsReady ? (
-                availableThinkingLevels.map((level) => (
-                  <SelectItem key={level} value={level} className="py-1.5">
-                    <span className="flex min-w-0 flex-1 items-center gap-2">
-                      <span className="truncate text-sm text-foreground">{levelLabel(t, level)}</span>
+                    {/* Name/meta column, with the inputs it accepts stated
+                        in the meta line. */}
+                    <span className="flex min-w-0 flex-1 flex-col">
+                      <span className="truncate text-sm text-foreground">{model.name}</span>
+                      <span className="flex min-w-0 items-center gap-1 text-[11px] text-muted-foreground">
+                        <span className="truncate">
+                          {model.reasoning ? t('model.reasoning') : t('model.standard')}
+                          {model.contextWindow
+                            ? ` · ${t('model.contextK', { k: Math.round(model.contextWindow / 1000) })}`
+                            : ''}
+                        </span>
+                        <ModelInputBadges input={model.input} />
+                      </span>
                     </span>
                   </SelectItem>
-                ))
-              ) : (
-                <p className="flex items-center gap-2 px-3 py-3 text-xs text-muted-foreground">
-                  <Loader2 className="size-3.5 animate-spin" />
-                  {t('model.thinkingLoading')}
-                </p>
-              )}
-            </>
-          ) : (
-            <>
-              {grouped.map((group, index) => (
-                <div key={group.providerId}>
-                  {index > 0 ? <div aria-hidden className="mx-1 my-1 h-px bg-border" /> : null}
-                  <div className="flex items-center gap-1.5 px-2.5 pb-0.5 pt-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                    <ProviderIcon providerId={group.providerId} name={group.providerName} size={12} />
-                    <span className="truncate">{group.providerName}</span>
-                    <span className="ml-auto font-normal normal-case">{group.models.length}</span>
-                  </div>
-                  {group.models.map((model) => (
-                    <SelectItem
-                      key={modelKey(model)}
-                      value={modelKey(model)}
-                      className="py-1.5"
-                    >
-                      {/* Name/meta column, with the inputs it accepts stated
-                          in the meta line. */}
-                      <span className="flex min-w-0 flex-1 flex-col">
-                        <span className="truncate text-sm text-foreground">{model.name}</span>
-                        <span className="flex min-w-0 items-center gap-1 text-[11px] text-muted-foreground">
-                          <span className="truncate">
-                            {model.reasoning ? t('model.reasoning') : t('model.standard')}
-                            {model.contextWindow
-                              ? ` · ${t('model.contextK', { k: Math.round(model.contextWindow / 1000) })}`
-                              : ''}
-                          </span>
-                          <ModelInputBadges input={model.input} />
-                        </span>
-                      </span>
-                    </SelectItem>
-                  ))}
-                </div>
+                ))}
+              </div>
+            ))}
+            {grouped.length === 0 ? (
+              <p className="px-3 py-6 text-center text-xs text-muted-foreground">
+                {t('model.noProviders')}
+              </p>
+            ) : null}
+          </div>
+        </SelectContent>
+      </Select>
+
+      {showLevels ? (
+        <Select
+          open={levelOpen}
+          onOpenChange={setLevelOpen}
+          value={thinkingLevel}
+          onValueChange={(next) => onThinkingLevelChange(next as ThinkingLevel)}
+          disabled={disabled || switching}
+          className="w-auto"
+        >
+          <SelectTrigger
+            aria-label={t('model.thinkingTitle')}
+            className="h-8 w-auto min-w-0 gap-1.5 rounded-control border-0 bg-transparent px-2.5 text-xs hover:bg-muted"
+          >
+            <span className="flex min-w-0 items-center gap-1.5 whitespace-nowrap">
+              <Brain aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+              <span className="max-w-24 truncate">{levelLabel(t, thinkingLevel)}</span>
+            </span>
+          </SelectTrigger>
+
+          <SelectContent className="left-0 right-auto w-44">
+            <div className="max-h-80 overflow-y-auto">
+              {availableThinkingLevels.map((level) => (
+                <SelectItem key={level} value={level} className="py-1.5">
+                  <span className="truncate text-sm text-foreground">{levelLabel(t, level)}</span>
+                </SelectItem>
               ))}
-              {grouped.length === 0 ? (
-                <p className="px-3 py-6 text-center text-xs text-muted-foreground">
-                  {t('model.noProviders')}
-                </p>
-              ) : null}
-            </>
-          )}
-        </div>
-      </SelectContent>
-    </Select>
+            </div>
+          </SelectContent>
+        </Select>
+      ) : null}
+    </>
   )
 }

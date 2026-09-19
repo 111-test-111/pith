@@ -676,7 +676,7 @@ app.on('window-all-closed',()=>app.quit());`
   )
   const devGuide = await evaluate('window.q("[data-browser-import-fda-guide]").textContent')
   assert.equal(devGuide.includes('terminal'), true, 'the dev guidance grants Full Disk Access to the launching terminal')
-  assert.equal(devGuide.includes('no need to add the Electron app'), true, 'the dev guidance passes on that the Electron app itself is not needed')
+  assert.equal(devGuide.includes('no need to add the app itself'), true, 'the dev guidance passes on that the app itself is not needed')
   assert.equal(await evaluate('window.q("[data-browser-import-fda-path]")'), null, 'the path chip and the ⌘⇧G paste steps are gone (one line, in passing)')
   assert.equal(await evaluate('window.importNote("none")'), null, 'no misleading none-note while blocked')
 
@@ -719,7 +719,7 @@ app.on('window-all-closed',()=>app.quit());`
   await pause(300)
   const zhDevGuide = await evaluate('window.q("[data-browser-import-fda-guide]").textContent')
   assert.equal(zhDevGuide.includes('终端'), true, 'the zh dev guidance names the launching terminal')
-  assert.equal(zhDevGuide.includes('无需添加 Electron 应用本身'), true, 'the zh dev guidance passes on that the Electron app is not needed')
+  assert.equal(zhDevGuide.includes('无需添加应用本身'), true, 'the zh dev guidance passes on that the app itself is not needed')
   assert.equal(zhDevGuide.includes('⌘⇧G'), false, 'the zh guidance carries no paste-steps ritual')
 
   assert.deepEqual(exceptions, [], 'no renderer exceptions during the fixture')
