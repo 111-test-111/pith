@@ -104,7 +104,7 @@ function refFrom(value: unknown): PlanSubmissionRef | null {
   return { planId, revision, submissionEntryId, hash, planningTurnEntryId, submittedAt }
 }
 
-export function reconstructPlan(branch: readonly unknown[]): PlanBranchState {
+export function reconstructPlan(branch: readonly unknown[], onSubmission?: (entry: unknown, document: PlanDocumentDTO) => void): PlanBranchState {
   const state: PlanBranchState = {
     mode: 'normal',
     planId: null,
@@ -180,6 +180,7 @@ export function reconstructPlan(branch: readonly unknown[]): PlanBranchState {
         if (!entryId) continue
         const submittedAt = typeof message.timestamp === 'number' ? message.timestamp : (typeof recordEntry.timestamp === 'number' ? recordEntry.timestamp : 0)
         state.latest = { ref: refOf(details, entryId, submittedAt), markdown: details.plan }
+        onSubmission?.(entry, state.latest)
       }
     }
   }

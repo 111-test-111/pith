@@ -64,6 +64,7 @@ const TOOL_ICONS: Record<string, IconComponent> = {
   // lib/tool-categories.ts), so a folded run and its rows are distinguishable.
   bash: Terminal,
   bash_task: Terminal,
+  submit_plan: FileText,
   todo_write: ListTodo,
   ask_user_question: CircleHelp,
   agent: Bot,

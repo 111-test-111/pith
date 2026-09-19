@@ -1,3 +1,5 @@
+import { SubmissionCard } from './PlanCard'
+import { submittedPlanRef } from '@/lib/plan-submissions'
 import { BashTaskRow } from './BashTaskView'
 import { SubagentCompletionRow, SubagentMessageRow, subagentMessageDetailsOf } from './SubagentView'
 import {
@@ -505,10 +507,12 @@ const AssistantParts = memo(function AssistantParts({
           // block that continues a run an earlier block already rendered stays
           // out of the DOM entirely.
           const planRows = toolPlan.get(toolPlanKey(messageIndex, index))
-          if (planRows === null) return null
+          const submissions = block.parts.flatMap(call => { const ref = submittedPlanRef(toolResults.get(call.id)); return ref ? [ref] : [] })
+          if (planRows === null && !submissions.length) return null
           const rows = planRows ?? splitByToolCategory(block.parts)
           return (
             <Fragment key={`tool-${index}`}>
+              {submissions.map(reference => <SubmissionCard key={reference.submissionEntryId} reference={reference} />)}
               {/* Adjacent same-category calls fold into one row; everything
                   else (including a lone categorized call) keeps its own row,
                   so reasoning or a different category between two calls never
@@ -751,7 +755,12 @@ interface TurnBoundary {
   block: number
 }
 
-function replyBoundary(messages: AssistantMsg[]): TurnBoundary {
+function replyBoundary(messages: AssistantMsg[], results: Map<string, ToolResultMsg>): TurnBoundary {
+  for (let round = 0; round < messages.length; round++) {
+    const blocks = groupContent(messages[round].content)
+    const block = blocks.findIndex(b => b.kind === 'tool' && b.parts.some(call => submittedPlanRef(results.get(call.id))))
+    if (block >= 0) return { round, block }
+  }
   for (let round = messages.length - 1; round >= 0; round--) {
     const blocks = groupContent(messages[round].content)
     for (let block = blocks.length - 1; block >= 0; block--) {
@@ -764,8 +773,8 @@ function replyBoundary(messages: AssistantMsg[]): TurnBoundary {
 
 /** The fold boundary: the reply block, pulled back to an errored round — that
  * disclosure IS the turn's outcome and has to stay on screen. */
-function processBoundary(messages: AssistantMsg[]): TurnBoundary {
-  const reply = replyBoundary(messages)
+function processBoundary(messages: AssistantMsg[], results: Map<string, ToolResultMsg>): TurnBoundary {
+  const reply = replyBoundary(messages, results)
   const error = messages.findIndex((message) => Boolean(message.errorMessage))
   return error >= 0 && error < reply.round ? { round: error, block: 0 } : reply
 }
@@ -899,7 +908,7 @@ export const AssistantGroup = memo(function AssistantGroup({
   // and the fold appears in the same frame the turn settles. Settled, the
   // boundary is the turn's own final reply block, so every block before it is
   // process — including the reasoning the reply's own round emitted first.
-  const boundary: TurnBoundary = live ? { round: 0, block: 0 } : processBoundary(messages)
+  const boundary: TurnBoundary = live ? { round: 0, block: 0 } : processBoundary(messages, toolResults)
   const boundaryRound = messages[boundary.round]
   const foldedMessages = messages.slice(0, boundary.round)
   const tailMessages = messages.slice(boundary.round)
@@ -910,19 +919,22 @@ export const AssistantGroup = memo(function AssistantGroup({
   // into the folded plan as well, so the blocks it contributes there keep their
   // run continuations resolved.
   const noticeBoundaries = new Set(notices?.map((notice) => notice.beforeRound))
+  const promoted = new Set([...toolResults].filter(([, result]) => submittedPlanRef(result)).map(([id]) => id))
   const foldedToolPlan = buildToolPlan(
     messages.slice(0, boundary.round + 1),
     0,
     showReasoning,
     toolGrouping,
-    noticeBoundaries
+    noticeBoundaries,
+    promoted
   )
   const tailToolPlan = buildToolPlan(
     tailMessages,
     boundary.round,
     showReasoning,
     toolGrouping,
-    noticeBoundaries
+    noticeBoundaries,
+    promoted
   )
   const foldedRowCount = live
     ? 0

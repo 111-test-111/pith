@@ -100,7 +100,8 @@ export function buildToolPlan(
   offset: number,
   showReasoning = true,
   toolGrouping = true,
-  breakBefore?: ReadonlySet<number>
+  breakBefore?: ReadonlySet<number>,
+  promoted: ReadonlySet<string> = new Set()
 ): ToolPlan {
   const plan: ToolPlan = new Map()
   const flat: (ToolBlockRef | null)[] = []
@@ -109,7 +110,12 @@ export function buildToolPlan(
     if (breakBefore?.has(messageIndex)) flat.push(null)
     groupContent(message.content).forEach((block, blockIndex) => {
       if (block.kind === 'tool') {
-        flat.push({ messageIndex, blockIndex, calls: block.parts })
+        const calls = block.parts.filter(call => !promoted.has(call.id))
+        const barrier = calls.length !== block.parts.length
+        if (barrier) flat.push(null)
+        if (calls.length) flat.push({ messageIndex, blockIndex, calls })
+        else plan.set(toolPlanKey(messageIndex, blockIndex), [])
+        if (barrier) flat.push(null)
       } else if (block.kind === 'thinking') {
         // Hidden reasoning paints nothing, so it cannot separate a run.
         if (showReasoning) flat.push(null)

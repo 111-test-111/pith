@@ -1540,6 +1540,7 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
             {!isNewSession ? (
               <ChatView
+                onRefinePlan={() => window.dispatchEvent(new CustomEvent('pith:refine-plan', { detail: { sessionPath: shell.sessionPath } }))}
                 store={store}
                 scrollResetKey={scrollResetKey}
                 onDismissError={dismissChatError}

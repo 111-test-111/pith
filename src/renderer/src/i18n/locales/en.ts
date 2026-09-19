@@ -4,6 +4,22 @@
  * `domain.key` strings; `{name}` placeholders are filled by `t()`.
  */
 const en = {
+  "plan.cardTitle": "Plan · version {revision}",
+  "plan.interrupted": "Startup interrupted",
+  "plan.started": "Execution started",
+  "plan.awaiting": "Awaiting approval",
+  "plan.historical": "Previous version",
+  "plan.loading": "Loading plan…",
+  "plan.executionPermission": "Execution permissions: {permission}",
+  "plan.startFailed": "Execution did not start. You can retry approval.",
+  "plan.reset": "Return to planning",
+  "plan.execute": "Start execution",
+  "plan.refine": "Revise plan",
+  "plan.copy": "Copy",
+  "plan.copied": "Copied",
+  "plan.export": "Export",
+  "plan.refinePrompt": "Describe what to change in the plan…",
+
   "plan.modeLabel": "Working mode",
   "plan.modeHelp": "Plan investigates with read-only tools; execution needs your approval.",
   "plan.normal": "Normal",

@@ -1,3 +1,5 @@
+import { PlanCard, PlanPresentationContext } from './PlanCard'
+import { visibleSubmissionIds } from '@/lib/plan-submissions'
 import { BashTasksProvider } from '@/lib/bash-tasks'
 import { SessionTasks } from './SessionTasks'
 import { memo, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, useSyncExternalStore } from 'react'
@@ -161,8 +163,10 @@ export const ChatView = memo(function ChatView({
   onUndoFiles,
   onFork,
   onReview,
-  onOpenSession
+  onOpenSession,
+  onRefinePlan
 }: {
+  onRefinePlan?: () => void
   store: PiStore
   /** Changes when a resend/retry lands, forcing the transcript back to the
    * live edge so the retried user message is visible. */
@@ -288,6 +292,14 @@ export const ChatView = memo(function ChatView({
         }
       : null
   const displayTurns = liveTurn ? [...turns, liveTurn] : turns
+  const missingPlan = state.plan?.latest && !visibleSubmissionIds(state.messages).has(state.plan.latest.submissionEntryId) ? state.plan.latest : null
+  const recoveredIndex = missingPlan ? displayTurns.findIndex(turn => {
+    const time = turn.role === 'user' ? turn.user.timestamp : turn.role === 'assistant'
+      ? (turn.assistants[0]?.timestamp ?? turn.notices?.[0]?.message.timestamp ?? 0) : turn.message.timestamp
+    return time > missingPlan.submittedAt
+  }) : -1
+  const recoveryCard = missingPlan && state.sessionPath && state.plan
+    ? <PlanCard key={`plan:${missingPlan.submissionEntryId}`} sessionPath={state.sessionPath} reference={missingPlan} state={state.plan} onRefine={onRefinePlan} /> : null
   const lastDisplayTurn = displayTurns[displayTurns.length - 1]
 
   /** Right-click: resolve the row, then let the surface trigger open. A row the
@@ -434,8 +446,10 @@ export const ChatView = memo(function ChatView({
       // session switches. clip never creates a scroll container.
       contentClassName="mx-auto min-h-full w-full max-w-3xl overflow-x-clip"
     >
+      <PlanPresentationContext.Provider value={state.plan && state.sessionPath ? { state: state.plan, sessionPath: state.sessionPath, onRefine: onRefinePlan } : null}>
       <MessageGroup spacing="default">
-        {displayTurns.map((turn, index) => renderTurn(turn, displayTurns[index - 1]))}
+        {displayTurns.flatMap((turn, index) => [index === recoveredIndex ? recoveryCard : null, renderTurn(turn, displayTurns[index - 1])])}
+        {recoveredIndex < 0 ? recoveryCard : null}
 
         {state.isStreaming && !streaming && !waitingInLastTurn ? (
           <TurnStatus seedKey={spinnerSeed} />
@@ -491,6 +505,7 @@ export const ChatView = memo(function ChatView({
           </RowReveal>
         ) : null}
       </MessageGroup>
+      </PlanPresentationContext.Provider>
     </MessageScroller>
     </ContextMenuTrigger>
     {/* One menu for the whole transcript; the row comes from the DOM marker

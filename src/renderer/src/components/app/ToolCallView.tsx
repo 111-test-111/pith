@@ -1,3 +1,4 @@
+import { submittedPlanRef } from '@/lib/plan-submissions'
 import { useBashTask, bashTaskStatus } from '@/lib/bash-tasks'
 import { BashTaskRow } from './BashTaskView'
 import { memo, useMemo, useState } from 'react'
@@ -284,6 +285,8 @@ export const ToolCallView = memo(function ToolCallView({ call, result, run, cwd 
       ) : null}
     </>
   )
+
+  if (submittedPlanRef(result)) return null
 
   switch (call.name) {
     case 'ask_user_question': {

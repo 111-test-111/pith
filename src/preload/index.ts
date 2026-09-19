@@ -121,6 +121,7 @@ const api = {
     ipcRenderer.invoke('app:setAskUserTimeoutSeconds', value),
   setSandboxMode: (mode: SandboxMode): Promise<SandboxMode> => ipcRenderer.invoke('app:setSandboxMode', mode),
   /** Change one session's mode; resolves with that session's fresh snapshot. */
+  exportPlan: (request: PlanDocumentRequest): Promise<PlanActionResult<{ cancelled: boolean }>> => ipcRenderer.invoke('plan:export', request),
   setSessionMode: (request: PlanModeRequest): Promise<PlanActionResult<PlanStateDTO>> => ipcRenderer.invoke('plan:setMode', request),
   getPlanState: (path: string): Promise<PlanStateDTO> => ipcRenderer.invoke('plan:state', path),
   readPlanDocument: (request: PlanDocumentRequest): Promise<PlanActionResult<PlanDocumentDTO>> => ipcRenderer.invoke('plan:document', request),

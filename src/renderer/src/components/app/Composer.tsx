@@ -179,6 +179,16 @@ export function Composer({
   const imageInputRef = useRef<HTMLInputElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const [refining, setRefining] = useState(false)
+  useEffect(() => {
+    setRefining(false)
+    const refine = (event: Event) => {
+      if ((event as CustomEvent).detail?.sessionPath !== sessionPath || readOnly) return
+      setRefining(true); textareaRef.current?.focus({ preventScroll: true })
+    }
+    window.addEventListener('pith:refine-plan', refine)
+    return () => window.removeEventListener('pith:refine-plan', refine)
+  }, [sessionPath, readOnly, plan?.mode])
   const inputContainerRef = useRef<HTMLDivElement>(null)
   const debounceRef = useRef<number>(0)
 
@@ -608,7 +618,7 @@ export function Composer({
                   ? t(behavior === 'steer' ? 'composer.hintSteer' : 'composer.hintFollowUp', {
                       modifier: IS_MAC ? '⌘' : 'Ctrl'
                     })
-                  : t(start ? 'newSession.placeholder' : 'composer.placeholder')
+                  : t(refining ? 'plan.refinePrompt' : start ? 'newSession.placeholder' : 'composer.placeholder')
               }
               leadingAction={
                 <span className="flex items-center gap-1">

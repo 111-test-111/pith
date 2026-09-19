@@ -2,6 +2,22 @@ import type { Messages } from './en'
 
 /** 简体中文 — key 必须与 en.ts 完全一致（类型强制）。 */
 const zhCN: Messages = {
+  "plan.cardTitle": "计划 · 第 {revision} 版",
+  "plan.interrupted": "启动已中断",
+  "plan.started": "已开始执行",
+  "plan.awaiting": "等待批准",
+  "plan.historical": "历史版本",
+  "plan.loading": "正在读取计划…",
+  "plan.executionPermission": "执行权限：{permission}",
+  "plan.startFailed": "执行未启动，可以重新批准。",
+  "plan.reset": "返回规划",
+  "plan.execute": "开始执行",
+  "plan.refine": "修改计划",
+  "plan.copy": "复制",
+  "plan.copied": "已复制",
+  "plan.export": "导出",
+  "plan.refinePrompt": "请输入计划的修改意见…",
+
   "plan.modeLabel": "工作模式",
   "plan.modeHelp": "规划模式使用只读工具调查，执行需要你批准。",
   "plan.normal": "普通",

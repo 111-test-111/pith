@@ -124,6 +124,7 @@ import type {
   PlanStateDTO,
   PlanDocumentRequest,
   PlanDocumentDTO,
+  PlanSubmissionRef,
   PlanApprovalDTO,
   PlanApproveRequest,
   ProviderDTO,
@@ -1214,7 +1215,7 @@ export class PiManager {
     // collapses at the same moment the notice appears instead of keeping a
     // pre-compaction view until the next session switch.
     if (event.type === 'compaction_end' && !(event as any).aborted) {
-      ;(routed as any).messages = serialize(managed.session.messages.map((message) => managed.changeScopes.stamp(message as ChatMessage)))
+      ;(routed as any).messages = serialize(this.stampPlanMessages(managed, managed.session.messages.map((message) => managed.changeScopes.stamp(message as ChatMessage)), managed.session.messages as ChatMessage[]))
     }
 
     if (event.type === 'message_start' || event.type === 'message_update') {
@@ -1799,7 +1800,7 @@ export class PiManager {
       const routed = { ...event,
         ...(event.type === 'agent_start' || previousTodos !== managed.todos.snapshot ? { todos: managed.todos.snapshot } : {}),
         ...(previousRecords !== managed.askRecords.snapshot ? { askUserRecords: managed.askRecords.snapshot } : {}),
-        ...('message' in event ? { message: { ...managed.changeScopes.stamp(event.message as ChatMessage), ...(userEntryId ? { sessionEntryId: userEntryId } : {}) } } : {}),
+        ...('message' in event ? { message: { ...this.stampPlanMessages(managed, [managed.changeScopes.stamp(event.message as ChatMessage)], [event.message as ChatMessage])[0], ...(userEntryId ? { sessionEntryId: userEntryId } : {}) } } : {}),
         ...(event.type === 'agent_start' ? { changeScopeId: managed.changeScopes.active } : {}),
         ...(event.type === 'agent_settled' ? { continuing: notifications!.continuesAtSettled || subagentState?.notifications?.continuesAtSettled || askUserNotifications!.continuesAtSettled } : {})
       }
@@ -2262,10 +2263,23 @@ export class PiManager {
     return { ok: true, value: document }
   }
 
+  private stampPlanMessages(managed: ManagedSession, messages: ChatMessage[], originals: ChatMessage[]): ChatMessage[] {
+    // No streaming/token path scans a branch; only snapshots and committed results.
+    if (!originals.some(m => m.role === 'toolResult' && m.toolName === 'submit_plan')) return messages
+    const refs = new Map<object, PlanSubmissionRef>()
+    reconstructPlan(managed.session.sessionManager.getBranch(), (entry, document) => {
+      refs.set((entry as { message: object }).message, document.ref)
+    })
+    return messages.map((message, index) => {
+      const ref = refs.get(originals[index])
+      return ref && message.role === 'toolResult' ? { ...message, planSubmission: ref } : message
+    })
+  }
+
   /** Serialize one session's current state for the renderer. */
   private snapshotOf(managed: ManagedSession): SessionSnapshotDTO {
     this.flushStreamEvents(managed)
-    const messages = (serialize(managed.session.messages) as ChatMessage[]).map((message) => managed.changeScopes.stamp(message))
+    const messages = serialize(this.stampPlanMessages(managed, managed.session.messages.map(message => managed.changeScopes.stamp(message as ChatMessage)), managed.session.messages as ChatMessage[])) as ChatMessage[]
     const live = managed.streaming as ChatMessage | null
     if (live?.role === 'assistant') {
       const index = messages.findLastIndex(

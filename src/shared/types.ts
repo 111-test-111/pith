@@ -87,6 +87,8 @@ export interface AssistantMsg extends CompletedAt {
 }
 
 export interface ToolResultMsg extends CompletedAt {
+  /** App-owned stamp, attached only after a valid submission is persisted. */
+  planSubmission?: PlanSubmissionRef
   role: 'toolResult'
   toolCallId: string
   toolName: string
