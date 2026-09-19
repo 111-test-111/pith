@@ -47,6 +47,7 @@ body { overflow: auto !important; } #gallery { max-width:900px; margin:32px auto
 .lab-columns { display:grid; grid-template-columns:1fr 1fr; gap:32px; }
 .lab-label { font-size:13px; opacity:.65; margin-bottom:12px; } .lab-section { margin:28px 0; }
 #pseudo::before {content:'';display:block;width:8px;height:8px;background:currentColor;}
+#pill-list [role="tablist"] { display:flex; flex-direction:column; align-items:stretch; gap:4px; width:128px; }
 </style></head><body><div id="root"></div><script type="module">
 import React from 'react';
 import {createRoot} from 'react-dom/client';
@@ -116,6 +117,20 @@ function Fixture(){
       h(MorphPopoverContent,{side,align:'center',instant},h('div',{style:{padding:20,width:260}},h('div',{style:{fontWeight:600,marginBottom:12}},'Native popover'),h(Button,{id:'popover-focus',variant:'secondary'},'Focus target')))),
      h(Tooltip,{content:'Shared overlay elevation'},h(Button,{id:'tooltip-trigger',variant:'ghost',size:'icon','aria-label':'Show tooltip'},'?'))),
     h(TurnWrittenFiles,{files:[file]}))),
+  // Defect 1: a TALL, vertical pill list, shaped like the Settings left nav and
+  // the Tools/Skills/Subagents/Extensions section lists. Its container must take
+  // the scale's card step: the capsule's 9999px radius would clamp to half this
+  // list's WIDTH and read as semicircular ends. It sits ABOVE the Composer so it
+  // is fully inside the captured viewport (the top AND bottom edges are what the
+  // defect affects).
+  h('section',{id:'pill-section',className:'lab-section'},h('div',{className:'lab-label'},'Vertical pill list'),
+   h('div',{id:'pill-list'},h(Tabs,{variant:'pill',value:tab,onValueChange:setTab},
+    h(TabsList,null,
+     h(TabsTrigger,{value:'one'},'General'),
+     h(TabsTrigger,{value:'two'},'Appearance'),
+     h(TabsTrigger,{value:'three'},'Providers'),
+     h(TabsTrigger,{value:'four'},'Tools'),
+     h(TabsTrigger,{value:'five'},'Sounds'))))),
   h('section',{className:'lab-section'},h('div',{className:'lab-label'},'Composer'),h(PromptInput,{placeholder:'Ask anything…',defaultValue:'Refine the corners, preserve the circles.'}))));
 }
 createRoot(document.getElementById('root')).render(h(Fixture));
@@ -275,6 +290,25 @@ app.on('window-all-closed',()=>app.quit());`)
           preset + ': the capsule site ' + (preset === 'square' ? 'stays a right angle' : 'is a full capsule') + ' (got ' + sendRadius + ')'
         )
         assert.equal(await style('[aria-label="Send prompt"]', 'corner-shape'), 'superellipse(1)', preset + ': the capsule keeps a round corner shape')
+        // Defect 1: the pill LIST takes the scale's card step, never the capsule.
+        // A tall vertical pill list (the Settings nav, the Tools/Skills/
+        // Subagents/Extensions section lists) is much taller than it is wide, so
+        // the capsule's 9999px radius clamps to half its WIDTH and its top and
+        // bottom render as semicircles. `rounded-capsule` is `!important`, so no
+        // call site could have overridden it.
+        const pill = await evaluate('(()=>{const e=document.querySelector("#pill-list [role=tablist]");const r=e.getBoundingClientRect();return {width:r.width,height:r.height,radius:parseFloat(getComputedStyle(e).borderTopLeftRadius),shape:getComputedStyle(e).cornerShape}})()')
+        assert.ok(pill.width > 0 && pill.height > pill.width, preset + ': the fixture pill list is a tall vertical list (got ' + pill.width + '×' + pill.height + ')')
+        assert.equal(pill.radius, parseFloat(expected.card), preset + ': the pill container takes the scale card step, so a tall pill list cannot turn into a capsule (got radius ' + pill.radius + ', expected ' + parseFloat(expected.card) + ' — a capsule would clamp to half its width and read as semicircular ends)')
+        assert.ok(pill.radius < Math.min(pill.width, pill.height) / 2, preset + ': the pill container keeps small rounded corners, not semicircular ends (radius ' + pill.radius + ' on a ' + pill.width + '×' + pill.height + ' list)')
+        assert.equal(pill.shape, 'superellipse(2)', preset + ': the pill container keeps the continuous corner shape, not a forced capsule — a capsule would force `corner-shape: round` and, on a tall list, clamp to semicircular ends')
+        // The moving INDICATOR stays a capsule: a selected row is a normal-height
+        // row, where a capsule is the right shape.
+        const pillIndicator = await evaluate('(()=>{const e=document.querySelector("#pill-list [role=tablist] > div > span");if(!e)return null;const r=e.getBoundingClientRect();return {width:r.width,height:r.height,radius:parseFloat(getComputedStyle(e).borderTopLeftRadius)}})()')
+        assert.ok(pillIndicator && pillIndicator.width > 0, preset + ': the fixture pill list renders its moving indicator')
+        assert.ok(
+          preset === 'square' ? pillIndicator.radius === 0 : pillIndicator.radius >= Math.min(pillIndicator.width, pillIndicator.height) / 2,
+          preset + ': the pill indicator stays ' + (preset === 'square' ? 'a right angle' : 'a capsule') + ' (radius ' + pillIndicator.radius + ', box ' + pillIndicator.width + '×' + pillIndicator.height + ')'
+        )
         // Selection controls, pinned per preset. Both frames take the CONTROL
         // step: hard-edged in the square style, a full circle in the squircle
         // style (the control step is 14px on this 14px box). The MARK is what
@@ -287,14 +321,18 @@ app.on('window-all-closed',()=>app.quit());`)
         const checkboxBox = await boxOf('#point-checkbox')
         const checkboxFrameRadius = await radiusOf('#point-checkbox')
         assert.equal(checkboxBox, 14, preset + ': the point-select checkbox keeps its text-sized 14px frame')
-        assert.equal(await style('#point-checkbox', 'corner-shape'), 'superellipse(2)', preset + ': continuous checkbox frame')
+        // `corner-round` on the frame is what makes it a TRUE circle: the
+        // presets turn on `corner-shape: squircle`, so the semantic radius alone
+        // would render a squarish circle on this square box.
+        assert.equal(await style('#point-checkbox', 'corner-shape'), 'superellipse(1)', preset + ': the checkbox frame is a true circle, not a superellipse-clamped one')
         assert.ok(
           preset === 'square' ? checkboxFrameRadius === 0 : checkboxFrameRadius >= checkboxBox / 2,
           preset + ': the checkbox frame is ' + (preset === 'square' ? 'a right angle' : 'a circle') + ' (radius ' + checkboxFrameRadius + ', box ' + checkboxBox + ')'
         )
         const radioBox = await boxOf('[role="radio"]')
         const radioFrameRadius = await radiusOf('[role="radio"]')
-        assert.equal(await style('[role="radio"]', 'corner-shape'), 'superellipse(2)', preset + ': continuous radio frame')
+        // Same `corner-round` rule as the checkbox frame above.
+        assert.equal(await style('[role="radio"]', 'corner-shape'), 'superellipse(1)', preset + ': the radio frame is a true circle, not a superellipse-clamped one')
         assert.ok(
           preset === 'square' ? radioFrameRadius === 0 : radioFrameRadius >= radioBox / 2,
           preset + ': the radio frame is a circle in the squircle style (radius ' + radioFrameRadius + ', box ' + radioBox + ')'

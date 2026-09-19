@@ -86,10 +86,16 @@ export function Tabs({
   );
 }
 
-// local patch (pi-app): pill tabs are capsule-by-design, so the shape token
-// follows the UI style (0px in the square style like every other scale step).
+// local patch (pi-app): the pill LIST takes the scale's card step, not the
+// capsule. A vertical pill list (the Settings nav, the Tools/Skills/Subagents/
+// Extensions section lists) is several hundred pixels tall, and a 9999px radius
+// clamps to half the WIDTH, turning its top and bottom into semicircles.
+// `rounded-capsule` is `!important`, so no call site could override it. The
+// moving INDICATOR below is still a capsule — a selected row is a normal-height
+// row. A call site that genuinely wants a true capsule can use `rounded-full`
+// (also `!important`).
 const listClasses: Record<Variant, string> = {
-  pill: "inline-flex items-center gap-1 rounded-capsule bg-card p-1",
+  pill: "inline-flex items-center gap-1 rounded-card bg-card p-1",
   underline: "inline-flex items-center gap-1 border-b border-border",
   segment: "inline-flex items-center gap-0 rounded-lg bg-card p-0.5",
 };

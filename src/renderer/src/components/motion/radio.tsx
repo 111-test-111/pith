@@ -126,10 +126,14 @@ export function RadioGroupItem({
           // the vendored 20px box, which read heavier than the line it marks.
           // The frame stays on `rounded-control`: a single-choice control IS a
           // circle in the squircle style, and the frame is what carries that.
+          // `corner-round` is required for a TRUE circle: the base rule turns on
+          // `corner-shape: squircle`, so the semantic radius alone would render a
+          // squarish circle on this square box. It is a no-op at the square
+          // style's 0px radius, so that style stays pixel-identical.
           // Only the point is capsule-by-design — a square point in the square
           // style, a circular one in the squircle style (see
           // --app-radius-capsule in styles.css).
-          "relative inline-flex size-3.5 shrink-0 items-center justify-center rounded-control border-2 outline-none transition-colors duration-200",
+          "relative inline-flex size-3.5 shrink-0 items-center justify-center rounded-control corner-round border-2 outline-none transition-colors duration-200",
           "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
           "disabled:cursor-not-allowed disabled:opacity-60",
           selected

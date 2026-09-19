@@ -123,6 +123,8 @@ Two rules, and they are the whole policy:
 
 The vendored files keep their `// local patch (pi-app):` markers, updated to say the shape now comes from the preset.
 
+The pill variant is the one Class A site whose **container** must not be a capsule: a tall vertical pill list (the Settings nav, the Tools/Skills/Subagents/Extensions section lists) is much taller than it is wide, so `9999px` clamps to half its WIDTH and its top and bottom read as semicircular ends — and `rounded-capsule` is `!important`, so no call site could have overridden it. Its container therefore takes the scale's **card step** (`rounded-card`, the same token those call sites already pass as `rounded-2xl`: 0px square, 20px squircle), while the moving indicator keeps `rounded-capsule` (a selected row is a normal-height row). Pinned per preset in `check-corners.mjs`.
+
 Every site must be re-read from the **current** file before editing, not from the diff: later commits have touched several of these files.
 
 **Pinned during execution:** the activity cells' live site is `charts/heat-calendar/grid.tsx` (cell hit area + cell visual), not the `TokenActivityPanel.tsx` row above. Evidence for the shape choice: at `397f6ed^` the panel's OWN cells were `rounded-full` — circles were the live squircle look — while the vendored grid has carried `rounded-detail` since it landed. So `rounded-capsule` restores the panel's own pre-square look; 4px squares in the squircle style stay a one-word alternative if they read better with data on screen.
@@ -142,14 +144,14 @@ The implemented design (commit `225291a`):
 
 | Site | Square style | Squircle style |
 | --- | --- | --- |
-| checkbox frame (`motion/checkbox.tsx`) | `rounded-control` → right angle | `rounded-control` → a circle (the 14px control step on this 14px box) |
+| checkbox frame (`motion/checkbox.tsx`) | `rounded-control` → right angle | `rounded-control` + `corner-round` → a **true** circle (the 14px control step on this 14px box) |
 | checkbox on-state mark | the `size-1.5` point (`rounded-capsule`, so 0px) | the check glyph (`AnimatedIcon`, HugeIcons geometry in that pack) in `currentColor` on the outlined frame |
-| radio frame (`motion/radio.tsx`) | `rounded-control` → right angle | `rounded-control` → a circle |
+| radio frame (`motion/radio.tsx`) | `rounded-control` → right angle | `rounded-control` + `corner-round` → a **true** circle |
 | radio on-state mark | `size-1.5 rounded-capsule` → right angle | a fully circular point |
 
 What fell out of it, and the rules future work must keep:
 
-- **Exactly one style read outside the tokens.** Frames and the radio's mark ride the token scale; only the checkbox's *which mark* consults `uiStyle` (`pointMark = square && uiStyle === 'square'`), because a check glyph and a point are different subtrees. An earlier revision pinned the checkbox frame to `rounded-detail` to separate the two controls by *shape*; the owner replaced that with the mark-based separation, so the frame is back on the control step and both frames are circles in the squircle style.
+- **Both frames are TRUE circles, and that needs `corner-round`.** The presets leave `--app-corner-shape: squircle` on every element, so a frame carrying only the semantic `rounded-control` would render a superellipse-clamped *squarish* circle on its square 14px box. `corner-round` (just `corner-shape: round`) on the frame makes it a real circle in the squircle style and is a no-op at the square style's 0px radius, so the square style stays pixel-identical. The earlier revision pinned the checkbox frame to `rounded-detail` to separate the two controls by *shape*; the owner replaced that with the mark-based separation, so the frame is back on the control step and both frames are circles in the squircle style.
 - **`data-checkbox-mark` sits on whichever mark renders** (the point `<span>` or the check `<svg>`), so a check can query "the on-state mark" without naming a shape. It replaced `data-checkbox-square`.
 - **The frame's on-state treatment stays keyed on the `mark` VARIANT, not the style:** `square` is an outlined frame with an open interior, `check` (multi-select lists, the session-search filter) is the filled accent box. That is why the squircle check draws in `currentColor` rather than white-on-primary, and why `mark="check"` behaviour was left untouched.
 - **The square style stays pixel-identical:** `rounded-capsule` is 0px there and the point is still the point.

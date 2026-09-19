@@ -82,7 +82,11 @@ export function Checkbox({
           // circle in the squircle style (the control step is 14px on this 14px
           // box). The squircle checkbox is told apart from the radio by the MARK
           // it draws — the check glyph versus the radio's dot — not by its frame.
-          "inline-flex size-3.5 shrink-0 items-center justify-center rounded-control border-2 outline-none transition-colors duration-200",
+          // `corner-round` is required for a TRUE circle: the base rule turns on
+          // `corner-shape: squircle`, so a semantic radius alone would render a
+          // squarish circle on this square box. It is a no-op at the square
+          // style's 0px radius, so that style stays pixel-identical.
+          "inline-flex size-3.5 shrink-0 items-center justify-center rounded-control corner-round border-2 outline-none transition-colors duration-200",
           "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
           "disabled:cursor-not-allowed disabled:opacity-60",
           showMark
