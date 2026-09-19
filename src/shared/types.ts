@@ -7,6 +7,19 @@
 import type { AskUserRecordDTO, PendingAskUserDTO } from './ask-user'
 import type { TableFormat } from './table'
 import type { BrowserPageMeta } from './browser'
+import type {
+  PlanActionResult,
+  PlanApprovalDTO,
+  PlanApproveRequest,
+  PlanBlocker,
+  PlanDocumentDTO,
+  PlanDocumentRequest,
+  PlanModeRequest,
+  PlanStateDTO,
+  PlanSubmissionRef,
+  SessionMode
+} from './plan'
+import { PLAN_MAX_BYTES } from './plan'
 
 export type WindowTheme = 'light' | 'dark' | 'system'
 
@@ -1444,3 +1457,8 @@ export interface RewindRequest {
   operationId: string
 }
 export interface RewindCommitDTO { operation: RewindOperationDTO; snapshot?: SessionSnapshotDTO }
+
+// Re-export Plan Mode DTOs so they share the same shared/types surface.
+export type { PlanActionResult, PlanApprovalDTO, PlanApproveRequest, PlanBlocker, PlanDocumentDTO, PlanDocumentRequest, PlanModeRequest, PlanStateDTO, PlanSubmissionRef, SessionMode }
+export { PLAN_MAX_BYTES }
+
