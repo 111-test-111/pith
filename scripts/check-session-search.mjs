@@ -1,6 +1,7 @@
 // Deterministic integration/benchmark harness; no SDK sessions or credentials
 // are touched. Run: node scripts/check-session-search.mjs (after npm run build).
 import assert from 'node:assert/strict'
+import { spawn } from 'node:child_process'
 import { mkdtemp, mkdir, writeFile, appendFile, rm, stat, utimes } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -9,6 +10,12 @@ import { performance } from 'node:perf_hooks'
 import { Worker } from 'node:worker_threads'
 import { DatabaseSync } from 'node:sqlite'
 import { build } from 'esbuild'
+import { createServer } from 'vite'
+import react from '@vitejs/plugin-react'
+import tailwindcss from '@tailwindcss/vite'
+import electron from 'electron'
+
+const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 const temp = await mkdtemp(join(tmpdir(), 'pith-search-check-'))
 const root = join(temp, 'sessions')
@@ -286,6 +293,135 @@ try {
     assert.equal(reply.result.hits[0].id, 'long')
     assert(ticks > 5, 'worker must leave the parent event loop responsive')
   } finally { clearInterval(interval) }
+
+  // Renderer default polarity, against the REAL `SessionSearch` panel in
+  // isolated Electron. The legs above prove the index semantics (a
+  // conversation-only search never returns tool-only content); this leg proves
+  // the panel's control is an EXCLUSION toggle that is ON by default and that
+  // the request it sends carries `includeDetails: false` until the user unchecks
+  // it — the default behaviour (tools/attachments/thinking left out) is
+  // unchanged while the control reads as an exclusion.
+  const uiRoot = resolve('.')
+  const uiPath = '/__search-panel-check.html'
+  const uiFixture = `<!doctype html><html><body><div id="root"></div><script type="module">
+import React from 'react';import {createRoot} from 'react-dom/client';
+import {I18nProvider} from '/src/i18n/index.tsx';
+import {SessionSearch,SessionSearchTrigger} from '/src/components/app/SessionSearch.tsx';
+import '/src/styles.css';
+localStorage.setItem('pi-app:locale','en');
+const iso=new Date(0).toISOString();
+const hit=(id,text)=>({id,path:'/fixture/'+id+'.jsonl',cwd:'/fixture/project',projectless:false,label:'',title:{text,ranges:[]},snippet:null,modified:iso});
+const SESSIONS=[];
+window.requests=[];
+window.pi={searchSessions:(request)=>{
+  window.requests.push(request);
+  const query=request.query||'',hits=[];
+  if(query.includes('prose'))hits.push(hit('prose','prose result'));
+  if(request.includeDetails&&query.includes('toolonly'))hits.push(hit('tool','toolonly result'));
+  return Promise.resolve({hits,total:hits.length,incomplete:0});
+}};
+function Fixture(){
+  return React.createElement(I18nProvider,null,
+    React.createElement(SessionSearch,{sessions:SESSIONS,activePath:null,runningPaths:new Set(),onOpen:async()=>{}},
+      React.createElement(SessionSearchTrigger)));
+}
+createRoot(document.getElementById('root')).render(React.createElement(Fixture));
+window.press=(node)=>{node.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerId:1,pointerType:'mouse',buttons:1}));node.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,pointerId:1,pointerType:'mouse'}));node.click()};
+window.type=(value)=>{const input=document.querySelector('input');const set=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;set.call(input,value);input.dispatchEvent(new Event('input',{bubbles:true}))};
+window.panel=()=>{
+  const box=[...document.querySelectorAll('[role="checkbox"]')][0]||null;
+  const label=box?document.querySelector('label[for="'+box.id+'"]'):null;
+  return {
+    box:box?{role:box.getAttribute('role'),checked:box.getAttribute('aria-checked'),id:box.id}:null,
+    label:label?label.textContent.trim():null,
+    labels:[...document.querySelectorAll('label')].map(n=>n.textContent.trim()),
+    groups:document.querySelectorAll('[data-search-folder]').length,
+    queries:window.requests.map(r=>({query:r.query,includeDetails:r.includeDetails}))
+  };
+};
+</script></body></html>`
+  const uiServer = await createServer({
+    configFile: false, root: join(uiRoot, 'src/renderer'), logLevel: 'error',
+    cacheDir: join(temp, 'ui-vite'), resolve: { alias: { '@': join(uiRoot, 'src/renderer/src') } },
+    plugins: [react(), tailwindcss(), { name: 'search-panel', configureServer(server) {
+      server.middlewares.use(uiPath, async (_req, res, next) => {
+        try { res.setHeader('Content-Type', 'text/html'); res.end(await server.transformIndexHtml(uiPath, uiFixture)) } catch (error) { next(error) }
+      })
+    } }], server: { host: '127.0.0.1', port: 0, fs: { allow: [uiRoot] } }
+  })
+  let uiChild, uiWs
+  try {
+    await uiServer.listen()
+    const uiMain = join(temp, 'ui-main.cjs')
+    await writeFile(uiMain, `const {app,BrowserWindow}=require('electron');
+app.setPath('userData',${JSON.stringify(join(temp, 'ui-profile'))});
+app.commandLine.appendSwitch('remote-debugging-port','0');
+app.whenReady().then(()=>{const w=new BrowserWindow({width:1000,height:760,show:false,webPreferences:{backgroundThrottling:false}});w.loadURL(${JSON.stringify(`http://127.0.0.1:${uiServer.httpServer.address().port}${uiPath}`)});});
+app.on('window-all-closed',()=>app.quit());`)
+    const uiEnv = { ...process.env }; delete uiEnv.ELECTRON_RUN_AS_NODE
+    uiChild = spawn(electron, [uiMain], { env: uiEnv, stdio: ['ignore', 'ignore', 'pipe'] })
+    const uiEndpoint = await new Promise((res, rej) => {
+      let output = ''
+      const timer = setTimeout(() => rej(new Error('Electron debugger did not start: ' + output)), 15000)
+      uiChild.once('exit', (code) => { clearTimeout(timer); rej(new Error('Electron exited: ' + code)) })
+      uiChild.stderr.on('data', (chunk) => { output += chunk; const match = /DevTools listening on ws:\/\/127\.0\.0\.1:(\d+)/.exec(output); if (match) { clearTimeout(timer); res('http://127.0.0.1:' + match[1]) } })
+    })
+    let uiPage
+    for (let i = 0; i < 100 && !uiPage; i++) { uiPage = (await (await fetch(uiEndpoint + '/json/list')).json()).find((p) => p.type === 'page'); if (!uiPage) await pause(50) }
+    assert.ok(uiPage, 'search-panel Electron page created')
+    uiWs = new WebSocket(uiPage.webSocketDebuggerUrl)
+    await new Promise((res) => uiWs.addEventListener('open', res, { once: true }))
+    let seq = 0
+    const pendingUi = new Map()
+    uiWs.addEventListener('message', (event) => { const msg = JSON.parse(event.data); if (msg.id) { pendingUi.get(msg.id)?.(msg); pendingUi.delete(msg.id) } })
+    const uiSend = (method, params = {}) => new Promise((res, rej) => { const id = ++seq; pendingUi.set(id, (msg) => msg.error ? rej(msg.error) : res(msg.result)); uiWs.send(JSON.stringify({ id, method, params })) })
+    const uiEval = async (expression) => { const result = await uiSend('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }); if (result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails)); return result.result.value }
+    for (let i = 0; i < 200; i++) { if (await uiEval(`!!document.querySelector('#root button[aria-haspopup=dialog]')`)) break; await pause(50) }
+
+    // The control renders CHECKED and labelled as an exclusion.
+    await uiEval(`window.press(document.querySelector('#root button[aria-haspopup=dialog]'))`)
+    await pause(600)
+    const control = await uiEval('window.panel()')
+    assert.ok(control.box, 'the search panel renders its filter control: ' + JSON.stringify(control))
+    assert.equal(control.box.role, 'checkbox', 'the filter control is the beUI Checkbox')
+    assert.equal(control.box.checked, 'true', 'the exclusion toggle is CHECKED by default')
+    assert.equal(control.label, 'Exclude tools, files and thinking', 'the label is sessionSearch.excludeDetails')
+    assert.ok(!control.labels.some((text) => text.includes('Include tools')), 'the old opt-in label is gone: ' + JSON.stringify(control.labels))
+    if (process.env.PI_SESSION_SEARCH_SCREENSHOT_DIR) {
+      await mkdir(process.env.PI_SESSION_SEARCH_SCREENSHOT_DIR, { recursive: true })
+      await writeFile(join(process.env.PI_SESSION_SEARCH_SCREENSHOT_DIR, 'search-exclude-toggle.png'), Buffer.from((await uiSend('Page.captureScreenshot')).data, 'base64'))
+    }
+
+    // Default behaviour: prose hits, tool-only text does not.
+    await uiEval(`window.type('prose')`)
+    await pause(800)
+    assert.ok(await uiEval(`document.querySelectorAll('[data-search-folder]').length > 0`), 'prose still hits with the default exclusion on')
+    await uiEval(`window.type('toolonly')`)
+    await pause(800)
+    const excluded = await uiEval('window.panel()')
+    assert.equal(excluded.groups, 0, 'with the default (excludeDetails checked) a tool-only match must NOT hit')
+    assert.ok(excluded.queries.some((r) => r.query === 'toolonly' && r.includeDetails === false), 'the default request sends includeDetails:false: ' + JSON.stringify(excluded.queries))
+
+    // Unchecking the exclusion includes tool text: the same query now hits.
+    await uiEval(`window.press(document.getElementById(${JSON.stringify(control.box.id)}))`)
+    await pause(800)
+    const included = await uiEval('window.panel()')
+    assert.equal(included.box.checked, 'false', 'unchecking the exclusion turns details back on')
+    assert.ok(included.groups > 0, 'with the exclusion off the tool-only match hits')
+    assert.ok(included.queries.some((r) => r.query === 'toolonly' && r.includeDetails === true), 'unchecking flips the request to includeDetails:true: ' + JSON.stringify(included.queries))
+    console.log('PASS: the search panel renders the exclusion toggle checked by default; tool-only text is excluded while prose still hits, and unchecking includes it.')
+  } finally {
+    uiWs?.close()
+    if (uiChild && uiChild.exitCode === null) {
+      uiChild.kill('SIGTERM')
+      // Await the exit before the outer `rm(temp)`: Electron keeps writing to
+      // its profile dir for a moment after SIGTERM, which raced the cleanup
+      // and turned a PASS into `ENOTEMPTY`.
+      await Promise.race([new Promise((res) => uiChild.once('exit', res)), pause(3000)])
+    }
+    await uiServer.close()
+  }
+
   samples.sort((a, b) => a - b)
   console.log(JSON.stringify({
     assertions: 'passed', sessions: count + 3, corpusMB: +((bytes + late.length) / 1e6).toFixed(1),

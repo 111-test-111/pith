@@ -91,6 +91,7 @@ function Fixture(){
     h('div',{className:'lab-row'},h(Button,{id:'primary',ripple:true},'Continue'),h(Button,{variant:'secondary'},'Cancel'),h(Button,{variant:'ghost',size:'icon','aria-label':'Icon control'},'+')),
     h(Input,{label:'Project name',defaultValue:'Pith',classNames:{field:'lab-field'}}),
     h('div',{className:'lab-row'},h(Checkbox,{id:'point-checkbox',mark:'square',checked,onCheckedChange:setChecked,'aria-label':'Enable feature'}),
+     h(Checkbox,{id:'check-mark-box',checked,onCheckedChange:setChecked,'aria-label':'Search filter'}),
      h(RadioGroup,{defaultValue:'on',orientation:'horizontal'},h(RadioGroupItem,{value:'on',label:'Enabled'})),
      h('span',{id:'status-dot',className:'size-1.5 rounded-full bg-primary'}),
      h('span',{id:'pseudo','data-drop':'before',className:'data-[drop=before]:before:rounded-full'}),h(Loader,{variant:'dots',size:16})),
@@ -276,7 +277,12 @@ app.on('window-all-closed',()=>app.quit());`)
       }
       for (const [preset, expected] of Object.entries(CORNER_PRESETS)) {
         await evaluate(`window.setUiStyle(${JSON.stringify(preset)})`)
-        await pause(150)
+        // The selected controls animate `transition-colors` (200ms), and the
+        // checkbox's FRAME reads `background-color`/`color` below, so the sweep
+        // must let that settle: a 150ms sample once caught the square→squircle
+        // fill mid-interpolation as an `oklab(...)` mix and reported two boxes
+        // that are in fact identical at rest as unequal.
+        await pause(400)
         for (const [token, value] of Object.entries(expected)) {
           assert.equal(
             await evaluate(`getComputedStyle(document.documentElement).getPropertyValue("--app-radius-${token}").trim()`),
@@ -354,6 +360,41 @@ app.on('window-all-closed',()=>app.quit());`)
           assert.equal(checkboxMark.tag, 'span', 'square: the point-select checkbox draws the point')
           assert.equal(checkboxMark.radius, 0, 'square: the point stays a right angle')
         }
+        // Change 1, pinned per preset: the squircle on-state is ONE look — the
+        // filled accent box with the white check — whatever the `mark` prop
+        // says, so the search panel's `mark="check"` control and a Settings
+        // row's `mark="square"` control are visually identical. The square style
+        // keeps two distinct treatments: `pointMark === square` there, so the
+        // point-mark control is the outlined box while the check-mark one is
+        // filled. Both fixture boxes are checked and targeted by id.
+        const frameFill = selector => style(selector, 'background-color')
+        const frameInk = selector => style(selector, 'color')
+        const markArt = selector => evaluate('(()=>{const m=document.querySelector(' + JSON.stringify(selector + ' [data-checkbox-mark]') + ');if(!m)return null;return {tag:m.tagName.toLowerCase(),paths:[...m.querySelectorAll("path")].filter(p=>(p.getAttribute("d")||"").trim()).length}})()')
+        const pointFill = await frameFill('#point-checkbox')
+        const checkFill = await frameFill('#check-mark-box')
+        if (preset === 'squircle') {
+          assert.equal(
+            pointFill, checkFill,
+            preset + ': the squircle on-state must look the same for both `mark` variants (filled accent + white check); got point-mark ' + pointFill + ' vs check-mark ' + checkFill
+          )
+          const pointInk = await frameInk('#point-checkbox')
+          const checkInk = await frameInk('#check-mark-box')
+          assert.equal(
+            pointInk, checkInk,
+            preset + ': both squircle mark variants must share one on-state text colour (the white check); got point-mark ' + pointInk + ' vs check-mark ' + checkInk
+          )
+          const pointArt = await markArt('#point-checkbox')
+          const checkArt = await markArt('#check-mark-box')
+          assert.ok(
+            pointArt && checkArt && pointArt.tag === 'svg' && pointArt.paths >= 1 && checkArt.tag === 'svg' && checkArt.paths >= 1,
+            preset + ': in the squircle style both mark variants must draw the check glyph (an <svg> with a drawn <path>); got point-mark ' + JSON.stringify(pointArt) + ' and check-mark ' + JSON.stringify(checkArt)
+          )
+        } else {
+          assert.notEqual(
+            pointFill, checkFill,
+            preset + ': the point-mark control must stay the outlined box while the check-mark control stays filled; got point-mark ' + pointFill + ' and check-mark ' + checkFill
+          )
+        }
         // The invariant this change exists to protect, in ONE assertion: the
         // checkbox and the radio must stay tellable apart by the mark they draw.
         assert.ok(
@@ -363,7 +404,7 @@ app.on('window-all-closed',()=>app.quit());`)
         await screenshot(`${theme}-${reduced ? 'reduced' : 'motion'}-${preset}-gallery`)
       }
       await evaluate("window.setUiStyle('square')")
-      await pause(150)
+      await pause(400)
 
       // The dialog is portalled outside #root. Check entry frames, focus trap,
       // shadow, and native corners at every observed frame (not just at rest).

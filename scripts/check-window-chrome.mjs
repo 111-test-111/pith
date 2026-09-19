@@ -214,19 +214,21 @@ app.whenReady().then(()=>{
   assert.equal(await evaluate(`document.querySelector('textarea').value`), '保留这份草稿 / keep this draft')
   await click('button[aria-label="搜索会话"]')
   await waitFor(`document.querySelector('[aria-modal="true"]')`)
-  // The "include tools, files and thinking" filter is a square point-select
-  // box, not a switch, and it is sized to the row's own 12px text.
+  // The "exclude tools, files and thinking" filter is a square point-select
+  // box, not a switch, it is CHECKED by default (details excluded unless the
+  // user asks), and it is sized to the row's own 12px text.
   const detailsBox = await evaluate(`(()=>{const dialog=document.querySelector('[aria-modal="true"]');const box=dialog.querySelector('[role="checkbox"]');if(!box)return null;const label=document.querySelector('label[for="'+box.id+'"]');const r=box.getBoundingClientRect();return {switches:dialog.querySelectorAll('[role="switch"]').length,checked:box.getAttribute('aria-checked'),label:label?label.innerText.trim():null,width:r.width,radius:getComputedStyle(box).borderTopLeftRadius}})()`)
   assert.ok(detailsBox, 'the search filter renders a checkbox')
   assert.equal(detailsBox.switches, 0, 'and no switch next to it')
-  assert.equal(detailsBox.checked, 'false', 'it starts off — search covers prose only')
-  assert.ok(detailsBox.label, `its label sits beside it and is associated: ${JSON.stringify(detailsBox)}`)
+  assert.equal(detailsBox.checked, 'true', 'it starts ON — details are excluded and search covers prose only')
+  assert.ok(detailsBox.label?.includes('排除'), `its label reads as an exclusion and is associated: ${JSON.stringify(detailsBox)}`)
   assert.equal(detailsBox.width, 14, `the box is text-sized: ${JSON.stringify(detailsBox)}`)
   assert.equal(detailsBox.radius, '0px', 'and hard-edged like every other control')
   await screenshot('search-details')
   await click('[role="checkbox"]')
-  assert.equal(await evaluate(`document.querySelector('[role="checkbox"]').getAttribute('aria-checked')`), 'true', 'clicking the box toggles the filter')
+  assert.equal(await evaluate(`document.querySelector('[role="checkbox"]').getAttribute('aria-checked')`), 'false', 'clicking the box toggles the exclusion off')
   await click('[role="checkbox"]')
+  assert.equal(await evaluate(`document.querySelector('[role="checkbox"]').getAttribute('aria-checked')`), 'true', 'and back on')
   assert.equal(await evaluate(`getComputedStyle(document.querySelector('[data-window-titlebar]')).webkitAppRegion`), 'no-drag')
   await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape' })
   await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape' })

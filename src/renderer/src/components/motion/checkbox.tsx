@@ -24,7 +24,11 @@ export interface CheckboxProps {
   // list-selection glyph (multi-select, filters); `square` is the app's on/off
   // control — it replaced every `Switch`. Its on-state follows the interface
   // style: a primary point in the square style, the check glyph in the squircle
-  // style, which is how it stays distinguishable from the radio's dot.
+  // style, which is how it stays distinguishable from the radio's dot. The
+  // FRAME's on-state does not depend on `mark` in the squircle style — there it
+  // is always the filled accent box with the white check, so the search panel's
+  // filter control and a Settings row's control look the same. The square style
+  // keeps its two distinct treatments (see `pointMark` below).
   mark?: 'check' | 'square';
 }
 
@@ -51,6 +55,14 @@ export function Checkbox({
   // which is what keeps this control distinguishable from the radio, whose
   // mark stays a dot. (Both controls' frames are circles in that style.)
   const pointMark = square && uiStyle === 'square';
+  // local patch (pi-app): the FRAME's on-state branch is keyed on `pointMark`,
+  // not on `square`. `pointMark` is true only in the square style, so that style
+  // is pixel-identical to before (`pointMark === square` there): the point-mark
+  // control is the outlined box whose interior stays open, while a `mark="check"`
+  // box is the filled accent one. In the squircle style `pointMark` is false for
+  // every `mark`, so both variants take the filled accent box with the white
+  // check — the search panel's filter control and a Settings row's control are
+  // visually identical.
 
   return (
     <label
@@ -90,10 +102,12 @@ export function Checkbox({
           "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
           "disabled:cursor-not-allowed disabled:opacity-60",
           showMark
-            ? square
-              ? // local patch (pi-app): the square mark's fill is the point
-                // INSIDE the frame, so the box's own interior stays open and
-                // only the frame takes the primary border when it is on.
+            ? pointMark
+              ? // local patch (pi-app): the square style's point mark draws its
+                // fill INSIDE the frame, so the box's own interior stays open
+                // and only the frame takes the primary border when it is on.
+                // This branch is the square style only (`pointMark` is true only
+                // there); the squircle style always takes the filled box below.
                 "border-primary bg-background"
               : "border-primary bg-primary text-primary-foreground"
             : "border-muted-foreground/50 bg-background hover:border-muted-foreground",

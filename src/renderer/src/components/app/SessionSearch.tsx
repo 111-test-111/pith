@@ -115,7 +115,10 @@ export function SessionSearch({ sessions, activePath, runningPaths, onOpen, chil
   const descriptionId = useId()
   const [isOpen, setIsOpen] = useState(false)
   const [query, setQuery] = useState('')
-  const [includeDetails, setIncludeDetails] = useState(false)
+  // local patch (pi-app): the details control reads as an EXCLUSION and is on by
+  // default, so the default search behaviour is unchanged — tools, attachments
+  // and thinking are left out unless the user opts them in by unchecking it.
+  const [excludeDetails, setExcludeDetails] = useState(true)
   /** The switch's own track carries this id; its label sits before it. */
   const detailsCheckboxId = useId()
   const [sort, setSort] = useState<SessionSearchSort>('newest')
@@ -133,7 +136,7 @@ export function SessionSearch({ sessions, activePath, runningPaths, onOpen, chil
   const results = useRef<HTMLDivElement>(null)
   const trimmed = query.trim()
   const active = Boolean(trimmed)
-  const key = JSON.stringify([trimmed, offset, sort, includeDetails])
+  const key = JSON.stringify([trimmed, offset, sort, excludeDetails])
   const value = response?.key === key ? response.value : null
   const dateFormat = useMemo(() => new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }), [locale])
   // The first appearance of a folder in this global activity sort is its
@@ -172,7 +175,7 @@ export function SessionSearch({ sessions, activePath, runningPaths, onOpen, chil
     setLoading(true)
     const search = async () => {
       try {
-        const next = await window.pi.searchSessions({ query: trimmed, sort, offset, includeDetails })
+        const next = await window.pi.searchSessions({ query: trimmed, sort, offset, includeDetails: !excludeDetails })
         if (cancelled) return
         if (offset > 0 && offset >= next.total) {
           setOffset(Math.max(0, Math.floor((next.total - 1) / 40) * 40))
@@ -199,7 +202,7 @@ export function SessionSearch({ sessions, activePath, runningPaths, onOpen, chil
     }
     timer = setTimeout(() => { void search() }, 150)
     return () => { cancelled = true; clearTimeout(timer) }
-  }, [trimmed, offset, sort, includeDetails, key, composing, sessions, isOpen])
+  }, [trimmed, offset, sort, excludeDetails, key, composing, sessions, isOpen])
 
   const changeQuery = (next: string) => {
     setQuery(next)
@@ -291,11 +294,11 @@ export function SessionSearch({ sessions, activePath, runningPaths, onOpen, chil
                 </Button>
               </Tooltip>
               <label htmlFor={detailsCheckboxId} className="cursor-pointer text-xs text-muted-foreground">
-                {t('sessionSearch.includeDetails')}
+                {t('sessionSearch.excludeDetails')}
               </label>
-              <Checkbox id={detailsCheckboxId} checked={includeDetails} aria-label={t('sessionSearch.includeDetails')}
+              <Checkbox id={detailsCheckboxId} checked={excludeDetails} aria-label={t('sessionSearch.excludeDetails')}
                 onCheckedChange={(checked) => {
-                  setIncludeDetails(checked)
+                  setExcludeDetails(checked)
                   setOffset(0)
                   results.current?.scrollTo(0, 0)
                 }} />

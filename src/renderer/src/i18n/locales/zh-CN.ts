@@ -276,7 +276,7 @@ const zhCN: Messages = {
   'sessionSearch.startHint': '开始对话后，你的会话会显示在这里。',
   'sessionSearch.loadingHint': '正在查找已保存的对话记录',
   'sessionSearch.clear': '清空搜索',
-  'sessionSearch.includeDetails': '包含工具、附件与思考',
+  'sessionSearch.excludeDetails': '排除工具、附件与思考',
   'sessionSearch.sourceUser': '用户消息',
   'sessionSearch.sourceAssistant': '助手回复',
   'sessionSearch.sourceSummary': '历史摘要',

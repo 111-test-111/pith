@@ -280,7 +280,7 @@ const en = {
   'sessionSearch.startHint': 'Your conversations will appear here once you start chatting.',
   'sessionSearch.loadingHint': 'Looking through your saved conversations',
   'sessionSearch.clear': 'Clear search',
-  'sessionSearch.includeDetails': 'Include tools, files and thinking',
+  'sessionSearch.excludeDetails': 'Exclude tools, files and thinking',
   'sessionSearch.sourceUser': 'User message',
   'sessionSearch.sourceAssistant': 'Assistant reply',
   'sessionSearch.sourceSummary': 'History summary',
