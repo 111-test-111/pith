@@ -364,7 +364,12 @@ export function PromptInput({
                 className="grid place-items-center"
               >
                 {loading && !canQueue ? (
-                  <Square className="size-3 fill-current" />
+                  // Two steps up from the glyph's original `size-3`, then one more:
+                  // a 12px fill read as a dot beside the 16px Send arrow it
+                  // replaces, so the stop control looked smaller than the control
+                  // it takes over. Only the stop grows — the send icon keeps its
+                  // size.
+                  <Square className="size-4 fill-current" />
                 ) : (
                   <Send className="size-4" />
                 )}

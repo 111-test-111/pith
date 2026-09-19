@@ -24,7 +24,7 @@ function UncoveredFiles({ paths }: { paths: RewindUncoveredPathDTO[] }) {
   const [visible, setVisible] = useState(100)
   return <div className="max-h-36 space-y-1 overflow-auto p-1 text-xs">
     {paths.slice(0, visible).map(item => <p key={item.path} className="break-all">{item.path} <span className="text-muted-foreground">· {t(`rewind.uncovered.${item.reason}`)}</span></p>)}
-    {paths.length > visible ? <Button variant="ghost" size="sm" whileHover={undefined} whileTap={undefined} onClick={() => setVisible(count => count + 100)}>{t('rewind.moreUncovered', { count: paths.length - visible })}</Button> : null}
+    {paths.length > visible ? <Button variant="ghost" size="sm" onClick={() => setVisible(count => count + 100)}>{t('rewind.moreUncovered', { count: paths.length - visible })}</Button> : null}
   </div>
 }
 
@@ -33,7 +33,7 @@ function SkippedHistory({ paths }: { paths: RewindUncoveredPathDTO[] }) {
   const [open, setOpen] = useState(false)
   const id = useId()
   return <div data-rewind-skipped>
-    <Button variant="ghost" size="sm" whileHover={undefined} whileTap={undefined} className="h-auto px-0 py-1 text-xs text-amber-600 dark:text-amber-400" aria-expanded={open} aria-controls={id} onClick={() => setOpen(!open)}><AlertTriangle className="size-3.5 shrink-0" />{t('rewind.skippedCount', { count: paths.length })}</Button>
+    <Button variant="ghost" size="sm" className="h-auto px-0 py-1 text-xs text-amber-600 dark:text-amber-400" aria-expanded={open} aria-controls={id} onClick={() => setOpen(!open)}><AlertTriangle className="size-3.5 shrink-0" />{t('rewind.skippedCount', { count: paths.length })}</Button>
     <AgentDisclosure id={id} open={open}>{open ? <UncoveredFiles paths={paths} /> : null}</AgentDisclosure>
   </div>
 }
@@ -74,7 +74,7 @@ function HistoryRow({ operation, selected, disabled, dates, onPreview }: {
   return <li data-rewind-history-entry={operation.id} className={cn('rounded-control border border-transparent', selected && 'border-primary/25 bg-primary/10')}>
     {available ? <Button data-rewind-history-preview={operation.canRedo ? 'redo' : 'undo'} variant="ghost" disabled={disabled} aria-current={selected ? 'true' : undefined}
       aria-label={t('rewind.historyPreview', { action: t(operation.canRedo ? 'rewind.redo' : 'rewind.undo'), subject, time: timestamp })}
-      whileHover={undefined} whileTap={undefined} className={rowClass} onClick={onPreview}>{content}</Button>
+      className={rowClass} onClick={onPreview}>{content}</Button>
       : <div className={rowClass}>{content}</div>}
     {!!operation.skipped?.length ? <div className="px-3 pb-2"><SkippedHistory paths={operation.skipped} /></div> : null}
   </li>
@@ -355,7 +355,7 @@ export function RewindDialog({ sessionPath, messageTimestamp, messageEntryId, on
               {!list.enabled ? <p className="p-2 text-xs text-muted-foreground">{t('rewind.disabled')}</p> : null}
               <div className="space-y-2">
                 <h3 className="px-2 text-xs font-medium text-muted-foreground">{t('rewind.checkpoints')}</h3>
-                {!checkpoints?.length ? <p className="p-2 text-xs text-muted-foreground">{t(messageTimestamp === undefined ? (list?.error ? 'rewind.emptyFailed' : 'rewind.empty') : 'rewind.noMessageCheckpoint')}</p> : checkpoints.map(cp => <Button key={cp.id} data-rewind-checkpoint variant="ghost" disabled={loading || fileLoading || executing} aria-pressed={preview?.checkpointId === cp.id} onClick={() => void select(cp.id)} whileHover={undefined} pressScale={1} className={cn('h-auto w-full flex-col items-stretch gap-2.5 border border-transparent px-3 py-3 text-left', preview?.checkpointId === cp.id && 'border-primary/25 bg-primary/10')}>
+                {!checkpoints?.length ? <p className="p-2 text-xs text-muted-foreground">{t(messageTimestamp === undefined ? (list?.error ? 'rewind.emptyFailed' : 'rewind.empty') : 'rewind.noMessageCheckpoint')}</p> : checkpoints.map(cp => <Button key={cp.id} data-rewind-checkpoint variant="ghost" disabled={loading || fileLoading || executing} aria-pressed={preview?.checkpointId === cp.id} onClick={() => void select(cp.id)} className={cn('h-auto w-full flex-col items-stretch gap-2.5 border border-transparent px-3 py-3 text-left', preview?.checkpointId === cp.id && 'border-primary/25 bg-primary/10')}>
                   <span className="flex items-start gap-2">
                     <span data-rewind-checkpoint-title className="min-w-0 flex-1 line-clamp-2 break-words text-sm font-medium leading-5 text-foreground">{cp.description || t('rewind.untitledTurn')}</span>
                     {preview?.checkpointId === cp.id ? <Check aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-primary" /> : null}

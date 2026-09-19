@@ -3,7 +3,7 @@ import type { JSX } from 'react'
 import { Globe, History, MoreVertical, Printer, Search, Smartphone, Trash2, type IconComponent } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
 import { Input } from '@/components/motion/input'
-import { Loader } from '@/components/motion/loader'
+import { RunningLoader } from './RunningLoader'
 import { MorphPopover, MorphPopoverContent } from '@/components/motion/popover-morph'
 import { Tooltip } from '@/components/motion/tooltip'
 import { useI18n } from '@/i18n'
@@ -340,7 +340,7 @@ export function BrowserOverlays({
                   onClick={entry.onSelect}
                 >
                   {entry.busy ? (
-                    <Loader variant="dither-plus" size={16} label={t('browser.menuClearData')} className="size-4 shrink-0" />
+                    <RunningLoader variant="dither-plus" size={16} label={t('browser.menuClearData')} className="size-4 shrink-0" />
                   ) : (
                     <Icon aria-hidden="true" className="size-4 shrink-0" />
                   )}

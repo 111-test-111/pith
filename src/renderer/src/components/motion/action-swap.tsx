@@ -308,7 +308,8 @@ export function ActionSwapButton({
     <motion.button
       type="button"
       disabled={disabled}
-      whileTap={reduce || disabled ? undefined : { scale: 0.97 }}
+      // local patch (pi-app): no press scale — a control must not dip inward
+      // while pressed (see `button/base`).
       transition={SPRING_PRESS}
       className={cn(
         "inline-flex items-center justify-center overflow-hidden font-medium transition-colors",

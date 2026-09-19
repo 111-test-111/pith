@@ -90,11 +90,9 @@ export const SessionTasks = memo(function SessionTasks({ todos, subagents = [], 
             <Button key={panel} ref={(node) => { triggers.current[panel] = node }}
               id={`${baseId}-${panel}`} size="sm" variant={active ? 'secondary' : 'ghost'}
               data-task-trigger={panel} aria-expanded={active} aria-controls={`${baseId}-panel`}
-              // A quiet toggle: beUI's press/hover scale made the label pulse
-              // outward on every click, and only the active variant carries a
-              // border — the constant transparent one keeps the pill (and every
-              // trigger after it) from shifting when the panel opens.
-              whileHover={{ scale: 1 }} whileTap={{ scale: 1 }}
+              // A quiet toggle: only the active variant carries a border — the
+              // constant transparent one keeps the pill (and every trigger after
+              // it) from shifting when the panel opens.
               onClick={() => setSelected(active ? null : panel)}
               className={cn('gap-2 text-xs', !active && 'border border-transparent')}>
               <Icon aria-hidden="true" className="size-3.5 text-muted-foreground" />

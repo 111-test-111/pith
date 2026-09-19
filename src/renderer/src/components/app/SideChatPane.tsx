@@ -1,7 +1,7 @@
 import { memo, useMemo, useSyncExternalStore } from 'react'
 import { Link2, MessageCirclePlus } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
-import { Loader } from '@/components/motion/loader'
+import { RunningLoader } from './RunningLoader'
 import { MessageGroup, Message, MessageBubble, MessageBubbleContent } from '@/components/agents/message'
 import { MessageScroller } from '@/components/agents/message-scroller'
 import { PromptInput } from '@/components/agents/prompt-input'
@@ -134,7 +134,7 @@ function SideChatExchangeRow({ exchange, spaced }: { exchange: SideChatExchange;
 
       {streaming && !exchange.answer ? (
         <Message from="assistant" className="flex h-6 items-center">
-          <Loader
+          <RunningLoader
             variant="spinner"
             size={16}
             label={t('sidebar.chatAsking')}

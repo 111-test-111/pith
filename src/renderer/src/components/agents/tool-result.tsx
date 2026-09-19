@@ -63,6 +63,13 @@ export interface ToolResultProps {
   animateChanges?: boolean;
   /** local patch (pi-app): do not mount expensive output while collapsed. */
   lazyContent?: boolean;
+  /**
+   * local patch (pi-app): render the body WITHOUT its framed output box — the
+   * content sits directly on the transcript at the row's own indent. A tool
+   * whose output is an image shows that image alone, so a muted frame with 12px
+   * inner padding, a height cap and a copy footer would only box a picture.
+   */
+  bare?: boolean;
 }
 export interface ToolResultOutputProps {
   children: string;
@@ -136,7 +143,8 @@ function ToolResultAction({
       aria-label={label}
       title={label}
       onClick={onClick}
-      whileTap={reduce ? undefined : { scale: 0.9 }}
+      // local patch (pi-app): no press scale — a tool-row icon button must not
+      // dip inward while pressed (see `button/base`).
       transition={SPRING_PRESS}
       className="grid size-7 place-items-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
     >
@@ -164,6 +172,19 @@ export function ToolResultOutput({
   );
 }
 
+/**
+ * local patch (pi-app): the output cap lands on a LINE boundary — the height
+ * shows whole lines, never a half one.
+ *
+ * The 12px body padding is INSIDE the scrollport, so the fold sits on a line
+ * boundary at `padding + lines × line`: 12 + 11 × 20 = 232, and AgentCode's
+ * `text-xs leading-5` makes that line 20px. The vendored 220 left a 208px
+ * content area — 10.4 lines — so the line at the fold was sliced in half.
+ */
+const OUTPUT_PADDING = 12;
+const OUTPUT_LINE = 20;
+const OUTPUT_LINES = 11;
+
 export function ToolResult({
   tool,
   title,
@@ -176,7 +197,7 @@ export function ToolResult({
   defaultOpen = true,
   onOpenChange,
   collapseOnComplete = true,
-  maxHeight = 220,
+  maxHeight = OUTPUT_PADDING + OUTPUT_LINE * OUTPUT_LINES,
   copyText,
   onCopy,
   onRetry,
@@ -184,6 +205,7 @@ export function ToolResult({
   contentClassName,
   animateChanges = true,
   lazyContent = false,
+  bare = false,
 }: ToolResultProps) {
   const reduce = useReducedMotion() ?? false;
   const baseId = useId();
@@ -346,48 +368,54 @@ export function ToolResult({
         open={currentOpen}
       >
         {lazyContent && !currentOpen ? null : (
-          <div className="pl-6 pt-1.5">
-            <div className="overflow-hidden rounded-xl bg-muted/80">
-              <div
-                ref={viewportRef}
-                role="log"
-                aria-live="polite"
-                data-fade={fadeEdges.top && fadeEdges.bottom ? "both" : fadeEdges.bottom ? "bottom" : fadeEdges.top ? "top" : "none"}
-                className="scrollbar-hide overflow-y-auto"
-                style={{ maxHeight, maskImage, WebkitMaskImage: maskImage }}
-              >
-                <div className={cn("p-3", contentClassName)}>{children}</div>
-              </div>
-
-              {canCopy || onRetry ? (
-                <div className="flex items-center gap-0.5 px-2 pb-1.5">
-                  {canCopy ? (
-                    <ToolResultAction
-                      label={copied ? "Copied" : "Copy result"}
-                      onClick={handleCopy}
-                    >
-                      {copied ? (
-                        <Check className="size-3.5" />
-                      ) : (
-                        <Copy className="size-3.5" />
-                      )}
-                    </ToolResultAction>
-                  ) : null}
-                  {onRetry ? (
-                    <ToolResultAction label="Run again" onClick={onRetry}>
-                      <RotateCcw className="size-3.5" />
-                    </ToolResultAction>
-                  ) : null}
-                  <span className="ml-auto text-[11px] text-muted-foreground/55">
-                    {animateChanges ? (
-                      <ActionSwapRollText value={status}>{statusLabel}</ActionSwapRollText>
-                    ) : (
-                      statusLabel
-                    )}
-                  </span>
+          // local patch (pi-app): `pl-6` is the row's own text indent (16px icon
+          // + 8px gap), so an expanded body starts exactly where the title does.
+          <div className="pl-6 pt-1.5" data-tool-body={bare ? "bare" : "framed"}>
+            {bare ? (
+              <div className={cn("min-w-0", contentClassName)}>{children}</div>
+            ) : (
+              <div className="overflow-hidden rounded-xl bg-muted/80">
+                <div
+                  ref={viewportRef}
+                  role="log"
+                  aria-live="polite"
+                  data-fade={fadeEdges.top && fadeEdges.bottom ? "both" : fadeEdges.bottom ? "bottom" : fadeEdges.top ? "top" : "none"}
+                  className="scrollbar-hide overflow-y-auto"
+                  style={{ maxHeight, maskImage, WebkitMaskImage: maskImage }}
+                >
+                  <div className={cn("p-3", contentClassName)}>{children}</div>
                 </div>
-              ) : null}
-            </div>
+
+                {canCopy || onRetry ? (
+                  <div className="flex items-center gap-0.5 px-2 pb-1.5">
+                    {canCopy ? (
+                      <ToolResultAction
+                        label={copied ? "Copied" : "Copy result"}
+                        onClick={handleCopy}
+                      >
+                        {copied ? (
+                          <Check className="size-3.5" />
+                        ) : (
+                          <Copy className="size-3.5" />
+                        )}
+                      </ToolResultAction>
+                    ) : null}
+                    {onRetry ? (
+                      <ToolResultAction label="Run again" onClick={onRetry}>
+                        <RotateCcw className="size-3.5" />
+                      </ToolResultAction>
+                    ) : null}
+                    <span className="ml-auto text-[11px] text-muted-foreground/55">
+                      {animateChanges ? (
+                        <ActionSwapRollText value={status}>{statusLabel}</ActionSwapRollText>
+                      ) : (
+                        statusLabel
+                      )}
+                    </span>
+                  </div>
+                ) : null}
+              </div>
+            )}
           </div>
         )}
       </AgentDisclosure>

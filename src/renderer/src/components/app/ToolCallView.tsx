@@ -5,12 +5,13 @@ import { FileDiff } from '@/components/agents/file-diff'
 import { ToolResult, ToolResultOutput, type ToolResultStatus } from '@/components/agents/tool-result'
 import { parseUnifiedDiff, countDiffChanges, synthesizeWritePatch } from '@/lib/diff'
 import { basename } from '@/lib/format'
-import { displayToolDir } from '@/lib/tool-path'
+import { displayToolDir, resolveFromCwd } from '@/lib/tool-path'
 import { ToolIcon } from '@/lib/tool-icons'
 import { cn } from '@/lib/utils'
 import { TRANSCRIPT_ROW, TRANSCRIPT_ROW_WIDTH } from '@/lib/transcript-rhythm'
 import { firstAskUserQuestionText, isAskUserToolDetails, askUserRecordKind } from '../../../../shared/ask-user'
 import { AskUserKindChip } from './AskUserRecordList'
+import { PreviewThumb } from './ImagePreview'
 import type { ImageContent, ToolCallContent, ToolResultMsg } from '../../../../shared/types'
 import type { ToolRun } from '@/state/pi-store'
 import { useI18n } from '@/i18n'
@@ -23,7 +24,10 @@ interface ToolCallViewProps {
   cwd?: string | null
 }
 
-/** Image parts a tool returned (the SDK's read tool inlines image files). */
+/**
+ * Image parts a tool returned (the SDK's `read` tool inlines image files and
+ * `browser_screenshot` returns a page capture).
+ */
 function resultImages(source: ToolResultMsg | ToolRun | undefined): ImageContent[] {
   if (!source) return []
   const content = 'content' in source && Array.isArray((source as ToolResultMsg).content)
@@ -33,36 +37,55 @@ function resultImages(source: ToolResultMsg | ToolRun | undefined): ImageContent
   return content.filter((part: any): part is ImageContent => part?.type === 'image' && Boolean(part.data))
 }
 
-function ResultImages({ images }: { images: ImageContent[] }) {
+/**
+ * A tool's images, as preview thumbnails: clicking one opens the same
+ * full-screen overlay every other image in the app uses. `path` is the file an
+ * image-reading tool read, when there is one — it is what gives the overlay its
+ * "open file" action.
+ */
+function ResultImages({
+  images,
+  path,
+  onError,
+}: {
+  images: ImageContent[]
+  path?: string
+  onError?: () => void
+}) {
   const { t } = useI18n()
   return (
-    <div className="mt-2 flex flex-wrap gap-2">
+    <div className="flex flex-wrap gap-2">
       {images.map((image, index) => (
-        <img
+        <PreviewThumb
           key={index}
           src={`data:${image.mimeType};base64,${image.data}`}
           alt={t('chat.imageAlt', { index: index + 1 })}
-          className="max-h-64 max-w-full rounded-lg border border-border object-contain"
+          path={path}
+          onError={onError}
+          className="max-w-full rounded-lg"
+          imageClassName="max-h-64 w-auto max-w-full object-contain"
         />
       ))}
     </div>
   )
 }
 
+/**
+ * A tool result's own TEXT parts. Image parts are not text: the row renders
+ * them itself (or says why it cannot), so a `[image]` placeholder would only be
+ * a second, worse copy of the picture — and it showed up exactly in the
+ * fallback case, under the image it was standing for.
+ */
 function resultText(source: ToolResultMsg | ToolRun | undefined): string {
   if (!source) return ''
-  if ('content' in source && Array.isArray((source as ToolResultMsg).content)) {
-    return (source as ToolResultMsg).content
-      .map((part) => (part.type === 'text' ? part.text : '[image]'))
-      .join('\n')
-  }
-  const partial = (source as ToolRun).partial
-  if (partial?.content) {
-    return partial.content
-      .map((part: any) => (part.type === 'text' ? part.text : '[image]'))
-      .join('\n')
-  }
-  return ''
+  const content = 'content' in source && Array.isArray((source as ToolResultMsg).content)
+    ? (source as ToolResultMsg).content
+    : (source as ToolRun).partial?.content
+  if (!Array.isArray(content)) return ''
+  return content
+    .filter((part) => part.type === 'text')
+    .map((part) => (part as { text: string }).text)
+    .join('\n')
 }
 
 /** Managed bash wraps its final result for the model. Foreground rows still
@@ -225,6 +248,19 @@ export const ToolCallView = memo(function ToolCallView({ call, result, run, cwd 
       : undefined
   const args = call.arguments ?? {}
   const images = resultImages(result ?? run)
+  // The images ARE the output while they really came back: the text beside them
+  // is the tool's own bookkeeping ("Read image file [image/png]", the
+  // screenshot's own notes), and the framed output box would only wrap a
+  // picture. But `read` and `browser_screenshot` also put their DIAGNOSIS in
+  // that text — so a failed result, or an image the browser cannot decode, keeps
+  // it, and that is the whole reason this is a condition rather than a count.
+  const [imageFailed, setImageFailed] = useState(false)
+  const imageOnly = images.length > 0 && result?.isError !== true && !imageFailed
+  /** The file an image-reading tool read — the preview's "open file" target. */
+  const imagePath =
+    call.name === 'read' && typeof args.path === 'string' && args.path
+      ? resolveFromCwd(args.path, cwd)
+      : undefined
   // Tool payloads can be large cumulative snapshots. Do not flatten them into
   // text on every update unless the user is actually viewing this disclosure.
   let output = open ? resultText(result ?? run) : ''
@@ -237,11 +273,15 @@ export const ToolCallView = memo(function ToolCallView({ call, result, run, cwd 
     if (bashOutput.truncated) lines.push(t('chat.bashTruncated'))
     output = lines.filter(Boolean).join('\n')
   }
-  // Text output plus any image content the tool returned.
+  // Text output, or the images a tool returned in its place.
   const renderOutput = (children: string) => (
     <>
-      <ToolResultOutput {...outputProps(status)}>{children}</ToolResultOutput>
-      {images.length ? <ResultImages images={images} /> : null}
+      {imageOnly ? null : (
+        <ToolResultOutput {...outputProps(status)}>{children}</ToolResultOutput>
+      )}
+      {images.length && !imageFailed ? (
+        <ResultImages images={images} path={imagePath} onError={() => setImageFailed(true)} />
+      ) : null}
     </>
   )
 
@@ -269,7 +309,7 @@ export const ToolCallView = memo(function ToolCallView({ call, result, run, cwd 
       return (
         <ToolResult animateChanges={false} lazyContent open={open} onOpenChange={setOpen}
           title={t('todo.updated')} status={status} icon={<ToolIcon name="todo_write" />} meta={meta}
-          collapseOnComplete={false} contentClassName={WRAP_OUTPUT}>
+          collapseOnComplete={false} bare={imageOnly} contentClassName={WRAP_OUTPUT}>
           {renderOutput(output || placeholder(t('tool.noOutput')))}
         </ToolResult>
       )
@@ -285,7 +325,7 @@ export const ToolCallView = memo(function ToolCallView({ call, result, run, cwd 
       return (
         <ToolResult animateChanges={false} lazyContent open={open} onOpenChange={setOpen}
           title={label} status={status} icon={<ToolIcon name="agent" />} meta={rowMeta || undefined}
-          collapseOnComplete={false} contentClassName={WRAP_OUTPUT}>
+          collapseOnComplete={false} bare={imageOnly} contentClassName={WRAP_OUTPUT}>
           {renderOutput(output || placeholder(t('tool.noOutput')))}
         </ToolResult>
       )
@@ -306,10 +346,9 @@ export const ToolCallView = memo(function ToolCallView({ call, result, run, cwd 
           status={status}
           icon={<ToolIcon name="bash" />}
           meta={meta}
-          copyText={output || command}
           defaultOpen={false}
           collapseOnComplete={false}
-          contentClassName={WRAP_OUTPUT}
+          bare={imageOnly} contentClassName={WRAP_OUTPUT}
         >
           {renderOutput(
             (status === 'running' ? output.slice(-4000) : output) ||
@@ -344,7 +383,7 @@ export const ToolCallView = memo(function ToolCallView({ call, result, run, cwd 
           meta={meta}
           defaultOpen={false}
           collapseOnComplete={false}
-          contentClassName={WRAP_OUTPUT}
+          bare={imageOnly} contentClassName={WRAP_OUTPUT}
         >
           {renderOutput(output || (status === 'running' ? t('tool.editing') : placeholder(t('tool.noDiff'))))}
         </ToolResult>
@@ -381,7 +420,7 @@ export const ToolCallView = memo(function ToolCallView({ call, result, run, cwd 
           meta={meta}
           defaultOpen={false}
           collapseOnComplete={false}
-          contentClassName={WRAP_OUTPUT}
+          bare={imageOnly} contentClassName={WRAP_OUTPUT}
         >
           {renderOutput(
             status === 'running'
@@ -406,7 +445,7 @@ export const ToolCallView = memo(function ToolCallView({ call, result, run, cwd 
           meta={meta}
           defaultOpen={false}
           collapseOnComplete={false}
-          contentClassName={WRAP_OUTPUT}
+          bare={imageOnly} contentClassName={WRAP_OUTPUT}
         >
           {renderOutput(
             status === 'running' ? t('tool.reading') : output.slice(0, 4000) || placeholder(t('tool.emptyFile'))
@@ -441,7 +480,7 @@ export const ToolCallView = memo(function ToolCallView({ call, result, run, cwd 
           meta={meta}
           defaultOpen={false}
           collapseOnComplete={false}
-          contentClassName={WRAP_OUTPUT}
+          bare={imageOnly} contentClassName={WRAP_OUTPUT}
         >
           {renderOutput(
             status === 'running'

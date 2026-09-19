@@ -2,10 +2,10 @@ import { cn } from '@/lib/utils'
 
 /**
  * Frosted-glass surface for the session sidebar (Settings → Appearance, default
- * on — `lib/sidebar-glass.ts` owns the preference). One module builds the
- * panel's surface classes, the wash painted behind it and the list-fade color,
- * so the workspace composition and `scripts/check-sidebar-glass.mjs` share the
- * same source of truth.
+ * on — `lib/sidebar-glass.ts` owns the preference). One module builds both the
+ * panel's surface classes and the wash painted behind it, so the workspace
+ * composition and `scripts/check-sidebar-glass.mjs` share the same source of
+ * truth.
  *
  * Glass works in two layers, deliberately: the wash is a *sibling* painted
  * behind the panel (through `AnimatedSidebar`'s backdrop slot), not a child of
@@ -37,18 +37,5 @@ export function sidebarGlassPanelClassName(glass: boolean): string {
   return cn(
     'h-full border-border/50',
     glass ? 'bg-background/65 backdrop-blur-2xl backdrop-saturate-150' : 'bg-background'
-  )
-}
-
-/**
- * The session list's bottom fade keeps the glass intact: its `from-` color
- * follows the panel surface, so the translucent column doesn't end in an
- * opaque band. Rows ghost slightly through the fade — the same trade every
- * frosted edge makes.
- */
-export function sidebarGlassFadeClassName(glass: boolean): string {
-  return cn(
-    'pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t to-transparent',
-    glass ? 'from-background/65' : 'from-background'
   )
 }

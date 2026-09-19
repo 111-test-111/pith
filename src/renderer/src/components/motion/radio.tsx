@@ -118,7 +118,8 @@ export function RadioGroupItem({
         aria-checked={selected}
         disabled={disabled}
         onClick={() => !disabled && setValue(value)}
-        whileTap={reduce || disabled ? undefined : { scale: 0.92 }}
+        // local patch (pi-app): no press scale — a control must not dip inward
+        // while pressed (see `button/base`).
         transition={SPRING_PRESS}
         data-state={selected ? "checked" : "unchecked"}
         className={cn(

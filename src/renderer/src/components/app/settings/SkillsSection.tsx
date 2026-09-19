@@ -95,7 +95,12 @@ export function SkillsSection() {
           value={current.filePath}
           onValueChange={setSelected}
           variant="pill"
-          className="grid gap-4 sm:grid-cols-[12rem_minmax(0,1fr)] sm:items-start"
+          // Stretch (the default), NOT `items-start`: with start alignment the
+          // detail column ended wherever its own content ended, so the preview
+          // stopped short and left the two columns visibly uneven. Stretched,
+          // the detail owns the row's height and its preview can run down to
+          // the skills list's own last row.
+          className="grid gap-4 sm:grid-cols-[12rem_minmax(0,1fr)]"
         >
           <TabsList className="flex h-max flex-col items-stretch gap-1 rounded-2xl p-1.5 sm:sticky sm:top-0">
             {filtered.map((skill) => (
@@ -118,7 +123,7 @@ export function SkillsSection() {
 
           {filtered.map((skill) =>
             skill.filePath === current.filePath ? (
-              <TabsContent key={skill.filePath} value={skill.filePath} className="mt-0 min-w-0">
+              <TabsContent key={skill.filePath} value={skill.filePath} className="mt-0 flex min-w-0 flex-col">
                 <SkillDetail
                   skill={skill}
                   busy={busy === `skill:${skill.filePath}`}
@@ -167,7 +172,7 @@ function SkillDetail({
   const body = content ? stripFrontmatter(content.text) : ''
 
   return (
-    <div className="min-w-0 space-y-5">
+    <div className="flex min-w-0 flex-1 flex-col gap-5">
       <div className="min-w-0 space-y-2">
         <div className="flex min-w-0 items-center gap-1.5">
           <span className="min-w-0 truncate text-sm font-semibold text-foreground">
@@ -235,14 +240,19 @@ function SkillDetail({
         </Button>
       </div>
 
-      <section>
+      {/* The preview takes the detail column's leftover height, so its own
+          bottom edge lands on the skills list's. `basis-96` is the 384px cap
+          it keeps when the list is the shorter column (a long SKILL.md must
+          not stretch the page); `grow` spends the spare height when the list
+          is taller, and `overflow-y-auto` still scrolls the document inside. */}
+      <section className="flex grow flex-col">
         <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
           {t('settings.skillPreview')}
         </p>
         {readError ? (
           <p className="text-xs text-destructive">{t('settings.skillReadFailed')}</p>
         ) : content ? (
-          <div className="max-h-96 overflow-y-auto rounded-xl border border-border/70 bg-card px-4 py-3">
+          <div className="grow basis-96 overflow-y-auto rounded-xl border border-border/70 bg-card px-4 py-3">
             <Markdown>{body}</Markdown>
             {content.truncated ? (
               <p className="mt-2 text-xs text-muted-foreground/70">

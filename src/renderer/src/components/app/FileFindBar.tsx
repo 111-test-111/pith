@@ -21,7 +21,7 @@ export function FileFindBar({ inputRef, query, options, result, current, searchi
   const error = result.error ? t(`files.searchError.${result.error}`) : undefined
   const symbol = (mode: typeof modes[number]) => <span aria-hidden className={mode === 'wholeWord' ? 'underline underline-offset-2' : undefined}>{t(`files.findSymbol.${mode}`)}</span>
   const toggle = (mode: typeof modes[number]) => onOptions({ ...options, [mode]: !options[mode] })
-  const controls = modes.map(mode => <Tooltip key={mode} content={t(`files.${mode}`)}><Button variant="ghost" size="icon" whileHover={undefined} whileTap={undefined} className={cn('size-5 rounded-detail text-[11px] font-medium', options[mode] && 'bg-primary/15 text-primary')} aria-label={t(`files.${mode}`)} aria-pressed={options[mode]} onClick={() => toggle(mode)}>{symbol(mode)}</Button></Tooltip>)
+  const controls = modes.map(mode => <Tooltip key={mode} content={t(`files.${mode}`)}><Button variant="ghost" size="icon" className={cn('size-5 rounded-detail text-[11px] font-medium', options[mode] && 'bg-primary/15 text-primary')} aria-label={t(`files.${mode}`)} aria-pressed={options[mode]} onClick={() => toggle(mode)}>{symbol(mode)}</Button></Tooltip>)
   const count = t('files.matches', { current: result.matches.length ? current + 1 : 0, total: `${result.matches.length}${result.limited ? '+' : ''}` })
   return <div data-file-find className="@container/find flex h-9 shrink-0 items-center gap-0.5 border-b border-border/40 px-1" onKeyDown={event => {
     if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); if (settings) { setSettings(false); settingsRef.current?.focus({ preventScroll: true }) } else onClose() }

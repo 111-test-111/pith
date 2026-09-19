@@ -24,7 +24,7 @@ import { StreamingResponse } from '@/components/agents/streaming-response'
 import { Markdown } from '@/lib/markdown'
 import { SummaryRow } from './SummaryRow'
 import { useFileNavigation } from '@/lib/file-navigation'
-import { TRANSCRIPT_ROW, TRANSCRIPT_ROW_WIDTH } from '@/lib/transcript-rhythm'
+import { ACTIVITY_BODY_INDENT, TRANSCRIPT_ROW, TRANSCRIPT_ROW_TRIGGER, TRANSCRIPT_ROW_WIDTH } from '@/lib/transcript-rhythm'
 import { cn } from '@/lib/utils'
 import { ToolIcon } from '@/lib/tool-icons'
 import { formatTime, formatTokenCount, basename } from '@/lib/format'
@@ -301,7 +301,6 @@ export const BashItem = memo(function BashItem({ message }: { message: BashExecu
       status={status}
       icon={<ToolIcon name="bash" />}
       meta={meta || undefined}
-      copyText={message.output || message.command}
       defaultOpen={false}
       collapseOnComplete={false}
       contentClassName={WRAP_ANYWHERE}
@@ -472,11 +471,12 @@ const AssistantParts = memo(function AssistantParts({
             <RowReveal key={`thinking-${index}`} animate={streaming} className="w-full">
               <AgentActivity
                 status="complete"
-                // One row height for the whole transcript (see TOOL_ROW_HEIGHT):
+                // One row height for the whole transcript (see TRANSCRIPT_ROW):
                 // the row is the same box as a tool row and centres its own
                 // content, so the space between two rows' text is identical
-                // whichever pair of rows you look at.
-                className={TRANSCRIPT_ROW}
+                // whichever pair of rows you look at. The trigger takes that
+                // box itself, so opening the reasoning cannot re-centre it.
+                className={TRANSCRIPT_ROW_TRIGGER}
                 summary={
                   // Same leading-icon shape as a tool row, so the Reasoning row
                   // scans like the tool calls under it.
@@ -487,7 +487,9 @@ const AssistantParts = memo(function AssistantParts({
                 }
                 defaultOpen={false}
                 collapseOnComplete={false}
-                contentClassName={WRAP_ANYWHERE}
+                // The body starts where the row's own "Reasoning" label does,
+                // like a tool row's expanded output (see ACTIVITY_BODY_INDENT).
+                contentClassName={cn(WRAP_ANYWHERE, ACTIVITY_BODY_INDENT)}
                 items={block.parts.map((part, partIndex) => ({
                   id: `think-${index}-${partIndex}`,
                   type: 'text' as const,
@@ -604,7 +606,8 @@ const AssistantParts = memo(function AssistantParts({
               summary={<span className={tone}>{stopped ? t('subagent.aborted') : t('chat.error')}</span>}
               defaultOpen={false}
               collapseOnComplete={false}
-              contentClassName={WRAP_ANYWHERE}
+              // Same indent as the reasoning body it shares this disclosure with.
+              contentClassName={cn(WRAP_ANYWHERE, ACTIVITY_BODY_INDENT)}
               items={[
                 {
                   id: 'error',
@@ -1024,7 +1027,7 @@ export const AssistantGroup = memo(function AssistantGroup({
               // rule sits on the row's own bottom edge, so the fold's first row
               // keeps exactly the same spacing as every other pair of rows —
               // whether the fold is open or closed.
-              className={cn(TRANSCRIPT_ROW, 'border-b border-border/70')}
+              className={cn(TRANSCRIPT_ROW_TRIGGER, 'border-b border-border/70')}
             />
             <AgentDisclosure
               open={processOpen}

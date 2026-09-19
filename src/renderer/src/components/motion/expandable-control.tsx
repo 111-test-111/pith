@@ -125,7 +125,8 @@ export function ExpandableButton({
           className,
         )}
         onClick={handleClick}
-        whileTap={reduce || disabled ? undefined : { scale: 0.97 }}
+        // local patch (pi-app): no press scale — a control must not dip inward
+        // while pressed (see `button/base`).
         transition={transition}
       >
         <motion.span
@@ -249,7 +250,7 @@ export function ExpandableChip({
               actionClassName,
             )}
             onClick={handleAction}
-            whileTap={reduce || disabled ? undefined : { scale: 0.97 }}
+            // local patch (pi-app): no press scale — see `button/base`.
             transition={transition}
           >
             <span aria-hidden="true">{actionIcon}</span>

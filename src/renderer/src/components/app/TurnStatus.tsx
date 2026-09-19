@@ -1,4 +1,4 @@
-import { Loader } from '@/components/motion/loader'
+import { RunningLoader } from './RunningLoader'
 import { TextShimmer } from '@/components/motion/text-shimmer'
 import { useI18n } from '@/i18n'
 import { cn } from '@/lib/utils'
@@ -74,7 +74,7 @@ export function TurnStatus({ className, waitingUser = false, step = THINKING_STE
       data-spinner-verb={verb?.id}
       data-spinner-loader={verb ? 'dither-plus' : 'spinner'}
     >
-      <Loader
+      <RunningLoader
         variant={verb ? 'dither-plus' : 'spinner'}
         // `size-4` — the same square as the transcript's tool glyphs.
         size={16}

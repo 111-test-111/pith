@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useTheme } from 'next-themes'
 import { ShaderBackground } from '@/components/motion/shader-background'
+import { useReduceMotion } from '@/lib/reduce-motion'
 
 /**
  * Resolve any CSS color expression (including `color-mix()` in oklch) to the
@@ -41,11 +42,17 @@ function buildPalette(): string[] {
  * A soft, theme-aware wash behind the welcome and new-chat landing surfaces.
  * The palette follows the live theme tokens (`class`/`data-accent` on <html>),
  * the layer is pointer-transparent and hidden from assistive tech, and a radial
- * mask keeps it reading as light rather than as an image. Reduced motion is
- * honoured by the vendored wrapper, which freezes the shader's `speed`.
+ * mask keeps it reading as light rather than as an image.
+ *
+ * Two independent signals freeze the shader's `speed`, because a WebGL effect is
+ * neither motion's nor CSS's to stop: the OS preference (the vendored wrapper
+ * reads `useReducedMotion()`) and 「关闭动效」, which this component reads itself
+ * and passes as `speed={0}` — a preference flip has to freeze the running shader
+ * without waiting for the component to remount.
  */
 export function ShaderBackdrop({ className }: { className?: string }) {
   const { resolvedTheme } = useTheme()
+  const reduceMotion = useReduceMotion()
   const [colors, setColors] = useState<string[]>(() => buildPalette())
   useEffect(() => {
     const update = () => setColors(buildPalette())
@@ -63,6 +70,7 @@ export function ShaderBackdrop({ className }: { className?: string }) {
       aria-hidden="true"
       data-shader-backdrop=""
       data-shader-colors={colors.join(" ")}
+      data-shader-motion={reduceMotion ? 'frozen' : 'live'}
       className={`pointer-events-none absolute inset-0 -z-10 overflow-hidden ${className ?? ''}`}
     >
       {colors.length >= 2 ? (
@@ -72,7 +80,7 @@ export function ShaderBackdrop({ className }: { className?: string }) {
           distortion={0.9}
           swirl={0.5}
           grainOverlay={0.04}
-          speed={0.6}
+          speed={reduceMotion ? 0 : 0.6}
           scale={1.4}
           className="h-full w-full opacity-55 [mask-image:radial-gradient(120%_95%_at_50%_38%,#000_30%,transparent_100%)] dark:opacity-40"
         />

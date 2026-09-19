@@ -1,6 +1,6 @@
 import { RefreshCw } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
-import { Loader } from '@/components/motion/loader'
+import { RunningLoader } from '@/components/app/RunningLoader'
 import { useI18n } from '@/i18n'
 import { loadUsageStats, useUsageStats } from '@/lib/usage-stats-store'
 import { dayKey } from '@/lib/usage-view'
@@ -32,7 +32,7 @@ export function UsageSection() {
   if (!stats) {
     return (
       <div className="flex min-h-40 flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
-        <Loader size={20} label={t('settings.usage.loading')} />
+        <RunningLoader size={20} label={t('settings.usage.loading')} />
         {loading ? t('settings.usage.loading') : t('settings.usage.loadError')}
       </div>
     )

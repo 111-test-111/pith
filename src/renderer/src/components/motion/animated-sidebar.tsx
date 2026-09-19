@@ -1012,7 +1012,8 @@ export function AnimatedSidebarMenuSubButton({
       aria-disabled={disabled || undefined}
       tabIndex={disabled ? -1 : undefined}
       onClick={select}
-      whileTap={context.reduce || disabled ? undefined : { scale: 0.98 }}
+      // local patch (pi-app): no press scale — a sidebar control must not dip
+      // inward while pressed (see `button/base`).
       transition={SPRING_PRESS}
       className={interactiveClassName}
     >
@@ -1024,7 +1025,7 @@ export function AnimatedSidebarMenuSubButton({
       disabled={disabled}
       aria-current={isActive ? "page" : undefined}
       onClick={select}
-      whileTap={context.reduce || disabled ? undefined : { scale: 0.98 }}
+      // local patch (pi-app): no press scale — see `button/base`.
       transition={SPRING_PRESS}
       className={interactiveClassName}
     >
@@ -1173,7 +1174,7 @@ export function AnimatedSidebarMenuButton({
       title={panel.collapsed ? textLabel : undefined}
       tabIndex={disabled ? -1 : undefined}
       onClick={select}
-      whileTap={context.reduce || disabled ? undefined : { scale: 0.98 }}
+      // local patch (pi-app): no press scale — see `button/base`.
       transition={SPRING_PRESS}
       className={interactiveClassName}
     >
@@ -1188,7 +1189,7 @@ export function AnimatedSidebarMenuButton({
       aria-label={panel.collapsed ? textLabel : undefined}
       title={panel.collapsed ? textLabel : undefined}
       onClick={select}
-      whileTap={context.reduce || disabled ? undefined : { scale: 0.98 }}
+      // local patch (pi-app): no press scale — see `button/base`.
       transition={SPRING_PRESS}
       className={interactiveClassName}
     >

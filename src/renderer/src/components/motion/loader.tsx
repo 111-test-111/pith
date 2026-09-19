@@ -6,6 +6,7 @@ import { AnimatedIcon } from "@/lib/animated-icons";
 import { motion, useReducedMotion } from "motion/react";
 import { useEffect, useId, useState } from "react";
 import { EASE_IN_OUT } from "@/lib/ease";
+import { useReduceMotion } from "@/lib/reduce-motion";
 import { cn } from "@/lib/utils";
 
 export type LoaderVariant =
@@ -593,9 +594,17 @@ function Dither({
   // the twelve remaining cells into the four holes.
   corners?: boolean;
 }) {
+  // local patch (pi-app): 「关闭动效」 freezes motion globally, but a running
+  // indicator's own motion is the information (see `lib/reduce-motion.ts`), so
+  // the particles keep jumping — through Tailwind's own `pulse` keyframe, with
+  // the vendored duration and Bayer stagger moved onto the CSS animation. That
+  // keeps the pattern (cells lighting in threshold order) without the app
+  // carrying a keyframe of its own.
+  const motionOff = useReduceMotion();
   const n = 4;
   const gap = Math.max(1, size * 0.05);
   const cell = (size - gap * (n - 1)) / n;
+  const stagger = (order: number) => (order / BAYER_4.length) * speed;
   return (
     <span
       className="grid"
@@ -606,20 +615,32 @@ function Dither({
           <motion.span
             // biome-ignore lint/suspicious/noArrayIndexKey: fixed matrix cells, order never changes
             key={idx}
-            className="bg-current"
+            className={cn("bg-current", motionOff && "animate-pulse")}
             style={{
               width: cell,
               height: cell,
+              ...(motionOff
+                ? {
+                    animationDuration: `${speed}s`,
+                    animationDelay: `${stagger(order)}s`,
+                  }
+                : null),
               ...(corners
                 ? null
                 : { gridColumn: (idx % n) + 1, gridRow: Math.floor(idx / n) + 1 }),
             }}
-            animate={reduce ? { opacity: [0.3, 1, 0.3] } : { opacity: [0.1, 1, 0.1] }}
+            animate={
+              motionOff
+                ? { opacity: 1 }
+                : reduce
+                  ? { opacity: [0.3, 1, 0.3] }
+                  : { opacity: [0.1, 1, 0.1] }
+            }
             transition={{
               duration: speed,
               ease: EASE_IN_OUT,
               repeat: Infinity,
-              delay: (order / BAYER_4.length) * speed,
+              delay: stagger(order),
             }}
           />
         ),

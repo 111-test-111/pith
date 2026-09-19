@@ -247,7 +247,8 @@ export function ToolApproval({
             <motion.button
               type="button"
               onClick={onApprove}
-              whileTap={reduce ? undefined : { scale: 0.97 }}
+              // local patch (pi-app): no press scale — an approval button must
+              // not dip inward while pressed (see `button/base`).
               transition={SPRING_PRESS}
               className="rounded-xl bg-foreground px-3 py-1.5 text-xs font-medium text-background outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
             >
@@ -257,7 +258,7 @@ export function ToolApproval({
               <motion.button
                 type="button"
                 onClick={onAlwaysAllow}
-                whileTap={reduce ? undefined : { scale: 0.97 }}
+                // local patch (pi-app): no press scale — see `button/base`.
                 transition={SPRING_PRESS}
                 className="rounded-xl border border-border/60 bg-background px-3 py-1.5 text-xs font-medium text-foreground outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
               >

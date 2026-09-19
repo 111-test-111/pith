@@ -107,7 +107,8 @@ export function HeatCalendarGrid({ children, className }: { children?: ReactNode
                 // local patch (pi-app): capsule-by-design cells, so the shape
                 // token follows the UI style (see --app-radius-capsule).
                 className="absolute -inset-0.5 block rounded-capsule outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                whileTap={reduce ? undefined : { scale: 0.9, transition: SPRING_PRESS }}
+                // local patch (pi-app): no press scale — a chart cell must not
+                // dip inward while pressed (see `button/base`).
               >
                 <motion.span
                   className="pointer-events-none absolute inset-0.5 block rounded-capsule"

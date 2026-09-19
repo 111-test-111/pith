@@ -949,8 +949,6 @@ function ToolFamily({
           // A quiet toggle: the vendored press/hover spring reads as a bounce on
           // a row whose whole job is to reveal the rows below it, so both are
           // cancelled (the same treatment the task panels' toggles use).
-          whileHover={undefined}
-          whileTap={undefined}
           onClick={() => setOpen((prev) => !prev)}
           className="min-w-0 flex-1 justify-start gap-1.5 px-1"
         >

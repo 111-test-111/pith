@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { ThemeProvider } from 'next-themes'
 import App from './App'
 import { initFonts } from './lib/fonts'
+import { initReduceMotion } from './lib/reduce-motion'
 import './styles.css'
 
 document.documentElement.dataset.platform = window.pi.platform
@@ -13,6 +14,11 @@ if (accent) document.documentElement.dataset.accent = accent
 
 // Same for the interface/monospace typefaces (Settings → Appearance).
 initFonts()
+
+// Same for 「关闭动效」: motion reads the flag when an animation is created, so
+// setting it before the first render is what keeps the boot free of entrance
+// animations.
+initReduceMotion()
 
 // Same for the interface language on <html lang>.
 const locale = window.localStorage.getItem('pi-app:locale')

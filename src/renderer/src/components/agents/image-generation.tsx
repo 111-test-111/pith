@@ -378,7 +378,8 @@ export function ImageGeneration({
           <motion.button
             type="button"
             onClick={onRetry}
-            whileTap={reduce ? undefined : { scale: 0.96 }}
+            // local patch (pi-app): no press scale — this action button must not
+            // dip inward while pressed (see `button/base`).
             transition={SPRING_PRESS}
             className="mt-3 inline-flex min-h-10 items-center gap-2 rounded-control px-3 text-sm font-medium text-foreground outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
           >

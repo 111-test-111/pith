@@ -159,8 +159,6 @@ export function NewSessionSuggestions({ projectName, onSelect }: NewSessionConte
             <Button
               type="button"
               variant="ghost"
-              whileHover={{ scale: 1 }}
-              pressScale={0.99}
               onClick={() => onSelect(t(`newSession.${key}.prompt`))}
               className="h-full w-full min-w-0 flex-col items-start justify-start gap-1 rounded-none bg-transparent px-3 py-2.5 text-left hover:bg-transparent"
             >

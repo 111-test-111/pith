@@ -1,16 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Brain, ChevronLeft, Loader2 } from '@/lib/icons'
-import {
-  Combobox,
-  ComboboxContent,
-  ComboboxEmpty,
-  ComboboxGroup,
-  ComboboxInput,
-  ComboboxItem,
-  ComboboxLabel,
-  ComboboxList,
-  ComboboxTrigger
-} from '@/components/motion/combobox'
+import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/motion/select'
 import { Tooltip } from '@/components/motion/tooltip'
 import { useI18n } from '@/i18n'
 import type { MessageKey } from '@/i18n/locales/en'
@@ -53,6 +43,14 @@ const modelKey = (model: { providerId: string; id: string }) => `${model.provide
  * Two-stage composer picker: the model list first, then — for a reasoning
  * model — the thinking levels that model actually supports, with a back row to
  * return to the list. The trigger carries both ("Model · High").
+ *
+ * A `Select`, the same primitive as the sandbox-mode picker beside it and as
+ * Settings → Providers' default-model row: the panel hangs off the trigger in
+ * the layout (`absolute left-0 top-full`), so it cannot drift away from it —
+ * a portalled panel positioned from coordinates measured on mount could, since
+ * the composer moves in ways no window resize or scroll reports (see
+ * `SelectContent`). Picking is a choice from a list, so there is no search
+ * field: the trigger always states the active model, never a query.
  *
  * The level list is the session's SDK-authoritative `availableThinkingLevels`,
  * so it only exists for the active model: after picking a model the panel waits
@@ -137,7 +135,7 @@ export function ModelPicker({
   }
 
   return (
-    <Combobox
+    <Select
       open={open}
       onOpenChange={(next) => {
         if (!next && keepOpenRef.current) {
@@ -152,7 +150,8 @@ export function ModelPicker({
       disabled={disabled}
       className="w-auto"
     >
-      <ComboboxTrigger
+      <SelectTrigger
+        aria-label={t('model.choose')}
         className="h-8 w-auto min-w-0 gap-1.5 rounded-control border-0 bg-transparent px-2.5 text-xs hover:bg-muted"
       >
         <span className="flex min-w-0 items-center gap-1.5 whitespace-nowrap">
@@ -163,17 +162,9 @@ export function ModelPicker({
             {current ? `${current.name}${levelSuffix}` : t('model.choose')}
           </span>
         </span>
-      </ComboboxTrigger>
+      </SelectTrigger>
 
-      <ComboboxContent className="left-0 right-auto w-80">
-        {/* The search field lives in the popover, not the compact composer
-            trigger, so the trigger keeps showing the active model. */}
-        <ComboboxInput
-          aria-label={t('model.search')}
-          placeholder={t('model.search')}
-          className="h-7 text-xs"
-          wrapperClassName="border-b border-border/60 px-2.5 py-1.5"
-        />
+      <SelectContent className="left-0 right-auto w-80">
         <div className="max-h-80 overflow-y-auto">
           {levelsFor ? (
             <>
@@ -199,15 +190,13 @@ export function ModelPicker({
                 </span>
               </div>
               {levelsReady ? (
-                <ComboboxList ariaLabel={t('model.thinkingTitle')}>
-                  {availableThinkingLevels.map((level) => (
-                    <ComboboxItem key={level} value={level} textValue={levelLabel(t, level)} className="py-1.5">
-                      <span className="flex min-w-0 flex-1 items-center gap-2">
-                        <span className="truncate text-sm text-foreground">{levelLabel(t, level)}</span>
-                      </span>
-                    </ComboboxItem>
-                  ))}
-                </ComboboxList>
+                availableThinkingLevels.map((level) => (
+                  <SelectItem key={level} value={level} className="py-1.5">
+                    <span className="flex min-w-0 flex-1 items-center gap-2">
+                      <span className="truncate text-sm text-foreground">{levelLabel(t, level)}</span>
+                    </span>
+                  </SelectItem>
+                ))
               ) : (
                 <p className="flex items-center gap-2 px-3 py-3 text-xs text-muted-foreground">
                   <Loader2 className="size-3.5 animate-spin" />
@@ -216,20 +205,19 @@ export function ModelPicker({
               )}
             </>
           ) : (
-            <ComboboxList ariaLabel={t('model.choose')}>
-              {grouped.map((group) => (
-                <ComboboxGroup key={group.providerId}>
-                  <ComboboxLabel className="flex items-center gap-1.5 normal-case tracking-normal">
+            <>
+              {grouped.map((group, index) => (
+                <div key={group.providerId}>
+                  {index > 0 ? <div aria-hidden className="mx-1 my-1 h-px bg-border" /> : null}
+                  <div className="flex items-center gap-1.5 px-2.5 pb-0.5 pt-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
                     <ProviderIcon providerId={group.providerId} name={group.providerName} size={12} />
                     <span className="truncate">{group.providerName}</span>
-                    <span className="ml-auto font-normal">{group.models.length}</span>
-                  </ComboboxLabel>
+                    <span className="ml-auto font-normal normal-case">{group.models.length}</span>
+                  </div>
                   {group.models.map((model) => (
-                    <ComboboxItem
+                    <SelectItem
                       key={modelKey(model)}
                       value={modelKey(model)}
-                      textValue={model.name}
-                      keywords={[model.providerName, model.providerId, model.id]}
                       className="py-1.5"
                     >
                       {/* Name/meta column, with the inputs it accepts stated
@@ -246,17 +234,19 @@ export function ModelPicker({
                           <ModelInputBadges input={model.input} />
                         </span>
                       </span>
-                    </ComboboxItem>
+                    </SelectItem>
                   ))}
-                </ComboboxGroup>
+                </div>
               ))}
               {grouped.length === 0 ? (
-                <ComboboxEmpty>{t('model.noProviders')}</ComboboxEmpty>
+                <p className="px-3 py-6 text-center text-xs text-muted-foreground">
+                  {t('model.noProviders')}
+                </p>
               ) : null}
-            </ComboboxList>
+            </>
           )}
         </div>
-      </ComboboxContent>
-    </Combobox>
+      </SelectContent>
+    </Select>
   )
 }

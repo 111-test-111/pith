@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { AlertCircle, Chart, RefreshCw } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
-import { Loader } from '@/components/motion/loader'
+import { RunningLoader } from './RunningLoader'
 import { LabelTooltip } from './LabelTooltip'
 import { cn } from '@/lib/utils'
 import { useI18n } from '@/i18n'
@@ -139,7 +139,7 @@ export function ContextDetailPane({ store }: { store: PiStore }) {
   if (!detail) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
-        <Loader variant="spinner" size={20} label={t('contextDetail.loading')} className="text-primary" />
+        <RunningLoader variant="spinner" size={20} label={t('contextDetail.loading')} className="text-primary" />
         <p className="text-sm text-muted-foreground">{t('contextDetail.loading')}</p>
       </div>
     )

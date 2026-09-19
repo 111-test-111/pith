@@ -138,8 +138,6 @@ const WrittenFileRow = memo(function WrittenFileRow({
         ref={buttonRef}
         variant="ghost"
         size="sm"
-        whileHover={undefined}
-        pressScale={1}
         className="h-8 w-full justify-start gap-2 rounded-none px-3 font-normal"
         // beUI's transition-colors otherwise trails an instant preview swap.
         style={{ transition: 'none' }}

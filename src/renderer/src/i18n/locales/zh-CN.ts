@@ -551,9 +551,7 @@ const zhCN: Messages = {
   'mention.image': '图片',
 
   // model picker
-  'model.searchAria': '搜索模型',
   'model.choose': '选择模型',
-  'model.search': '搜索模型',
   'model.listAria': '模型',
   'model.noneFound': '未找到模型。',
   'model.reasoning': '推理',
@@ -661,6 +659,9 @@ const zhCN: Messages = {
   'settings.sidebar': '侧栏',
   'settings.sidebarGlass': '半透明侧栏',
   'settings.sidebarGlassDesc': '会话侧栏呈现毛玻璃质感，透出淡淡的强调色底色',
+  'settings.motion': '动效',
+  'settings.reduceMotion': '关闭动效',
+  'settings.reduceMotionDesc': '界面动效与过渡立即完成；运行中的状态指示保持转动',
   'settings.language': '语言',
   'settings.languageDesc': '界面语言 — 立即生效',
   'settings.fonts': '字体',

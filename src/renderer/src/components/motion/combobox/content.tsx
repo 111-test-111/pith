@@ -26,6 +26,14 @@ const COMBOBOX_MORPH: Transition = {
 };
 const VIEWPORT_PADDING = 8;
 
+/** The panel's own 1px top/bottom borders (`border border-border` below).
+ *  local patch (pi-app): the animated height is this surface's BORDER-box
+ *  height (border-box is global), while the measured content is the inner
+ *  wrapper — without these the panel settles 2px short of its content and
+ *  `overflow: hidden` clips the BOTTOM padding, so the list reads top-heavy.
+ *  Same fix as select.tsx and multi-select/content. */
+const PANEL_BORDER_PX = 2;
+
 export interface ComboboxContentProps {
   children: ReactNode;
   side?: Side;
@@ -102,7 +110,7 @@ export function ComboboxContent({
     window.innerWidth - contentWidth - VIEWPORT_PADDING,
   );
   const left = Math.min(Math.max(desiredLeft, VIEWPORT_PADDING), maxLeft);
-  const surfaceHeight = layout?.content.height ?? 0;
+  const surfaceHeight = (layout?.content.height ?? 0) + PANEL_BORDER_PX;
 
   return createPortal(
     <motion.div

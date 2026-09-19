@@ -125,7 +125,7 @@ import {
   RiSortDesc,
   RiSparkling2Line,
   RiStethoscopeLine,
-  RiStopLargeLine,
+  RiStopLargeFill,
   RiSubtractLine,
   RiStackLine,
   RiSunLine,
@@ -468,7 +468,11 @@ const GLYPHS = {
   ShieldCheck: { remix: RiShieldCheckLine, huge: ShieldCheckIcon },
   Sparkles: { remix: RiSparkling2Line, huge: SparklesIcon },
   SourceCode: { remix: RiCodeSSlashLine, huge: SourceCodeIcon },
-  Square: { remix: RiStopLargeLine, huge: SquareIcon },
+  // A stop mark is a SOLID block: the line variant's ring path fills its own
+  // outline, which renders as a hollow square however it is filled. The
+  // HugeIcons side is stroke artwork; the call site's `fill-current` fills it
+  // there, so both packs show the same solid square.
+  Square: { remix: RiStopLargeFill, huge: SquareIcon },
   SquareArrowOutUpRight: { remix: RiExternalLinkLine, huge: SquareArrowOutUpRightIcon },
   SquareTerminal: { remix: RiTerminalWindowLine, huge: SquareTerminalIcon },
   Stethoscope: { remix: RiStethoscopeLine, huge: StethoscopeIcon },

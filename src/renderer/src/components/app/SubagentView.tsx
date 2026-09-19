@@ -24,7 +24,6 @@ export const SubagentCompletionRow = memo(function SubagentCompletionRow({ run }
         status={status}
         icon={<Bot aria-hidden="true" className="size-4" />}
         meta={[run.profile, run.model, ...(run.runInBackground ? [t('subagent.background')] : []), ...(run.status === 'interrupted' ? [t('subagent.interrupted')] : []), ...(run.limitReached ? [t('subagent.turnLimit')] : []), ...(run.writtenFiles?.length ? [t('subagent.filesCount', { count: run.writtenFiles.length })] : [])].filter(Boolean).join(' · ')}
-        copyText={run.result ?? run.error ?? run.task}
         collapseOnComplete={false}>
         {open ? (
           <div className="space-y-2">
@@ -92,7 +91,6 @@ export const SubagentMessageRow = memo(function SubagentMessageRow({ details }: 
           details.profile,
           ...(Number.isFinite(sentAt) ? [formatTime(sentAt)] : [])
         ].filter(Boolean).join(' · ')}
-        copyText={details.message}
         collapseOnComplete={false}>
         {open ? (
           <p className="whitespace-pre-wrap break-words text-xs">{details.message}</p>
@@ -175,7 +173,6 @@ function SubagentRow({ run, sessionPath, onOpenSession }: {
         status={run.status === 'running' ? 'running' : run.status === 'completed' ? 'success' : run.status === 'aborted' || run.status === 'interrupted' ? 'cancelled' : 'error'}
         icon={<Bot aria-hidden="true" className="size-4" />}
         meta={meta}
-        copyText={run.task}
         collapseOnComplete={false}>
         {open ? (
           <div className="space-y-2">

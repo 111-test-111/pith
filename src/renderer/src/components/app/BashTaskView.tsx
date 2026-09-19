@@ -79,7 +79,7 @@ export function BashTaskRow({ task: fallback, completion = false, inset = false 
         title={completion ? t('bashTask.completedCommand', { command: firstLine }) : `bash · ${firstLine}`}
         status={expired ? 'cancelled' : bashTaskStatus(task)} icon={<ToolIcon name="bash" />}
         meta={t(expired ? 'bashTask.unavailable' : task.background && task.status === 'running' ? 'bashTask.background' : `bashTask.${task.status}`)}
-        copyText={task.command} collapseOnComplete={false}>
+        collapseOnComplete={false}>
         {open ? available ? <BashOutput key={task.id} task={task} /> : <p className="text-xs text-muted-foreground">{t('bashTask.recordExpired')}</p> : null}
       </ToolResult>
     </div>

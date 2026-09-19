@@ -146,7 +146,8 @@ export function CodeBlock({
             aria-label={copied ? "Copied" : "Copy code"}
             title={copied ? "Copied" : "Copy code"}
             onClick={handleCopy}
-            whileTap={reduce ? undefined : { scale: 0.9 }}
+            // local patch (pi-app): no press scale — a label icon button must not
+            // dip inward while pressed (see `button/base`).
             transition={SPRING_PRESS}
             // local patch (pi-app): capsule-by-design, so the shape token
             // follows the UI style (see --app-radius-capsule in styles.css).

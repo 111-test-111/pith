@@ -82,7 +82,8 @@ export function Checkbox({
         aria-describedby={ariaDescribedBy}
         disabled={disabled}
         onClick={() => !disabled && onCheckedChange(!checked)}
-        whileTap={reduce || disabled ? undefined : { scale: 0.92 }}
+        // local patch (pi-app): no press scale — a control must not dip inward
+        // while pressed (see `button/base`).
         transition={SPRING_PRESS}
         data-state={
           checked ? "checked" : indeterminate ? "indeterminate" : "unchecked"

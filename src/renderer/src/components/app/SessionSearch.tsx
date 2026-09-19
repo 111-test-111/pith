@@ -55,7 +55,7 @@ function SearchFolderGroup({ cwd, projectless, open, onToggle, count, children }
   return (
     <section aria-label={projectless ? name : cwd} data-search-folder={projectless ? 'projectless' : cwd}>
       <h3 className="sticky top-0 z-10 bg-background">
-        <Button variant="ghost" pressScale={1} whileHover={{ scale: 1 }} onClick={onToggle}
+        <Button variant="ghost" onClick={onToggle}
           aria-expanded={open} aria-controls={contentId}
           aria-label={t(open ? 'sessionSearch.collapseGroup' : 'sessionSearch.expandGroup', { name: projectless ? name : cwd })}
           className="h-10 w-full min-w-0 justify-start gap-2 rounded-lg px-2 text-left focus-visible:ring-inset">
@@ -347,7 +347,7 @@ export function SessionSearch({ sessions, activePath, runningPaths, onOpen, chil
                   // outside ring's top edge (`ring-inset` keeps the ring on the
                   // row's own surface, fully visible).
                   return (
-                    <Button key={hit.path} variant="ghost" pressScale={1} whileHover={{ scale: 1 }}
+                    <Button key={hit.path} variant="ghost" 
                       aria-current={current ? 'page' : undefined} disabled={Boolean(openingPath)}
                       onClick={() => { void openSession(hit.path, hit.cwd) }}
                       className={cn('group h-auto min-h-9 w-full items-start justify-start gap-2 rounded-lg px-2 py-2 text-left font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset [content-visibility:auto] [contain-intrinsic-size:auto_20px]', active && '[contain-intrinsic-size:auto_62px]', current && 'bg-primary/5')}

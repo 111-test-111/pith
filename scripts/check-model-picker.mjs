@@ -1,10 +1,10 @@
 /**
- * The composer's model picker is beUI's `Combobox`: a searchable model list
- * whose popover stays open while a reasoning model's thinking levels replace
- * it. This runs the real picker in isolated Electron and checks the compact
- * trigger, the search field, the two-stage flow, the level change and the
- * model row itself (inputs accepted, no step hint). No
- * model calls, no user data.
+ * The composer's model picker is a `Select` — the same pick-one control as the
+ * sandbox-mode picker beside it: a panel anchored to its trigger, which stays
+ * on the trigger through layout moves that report no resize or scroll. This
+ * runs the real picker in isolated Electron and checks the compact trigger, the
+ * two-stage flow, the level change, the model row itself (inputs accepted, no
+ * step hint) and that the panel cannot drift. No model calls, no user data.
  */
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
@@ -37,10 +37,18 @@ function Fixture(){
  const [value,setValue]=React.useState('p1/m1');
  const [level,setLevel]=React.useState('off');
  const [levels,setLevels]=React.useState(['off','high']);
- return React.createElement('div',{style:{width:640,padding:24}},
-  React.createElement(ModelPicker,{models,value,thinkingLevel:level,availableThinkingLevels:levels,
-   onChange:(m)=>{window.changes.push(m.id);setValue(m.providerId+'/'+m.id);setLevels(['off','high','max'])},
-   onThinkingLevelChange:(l)=>{window.levelChanges.push(l);setLevel(l)}}))}
+ // The stage stands in for the composer: a centred, max-width-bounded box whose
+ // picker is a shrink-to-fit flex item (the composer's leading-action row), so a
+ // width change moves the trigger WITHOUT resizing it — exactly the way
+ // Workspace.resizePanels writes the panel widths as CSS variables during a
+ // drag, with no window resize and no scroll event to observe.
+ return React.createElement('div',{id:'stage',style:{width:640,padding:24}},
+  React.createElement('div',{id:'box',style:{width:'100%',maxWidth:592,margin:'0 auto',display:'flex',alignItems:'center',gap:8,paddingLeft:12}},
+   React.createElement('span',{id:'leading',style:{width:28,height:28,flexShrink:0,borderRadius:8,background:'#ddd'}}),
+   React.createElement(ModelPicker,{models,value,thinkingLevel:level,availableThinkingLevels:levels,
+    onChange:(m)=>{window.changes.push(m.id);setValue(m.providerId+'/'+m.id);setLevels(['off','high','max'])},
+    onThinkingLevelChange:(l)=>{window.levelChanges.push(l);setLevel(l)}})))}
+window.setStageWidth=(maxWidth)=>{document.getElementById('box').style.maxWidth=maxWidth+'px'};
 createRoot(document.getElementById('root')).render(React.createElement(I18nProvider,null,React.createElement(Fixture)));
 window.fixtureReady=true;
 </script></body></html>`
@@ -82,23 +90,34 @@ try {
   await send('Runtime.enable')
   const waitFor = async (expression) => { for (let i = 0; i < 150; i++) { if (await evaluate(`Boolean(${expression})`)) return; await pause(100) } throw new Error('Timed out: ' + expression + '\n' + JSON.stringify(exceptions)) }
 
-  await waitFor('window.fixtureReady && document.querySelector(".cursor-text")')
-  assert.match(await evaluate(`document.querySelector('.cursor-text').textContent`), /Model One · Off/, 'the compact trigger shows the model and level')
+  await waitFor('window.fixtureReady && document.querySelector("[aria-haspopup=listbox]")')
+  assert.match(await evaluate(`document.querySelector('[aria-haspopup=listbox]').textContent`), /Model One · Off/, 'the compact trigger shows the model and level')
 
+  // The picker is a `Select` (the sandbox-mode picker beside it, Settings →
+  // Providers' default-model row): a list you choose from, with no field to
+  // type in, and a panel the layout anchors to the trigger.
   const openPicker = async () => {
-    await evaluate(`(()=>{const t=document.querySelector('.cursor-text');t.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,cancelable:true,pointerId:1,pointerType:'mouse'}))})()`)
-    await waitFor(`document.querySelector('[data-combobox-content]')?.getAttribute('aria-hidden')==='false'`)
+    await evaluate(`document.querySelector('[aria-haspopup=listbox]').click()`)
+    await waitFor(`document.querySelector('[role=listbox]')?.getAttribute('aria-hidden')==='false'`)
     await pause(150)
   }
-  const options = () => evaluate(`Array.from(document.querySelectorAll('[role=option]')).map(o=>o.textContent.trim())`)
+  // The Select keeps every item mounted while closed (their labels are what the
+  // trigger reads), so a reading of the list has to scope itself to the OPEN panel.
+  const options = () => evaluate(`Array.from(document.querySelector('[role=listbox][aria-hidden="false"]').querySelectorAll('[role=option]')).map(o=>o.textContent.trim())`)
+  const listState = () => evaluate(`document.querySelector('[role=listbox]').getAttribute('aria-hidden')`)
 
   await openPicker()
   assert.equal((await options()).length, 3, 'all available models are listed')
+  assert.equal(
+    await evaluate(`Boolean(document.querySelector('[role=listbox][aria-hidden="false"]').querySelector('input,textarea,[contenteditable]'))`),
+    false,
+    'the panel offers no field to type in — it is a pick-one list'
+  )
 
   // A model row states the inputs it accepts, and carries no step hint: the
   // picker's second stage opens on a reasoning model by itself.
   const rowFacts = await evaluate(`(()=>{
-    const rows=[...document.querySelectorAll('[role=option]')];
+    const rows=[...document.querySelector('[role=listbox][aria-hidden="false"]').querySelectorAll('[role=option]')];
     const fact=(name)=>{
       const row=rows.find(o=>o.textContent.includes(name));
       if(!row) return null;
@@ -131,37 +150,85 @@ try {
     'a two-input row is no taller than a one-input row'
   )
   assert.equal(rowFacts.two.height, rowFacts.three.height, 'every model row keeps one height')
-  // Search filters the list.
-  await evaluate(`(()=>{const input=document.querySelector('input[role=combobox]');const set=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;set.call(input,'three');input.dispatchEvent(new Event('input',{bubbles:true}))})()`)
-  await pause(200)
-  const filtered = await options()
-  assert.equal(filtered.length, 1, 'the search field narrows the list to one row')
-  assert.match(filtered[0], /Model Three/, 'the remaining row is the matching model')
-  await evaluate(`(()=>{const input=document.querySelector('input[role=combobox]');const set=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;set.call(input,'');input.dispatchEvent(new Event('input',{bubbles:true}))})()`)
-  await pause(200)
 
-  // Picking a reasoning model keeps the popover open and swaps in its levels.
+  // Picking a reasoning model keeps the panel open and swaps in its levels.
   await evaluate(`[...document.querySelectorAll('[role=option]')].find(o=>o.textContent.includes('Model One')).click()`)
   await pause(300)
-  assert.equal(await evaluate(`document.querySelector('[data-combobox-content]')?.getAttribute('aria-hidden')`), 'false', 'the popover stays open for the thinking step')
+  assert.equal(await listState(), 'false', 'the panel stays open for the thinking step')
   assert.deepEqual(await evaluate('window.changes'), ['m1'], 'picking a model reports it once')
   assert.deepEqual(await options(), ['Off', 'High', 'Max'], 'the supported thinking levels replace the model list')
   await evaluate(`[...document.querySelectorAll('[role=option]')].find(o=>o.textContent.trim()==='High').click()`)
   await pause(300)
-  assert.equal(await evaluate(`document.querySelector('[data-combobox-content]')?.getAttribute('aria-hidden')`), 'true', 'choosing a level closes the popover')
+  assert.equal(await listState(), 'true', 'choosing a level closes the panel')
   assert.deepEqual(await evaluate('window.levelChanges'), ['high'], 'the level change is reported')
-  assert.match(await evaluate(`document.querySelector('.cursor-text').textContent`), /Model One · High/, 'the trigger reflects the new level')
+  assert.match(await evaluate(`document.querySelector('[aria-haspopup=listbox]').textContent`), /Model One · High/, 'the trigger reflects the new level')
 
   // A non-reasoning model has no second step.
   await openPicker()
   await evaluate(`[...document.querySelectorAll('[role=option]')].find(o=>o.textContent.includes('Model Two')).click()`)
   await pause(300)
-  assert.equal(await evaluate(`document.querySelector('[data-combobox-content]')?.getAttribute('aria-hidden')`), 'true', 'a non-reasoning model closes immediately')
+  assert.equal(await listState(), 'true', 'a non-reasoning model closes immediately')
   assert.deepEqual(await evaluate('window.changes'), ['m1', 'm2'], 'the second model is reported')
-  assert.match(await evaluate(`document.querySelector('.cursor-text').textContent`), /Model Two/, 'the trigger follows the non-reasoning model')
+  assert.match(await evaluate(`document.querySelector('[aria-haspopup=listbox]').textContent`), /Model Two/, 'the trigger follows the non-reasoning model')
+
+  // The panel is ANCHORED to the trigger, not parked at a stored viewport
+  // measurement: a moving composer must carry it along, and every open must
+  // land in the same place. Only the side is decided in JS; the position is the
+  // layout's own, which is what makes it impossible to drift.
+  const panelPlacement = () => evaluate(`(()=>{
+    const trigger=document.querySelector('[aria-haspopup=listbox]');
+    const t=trigger.getBoundingClientRect();
+    const panel=document.querySelector('[role=listbox]');
+    const p=panel.getBoundingClientRect();
+    const box=document.getElementById('box').getBoundingClientRect();
+    return {dx:Math.round(p.left-t.left),dy:Math.round(p.top-t.bottom),
+      panelWidth:Math.round(p.width),triggerWidth:Math.round(t.width),triggerLeft:Math.round(t.left),
+      boxLeft:Math.round(box.left),position:getComputedStyle(panel).position,side:panel.dataset.side||''};
+  })()`)
+  const closePicker = async () => {
+    await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'}))`)
+    await waitFor(`document.querySelector('[role=listbox]')?.getAttribute('aria-hidden')==='true'`)
+    await pause(150)
+  }
+  const show = (placement) => JSON.stringify(placement)
+  const flushLeftEdge = (placement, label) =>
+    assert.ok(Math.abs(placement.dx) <= 1, `${label} (${show(placement)})`)
+  // The near gap animates (a spring with a 0.12s delay) from 0 to 8px, so the
+  // assertion is "attached to the trigger's bottom edge, never floated away".
+  const underTrigger = (placement, label) =>
+    assert.ok(placement.dy >= 0 && placement.dy <= 14, `${label} (${show(placement)})`)
+  await openPicker()
+  const atRest = await panelPlacement()
+  flushLeftEdge(atRest, "the panel starts on the trigger's left edge")
+  underTrigger(atRest, 'and hangs off its bottom edge')
+  await closePicker()
+
+  // Narrow the composer exactly the way Workspace.resizePanels moves it (a CSS
+  // width write, no window resize, no scroll), then open again: the panel must
+  // not remember where the trigger used to be.
+  await evaluate(`window.setStageWidth(496)`)
+  await pause(100)
+  await openPicker()
+  const shifted = await panelPlacement()
+  assert.notEqual(shifted.triggerLeft, atRest.triggerLeft, 'the fixture really moved the trigger')
+  assert.equal(shifted.triggerWidth, atRest.triggerWidth, 'and left its width alone')
+  flushLeftEdge(shifted, 'a moved composer takes the panel with it (no stale anchor)')
+  underTrigger(shifted, 'no stale vertical anchor either')
+
+  // And it keeps tracking while it is open: the panel is anchored, so it
+  // follows the trigger live instead of waiting for a resize or scroll event.
+  await evaluate(`window.setStageWidth(560)`)
+  await pause(120)
+  const followed = await panelPlacement()
+  flushLeftEdge(followed, 'an open panel follows its trigger')
+  underTrigger(followed, 'vertically too')
+  assert.equal(followed.panelWidth, 320, `the anchored panel keeps its own width (${show(followed)})`)
+  assert.equal(followed.position, 'absolute', 'the panel belongs to the layout, not to a portal')
+  await closePicker()
+  await evaluate(`window.setStageWidth(592)`)
 
   assert.deepEqual(exceptions, [], 'no uncaught renderer exceptions')
-  console.log('PASS: model picker — searchable combobox, per-row input badges, no step hint, two-stage thinking step, level + model changes')
+  console.log('PASS: model picker — pick-one Select anchored to its trigger, per-row input badges, no step hint, two-stage thinking step, level + model changes')
 } finally {
   ws?.close()
   if (child && child.exitCode === null) { const exited = new Promise((r) => child.once('exit', r)); child.kill(); await exited }

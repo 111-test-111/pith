@@ -15,7 +15,6 @@ import {
   useState,
 } from "react";
 import { EASE_OUT, SPRING_PRESS } from "@/lib/ease";
-import { useHoverCapable } from "@/lib/hooks/use-hover-capable";
 import { cn } from "@/lib/utils";
 
 export type ButtonVariant = "primary" | "secondary" | "ghost" | "outline";
@@ -27,7 +26,6 @@ export interface ButtonProps extends Omit<
 > {
   variant?: ButtonVariant;
   size?: ButtonSize;
-  pressScale?: number;
   /** Spawn a Material-style ripple from the press point. Off by default. */
   ripple?: boolean;
   children?: ReactNode;
@@ -39,7 +37,6 @@ export interface ButtonLinkProps extends Omit<
 > {
   variant?: ButtonVariant;
   size?: ButtonSize;
-  pressScale?: number;
   children?: ReactNode;
 }
 
@@ -67,7 +64,6 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
     {
       variant = "primary",
       size = "md",
-      pressScale = 0.93,
       ripple = false,
       className,
       children,
@@ -77,7 +73,6 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
     ref,
   ) {
     const reduce = useReducedMotion();
-    const canHover = useHoverCapable();
     const [ripples, setRipples] = useState<Ripple[]>([]);
     const nextId = useRef(0);
 
@@ -106,8 +101,10 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
       <motion.button
         ref={ref}
         type="button"
-        whileTap={reduce ? undefined : { scale: pressScale }}
-        whileHover={reduce || !canHover ? undefined : { scale: 1.02 }}
+        // local patch (pi-app): no press or hover scale. A control must not
+        // change size under the pointer — a full-width menu row grew 2% on
+        // hover and bulged past its own panel, and every button dipped inward
+        // while pressed. Focus rings, hover colours and the ripple stay.
         transition={SPRING_PRESS}
         onPointerDown={handlePointerDown}
         className={cn(
@@ -162,21 +159,16 @@ export const ButtonLink = forwardRef<HTMLAnchorElement, ButtonLinkProps>(
     {
       variant = "primary",
       size = "md",
-      pressScale = 0.93,
       className,
       children,
       ...rest
     },
     ref,
   ) {
-    const reduce = useReducedMotion();
-    const canHover = useHoverCapable();
-
     return (
       <motion.a
         ref={ref}
-        whileTap={reduce ? undefined : { scale: pressScale }}
-        whileHover={reduce || !canHover ? undefined : { scale: 1.02 }}
+        // local patch (pi-app): no press or hover scale — see `Button` above.
         transition={SPRING_PRESS}
         className={cn(
           "inline-flex items-center justify-center font-medium select-none",

@@ -297,28 +297,45 @@ export function SelectContent({ className, children }: SelectContentProps) {
   const open = ctx.open;
   const { setPlacement } = ctx;
 
+  // local patch (pi-app): the panel animates its BORDER-box height (Tailwind's
+  // preflight makes everything border-box) while `offsetHeight` is the inner
+  // content — so this panel's own 1px top/bottom borders have to be added to
+  // the measurement. Without them the panel settles 2px short of its content,
+  // `overflow: hidden` eats the difference at the BOTTOM, and every dropdown
+  // reads top-heavy (5px above the first row, 3px below the last instead of
+  // 5/5). Same fix in combobox/content and multi-select/content.
+  const panelHeight = useCallback(() => {
+    const node = innerRef.current;
+    if (!node) return 0;
+    const panel = node.parentElement;
+    const styles = panel ? getComputedStyle(panel) : null;
+    const border = styles
+      ? parseFloat(styles.borderTopWidth) + parseFloat(styles.borderBottomWidth)
+      : 0;
+    return node.offsetHeight + (Number.isFinite(border) ? border : 0);
+  }, []);
+
   useLayoutEffect(() => {
     const node = innerRef.current;
     if (!node) return;
-    const measure = () => setHeight(node.offsetHeight);
+    const measure = () => setHeight(panelHeight());
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(node);
     return () => observer.disconnect();
-  });
+  }, [panelHeight]);
 
   // On open, flip upward when there isn't room below and there's more above.
   useLayoutEffect(() => {
     if (!open) return;
     const trigger = document.getElementById(ctx.triggerId);
-    const node = innerRef.current;
-    if (!trigger || !node) return;
+    if (!trigger || !innerRef.current) return;
     const rect = trigger.getBoundingClientRect();
-    const h = node.offsetHeight;
+    const h = panelHeight();
     const below = window.innerHeight - rect.bottom;
     const above = rect.top;
     setPlacement(below < h + 16 && above > below ? "top" : "bottom");
-  }, [open, ctx.triggerId, setPlacement]);
+  }, [open, ctx.triggerId, setPlacement, panelHeight]);
 
   // Specify EVERY corner + both margins each render. The near edge (facing the
   // trigger) animates flat->round and the gap opens on that side; the far edge

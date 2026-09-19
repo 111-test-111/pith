@@ -70,13 +70,18 @@ export function useScrollFade(
   }, [viewportRef, contentRef, fadeSize, dependsOn])
 
   const ramp = `${fadeSize}px`
+  // The ramp belongs to the edge that HIDES content: content above the viewport
+  // fades at the TOP, content below it at the BOTTOM. These two single-edge
+  // branches were swapped, so a viewport sitting at its top — the common case —
+  // faded the edge where nothing was hidden and hard-chopped the one where
+  // everything was.
   const maskImage =
     edges.top && edges.bottom
       ? `linear-gradient(to bottom, transparent, black ${ramp}, black calc(100% - ${ramp}), transparent)`
       : edges.bottom
-        ? `linear-gradient(to bottom, transparent, black ${ramp})`
+        ? `linear-gradient(to bottom, black calc(100% - ${ramp}), transparent)`
         : edges.top
-          ? `linear-gradient(to bottom, black calc(100% - ${ramp}), transparent)`
+          ? `linear-gradient(to bottom, transparent, black ${ramp})`
           : undefined
 
   return { edges, maskImage }

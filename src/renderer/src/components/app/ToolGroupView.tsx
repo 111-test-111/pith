@@ -3,7 +3,7 @@ import { memo, useMemo, useState } from 'react'
 import { AgentActivity } from '@/components/agents/agent-activity'
 import { AgentDisclosure } from '@/components/agents/agent-disclosure'
 import { useI18n } from '@/i18n'
-import { TRANSCRIPT_ROW } from '@/lib/transcript-rhythm'
+import { TRANSCRIPT_ROW_TRIGGER } from '@/lib/transcript-rhythm'
 import type { ToolCallContent, ToolResultMsg } from '../../../../shared/types'
 import type { ToolRun } from '@/state/pi-store'
 import type { ToolCategory } from '@/lib/tool-categories'
@@ -95,7 +95,8 @@ export const ToolGroupView = memo(function ToolGroupView({
         status="complete"
         // The group row shares the transcript's one row height, so a group and a
         // tool row sit the same distance from whatever is above and below them.
-        className={TRANSCRIPT_ROW}
+        // Its trigger owns that box, so expanding the group moves nothing.
+        className={TRANSCRIPT_ROW_TRIGGER}
         summary={summary}
         open={open}
         onOpenChange={setOpen}

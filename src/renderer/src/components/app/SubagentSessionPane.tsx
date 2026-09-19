@@ -1,7 +1,7 @@
 import { memo, useEffect, useMemo, useState } from 'react'
 import { Bot } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
-import { Loader } from '@/components/motion/loader'
+import { RunningLoader } from './RunningLoader'
 import { PiStore } from '@/state/pi-store'
 import { useI18n } from '@/i18n'
 import { ChatView } from './ChatView'
@@ -112,7 +112,7 @@ export const SubagentSessionPane = memo(function SubagentSessionPane({
           <ChatView store={store} />
         ) : (
           <div className="flex h-full items-center justify-center">
-            <Loader variant="spinner" size={16} label={t('subagent.paneLoading')} className="text-primary" />
+            <RunningLoader variant="spinner" size={16} label={t('subagent.paneLoading')} className="text-primary" />
           </div>
         )}
       </div>

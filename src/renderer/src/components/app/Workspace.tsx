@@ -52,6 +52,7 @@ import { AskUserPanel } from './AskUserPanel'
 import { WindowTitlebar } from './WindowTitlebar'
 import { TitlebarOverflow } from './TitlebarOverflow'
 import { useOverflowFade } from '@/lib/hooks/use-overflow-fade'
+import { useScrollFade } from '@/lib/hooks/use-scroll-fade'
 import { Button } from '@/components/motion/button'
 import { Tooltip } from '@/components/motion/tooltip'
 import { basename } from '@/lib/format'
@@ -71,11 +72,7 @@ import type {
 } from '../../../../shared/types'
 import { PiStore } from '@/state/pi-store'
 import { useSidebarGlass } from '@/lib/sidebar-glass'
-import {
-  SidebarGlassWash,
-  sidebarGlassFadeClassName,
-  sidebarGlassPanelClassName
-} from './SidebarGlass'
+import { SidebarGlassWash, sidebarGlassPanelClassName } from './SidebarGlass'
 import type { StreamingBehavior } from '@/lib/streaming-behavior'
 import { ChatView } from './ChatView'
 import { Composer } from './Composer'
@@ -226,6 +223,11 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
    * a drag runs (see `applyPanelWidth`), and from the layout effect otherwise. */
   const leftPanelRef = useRef<HTMLElement | null>(null)
   const rightPanelRef = useRef<HTMLElement | null>(null)
+  /** The session list's own scrollport. It carries no bottom padding (the last
+   * row reaches the panel's bottom line), so the edge that hides content is
+   * marked with the shared ramp instead of chopping a row in half. */
+  const sessionListRef = useRef<HTMLDivElement>(null)
+  const { maskImage: sessionListMask } = useScrollFade(sessionListRef)
   /** Panes hosted by the right rail; state lives here so closing and
    * re-opening the rail restores the same tabs. */
   const [sidePanelTabs, setSidePanelTabs] = useState<SidebarTabId[]>([])
@@ -1284,7 +1286,10 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
         backdrop={sidebarGlass ? <SidebarGlassWash /> : undefined}
         panelClassName={cn(sidebarGlassPanelClassName(sidebarGlass), activeEdge.left && 'border-primary')}
       >
-        <AnimatedSidebarContent className="gap-5 overflow-hidden px-2 pb-3 pt-2">
+        {/* pb-0 overrides the vendored content's own py-2: the session list's
+            last row must reach the panel's bottom line, not stop 8px above it
+            (the row's own leading keeps the text off the edge). */}
+        <AnimatedSidebarContent className="gap-5 overflow-hidden px-2 pb-0 pt-2">
           <AnimatedSidebarGroup className="shrink-0 px-1 py-0">
             <AnimatedSidebarGroupContent>
               <AnimatedSidebarMenu className="gap-1">
@@ -1292,7 +1297,11 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
                   <AnimatedSidebarMenuButton
                     icon={<MessageSquarePlus className="size-4" />}
                     onSelect={() => void newSession()}
-                    className="bg-muted/70 font-medium text-foreground"
+                    // No resting background: a permanent box on the row read as
+                    // a floating grey slab against the glass panel. The row is
+                    // still the primary action — weight and full-contrast text
+                    // — it just wears no box of its own.
+                    className="font-medium text-foreground"
                   >
                     {t('workspace.newChat')}
                   </AnimatedSidebarMenuButton>
@@ -1320,8 +1329,10 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
             {sidebarSaveError ? <p role="alert" className="px-2 pb-2 text-xs text-destructive">{t('workspace.sidebarSaveError')}</p> : null}
             <AnimatedSidebarGroupContent className="relative min-h-0 flex-1 overflow-hidden">
               <div
+                ref={sessionListRef}
+                style={sessionListMask ? { maskImage: sessionListMask, WebkitMaskImage: sessionListMask } : undefined}
                 className={[
-                  'h-full overflow-y-auto overscroll-contain pb-8 [overflow-anchor:none]',
+                  'h-full overflow-y-auto overscroll-contain [overflow-anchor:none]',
                   // “Show more” rows (identified by the [data-more-row] icon)
                   // are plain text actions, not session rows: no hover box and
                   // no row menu — hover only shifts the text color.
@@ -1491,7 +1502,6 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
                   }}
                 />
               </div>
-              <div aria-hidden="true" data-sidebar-fade className={sidebarGlassFadeClassName(sidebarGlass)} />
             </AnimatedSidebarGroupContent>
           </AnimatedSidebarGroup>
         </AnimatedSidebarContent>

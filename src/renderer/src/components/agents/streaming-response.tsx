@@ -88,7 +88,8 @@ function ResponseAction({
       title={label}
       aria-pressed={label === "Helpful" || label === "Not helpful" ? active : undefined}
       onClick={onClick}
-      whileTap={reduce ? undefined : { scale: 0.9 }}
+      // local patch (pi-app): no press scale — a message action button must not
+      // dip inward while pressed (see `button/base`).
       transition={SPRING_PRESS}
       className={cn(
         "grid size-7 place-items-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",

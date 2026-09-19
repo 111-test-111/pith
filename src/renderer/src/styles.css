@@ -411,3 +411,44 @@ body:has([aria-modal="true"]:not([aria-hidden="true"])) .window-titlebar {
   content-visibility: auto;
   contain-intrinsic-size: auto 400px;
 }
+
+/* 「关闭动效」 (Settings → Appearance, `lib/reduce-motion.ts`) — the CSS half of
+ * the switch; the same call sets motion's own global flag, which handles every
+ * JS animation. What is left for CSS is hover transitions and the few keyframes
+ * the app still carries (beui-text-shimmer, the theme View Transition's
+ * `::view-transition-*` reveal).
+ *
+ * Running-state motion is the ONE exception, because "this is still running" is
+ * information rather than decoration: `animate-spin` (every busy glyph in the
+ * app and in vendored beUI), `animate-pulse` (the dither Loader's particles,
+ * which re-add their own stagger in `components/motion/loader.tsx`) and
+ * `beui-text-shimmer` (the waiting row's sentence sweep) stay animated — the
+ * spinner's particles and its sentence are the row's whole signal. Only those
+ * three are exempt: a decorative keyframe cannot survive by being a Tailwind
+ * animation.
+ *
+ * Both pseudo-elements are matched, since a component's own `::before`/`::after`
+ * animation is otherwise untouched. `!important` is required: a vendored
+ * component injects its `<style>` at the same origin, and media queries inside
+ * those blocks (text-shimmer's own reduced-motion reset) must not be the only
+ * thing that stops it. `transition-delay` is zeroed with the duration, so a
+ * staggered reveal appears at once instead of sitting in its initial state.
+ */
+html[data-reduce-motion='true'] *:not(.animate-spin):not(.animate-pulse):not(.beui-text-shimmer),
+html[data-reduce-motion='true'] *:not(.animate-spin):not(.animate-pulse):not(.beui-text-shimmer)::before,
+html[data-reduce-motion='true'] *:not(.animate-spin):not(.animate-pulse):not(.beui-text-shimmer)::after {
+  animation: none !important;
+}
+html[data-reduce-motion='true'] *,
+html[data-reduce-motion='true'] *::before,
+html[data-reduce-motion='true'] *::after {
+  transition-duration: 1ms !important;
+  transition-delay: 0s !important;
+}
+/* The theme switch animates the document's own view-transition snapshots, which
+ * are pseudo-elements of <html> and so are not reached by the rules above. No
+ * animation leaves the new theme's snapshot in place immediately. */
+html[data-reduce-motion='true']::view-transition-old(root),
+html[data-reduce-motion='true']::view-transition-new(root) {
+  animation: none !important;
+}

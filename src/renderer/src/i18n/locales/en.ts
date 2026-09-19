@@ -560,9 +560,7 @@ const en = {
   'mention.image': 'image',
 
   // model picker
-  'model.searchAria': 'Search models',
   'model.choose': 'Choose model',
-  'model.search': 'Search models',
   'model.listAria': 'Models',
   'model.noneFound': 'No models found.',
   'model.reasoning': 'reasoning',
@@ -681,6 +679,10 @@ const en = {
   'settings.sidebarGlass': 'Translucent sidebar',
   'settings.sidebarGlassDesc':
     'The session sidebar becomes frosted glass, letting a soft accent-tinted wash show through',
+  'settings.motion': 'Motion',
+  'settings.reduceMotion': 'Disable animations',
+  'settings.reduceMotionDesc':
+    'Interface animations and transitions land instantly; running indicators keep moving',
   'settings.language': 'Language',
   'settings.languageDesc': 'Interface language — applies immediately',
   'settings.fonts': 'Fonts',

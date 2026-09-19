@@ -7,6 +7,7 @@ import { Tooltip } from '@/components/motion/tooltip'
 import { cn } from '@/lib/utils'
 import { useFontSettings } from '@/lib/fonts'
 import { useSidebarGlass } from '@/lib/sidebar-glass'
+import { setReduceMotion, useReduceMotion } from '@/lib/reduce-motion'
 import { useI18n, LOCALE_NAMES, type Locale } from '@/i18n'
 import type { UiStyle } from '@/lib/ui-style'
 import { SettingsGroup, SettingsRow } from './SettingsRow'
@@ -88,6 +89,7 @@ export function AppearanceSection({
   const { theme, setTheme } = useTheme()
   const [fonts, setFonts] = useFontSettings()
   const [sidebarGlass, setSidebarGlass] = useSidebarGlass()
+  const reduceMotion = useReduceMotion()
   const [mounted, setMounted] = useState(false)
 
   // next-themes resolves the stored theme after mount; render the neutral
@@ -171,7 +173,10 @@ export function AppearanceSection({
                   aria-pressed={accent === preset.id}
                   onClick={() => onAccentChange(preset.id)}
                   className={cn(
-                    'grid size-8 place-items-center rounded-capsule transition-transform hover:scale-110',
+                    // 24px, not the 32px it started at: seven of them in a row read
+                    // as chunky blocks beside the compact controls every other
+                    // Settings row uses.
+                    'grid size-6 place-items-center rounded-capsule transition-transform hover:scale-110',
                     accent === preset.id && 'ring-2 ring-foreground/60 ring-offset-2 ring-offset-background'
                   )}
                   style={{ background: preset.color }}
@@ -194,6 +199,20 @@ export function AppearanceSection({
             checked={sidebarGlass}
             onCheckedChange={setSidebarGlass}
             aria-label={t('settings.sidebarGlass')}
+          />
+        </SettingsRow>
+      </SettingsGroup>
+
+      <SettingsGroup title={t('settings.motion')}>
+        <SettingsRow
+          label={t('settings.reduceMotion')}
+          description={t('settings.reduceMotionDesc')}
+        >
+          <Checkbox
+            mark="square"
+            checked={reduceMotion}
+            onCheckedChange={setReduceMotion}
+            aria-label={t('settings.reduceMotion')}
           />
         </SettingsRow>
       </SettingsGroup>

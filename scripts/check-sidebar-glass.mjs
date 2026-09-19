@@ -27,7 +27,7 @@ const fixturePath = '/__sidebar-glass-check.html'
 const fixture = `<!doctype html><html><body><div id="root"></div><script type="module">
 import React from 'react';import {createRoot} from 'react-dom/client';import {flushSync} from 'react-dom';
 import {AnimatedSidebarProvider,AnimatedSidebar,AnimatedSidebarContent,AnimatedSidebarInset} from '/src/components/motion/animated-sidebar.tsx';
-import {SidebarGlassWash,sidebarGlassPanelClassName,sidebarGlassFadeClassName} from '/src/components/app/SidebarGlass.tsx';
+import {SidebarGlassWash,sidebarGlassPanelClassName} from '/src/components/app/SidebarGlass.tsx';
 import {useSidebarGlass} from '/src/lib/sidebar-glass.ts';
 import '/src/styles.css';
 window.pi={platform:'darwin'};
@@ -40,8 +40,7 @@ function Shell(){
       panelClassName:sidebarGlassPanelClassName(glass)},
       React.createElement(AnimatedSidebarContent,{className:'relative gap-2 overflow-hidden px-2 pt-2'},
         React.createElement('div',{style:{height:'100%',overflowY:'auto'}},
-          sessions.map(label=>React.createElement('div',{key:label,style:{padding:'10px 8px',fontSize:13}},label))),
-        React.createElement('div',{'data-sidebar-fade':'',className:sidebarGlassFadeClassName(glass)}))),
+          sessions.map(label=>React.createElement('div',{key:label,style:{padding:'10px 8px',fontSize:13}},label))))),
     React.createElement(AnimatedSidebarInset,{className:'overflow-hidden bg-background'},
       React.createElement('div',{style:{padding:24,color:'var(--muted-foreground)',fontSize:13}},'conversation column')));
 }
@@ -50,14 +49,12 @@ window.read=()=>{
   const aside=document.querySelector('[data-slot="sidebar"]');
   const panel=aside?aside.querySelector(':scope > div:last-of-type'):null;
   const wash=document.querySelector('[data-sidebar-glass-wash]');
-  const fade=document.querySelector('[data-sidebar-fade]');
   const pc=panel?getComputedStyle(panel):null;
   const wc=wash?getComputedStyle(wash):null;
   return{aside:!!aside,panel:!!panel,
     wash:!!wash,washFirst:wash?wash.previousElementSibling===null:null,washBeforePanel:wash?wash.nextElementSibling===panel:null,
     washImage:wc?wc.backgroundImage:null,washPointer:wc?wc.pointerEvents:null,washPosition:wc?wc.position:null,
     filter:pc?pc.backdropFilter:null,panelBg:pc?pc.backgroundColor:null,
-    fadeImage:fade?getComputedStyle(fade).backgroundImage:null,
     stored:(()=>{try{return localStorage.getItem('pi-app:sidebar-glass')}catch{return null}})()};
 };
 </script></body></html>`
@@ -130,8 +127,6 @@ try {
   assert.match(on.washImage, /radial-gradient/, 'the wash carries the themed gradient')
   assert.match(on.filter, /blur/, 'the panel surface is frosted: ' + on.filter)
   assert.ok(alphaOf(on.panelBg) > 0 && alphaOf(on.panelBg) < 1, 'the panel surface is translucent: ' + on.panelBg)
-  assert.match(on.fadeImage, /linear-gradient/, 'the list fade resolves a gradient')
-  assert.match(on.fadeImage, /\/\s*[\d.]+\)/, 'the fade follows the translucent surface: ' + on.fadeImage)
   await shoot('light-on.png')
 
   // 2. The wash follows the live theme and accent: both change its resolved
@@ -151,15 +146,13 @@ try {
   await pause(100)
 
   // 3. Settings toggle off: the column goes back to the opaque surface, the
-  //    wash unmounts entirely, the fade returns to full alpha, and the value
-  //    persists.
+  //    wash unmounts entirely, and the value persists.
   await evaluate(`window.setGlass(false)`)
   await pause(150)
   const off = await evaluate('window.read()')
   assert.ok(!off.wash, 'the wash unmounts when glass is off')
   assert.equal(off.filter, 'none', 'no backdrop filter when glass is off')
   assert.equal(alphaOf(off.panelBg), 1, 'the panel surface is opaque when glass is off: ' + off.panelBg)
-  assert.notEqual(off.fadeImage, on.fadeImage, 'the list fade follows the surface')
   assert.equal(off.stored, 'off', 'the off value persists to localStorage')
   await shoot('light-off.png')
   await evaluate(`document.documentElement.classList.add('dark')`)

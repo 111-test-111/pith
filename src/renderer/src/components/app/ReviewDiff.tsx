@@ -27,7 +27,7 @@ export function ReviewFileHeader({ displayPath, fullPath, collapsed, onToggle, a
   const slash = displayPath.lastIndexOf('/')
   const dir = slash >= 0 ? displayPath.slice(0, slash) : ''
   const name = slash >= 0 ? displayPath.slice(slash + 1) : displayPath
-  const disclosure = <Button variant="ghost" size="sm" whileHover={undefined} pressScale={1} aria-expanded={!collapsed} aria-controls={contentId} onClick={onToggle} className="h-8 min-w-0 flex-1 justify-start gap-2 rounded-none px-3 font-normal">
+  const disclosure = <Button variant="ghost" size="sm" aria-expanded={!collapsed} aria-controls={contentId} onClick={onToggle} className="h-8 min-w-0 flex-1 justify-start gap-2 rounded-none px-3 font-normal">
         <ChevronDown aria-hidden="true" className={cn('size-3.5 shrink-0 text-muted-foreground transition-transform', collapsed && '-rotate-90')} />
         <span className="min-w-0 flex-1 truncate text-left text-xs">{dir ? <span className="text-muted-foreground/60">{dir}/</span> : null}<span className="text-foreground">{name}</span></span>
         {detail}

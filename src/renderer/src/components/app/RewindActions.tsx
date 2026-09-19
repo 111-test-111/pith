@@ -41,12 +41,12 @@ export function RewindActions({ mode, onModeChange, onRestore, actionLabel, disa
   }, [open])
   return <div className="ml-auto flex shrink-0 items-center gap-1">
     <div className="flex items-center">
-      <Button ref={actionRef} data-rewind-restore data-rewind-selected-mode={mode} variant="primary" size="sm" whileHover={undefined} whileTap={undefined} className="h-8 gap-1.5 rounded-r-none px-2.5 text-xs" disabled={disabled} aria-label={actionLabel ?? t(`rewind.restoreMode.${mode}`)} onClick={onRestore}>
+      <Button ref={actionRef} data-rewind-restore data-rewind-selected-mode={mode} variant="primary" size="sm" className="h-8 gap-1.5 rounded-r-none px-2.5 text-xs" disabled={disabled} aria-label={actionLabel ?? t(`rewind.restoreMode.${mode}`)} onClick={onRestore}>
         <Rewind aria-hidden="true" className="hidden size-3.5 @min-[500px]:block" />
         {actionLabel ?? <><span className="hidden @min-[500px]:inline">{t(`rewind.restoreMode.${mode}`)}</span><span className="@min-[500px]:hidden">{t(`rewind.shortMode.${mode}`)}</span></>}
       </Button>
       <MorphPopover open={open === 'mode'} onOpenChange={value => setOpen(value ? 'mode' : null)}>
-        <MorphPopoverTrigger><Button ref={modeRef} data-rewind-mode-trigger variant="primary" size="icon" whileHover={undefined} whileTap={undefined} className="h-8 w-7 rounded-l-none border-l border-primary-foreground/25" disabled={modeDisabled} aria-label={t('rewind.chooseMode')}><ChevronDown aria-hidden="true" className="size-3.5" /></Button></MorphPopoverTrigger>
+        <MorphPopoverTrigger><Button ref={modeRef} data-rewind-mode-trigger variant="primary" size="icon" className="h-8 w-7 rounded-l-none border-l border-primary-foreground/25" disabled={modeDisabled} aria-label={t('rewind.chooseMode')}><ChevronDown aria-hidden="true" className="size-3.5" /></Button></MorphPopoverTrigger>
         <MorphPopoverContent instant align="end" radius="var(--app-radius-card)" className="w-max max-w-[calc(100vw-4rem)] p-1.5">
           <div ref={menuRef} data-rewind-mode-options className="flex flex-col gap-1" onKeyDown={event => {
             if (event.key === 'Tab') { event.preventDefault(); close(); return }
@@ -57,7 +57,7 @@ export function RewindActions({ mode, onModeChange, onRestore, actionLabel, disa
             const index = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (current + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length
             buttons[index]?.focus()
           }}>
-            {(['conversation', 'all', 'files'] as const).filter(value => value !== mode).map(value => <Button key={value} data-rewind-mode={value} variant="ghost" size="sm" whileHover={undefined} whileTap={undefined} className="w-full justify-start gap-3 px-2.5 text-sm font-normal" disabled={conversationUnavailable && value !== 'files'} onClick={() => { onModeChange(value); setOpen(null); actionRef.current?.focus() }}>
+            {(['conversation', 'all', 'files'] as const).filter(value => value !== mode).map(value => <Button key={value} data-rewind-mode={value} variant="ghost" size="sm" className="w-full justify-start gap-3 px-2.5 text-sm font-normal" disabled={conversationUnavailable && value !== 'files'} onClick={() => { onModeChange(value); setOpen(null); actionRef.current?.focus() }}>
               <span className="flex-1 text-left">{t(`rewind.mode.${value}`)}</span>
               {fileWarning && value !== 'conversation' ? <AlertTriangle data-rewind-mode-warning role="img" aria-label={t('rewind.modeConflict')} className="size-4 shrink-0 text-amber-600 dark:text-amber-400" /> : null}
             </Button>)}
@@ -66,7 +66,7 @@ export function RewindActions({ mode, onModeChange, onRestore, actionLabel, disa
       </MorphPopover>
     </div>
     <MorphPopover open={open === 'info'} onOpenChange={value => setOpen(value ? 'info' : null)}>
-      <MorphPopoverTrigger><Button ref={infoRef} data-rewind-info-trigger variant="ghost" size="icon" whileHover={undefined} whileTap={undefined} className="size-8 shrink-0" disabled={infoDisabled} aria-label={t('rewind.backupInfo')}><Info aria-hidden="true" className="size-4" /></Button></MorphPopoverTrigger>
+      <MorphPopoverTrigger><Button ref={infoRef} data-rewind-info-trigger variant="ghost" size="icon" className="size-8 shrink-0" disabled={infoDisabled} aria-label={t('rewind.backupInfo')}><Info aria-hidden="true" className="size-4" /></Button></MorphPopoverTrigger>
       <MorphPopoverContent instant align="end" radius="var(--app-radius-card)" className="w-[min(22rem,calc(100vw-4rem))]">
         <div ref={contentRef} tabIndex={0} data-rewind-coverage className="max-h-[min(26rem,calc(100dvh-10rem))] space-y-3 overflow-auto p-4 text-xs text-muted-foreground outline-none" onKeyDown={event => { if (event.key === 'Tab') { event.preventDefault(); close() } }}>
           <h3 className="text-sm font-semibold text-foreground">{t('rewind.backupInfo')}</h3>

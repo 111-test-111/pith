@@ -310,11 +310,8 @@ function StepperAction({
         aria-hidden={hidden || undefined}
         tabIndex={hidden ? -1 : tabIndex}
         disabled={context.disabled || hidden}
-        whileTap={
-          context.reduce || context.disabled || hidden
-            ? undefined
-            : { scale: 0.94 }
-        }
+        // local patch (pi-app): no press scale — a download button must not dip
+        // inward while pressed (see `button/base`).
         transition={context.reduce ? { duration: 0 } : SPRING_PRESS}
         style={style}
         className={cn(

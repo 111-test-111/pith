@@ -225,13 +225,18 @@ function ImageZoom({ image }: { image: PreviewImage }) {
  * form for everything that is not rendered from markdown (composer
  * attachments, message-bubble images). Markdown images use this too once their
  * workspace path has been resolved to a data URL.
+ *
+ * The thumbnail itself carries no hover lift: the camera cursor, the focus ring
+ * and the preview are the affordance, and a shadow under a picture competed
+ * with the elevation family (which is for floating surfaces, not for content).
  */
 export function PreviewThumb({
   src,
   alt,
   path,
   className,
-  imageClassName
+  imageClassName,
+  onError
 }: {
   src: string
   /** Image alt text — also the preview caption. */
@@ -241,6 +246,9 @@ export function PreviewThumb({
   className?: string
   /** Classes for the `<img>` itself. */
   imageClassName?: string
+  /** The bytes could not be decoded — a caller whose image is the row's whole
+   * output uses this to fall back to the text that came with it. */
+  onError?: () => void
 }) {
   const openImage = useImagePreview()
   const { t } = useI18n()
@@ -251,11 +259,11 @@ export function PreviewThumb({
       onClick={() => openImage({ src, label: name, path })}
       aria-label={t('imagePreview.open', { name })}
       className={cn(
-        'group/preview inline-block cursor-zoom-in overflow-hidden border border-border align-middle transition-shadow hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+        'group/preview inline-block cursor-zoom-in overflow-hidden border border-border align-middle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
         className
       )}
     >
-      <img src={src} alt={alt ?? ''} className={cn('block', imageClassName)} />
+      <img src={src} alt={alt ?? ''} onError={onError} className={cn('block', imageClassName)} />
     </button>
   )
 }
