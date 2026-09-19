@@ -31,6 +31,7 @@ import { APP_BASH_TOOL_NAMES } from './bash-tools'
 import { TODO_TOOL_NAME } from './todo-protocol'
 import { AGENT_STEER_TOOL_NAME, MESSAGE_PARENT_TOOL_NAME, SUBAGENT_TOOL_NAME } from './subagents/protocol'
 import { ASK_USER_TOOL_NAME } from '../../shared/ask-user'
+import { hasPlanOpening, cancelledPlanOpening } from './plan-approval-access'
 import type { PlanController } from './plan-mode'
 import { PLAN_ESCALATION_REFUSED, PLAN_SHELL_UNAVAILABLE } from '../sandbox/escalation'
 
@@ -159,7 +160,8 @@ function createGate(options: PlanGateOptions): PlanGate {
   const previousStop = session.agent.shouldStopAfterTurn
   const previousPrompt = session.agent.prompt
   const promptRun: typeof previousPrompt = async (...args) => {
-    controller.checkWorkAdmission()
+    if (cancelledPlanOpening(controller)) throw new Error('plan-opening-aborted')
+    if (!hasPlanOpening(controller)) controller.checkWorkAdmission()
     const messages = Array.isArray(args[0]) ? args[0] : [args[0]]
     const userOpening = messages.some(m => typeof m === 'string' || m.role === 'user')
     if (controller.submissionLocked && !userOpening) throw new Error('plan-already-submitted')

@@ -143,7 +143,7 @@ export function reconstructPlan(branch: readonly unknown[]): PlanBranchState {
           }
         } else {
           // Normal exit keeps historical plan identity but clears active approval.
-          state.approval = null
+          if (data.via !== 'approve') state.approval = null
         }
       } else if (recordEntry.customType === PLAN_APPROVAL_ENTRY) {
         if (data.version !== 1) continue

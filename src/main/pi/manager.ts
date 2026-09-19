@@ -46,6 +46,7 @@ import { TodoState, createTodoTool } from './todo'
 import { TODO_TOOL_NAME } from './todo-protocol'
 import { PlanController, PlanAdmissionError, planErrorCode, type PlanLiveFacts } from './plan-mode'
 import { installPlanGate, type PlanGate } from './plan-gate'
+import { PlanApprovalController } from './plan-approval'
 import { PlanStorage } from './plan-storage'
 import { parsePlanSubmission, reconstructPlan } from './plan-protocol'
 import { createPlanSubmissionTool } from './plan-submission'
@@ -123,6 +124,8 @@ import type {
   PlanStateDTO,
   PlanDocumentRequest,
   PlanDocumentDTO,
+  PlanApprovalDTO,
+  PlanApproveRequest,
   ProviderDTO,
   ProviderModelDTO,
   PromptPayload,
@@ -285,6 +288,7 @@ interface ManagedSession {
   /** The runtime tool ceiling (setter adapter + hook chain + execute recheck). */
   gate?: PlanGate
   disposePlanStream?: () => void
+  planApproval?: PlanApprovalController
   /** Present on subagent child sessions: linkage + frozen tool ceiling. The
    * child's initialization activates only the ceiling, never the full set. */
   subagentChild?: { parentPath: string; toolCeiling: readonly string[]; planRestricted?: true }
@@ -1102,6 +1106,7 @@ export class PiManager {
     if (managed.subagentChild) clearSubagentAskUserRequests(managed.path)
     if (managed.disposePromise) return managed.disposePromise
     managed.disposing = true
+    managed.planApproval?.dispose()
     managed.rewind?.dispose()
     // Put the session's own tool setter and hook chain back before disposal,
     // so an SDK path that reaches the session during teardown sees its own
@@ -1532,9 +1537,10 @@ export class PiManager {
     // `restricted` live on every call, so the controller must already be
     // readable when createAgentSessionFromServices freezes customTools.
     const planPath = sessionManager.getSessionFile() ?? `memory:${sessionManager.getSessionId()}`
+    const planStorage = new PlanStorage(sessionManager)
     const plan = new PlanController({
       manager: sessionManager,
-      storage: new PlanStorage(sessionManager),
+      storage: planStorage,
       facts: () => this.planFacts(managed),
       // Every published mode/plan change re-materializes the effective tool
       // view: entering/leaving Plan must change what the model can call NOW,
@@ -1837,6 +1843,16 @@ export class PiManager {
       appDefinitions: customTools,
       roleCeiling: () => managed.subagentChild?.toolCeiling
     })
+    managed.planApproval = new PlanApprovalController({ session, controller: plan, storage: planStorage,
+      read: request => { const result = this.readPlanDocument(request); if (!result.ok) throw new PlanAdmissionError(result.code, result.blockers); return result.value },
+      applyTools: () => managed.gate?.refresh(), changed: () => plan.refresh(),
+      onError: error => this.emitSessionError(managed, error),
+      holdWakes: () => {
+        managed.notifications.holdWake(); managed.askUser.holdWake(); managed.subagents?.notifications?.holdWake()
+        return () => { managed.notifications.releaseWake(); managed.askUser.releaseWake(); managed.subagents?.notifications?.releaseWake() }
+      }
+    })
+    managed.planApproval.recover()
     // Navigation only needs the restored transcript. A session_start hook can
     // wait on a file scan or network connection for many seconds; do not put
     // that wait on init/new/open. Subscribe first so startup events are kept.
@@ -2219,6 +2235,18 @@ export class PiManager {
       }
       throw error
     }
+  }
+
+  async approvePlan(request: PlanApproveRequest): Promise<PlanActionResult<PlanApprovalDTO>> {
+    const managed = this.sessions.get(request?.sessionPath)
+    if (!managed?.planApproval) return { ok: false, code: 'no-session', blockers: [] }
+    return managed.planApproval.approve(request)
+  }
+
+  async resetPlanApproval(request: PlanDocumentRequest): Promise<PlanActionResult<PlanStateDTO>> {
+    const managed = this.sessions.get(request?.sessionPath)
+    if (!managed?.planApproval) return { ok: false, code: 'no-session', blockers: [] }
+    return managed.planApproval.reset(request)
   }
 
   readPlanDocument(request: PlanDocumentRequest): PlanActionResult<PlanDocumentDTO> {
@@ -3025,6 +3053,7 @@ export class PiManager {
   abort(): void {
     const managed = this.activeSession
     if (!managed) return
+    managed.planApproval?.cancelOpening()
     managed.userAborted = true
     managed.notifications.pause()
     managed.askUser.pause()

@@ -19,6 +19,7 @@
  *
  * Business rules live here; PiManager only wires lifecycle and facts.
  */
+import { hasPlanOpening } from './plan-approval-access'
 import { randomUUID } from 'node:crypto'
 import type { SessionManager } from '@earendil-works/pi-coding-agent'
 import type { PlanBlocker, PlanStateDTO, SessionMode } from '../../shared/plan'
@@ -264,6 +265,7 @@ export class PlanController {
   async setMode(mode: SessionMode): Promise<PlanStateDTO> {
     if (mode !== 'normal' && mode !== 'plan') throw new Error(`Unknown session mode: ${String(mode)}`)
     await this.transition(async () => {
+      if (this.approvalRecovery) throw new PlanAdmissionError('plan-recovery-required', ['recovery'])
       if (this.branchState.unsupported) {
         throw new PlanAdmissionError('This session was written by a newer plan protocol version', ['unsupported-version'])
       }
@@ -301,6 +303,7 @@ export class PlanController {
    */
   checkWorkAdmission(): void {
     const facts = this.options.facts()
+    if (this.approvalRecovery) throw new PlanAdmissionError('plan-recovery-required', ['recovery'])
     if (this.options.storage.failed) throw new PlanAdmissionError('plan-storage-locked', ['storage'])
     if (this.branchState.unsupported) throw new PlanAdmissionError('plan-unsupported-version', ['unsupported-version'])
     if (facts.recovery) throw new PlanAdmissionError('plan-recovery-required', ['recovery'])
@@ -419,6 +422,10 @@ export class PlanController {
     }
   }
 
+  private get approvalRecovery(): boolean {
+    return !hasPlanOpening(this) && (this.branchState.approval?.status === 'requested' || this.branchState.approval?.status === 'interrupted')
+  }
+
   private isRestricted(dto: PlanStateDTO): boolean {
     return dto.mode === 'plan'
   }
@@ -426,7 +433,7 @@ export class PlanController {
   private build(): PlanStateDTO {
     const facts = this.options.facts()
     const restricted =
-      this.branchState.mode === 'plan' || this.branchState.unsupported || facts.inheritedPlanRestriction
+      this.branchState.mode === 'plan' || this.branchState.unsupported || facts.inheritedPlanRestriction || this.approvalRecovery
     return {
       seq: this.seq,
       // Reported mode follows the EFFECTIVE restriction, so the UI can never
@@ -440,7 +447,7 @@ export class PlanController {
       effectiveSandboxMode: restricted ? 'read-only' : facts.configuredSandboxMode,
       shellEnforcement: facts.shellEnforcement,
       blockers: {
-        switch: this.factBlockers(facts, true),
+        switch: [...this.factBlockers(facts, true), ...(this.approvalRecovery ? ['recovery' as const] : [])],
         submit: this.submitBlockers(facts),
         approve: this.approveBlockers(facts)
       }
@@ -498,6 +505,7 @@ export class PlanController {
   /** Whether the user may start executing the latest submission. */
   private approveBlockers(facts: PlanLiveFacts): PlanBlocker[] {
     const blockers = this.factBlockers(facts, true)
+    if (this.approvalRecovery) blockers.push('recovery')
     if (this.branchState.mode !== 'plan') blockers.push('not-plan')
     if (!this.branchState.unsupported) {
       if (!this.branchState.latest) blockers.push('no-submission')
@@ -524,7 +532,7 @@ export class PlanController {
    * admission transition to the app (see `onWakeOpened`).
    */
   private backgroundWakeOpen(): boolean {
-    return !this.lock && !this.sealed && !this.options.storage.failed && !this.branchState.unsupported && !this.options.facts().closing
+    return !this.lock && !this.sealed && !this.approvalRecovery && !this.options.storage.failed && !this.branchState.unsupported && !this.options.facts().closing
   }
 
   private trackWakeAdmission(): void {
