@@ -110,6 +110,19 @@
   --terminal-selection-inactive-background: #59667e;
 }
 
+/* Restored continuous-corner style (Superellipse UI). Values recovered from
+ * 397f6ed^ — the commit that squared the branch. The block must stay BELOW
+ * `:root`: it has the same specificity (0,1,0) and wins on source order alone,
+ * exactly like the [data-accent='…'] presets further down. */
+[data-corners='squircle'] {
+  --app-radius-detail: 4px;
+  --app-radius-inner: 10px;
+  --app-radius-item: 14px;
+  --app-radius-card: 20px;
+  --app-radius-window: 28px;
+  --app-radius-capsule: 9999px;
+}
+
 .dark {
   --app-elevation-contact: oklch(0 0 0 / 0.30);
   --app-elevation-ambient: oklch(0 0 0 / 0.40);

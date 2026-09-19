@@ -5,6 +5,7 @@ import { Button } from '@/components/motion/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/motion/tabs'
 import { EASE_OUT } from '@/lib/ease'
 import type { MessageKey } from '@/i18n/locales/en'
+import type { UiStyle } from '@/lib/ui-style'
 import { useI18n } from '@/i18n'
 import { GeneralSection } from './GeneralSection'
 import { PromptSection } from './PromptSection'
@@ -21,6 +22,8 @@ import { WindowTitlebar } from '../WindowTitlebar'
 interface SectionProps {
   accent: string
   onAccentChange: (accent: string) => void
+  uiStyle: UiStyle
+  onUiStyleChange: (style: UiStyle) => void
 }
 
 /**
@@ -56,7 +59,12 @@ const SECTIONS: {
     descriptionKey: 'settings.appearanceDesc',
     icon: <Palette className="size-4" />,
     render: (props) => (
-      <AppearanceSection accent={props.accent} onAccentChange={props.onAccentChange} />
+      <AppearanceSection
+        accent={props.accent}
+        onAccentChange={props.onAccentChange}
+        uiStyle={props.uiStyle}
+        onUiStyleChange={props.onUiStyleChange}
+      />
     )
   },
   {

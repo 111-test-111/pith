@@ -119,11 +119,14 @@ import { AlertTriangle, Rewind } from '@/lib/icons'
 import { RewindDialog } from './RewindDialog'
 import { ConfirmDialog } from './ConfirmDialog'
 import type { AuthNotifyDTO, AuthPromptDTO, BrowserStatusDTO } from '../../../../shared/types'
+import type { UiStyle } from '@/lib/ui-style'
 
 interface WorkspaceProps {
   store: PiStore
   accent: string
   onAccentChange: (accent: string) => void
+  uiStyle: UiStyle
+  onUiStyleChange: (style: UiStyle) => void
 }
 
 interface PendingDelete {
@@ -166,7 +169,7 @@ function SidebarRowMenuAction({ icon: Icon, label, tone = 'default', onSelect }:
   )
 }
 
-export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
+export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleChange }: WorkspaceProps) {
   const { t } = useI18n()
   const toast = useToast()
   const titleFade = useOverflowFade()
@@ -1649,6 +1652,8 @@ export function Workspace({ store, accent, onAccentChange }: WorkspaceProps) {
         onBack={() => setSettingsOpen(false)}
         accent={accent}
         onAccentChange={onAccentChange}
+        uiStyle={uiStyle}
+        onUiStyleChange={onUiStyleChange}
       />
 
       <RewindDialog sessionPath={rewindTarget?.path ?? null} messageTimestamp={rewindTarget?.messageTimestamp} messageEntryId={rewindTarget?.messageEntryId} onClose={closeRewind} onCommitted={value => {

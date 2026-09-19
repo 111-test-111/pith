@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react'
 import { useTheme } from 'next-themes'
 import { WindowTitlebar } from './components/app/WindowTitlebar'
 import { ImagePreviewProvider } from './components/app/ImagePreview'
@@ -8,6 +8,7 @@ import { Workspace } from './components/app/Workspace'
 import { PiStore } from './state/pi-store'
 import { useNotificationSoundEvents } from './lib/notification-sounds'
 import { I18nProvider, useI18n } from './i18n'
+import { applyUiStyle, useUiStyle } from './lib/ui-style'
 import type { SessionSnapshotDTO } from '../../shared/types'
 
 const ACCENT_KEY = 'pi-app:accent'
@@ -42,6 +43,13 @@ function AppInner() {
   useEffect(() => {
     applyAccent(accent)
   }, [accent])
+
+  const [uiStyle, setUiStyle] = useUiStyle()
+  // A layout effect (not an effect) so the preset is on <html> before the
+  // first paint: an effect would flash the square style on a squircle boot.
+  useLayoutEffect(() => {
+    applyUiStyle(uiStyle)
+  }, [uiStyle])
 
   useEffect(() => {
     const offEvent = window.pi.onEvent((event) => store.dispatch(event))
@@ -110,7 +118,13 @@ function AppInner() {
 
   return (
     <ImagePreviewProvider>
-      <Workspace store={store} accent={accent} onAccentChange={setAccent} />
+      <Workspace
+        store={store}
+        accent={accent}
+        onAccentChange={setAccent}
+        uiStyle={uiStyle}
+        onUiStyleChange={setUiStyle}
+      />
     </ImagePreviewProvider>
   )
 }

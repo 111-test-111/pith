@@ -247,6 +247,35 @@ app.on('window-all-closed',()=>app.quit());`)
       await evaluate('document.documentElement.style.removeProperty("--app-corner-shape")')
       await screenshot(`${theme}-${reduced ? 'reduced' : 'motion'}-gallery`)
 
+      // The style preset must be a pure token swap: both presets pinned, and the
+      // capsule site must actually change shape between them. The preset block
+      // has the same specificity as :root and wins on source order alone, so
+      // this is also what catches a reorder above :root.
+      const CORNER_PRESETS = {
+        square: { detail: '0px', inner: '0px', item: '0px', card: '0px', window: '0px', capsule: '0px' },
+        squircle: { detail: '4px', inner: '10px', item: '14px', card: '20px', window: '28px', capsule: '9999px' }
+      }
+      for (const [preset, expected] of Object.entries(CORNER_PRESETS)) {
+        await evaluate(`document.documentElement.dataset.corners = ${JSON.stringify(preset)}`)
+        await pause(150)
+        for (const [token, value] of Object.entries(expected)) {
+          assert.equal(
+            await evaluate(`getComputedStyle(document.documentElement).getPropertyValue("--app-radius-${token}").trim()`),
+            value,
+            preset + ': --app-radius-' + token
+          )
+        }
+        const sendRadius = parseFloat(await style('[aria-label="Send prompt"]', 'border-top-left-radius'))
+        assert.ok(
+          preset === 'square' ? sendRadius === 0 : sendRadius >= 16,
+          preset + ': the capsule site ' + (preset === 'square' ? 'stays a right angle' : 'is a full capsule') + ' (got ' + sendRadius + ')'
+        )
+        assert.equal(await style('[aria-label="Send prompt"]', 'corner-shape'), 'superellipse(1)', preset + ': the capsule keeps a round corner shape')
+        await screenshot(`${theme}-${reduced ? 'reduced' : 'motion'}-${preset}-gallery`)
+      }
+      await evaluate('delete document.documentElement.dataset.corners')
+      await pause(150)
+
       // The dialog is portalled outside #root. Check entry frames, focus trap,
       // shadow, and native corners at every observed frame (not just at rest).
       const dialog = '[role="dialog"][aria-modal="true"]'

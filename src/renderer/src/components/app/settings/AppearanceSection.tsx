@@ -8,6 +8,7 @@ import { cn } from '@/lib/utils'
 import { useFontSettings } from '@/lib/fonts'
 import { useSidebarGlass } from '@/lib/sidebar-glass'
 import { useI18n, LOCALE_NAMES, type Locale } from '@/i18n'
+import type { UiStyle } from '@/lib/ui-style'
 import { SettingsGroup, SettingsRow } from './SettingsRow'
 
 /** Swatch colors: the light-mode `--primary` of each preset, lifted a touch so
@@ -21,6 +22,13 @@ export const ACCENTS = [
   { id: 'amber', color: 'oklch(0.67 0.13 68)' },
   { id: 'rose', color: 'oklch(0.61 0.165 15)' },
   { id: 'cyan', color: 'oklch(0.61 0.105 215)' }
+] as const
+
+/** Interface style: the corner/radius preset and the icon pack that matches it.
+ * They are one choice on purpose — the two dimensions can never disagree. */
+export const UI_STYLE_OPTIONS = [
+  { id: 'square', labelKey: 'settings.uiStyleSquare' },
+  { id: 'squircle', labelKey: 'settings.uiStyleSquircle' }
 ] as const
 
 /** Free-text family field, shared by both typefaces; empty leaves the app on
@@ -67,10 +75,14 @@ function FontPicker({
 /** Language / theme mode / accent / fonts — everything that changes how the app looks. */
 export function AppearanceSection({
   accent,
-  onAccentChange
+  onAccentChange,
+  uiStyle,
+  onUiStyleChange
 }: {
   accent: string
   onAccentChange: (accent: string) => void
+  uiStyle: UiStyle
+  onUiStyleChange: (style: UiStyle) => void
 }) {
   const { t, locale, setLocale } = useI18n()
   const { theme, setTheme } = useTheme()
@@ -110,6 +122,21 @@ export function AppearanceSection({
             <RadioGroupItem value="light" label={t('settings.light')} />
             <RadioGroupItem value="dark" label={t('settings.dark')} />
             <RadioGroupItem value="system" label={t('settings.system')} />
+          </RadioGroup>
+        </div>
+      </SettingsGroup>
+
+      <SettingsGroup title={t('settings.uiStyle')} description={t('settings.uiStyleDesc')}>
+        <div className="px-4 py-3.5">
+          <RadioGroup
+            orientation="horizontal"
+            value={uiStyle}
+            onValueChange={(next) => onUiStyleChange(next as UiStyle)}
+            className="gap-6"
+          >
+            {UI_STYLE_OPTIONS.map((option) => (
+              <RadioGroupItem key={option.id} value={option.id} label={t(option.labelKey)} />
+            ))}
           </RadioGroup>
         </div>
       </SettingsGroup>
