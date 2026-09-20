@@ -12,7 +12,7 @@ import {
   useState,
   type ReactNode
 } from 'react'
-import { Brain, ChevronDown, FileText, GitFork, Pencil, RefreshCw, Rewind } from '@/lib/icons'
+import { Brain, ChevronDown, CircleX, FileText, GitFork, Pencil, RefreshCw, Rewind } from '@/lib/icons'
 import { AgentActivity } from '@/components/agents/agent-activity'
 import { AgentDisclosure } from '@/components/agents/agent-disclosure'
 import {
@@ -599,7 +599,8 @@ const AssistantParts = memo(function AssistantParts({
         // "stopped" row instead of a red error disclosure (the SDK reports the
         // abort through the same `errorMessage` field).
         const stopped = message.stopReason === 'aborted'
-        const tone = stopped ? 'text-muted-foreground' : 'text-destructive'
+        const tone = 'text-muted-foreground'
+        const summary = stopped ? t('subagent.aborted') : t('chat.error')
         return (
           // Reuses the reasoning disclosure (beUI AgentActivity): a collapsed row
           // that expands to the raw provider/SDK error instead of dumping a red
@@ -607,7 +608,12 @@ const AssistantParts = memo(function AssistantParts({
           <RowReveal animate={streaming} className="w-full">
             <AgentActivity
               status="complete"
-              summary={<span className={tone}>{stopped ? t('subagent.aborted') : t('chat.error')}</span>}
+              summary={
+                <span className={cn(tone, 'inline-flex items-center gap-1.5')}>
+                  {!stopped && <CircleX aria-hidden="true" className="size-3.5" />}
+                  {summary}
+                </span>
+              }
               defaultOpen={false}
               collapseOnComplete={false}
               // Same indent as the reasoning body it shares this disclosure with.

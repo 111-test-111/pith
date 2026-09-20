@@ -22,6 +22,7 @@ const en = {
 
   "plan.modeLabel": "Working mode",
   "plan.modeHelp": "Plan investigates with read-only tools; execution needs your approval.",
+  "plan.chipClose": "Exit plan mode",
   "plan.normal": "Normal",
   "plan.plan": "Plan",
   "plan.shellUnavailable": "Shell is unavailable: full read-only enforcement is required.",
@@ -420,6 +421,7 @@ const en = {
   'composer.placeholder': 'Ask Pith to do something… (@ to reference files)',
   'composer.inputAria': 'Message to Pith',
   'composer.initializing': 'Preparing session tools…',
+  'composer.planMode': 'Plan mode',
   'composer.attachImage': 'Attach image',
   'composer.attachImageDesc': 'Send a screenshot or photo to the model',
   'composer.attachFile': 'Reference file',

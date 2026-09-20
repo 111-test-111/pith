@@ -24,9 +24,9 @@ const markdown='# Reviewable plan\n\n1. Inspect the repository.\n2. Implement th
 const hash=[...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(markdown)))].map(n=>n.toString(16).padStart(2,'0')).join('');
 window.reference={planId:'p1',revision:1,submissionEntryId:'s1',hash,planningTurnEntryId:'u1',submittedAt:2000};
 window.approvals=[];window.exports=[];window.refines=0;
- window.rejectMode=false;
+ window.rejectMode=false;window.rejectInit=false;
 window.plan={seq:1,mode:'normal',planId:null,latest:null,approval:null,configuredSandboxMode:'workspace-write',effectiveSandboxMode:'workspace-write',shellEnforcement:'full',blockers:{switch:[],submit:[],approve:[]}};
-window.pi={setSessionMode:async request=>{window.modeCalls.push(request); if(window.rejectMode)return {ok:false,code:'busy',blockers:['busy']}; return {ok:true,value:{...window.plan,seq:window.plan.seq+1,mode:request.mode,effectiveSandboxMode:request.mode==='plan'?'read-only':'workspace-write'}}},searchFiles:async()=>[],queueAction:async()=>{},onBashTask:()=>()=>{},listBashTasks:async()=>[],
+window.pi={setSessionMode:async request=>{window.modeCalls.push(request); if(window.rejectMode)return {ok:false,code:'busy',blockers:['busy']}; if(window.rejectInit){window.rejectInit=false;return {ok:false,code:'initializing',blockers:['initializing']}}; return {ok:true,value:{...window.plan,seq:window.plan.seq+1,mode:request.mode,effectiveSandboxMode:request.mode==='plan'?'read-only':'workspace-write'}}},searchFiles:async()=>[],queueAction:async()=>{},onBashTask:()=>()=>{},listBashTasks:async()=>[],
 readPlanDocument:async request=>({ok:true,value:{ref:window.reference,markdown}}),
 approvePlan:async request=>{window.approvals.push(request);return {ok:false,code:'busy',blockers:['busy']}},
 exportPlan:async request=>{window.exports.push(request);return {ok:true,value:{cancelled:true}}}};
@@ -39,8 +39,8 @@ Object.defineProperty(navigator,'clipboard',{value:{writeText:async text=>{windo
 window.setTranscript=(kind='full')=>{window.store.applySnapshot({sessionPath:currentPath,sessionId:'fixture',cwd:'/tmp',projectless:false,model:null,thinkingLevel:'off',isStreaming:false,eventSequence:++sequence,plan:window.plan,messages:kind==='full'?full:[{role:'compactionSummary',summary:'Older investigation',tokensBefore:100,timestamp:3000},{role:'user',content:'Later conversation',timestamp:4000}]})};
 const cards=new URLSearchParams(location.search).has('cards');
 if(cards){window.plan={...window.plan,mode:'plan',effectiveSandboxMode:'read-only',planId:'p1',latest:window.reference};window.setTranscript()}
-function App(){const [plan,setPlan]=React.useState(window.plan);const [busy,setBusy]=React.useState(false);window.setBusy=setBusy; window.setPlan=p=>{window.plan=p;setPlan(p);window.store.dispatch({type:'plan_state_update',sessionPath:'/fixture.jsonl',plan:p})};
-return h(I18nProvider,null,h('div',{style:{display:'flex',flexDirection:'column',height:'780px'}},cards?h('div',{style:{display:'flex',flexDirection:'column',height:'570px'}},h(ChatView,{store:window.store,onRefinePlan:()=>{window.refines++;window.dispatchEvent(new CustomEvent('pith:refine-plan',{detail:{sessionPath:'/fixture.jsonl'}}))}})):null,h(Composer,{models:[],model:null,thinkingLevel:'off',availableThinkingLevels:['off'],busy,plan,sessionPath:'/fixture.jsonl',onPlanState:(_path,p)=>window.setPlan(p),queued:{steering:[],followUp:[]},onSend:p=>window.sent.push(p),onQueue:p=>window.sent.push(p),onRecallQueue:async()=>[],onModelChange:()=>{},onThinkingLevelChange:()=>{}})))}
+function App(){const [plan,setPlan]=React.useState(window.plan);const [busy,setBusy]=React.useState(false);const [init,setInit]=React.useState(false);window.setBusy=setBusy;window.setInit=setInit; window.setPlan=p=>{window.plan=p;setPlan(p);window.store.dispatch({type:'plan_state_update',sessionPath:'/fixture.jsonl',plan:p})};
+return h(I18nProvider,null,h('div',{style:{display:'flex',flexDirection:'column',justifyContent:'flex-end',height:'780px'}},cards?h('div',{style:{display:'flex',flexDirection:'column',height:'570px'}},h(ChatView,{store:window.store,onRefinePlan:()=>{window.refines++;window.dispatchEvent(new CustomEvent('pith:refine-plan',{detail:{sessionPath:'/fixture.jsonl'}}))}})):null,h(Composer,{models:[],model:null,thinkingLevel:'off',availableThinkingLevels:['off'],busy,initializing:init,plan,sessionPath:'/fixture.jsonl',onPlanState:(_path,p)=>window.setPlan(p),queued:{steering:[],followUp:[]},onSend:p=>window.sent.push(p),onQueue:p=>window.sent.push(p),onRecallQueue:async()=>[],onModelChange:()=>{},onThinkingLevelChange:()=>{}})))}
 createRoot(document.getElementById('root')).render(h(App));
 </script></body></html>`
 let server, app
@@ -65,14 +65,29 @@ try {
     await page.goto(url + '?locale=' + locale)
     const textarea = page.locator('textarea')
     await textarea.waitFor()
-    const mode = page.getByRole('combobox', { name: locale === 'en' ? 'Working mode' : '工作模式' })
-    // Vendored Select's trigger uses a button rather than an ARIA combobox.
-    const picker = page.locator('[data-session-mode] button').first()
-    await picker.click()
-    await page.getByRole('option', { name: locale === 'en' ? 'Plan' : '规划', exact: true }).click()
+    // The plan mode entry lives in the '+' panel: click to enable, click the
+    // item again to disable.
+    const addButton = page.getByRole('button', { name: 'Add to prompt' })
+    await addButton.click()
+    await page.getByRole('button', { name: locale === 'en' ? 'Plan mode' : '规划模式' }).click()
     await page.waitForFunction(() => window.plan.mode === 'plan')
     assert.equal(await textarea.isEnabled(), true)
-    assert.equal(await page.locator('[data-sandbox-mode-icon="read-only"]').count(), 1)
+    // Enabling hides the sandbox picker; the plan chip takes its spot.
+    assert.equal(await page.locator('[data-sandbox-mode-icon]').count(), 0)
+    const chip = page.locator('[data-plan-chip]')
+    await chip.getByText(locale === 'en' ? 'Plan' : '规划', { exact: true }).waitFor()
+    // Hovering reveals the exit mark, which floats on the chip: its width
+    // must not change.
+    const chipBox = await chip.boundingBox()
+    assert(chipBox)
+    await chip.hover()
+    assert.equal((await chip.boundingBox()).width, chipBox.width, 'hovering must not change the chip width')
+    await chip.getByRole('button', { name: locale === 'en' ? 'Exit plan mode' : '退出规划模式' }).click()
+    await page.waitForFunction(() => window.plan.mode === 'normal')
+    assert.equal(await page.locator('[data-sandbox-mode-icon]').count(), 1)
+    await textarea.fill('/plan')
+    await textarea.press('Enter')
+    await page.waitForFunction(() => window.plan.mode === 'plan')
     await textarea.fill('/plan')
     await textarea.press('Enter')
     await page.waitForFunction(() => window.plan.mode === 'normal')
@@ -96,6 +111,69 @@ try {
       }
     }
   }
+  // Option B: a mode chosen mid-initialization queues — the chip shows
+  // immediately, no IPC — and applies when the session reports initialized;
+  // a failed flush reverts the optimistic UI and surfaces the reason.
+  await page.goto(url + '?locale=en')
+  await page.locator('textarea').waitFor()
+  await page.evaluate(() => window.setInit(true))
+  const add = page.getByRole('button', { name: 'Add to prompt' })
+  await add.click()
+  await page.getByRole('button', { name: 'Plan mode' }).click()
+  assert.equal(await page.evaluate(() => window.modeCalls.length), 0, 'queued intent must not hit IPC during initialization')
+  assert.equal(await page.locator('[data-plan-chip]').count(), 1, 'queued intent shows the plan chip immediately')
+  assert.equal(await page.locator('[data-sandbox-mode-icon]').count(), 0)
+  // The send path waits for the queued intent: Enter must not fire a prompt
+  // that would race the flush IPC into a 'busy' refusal.
+  const input = page.locator('textarea')
+  await input.fill('queued draft')
+  await input.press('Enter')
+  assert.equal(await page.evaluate(() => window.sent.length), 0, 'a queued mode intent gates the first send')
+  assert.equal(await input.inputValue(), 'queued draft')
+  await page.evaluate(() => window.setInit(false))
+  await page.waitForFunction(() => window.modeCalls.length === 1 && window.plan.mode === 'plan')
+  // The flush has applied plan mode; the preserved draft now sends under it.
+  await input.press('Enter')
+  await page.waitForFunction(() => window.sent.length === 1)
+  // Queued exit: the picker restores immediately; the flush leaves plan mode
+  // when initialization ends.
+  await page.evaluate(() => window.setInit(true))
+  const queuedChip = page.locator('[data-plan-chip]')
+  await queuedChip.hover()
+  await queuedChip.getByRole('button', { name: 'Exit plan mode' }).click()
+  assert.equal(await page.evaluate(() => window.modeCalls.length), 1)
+  assert.equal(await page.locator('[data-plan-chip]').count(), 0, 'queued exit restores the picker immediately')
+  assert.equal(await page.locator('[data-sandbox-mode-icon]').count(), 1)
+  await page.evaluate(() => window.setInit(false))
+  await page.waitForFunction(() => window.modeCalls.length === 2 && window.plan.mode === 'normal')
+  // A failed flush reverts: the picker returns and the reason is shown.
+  await page.evaluate(() => window.setInit(true))
+  await add.click()
+  await page.getByRole('button', { name: 'Plan mode' }).click()
+  await page.evaluate(() => { window.rejectMode = true; window.setInit(false) })
+  await page.getByRole('alert').waitFor()
+  assert.equal(await page.locator('[data-plan-chip]').count(), 0)
+  assert.equal(await page.locator('[data-sandbox-mode-icon]').count(), 1)
+  await page.evaluate(() => { window.rejectMode = false })
+  // The stale-DTO race: the shell flag has cleared but the plan state still
+  // carries the initializing blocker — the click queues instead of erroring.
+  const base = await page.evaluate(() => window.modeCalls.length)
+  await page.evaluate(() => window.setPlan({ ...window.plan, seq: window.plan.seq + 1, blockers: { ...window.plan.blockers, switch: ['initializing'] } }))
+  await add.click()
+  await page.getByRole('button', { name: 'Plan mode' }).click()
+  assert.equal(await page.evaluate(() => window.modeCalls.length), base, 'stale initializing blocker must queue, not error')
+  assert.equal(await page.locator('[data-plan-chip]').count(), 1)
+  await page.evaluate(() => window.setPlan({ ...window.plan, seq: window.plan.seq + 1, blockers: { ...window.plan.blockers, switch: [] } }))
+  await page.waitForFunction((mc) => window.modeCalls.length === mc + 1 && window.plan.mode === 'plan', base)
+  // An IPC refusal with code 'initializing' (the renderer never saw the
+  // state) queues as well, and the flush retries once main admits.
+  const base2 = await page.evaluate(() => window.modeCalls.length)
+  await page.evaluate(() => { window.setPlan({ ...window.plan, seq: window.plan.seq + 1, mode: 'normal', effectiveSandboxMode: 'workspace-write' }); window.rejectInit = true })
+  await add.click()
+  await page.getByRole('button', { name: 'Plan mode' }).click()
+  await page.waitForFunction((mc) => window.modeCalls.length === mc + 2 && window.plan.mode === 'plan', base2)
+  assert.equal(await page.locator('[data-plan-chip]').count(), 1)
+  assert.equal(await page.getByRole('alert').count(), 0, 'initializing refusal queues instead of erroring')
   for (const locale of ['en', 'zh-CN']) {
     await page.goto(url + '?locale=' + locale + '&cards=1')
     const card = page.locator('[data-plan-card="s1"]')

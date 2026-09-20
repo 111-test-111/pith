@@ -20,6 +20,7 @@ const zhCN: Messages = {
 
   "plan.modeLabel": "工作模式",
   "plan.modeHelp": "规划模式使用只读工具调查，执行需要你批准。",
+  "plan.chipClose": "退出规划模式",
   "plan.normal": "普通",
   "plan.plan": "规划",
   "plan.shellUnavailable": "当前无法使用 shell：需要完整的只读沙箱支持。",
@@ -416,6 +417,7 @@ const zhCN: Messages = {
   'composer.placeholder': '让 Pith 做点什么…（@ 可引用文件）',
   'composer.inputAria': '发送给 Pith 的消息',
   'composer.initializing': '正在准备会话工具…',
+  'composer.planMode': '规划模式',
   'composer.attachImage': '附加图片',
   'composer.attachImageDesc': '向模型发送截图或照片',
   'composer.attachFile': '引用文件',

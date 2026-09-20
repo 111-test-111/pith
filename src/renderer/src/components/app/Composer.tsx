@@ -7,7 +7,7 @@ import {
   type ClipboardEvent as ReactClipboardEvent,
   type DragEvent as ReactDragEvent
 } from 'react'
-import { Bot, FileText, ImagePlus, Loader2, Paperclip, X } from '@/lib/icons'
+import { Bot, Check, FileText, ImagePlus, ListChecks, Loader2, Paperclip, X } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
 import { ExpandableChip } from '@/components/motion/expandable-control'
 import { PromptInput } from '@/components/agents/prompt-input'
@@ -32,7 +32,6 @@ import { DEFAULT_SANDBOX_MODE, type SandboxMode, type SandboxStatusDTO, type Ses
 import { FileMention, type MentionState } from './FileMention'
 import { PreviewThumb } from './ImagePreview'
 import { ModelPicker } from './ModelPicker'
-import { SessionModePicker } from './SessionModePicker'
 import { parsePlanCommand, planErrorKey } from '@/lib/plan-submissions'
 import { SandboxModePicker } from './SandboxModePicker'
 import { ContextRing } from './ContextRing'
@@ -150,23 +149,68 @@ export function Composer({
   const { t } = useI18n()
   const [modePending, setModePending] = useState(false)
   const [modeError, setModeError] = useState<string | null>(null)
+  // A mode chosen while the session is still initializing cannot be admitted
+  // by main yet (extension startup may still rewrite the session). The intent
+  // is queued here and flushed when initialization ends; until then the
+  // optimistic value drives the UI (sandbox picker hidden, plan chip shown),
+  // and a failed flush reverts it through `setPendingMode(null)` + modeError.
+  const [pendingMode, setPendingMode] = useState<SessionMode | null>(null)
   const currentPath = useRef(sessionPath)
   currentPath.current = sessionPath
-  useEffect(() => { setModeError(null); setModePending(false) }, [sessionPath])
+  useEffect(() => { setModeError(null); setModePending(false); setPendingMode(null) }, [sessionPath])
+  // What the composer shows: a queued intent wins over the published state
+  // until the flush settles either way.
+  const effectiveMode: SessionMode = pendingMode ?? plan?.mode ?? 'normal'
+  const flushed = useRef(false)
+  const queueMode = (mode: SessionMode) => {
+    // Reset the flush guard so the plan-state change that follows retries the
+    // application (the IPC-refusal path re-queues from inside a flush).
+    flushed.current = false
+    setPendingMode(mode)
+    setModeError(null)
+  }
   const changeMode = async (mode: SessionMode): Promise<boolean> => {
     if (!sessionPath || modePending) return false
-    const blocked = initializing ? 'initializing' : readOnly ? 'child-session' : busy ? 'busy' : plan?.blockers.switch[0]
+    // "Still initializing" reaches the renderer three ways — the shell flag,
+    // a stale plan DTO blocker, or an IPC refusal — and all three queue the
+    // intent instead of erroring, so a new session can enter plan mode
+    // before its tools are ready.
+    if (!readOnly && (initializing || (plan?.blockers.switch.includes('initializing') ?? false))) {
+      queueMode(mode)
+      return true
+    }
+    const blocked = readOnly ? 'child-session' : busy ? 'busy' : plan?.blockers.switch[0]
     if (blocked) { setModeError(blocked); return false }
     setModePending(true); setModeError(null)
     try {
       const result = await window.pi.setSessionMode({ sessionPath, mode })
       if (result.ok) onPlanState?.(sessionPath, result.value)
       if (currentPath.current !== sessionPath) return false
-      if (!result.ok) { setModeError(result.code); return false }
+      if (!result.ok) {
+        if (result.code === 'initializing' && !readOnly) { queueMode(mode); return true }
+        setModeError(result.code); return false
+      }
       return true
     } catch { if (currentPath.current === sessionPath) setModeError('unknown'); return false }
     finally { if (currentPath.current === sessionPath) setModePending(false) }
   }
+  // Flush a queued intent once nothing reports initializing anymore. The
+  // blockers guard covers the stale-DTO window between session_initialized
+  // and the plan refresh; `flushed` keeps a re-queued flush from applying
+  // twice, and a same-mode intent (two quick toggles) needs no durable entry.
+  useEffect(() => {
+    if (initializing) { flushed.current = false; return }
+    if (pendingMode === null || flushed.current) return
+    if (plan?.blockers.switch.includes('initializing')) return
+    flushed.current = true
+    if (pendingMode === (plan?.mode ?? 'normal')) { setPendingMode(null); return }
+    // Clear before applying so a refused flush (busy…) reverts the optimistic
+    // UI; an 'initializing' refusal re-queues from inside changeMode, which
+    // resets `flushed` and lets the next plan-state change retry.
+    const mode = pendingMode
+    setPendingMode(null)
+    void changeMode(mode)
+  }, [initializing, pendingMode, plan?.mode, plan?.blockers, changeMode])
   const [behavior] = useStreamingBehavior()
   const [value, setValue] = useState('')
   const [images, setImages] = useState<ImageAttachment[]>([])
@@ -282,12 +326,15 @@ export function Composer({
     const text = value.trim()
     if (parsePlanCommand(text)) {
       if (images.length || files.length) { setModeError('plan-command-attachments'); return }
-      void changeMode(plan?.mode === 'plan' ? 'normal' : 'plan').then(changed => {
+      void changeMode(effectiveMode === 'plan' ? 'normal' : 'plan').then(changed => {
         if (changed) setValue(current => parsePlanCommand(current) ? '' : current)
       })
       return
     }
-    if (initializing || readOnly) return
+    // A queued or in-flight mode intent gates the send too: the first prompt
+    // must go out under the mode the chip shows, not race the flush IPC into
+    // a 'busy' refusal (and a revert that silently downgrades the request).
+    if (initializing || readOnly || pendingMode !== null || modePending) return
     if (!text && !images.length && !files.length) return
     const payload = {
       text,
@@ -607,7 +654,7 @@ export function Composer({
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
               loading={busy}
-              submitDisabled={initializing || readOnly}
+              submitDisabled={initializing || readOnly || pendingMode !== null || modePending}
               disabled={readOnly}
               onStop={() => void handleStop()}
               onSubmit={() => dispatch(behavior)}
@@ -635,18 +682,23 @@ export function Composer({
               }
               contextIndicator={
                 <span className="flex items-center gap-1">
-                  {/* The sandbox mode sits with the send cluster, left of the
-                      context ring: it is the permission the next submitted turn
-                      runs under. */}
-                  <SessionModePicker state={plan} disabled={busy || initializing || readOnly || modePending || !sessionPath} onChange={mode => void changeMode(mode)} />
-                  <SandboxModePicker
-                    mode={plan?.effectiveSandboxMode ?? sandboxMode}
-                    status={sandbox}
-                    sessionPath={sessionPath}
-                    disabled={busy || initializing || readOnly}
-                    planRestricted={plan?.mode === 'plan'}
-                    onSnapshot={(snapshot) => onSandboxSnapshot?.(snapshot)}
-                  />
+                  {/* Plan owns this spot: while it is on, the sandbox picker
+                      is hidden and a plan chip sits in its place — under a
+                      plan the permission is always the read-only overlay.
+                      Hovering (or focusing) the chip slides out the exit
+                      action; leaving restores the picker here. */}
+                  {effectiveMode === 'plan' ? (
+                    <PlanModeChip onClose={() => void changeMode('normal')} />
+                  ) : (
+                    <SandboxModePicker
+                      mode={plan?.effectiveSandboxMode ?? sandboxMode}
+                      status={sandbox}
+                      sessionPath={sessionPath}
+                      disabled={busy || initializing || readOnly}
+                      planRestricted={plan?.mode === 'plan'}
+                      onSnapshot={(snapshot) => onSandboxSnapshot?.(snapshot)}
+                    />
+                  )}
                   {initializing ? (
                     <LabelTooltip content={t('composer.initializing')}>
                       <span role="status" aria-label={t('composer.initializing')} className="grid size-7 place-items-center text-muted-foreground">
@@ -657,6 +709,21 @@ export function Composer({
                 </span>
               }
               actions={[
+                {
+                  value: 'toggle-plan',
+                  label: (
+                    <span className="flex w-full items-center justify-between gap-2">
+                      <span>{t('composer.planMode')}</span>
+                      {effectiveMode === 'plan' ? <Check aria-hidden="true" className="size-3.5 shrink-0 text-primary" /> : null}
+                    </span>
+                  ),
+                  description: t('plan.modeHelp'),
+                  icon: <ListChecks />,
+                  // Initialization itself is not a blocker here: the intent
+                  // queues and applies when the session reports initialized.
+                  // Every other live switch blocker still disables the item.
+                  disabled: readOnly || busy || modePending || !sessionPath || (plan?.blockers.switch.some((blocker) => blocker !== 'initializing') ?? false)
+                },
                 {
                   value: 'attach-image',
                   label: t('composer.attachImage'),
@@ -671,7 +738,8 @@ export function Composer({
                 }
               ]}
               onAction={(action) => {
-                if (action === 'attach-image') imageInputRef.current?.click()
+                if (action === 'toggle-plan') void changeMode(effectiveMode === 'plan' ? 'normal' : 'plan')
+                else if (action === 'attach-image') imageInputRef.current?.click()
                 else if (action === 'attach-file') fileInputRef.current?.click()
               }}
             />
@@ -713,5 +781,33 @@ export function Composer({
         {start ? <NewSessionSuggestions {...start} onSelect={selectStarter} /> : null}
       </div>
     </div>
+  )
+}
+
+/**
+ * The chip that sits where the sandbox picker was while plan mode is on —
+ * the plan state is readable at the permission's own spot. Hover (or
+ * keyboard focus) reveals the exit mark, which FLOATS on the chip's corner
+ * (the attachment-remove pattern): the chip keeps its width, the close
+ * action never joins the row's layout. Activating it leaves plan mode,
+ * which restores the sandbox picker in this same position.
+ */
+function PlanModeChip({ onClose }: { onClose: () => void }) {
+  const { t } = useI18n()
+  return (
+    <span data-plan-chip="" className="group relative inline-flex">
+      <span className="inline-flex h-8 items-center gap-1.5 rounded-capsule border border-border px-2.5 text-xs">
+        <ListChecks aria-hidden="true" className="size-3.5 text-primary" />
+        {t('plan.plan')}
+      </span>
+      <button
+        type="button"
+        aria-label={t('plan.chipClose')}
+        onClick={onClose}
+        className="absolute -right-1.5 -top-1.5 grid size-5 place-items-center rounded-capsule bg-foreground text-background opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+      >
+        <X className="size-3" />
+      </button>
+    </span>
   )
 }
