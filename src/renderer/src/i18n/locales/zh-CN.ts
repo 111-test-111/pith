@@ -13,6 +13,7 @@ const zhCN: Messages = {
   "plan.reset": "返回规划",
   "plan.execute": "开始执行",
   "plan.refine": "修改计划",
+  "plan.reviewChanges": "查看改动",
   "plan.copy": "复制",
   "plan.copied": "已复制",
   "plan.export": "导出",

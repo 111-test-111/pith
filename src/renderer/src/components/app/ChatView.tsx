@@ -17,6 +17,7 @@ import type {
 import type { Notice, PiStore, PiState } from '@/state/pi-store'
 import { useI18n } from '@/i18n'
 import { buildTurns, collectChangeScopes, type ChatTurn } from '@/lib/chat-turns'
+import { extractReviewTurns } from '@/lib/turn-written-files'
 import { extractUserDisplay } from '@/lib/user-message'
 import { AssistantGroup, BashItem, CustomItem, SummaryItem, UserItem } from './MessageItems'
 import { RowReveal } from './RowReveal'
@@ -217,6 +218,36 @@ export const ChatView = memo(function ChatView({
   const turns = useMemo(() => buildTurns(state.messages), [state.messages])
   const changeScopes = useMemo(() => collectChangeScopes(turns), [turns])
   /**
+   * Approving a plan asks the model by writing a synthetic user message that
+   * carries the plan body. Nobody typed it: while it is the started approval's
+   * opening entry, the transcript hides that row (and its rail tick) so the plan
+   * card and the execution read as one continuous exchange.
+   */
+  const approvalOpeningEntryId =
+    state.plan?.approval?.status === 'started' ? state.plan.approval.executionEntryId ?? null : null
+  const hiddenUserKey = useMemo(() => {
+    if (!approvalOpeningEntryId) return null
+    const opening = turns.find(
+      (turn) => turn.role === 'user' && turn.user.sessionEntryId === approvalOpeningEntryId
+    )
+    return opening?.role === 'user' ? opening.key : null
+  }, [turns, approvalOpeningEntryId])
+  /**
+   * The Plan card's Review action opens the review pane on the turn that
+   * executed the approved plan — the same pane and the same turn identity the
+   * changed-files card uses. Offered only while the approval is started and that
+   * turn actually listed files; otherwise the pane would fall back to an
+   * unrelated turn and show changes the plan never caused.
+   */
+  const reviewExecutionId = useMemo(() => {
+    const turnId = state.plan?.executionTurnId
+    if (!onReview || state.plan?.approval?.status !== 'started' || typeof turnId !== 'number') return undefined
+    return extractReviewTurns(state.messages, state.cwd).some((turn) => turn.id === turnId) ? turnId : undefined
+  }, [state.plan, state.messages, state.cwd, onReview])
+  const reviewExecution = reviewExecutionId !== undefined && onReview
+    ? () => onReview(reviewExecutionId)
+    : undefined
+  /**
    * Navigation rail: one tick per user turn. The hover preview pairs the
    * user's message with the turn's final assistant reply — both excerpted
    * from the message data, so UI chrome (tool cards, copy buttons, usage
@@ -229,6 +260,9 @@ export const ChatView = memo(function ChatView({
     for (let index = 0; index < turns.length; index++) {
       const turn = turns[index]
       if (turn.role !== 'user') continue
+      // The plan-approval opening is protocol input, not a user prompt: it has
+      // no tick of its own in the rail either.
+      if (turn.key === hiddenUserKey) continue
       const assistants: AssistantMsg[] = []
       for (let next = index + 1; next < turns.length; next++) {
         const candidate = turns[next]
@@ -343,6 +377,7 @@ export const ChatView = memo(function ChatView({
    * final reply stay visible. `previous` lets a user row sit a little further
    * from the assistant turn above it than turns sit from each other. */
   const renderTurn = (turn: ChatTurn, previous?: ChatTurn) => {
+    if (turn.key === hiddenUserKey) return null
     if (turn.role === 'user')
       return (
         <UserItem
@@ -446,7 +481,7 @@ export const ChatView = memo(function ChatView({
       // session switches. clip never creates a scroll container.
       contentClassName="mx-auto min-h-full w-full max-w-3xl overflow-x-clip"
     >
-      <PlanPresentationContext.Provider value={state.plan && state.sessionPath ? { state: state.plan, sessionPath: state.sessionPath, onRefine: onRefinePlan } : null}>
+      <PlanPresentationContext.Provider value={state.plan && state.sessionPath ? { state: state.plan, sessionPath: state.sessionPath, onRefine: onRefinePlan, onReviewExecution: reviewExecution } : null}>
       <MessageGroup spacing="default">
         {displayTurns.flatMap((turn, index) => [index === recoveredIndex ? recoveryCard : null, renderTurn(turn, displayTurns[index - 1])])}
         {recoveredIndex < 0 ? recoveryCard : null}

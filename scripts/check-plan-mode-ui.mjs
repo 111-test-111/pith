@@ -23,7 +23,7 @@ window.sent=[]; window.modeCalls=[];
 const markdown='# Reviewable plan\n\n1. Inspect the repository.\n2. Implement the change.\n3. Run verification.';
 const hash=[...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(markdown)))].map(n=>n.toString(16).padStart(2,'0')).join('');
 window.reference={planId:'p1',revision:1,submissionEntryId:'s1',hash,planningTurnEntryId:'u1',submittedAt:2000};
-window.approvals=[];window.exports=[];window.refines=0;
+window.approvals=[];window.exports=[];window.refines=0;window.reviewOpens=[];
  window.rejectMode=false;window.rejectInit=false;
 window.plan={seq:1,mode:'normal',planId:null,latest:null,approval:null,configuredSandboxMode:'workspace-write',effectiveSandboxMode:'workspace-write',shellEnforcement:'full',blockers:{switch:[],submit:[],approve:[]}};
 window.pi={setSessionMode:async request=>{window.modeCalls.push(request); if(window.rejectMode)return {ok:false,code:'busy',blockers:['busy']}; if(window.rejectInit){window.rejectInit=false;return {ok:false,code:'initializing',blockers:['initializing']}}; return {ok:true,value:{...window.plan,seq:window.plan.seq+1,mode:request.mode,effectiveSandboxMode:request.mode==='plan'?'read-only':'workspace-write'}}},searchFiles:async()=>[],queueAction:async()=>{},onBashTask:()=>()=>{},listBashTasks:async()=>[],
@@ -33,14 +33,20 @@ exportPlan:async request=>{window.exports.push(request);return {ok:true,value:{c
 window.store=new PiStore();
 const submission={role:'toolResult',toolName:'submit_plan',toolCallId:'plan-call',timestamp:2000,isError:false,content:[{type:'text',text:markdown}],details:{kind:'pi-app-plan-submission',version:1,planId:'p1',revision:1,planningTurnEntryId:'u1',plan:markdown,hash},planSubmission:window.reference};
 const full=[{role:'user',content:'Design this',timestamp:1000},{role:'assistant',timestamp:1500,stopReason:'toolUse',content:[{type:'thinking',thinking:'Investigating the implementation.'},{type:'toolCall',id:'plan-call',name:'submit_plan',arguments:{plan:markdown}}]},submission];
+// The approval writes this exact prompt as a user message; the transcript hides
+// it while the approval is the started one. Its turn rewrote a file, so the
+// card can offer that turn to the review pane.
+const approvalPrompt='The user has explicitly approved the following plan. Implement it in this conversation and verify the result. Ask the user about substantive changes required by new evidence. Use the existing file permissions.\n\n'+markdown;
+const execution=[{role:'user',content:approvalPrompt,timestamp:2500,sessionEntryId:'exec-entry'},{role:'assistant',timestamp:2600,stopReason:'toolUse',content:[{type:'toolCall',id:'write-call',name:'write',arguments:{path:'/tmp/approved.txt',content:'approved\n'}}]},{role:'toolResult',toolName:'write',toolCallId:'write-call',timestamp:2610,isError:false,content:[{type:'text',text:'ok'}],details:{}},{role:'assistant',timestamp:2700,stopReason:'stop',content:[{type:'text',text:'Implemented the plan.'}]}];
 let sequence=0, currentPath='/fixture.jsonl';
 window.switchSession=path=>{currentPath=path;window.setTranscript()};
 Object.defineProperty(navigator,'clipboard',{value:{writeText:async text=>{window.copiedText=text}},configurable:true});
-window.setTranscript=(kind='full')=>{window.store.applySnapshot({sessionPath:currentPath,sessionId:'fixture',cwd:'/tmp',projectless:false,model:null,thinkingLevel:'off',isStreaming:false,eventSequence:++sequence,plan:window.plan,messages:kind==='full'?full:[{role:'compactionSummary',summary:'Older investigation',tokensBefore:100,timestamp:3000},{role:'user',content:'Later conversation',timestamp:4000}]})};
+window.setTranscript=(kind='full')=>{window.store.applySnapshot({sessionPath:currentPath,sessionId:'fixture',cwd:'/tmp',projectless:false,model:null,thinkingLevel:'off',isStreaming:false,eventSequence:++sequence,plan:window.plan,messages:kind==='executed'?[...full,...execution]:kind==='full'?full:[{role:'compactionSummary',summary:'Older investigation',tokensBefore:100,timestamp:3000},{role:'user',content:'Later conversation',timestamp:4000}]})};
 const cards=new URLSearchParams(location.search).has('cards');
 if(cards){window.plan={...window.plan,mode:'plan',effectiveSandboxMode:'read-only',planId:'p1',latest:window.reference};window.setTranscript()}
+if(cards&&new URLSearchParams(location.search).has('executed')){window.plan={...window.plan,seq:window.plan.seq+1,mode:'normal',effectiveSandboxMode:'workspace-write',planId:'p1',latest:window.reference,approval:{approvalId:'ap1',ref:window.reference,status:'started',executionEntryId:'exec-entry'},executionTurnId:2600};window.setTranscript('executed')}
 function App(){const [plan,setPlan]=React.useState(window.plan);const [busy,setBusy]=React.useState(false);const [init,setInit]=React.useState(false);window.setBusy=setBusy;window.setInit=setInit; window.setPlan=p=>{window.plan=p;setPlan(p);window.store.dispatch({type:'plan_state_update',sessionPath:'/fixture.jsonl',plan:p})};
-return h(I18nProvider,null,h('div',{style:{display:'flex',flexDirection:'column',justifyContent:'flex-end',height:'780px'}},cards?h('div',{style:{display:'flex',flexDirection:'column',height:'570px'}},h(ChatView,{store:window.store,onRefinePlan:()=>{window.refines++;window.dispatchEvent(new CustomEvent('pith:refine-plan',{detail:{sessionPath:'/fixture.jsonl'}}))}})):null,h(Composer,{models:[],model:null,thinkingLevel:'off',availableThinkingLevels:['off'],busy,initializing:init,plan,sessionPath:'/fixture.jsonl',onPlanState:(_path,p)=>window.setPlan(p),queued:{steering:[],followUp:[]},onSend:p=>window.sent.push(p),onQueue:p=>window.sent.push(p),onRecallQueue:async()=>[],onModelChange:()=>{},onThinkingLevelChange:()=>{}})))}
+return h(I18nProvider,null,h('div',{style:{display:'flex',flexDirection:'column',justifyContent:'flex-end',height:'780px'}},cards?h('div',{style:{display:'flex',flexDirection:'column',height:'570px'}},h(ChatView,{store:window.store,onReview:id=>{window.reviewOpens.push(id)},onRefinePlan:()=>{window.refines++;window.dispatchEvent(new CustomEvent('pith:refine-plan',{detail:{sessionPath:'/fixture.jsonl'}}))}})):null,h(Composer,{models:[],model:null,thinkingLevel:'off',availableThinkingLevels:['off'],busy,initializing:init,plan,sessionPath:'/fixture.jsonl',onPlanState:(_path,p)=>window.setPlan(p),queued:{steering:[],followUp:[]},onSend:p=>window.sent.push(p),onQueue:p=>window.sent.push(p),onRecallQueue:async()=>[],onModelChange:()=>{},onThinkingLevelChange:()=>{}})))}
 createRoot(document.getElementById('root')).render(h(App));
 </script></body></html>`
 let server, app
@@ -187,6 +193,22 @@ try {
       assert.equal(await card.getByRole('button', { name: locale === 'en' ? 'Start execution' : '开始执行', exact: true }).isEnabled(), true)
       if (process.env.PI_PLAN_SCREENSHOT_DIR) await page.screenshot({ path: join(process.env.PI_PLAN_SCREENSHOT_DIR, `card-${locale}-${corners}-${dark ? 'dark' : 'light'}.png`) })
     }
+  }
+  // Approved and executing: the card offers the execution turn's changes, the
+  // synthetic approval prompt is neither a message row nor a rail target, and
+  // the action strip stays thin under a taller plan body.
+  for (const locale of ['en', 'zh-CN']) {
+    await page.goto(url + '?locale=' + locale + '&cards=1&executed=1')
+    const executedCard = page.locator('[data-plan-card="s1"]')
+    await executedCard.getByText('Reviewable plan', { exact: true }).waitFor()
+    assert.equal(await page.getByText('The user has explicitly approved the following plan.').count(), 0, 'the approval opening must not render as a user message')
+    assert.equal(await page.locator('[data-rail-id]').count(), 1, 'only the real user prompt keeps a transcript row')
+    await executedCard.getByRole('button', { name: locale === 'en' ? 'Review changes' : '查看改动' }).click()
+    assert.deepEqual(await page.evaluate(() => window.reviewOpens), [2600], 'Review changes must open the plan execution turn')
+    const actions = await page.locator('[data-plan-actions]').boundingBox()
+    assert(actions && actions.height <= 30, `the plan footer must stay a thin strip (got ${actions?.height})`)
+    assert.equal(await page.evaluate(() => { const body = document.querySelector('[data-plan-card="s1"] [data-fade-scroll]'); return body ? getComputedStyle(body).maxHeight : null }), '448px', 'the plan body keeps the taller cap')
+    if (process.env.PI_PLAN_SCREENSHOT_DIR) await page.screenshot({ path: join(process.env.PI_PLAN_SCREENSHOT_DIR, `card-executed-${locale}.png`) })
   }
   await page.goto(url + '?locale=en&cards=1')
   const card = page.locator('[data-plan-card="s1"]')

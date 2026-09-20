@@ -15,6 +15,7 @@ const en = {
   "plan.reset": "Return to planning",
   "plan.execute": "Start execution",
   "plan.refine": "Revise plan",
+  "plan.reviewChanges": "Review changes",
   "plan.copy": "Copy",
   "plan.copied": "Copied",
   "plan.export": "Export",

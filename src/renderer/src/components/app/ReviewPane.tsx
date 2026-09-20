@@ -56,7 +56,17 @@ export const ReviewPane = memo(function ReviewPane({ store, focusTurnId }: Revie
   // never re-renders (or re-derives) the review.
   const messages = useSyncExternalStore(store.subscribe, () => store.getState().messages)
   const cwd = useSyncExternalStore(store.subscribe, () => store.getState().cwd)
-  const turns = useMemo(() => extractReviewTurns(messages, cwd), [messages, cwd])
+  /** The plan-approval opening prompt the transcript hides: its turn keeps its
+   *  files here, but the switcher labels it by number instead of quoting the
+   *  protocol message. */
+  const approvalOpeningEntryId = useSyncExternalStore(store.subscribe, () => {
+    const plan = store.getState().plan
+    return plan?.approval?.status === 'started' ? plan.approval.executionEntryId ?? null : null
+  })
+  const turns = useMemo(
+    () => extractReviewTurns(messages, cwd, approvalOpeningEntryId),
+    [messages, cwd, approvalOpeningEntryId]
+  )
 
   const [selectedId, setSelectedId] = useState<number | null>(focusTurnId)
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})

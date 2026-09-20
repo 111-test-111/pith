@@ -229,8 +229,16 @@ function promptLabel(text: string, limit = 60): string | null {
  */
 export function extractReviewTurns(
   messages: readonly ChatMessage[],
-  cwd?: string | null
+  cwd?: string | null,
+  /**
+   * Entry id of a synthetic prompt the transcript hides — the plan-approval
+   * opening. Its turn still lists the files it changed, but the switcher's
+   * label falls back to the turn number instead of echoing protocol text the
+   * user never wrote.
+   */
+  suppressedPromptEntryId?: string | null
 ): ReviewTurn[] {
+  const suppressPrompt = typeof suppressedPromptEntryId === 'string' && suppressedPromptEntryId.length > 0
   const toolResults = new Map<string, ToolResultMsg>()
   for (const message of messages) {
     if (message.role === 'toolResult') toolResults.set(message.toolCallId, message)
@@ -241,9 +249,12 @@ export function extractReviewTurns(
     const rounds = scope.assistants
     const files = extractTurnWrittenFiles(rounds, toolResults, cwd, scope.completions)
     if (files.length > 0) {
+      const prompt = scope.prompt && !(suppressPrompt && scope.prompt.sessionEntryId === suppressedPromptEntryId)
+        ? scope.prompt
+        : null
       turns.push({
         id: scope.reviewId,
-        prompt: scope.prompt ? promptLabel(extractUserDisplay(scope.prompt.content).text) : null,
+        prompt: prompt ? promptLabel(extractUserDisplay(prompt.content).text) : null,
         timestamp: rounds[rounds.length - 1].timestamp,
         files
       })
