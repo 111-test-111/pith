@@ -8,6 +8,7 @@ export async function checkPlanApproval() {
   try {
     const ref = await submitFixturePlan(f)
     const request = { sessionPath: f.managed.path, ...ref }
+    assert.equal(f.app.getPlanState(f.managed.path).executionTurnId, null, 'a submission has no execution turn yet')
     f.setRespond(() => [{ type: 'text', text: 'Execution accepted' }])
     const beforeUsers = f.manager.getBranch().filter(e => e.type === 'message' && e.message.role === 'user').length
     assert.equal((await f.app.approvePlan({ ...request, revision: 9 })).ok, false)
@@ -26,6 +27,20 @@ export async function checkPlanApproval() {
     assert.equal(f.manager.getBranch().filter(e => e.type === 'message' && e.message.role === 'user').length, beforeUsers + 1)
     const entries = readFileSync(f.managed.path, 'utf8').trim().split('\n').map(JSON.parse)
     assert(entries.some(e => e.id === started[0].data.executionEntryId))
+    // The review pane groups a turn by its first assistant message timestamp,
+    // while the approval records only the opening user entry id: main derives
+    // the mapping from the selected branch, and a branch that no longer holds
+    // the opening (rewind, resend, compaction) maps to null.
+    const executionEntryId = started[0].data.executionEntryId
+    const branch = f.manager.getBranch()
+    const openingIndex = branch.findIndex(e => e.type === 'message' && e.id === executionEntryId)
+    assert(openingIndex >= 0, 'the opening user entry is on the selected branch')
+    const executionAssistant = branch.slice(openingIndex + 1).find(e => e.type === 'message' && e.message.role === 'assistant')
+    assert(executionAssistant, 'the approved execution produced an assistant message')
+    assert.equal(state.executionTurnId, executionAssistant.message.timestamp, 'a started approval maps to its execution turn')
+    f.manager.branch(branch[openingIndex - 1].id)
+    f.managed.plan.restore()
+    assert.equal(f.app.getPlanState(f.managed.path).executionTurnId, null, 'a rewound-away opening has no execution turn')
   } finally { await f.close() }
   for (const mode of ['workspace-write', 'read-only']) {
     const f = await createPlanFixture()
@@ -70,6 +85,7 @@ export async function checkPlanApproval() {
     cold.managed.planApproval.recover()
     assert.equal(cold.requests.length, before)
     assert.equal(cold.app.getPlanState(cold.managed.path).approval.status, 'interrupted')
+    assert.equal(cold.app.getPlanState(cold.managed.path).executionTurnId, null, 'an interrupted approval has no execution turn')
     assert.equal((await cold.app.setSessionMode({ sessionPath: cold.managed.path, mode: 'normal' })).ok, false)
     assert.equal((await cold.app.approvePlan(request)).ok, false)
     assert((await cold.app.resetPlanApproval(request)).ok)

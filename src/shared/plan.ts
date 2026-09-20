@@ -34,6 +34,14 @@ export interface PlanStateDTO {
   planId: string | null
   latest: PlanSubmissionRef | null
   approval: PlanApprovalDTO | null
+  /**
+   * The transcript turn that executes an approved plan, identified the way the
+   * review pane groups turns (its first assistant message timestamp). Main
+   * derives it from the selected branch whenever the approval is `started`;
+   * `null` means there is nothing to open — no execution, the opening entry
+   * left the branch (rewind/resend) or the turn was compacted away.
+   */
+  executionTurnId: number | null
   configuredSandboxMode: SandboxMode
   effectiveSandboxMode: SandboxMode
   shellEnforcement: 'full' | 'partial' | 'unavailable'

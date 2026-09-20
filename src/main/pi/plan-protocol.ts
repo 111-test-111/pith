@@ -187,6 +187,37 @@ export function reconstructPlan(branch: readonly unknown[], onSubmission?: (entr
   return state
 }
 
+/**
+ * The review pane groups a transcript turn by its first assistant message
+ * timestamp, while an approval records only the JSONL entry id of the user
+ * message that opened execution. Map one to the other from the selected branch:
+ * the first assistant message after that user entry belongs to the execution
+ * turn.
+ *
+ * This is computed from the LIVE branch on every publish rather than cached in
+ * the folded state: the assistant message the mapping needs arrives after the
+ * approval entry, so a fold performed at approval time could never see it.
+ * Rewind/resend take the entry off the branch and compaction folds the turn
+ * away; both report `null`, and the UI offers no entry point.
+ */
+export function planExecutionTurnId(branch: readonly unknown[], approval: PlanApprovalDTO | null): number | null {
+  if (approval?.status !== 'started' || !approval.executionEntryId) return null
+  let reached = false
+  for (const entry of branch) {
+    const recordEntry = record(entry)
+    if (!recordEntry) continue
+    if (!reached) {
+      if (recordEntry.type === 'message' && text(recordEntry.id) === approval.executionEntryId) reached = true
+      continue
+    }
+    if (recordEntry.type !== 'message') continue
+    const message = record(recordEntry.message)
+    if (message?.role !== 'assistant') continue
+    return typeof message.timestamp === 'number' ? message.timestamp : null
+  }
+  return null
+}
+
 export function isCurrentPlan(state: PlanBranchState): boolean {
   if (state.mode !== 'plan') return false
   if (!state.latest) return false
