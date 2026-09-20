@@ -7,6 +7,7 @@ import {
   useState,
   useSyncExternalStore
 } from 'react'
+import { isNothingToCompactError } from '../../../../shared/compaction-errors'
 import {
   ArrowDown,
   ArrowUp,
@@ -664,9 +665,15 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
     try {
       const snapshot = await window.pi.compactSession(targetPath)
       if (store.getShell().sessionPath === targetPath) store.applySnapshot(snapshot)
-    } catch {
-      // No toast: a failure renders as its own error row in the transcript
-      // (`SummaryRow`), where the reason can be read and kept.
+    } catch (error) {
+      // A brand-new / just-started session has nothing to summarize. Keep it
+      // out of the transcript and report it as a transient toast instead.
+      if (isNothingToCompactError(error)) {
+        toast.error({ title: t('palette.compactNothingToCompact') })
+        return
+      }
+      // Other compaction failures still render as their own `SummaryRow` error
+      // row in the transcript, where the reason can be read and kept.
     }
   }, [store, t, toast])
 

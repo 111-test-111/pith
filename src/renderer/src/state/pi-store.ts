@@ -1,3 +1,4 @@
+import { isNothingToCompactError } from '../../../shared/compaction-errors'
 import type {
   AssistantMsg,
   ChatMessage,
@@ -753,9 +754,10 @@ export class PiStore {
         // renders where it happened (`chat-turns` places it by time) and is
         // still there when the session is reopened, which a UI-only row was not.
         const messages = Array.isArray(event.messages) ? (event.messages as ChatMessage[]) : null
+        const nothingToCompact = isNothingToCompactError(event.errorMessage)
         this.set({
           ...(messages ? { messages, streaming: null } : {}),
-          notice: event.errorMessage
+          notice: event.errorMessage && !nothingToCompact
             ? { key: 'compactFailed', detail: event.errorMessage }
             : null,
           ...('contextUsage' in event ? { contextUsage: event.contextUsage ?? null } : {})

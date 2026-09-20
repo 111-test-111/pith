@@ -270,6 +270,7 @@ const en = {
   'palette.current': 'Current',
   'palette.compact': 'Summarize conversation',
   'palette.compactBusy': 'Stop the current reply before summarizing',
+  'palette.compactNothingToCompact': 'Not enough context to summarize yet',
   'palette.reload': 'Reload extensions, skills and context files',
   'palette.reloadBusy': 'Stop the running turn before reloading',
   'palette.reloadDone': 'Extensions, skills and context files reloaded',

@@ -267,6 +267,7 @@ const zhCN: Messages = {
   'palette.current': '当前',
   'palette.compact': '总结会话',
   'palette.compactBusy': '请先停止当前回复再总结',
+  'palette.compactNothingToCompact': '当前会话内容较少，无需总结',
   'palette.reload': '重载扩展、技能与上下文文件',
   'palette.reloadBusy': '请先停止当前运行再重载',
   'palette.reloadDone': '扩展、技能与上下文文件已重载',

@@ -1,5 +1,6 @@
 import type { RewindPatchDTO, RewindStatsDTO, RewindStatsTargetDTO } from '../../shared/types'
 import {
+  buildSessionContext,
   createAgentSessionFromServices,
   createAgentSessionServices,
   DefaultPackageManager,
@@ -14,6 +15,7 @@ import {
   type Extension,
   type ResourceLoader
 } from '@earendil-works/pi-coding-agent'
+import { NOTHING_TO_COMPACT_MESSAGE } from '../../shared/compaction-errors'
 import { app, shell } from 'electron'
 import { settleWithin, SESSION_DISPOSE_TIMEOUT_MS } from '../shutdown'
 import { homedir } from 'node:os'
@@ -590,6 +592,19 @@ export class PiManager {
     if (managed.session.isStreaming) throw new Error('Stop the running turn before compacting')
     const release = managed.plan.beginWork('branch')
     try {
+      // Pre-flight the same "is there anything to summarize?" check the SDK does
+      // inside `prepareCompaction()`: if the whole context fits within
+      // `keepRecentTokens`, the cut point keeps everything and there is nothing to
+      // summarize. Catching this here avoids emitting `compaction_start` /
+      // `compaction_end` events and the transient "compressing" row they produce.
+      const branch = managed.session.sessionManager.getBranch()
+      const settings = managed.session.settingsManager.getCompactionSettings()
+      const messages = buildSessionContext(branch).messages
+      const tokens = messages.reduce((sum, m) => sum + estimateTokens(m), 0)
+      if (tokens <= settings.keepRecentTokens) {
+        throw new Error(NOTHING_TO_COMPACT_MESSAGE)
+      }
+
       await managed.session.compact()
       return this.snapshotOf(managed)
     } finally { release() }
