@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { BASH_DEFAULT_MAX_WAIT_MS, BASH_MIN_WAIT_MS, BASH_MAX_WAIT_MS, DEFAULT_SANDBOX_MODE, type SandboxMode, type SandboxStatusDTO, type StartupSessionMode } from '../../../../../shared/types'
 import { ASK_USER_DEFAULT_TIMEOUT_S, ASK_USER_MAX_TIMEOUT_S, ASK_USER_MIN_TIMEOUT_S, clampAskUserTimeoutSeconds } from '../../../../../shared/ask-user'
+import { RESPONSE_TIMEOUT_DEFAULT_S, RESPONSE_TIMEOUT_MAX_S, RESPONSE_TIMEOUT_MIN_S, clampResponseTimeoutSeconds } from '../../../../../shared/response-timeout'
 import { Button } from '@/components/motion/button'
 import { Input } from '@/components/motion/input'
 import { Checkbox } from '@/components/motion/checkbox'
@@ -82,6 +83,32 @@ export function GeneralSection() {
     } catch { setAskTimeoutError(true) }
     finally { setSavingAskTimeout(false) }
   }
+  // Provider request timeout: how long a model request may go unanswered
+  // before the SDK fails it as a timeout and retries.
+  const [responseTimeout, setResponseTimeout] = useState(String(RESPONSE_TIMEOUT_DEFAULT_S))
+  const [savedResponseTimeout, setSavedResponseTimeout] = useState(RESPONSE_TIMEOUT_DEFAULT_S)
+  const [savingResponseTimeout, setSavingResponseTimeout] = useState(false)
+  const [responseTimeoutError, setResponseTimeoutError] = useState(false)
+  const responseTimeoutValue = Number(responseTimeout)
+  const validResponseTimeout = responseTimeout.trim() !== ''
+    && Number.isInteger(responseTimeoutValue)
+    && responseTimeoutValue >= RESPONSE_TIMEOUT_MIN_S
+    && responseTimeoutValue <= RESPONSE_TIMEOUT_MAX_S
+  const clampResponseTimeout = (raw: string) => {
+    const parsed = raw.trim() === '' ? Number.NaN : Number(raw)
+    return String(clampResponseTimeoutSeconds(parsed))
+  }
+  const saveResponseTimeout = async () => {
+    if (!validResponseTimeout) return
+    setSavingResponseTimeout(true)
+    try {
+      const value = await window.pi.setResponseTimeoutSeconds(responseTimeoutValue)
+      setSavedResponseTimeout(value)
+      setResponseTimeout(String(value))
+      setResponseTimeoutError(false)
+    } catch { setResponseTimeoutError(true) }
+    finally { setSavingResponseTimeout(false) }
+  }
   const [checkpoints, setCheckpoints] = useState(true)
   const [checkpointError, setCheckpointError] = useState(false)
   const [savingCheckpoints, setSavingCheckpoints] = useState(false)
@@ -124,7 +151,7 @@ export function GeneralSection() {
   useEffect(() => {
     void window.pi
       .appInfo()
-      .then((info) => { setVersion(info.version); setCheckpoints(info.checkpointsEnabled); setStartup(info.startup); setWaitSeconds(formatSeconds(info.bashMaxWaitMs)); setSavedWait(info.bashMaxWaitMs); setSandboxMode(info.sandboxMode); setSandbox(info.sandbox); setAskTimeout(String(info.askUserTimeoutSeconds ?? ASK_USER_DEFAULT_TIMEOUT_S)); setSavedAskTimeout(info.askUserTimeoutSeconds ?? ASK_USER_DEFAULT_TIMEOUT_S) })
+      .then((info) => { setVersion(info.version); setCheckpoints(info.checkpointsEnabled); setStartup(info.startup); setWaitSeconds(formatSeconds(info.bashMaxWaitMs)); setSavedWait(info.bashMaxWaitMs); setSandboxMode(info.sandboxMode); setSandbox(info.sandbox); setAskTimeout(String(info.askUserTimeoutSeconds ?? ASK_USER_DEFAULT_TIMEOUT_S)); setSavedAskTimeout(info.askUserTimeoutSeconds ?? ASK_USER_DEFAULT_TIMEOUT_S); setResponseTimeout(String(info.responseTimeoutSeconds ?? RESPONSE_TIMEOUT_DEFAULT_S)); setSavedResponseTimeout(info.responseTimeoutSeconds ?? RESPONSE_TIMEOUT_DEFAULT_S) })
       .catch(() => {})
   }, [])
 
@@ -282,6 +309,28 @@ export function GeneralSection() {
           <Button variant="ghost" size="sm" disabled={!validAskTimeout || askTimeoutValue === savedAskTimeout || savingAskTimeout} onClick={() => void saveAskTimeout()}>{t('askUser.save')}</Button>
         </SettingsRow>
         {askTimeoutError ? <p className="px-4 text-xs text-destructive" role="status">{t('askUser.saveFailed')}</p> : null}
+      </SettingsGroup>
+
+      <SettingsGroup title={t('settings.timeoutGroup')}>
+        <SettingsRow
+          label={t('settings.responseTimeoutLabel')}
+          description={t('settings.responseTimeoutDesc')}
+        >
+          <Input
+            value={responseTimeout}
+            onChange={(value) => setResponseTimeout(value.replace(/[^0-9]/g, '').slice(0, 4))}
+            onBlur={() => setResponseTimeout(clampResponseTimeout(responseTimeout))}
+            onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur() }}
+            inputMode="numeric"
+            disabled={savingResponseTimeout}
+            aria-label={t('settings.responseTimeoutSeconds')}
+            className="w-20"
+            classNames={{ field: 'h-8', input: 'px-2 text-center text-sm' }}
+          />
+          <span className="text-xs text-muted-foreground">{t('settings.timeoutSecondsUnit')}</span>
+          <Button variant="ghost" size="sm" disabled={!validResponseTimeout || responseTimeoutValue === savedResponseTimeout || savingResponseTimeout} onClick={() => void saveResponseTimeout()}>{t('settings.timeoutSave')}</Button>
+        </SettingsRow>
+        {responseTimeoutError ? <p className="px-4 text-xs text-destructive" role="status">{t('settings.timeoutSaveFailed')}</p> : null}
       </SettingsGroup>
 
       <SettingsGroup title={t('sandbox.group')}>

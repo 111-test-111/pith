@@ -31,6 +31,7 @@ const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 const CONCURRENCY_LABEL = 'Concurrent delegations'
 const WAIT_LABEL = 'Maximum blocking time in seconds'
 const ASK_TIMEOUT_LABEL = 'Auto-close seconds'
+const RESPONSE_TIMEOUT_LABEL = 'Response timeout seconds'
 
 const fixture = `<!doctype html><html><head><style>
 body { margin: 0; background: var(--background); }
@@ -52,6 +53,7 @@ const appInfo = {
   subagentMaxConcurrent: Number(params.get('concurrency') ?? 4),
   bashMaxWaitMs: Number(params.get('waitMs') ?? 10000),
   askUserTimeoutSeconds: Number(params.get('askTimeout') ?? 120),
+  responseTimeoutSeconds: Number(params.get('responseTimeout') ?? 60),
   sandboxMode: 'workspace-write',
   sandbox: { support: params.get('sandbox') ?? 'ready', backend: 'seatbelt' }
 };
@@ -74,6 +76,7 @@ window.pi = {
   setSubagentProfileTools: async (filePath, tools) => { window.calls.push(['profileTools', filePath, tools]); return subagentProfiles; },
   toolsCatalog: async () => ({ tools: [], extensions: [], skills: [], skillDiagnostics: [] }),
   setAskUserTimeoutSeconds: async (v) => { window.calls.push(['askTimeout', v]); return v; },
+  setResponseTimeoutSeconds: async (v) => { window.calls.push(['responseTimeout', v]); return v; },
   setBashMaxWaitMs: async (v) => { window.calls.push(['waitMs', v]); return v; },
   setCheckpointsEnabled: async (v) => v,
   setSandboxMode: async (v) => v,
@@ -377,6 +380,27 @@ app.on('window-all-closed',()=>app.quit());`
   assert.deepEqual((await calls()).at(-1), ['askTimeout', 45], 'Save commits the typed seconds exactly once')
   assert.equal((await probe(ASK_TIMEOUT_LABEL)).saveDisabled, true, 'and disables Save again')
 
+  // --- the provider response timeout (Settings → General → timeouts) is the
+  // same kind of field: whole seconds, filtered while typing, clamped on leave,
+  // saved explicitly. It is the value the SDK receives as
+  // retry.provider.timeoutMs, so an unanswered request fails and retries.
+  await load()
+  await pause(300)
+  const responseField = await assertTextField(RESPONSE_TIMEOUT_LABEL, { unit: 's', save: 'Save' })
+  assert.equal(responseField.value, '60', 'the response timeout shows the one-minute default')
+  assert.equal(responseField.saveDisabled, true, 'its Save is disabled while nothing changed')
+  assert.equal(await typed(RESPONSE_TIMEOUT_LABEL, '1a2s.5'), '125', 'letters, units and dots never enter the response-timeout field')
+  assert.equal(await typed(RESPONSE_TIMEOUT_LABEL, '12345'), '1234', 'the response-timeout field takes at most four digits')
+  assert.equal(await left(RESPONSE_TIMEOUT_LABEL), '1234', 'an in-range entry is kept on leave')
+  assert.equal(await left(RESPONSE_TIMEOUT_LABEL, '9999'), '3600', 'an above-range entry clamps to the maximum')
+  assert.equal(await left(RESPONSE_TIMEOUT_LABEL, '0'), '10', 'a below-range entry clamps to the minimum')
+  assert.equal(await left(RESPONSE_TIMEOUT_LABEL, ''), '60', 'an emptied field restores the saved value')
+  await typed(RESPONSE_TIMEOUT_LABEL, '90')
+  assert.equal(await evaluate(`window.clickSave(${JSON.stringify(RESPONSE_TIMEOUT_LABEL)})`), true, 'the response-timeout Save is clickable')
+  await frame()
+  assert.deepEqual((await calls()).at(-1), ['responseTimeout', 90], 'Save commits the typed seconds exactly once')
+  assert.equal((await probe(RESPONSE_TIMEOUT_LABEL)).saveDisabled, true, 'and disables Save again')
+
   // --- both locales
   await evaluate('localStorage.setItem("pi-app:locale","zh-CN")')
   await load('?concurrency=4&waitMs=10000')
@@ -385,6 +409,8 @@ app.on('window-all-closed',()=>app.quit());`
   const zhWait = await evaluate(`window.field('最大阻塞时长（秒）').value`)
   assert.equal(zhConcurrency, '4', 'the Chinese labels map to the same fields')
   assert.equal(zhWait, '10.0', 'the Chinese wait field shows one decimal')
+  const zhResponseTimeout = await evaluate(`window.field('无响应超时（秒）').value`)
+  assert.equal(zhResponseTimeout, '60', 'the Chinese labels map to the response-timeout field too')
   const zhState = await evaluate(`window.probeField('最大阻塞时长（秒）')`)
   assert.equal(zhState.unit?.text, '秒', 'the unit suffix is translated')
   assert.equal(Math.round(Math.abs(zhState.unit.center - zhState.center)), 0, 'the Chinese unit shares the field’s centre line')

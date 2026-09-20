@@ -221,6 +221,15 @@ const zhCN: Messages = {
   'askUser.save': '保存',
   'askUser.saveFailed': '无法保存自动结束时长。',
 
+  // timeouts (Settings → General)
+  'settings.timeoutGroup': '超时',
+  'settings.responseTimeoutLabel': '无响应多久后重试',
+  'settings.responseTimeoutDesc': '模型请求超过这么久没有回应就按超时处理并自动重试（重试间隔由 SDK 自身的退避策略决定）。OpenAI 系 provider 指的是等待首个响应的时间；Anthropic、Mistral 则是对整个请求的上限。',
+  'settings.responseTimeoutSeconds': '无响应超时（秒）',
+  'settings.timeoutSecondsUnit': '秒',
+  'settings.timeoutSave': '保存',
+  'settings.timeoutSaveFailed': '无法保存无响应超时。',
+
   // common
   'common.cancel': '取消',
   'common.delete': '删除',

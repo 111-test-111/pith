@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { BASH_DEFAULT_MAX_WAIT_MS, BASH_MIN_WAIT_MS, BASH_MAX_WAIT_MS, type StartupSessionMode } from '../shared/types'
 import { ASK_USER_DEFAULT_TIMEOUT_S, clampAskUserTimeoutSeconds } from '../shared/ask-user'
+import { RESPONSE_TIMEOUT_DEFAULT_S, clampResponseTimeoutSeconds } from '../shared/response-timeout'
 import { DEFAULT_SANDBOX_MODE, isSandboxMode } from './sandbox/mode'
 import type { SandboxMode } from './sandbox/types'
 
@@ -58,6 +59,10 @@ export interface AppSettings {
   /** Seconds an unanswered ask_user_question panel waits before it closes
    * itself. Any real interaction cancels the countdown. */
   askUserTimeoutSeconds: number
+  /** Seconds a model request may go unanswered before it is retried (app-local;
+   * injected into sessions in memory, never written to the SDK's global
+   * settings file). */
+  responseTimeoutSeconds: number
   /** DSH file-sandbox mode for this app: which file effects the first-party
    * `bash`, `edit` and `write` may perform. Reads, network, MCP and extensions
    * are outside it, and there is no approval gate — the mode is the policy. */
@@ -84,6 +89,7 @@ const defaults: AppSettings = {
   subagentCommsEnabled: false,
   subagentMaxConcurrent: 4,
   askUserTimeoutSeconds: ASK_USER_DEFAULT_TIMEOUT_S,
+  responseTimeoutSeconds: RESPONSE_TIMEOUT_DEFAULT_S,
   sandboxMode: DEFAULT_SANDBOX_MODE,
   browserConsent: false,
   browserAgentToolsEnabled: false
@@ -108,7 +114,11 @@ export function loadSettings(): AppSettings {
     const askUserTimeoutSeconds = clampAskUserTimeoutSeconds(
       typeof raw.askUserTimeoutSeconds === 'number' ? raw.askUserTimeoutSeconds : ASK_USER_DEFAULT_TIMEOUT_S
     )
+    const responseTimeoutSeconds = clampResponseTimeoutSeconds(
+      typeof raw.responseTimeoutSeconds === 'number' ? raw.responseTimeoutSeconds : RESPONSE_TIMEOUT_DEFAULT_S
+    )
     return { ...defaults, ...raw, bashMaxWaitMs, startup, startupSession, subagentMaxConcurrent, askUserTimeoutSeconds,
+      responseTimeoutSeconds,
       sandboxMode: isSandboxMode(raw.sandboxMode) ? raw.sandboxMode : DEFAULT_SANDBOX_MODE }
   } catch {
     return { ...defaults }

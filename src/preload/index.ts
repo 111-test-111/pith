@@ -119,6 +119,9 @@ const api = {
   /** Auto-settle deadline for an unanswered ask_user_question panel, in seconds. */
   setAskUserTimeoutSeconds: (value: number): Promise<number> =>
     ipcRenderer.invoke('app:setAskUserTimeoutSeconds', value),
+  /** Provider request timeout for an unanswered model request, in seconds. */
+  setResponseTimeoutSeconds: (value: number): Promise<number> =>
+    ipcRenderer.invoke('app:setResponseTimeoutSeconds', value),
   setSandboxMode: (mode: SandboxMode): Promise<SandboxMode> => ipcRenderer.invoke('app:setSandboxMode', mode),
   /** Change one session's mode; resolves with that session's fresh snapshot. */
   exportPlan: (request: PlanDocumentRequest): Promise<PlanActionResult<{ cancelled: boolean }>> => ipcRenderer.invoke('plan:export', request),

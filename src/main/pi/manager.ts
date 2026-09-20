@@ -33,6 +33,7 @@ import { clearSessionEscalations, listPendingEscalations, respondToEscalation } 
 import { clearSessionAskUserRequests, clearSubagentAskUserRequests, createAskUserTool, engageAskUser as engageAskUserRequest, listPendingAskUser, respondAskUserRequest } from './ask-user'
 import type { AskUserAnswer } from '../../shared/ask-user'
 import { ASK_USER_MAX_TIMEOUT_S, ASK_USER_MIN_TIMEOUT_S, ASK_USER_TOOL_NAME, clampAskUserTimeoutSeconds } from '../../shared/ask-user'
+import { RESPONSE_TIMEOUT_MAX_S, RESPONSE_TIMEOUT_MIN_S, clampResponseTimeoutSeconds } from '../../shared/response-timeout'
 import type { SandboxMode } from '../sandbox/types'
 import type { SandboxEscalationDecision } from '../../shared/types'
 import { TaskNotifications } from './task-notifications'
@@ -361,6 +362,23 @@ export class PiManager {
   private subagentMaxConcurrentSetting = loadSettings().subagentMaxConcurrent ?? MAX_CONCURRENT_SUBAGENTS_DEFAULT
   /** Ask-panel auto-settle deadline; read live by every ask_user_question call. */
   private askUserTimeoutMs = clampAskUserTimeoutSeconds(loadSettings().askUserTimeoutSeconds) * 1000
+  /**
+   * Provider request timeout (Settings → General), in milliseconds. Applied to
+   * every session's SettingsManager as an in-memory override, so the app-local
+   * preference never rewrites the SDK's shared global settings file; the SDK's
+   * own auto-retry turns the resulting timeout error into a retry.
+   */
+  private responseTimeoutMs = clampResponseTimeoutSeconds(loadSettings().responseTimeoutSeconds) * 1000
+
+  /**
+   * Give one SettingsManager the app's provider timeout. `applyOverrides`
+   * merges into the manager's in-memory view only (no write, no `reload()`
+   * survival), and the SDK re-reads it on every request — so the call applies to
+   * the next request of that session, including subagent children.
+   */
+  private applyResponseTimeout(settingsManager: SettingsManager): void {
+    settingsManager.applyOverrides({ retry: { provider: { timeoutMs: this.responseTimeoutMs } } })
+  }
 
   private get commandTasks(): BashTaskManager {
     return this.commandTasksInstance ??= new BashTaskManager(join(app.getPath('userData'), 'bash-tasks'),
@@ -399,6 +417,18 @@ export class PiManager {
     }
     saveSettings({ ...loadSettings(), askUserTimeoutSeconds: value })
     this.askUserTimeoutMs = value * 1000
+    return value
+  }
+  /** Settings → General: how long a model request may go unanswered before the
+   * SDK fails it as a timeout and retries. Persisted app-local and applied to
+   * every live session's SettingsManager (the next request picks it up). */
+  setResponseTimeoutSeconds(value: number): number {
+    if (!Number.isInteger(value) || value < RESPONSE_TIMEOUT_MIN_S || value > RESPONSE_TIMEOUT_MAX_S) {
+      throw new Error('Invalid response timeout')
+    }
+    saveSettings({ ...loadSettings(), responseTimeoutSeconds: value })
+    this.responseTimeoutMs = value * 1000
+    for (const managed of this.sessions.values()) this.applyResponseTimeout(managed.session.settingsManager)
     return value
   }
   /** Settings → General: the default a session starts from, not a live mode. */
@@ -1055,8 +1085,16 @@ export class PiManager {
     // A loader owns mutable extension closures and an ExtensionRuntime whose
     // actions bind to ONE session. Sharing it by cwd lets another session's
     // bind/reload/dispose overwrite or invalidate a still-live MCP context.
+    //
+    // The SettingsManager is built here (not left to the SDK) so the app's
+    // provider timeout can be applied as an in-memory override before the
+    // session's first request; `SettingsManager.create(cwd, agentDir)` is
+    // exactly the SDK's own default for this path.
+    const settingsManager = SettingsManager.create(cwd, getAgentDir())
+    this.applyResponseTimeout(settingsManager)
     return createAgentSessionServices({
       cwd,
+      settingsManager,
       modelRuntime: await this.runtime(),
       resourceLoaderOptions: {
         // A subagent child loads extensions ONLY when its frozen ceiling

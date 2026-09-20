@@ -224,6 +224,15 @@ const en = {
   'askUser.save': 'Save',
   'askUser.saveFailed': 'Could not save the auto-close time.',
 
+  // timeouts (Settings → General)
+  'settings.timeoutGroup': 'Timeouts',
+  'settings.responseTimeoutLabel': 'Retry a request that goes unanswered after',
+  'settings.responseTimeoutDesc': 'A model request with no answer for this long fails as a timeout and is retried automatically (the SDK keeps its own backoff between attempts). For OpenAI-family providers it bounds the wait for the first response; for Anthropic and Mistral it caps the whole request.',
+  'settings.responseTimeoutSeconds': 'Response timeout seconds',
+  'settings.timeoutSecondsUnit': 's',
+  'settings.timeoutSave': 'Save',
+  'settings.timeoutSaveFailed': 'Could not save the response timeout.',
+
   // common
   'common.cancel': 'Cancel',
   'common.delete': 'Delete',

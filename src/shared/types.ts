@@ -1060,6 +1060,12 @@ export interface AppInfoDTO {
    * real interaction cancels it for good (collapsing does not).
    */
   askUserTimeoutSeconds: number
+  /**
+   * Provider request timeout, in seconds (Settings → General → timeouts). A
+   * model request that stays unanswered this long fails as a timeout and the
+   * SDK retries it; the value is applied to sessions in memory only.
+   */
+  responseTimeoutSeconds: number
   /** The user consented to the embedded browser (stored, asked once). */
   browserConsent: boolean
   /** Whether the model's browser_* tools are enabled for sessions. */

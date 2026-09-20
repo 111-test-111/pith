@@ -249,6 +249,7 @@ export function registerIpc(pi: PiManager): () => boolean {
       subagentReuseEnabled: settings.subagentReuseEnabled === true,
       subagentCommsEnabled: settings.subagentCommsEnabled === true,
       askUserTimeoutSeconds: settings.askUserTimeoutSeconds,
+      responseTimeoutSeconds: settings.responseTimeoutSeconds,
       browserConsent: settings.browserConsent === true,
       browserAgentToolsEnabled: settings.browserAgentToolsEnabled === true,
       version: app.getVersion()
@@ -267,6 +268,7 @@ export function registerIpc(pi: PiManager): () => boolean {
   ipcMain.handle('app:setStartup', (_event, mode: StartupSessionMode) => pi.setStartupMode(mode))
   ipcMain.handle('app:setBashMaxWaitMs', (_event, value: number) => pi.setBashMaxWaitMs(value))
   ipcMain.handle('app:setAskUserTimeoutSeconds', (_event, value: number) => pi.setAskUserTimeoutSeconds(value))
+  ipcMain.handle('app:setResponseTimeoutSeconds', (_event, value: number) => pi.setResponseTimeoutSeconds(value))
   ipcMain.handle('app:setSandboxMode', (_event, mode: SandboxMode) => pi.setSandboxMode(mode))
   // The preference is persisted here like the other app:set* switches; the
   // manager applies the flag to sessions (build-time registration + live reload).
