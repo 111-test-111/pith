@@ -110,6 +110,14 @@ Main stamps successful persisted transcript results with `planSubmission`. Compa
 
 Card loading is keyed by session path, entry and hash. The renderer recomputes SHA-256, checks the returned reference, and discards late responses from another session. Copy uses only this verified body. Export reads the host's authoritative immutable document **before** Save As; cancelling does not change the branch, and a subsequent branch change does not alter the chosen export snapshot. Neither model nor renderer supplies an export body or destination path to this API.
 
+`PlanStateDTO.executionTurnId` links the approved plan back to the transcript turn that executes it. The review pane groups a turn by its **first assistant message timestamp**, while an approval records only the opening user entry id, so `planExecutionTurnId` maps one to the other from the selected branch. It is computed inside `PlanController.build()` against the **live** branch, not cached in the folded state: the assistant message it needs lands after the approval entry, so a fold performed at approval time could never see it. Rewind/resend take the entry off the branch and compaction folds the turn away; both report `null`.
+
+Presentation follows from those facts:
+
+- While the approval is `started`, the plan card offers **Review changes** — but only when `executionTurnId` is present *and* `extractReviewTurns` actually lists that turn (it changed files), so the pane never falls back to an unrelated turn. The action routes through the same `onReview` path as the transcript's changed-files card, opening the review rail on that turn.
+- The approved plan reaches the model as a synthetic user message. That message carries the plan body, not a user's words, so while its approval is the started one the transcript renders **no row for it and no rail tick** (matched exactly by `UserMsg.sessionEntryId === approval.executionEntryId`), and the review switcher suppresses its prompt label instead of quoting protocol text. The message itself stays in the branch and in the session file.
+- The card body keeps the plan readable (taller scroll cap) while its action strip stays a thin one-line footer; both are asserted in `check-plan-mode-ui.mjs`.
+
 ## SDK 0.85.1 upgrade assumptions
 
 These adapters use public SDK surfaces. Re-run the Plan checks on every SDK upgrade:
