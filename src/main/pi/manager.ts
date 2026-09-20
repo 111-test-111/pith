@@ -1918,7 +1918,16 @@ export class PiManager {
     const startup = this.initializeSession(managed, services.resourceLoader)
     managed.lifecyclePromise = startup
     void startup.finally(() => {
-      if (managed.lifecyclePromise === startup) managed.lifecyclePromise = null
+      if (managed.lifecyclePromise === startup) {
+        managed.lifecyclePromise = null
+        // The refresh inside initializeSession's finally ran while this
+        // barrier was still set, so the facts still reported initializing
+        // and the contentKey dedupe published nothing. Republish now that
+        // initialization is truly over — otherwise a quiet session's plan
+        // blockers keep 'initializing' forever (a reload gets its own
+        // post-clear refresh through releasePlanWork).
+        if (!this.closing && !managed.disposing) managed.plan.refresh()
+      }
     }).catch(() => {})
     // Restore this session's subagent roster from disk (interrupted runs show
     // as cards; v1 never wakes them automatically).

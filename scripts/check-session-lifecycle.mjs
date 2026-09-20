@@ -183,6 +183,16 @@ export function createAgentSessionServices(options) {
   store.applySnapshot(boot)
   assert.equal(store.getShell().initializing, false, 'an older snapshot cannot undo cached readiness')
   assert.equal(store.getState().eventSequence, ready.eventSequence)
+  // The plan state the renderer holds must not keep the 'initializing'
+  // blocker once the lifecycle barrier clears: initializeSession's finally
+  // refreshed while lifecyclePromise was still set, so the contentKey dedupe
+  // published nothing — the barrier's own release must republish.
+  const planUpdates = readiness.filter((e) => e.type === 'plan_state_update' && e.sessionPath === boot.sessionPath)
+  assert(planUpdates.length > 0, 'plan state publishes during initialization')
+  const lastPlan = planUpdates.at(-1)
+  assert(!lastPlan.plan.blockers.switch.includes('initializing'), 'the last plan publish after init must not keep the initializing blocker')
+  store.dispatch(lastPlan)
+  assert.equal(store.getShell().plan?.blockers.switch.includes('initializing') ?? false, false, 'the composer must never be stuck on a stale initializing blocker')
   console.log('PASS: init, global/project new chat and existing chat open without waiting; prompts wait for tools and readiness survives snapshot races.')
 
   probe.holdStart = deferred()
