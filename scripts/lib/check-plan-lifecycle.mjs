@@ -7,7 +7,10 @@ import { createPlanFixture, submitFixturePlan } from './plan-fixture.mjs'
 
 const deferred = () => { let resolve; return { promise: new Promise(r => { resolve = r }), resolve: () => resolve() } }
 export async function checkPlanLifecycle() {
-  const f = await createPlanFixture()
+  // `keepRecentTokens: 1` keeps the compaction-admission fixture above the
+  // "nothing to summarize" floor: this case is about the shared transition
+  // boundary, not about a session that is too small to compact at all.
+  const f = await createPlanFixture({ keepRecentTokens: 1 })
   try {
     await f.managed.lifecyclePromise
     await f.session.prompt('Seed a saved session')
@@ -32,8 +35,34 @@ export async function checkPlanLifecycle() {
       assert(result.blockers.includes('busy'))
     } finally { compactBarrier.resolve(); await compacting; f.session.compact = original }
   } finally { await f.close() }
+  await checkNothingToCompact()
   await checkRestoration()
   console.log('PASS: compaction/reload/fork/rewind share the Plan transition admission boundary')
+}
+
+/**
+ * A session that fits inside `keepRecentTokens` has nothing to summarize. The
+ * host must fail fast with the SDK's own message — and without emitting the
+ * `compaction_start`/`compaction_end` pair a model-less compaction would never
+ * settle, which is what put a transient "compressing" row in the transcript.
+ */
+async function checkNothingToCompact() {
+  const f = await createPlanFixture()
+  try {
+    await f.managed.lifecyclePromise
+    await f.session.prompt('Too small to summarize')
+    const events = []
+    const unsubscribe = f.session.subscribe(event => events.push(event.type))
+    await assert.rejects(
+      f.app.compactSession(f.managed.path),
+      error => String(error?.message ?? error).includes('Nothing to compact (session too small)')
+    )
+    unsubscribe()
+    assert(
+      !events.includes('compaction_start') && !events.includes('compaction_end'),
+      'a too-small session must not emit compaction events'
+    )
+  } finally { await f.close() }
 }
 
 async function checkRestoration() {
