@@ -1,15 +1,18 @@
 /** Real SVG adapter/interaction checks in isolated Electron. No SDK or user data.
  * PI_ICONS_SCREENSHOT_DIR retains the light/dark icon and control galleries.
  *
- * Icons are pack-free by design: Phosphor for UI glyphs and Catppuccin for file
+ * Icons are pack-free by design: Lucide for UI glyphs and Catppuccin for file
  * types in BOTH interface styles, so this check asserts one gallery instead of
  * flipping a pack. The source guards at the top fail if a second icon family is
- * ever reintroduced. */
+ * ever reintroduced — @phosphor-icons/react is the ONE exception, kept in
+ * package.json as the pre-migration family so a revert stays a one-line
+ * declaration change, and imported by nothing. */
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { mkdir, mkdtemp, readFile, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
+import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { createServer } from 'vite'
 import react from '@vitejs/plugin-react'
@@ -21,30 +24,52 @@ const temporary = await mkdtemp(join(tmpdir(), 'pith-icons-'))
 const fixturePath = '/__icons_check.html'
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms))
 const source = await readFile(join(repo, 'src/renderer/src/lib/icons.tsx'), 'utf8')
-const expectedNames = [...source.matchAll(/export const (\w+) =/g)].map(match => match[1]).sort()
+const expectedNames = [...source.matchAll(/^export const (\w+) = /gm)].map(match => match[1]).sort()
 const providersSource = await readFile(join(repo, 'src/renderer/src/components/app/ProviderIcon.tsx'), 'utf8')
 const providerMap = providersSource.match(/const PROVIDER_ICONS[^=]+=[^{]*\{([\s\S]+?)\n\}/)[1]
 const providers = [...providerMap.matchAll(/^  (?:'([^']+)'|([\w]+)): /gm)].map(match => match[1] || match[2])
 
-// One family, one grid: every Phosphor glyph draws on its native 256 view box,
-// which proves the adapter passes the library's artwork through rather than
-// rescaling paths itself.
-const PHOSPHOR_VIEW_BOX = '0 0 256 256'
-const glyphs = [...source.matchAll(/^  (\w+): (Phosphor\.\w+),$/gm)]
-assert.equal(glyphs.length, expectedNames.length, 'every export has exactly one Phosphor glyph')
-assert.deepEqual(glyphs.map(match => match[1]).sort(), expectedNames, 'the mapping table and the exports agree')
-assert.doesNotMatch(source, /Carbon|Huge|Remix/, 'the adapter names one icon family only')
+// One family, one stroke grid: the adapter's table binds every semantic name to a
+// Lucide drawing, and each binding is an alias of the library's own export name —
+// resolved here against the installed package, so a mapping can never drift into
+// a drawing Lucide does not ship.
+const lucide = createRequire(import.meta.url)('lucide-react')
+const lucideExports = new Set(Object.keys(lucide))
+const bindings = Object.fromEntries([...source.matchAll(/^  (\w+) as (\w+),?$/gm)].map(match => [match[2], match[1]]))
+const glyphs = [...source.matchAll(/^  (\w+): (\w+Glyph),?$/gm)].map(([, name, binding]) => ({
+  name,
+  glyph: bindings[binding] ?? binding
+}))
+assert.equal(glyphs.length, expectedNames.length, 'every export has exactly one Lucide drawing')
+assert.deepEqual(glyphs.map(glyph => glyph.name).sort(), expectedNames, 'the mapping table and the exports agree')
+assert.ok(new Set(glyphs.map(glyph => glyph.glyph)).size > 150, 'the vocabulary draws from the whole family')
+for (const glyph of glyphs) assert.ok(lucideExports.has(glyph.glyph), glyph.name + ': ' + glyph.glyph + ' is a lucide-react export')
+assert.match(source, /^const GLYPHS = \{$/m, 'the adapter keeps its one reviewable table')
+assert.doesNotMatch(source, /from '(?:@phosphor-icons|lucide-static|@carbon-icons|@iconify)/, 'the adapter imports one icon family only')
 
 // The reverse guard: the removed packs must not creep back as a dependency, a
-// map file or a public artwork directory.
+// map file or a public artwork directory. Phosphor is the retained rollback
+// family — declared, never imported.
 const packageJson = await readFile(join(repo, 'package.json'), 'utf8')
-assert.doesNotMatch(packageJson, /@carbon\/icons-react|@iconify-json\/vscode-icons/, 'no second UI or file-icon package is declared')
+assert.match(packageJson, /"lucide-react": "/, 'the family is declared as a package')
+assert.match(packageJson, /"@phosphor-icons\/react": "/, 'the previous family stays declared for rollback')
+assert.doesNotMatch(packageJson, /@carbon\/icons-react|@iconify-json\/vscode-icons|lucide-static/, 'no third UI or file-icon package is declared')
+const adapters = await Promise.all(
+  ['icons.tsx', 'animated-icons.tsx'].map(file => readFile(join(repo, 'src/renderer/src/lib', file), 'utf8'))
+)
+assert.doesNotMatch(adapters.join('\n'), /from '@phosphor-icons\/react'/, 'nothing imports the rollback family')
 assert.doesNotMatch(await readFile(join(repo, 'src/renderer/src/lib/file-icons.ts'), 'utf8'), /vscode|iconPack|IconPack/, 'the file-icon lookup has one family and no pack parameter')
 assert.deepEqual(
   (await readFile(join(repo, 'src/renderer/src/lib/file-icons.map.json'), 'utf8').then(JSON.parse)).source.match(/Catppuccin/)?.[0],
   'Catppuccin',
   'the committed file-icon map is the Catppuccin one'
 )
+
+// Lucide draws every glyph on one 24 grid with its own balanced extent (a minus
+// is 14 units wide, a circle 20); the family's optical scale is what the check
+// asserts, not a normalization.
+const ICON_VIEW_BOX = '0 0 24 24'
+const OPTICAL = { min: 8, max: 24, medianMin: 17, medianMax: 21 }
 
 const fixture = `<!doctype html><html><head><style>
 body{margin:0!important}main{padding:20px;max-width:1200px;margin:auto}h2{font-size:14px;margin:0 0 12px}
@@ -69,7 +94,7 @@ function Fixture(){
  const ref=React.useRef(null);window.controls={setChecked,setMixed};
  React.useEffect(()=>{window.iconRef=ref;window.fixtureReady=true},[]);
  return h('main',null,
- h('h2',null,'Phosphor · 12 / 16 / 24 px'),
+ h('h2',null,'Lucide · 12 / 16 / 24 px'),
  h('div',{id:'gallery'},Object.entries(icons).map(([name,Icon])=>h('div',{key:name,className:'cell'},
    h('div',{className:'samples'},...[12,16,24].map(size=>h(Icon,{key:size,size,'data-sample':name,'data-size':size}))),h('span',{className:'label'},name)))),
  h('div',{className:'row'},h('div',{id:'checkbox'},h(Checkbox,{checked,indeterminate:mixed,onCheckedChange:setChecked,label:'Checkbox'})),
@@ -123,18 +148,31 @@ try {
   for(let i=0;i<240&&!ready;i++){ready=await evaluate('!!window.fixtureReady');if(!ready)await pause(50)}
   assert(ready,'Fixture mounted')
 
-  const gallery=async()=>evaluate(`Array.from(document.querySelectorAll('#gallery svg[data-size="24"]')).map(svg=>({name:svg.dataset.sample,width:svg.getBoundingClientRect().width,height:svg.getBoundingClientRect().height,viewBox:svg.getAttribute('viewBox'),hidden:svg.getAttribute('aria-hidden'),paths:svg.querySelectorAll('path,circle,rect,line,polyline,polygon,ellipse').length,box:JSON.stringify([svg.getBBox().x,svg.getBBox().y,svg.getBBox().width,svg.getBBox().height]),html:svg.outerHTML}))`)
+  // A stroke family renders differently from the fill families the app has also
+  // used: no fill, currentColor stroke, Lucide's 2px default and round joins. The
+  // ink box is the family's own optical balance, so the check asserts the
+  // distribution rather than normalizing it.
+  const gallery=async()=>evaluate(`Array.from(document.querySelectorAll('#gallery svg[data-size="24"]')).map(svg=>{const box=svg.getBBox();const view=svg.getAttribute('viewBox').split(' ').map(Number);const perUnit=24/view[2];return {name:svg.dataset.sample,width:svg.getBoundingClientRect().width,height:svg.getBoundingClientRect().height,viewBox:svg.getAttribute('viewBox'),hidden:svg.getAttribute('aria-hidden'),fill:svg.getAttribute('fill'),stroke:svg.getAttribute('stroke'),strokeWidth:svg.getAttribute('stroke-width'),linecap:svg.getAttribute('stroke-linecap'),linejoin:svg.getAttribute('stroke-linejoin'),paths:svg.querySelectorAll('path,circle,rect,line,polyline,polygon,ellipse').length,inkLongSide:Math.max(box.width,box.height)*perUnit,box:JSON.stringify([box.x,box.y,box.width,box.height]),html:svg.outerHTML}})`)
   const rendered=await gallery()
   assert.deepEqual(rendered.map(icon=>icon.name).sort(),expectedNames,'every export renders')
   for(const icon of rendered){
     assert.equal(icon.width,24,icon.name+': width')
     assert.equal(icon.height,24,icon.name+': height')
-    assert.equal(icon.viewBox,PHOSPHOR_VIEW_BOX,icon.name+': keeps the native 256 grid')
+    assert.equal(icon.viewBox,ICON_VIEW_BOX,icon.name+': draws on the family canvas')
     assert.equal(icon.hidden,'true',icon.name+': is decorative by default')
+    assert.equal(icon.fill,'none',icon.name+': is stroke artwork, not fill')
+    assert.equal(icon.stroke,'currentColor',icon.name+': follows the text colour')
+    assert.equal(icon.strokeWidth,'2',icon.name+': draws the family default weight')
+    assert.equal(icon.linecap,'round',icon.name+': keeps the family line caps')
+    assert.equal(icon.linejoin,'round',icon.name+': keeps the family line joins')
     assert(icon.paths>0,icon.name+': draws real geometry')
+    assert(icon.inkLongSide>=OPTICAL.min&&icon.inkLongSide<=OPTICAL.max,icon.name+': ink stays inside the family canvas ('+icon.inkLongSide.toFixed(1)+')')
     assert.doesNotMatch(icon.box,/NaN|null/,icon.name+': has no NaN/null geometry')
     assert.doesNotMatch(icon.html,/NaN|null/,icon.name+': has no NaN/null attribute')
   }
+  const longSides=rendered.map(icon=>icon.inkLongSide).sort((a,b)=>a-b)
+  const median=longSides[Math.floor(longSides.length/2)]
+  assert.ok(median>=OPTICAL.medianMin&&median<=OPTICAL.medianMax,'the vocabulary\'s median glyph lands on the family\'s optical scale ('+median.toFixed(2)+')')
   assert.equal(await evaluate('window.iconRef.current===document.querySelector("#props-icon")'),true,'forwards the SVG ref')
   assert.equal(await evaluate('document.querySelector("#props-icon").getAttribute("aria-hidden")'),null,'a named SVG stays accessible')
   assert.equal(await evaluate('document.querySelector("#css-icon").getBoundingClientRect().width'),16,'Tailwind size overrides the SVG size')
@@ -142,13 +180,15 @@ try {
     const paths=await evaluate(`document.querySelectorAll('[data-sample="${arrow}"][data-size="24"] path').length`)
     assert.ok(paths>=1,arrow+' renders line artwork')
   }
-  assert.equal(await evaluate('document.querySelector("#props-icon").getAttribute("stroke-width")'),null,'stroke-only props are dropped')
-  assert.equal(await evaluate('document.querySelector("#props-icon").getAttribute("fill")'),'currentColor','regular fill artwork follows currentColor')
-  assert.equal(await evaluate('document.querySelector("#props-icon").getAttribute("viewBox")'),PHOSPHOR_VIEW_BOX,'keeps the native 256 grid for every size')
+  // A stroke family makes these props mean what Lucide says: an absolute stroke
+  // is scaled to hold its pixel width at any rendered size.
+  assert.equal(await evaluate('document.querySelector("#props-icon").getAttribute("stroke-width")'),'1.5','absoluteStrokeWidth scales the stroke to size')
+  assert.equal(await evaluate('document.querySelector("#props-icon").getAttribute("fill")'),'none','the family is stroke artwork')
+  assert.equal(await evaluate('document.querySelector("#props-icon").getAttribute("viewBox")'),ICON_VIEW_BOX,'every size keeps the family canvas')
   const fileIcons=await evaluate(`Promise.all(Array.from(document.querySelectorAll('#file-types img')).map(async image=>{await image.decode();return {src:image.getAttribute('src'),width:image.naturalWidth,height:image.naturalHeight}}))`)
   assert(fileIcons.every(icon=>/^\.\/file-icons\/[^/]+\.svg$/.test(icon.src)),'file icons load Catppuccin artwork from the flat public directory')
   assert(fileIcons.every(icon=>icon.width>0&&icon.height>0),'file icon SVGs decode')
-  console.log('PASS: all '+expectedNames.length+' icons in the one Phosphor gallery, native SVG props, CSS sizing, ref and accessibility')
+  console.log('PASS: all '+expectedNames.length+' icons in the one Lucide gallery, stroke props, CSS sizing, ref and accessibility')
 
   await evaluate('document.querySelector("#checkbox button").click()')
   await pause(80)

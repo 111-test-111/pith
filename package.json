@@ -35,6 +35,7 @@
     "@xterm/addon-webgl": "^0.19.0",
     "@xterm/xterm": "^6.0.0",
     "clsx": "^2.1.1",
+    "lucide-react": "^1.48.0",
     "micromark-factory-space": "^2.0.1",
     "micromark-util-character": "^2.1.1",
     "motion": "^13.2.0",

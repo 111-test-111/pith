@@ -19,10 +19,12 @@ import {
 import { cn } from '@/lib/utils'
 
 /**
- * The mac ⇧ (U+21E7) as drawn artwork: Phosphor has no Shift glyph, and the
- * text character's baseline varies by fallback font — which is exactly the
- * off-centre look this component exists to kill. Stroked at Phosphor
- * regular's weight (≈1.3px at 14px), so it sits evenly next to them.
+ * The mac ⇧ (U+21E7) as drawn artwork: Lucide draws ⌘ and ⌥ (`Command`,
+ * `Option`) and this adapter maps ⌃ to its `ChevronUp` caret, but the pack ships
+ * no shift drawing, and the text character's baseline varies by fallback font —
+ * exactly the off-centre look this component exists to kill. Stroked at the
+ * family's own default weight (2px in the 24 box), so it sits evenly next to
+ * them.
  */
 function ShiftGlyph({ size = 14 }: { size?: string | number }): ReactElement {
   return (
@@ -32,7 +34,7 @@ function ShiftGlyph({ size = 14 }: { size?: string | number }): ReactElement {
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth={2.2}
+      strokeWidth={2}
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden="true"

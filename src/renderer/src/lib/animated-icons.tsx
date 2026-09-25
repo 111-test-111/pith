@@ -1,24 +1,24 @@
 import { forwardRef, type ReactNode } from 'react'
 import { motion, type SVGMotionProps } from 'motion/react'
 
-// Animated marks use centerline geometry because beUI draws them with a
-// pathLength transition. Phosphor's regular icons are fill paths, so each mark
-// carries a compact line-art equivalent on the app's 24px animation grid,
-// reduced from Phosphor's 256 grid to the centerlines the draw-in needs.
+// Lucide geometry, read out of the pack's own drawings. beUI animates these with
+// a pathLength transition, so they stay app-rendered — one node per tag, because
+// the completion mark is a circle plus a path — but the strokes are the family's
+// own, which is why a drawn mark and an imported glyph match.
 type Node = { tag: 'path'; d: string } | { tag: 'circle'; cx: number; cy: number; r: number }
 
 const artwork = {
-  check: [{ tag: 'path', d: 'M3.75 13.5 9 18.75 20.5 7.25' }],
-  minus: [{ tag: 'path', d: 'M3.75 12h16.5' }],
+  check: [{ tag: 'path', d: 'M20 6 9 17l-5-5' }],
+  minus: [{ tag: 'path', d: 'M5 12h14' }],
   cancel: [
-    { tag: 'path', d: 'M5.25 5.25 18.75 18.75' },
-    { tag: 'path', d: 'M18.75 5.25 5.25 18.75' }
+    { tag: 'path', d: 'M18 6 6 18' },
+    { tag: 'path', d: 'm6 6 12 12' }
   ],
   complete: [
-    { tag: 'circle', cx: 12, cy: 12, r: 9.75 },
-    { tag: 'path', d: 'm7.75 12.5 2.25 2.25 5.25-5.25' }
+    { tag: 'circle', cx: 12, cy: 12, r: 10 },
+    { tag: 'path', d: 'm16 9-5.5 5.5L8 12' }
   ],
-  spinner: [{ tag: 'path', d: 'M12 3v3m9 6h-3m-.64 5.36-2.12-2.12M12 21v-3m-5.36-.64 2.12-2.12M3 12h3m.64-5.36 2.12 2.12' }]
+  spinner: [{ tag: 'path', d: 'M21 12a9 9 0 1 1-6.219-8.56' }]
 } satisfies Record<string, Node[]>
 
 const MOTION_TAGS = {
@@ -56,6 +56,7 @@ export const AnimatedIcon = forwardRef<SVGSVGElement, Omit<SVGMotionProps<SVGSVG
     data-app-icon={icon}
     {...props}
   >
+    {/* Lucide's own default weight, so a drawn mark matches an imported glyph. */}
     <IconPaths icon={icon} {...draw} strokeWidth={props.strokeWidth ?? 2} />
     {children}
   </motion.svg>

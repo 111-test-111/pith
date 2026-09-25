@@ -5,13 +5,15 @@ import { cn } from './utils'
  * The app's status marks: one small circle per outcome — waiting, done, failed,
  * cancelled.
  *
- * A settled mark is the icon adapter's own Phosphor artwork. Phosphor's regular
- * weight draws `CheckCircle` / `XCircle` / `Prohibit` on its native 256 grid as
- * a ring with an r=96/256 centerline at a 16/256 weight — at 24px the very r=9 /
- * 1.5px circle (and, for `Prohibit`, the 45° chord) this file used to hand-draw.
- * Routing them through `lib/icons.tsx` is what keeps a status mark the same
- * family as every other glyph: Phosphor is the app's only icon family and
- * `lib/ui-style.ts` changes corners only, so 直角 and 超椭圆 draw one circle.
+ * A settled mark is the icon adapter's own Lucide artwork — `circle-check` /
+ * `circle-x` / `ban` (see `lib/icons.tsx`), each a ring of r=10 in the family's
+ * 24 box carrying the mark that names the outcome. Routing them through
+ * `lib/icons.tsx` is what keeps a status mark the same family as every other
+ * glyph: Lucide is the app's only icon family and `lib/ui-style.ts` changes
+ * corners only, so 直角 and 超椭圆 draw one circle. The family draws at 2px by
+ * default, but a settled mark is rendered at the same 1.5px the waiting arc is
+ * drawn at — a stroke family makes that a prop rather than a compromise, and it
+ * is what lets one row's waiting and settled marks read as one circle.
  *
  * Waiting stays drawn here, because it is the one status that moves: the same
  * r=9 / 1.5px circle as a 3/4 arc (`pathLength` 1 with a 0.75/0.25 dash) that
@@ -24,12 +26,15 @@ import { cn } from './utils'
  */
 export type StatusRingStatus = 'running' | 'success' | 'error' | 'cancelled'
 
-/** One Phosphor glyph per settled outcome. */
+/** One Lucide glyph per settled outcome, drawn at the waiting arc's weight. */
 const SETTLED_GLYPHS = {
   success: CircleCheck,
   error: CircleX,
   cancelled: Ban
 } as const
+
+/** The weight both owners of the status circle are drawn at. */
+const SETTLED_STROKE = 1.5
 
 /** The waiting arc's centerline radius in the 24 box the app's marks share. */
 const RING_RADIUS = 9
@@ -46,7 +51,7 @@ export function StatusRing({
 }) {
   if (status !== 'running') {
     const Glyph = SETTLED_GLYPHS[status]
-    return <Glyph data-status-ring={status} className={cn('shrink-0', className)} />
+    return <Glyph data-status-ring={status} strokeWidth={SETTLED_STROKE} className={cn('shrink-0', className)} />
   }
 
   return (

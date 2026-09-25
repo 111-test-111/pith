@@ -111,10 +111,10 @@ function KindIcon({ kind }: { kind: ToolResultKind }) {
 }
 
 // local patch (pi-app): the status mark is the task strip's shared circle
-// (`lib/status-ring`): Phosphor's own `CheckCircle` / `XCircle` / `Prohibit` for
-// a settled row, and the drawn spinning 3/4 arc while it runs. Both are the
-// marks the todo rows and the sidebar's live spin already draw, so one glance
-// reads all three panels the same way.
+// (`lib/status-ring`): the icon adapter's own `circle-check` / `circle-x` /
+// `ban` artwork for a settled row, and the drawn spinning 3/4 arc while it
+// runs. Both are the marks the todo rows and the sidebar's live spin already
+// draw, so one glance reads all three panels the same way.
 function StatusIcon({
   status,
   reduce,

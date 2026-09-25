@@ -108,7 +108,7 @@ function TodoHeaderIcon({ complete }: { complete: boolean }) {
   );
 }
 
-/** One Phosphor glyph per settled outcome — the same marks the tool rows draw. */
+/** One Lucide glyph per settled outcome — the same marks the tool rows draw. */
 const TODO_GLYPHS = {
   pending: CircleDashed,
   completed: CircleCheck,
@@ -158,17 +158,18 @@ function TodoStatusIcon({
     );
   }
 
-  // local patch (pi-app): a settled row is the icon adapter's own Phosphor
-  // artwork — `CircleDashed` while awaiting, `CheckCircle` when done, `Ban` when
-  // dropped. Phosphor's regular weight draws each on its native 256 grid as a
-  // ring with an r=96/256 centerline at a 16/256 weight, i.e. the same r=9 / 1.5
-  // circle (and, for `Ban`, the same 45° chord) this panel used to hand-draw, so
-  // a todo row and the tool row beside it read alike — `lib/status-ring.tsx`
-  // makes the same choice for the tool rows. Only the running row stays drawn:
-  // no glyph carries the live spin.
+  // local patch (pi-app): a settled row is the icon adapter's own Lucide
+  // artwork — `CircleDashed` while awaiting, `CircleCheck` when done, `Ban` when
+  // dropped. Each draws a r=10 ring in the family's 24 box, i.e. the same shared
+  // mark box (and, for `Ban`, the same 45° chord) this panel used to hand-draw,
+  // rendered at the 1.5px the waiting arc is drawn at so a todo row and the tool
+  // row beside it read alike — `lib/status-ring.tsx` makes the same choice for
+  // the tool rows. Only the running row stays drawn: no glyph carries the live
+  // spin.
   const Glyph = TODO_GLYPHS[status];
   return (
     <Glyph
+      strokeWidth={1.5}
       className={cn(
         // local patch (pi-app): the shared task panel's rows all lead with a
         // size-4 box — the same one the bash/subagent rows' `ToolResult`

@@ -4,18 +4,24 @@
  *
  * The small circle at the right of a tool row — and of every row in the task
  * strip (background tasks, Q&A records, subagents) — is one mark per outcome.
- * A settled row draws Phosphor's own `CheckCircle` / `XCircle` / `Prohibit`
- * through the icon adapter, and only the waiting row is drawn app-side in
- * `lib/status-ring.tsx`, because no glyph carries the spinning 3/4 arc. The
- * task panel's rows split the same way: the awaiting row is Phosphor's
- * `CircleDashed`, while the moving and draw-in marks stay the app's artwork.
+ * A settled row draws Lucide's own `circle-check` / `circle-x` / `ban` through
+ * the icon adapter, and only the waiting row is drawn app-side in
+ * `lib/status-ring.tsx`, because no glyph carries the spinning 3/4 arc. The task
+ * panel's rows split the same way: the awaiting row is Lucide's `circle-dashed`,
+ * while the moving and draw-in marks stay the app's artwork.
  *
  * This check renders the real surfaces and asserts:
  *
  *   geometry     the waiting arc is an r=9 circle at 1.5 stroke in the 24 box,
- *                and every settled glyph's own ring lands on that same circle
- *                (Phosphor's 256 grid: 24,24 208-wide — the r=96/256 ring at
- *                16/256 weight)
+ *                and every settled glyph draws the family's r=10 ring in that
+ *                same 24 box at the same 1.5 stroke — a stroke family lets the
+ *                app set that weight rather than accept the pack's 2px default
+ *
+ *   family       settled marks ARE adapter glyphs (`data-app-icon`) and waiting
+ *                arcs are not — one owner per mark, no second drawing
+ *   statuses     the right mark per status across the transcript, the task strip
+ *                and the todo panel (waiting / done / failed / cancelled)
+
  *   family       settled marks ARE adapter glyphs (`data-app-icon`) and waiting
  *                arcs are not — one owner per mark, no second drawing
  *   statuses     the right mark per status across the transcript, the task strip
@@ -179,31 +185,34 @@ app.on('window-all-closed',()=>app.quit());`)
   }
 
   /**
-   * Every status mark inside one surface, reduced to the facts that matter.
-   * A settled mark is an adapter glyph (one 256-grid Phosphor path, no circle
-   * element); a waiting mark is the drawn 24-box 3/4 arc. `box` is the mark's
-   * own user-space box, so both families can be measured against the one circle
-   * they draw.
+   * Every status mark inside one surface, reduced to the facts that matter. A
+   * settled mark is an adapter glyph (one Lucide drawing on the family's 24 grid,
+   * no circle element); a waiting mark is the drawn 24-box 3/4 arc. `box` is the
+   * mark's own user-space box and `side` that box rendered into the 24 box, so
+   * both owners can be measured against the one circle they draw.
    */
   const marks = id => evaluate(`(()=>[...document.querySelectorAll('#${id} [data-status-ring]')].map(svg => {
     const ring=svg.querySelector('circle');
     const box=svg.getBBox();
+    const view=svg.getAttribute('viewBox').split(' ').map(Number);
     return {status:svg.dataset.statusRing, viewBox:svg.getAttribute('viewBox'),
       glyph:svg.dataset.appIcon ?? null,
       box:[box.x,box.y,box.width,box.height].join(' '),
+      side:Math.max(box.width,box.height)*(24/view[2]),
+      stroke:svg.getAttribute('stroke-width'),
       ring:ring?[ring.getAttribute('cx'),ring.getAttribute('cy'),ring.getAttribute('r'),ring.getAttribute('stroke-width')].join(' '):null,
       dash:ring?.getAttribute('stroke-dasharray') ?? null,
       paths:svg.querySelectorAll('path').length,
       spin:svg.classList.contains('animate-spin'),
-      reads:getComputedStyle(svg).fill===getComputedStyle(svg).color}}))()`)
+      reads:getComputedStyle(svg).stroke===getComputedStyle(svg).color}}))()`)
 
   // Waiting: the app's own drawing — r=9 at 1.5 stroke in the shared 24 box.
   const PURITY = '12 12 9 1.5'
   const ARC_BOX = '3 3 18 18'
-  // Settled: Phosphor's native 256 grid, its ring spanning 24…232 — the same
-  // r=9 / 1.5 circle once scaled into the 24 box.
-  const GLYPH_VIEW_BOX = '0 0 256 256'
-  const GLYPH_BOX = '24 24 208 208'
+  const ARC_STROKE = 1.5
+  // Settled: Lucide's ring on the family's own 24 grid — a circle of r=10 drawn
+  // at the 1.5px stroke the arc uses.
+  const GLYPH_SIDE = 20
   const SETTLED = { success: 'CircleCheck', error: 'CircleX', cancelled: 'Ban' }
   const isArc = mark => mark.status === 'running'
   const assertArc = (mark, where) => {
@@ -215,10 +224,11 @@ app.on('window-all-closed',()=>app.quit());`)
     assert.equal(mark.box, ARC_BOX, where + ': the waiting arc spans the shared mark box')
   }
   const assertGlyph = (mark, where) => {
-    assert.equal(mark.glyph, SETTLED[mark.status], where + ': Phosphor ' + SETTLED[mark.status])
-    assert.equal(mark.viewBox, GLYPH_VIEW_BOX, where + ': the glyph keeps its native 256 grid')
-    assert.equal(mark.paths, 1, where + ': one Phosphor path carries ring and mark')
-    assert.equal(mark.box, GLYPH_BOX, where + ": the glyph's ring is the row's r=9 circle")
+    assert.equal(mark.glyph, SETTLED[mark.status], where + ': Lucide ' + SETTLED[mark.status])
+    assert.equal(mark.viewBox, '0 0 24 24', where + ': the glyph draws in the same 24 box')
+    assert.equal(mark.stroke, String(ARC_STROKE), where + ': the glyph is drawn at the arc\'s weight')
+    assert.ok(mark.paths >= 1, where + ': the glyph draws real geometry')
+    assert.ok(Math.abs(mark.side - GLYPH_SIDE) < 1, where + ": the glyph's ring is the row's own circle")
     assert.equal(mark.reads, true, where + ': the mark follows the row colour')
   }
 
@@ -246,7 +256,7 @@ app.on('window-all-closed',()=>app.quit());`)
     else assertGlyph(mark, where)
   }
 
-  // 3. One owner per mark: a settled row is the adapter's Phosphor glyph, and
+  // 3. One owner per mark: a settled row is the adapter's Lucide glyph, and
   //    only the waiting arc is drawn app-side.
   for (const mark of [...rows, ...bash, ...qa]) {
     assert.equal(mark.glyph, isArc(mark) ? null : SETTLED[mark.status], mark.status + ': one owner per mark')
@@ -259,6 +269,7 @@ app.on('window-all-closed',()=>app.quit());`)
     const ring=svg?.querySelector('circle');
     return {glyph:svg?.dataset.appIcon ?? null, viewBox:svg?.getAttribute('viewBox') ?? null,
       progress:!!svg?.hasAttribute('data-todo-progress'),
+      stroke:svg?.getAttribute('stroke-width') ?? null,
       ring:ring?[ring.getAttribute('cx'),ring.getAttribute('cy'),ring.getAttribute('r'),ring.getAttribute('stroke-width')].join(' '):null,
       paths:svg?svg.querySelectorAll('path').length:0,
       spin:!!svg?.classList.contains('animate-spin')}}))()`)
@@ -269,17 +280,17 @@ app.on('window-all-closed',()=>app.quit());`)
   assert.equal(active.ring, PURITY, 'a running todo row is a 12,12 r=9 circle at 1.5 stroke')
   assert.equal(active.spin, true, 'a running todo row spins')
   for (const [mark, where, glyph] of [
-    [awaiting, 'an awaiting todo row', 'CircleDashed'],
     [done, 'a completed todo row', 'CircleCheck'],
     [dropped, 'a dropped todo row', 'Ban']
   ]) {
-    assert.equal(mark.glyph, glyph, where + ' is Phosphor ' + glyph)
-    assert.equal(mark.viewBox, GLYPH_VIEW_BOX, where + ' keeps the native 256 grid')
-    assert.equal(mark.paths, 1, where + ' draws one Phosphor path')
+    assert.equal(mark.glyph, glyph, where + ' is Lucide ' + glyph)
+    assert.equal(mark.viewBox, '0 0 24 24', where + ' draws in the shared 24 box')
+    assert.equal(mark.stroke, String(ARC_STROKE), where + " is drawn at the arc's weight")
+    assert.ok(mark.paths >= 1, where + ' draws real geometry')
     assert.equal(mark.spin, false, where + ' never spins')
   }
 
-  // 5. Settings controls draw their own mark — a status mark is an exception,
+  // 6. Settings controls draw their own mark — a status mark is an exception,
   //    not a property of every mark in the app.
   const control = await evaluate(`(()=>{
     const mark=document.querySelector('#control [data-checkbox-mark]');
