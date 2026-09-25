@@ -13,6 +13,7 @@ import {
   ArrowUpRight as ArrowUpRightGlyph,
   Ban as BanGlyph,
   Bell as BellGlyph,
+  Blocks as BlocksGlyph,
   BookDown as BookDownGlyph,
   Bookmark as BookmarkGlyph,
   BookOpen as BookOpenGlyph,
@@ -74,7 +75,6 @@ import {
   GitFork as GitForkGlyph,
   GitPullRequest as GitPullRequestGlyph,
   Globe2 as Globe2Glyph,
-  GraduationCap as GraduationCapGlyph,
   HatGlasses as HatGlassesGlyph,
   History as HistoryGlyph,
   Image as ImageGlyph,
@@ -298,7 +298,7 @@ const GLYPHS = {
   GitPullRequest: GitPullRequestGlyph,
   Globe: EarthGlyph,
   Globe2: Globe2Glyph,
-  GraduationCap: GraduationCapGlyph,
+  Skills: BlocksGlyph,
   History: HistoryGlyph,
   Image: ImageGlyph,
   ImageIcon: ImageIconGlyph,
@@ -493,7 +493,7 @@ export const GitFork = /* @__PURE__ */ createIcon('GitFork', GLYPHS.GitFork)
 export const GitPullRequest = /* @__PURE__ */ createIcon('GitPullRequest', GLYPHS.GitPullRequest)
 export const Globe = /* @__PURE__ */ createIcon('Globe', GLYPHS.Globe)
 export const Globe2 = /* @__PURE__ */ createIcon('Globe2', GLYPHS.Globe2)
-export const GraduationCap = /* @__PURE__ */ createIcon('GraduationCap', GLYPHS.GraduationCap)
+export const Skills = /* @__PURE__ */ createIcon('Skills', GLYPHS.Skills)
 export const History = /* @__PURE__ */ createIcon('History', GLYPHS.History)
 export const Image = /* @__PURE__ */ createIcon('Image', GLYPHS.Image)
 export const ImageIcon = /* @__PURE__ */ createIcon('ImageIcon', GLYPHS.ImageIcon)

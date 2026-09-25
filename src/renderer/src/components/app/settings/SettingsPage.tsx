@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
-import { ArrowLeft, Bell, Chart, Flask, Globe, GraduationCap, Keyboard, KeyRound, Palette, Puzzle, Settings2, Subagent, TextAlignCenter, Wrench } from '@/lib/icons'
+import { ArrowLeft, Bell, Chart, Flask, Globe, Keyboard, KeyRound, Palette, Puzzle, Settings2, Skills, Subagent, TextAlignCenter, Wrench } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/motion/tabs'
 import { EASE_OUT } from '@/lib/ease'
@@ -118,7 +118,7 @@ const SECTIONS: {
     id: 'skills',
     labelKey: 'settings.skills',
     descriptionKey: 'settings.skillsDesc',
-    icon: <GraduationCap className="size-4" />,
+    icon: <Skills className="size-4" />,
     render: () => <SkillsSection />
   },
   {
