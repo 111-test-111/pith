@@ -86,6 +86,22 @@ const liveBeui = liveRoster.find((server) => server.name === 'beui')
 assert.equal(liveBeui.status, 'connected', 'live status wins')
 assert.equal(liveBeui.toolCount, 99, 'live tool count wins')
 
+// An idle server (lazy connect, first tool call) must not lose its cached
+// metadata to a zero-tool live report: status stays `cached` while the cache
+// is valid, and the cached tool count survives.
+const idleRoster = mcp.buildMcpRoster({
+  cwd: null, agentDir, adapter, modules,
+  live: new Map([['beui', { status: 'not-connected', toolCount: 0, disabled: false }]])
+})
+const idleBeui = idleRoster.find((server) => server.name === 'beui')
+assert.equal(idleBeui.status, 'cached', 'a live not-connected report keeps the cached status while the cache is valid')
+assert.equal(idleBeui.toolCount, beui.toolCount, 'the cached tool count survives a zero-tool live report')
+// context7's real cache is expired right now: it must stay not-connected but
+// still report its cached tool count.
+const idleContext7 = idleRoster.find((server) => server.name === 'context7')
+assert.equal(idleContext7.status, 'not-connected', 'an expired cache is honestly not-connected')
+assert.equal(idleContext7.toolCount, 2, 'the stale cache still reports its tool count')
+
 const detail = mcp.mcpServerDetail('beui', agentDir, modules)
 assert.ok(detail.tools.length > 0, 'server detail lists cached tools')
 assert.ok(detail.tools.every((tool) => typeof tool.name === 'string'), 'tool rows carry names')

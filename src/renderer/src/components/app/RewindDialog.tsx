@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type RefObject } from 'react'
-import { AlertTriangle, Check, ChevronRight, Rewind } from '@/lib/icons'
+import { AlertTriangle, ArrowLeftFromLine, Check, ChevronRight } from '@/lib/icons'
 import { CenterMorphModal, CenterMorphModalContent } from '@/components/motion/center-morph-modal'
 import { Button } from '@/components/motion/button'
 import { AgentDisclosure } from '@/components/agents/agent-disclosure'
@@ -186,7 +186,7 @@ function DiffRow({ path, preview, change, neighbors, collapsed, layoutKey, onTog
     <ReviewFileHeader pathTooltip={false} displayPath={change.path || t('rewind.indexMetadata')} collapsed={collapsed} onToggle={onToggle} contentId={contentId} added={stats?.added} removed={stats?.removed} showZeroStats={!!stats}
       statsLabel={change.binary || stats?.binary ? t('rewind.binaryLabel') : statsFailed ? t('rewind.statsUnavailable') : !stats ? t('rewind.statsLoading') : undefined}
       detail={<span className="shrink-0 text-xs text-muted-foreground">{change.stage ? t('rewind.indexStage', { stage: change.stage }) : t(`rewind.area.${change.area}`)}</span>}
-      action={onRestore ? <Button data-rewind-file-restore={change.path} variant="ghost" size="icon" className="size-6 shrink-0" disabled={restoreDisabled} aria-label={t('rewind.restoreFile', { path: change.path })} onClick={onRestore}><Rewind aria-hidden="true" className="size-3.5" /></Button> : null} />
+      action={onRestore ? <Button data-rewind-file-restore={change.path} variant="ghost" size="icon" className="size-6 shrink-0" disabled={restoreDisabled} aria-label={t('rewind.restoreFile', { path: change.path })} onClick={onRestore}><ArrowLeftFromLine aria-hidden="true" className="size-3.5" /></Button> : null} />
     {collapsed ? null : !visible ? <div id={contentId} data-rewind-placeholder aria-hidden="true" style={{ height: bodyHeight.current }} /> : <div id={contentId} ref={bodyRef}>
       {change.beforeMode !== change.afterMode || change.binary || (result && !result.patch) ? <p className="px-3 py-2 text-xs text-muted-foreground">{t(`rewind.change.${change.kind}`)} · {t('rewind.fileMetadata', { bytes: change.bytes, before: change.beforeMode?.toString(8) ?? '—', after: change.afterMode?.toString(8) ?? '—' })}</p> : null}
       {change.binary ? <p className="px-3 pb-2 text-xs text-muted-foreground">{t('rewind.binary')}</p> : error ? <ErrorMessage error={error} /> : result ? <>
@@ -373,7 +373,7 @@ export function RewindDialog({ sessionPath, messageTimestamp, messageEntryId, in
       <CenterMorphModalContent ariaLabel={t('rewind.title')} ariaDescribedBy={descriptionId} closeButtonLabel={t('rewind.close')} showCloseButton={!executing} dismissible={!executing} suspended={confirming} className="max-w-5xl">
       <div data-rewind-panel className="flex h-[min(760px,calc(100dvh-96px))] min-h-0 flex-col">
         <div className="shrink-0 border-b border-border px-5 py-4 pr-14">
-          <h2 className="flex items-center gap-2 text-base font-semibold"><Rewind className="size-4" />{t('rewind.title')}</h2>
+          <h2 className="flex items-center gap-2 text-base font-semibold"><ArrowLeftFromLine className="size-4" />{t('rewind.title')}</h2>
           <p id={descriptionId} className="mt-1.5 text-xs leading-5 text-muted-foreground">{t('rewind.description')}</p>
         </div>
         <div className="flex min-h-0 flex-1 max-sm:flex-col">

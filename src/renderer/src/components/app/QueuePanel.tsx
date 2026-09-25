@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'motion/react'
-import { Clock, FastForward, Image as ImageIcon, LinkSimple, Rewind, X, Zap } from '@/lib/icons'
+import { ArrowBigRightDash, ArrowLeftFromLine, Clock, Image as ImageIcon, LinkSimple, X, Zap } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
 import { Tooltip } from '@/components/motion/tooltip'
 import { EASE_OUT } from '@/lib/ease'
@@ -66,7 +66,7 @@ export function QueuePanel({
                 aria-label={t('composer.recallQueue')}
                 onClick={onRecall}
               >
-                <Rewind className="size-3.5" />
+                <ArrowLeftFromLine className="size-3.5" />
               </Button>
             </Tooltip>
           </div>
@@ -126,7 +126,7 @@ export function QueuePanel({
                             aria-label={t('composer.steerNow')}
                             onClick={() => onPromote(row.index)}
                           >
-                            <FastForward className="size-3.5" />
+                            <ArrowBigRightDash className="size-3.5" />
                           </Button>
                         </Tooltip>
                       ) : null}

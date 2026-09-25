@@ -330,8 +330,24 @@ export function buildMcpRoster(options: McpRosterOptions): McpServerDTO[] {
         cacheValid = true
       }
       const liveEntry = live?.get(name)
-      const status: McpRuntimeStatus | null =
-        liveEntry?.status ?? (disabled ? 'disabled' : cacheValid ? 'cached' : cacheEntry ? 'cached' : 'not-connected')
+      // The adapter lazy-connects on first tool call, so an idle server with a
+      // usable cache reads as `cached` (its metadata stays browseable) — a live
+      // 'not-connected' report must not turn that into a zero-tool void. A
+      // stale cache (expired or config-changed) is genuinely not-connected.
+      const usableCache = modules ? cacheValid : cacheEntry !== undefined
+      const status: McpRuntimeStatus | null = disabled
+        ? 'disabled'
+        : liveEntry && liveEntry.status !== 'not-connected'
+          ? liveEntry.status
+          : usableCache
+            ? 'cached'
+            : (liveEntry?.status ?? 'not-connected')
+      // The live count only wins while connected; otherwise the cache's tool
+      // metadata is what the tools viewer shows, so the count must match it.
+      const toolCount =
+        liveEntry && liveEntry.status === 'connected'
+          ? liveEntry.toolCount
+          : (cacheEntry?.tools.length ?? liveEntry?.toolCount ?? null)
       return {
         name,
         transport: inferTransport(entry),
@@ -341,7 +357,7 @@ export function buildMcpRoster(options: McpRosterOptions): McpServerDTO[] {
         sourcePath: prov?.path,
         editable,
         status,
-        toolCount: liveEntry?.toolCount ?? cacheEntry?.tools.length ?? null,
+        toolCount,
         cachedAt: cacheEntry?.cachedAt ?? null,
         entry: entry as Record<string, unknown>
       }

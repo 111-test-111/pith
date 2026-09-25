@@ -3,10 +3,12 @@ import { type LucideIcon, type LucideProps } from 'lucide-react'
 import {
   AlertCircle as AlertCircleGlyph,
   AlertTriangle as AlertTriangleGlyph,
+  ArrowBigRightDash as ArrowBigRightDashGlyph,
   ArrowDown as ArrowDownGlyph,
   ArrowDownUp as ArrowDownUpGlyph,
   ArrowDownWideNarrow as ArrowDownWideNarrowGlyph,
   ArrowLeft as ArrowLeftGlyph,
+  ArrowLeftFromLine as ArrowLeftFromLineGlyph,
   ArrowRight as ArrowRightGlyph,
   ArrowUp as ArrowUpGlyph,
   ArrowUpNarrowWide as ArrowUpNarrowWideGlyph,
@@ -56,7 +58,6 @@ import {
   ExternalLink as ExternalLinkGlyph,
   Eye as EyeGlyph,
   EyeOff as EyeOffGlyph,
-  FastForward as FastForwardGlyph,
   FileCode2 as FileCode2Glyph,
   FileDiff as FileDiffGlyph,
   FilePen as FilePenGlyph,
@@ -127,7 +128,6 @@ import {
   Printer as PrinterGlyph,
   Puzzle as PuzzleGlyph,
   RefreshCw as RefreshCwGlyph,
-  Rewind as RewindGlyph,
   RotateCcw as RotateCcwGlyph,
   ScanSearch as ScanSearchGlyph,
   ScanText as ScanTextGlyph,
@@ -220,10 +220,12 @@ export type IconComponent = ForwardRefExoticComponent<IconProps & RefAttributes<
 const GLYPHS = {
   AlertCircle: AlertCircleGlyph,
   AlertTriangle: AlertTriangleGlyph,
+  ArrowBigRightDash: ArrowBigRightDashGlyph,
   ArrowDown: ArrowDownGlyph,
   ArrowDownUp: ArrowDownUpGlyph,
   ArrowDownWideNarrow: ArrowDownWideNarrowGlyph,
   ArrowLeft: ArrowLeftGlyph,
+  ArrowLeftFromLine: ArrowLeftFromLineGlyph,
   ArrowRight: ArrowRightGlyph,
   ArrowUp: ArrowUpGlyph,
   ArrowUpNarrowWide: ArrowUpNarrowWideGlyph,
@@ -277,7 +279,6 @@ const GLYPHS = {
   ExternalLink: ExternalLinkGlyph,
   Eye: EyeGlyph,
   EyeOff: EyeOffGlyph,
-  FastForward: FastForwardGlyph,
   FileCode2: FileCode2Glyph,
   FileDiff: FileDiffGlyph,
   FilePen: FilePenGlyph,
@@ -347,7 +348,6 @@ const GLYPHS = {
   Plus: PlusGlyph,
   Puzzle: PuzzleGlyph,
   RefreshCw: RefreshCwGlyph,
-  Rewind: RewindGlyph,
   RotateCcw: RotateCcwGlyph,
   ScanSearch: ScanSearchGlyph,
   ScanText: ScanTextGlyph,
@@ -415,10 +415,12 @@ function createIcon(name: string, glyph: LucideIcon): IconComponent {
 // Keep semantic component names at call sites; map their artwork only here.
 export const AlertCircle = /* @__PURE__ */ createIcon('AlertCircle', GLYPHS.AlertCircle)
 export const AlertTriangle = /* @__PURE__ */ createIcon('AlertTriangle', GLYPHS.AlertTriangle)
+export const ArrowBigRightDash = /* @__PURE__ */ createIcon('ArrowBigRightDash', GLYPHS.ArrowBigRightDash)
 export const ArrowDown = /* @__PURE__ */ createIcon('ArrowDown', GLYPHS.ArrowDown)
 export const ArrowDownUp = /* @__PURE__ */ createIcon('ArrowDownUp', GLYPHS.ArrowDownUp)
 export const ArrowDownWideNarrow = /* @__PURE__ */ createIcon('ArrowDownWideNarrow', GLYPHS.ArrowDownWideNarrow)
 export const ArrowLeft = /* @__PURE__ */ createIcon('ArrowLeft', GLYPHS.ArrowLeft)
+export const ArrowLeftFromLine = /* @__PURE__ */ createIcon('ArrowLeftFromLine', GLYPHS.ArrowLeftFromLine)
 export const ArrowRight = /* @__PURE__ */ createIcon('ArrowRight', GLYPHS.ArrowRight)
 export const ArrowUp = /* @__PURE__ */ createIcon('ArrowUp', GLYPHS.ArrowUp)
 export const ArrowUpNarrowWide = /* @__PURE__ */ createIcon('ArrowUpNarrowWide', GLYPHS.ArrowUpNarrowWide)
@@ -472,7 +474,6 @@ export const Download = /* @__PURE__ */ createIcon('Download', GLYPHS.Download)
 export const ExternalLink = /* @__PURE__ */ createIcon('ExternalLink', GLYPHS.ExternalLink)
 export const Eye = /* @__PURE__ */ createIcon('Eye', GLYPHS.Eye)
 export const EyeOff = /* @__PURE__ */ createIcon('EyeOff', GLYPHS.EyeOff)
-export const FastForward = /* @__PURE__ */ createIcon('FastForward', GLYPHS.FastForward)
 export const FileCode2 = /* @__PURE__ */ createIcon('FileCode2', GLYPHS.FileCode2)
 export const FileDiff = /* @__PURE__ */ createIcon('FileDiff', GLYPHS.FileDiff)
 export const FilePen = /* @__PURE__ */ createIcon('FilePen', GLYPHS.FilePen)
@@ -542,7 +543,6 @@ export const PlugZap = /* @__PURE__ */ createIcon('PlugZap', GLYPHS.PlugZap)
 export const Plus = /* @__PURE__ */ createIcon('Plus', GLYPHS.Plus)
 export const Puzzle = /* @__PURE__ */ createIcon('Puzzle', GLYPHS.Puzzle)
 export const RefreshCw = /* @__PURE__ */ createIcon('RefreshCw', GLYPHS.RefreshCw)
-export const Rewind = /* @__PURE__ */ createIcon('Rewind', GLYPHS.Rewind)
 export const RotateCcw = /* @__PURE__ */ createIcon('RotateCcw', GLYPHS.RotateCcw)
 export const ScanSearch = /* @__PURE__ */ createIcon('ScanSearch', GLYPHS.ScanSearch)
 export const ScanText = /* @__PURE__ */ createIcon('ScanText', GLYPHS.ScanText)

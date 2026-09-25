@@ -353,7 +353,7 @@ app.on('window-all-closed',()=>app.quit());`
   assert.equal(await evaluate(`!!document.querySelector('[role=dialog]')`), false, 'the dialog closes on save')
 
   // 6. Add: validation first (no IPC), then a valid stdio server saves by scope.
-  await evaluate(`[...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Add global server').click()`)
+  await evaluate(`[...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Add server').click()`)
   await pause(250)
   await evaluate(`[...document.querySelectorAll('[role=dialog] button')].find((b) => b.textContent.trim() === 'Save').click()`)
   await pause(200)
@@ -404,7 +404,7 @@ app.on('window-all-closed',()=>app.quit());`
   await pause(300)
   const zhRow = await evaluate(`document.querySelector(${JSON.stringify(rowSelector('beui'))})?.textContent ?? ''`)
   assert.ok(zhRow.includes('全局'), 'zh-CN scope badge renders')
-  assert.ok(await evaluate(`[...document.querySelectorAll('button')].some((b) => b.textContent.trim() === '添加全局服务器')`), 'zh-CN add button renders')
+  assert.ok(await evaluate(`[...document.querySelectorAll('button')].some((b) => b.textContent.trim() === '添加服务器')`), 'zh-CN add button renders')
   await screenshot('zh-CN')
 
   assert.deepEqual(exceptions, [], 'no renderer exceptions')

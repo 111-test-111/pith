@@ -14,7 +14,7 @@ import { Button } from '@/components/motion/button'
 import { Checkbox } from '@/components/motion/checkbox'
 import { Input } from '@/components/motion/input'
 import { MorphingModal } from '@/components/motion/morphing-modal'
-import { Tabs, TabsList, TabsTrigger } from '@/components/motion/tabs'
+import { RadioGroup, RadioGroupItem } from '@/components/motion/radio'
 import { Tooltip } from '@/components/motion/tooltip'
 import { useI18n } from '@/i18n'
 import type { MessageKey } from '@/i18n/locales/en'
@@ -44,7 +44,6 @@ import {
 import { installExtension, useToolCatalog } from '@/lib/extensions-catalog'
 import type {
   McpConfigFileDTO,
-  McpConfigScope,
   McpRuntimeStatus,
   McpServerDTO,
   McpServerDetailDTO
@@ -73,9 +72,8 @@ interface JsonDraft {
 
 interface EditorState {
   form: McpServerForm
-  /** Existing server: its defining file. New server: absent — scope decides. */
+  /** Existing server: its defining file. New server: absent (lands global). */
   targetPath?: string
-  scope: McpConfigScope
 }
 
 const STATUS_META: Record<McpRuntimeStatus, { dot: string; labelKey: MessageKey }> = {
@@ -127,19 +125,15 @@ export function McpSection() {
 
   const existingNames = data.servers.map((server) => server.name)
 
-  const startNew = (scope: McpConfigScope) => {
+  const startNew = () => {
     setEditorError(null)
-    setEditor({ form: createEmptyMcpServerForm(), scope })
+    setEditor({ form: createEmptyMcpServerForm() })
   }
 
   const startEdit = (server: McpServerDTO) => {
     if (!server.editable || !server.sourcePath) return
     setEditorError(null)
-    setEditor({
-      form: serverEntryToForm(server.name, server.entry),
-      targetPath: server.sourcePath,
-      scope: server.scope === 'project' ? 'project' : 'global'
-    })
+    setEditor({ form: serverEntryToForm(server.name, server.entry), targetPath: server.sourcePath })
   }
 
   const saveEditor = async () => {
@@ -151,7 +145,7 @@ export function McpSection() {
     }
     const ok = await upsertMcpServer({
       targetPath: editor.targetPath,
-      scope: editor.targetPath ? undefined : editor.scope,
+      scope: editor.targetPath ? undefined : 'global',
       originalName: editor.form.originalName ?? null,
       name: editor.form.name.trim(),
       entry: formToServerEntry(editor.form)
@@ -226,43 +220,23 @@ export function McpSection() {
           ))
         )}
       </SettingsGroup>
-      <div className="flex justify-center gap-2">
-        <Button variant="outline" size="sm" onClick={() => startNew('global')}>
+      <div className="flex justify-center">
+        <Button variant="outline" size="sm" onClick={startNew}>
           <Plus className="size-3.5" />
-          {t('mcp.addGlobal')}
+          {t('mcp.add')}
         </Button>
-        {data.projectCwd ? (
-          <Button variant="outline" size="sm" onClick={() => startNew('project')}>
-            <Plus className="size-3.5" />
-            {t('mcp.addProject')}
-          </Button>
-        ) : null}
       </div>
 
-      <JsonConfigCard scope="global" file={data.global} />
-      {data.project ? (
-        <JsonConfigCard scope="project" file={data.project} />
-      ) : (
-        <section>
-          <div className="px-1 pb-2">
-            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              {t('mcp.projectConfigTitle')}
-            </p>
-            <p className="mt-1 text-xs text-muted-foreground/70">{t('mcp.projectNeedsCwd')}</p>
-          </div>
-        </section>
-      )}
+      <JsonConfigCard file={data.global} />
 
       <ServerEditorDialog
         editor={editor}
         error={editorError ?? actionError}
         saving={busy !== null && busy.startsWith('upsert:')}
-        allowScope={!editor?.targetPath && data.projectCwd !== null}
         onChange={(form) => {
           setEditorError(null)
           setEditor((prev) => (prev ? { ...prev, form } : prev))
         }}
-        onScopeChange={(scope) => setEditor((prev) => (prev ? { ...prev, scope } : prev))}
         onClose={() => setEditor(null)}
         onSave={() => void saveEditor()}
       />
@@ -431,7 +405,7 @@ function ServerRow({
 
 // ---- raw JSON editor for one config file ----
 
-function JsonConfigCard({ scope, file }: { scope: McpConfigScope; file: McpConfigFileDTO }) {
+function JsonConfigCard({ file }: { file: McpConfigFileDTO }) {
   const { t } = useI18n()
   const [draft, setDraft] = useState<JsonDraft>({
     text: file.content,
@@ -446,11 +420,11 @@ function JsonConfigCard({ scope, file }: { scope: McpConfigScope; file: McpConfi
     const current = draftRef.current
     if (current.text === current.savedText) return
     if (!parseMcpConfigJson(current.text).ok) return
-    const ok = await writeMcpConfig(scope, current.text)
+    const ok = await writeMcpConfig('global', current.text)
     if (ok && draftRef.current.text === current.text) {
       setDraft((prev) => ({ ...prev, savedText: current.text }))
     }
-  }, [scope])
+  }, [])
 
   const saveRef = useRef(save)
   saveRef.current = save
@@ -473,8 +447,8 @@ function JsonConfigCard({ scope, file }: { scope: McpConfigScope; file: McpConfi
     }
   }, [])
 
-  const title = scope === 'global' ? t('mcp.globalConfigTitle') : t('mcp.projectConfigTitle')
-  const hint = scope === 'global' ? t('mcp.globalConfigHint') : t('mcp.projectConfigHint')
+  const title = t('mcp.globalConfigTitle')
+  const hint = t('mcp.globalConfigHint')
 
   return (
     <section>
@@ -493,10 +467,9 @@ function JsonConfigCard({ scope, file }: { scope: McpConfigScope; file: McpConfi
         </div>
         <p className="mt-1 text-xs text-muted-foreground/70">{hint}</p>
       </div>
-      <div className="rounded-xl border border-border/70 bg-card p-3">
-        <Input
-          multiline
-          rows={10}
+      <Input
+        multiline
+        rows={10}
           value={draft.text}
           aria-label={title}
           placeholder='{\n  "mcpServers": {}\n}'
@@ -522,7 +495,6 @@ function JsonConfigCard({ scope, file }: { scope: McpConfigScope; file: McpConfi
             }
           }}
         />
-      </div>
     </section>
   )
 }
@@ -533,18 +505,14 @@ function ServerEditorDialog({
   editor,
   error,
   saving,
-  allowScope,
   onChange,
-  onScopeChange,
   onClose,
   onSave
 }: {
   editor: EditorState | null
   error: string | null
   saving: boolean
-  allowScope: boolean
   onChange: (form: McpServerForm) => void
-  onScopeChange: (scope: McpConfigScope) => void
   onClose: () => void
   onSave: () => void
 }) {
@@ -562,19 +530,6 @@ function ServerEditorDialog({
             {form.originalName ? t('mcp.editTitle') : t('mcp.addTitle')}
           </h2>
           <div className="mt-3 min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain p-1">
-            {!form.originalName && allowScope ? (
-              <Tabs value={editor.scope} onValueChange={(scope) => onScopeChange(scope as McpConfigScope)} variant="pill">
-                <TabsList className="flex w-full gap-1 rounded-control p-0.5">
-                  <TabsTrigger value="global" className="flex-1 rounded-control px-3 py-1.5 text-xs">
-                    {t('mcp.scope.global')}
-                  </TabsTrigger>
-                  <TabsTrigger value="project" className="flex-1 rounded-control px-3 py-1.5 text-xs">
-                    {t('mcp.scope.project')}
-                  </TabsTrigger>
-                </TabsList>
-              </Tabs>
-            ) : null}
-
             <Input
               label={t('mcp.name')}
               value={form.name}
@@ -586,23 +541,16 @@ function ServerEditorDialog({
 
             <div>
               <p className="mb-1.5 text-xs font-medium text-muted-foreground">{t('mcp.type')}</p>
-              <Tabs
+              <RadioGroup
                 value={form.transport}
                 onValueChange={(transport) => set({ transport: transport as McpTransportKind })}
-                variant="pill"
+                orientation="horizontal"
+                className="w-full"
               >
-                <TabsList className="flex w-full gap-1 rounded-control p-0.5">
-                  <TabsTrigger value="stdio" className="flex-1 rounded-control px-3 py-1.5 text-xs">
-                    {t('mcp.type.stdio')}
-                  </TabsTrigger>
-                  <TabsTrigger value="http" className="flex-1 rounded-control px-3 py-1.5 text-xs">
-                    {t('mcp.type.http')}
-                  </TabsTrigger>
-                  <TabsTrigger value="socket" className="flex-1 rounded-control px-3 py-1.5 text-xs">
-                    {t('mcp.type.socket')}
-                  </TabsTrigger>
-                </TabsList>
-              </Tabs>
+                <RadioGroupItem value="stdio" label={t('mcp.type.stdio')} className="flex-1" />
+                <RadioGroupItem value="http" label={t('mcp.type.http')} className="flex-1" />
+                <RadioGroupItem value="socket" label={t('mcp.type.socket')} className="flex-1" />
+              </RadioGroup>
             </div>
 
             {form.transport === 'stdio' ? (
@@ -659,19 +607,16 @@ function ServerEditorDialog({
                 />
                 <div>
                   <p className="mb-1.5 text-xs font-medium text-muted-foreground">{t('mcp.auth')}</p>
-                  <Tabs value={form.auth} onValueChange={(auth) => set({ auth: auth as McpAuthKind })} variant="pill">
-                    <TabsList className="flex w-full gap-1 rounded-control p-0.5">
-                      <TabsTrigger value="none" className="flex-1 rounded-control px-3 py-1.5 text-xs">
-                        {t('mcp.auth.none')}
-                      </TabsTrigger>
-                      <TabsTrigger value="bearer" className="flex-1 rounded-control px-3 py-1.5 text-xs">
-                        {t('mcp.auth.bearer')}
-                      </TabsTrigger>
-                      <TabsTrigger value="oauth" className="flex-1 rounded-control px-3 py-1.5 text-xs">
-                        {t('mcp.auth.oauth')}
-                      </TabsTrigger>
-                    </TabsList>
-                  </Tabs>
+                  <RadioGroup
+                    value={form.auth}
+                    onValueChange={(auth) => set({ auth: auth as McpAuthKind })}
+                    orientation="horizontal"
+                    className="w-full"
+                  >
+                    <RadioGroupItem value="none" label={t('mcp.auth.none')} className="flex-1" />
+                    <RadioGroupItem value="bearer" label={t('mcp.auth.bearer')} className="flex-1" />
+                    <RadioGroupItem value="oauth" label={t('mcp.auth.oauth')} className="flex-1" />
+                  </RadioGroup>
                 </div>
                 {form.auth === 'bearer' ? (
                   <Input

@@ -12,7 +12,7 @@ import {
   useState,
   type ReactNode
 } from 'react'
-import { ArrowRight, Brain, ChevronDown, CircleX, FileText, GitFork, Pencil, RefreshCw, Rewind } from '@/lib/icons'
+import { ArrowLeftFromLine, ArrowRight, Brain, ChevronDown, CircleX, FileText, GitFork, Pencil, RefreshCw } from '@/lib/icons'
 import { AgentActivity } from '@/components/agents/agent-activity'
 import { AgentDisclosure } from '@/components/agents/agent-disclosure'
 import {
@@ -240,7 +240,7 @@ export const UserItem = memo(function UserItem({
         {showActions ? (
           <MessageActions alwaysVisible={actionsAlwaysVisible}>
             {text ? <CopyAction text={text} /> : null}
-            {onRewind ? <MessageAction label={t('rewind.title')} onClick={() => onRewind(message)}><Rewind className="size-3.5" /></MessageAction> : null}
+            {onRewind ? <MessageAction label={t('rewind.title')} onClick={() => onRewind(message)}><ArrowLeftFromLine className="size-3.5" /></MessageAction> : null}
             {onEdit ? (
               <MessageAction label={t('chat.messageResend')} onClick={() => onEdit(message)}>
                 <Pencil className="size-3.5" />

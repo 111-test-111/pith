@@ -1627,14 +1627,13 @@ export interface McpServerDTO {
   entry: Record<string, unknown>
 }
 
-/** Everything Settings → MCP renders: files for editing plus the merged server roster. */
+/** Everything Settings → MCP renders: the editable global file plus the merged server roster. */
 export interface McpStateDTO {
   adapterInstalled: boolean
   adapterVersion?: string
-  /** Active workspace cwd; the project scope stays empty without one. */
+  /** Active workspace cwd; project-layer servers in the roster key off it. */
   projectCwd: string | null
   global: McpConfigFileDTO
-  project: McpConfigFileDTO | null
   servers: McpServerDTO[]
 }
 

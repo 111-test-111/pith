@@ -130,7 +130,7 @@ import { BROWSER_OPEN_LINK_EVENT } from '@/lib/browser/open-link'
 import { HUMAN_OWNER } from '../../../../shared/browser'
 import { FileNavigationProvider, type FileTarget } from '@/lib/file-navigation'
 import { AuthBridge } from './AuthBridge'
-import { AlertTriangle, Rewind } from '@/lib/icons'
+import { AlertTriangle, ArrowLeftFromLine } from '@/lib/icons'
 import { RewindDialog } from './RewindDialog'
 import { ConfirmDialog } from './ConfirmDialog'
 import { SystemPromptDialog } from './SystemPromptDialog'
@@ -1440,7 +1440,7 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
               ...(shell.scheduledTaskSession ? [] : [{
                 id: 'rewind',
                 label: t(rewindWarning ? 'rewind.captureWarning' : 'rewind.title'),
-                icon: rewindWarning ? <AlertTriangle className="size-4 text-destructive" /> : <Rewind className="size-4" />,
+                icon: rewindWarning ? <AlertTriangle className="size-4 text-destructive" /> : <ArrowLeftFromLine className="size-4" />,
                 disabled: !shell.sessionPath,
                 onSelect: () => { if (shell.sessionPath) setRewindTarget({ path: shell.sessionPath }) }
               }])
@@ -1697,7 +1697,7 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
                           onSelect={() => { controls.close(); controls.moves.up?.() }} /> : null}
                         {controls.moves.down ? <SidebarRowMenuAction icon={ArrowDown} label={t('workspace.moveSessionDown')}
                           onSelect={() => { controls.close(); controls.moves.down?.() }} /> : null}
-                        <SidebarRowMenuAction icon={Rewind} label={t('rewind.title')} onSelect={() => {
+                        <SidebarRowMenuAction icon={ArrowLeftFromLine} label={t('rewind.title')} onSelect={() => {
                           controls.close()
                           const session = sessionsByPath.get(item.id)
                           if (session) void openSession(session.path, session.cwd).then(() => setRewindTarget({ path: session.path }))

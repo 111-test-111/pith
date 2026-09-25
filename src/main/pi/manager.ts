@@ -4242,7 +4242,6 @@ export class PiManager {
       adapterVersion: adapter?.version,
       projectCwd: cwd,
       global: readMcpConfigFile('global', null, agentDir)!,
-      project: cwd ? readMcpConfigFile('project', cwd, agentDir) : null,
       servers: buildMcpRoster({ cwd, agentDir, adapter, modules, live: cwd ? (this.mcpLiveByCwd.get(cwd) ?? null) : null })
     }
   }
