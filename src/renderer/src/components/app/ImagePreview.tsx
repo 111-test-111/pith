@@ -158,14 +158,17 @@ function ImageZoom({ image }: { image: PreviewImage }) {
           animate={{ scale: view.scale, x: view.x, y: view.y }}
           // Dragging must track the pointer 1:1; everything else springs.
           transition={dragging || reduce ? { duration: 0 } : ZOOM_SPRING}
-          // The picture itself follows the interface style, like every other
-          // image surface: `rounded-item` is the app's item step (0 in the square
-          // style, 14px in the squircle style) and the base `corner-shape` rule
-          // supplies the shape, so those corners are a superellipse rather than a
-          // circular arc. A replaced element is clipped by its own radius, so the
-          // element box — which the fit sizing keeps equal to the painted image —
-          // is exactly what gets rounded, at every zoom level.
-          className="max-h-full max-w-full select-none rounded-item object-contain will-change-transform"
+          // The picture itself follows the interface style: `rounded-window` is the
+          // app's top step (0 in the square style, 28px in the squircle style),
+          // chosen so a previewed image is never LESS round than the macOS window
+          // it sits in — that corner is 26pt on Tahoe, 20 on the next release and
+          // 10 before those (a CSS px is a point on macOS, so 28px clears all of
+          // them). The base `corner-shape` rule supplies the shape, so those
+          // corners are a superellipse rather than a circular arc. A replaced
+          // element is clipped by its own radius, so the element box — which the
+          // fit sizing keeps equal to the painted image — is exactly what gets
+          // rounded, at every zoom level.
+          className="max-h-full max-w-full select-none rounded-window object-contain will-change-transform"
         />
         {failed ? (
           // The viewport has no surface of its own, so the notice brings one:

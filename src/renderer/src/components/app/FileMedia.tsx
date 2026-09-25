@@ -61,8 +61,9 @@ function ImageView({ path }: { path: string }) {
       // Dragging must track the pointer 1:1; everything else springs.
       transition={dragging || reduce ? { duration: 0 } : ZOOM_SPRING}
       // Same interface-style radius as the overlay's own view of the picture:
-      // item step (0 square, 14px squircle), shape from the base corner rule.
-      className="max-h-full max-w-full select-none rounded-item object-contain will-change-transform"
+      // the window step (0 square, 28px squircle — never less round than the
+      // macOS window corner), shape from the base corner rule.
+      className="max-h-full max-w-full select-none rounded-window object-contain will-change-transform"
     />
     <div className="absolute bottom-3 right-3 flex items-center gap-0.5 rounded-control border border-border bg-background/90 p-0.5 pl-2 shadow-overlay backdrop-blur-sm">
       {size ? <span className="pr-1.5 text-[10px] tabular-nums text-muted-foreground">{size.width} × {size.height}</span> : null}

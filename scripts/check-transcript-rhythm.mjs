@@ -631,10 +631,10 @@ window.previewSurfaces = () => {
     panel: fill(dialog),
     viewport: fill(viewport),
     bars: bars.map(fill),
-    // The picture follows the interface style: item-step radius, app corner shape.
+    // The picture follows the interface style: window-step radius, app corner shape.
     image: corner
       ? { radius: corner.borderTopLeftRadius, shape: corner.cornerShape,
-          item: getComputedStyle(document.documentElement).getPropertyValue('--app-radius-item').trim() }
+          step: getComputedStyle(document.documentElement).getPropertyValue('--app-radius-window').trim() }
       : null
   };
 };
@@ -1073,16 +1073,18 @@ app.on('window-all-closed',()=>app.quit());`
   }
   assert.equal(surfaces.bars[0], surfaces.bars[1], `both bars carry the same surface: ${surfaces.bars.join(' / ')}`)
   assert.ok(surfaces.image, 'the preview really holds an image')
-  assert.equal(surfaces.image.radius, surfaces.image.item, `the picture takes the app's item radius: ${surfaces.image.radius} vs ${surfaces.image.item}`)
+  assert.equal(surfaces.image.radius, surfaces.image.step, `the picture takes the app's window-step radius: ${surfaces.image.radius} vs ${surfaces.image.step}`)
   assert.equal(surfaces.image.shape, 'superellipse(2)', `the picture carries the app's corner shape: ${surfaces.image.shape}`)
-  // The squircle preset must round the picture for real; the screenshot is the
-  // evidence that the painted corner is a superellipse, not a circular inset.
+  // The squircle preset must round the picture for real, and never less than the
+  // macOS window corner (26pt on Tahoe, 20 on the next release, 10 before);
+  // the screenshot is the evidence that the painted corner is a superellipse.
   const cornerAttribute = await evaluate(`document.documentElement.dataset.corners || ''`)
   await evaluate(`document.documentElement.dataset.corners = 'squircle'`)
   await pause(400)
   const squircleSurfaces = await evaluate('window.previewSurfaces()')
-  assert.equal(squircleSurfaces.image.item, '14px', 'the squircle preset moves the item step')
-  assert.equal(squircleSurfaces.image.radius, '14px', `the squircle style rounds the picture: ${squircleSurfaces.image.radius}`)
+  assert.equal(squircleSurfaces.image.step, '28px', 'the squircle preset moves the window step')
+  assert.equal(squircleSurfaces.image.radius, '28px', `the squircle style rounds the picture: ${squircleSurfaces.image.radius}`)
+  assert.ok(parseFloat(squircleSurfaces.image.radius) >= 26, `the picture is never less round than the macOS window corner: ${squircleSurfaces.image.radius}`)
   assert.equal(squircleSurfaces.image.shape, 'superellipse(2)', 'the rounded corner stays a superellipse')
   await screenshot('image-preview-squircle')
   await evaluate(cornerAttribute ? `document.documentElement.dataset.corners = ${JSON.stringify(cornerAttribute)}` : `delete document.documentElement.dataset.corners`)
