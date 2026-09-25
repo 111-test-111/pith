@@ -8,7 +8,7 @@ import { highlightSearchText, normalizeSearchText, searchGrams, searchTerms } fr
 import { contentPassages, isConversationPassage, messagePassages, passageSnippet, type SearchPassage } from './session-search-passages'
 
 const PAGE_SIZE = 40
-const INDEX_VERSION = 3
+const INDEX_VERSION = 4
 
 interface DocumentRow {
   rowid: number
@@ -22,6 +22,11 @@ interface DocumentRow {
 /** Stable malformed data can only be repaired by changing the file. I/O
  * failures stay retryable; they must not be cached as permanent corruption. */
 class InvalidSessionFile extends Error {}
+
+/** Scheduled-run sessions surface only in the scheduled tasks view: the index
+ * drops them without recording a failure. The marker entry sits before the
+ * session's first prompt, so detection aborts the read within a few lines. */
+class ScheduledTaskSessionFile extends Error {}
 
 export class SessionSearchIndex {
   private incomplete = 0
@@ -94,6 +99,7 @@ export class SessionSearchIndex {
         try {
           await this.indexFile(path, fingerprint, stats.mtime.toISOString())
         } catch (error) {
+          if (error instanceof ScheduledTaskSessionFile) { this.remove(path); continue }
           // Never present an old match from a file that was replaced/corrupted.
           this.remove(path)
           if (error instanceof InvalidSessionFile) {
@@ -129,6 +135,7 @@ export class SessionSearchIndex {
           header = entry
           continue
         }
+        if (entry.type === 'custom' && entry.customType === 'pith_scheduled_task') throw new ScheduledTaskSessionFile()
         if (entry.type === 'session_info') title = typeof entry.name === 'string' ? entry.name.trim() : ''
         if (entry.type === 'message') {
           count++

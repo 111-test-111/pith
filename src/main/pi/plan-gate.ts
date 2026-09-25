@@ -29,6 +29,7 @@ import type { AgentSession, ToolDefinition } from '@earendil-works/pi-coding-age
 import { createReadOnlyTools } from '@earendil-works/pi-coding-agent'
 import { APP_BASH_TOOL_NAMES } from './bash-tools'
 import { TODO_TOOL_NAME } from './todo-protocol'
+import { JEV_TOOL_NAME } from './jev/protocol'
 import { AGENT_STEER_TOOL_NAME, MESSAGE_PARENT_TOOL_NAME, SUBAGENT_TOOL_NAME } from './subagents/protocol'
 import { ASK_USER_TOOL_NAME } from '../../shared/ask-user'
 import { hasPlanOpening, cancelledPlanOpening } from './plan-approval-access'
@@ -106,6 +107,7 @@ const PLAN_APP_TOOLS: ReadonlySet<string> = new Set([
   ...APP_BASH_TOOL_NAMES,
   ASK_USER_TOOL_NAME,
   TODO_TOOL_NAME,
+  JEV_TOOL_NAME,
   SUBAGENT_TOOL_NAME,
   AGENT_STEER_TOOL_NAME,
   MESSAGE_PARENT_TOOL_NAME,
@@ -297,7 +299,12 @@ function createGate(options: PlanGateOptions): PlanGate {
         }
       }
       seen.add(name)
-      next.push({ name, tool: wrapped(tool, provenance), ...(definition ? { definition } : {}), provenance })
+      // SDK 0.85 snapshots descriptions when registering tools. Jev capability
+      // switches also affect live turns; refresh only this owned definition's
+      // metadata, preserving the captured implementation and provenance gate.
+      const current = name === JEV_TOOL_NAME && provenance === 'app' && definition
+        ? { ...tool, description: definition.description } : tool
+      next.push({ name, tool: wrapped(current, provenance), ...(definition ? { definition } : {}), provenance })
     }
     effective = next
     session.agent.state.tools = next.map((entry) => entry.tool)

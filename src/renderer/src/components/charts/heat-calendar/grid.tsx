@@ -106,7 +106,7 @@ export function HeatCalendarGrid({ children, className }: { children?: ReactNode
                 }}
                 // local patch (pi-app): capsule-by-design cells, so the shape
                 // token follows the UI style (see --app-radius-capsule).
-                className="absolute -inset-0.5 block rounded-capsule outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                className="absolute -inset-0.5 block rounded-capsule outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 // local patch (pi-app): no press scale — a chart cell must not
                 // dip inward while pressed (see `button/base`).
               >
@@ -114,7 +114,7 @@ export function HeatCalendarGrid({ children, className }: { children?: ReactNode
                   className="pointer-events-none absolute inset-0.5 block rounded-capsule"
                   style={{
                     background: fill(b),
-                    boxShadow: isEnd ? "0 0 0 2px var(--background), 0 0 0 3.5px var(--foreground)" : "none",
+                    boxShadow: isEnd ? "0 0 0 2px var(--background), 0 0 0 3px var(--foreground)" : "none",
                     transition: "box-shadow 150ms",
                   }}
                   // the diagonal wave: each cell arrives (w + d) steps after the corner;
@@ -141,7 +141,7 @@ export function HeatCalendarGrid({ children, className }: { children?: ReactNode
                   <AnimatePresence>
                     {on && !isEnd ? (
                       <motion.span
-                        className="pointer-events-none absolute inset-0 block border-[1.5px]"
+                        className="pointer-events-none absolute inset-0 block border"
                         style={{
                           borderRadius: "inherit",
                           borderColor: "color-mix(in srgb, var(--foreground) 55%, transparent)",

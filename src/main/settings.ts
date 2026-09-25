@@ -1,7 +1,7 @@
 import { app } from 'electron'
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { BASH_DEFAULT_MAX_WAIT_MS, BASH_MIN_WAIT_MS, BASH_MAX_WAIT_MS, type StartupSessionMode } from '../shared/types'
+import { BASH_DEFAULT_MAX_WAIT_MS, BASH_MIN_WAIT_MS, BASH_MAX_WAIT_MS, type StartupSessionMode, type JevPreferences } from '../shared/types'
 import { ASK_USER_DEFAULT_TIMEOUT_S, clampAskUserTimeoutSeconds } from '../shared/ask-user'
 import { RESPONSE_TIMEOUT_DEFAULT_S, clampResponseTimeoutSeconds } from '../shared/response-timeout'
 import { DEFAULT_SANDBOX_MODE, isSandboxMode } from './sandbox/mode'
@@ -20,6 +20,7 @@ export interface WindowBounds {
 }
 
 export interface AppSettings {
+  jev: JevPreferences
   checkpointsEnabled: boolean
   /** Initial blocking ceiling; commands keep running after this wait expires. */
   bashMaxWaitMs: number
@@ -75,6 +76,7 @@ export interface AppSettings {
 }
 
 const defaults: AppSettings = {
+  jev: { mode: 'off', choice: true, score: true, noul: true },
   checkpointsEnabled: true,
   bashMaxWaitMs: BASH_DEFAULT_MAX_WAIT_MS,
   cwd: null,
@@ -117,7 +119,13 @@ export function loadSettings(): AppSettings {
     const responseTimeoutSeconds = clampResponseTimeoutSeconds(
       typeof raw.responseTimeoutSeconds === 'number' ? raw.responseTimeoutSeconds : RESPONSE_TIMEOUT_DEFAULT_S
     )
-    return { ...defaults, ...raw, bashMaxWaitMs, startup, startupSession, subagentMaxConcurrent, askUserTimeoutSeconds,
+    const jev = {
+      mode: (['off', 'tools', 'workflow'].includes(raw.jev?.mode) ? raw.jev.mode : raw.jev?.enabled === true ? 'tools' : 'off') as JevPreferences['mode'],
+      choice: raw.jev?.choice !== false,
+      score: raw.jev?.score !== false,
+      noul: raw.jev?.noul !== false
+    }
+    return { ...defaults, ...raw, jev, bashMaxWaitMs, startup, startupSession, subagentMaxConcurrent, askUserTimeoutSeconds,
       responseTimeoutSeconds,
       sandboxMode: isSandboxMode(raw.sandboxMode) ? raw.sandboxMode : DEFAULT_SANDBOX_MODE }
   } catch {

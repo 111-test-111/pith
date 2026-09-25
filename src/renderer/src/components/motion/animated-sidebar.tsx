@@ -1,3 +1,4 @@
+// local patch (pi-app): keep UI frames and focus rings in this component at 1px.
 "use client";
 
 // local patch (pi-app): use the shared Lucide icon adapter.
@@ -206,6 +207,9 @@ export interface AnimatedSidebarProviderProps
   openMobile?: boolean;
   defaultOpenMobile?: boolean;
   onOpenMobileChange?: (open: boolean) => void;
+  /** local patch (pi-app): the vendored Cmd/Ctrl+key toggle. Pass `null`
+   *  when an external shortcut dispatcher owns it. */
+  keyboardShortcut?: string | null;
   style?: SidebarProviderStyle;
 }
 
@@ -217,6 +221,7 @@ export function AnimatedSidebarProvider({
   openMobile,
   defaultOpenMobile = false,
   onOpenMobileChange,
+  keyboardShortcut = SIDEBAR_KEYBOARD_SHORTCUT,
   className,
   style,
   ...props
@@ -253,9 +258,10 @@ export function AnimatedSidebarProvider({
   }, [desktopOpen, isMobile, mobileOpen, setOpen, setOpenMobile]);
 
   useEffect(() => {
+    if (!keyboardShortcut) return;
     const handleShortcut = (event: KeyboardEvent) => {
       if (
-        event.key.toLowerCase() === SIDEBAR_KEYBOARD_SHORTCUT &&
+        event.key.toLowerCase() === keyboardShortcut &&
         (event.metaKey || event.ctrlKey)
       ) {
         event.preventDefault();
@@ -265,7 +271,7 @@ export function AnimatedSidebarProvider({
 
     window.addEventListener("keydown", handleShortcut);
     return () => window.removeEventListener("keydown", handleShortcut);
-  }, [toggleSidebar]);
+  }, [keyboardShortcut, toggleSidebar]);
 
   return (
     <AnimatedSidebarContext.Provider
@@ -640,8 +646,9 @@ export const AnimatedSidebarTrigger = forwardRef<
         if (!event.defaultPrevented) context.toggleSidebar();
       }}
       className={cn(
-        "inline-flex size-10 shrink-0 items-center justify-center rounded-xl outline-none",
-        "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+        // local patch (pi-app): standalone sidebar controls fill on hover.
+        "inline-flex size-10 shrink-0 items-center justify-center rounded-xl outline-none transition-colors hover:bg-muted",
+        "focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
         className,
       )}
     />
@@ -673,8 +680,8 @@ export const AnimatedSidebarClose = forwardRef<
         else context.setOpen(false);
       }}
       className={cn(
-        "inline-flex size-10 shrink-0 items-center justify-center rounded-xl outline-none",
-        "focus-visible:ring-2 focus-visible:ring-ring",
+        "inline-flex size-10 shrink-0 items-center justify-center rounded-xl outline-none transition-colors hover:bg-muted",
+        "focus-visible:ring-1 focus-visible:ring-ring",
         className,
       )}
     />
@@ -994,7 +1001,7 @@ export function AnimatedSidebarMenuSubButton({
   const interactiveClassName = cn(
     "flex min-h-8 w-full min-w-0 items-center gap-2 rounded-lg px-2 text-left text-xs outline-none",
     "text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground",
-    "focus-visible:bg-muted/70 focus-visible:ring-2 focus-visible:ring-ring",
+    "focus-visible:bg-muted/70 focus-visible:ring-1 focus-visible:ring-ring",
     isActive && "bg-muted/70 text-foreground",
     disabled && "cursor-not-allowed opacity-40",
     className,
@@ -1152,8 +1159,9 @@ export function AnimatedSidebarMenuButton({
 
   const interactiveClassName = cn(
     "relative flex min-h-9 w-full min-w-0 items-center gap-2.5 overflow-hidden rounded-xl px-3 text-left text-sm font-medium outline-none",
+    // local patch (pi-app): SharedLayoutBg owns the hover fill; this row changes text only.
     "text-muted-foreground transition-colors hover:text-foreground",
-    "focus-visible:bg-muted/70 focus-visible:ring-2 focus-visible:ring-ring",
+    "focus-visible:bg-muted/70 focus-visible:ring-1 focus-visible:ring-ring",
     isActive && "text-foreground",
     disabled && "cursor-not-allowed opacity-40",
     className,

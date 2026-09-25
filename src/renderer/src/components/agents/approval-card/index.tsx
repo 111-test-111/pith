@@ -1,3 +1,4 @@
+// local patch (pi-app): keep UI frames and focus rings in this component at 1px.
 "use client";
 // local patch (pi-app): approval actions and status badges use semantic radii.
 // beui.dev/components/agents/chat-app
@@ -343,7 +344,8 @@ export function ApprovalCard({
                 onClick={onDismiss}
                 // local patch (pi-app): capsule-by-design, so the shape token
                 // follows the UI style (see --app-radius-capsule in styles.css).
-                className="grid size-5 shrink-0 place-items-center rounded-capsule text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                // local patch (pi-app): dismiss uses the shared filled hover cue.
+                className="grid size-5 shrink-0 place-items-center rounded-capsule text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
               >
                 <X className="size-4" />
               </button>

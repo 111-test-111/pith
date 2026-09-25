@@ -1,8 +1,9 @@
+// local patch (pi-app): keep UI frames and focus rings in this component at 1px.
 "use client";
 // beui.dev/components/agents/chat-app
 
 // local patch (pi-app): use the shared Lucide icon adapter.
-import { ChevronDown, ListTodo } from "@/lib/icons";
+import { Ban, ChevronDown, CircleCheck, CircleDashed, ListTodo } from "@/lib/icons";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   type ReactNode,
@@ -21,8 +22,8 @@ import {
   SPRING_SWAP,
 } from "@/lib/ease";
 import { cn } from "@/lib/utils";
-// local patch (pi-app): animate Lucide artwork through the shared SVG adapter.
-import { AnimatedIcon, IconPaths } from "@/lib/animated-icons";
+// local patch (pi-app): animate the shared stroke marks through the app's own mark table.
+import { AnimatedIcon } from "@/lib/animated-icons";
 
 export type TodoItemStatus =
   | "pending"
@@ -107,6 +108,13 @@ function TodoHeaderIcon({ complete }: { complete: boolean }) {
   );
 }
 
+/** One Phosphor glyph per settled outcome — the same marks the tool rows draw. */
+const TODO_GLYPHS = {
+  pending: CircleDashed,
+  completed: CircleCheck,
+  cancelled: Ban,
+} as const;
+
 function TodoStatusIcon({
   status,
   progress,
@@ -117,7 +125,7 @@ function TodoStatusIcon({
   const reduce = useReducedMotion() ?? false;
   const running = status === "in-progress";
   // local patch (pi-app): in-progress uses the sidebar's live-session spin + theme
-  // colour, but the same r=9 / 1.5 stroke circle as completed/pending rows.
+  // colour, but the same r=9 / 1.5 stroke circle as the other rows.
   // progress === 0 and reduced motion keep paused/retained rows still.
   const spinning = running && progress === undefined && !reduce;
 
@@ -150,63 +158,28 @@ function TodoStatusIcon({
     );
   }
 
+  // local patch (pi-app): a settled row is the icon adapter's own Phosphor
+  // artwork — `CircleDashed` while awaiting, `CheckCircle` when done, `Ban` when
+  // dropped. Phosphor's regular weight draws each on its native 256 grid as a
+  // ring with an r=96/256 centerline at a 16/256 weight, i.e. the same r=9 / 1.5
+  // circle (and, for `Ban`, the same 45° chord) this panel used to hand-draw, so
+  // a todo row and the tool row beside it read alike — `lib/status-ring.tsx`
+  // makes the same choice for the tool rows. Only the running row stays drawn:
+  // no glyph carries the live spin.
+  const Glyph = TODO_GLYPHS[status];
   return (
-    <motion.svg
-      aria-hidden="true"
-      viewBox="0 0 24 24"
-      initial={false}
+    <Glyph
       className={cn(
-        // local patch (pi-app): same box as the in-progress ring and the
-        // bash/subagent rows' icon slot (see above).
-        "size-4 shrink-0 overflow-visible text-muted-foreground",
+        // local patch (pi-app): the shared task panel's rows all lead with a
+        // size-4 box — the same one the bash/subagent rows' `ToolResult`
+        // slot gives their icon — so the three panels line up.
+        "size-4 shrink-0",
         // local patch (pi-app): every settled status owns a colour — done, dropped.
+        status === "pending" && "text-muted-foreground",
         status === "completed" && "text-emerald-600 dark:text-emerald-400",
         status === "cancelled" && "text-rose-600 dark:text-rose-400",
       )}
-    >
-      <motion.circle
-        cx="12"
-        cy="12"
-        r="9"
-        fill="currentColor"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeDasharray={status === "pending" ? "2 3" : undefined}
-        strokeLinecap="round"
-        initial={false}
-        animate={{ fillOpacity: status === "completed" ? 0.06 : 0 }}
-        transition={reduce ? { duration: 0 } : { duration: 0.18, ease: EASE_OUT }}
-      />
-      <IconPaths
-        icon="check"
-        transform="translate(3 3) scale(0.75)"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        initial={false}
-        animate={{
-          pathLength: status === "completed" ? 1 : 0,
-          opacity: status === "completed" ? 1 : 0,
-        }}
-        transition={reduce ? { duration: 0 } : { duration: 0.24, ease: EASE_OUT }}
-      />
-      <IconPaths
-        icon="cancel"
-        transform="translate(3 3) scale(0.75)"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        initial={false}
-        animate={{
-          pathLength: status === "cancelled" ? 1 : 0,
-          opacity: status === "cancelled" ? 1 : 0,
-        }}
-        transition={reduce ? { duration: 0 } : { duration: 0.2, ease: EASE_OUT }}
-      />
-    </motion.svg>
+    />
   );
 }
 
@@ -324,7 +297,8 @@ export function TodoList({
         aria-expanded={currentOpen}
         aria-controls={contentId}
         onClick={() => setOpen(!currentOpen)}
-        className="group flex h-11 w-full items-center gap-2.5 rounded-2xl px-3.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        // local patch (pi-app): the expandable header fills on hover.
+        className="group flex h-11 w-full items-center gap-2.5 rounded-2xl px-3.5 text-left outline-none transition-colors hover:bg-muted/50 focus-visible:ring-1 focus-visible:ring-ring"
       >
         <TodoHeaderIcon complete={allComplete} />
         <h3 className="min-w-0 flex-1 truncate text-sm font-medium text-foreground/90">
@@ -406,22 +380,23 @@ export function TodoList({
                         status === "cancelled" && "text-muted-foreground/55",
                       )}
                     >
-                      <span className="relative inline-block max-w-full">
+                      {/* local patch (pi-app): a real line-through instead of an
+                          absolutely positioned strip. The strip could only sit at
+                          one height, so a title wrapping to several lines got a
+                          single strike across the box's middle; text decoration
+                          propagates to every line box, so each wrapped row gets
+                          its own strike. The draw-in becomes a colour fade — a
+                          per-line wipe is not expressible — and fading the colour
+                          both ways also animates un-completing a row. */}
+                      <span
+                        className={cn(
+                          "inline-block max-w-full line-through transition-[text-decoration-color] delay-[60ms] duration-300 ease-out motion-reduce:transition-none",
+                          status === "completed"
+                            ? "decoration-current"
+                            : "decoration-transparent",
+                        )}
+                      >
                         {item.title}
-                        <motion.span
-                          aria-hidden="true"
-                          initial={false}
-                          animate={{
-                            scaleX: status === "completed" ? 1 : 0,
-                            opacity: status === "completed" ? 1 : 0,
-                          }}
-                          transition={
-                            reduce
-                              ? { duration: 0 }
-                              : { duration: 0.28, ease: EASE_OUT, delay: 0.06 }
-                          }
-                          className="absolute inset-x-0 top-1/2 h-px origin-left bg-current"
-                        />
                       </span>
                     </span>
                     {item.detail ? (

@@ -329,7 +329,7 @@
 
 .annotationLayer .textWidgetAnnotation :is(input,textarea),.annotationLayer .choiceWidgetAnnotation select,.annotationLayer .buttonWidgetAnnotation:is(.checkBox,.radioButton) input{
     background-image:var(--annotation-unfocused-field-background);
-    border:2px solid var(--input-unfocused-border-color);
+    border:1px solid var(--input-unfocused-border-color);
     box-sizing:border-box;
     font:calc(9px * var(--total-scale-factor)) sans-serif;
     height:100%;
@@ -340,7 +340,7 @@
 
 
 .annotationLayer .textWidgetAnnotation :is(input,textarea):required,.annotationLayer .choiceWidgetAnnotation select:required,.annotationLayer .buttonWidgetAnnotation:is(.checkBox,.radioButton) input:required{
-    outline:1.5px solid red;
+    outline:1px solid red;
   }
 
 
@@ -361,13 +361,13 @@
 
 .annotationLayer .textWidgetAnnotation [disabled]:is(input,textarea),.annotationLayer .choiceWidgetAnnotation select[disabled],.annotationLayer .buttonWidgetAnnotation:is(.checkBox,.radioButton) input[disabled]{
     background:none;
-    border:2px solid var(--input-disabled-border-color);
+    border:1px solid var(--input-disabled-border-color);
     cursor:not-allowed;
   }
 
 
 .annotationLayer .textWidgetAnnotation :is(input,textarea):hover,.annotationLayer .choiceWidgetAnnotation select:hover,.annotationLayer .buttonWidgetAnnotation:is(.checkBox,.radioButton) input:hover{
-    border:2px solid var(--input-hover-border-color);
+    border:1px solid var(--input-hover-border-color);
   }
 
 
@@ -378,7 +378,7 @@
 
 .annotationLayer .textWidgetAnnotation :is(input,textarea):focus,.annotationLayer .choiceWidgetAnnotation select:focus{
     background:none;
-    border:2px solid var(--input-focus-border-color);
+    border:1px solid var(--input-focus-border-color);
     border-radius:var(--app-radius-detail);
     outline:var(--input-focus-outline);
   }
@@ -391,14 +391,14 @@
 
 
 .annotationLayer .buttonWidgetAnnotation.checkBox :focus{
-    border:2px solid var(--input-focus-border-color);
+    border:1px solid var(--input-focus-border-color);
     border-radius:var(--app-radius-detail);
     outline:var(--input-focus-outline);
   }
 
 
 .annotationLayer .buttonWidgetAnnotation.radioButton :focus{
-    border:2px solid var(--input-focus-border-color);
+    border:1px solid var(--input-focus-border-color);
     outline:var(--input-focus-outline);
   }
 
@@ -571,7 +571,7 @@
 
 
 .xfaLayer *:required{
-  outline:1.5px solid red;
+  outline:1px solid red;
 }
 
 

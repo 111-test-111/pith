@@ -9,7 +9,6 @@ import { RadioGroup, RadioGroupItem } from '@/components/motion/radio'
 import { useI18n } from '@/i18n'
 import { useShowReasoning } from '@/lib/show-reasoning'
 import { useSpinnerVerbs } from '@/lib/spinner-verbs'
-import { previewNotificationSound, useNotificationSounds } from '@/lib/notification-sounds'
 import { useToolGrouping } from '@/lib/tool-grouping'
 import { useStreamingBehavior, type StreamingBehavior } from '@/lib/streaming-behavior'
 import { SettingsGroup, SettingsRow } from './SettingsRow'
@@ -145,8 +144,6 @@ export function GeneralSection() {
   const [toolGrouping, setToolGrouping] = useToolGrouping()
   // Plays a status sentence on the turn-in-progress row instead of a bare spinner.
   const [spinnerVerbs, setSpinnerVerbs] = useSpinnerVerbs()
-  // Audio cues for a finished turn and for a question waiting on the user.
-  const [sounds, setSounds] = useNotificationSounds()
 
   useEffect(() => {
     void window.pi
@@ -230,45 +227,6 @@ export function GeneralSection() {
             checked={spinnerVerbs}
             onCheckedChange={setSpinnerVerbs}
             aria-label={t('settings.spinnerVerbs')}
-          />
-        </SettingsRow>
-      </SettingsGroup>
-
-      <SettingsGroup title={t('settings.soundsGroup')}>
-        <SettingsRow label={t('settings.soundsEnabled')} description={t('settings.soundsEnabledDesc')}>
-          <Checkbox
-            mark="square"
-            checked={sounds.enabled}
-            onCheckedChange={(value) => setSounds({ enabled: value === true })}
-            aria-label={t('settings.soundsEnabled')}
-          />
-        </SettingsRow>
-        {/* The two cues side by side, each with its own switch and a preview
-            that plays it even while it is off — the only way to judge a cue
-            before turning it on. The switches stay visible (not hidden) when
-            the master is off, so the choice is remembered. */}
-        <SettingsRow label={t('settings.soundTurnComplete')} description={t('settings.soundTurnCompleteDesc')}>
-          <Button variant="ghost" size="sm" onClick={() => previewNotificationSound('turnComplete')}>
-            {t('settings.soundPreview')}
-          </Button>
-          <Checkbox
-            mark="square"
-            disabled={!sounds.enabled}
-            checked={sounds.turnComplete}
-            onCheckedChange={(value) => setSounds({ turnComplete: value === true })}
-            aria-label={t('settings.soundTurnComplete')}
-          />
-        </SettingsRow>
-        <SettingsRow label={t('settings.soundAskUser')} description={t('settings.soundAskUserDesc')}>
-          <Button variant="ghost" size="sm" onClick={() => previewNotificationSound('askUser')}>
-            {t('settings.soundPreview')}
-          </Button>
-          <Checkbox
-            mark="square"
-            disabled={!sounds.enabled}
-            checked={sounds.askUser}
-            onCheckedChange={(value) => setSounds({ askUser: value === true })}
-            aria-label={t('settings.soundAskUser')}
           />
         </SettingsRow>
       </SettingsGroup>

@@ -5,7 +5,7 @@ import { Tooltip } from '@/components/motion/tooltip'
 import { Image, MusicNote, ZoomIn, ZoomOut } from '@/lib/icons'
 import { useI18n } from '@/i18n'
 import { basename } from '@/lib/format'
-import { useImageZoom, ZOOM_MAX, ZOOM_SPRING, ZOOM_STEP } from '@/lib/hooks/use-image-zoom'
+import { useImageZoom, ZOOM_MAX, ZOOM_MIN, ZOOM_SPRING, ZOOM_STEP } from '@/lib/hooks/use-image-zoom'
 import { cn } from '@/lib/utils'
 import { mediaUrl, type MediaKind } from '../../../../shared/media'
 import type { FileTab } from '@/state/file-browser-store'
@@ -33,7 +33,7 @@ function ImageView({ path }: { path: string }) {
   const imgRef = useRef<HTMLImageElement>(null)
   // The pane shares the window with the composer, so the +/-/arrow shortcuts
   // are heard only while this viewport has focus (the overlay listens globally).
-  const { view, dragging, zoomed, zoomAt, reset, handlers } = useImageZoom({ viewportRef, imageRef: imgRef, keyboard: 'element' })
+  const { view, dragging, zoomed, pannable, zoomAt, reset, handlers } = useImageZoom({ viewportRef, imageRef: imgRef, keyboard: 'element' })
   const [size, setSize] = useState<{ width: number; height: number } | null>(null)
   const [failed, setFailed] = useState(false)
 
@@ -46,8 +46,8 @@ function ImageView({ path }: { path: string }) {
     aria-label={t('files.media.viewportAria')}
     {...handlers}
     className={cn(
-      'relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-muted/30 [touch-action:none] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset',
-      zoomed ? (dragging ? 'cursor-grabbing' : 'cursor-grab') : 'cursor-zoom-in'
+      'relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-muted/30 [touch-action:none] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset',
+      pannable ? (dragging ? 'cursor-grabbing' : 'cursor-grab') : 'cursor-zoom-in'
     )}
   >
     <motion.img
@@ -60,11 +60,13 @@ function ImageView({ path }: { path: string }) {
       animate={{ scale: view.scale, x: view.x, y: view.y }}
       // Dragging must track the pointer 1:1; everything else springs.
       transition={dragging || reduce ? { duration: 0 } : ZOOM_SPRING}
-      className="max-h-full max-w-full select-none object-contain will-change-transform"
+      // Same interface-style radius as the overlay's own view of the picture:
+      // item step (0 square, 14px squircle), shape from the base corner rule.
+      className="max-h-full max-w-full select-none rounded-item object-contain will-change-transform"
     />
     <div className="absolute bottom-3 right-3 flex items-center gap-0.5 rounded-control border border-border bg-background/90 p-0.5 pl-2 shadow-overlay backdrop-blur-sm">
       {size ? <span className="pr-1.5 text-[10px] tabular-nums text-muted-foreground">{size.width} × {size.height}</span> : null}
-      <Tooltip content={t('imagePreview.zoomOut')}><Button variant="ghost" size="icon" className="size-7" aria-label={t('imagePreview.zoomOut')} disabled={!zoomed} onClick={() => zoomAt(1 / ZOOM_STEP)}><ZoomOut aria-hidden className="size-3.5" /></Button></Tooltip>
+      <Tooltip content={t('imagePreview.zoomOut')}><Button variant="ghost" size="icon" className="size-7" aria-label={t('imagePreview.zoomOut')} disabled={view.scale <= ZOOM_MIN} onClick={() => zoomAt(1 / ZOOM_STEP)}><ZoomOut aria-hidden className="size-3.5" /></Button></Tooltip>
       <Tooltip content={t('imagePreview.resetZoom')}><Button variant="ghost" size="sm" className="min-w-14 justify-center tabular-nums text-xs" aria-label={t('imagePreview.resetZoom')} disabled={!zoomed} onClick={reset}>{Math.round(view.scale * 100)}%</Button></Tooltip>
       <Tooltip content={t('imagePreview.zoomIn')}><Button variant="ghost" size="icon" className="size-7" aria-label={t('imagePreview.zoomIn')} disabled={view.scale >= ZOOM_MAX} onClick={() => zoomAt(ZOOM_STEP)}><ZoomIn aria-hidden className="size-3.5" /></Button></Tooltip>
     </div>

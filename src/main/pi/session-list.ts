@@ -49,6 +49,9 @@ export interface SessionRow {
   /** First user message text; the SDK's `"(no messages)"` sentinel when none. */
   firstMessage: string
   subagentChild: boolean
+  /** Persisted `pith_scheduled_task` marker: the file belongs to a scheduled
+   * run and is reachable only from the scheduled tasks view. */
+  scheduledTask: boolean
   branchHasMessages: boolean
 }
 
@@ -96,6 +99,7 @@ class RowBuilder {
   private lastActivity: number | undefined
   private firstUserText = ''
   private subagentStart = false
+  private scheduledStart = false
   private branchDecision: boolean | undefined
 
   /** One parsed entry; malformed lines are skipped before reaching here. */
@@ -128,6 +132,7 @@ class RowBuilder {
       return
     }
     if (entry?.type === 'custom' && entry.customType === 'pith_subagent_run') this.subagentStart = true
+    if (entry?.type === 'custom' && entry.customType === 'pith_scheduled_task') this.scheduledStart = true
     if (entry?.type === 'message') {
       this.messageCount++
       // selectedBranchHasMessages: any message entry decides the branch.
@@ -178,6 +183,7 @@ class RowBuilder {
       messageCount: this.messageCount,
       firstMessage: this.firstUserText || NO_MESSAGES,
       subagentChild: this.subagentStart,
+      scheduledTask: this.scheduledStart,
       // "The whole file holds no message entry and no selection: nothing to show."
       branchHasMessages: this.branchDecision ?? false
     }

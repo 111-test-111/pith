@@ -367,13 +367,11 @@ export function BrowserSection() {
           }
         >
           <Button
-            variant={confirmingClearImport ? 'primary' : 'outline'}
+            variant="destructive"
             size="sm"
             data-browser-clear-import={confirmingClearImport ? 'confirm' : 'idle'}
             disabled={clearingImport || !importStatus.present}
-            className={
-              confirmingClearImport ? 'bg-destructive text-white hover:bg-destructive/90' : undefined
-            }
+            className={confirmingClearImport ? 'hover:bg-destructive hover:text-white' : undefined}
             onClick={clearImported}
           >
             {confirmingClearImport
@@ -386,13 +384,11 @@ export function BrowserSection() {
           description={t('settings.browserClearDataHint')}
         >
           <Button
-            variant={confirmingClear ? 'primary' : 'outline'}
+            variant="destructive"
             size="sm"
             data-browser-clear={confirmingClear ? 'confirm' : 'idle'}
             disabled={clearing}
-            className={
-              confirmingClear ? 'bg-destructive text-white hover:bg-destructive/90' : undefined
-            }
+            className={confirmingClear ? 'hover:bg-destructive hover:text-white' : undefined}
             onClick={clearData}
           >
             {confirmingClear ? t('settings.browserClearDataConfirm') : t('settings.browserClearData')}

@@ -98,7 +98,7 @@ export interface ToolResultMsg extends CompletedAt {
   timestamp: number
 }
 
-/** Context was compacted: the summarized history replaced by this entry. */
+/** Context was compacted: this entry replaces summarized history for the model, not the UI. */
 export interface CompactionSummaryMsg {
   role: 'compactionSummary'
   summary: string
@@ -177,6 +177,8 @@ export interface ModelRefDTO {
 
 export interface ModelDTO extends ModelRefDTO {
   providerName: string
+  /** The SDK's per-model supported thinking levels, including opt-in xhigh/max. */
+  thinkingLevels?: ThinkingLevel[]
   input: string[]
   contextWindow: number
   maxTokens: number
@@ -240,6 +242,9 @@ export interface ModelOverrideDTO {
   contextWindow?: number
   maxTokens?: number
   cost?: ModelCostDTO
+  /** App-level visibility: hidden models stay composed/usable but are kept
+   * out of every model selector. Not an SDK field — the runtime ignores it. */
+  hidden?: boolean
   [key: string]: unknown
 }
 
@@ -276,6 +281,9 @@ export interface ProviderModelDTO {
   source: 'builtin' | 'custom' | 'both'
   /** models.json carries a modelOverrides entry for this id. */
   hasOverride: boolean
+  /** models.json hides this model from the app's model selectors
+   * (modelOverrides.<id>.hidden). The runtime still composes it. */
+  hidden: boolean
 }
 
 export interface DiscoveredModelDTO {
@@ -672,6 +680,8 @@ export interface ToolRunDTO {
 }
 
 export interface SessionSnapshotDTO {
+  jevWorkflow?: JevWorkflowDTO | null
+  jevWorkflowSeq?: number
   /** Transcript is available while session_start hooks finish preparing tools. */
   initializing?: boolean
   /** This session's DSH file-sandbox mode, folded from its own branch. */
@@ -695,7 +705,7 @@ export interface SessionSnapshotDTO {
   cwd: string
   /** Internal default directory; never show cwd in workspace chrome. */
   projectless: boolean
-  /** Completed messages only; the live assistant is carried separately. */
+  /** Full selected-branch transcript; compacted history stays visible. The live assistant is separate. */
   messages: ChatMessage[]
   streaming?: AssistantMsg | null
   toolRuns?: Record<string, ToolRunDTO>
@@ -713,6 +723,8 @@ export interface SessionSnapshotDTO {
   /** True when THIS session is itself a subagent child: a read-only view —
    * the composer is disabled and main refuses direct prompts. */
   subagentChild?: boolean
+  /** True when this session is owned by a scheduled run (read-only). */
+  scheduledTaskSession?: boolean
   /** Parent session file for a child view (the "open parent" action). */
   subagentParentPath?: string
   /** Last event incorporated into this snapshot. */
@@ -845,6 +857,8 @@ export interface SubagentActionPayload {
   sessionPath: string
   /** Child session id the action targets. */
   sessionId: string
+  /** Run visible when the user chose the action. Main rejects a newer run. */
+  expectedRunId: string
   action: 'steer' | 'abort' | 'resume'
   /** Steer/resume message; required for steer. */
   message?: string
@@ -1157,6 +1171,9 @@ export interface FileBrowserRequest {
   cwd: string
   path: string
 }
+/** URL serves complete HTML and its scoped assets, independently of the source cap. */
+export type HtmlPreviewDTO = { url: string; error?: never } | { url?: never; error: FileBrowserError }
+export interface HtmlPreviewLinkDTO { webContentsId: number; url: string }
 export interface FileActionResultDTO { status: 'ok' | 'cancelled' | 'error' }
 export type FileBrowserError = 'missing' | 'directory' | 'binary' | 'unreadable' | 'tooLarge' | 'git'
 export interface FileDirectoryEntryDTO {
@@ -1265,6 +1282,13 @@ export interface PromptPayload {
    * run) — AgentSession.prompt() resolves that atomically.
    */
   streamingBehavior?: 'steer' | 'followUp'
+}
+
+/** Resume the unfinished frontier without moving the selected branch. */
+export interface ContinuePayload {
+  sessionPath: string
+  /** The interrupted frontier, checked again in main before starting. */
+  timestamp: number
 }
 
 /**
@@ -1473,4 +1497,87 @@ export interface RewindCommitDTO { operation: RewindOperationDTO; snapshot?: Ses
 // Re-export Plan Mode DTOs so they share the same shared/types surface.
 export type { PlanActionResult, PlanApprovalDTO, PlanApproveRequest, PlanBlocker, PlanDocumentDTO, PlanDocumentRequest, PlanModeRequest, PlanStateDTO, PlanSubmissionRef, SessionMode }
 export { PLAN_MAX_BYTES }
+/** Native Jev settings. Credentials only travel renderer → main when replaced. */
+export interface JevPreferences {
+  mode: 'off' | 'tools' | 'workflow'
+  choice: boolean
+  score: boolean
+  noul: boolean
+}
+export interface JevSettingsDTO extends JevPreferences {
+  keySource: 'saved' | 'environment' | 'missing' | 'unavailable'
+}
+export interface JevSettingsUpdate {
+  preferences?: JevPreferences
+  apiKey?: string | null
+}
+export const JEV_ERROR_CODES = ['disabled', 'capability_disabled', 'missing_key', 'credentials', 'invalid_input', 'authentication', 'rate_limit', 'timeout', 'cancelled', 'network', 'invalid_response', 'busy', 'storage'] as const
+export type JevErrorCode = typeof JEV_ERROR_CODES[number]
+export type JevActionResult<T> = { ok: true; data: T } | { ok: false; code: JevErrorCode }
+export type JevAnswerDTO =
+  | { type: 'noul'; noul: number }
+  | { type: 'choice'; choice: string; probabilities: Record<string, number>; confidence: number }
+  | { type: 'score'; score: number; legend: Record<string, string>; probabilities: Record<string, number>; confidence: number }
+export interface JevEvaluationDTO {
+  model: string
+  answers: Record<string, JevAnswerDTO>
+  elapsedMs: number
+  inputTokens: number
+  outputTokens: number
+}
+export type JevWorkflowRoute = 'respond' | 'inspect' | 'act'
+/** Branch-owned audit, fetched on demand; never part of the model context. */
+export interface JevTraceSummaryDTO {
+  id: string
+  stage: 'router' | 'verifier'
+  timestamp: number
+  status: 'running' | 'completed' | 'failed' | 'interrupted'
+  choice?: string
+  effectiveChoice?: string
+  override?: 'action_request' | 'missing_evidence' | 'unactionable_review' | 'no_progress'
+  target?: { id: string; requirement: string; instruction: string; evidenceIds: string[] }
+  error?: JevErrorCode
+}
+export interface JevTraceDTO extends JevTraceSummaryDTO {
+  request: { state: string; questions: Record<string, unknown> }
+  evaluation?: JevEvaluationDTO
+}
+export interface JevTracePageDTO {
+  items: JevTraceSummaryDTO[]
+  nextCursor: string | null
+}
+export type JevWorkflowReason = JevErrorCode | 'limit' | 'uncertain' | 'interrupted' | 'no_progress' | 'blocked'
+export interface JevWorkflowDTO {
+  seq: number
+  phase: 'routing' | 'executing' | 'verifying' | 'waiting' | 'approval' | 'completed' | 'paused'
+  route?: JevWorkflowRoute
+  decision?: 'continue' | 'retry' | 'verify' | 'stop'
+  reason?: JevWorkflowReason
+  corrections: number
+  requests: number
+  jevInput: number
+  jevOutput: number
+  mainInput: number
+  mainOutput: number
+  cacheRead: number
+  cacheWrite: number
+}
 
+// ---- Scheduled tasks ----
+export interface ScheduledTasksSnapshotDTO {
+  tasks: import('./scheduled-tasks').ScheduledTask[]
+  runs: import('./scheduled-tasks').ScheduledTaskRun[]
+  serverTime: string
+  defaultPermissionMode: SandboxMode
+  dedicatedRoot: string
+  /** Terminal runs the user has not marked read — the sidebar badge count. */
+  unreadCount: number
+}
+
+/** Full final assistant text for one selected scheduled run, fetched on demand. */
+export interface ScheduledRunOutputDTO {
+  text: string | null
+}
+
+/** IPC result wrapper: ScheduledTaskError's status survives the boundary. */
+export type ScheduledTaskResult<T> = { ok: true; value: T } | { ok: false; status: number; error: string }

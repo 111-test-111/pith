@@ -3,18 +3,20 @@ import { AgentCode } from '@/components/agents/agent-code'
 import { Button } from '@/components/motion/button'
 import { Tabs, TabsList, TabsTrigger } from '@/components/motion/tabs'
 import { Tooltip } from '@/components/motion/tooltip'
-import { Check, Copy, Download, ExternalLink, FileText, FolderOpen, FolderTree, LoaderCircle, RefreshCw, Search, WrapText, type IconComponent } from '@/lib/icons'
+import { Check, Copy, Download, ExternalLink, FileText, FolderOpen, FolderTree, Globe, LoaderCircle, RefreshCw, Search, WrapText, type IconComponent } from '@/lib/icons'
 import { basename, formatBytes } from '@/lib/format'
 import { fileDirname, FileBaseDirectory, FileNavigationProvider } from '@/lib/file-navigation'
-import { Markdown } from '@/lib/markdown'
 import { cn } from '@/lib/utils'
 import { useI18n } from '@/i18n'
 import { type FileBrowserStore, type FileTab, type FileView } from '@/state/file-browser-store'
 import type { PiStore } from '@/state/pi-store'
 import type { FileDocumentDTO, FileGitDiffDTO } from '../../../../shared/types'
-import { hasPreviewView, isInlineOnly, isMediaKind, previewKindOf, readsAsText, textReadLimit, type PreviewKind } from '../../../../shared/preview'
+import { hasPreviewView, isInlineOnly, isMediaKind, previewKindOf, readsAsText, subtitleFormatOf, textReadLimit, type PreviewKind } from '../../../../shared/preview'
 import { FileDiffPreview } from './FileDiffPreview'
 import { FileFont } from './FileFont'
+import { FileHtml } from './FileHtml'
+import { FileMarkdown } from './FileMarkdown'
+import { requestBrowserOpenLink } from '@/lib/browser/open-link'
 import { FileNotebook } from './FileNotebook'
 import { FileSubtitle } from './FileSubtitle'
 import { useToast } from './ToastProvider'
@@ -77,10 +79,10 @@ function FileContent({ tab, kind, document, store, search, refresh, wrap }: { ta
     // document's own scroll container (see shared/preview.ts).
     if (kind === 'diff') return <FileDiffPreview text={document.text ?? ''} displayPath={tab.path} />
     if (kind === 'notebook') return <FileNotebook text={document.text ?? ''} truncated={document.truncated} tab={tab} store={store} />
-    if (kind === 'subtitle') return <FileSubtitle text={document.text ?? ''} />
+    if (kind === 'subtitle') return <FileSubtitle text={document.text ?? ''} format={subtitleFormatOf(tab.path) ?? 'srt'} />
     return <div ref={scroll} data-file-markdown onScroll={onScroll} className="min-h-0 flex-1 overflow-auto p-5">
       <FileNavigationProvider cwd={tab.cwd} openFile={target => store.open(tab.cwd, target)}>
-        <FileBaseDirectory.Provider value={fileDirname(tab.path)}><Markdown>{document.text ?? ''}</Markdown></FileBaseDirectory.Provider>
+        <FileBaseDirectory.Provider value={fileDirname(tab.path)}><FileMarkdown text={document.text ?? ''} /></FileBaseDirectory.Provider>
       </FileNavigationProvider>
     </div>
   }
@@ -198,6 +200,15 @@ export function FilesPane({ files, store, filePath }: { files: FileBrowserStore;
     clearActionError()
     try { if (await window.pi.openPath(tab.path)) reportActionError() } catch { reportActionError() }
   }
+  const openInBrowser = async () => {
+    if (!tab) return
+    clearActionError()
+    try {
+      const preview = await window.pi.htmlPreview({ cwd: tab.cwd, path: tab.path })
+      if (preview.url) requestBrowserOpenLink(preview.url)
+      else reportActionError()
+    } catch { reportActionError() }
+  }
   const showInFolder = () => { if (tab) void window.pi.showInFolder(tab.path) }
   const saveCopy = async () => {
     if (!tab) return
@@ -227,6 +238,7 @@ export function FilesPane({ files, store, filePath }: { files: FileBrowserStore;
       </LabelTooltip>
       <ToolButton label={t('files.refresh')} icon={RefreshCw} onClick={refreshFiles} />
       {tab ? <>
+        {kind === 'html' ? <ToolButton label={t('files.html.openBrowser')} icon={Globe} onClick={() => void openInBrowser()} /> : null}
         <ToolButton label={t('files.openDefault')} icon={ExternalLink} onClick={() => void openDefault()} />
         <ToolButton label={t('files.showInFolder')} icon={FolderOpen} onClick={showInFolder} />
         <ToolButton label={t('files.saveAs')} icon={Download} onClick={() => void saveCopy()} />
@@ -253,10 +265,10 @@ export function FilesPane({ files, store, filePath }: { files: FileBrowserStore;
             </div>
           </div>}
           {!inlineOnly && !spreadsheet && find ? <FileFindBar inputRef={findRef} query={query} options={findOptions} result={searchResult} current={selectedMatch} searching={searching} onQuery={value => { setQuery(value); setMatchIndex(0) }} onOptions={value => { setFindOptions(value); setMatchIndex(0) }} onMove={moveMatch} onClose={closeFind} /> : null}
-          {mediaKind ? <FileMedia tab={tab} kind={mediaKind} refresh={refresh} /> : kind === 'pdf' ? <FilePdf key={tab.path} tab={tab} onOpenFile={target => files.open(tab.cwd, { path: target })} /> : kind === 'font' ? <FileFont key={`${tab.path}:${refresh}`} tab={tab} /> : kind === 'unplayable' ? <Notice>{t('files.media.unsupported')}</Notice> : table && view === 'preview' ? <FileTable key={tab.path} tab={tab} format={table} store={files} generation={refresh} /> : ready ? <FileContent key={tab.path} tab={tab} kind={kind} document={ready} store={files} search={find ? { result: searchResult, current: selectedMatch } : undefined} refresh={refresh} wrap={state.wrapLines} /> : <Notice loading>{t('files.loading')}</Notice>}
+          {mediaKind ? <FileMedia tab={tab} kind={mediaKind} refresh={refresh} /> : kind === 'pdf' ? <FilePdf key={tab.path} tab={tab} onOpenFile={target => files.open(tab.cwd, { path: target })} /> : kind === 'font' ? <FileFont key={`${tab.path}:${refresh}`} tab={tab} /> : kind === 'unplayable' ? <Notice>{t('files.media.unsupported')}</Notice> : kind === 'html' && view === 'preview' ? <FileHtml key={tab.path} tab={tab} refresh={refresh} onFind={showFind} /> : table && view === 'preview' ? <FileTable key={tab.path} tab={tab} format={table} store={files} generation={refresh} /> : ready ? <FileContent key={tab.path} tab={tab} kind={kind} document={ready} store={files} search={find ? { result: searchResult, current: selectedMatch } : undefined} refresh={refresh} wrap={state.wrapLines} /> : <Notice loading>{t('files.loading')}</Notice>}
           {/* A table's preview is not the truncated source text, so the source
               notice belongs to the source view only. */}
-          {ready?.truncated && !(table && view === 'preview') ? <p role="status" className="shrink-0 border-t border-border/40 px-3 py-2 text-xs text-muted-foreground">{t('files.truncated', { size: formatBytes(textReadLimit(kind)) })}</p> : null}
+          {ready?.truncated && !((table || kind === 'html') && view === 'preview') ? <p role="status" className="shrink-0 border-t border-border/40 px-3 py-2 text-xs text-muted-foreground">{t('files.truncated', { size: formatBytes(textReadLimit(kind)) })}</p> : null}
           {view === 'diff' && ready?.gitRoot ? <p className="shrink-0 border-t border-border/40 px-3 py-1.5 text-[10px] text-muted-foreground">{t('files.diffBase')}</p> : null}
         </> : <Notice>{t('files.chooseFile')}</Notice>}
       </div>

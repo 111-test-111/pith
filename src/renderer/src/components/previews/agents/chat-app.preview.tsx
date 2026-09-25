@@ -1,5 +1,7 @@
 "use client";
 
+// local patch (pi-app): preview controls use the app-wide 1px focus stroke.
+
 // local patch (pi-app): use the shared Lucide icon adapter.
 import { Maximize2, Minimize2 } from "@/lib/icons";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -112,7 +114,7 @@ export function ChatAppPreview() {
         onClick={toggleExpanded}
         aria-label={expanded ? "Exit expanded preview" : "Expand preview"}
         title={expanded ? "Exit expanded preview" : "Expand preview"}
-        className="absolute top-5 right-24 z-50 grid size-10 place-items-center rounded-full border border-border/80 bg-background/90 text-muted-foreground backdrop-blur-sm transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+        className="absolute top-5 right-24 z-50 grid size-10 place-items-center rounded-full border border-border/80 bg-background/90 text-muted-foreground backdrop-blur-sm transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-2"
       >
         <ActionSwapIcon
           value={expanded ? "minimize" : "maximize"}

@@ -1,3 +1,4 @@
+// local patch (pi-app): keep UI frames and focus rings in this component at 1px.
 "use client";
 // local patch (pi-app): citation counts use item geometry; source avatars stay round.
 
@@ -67,7 +68,8 @@ export function Citation({
       href={`#${citationTargetId(idPrefix, citationId)}`}
       aria-label={`View citation ${index}`}
       className={cn(
-        "mx-0.5 inline-flex min-w-4 -translate-y-0.5 items-center justify-center rounded-md bg-muted/60 px-1 py-0.5 text-[10px] font-semibold leading-none text-muted-foreground no-underline outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
+        // local patch (pi-app): citations use a fill on hover.
+        "mx-0.5 inline-flex min-w-4 -translate-y-0.5 items-center justify-center rounded-md bg-muted/60 px-1 py-0.5 text-[10px] font-semibold leading-none text-muted-foreground no-underline outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring",
         className,
       )}
     >
@@ -125,7 +127,7 @@ export function CitationStack({
         <CitationFavicon
           key={citation.id}
           url={citation.url}
-          className="size-6 rounded-full bg-background ring-2 ring-background"
+          className="size-6 rounded-full bg-background ring-1 ring-background"
         />
       ))}
     </span>
@@ -164,8 +166,11 @@ function CitationRow({
       </span>
     </>
   );
-  const className =
-    "group/citation flex items-center gap-2 rounded-md px-1.5 py-1 outline-none focus-visible:ring-2 focus-visible:ring-ring";
+  // local patch (pi-app): a linked citation fills on hover without a frame.
+  const className = cn(
+    "group/citation flex items-center gap-2 rounded-md px-1.5 py-1 outline-none focus-visible:ring-1 focus-visible:ring-ring",
+    citation.url && "transition-colors hover:bg-muted/50",
+  );
   const id = citationTargetId(idPrefix, citation.id);
 
   return citation.url ? (
@@ -258,7 +263,7 @@ export function Citations({
         aria-expanded={currentOpen}
         aria-controls={contentId}
         onClick={() => setOpen(!currentOpen)}
-        className="group -ml-1 flex min-h-8 items-center gap-2 rounded-lg px-1 text-left text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+        className="group -ml-1 flex min-h-8 items-center gap-2 rounded-lg px-1 text-left text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
       >
         <BookOpenText className="size-4" />
         <span className="font-medium">{title}</span>

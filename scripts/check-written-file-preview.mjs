@@ -55,11 +55,24 @@ const results = calls.map((call,index)=>({role:'toolResult',toolCallId:call.id,t
  content:[],isError:false,timestamp:index+2,...(call.name==='edit'?{details:{patch:files[4].patch}}:{})}));
 const reviewState = {cwd:'/fixture',messages:[{role:'assistant',timestamp:1,content:calls},...results]};
 const reviewStore = {subscribe:()=>()=>{},getState:()=>reviewState};
+const largeContent = Array.from({length:10000},(_,line)=>'export const largeLine'+line+' = '+line+';').join('\\n');
+const largePatch = synthesizeWritePatch('large-edit.ts',largeContent);
+const largeCalls = [
+ {type:'toolCall',id:'large-write',name:'write',arguments:{path:'large-write.ts',content:largeContent}},
+ {type:'toolCall',id:'large-edit',name:'edit',arguments:{path:'large-edit.ts'}}
+];
+const largeResults = [
+ {role:'toolResult',toolCallId:'large-write',toolName:'write',content:[],isError:false,timestamp:20},
+ {role:'toolResult',toolCallId:'large-edit',toolName:'edit',content:[],isError:false,timestamp:21,details:{patch:largePatch}}
+];
 window.renderDiffSurfaces = () => window.checkRoot.render(React.createElement(I18nProvider,null,
  React.createElement('div',{style:{display:'flex',gap:24,padding:24}},
   React.createElement('div',{id:'transcript-diffs',style:{width:540}},...calls.map((call,index)=>
    React.createElement('div',{key:call.id,'data-line-count':surfaceCounts[index]},
     React.createElement(ToolCallView,{call,result:results[index],cwd:'/fixture'})))),
+  React.createElement('div',{id:'large-tool-diffs',style:{width:540}},...largeCalls.map((call,index)=>
+   React.createElement('div',{key:call.id,'data-large-tool':call.name},
+    React.createElement(ToolCallView,{call,result:largeResults[index],cwd:'/fixture'})))),
   React.createElement('div',{id:'review-diffs',style:{width:540,height:850}},
    React.createElement(ReviewPane,{store:reviewStore,focusTurnId:1})))));
 window.fixtureReady=true;
@@ -151,9 +164,19 @@ app.on('window-all-closed',()=>app.quit());`)
   let positions = await rows()
   assert.equal(positions.length,5,'large file lists start folded')
   await move(50,50);await pause(80)
+  await evaluate(`(()=>{window.firstOpenFrames=[];window.sampleFirstOpen=true;
+    function sample(){if(!window.sampleFirstOpen)return;const row=document.querySelector('ul[data-plain-list] button[aria-expanded="true"]');
+      if(row){const p=document.querySelector('[data-morph-popover-portal]');const v=p?.querySelector('[data-slot="file-diff-viewport"]');
+        window.firstOpenFrames.push({portal:!!p,visible:!!p&&getComputedStyle(p).visibility==='visible',viewport:!!v,rows:v?.querySelectorAll('.grid').length??0})}
+      requestAnimationFrame(sample)}requestAnimationFrame(sample)})()`)
   await move(positions[0].x,positions[0].y)
   for(let attempt=0;attempt<100 && await panels()!==1;attempt++) await pause(30)
   assert.equal(await panels(),1,'hover opens one preview')
+  await pause(50)
+  const firstOpenFrames=await evaluate('window.sampleFirstOpen=false;window.firstOpenFrames')
+  assert.ok(firstOpenFrames.length>0,'first-open frame sampler observed the active row')
+  assert.ok(firstOpenFrames.every(frame=>frame.portal&&frame.visible&&frame.viewport&&frame.rows>0),
+    'the first expanded-row frame already contains a visible populated preview')
 
   for (const {theme, top} of [{theme:'light',top:400},{theme:'dark',top:400},{theme:'light',top:40}]) {
     await key('Escape');await move(50,50)
@@ -265,11 +288,22 @@ app.on('window-all-closed',()=>app.quit());`)
   assert.equal(await panels(),0,'unmounting the transcript releases the preview')
   await evaluate('window.resetCheckRoot();window.renderDiffSurfaces()')
   await pause(120)
-  await evaluate(`document.querySelectorAll('#transcript-diffs button[aria-expanded="false"]').forEach(button=>button.click())`)
-  await pause(300)
+  const largeOpenMs=await evaluate(`(async()=>{const start=performance.now();document.querySelectorAll('#transcript-diffs button[aria-expanded="false"],#large-tool-diffs button[aria-expanded="false"]').forEach(button=>button.click());
+    for(let frame=0;frame<120;frame++){await new Promise(requestAnimationFrame);const bodies=[...document.querySelectorAll('#large-tool-diffs [data-large-tool]')];
+      if(bodies.length===2&&bodies.every(host=>host.querySelector('[data-slot="file-diff-viewport"] .grid')))return performance.now()-start}return null})()`)
+  assert.equal(typeof largeOpenMs,'number','large tool diffs reach a populated paint')
+  const largeTools=await evaluate(`[...document.querySelectorAll('#large-tool-diffs [data-large-tool]')].map(host=>{const v=host.querySelector('[data-slot="file-diff-viewport"]');return {tool:host.dataset.largeTool,rows:v?.querySelectorAll('.grid').length,scrollHeight:v?.scrollHeight,tokenSpans:v?.querySelectorAll('[style*="--agent-code-light"]').length,footer:!!host.querySelector('[data-diff-body] > *:not([data-slot="file-diff-viewport"])'),live:v?.getAttribute('aria-live')}})`)
+  assert.deepEqual(largeTools.map(item=>item.tool),['write','edit'],'both large file tools render a diff')
+  assert.ok(largeTools.every(item=>item.rows>0&&item.rows<=40),'large tool diffs mount only the visible row window')
+  assert.ok(largeTools.every(item=>item.scrollHeight===200000),'large tool diffs retain their complete 10,000-line scroll range')
+  assert.ok(largeTools.every(item=>item.tokenSpans===0),'large tool diffs skip whole-patch Shiki tokenization')
+  assert.ok(largeTools.every(item=>!item.footer),'a transcript diff card is only its viewport — no footer bar under it')
+  assert.ok(largeTools.every(item=>item.live===null),'settled virtual windows are not announced again on every scroll')
   const surfaceHeights=await evaluate(`['transcript-diffs','review-diffs'].map(id=>[...document.querySelectorAll('#'+id+' [data-slot="file-diff-viewport"]')].map(v=>({height:v.getBoundingClientRect().height,scrollHeight:v.scrollHeight})))`)
-  assert.deepEqual(surfaceHeights[0].map(v=>v.height),[20,60,160,220],'transcript diffs shrink to content and cap only long bodies')
-  assert.deepEqual(surfaceHeights[1].map(v=>v.height),[20,60,160,800],'review bodies use full content height with no minimum or cap')
+  // Rounded: `getBoundingClientRect` reports fractional device pixels, and a cap
+  // that lands on a sub-pixel boundary reads as 219.99997 rather than 220.
+  assert.deepEqual(surfaceHeights[0].map(v=>Math.round(v.height)),[20,60,160,220],'transcript diffs shrink to content and cap only long bodies')
+  assert.deepEqual(surfaceHeights[1].map(v=>Math.round(v.height)),[20,60,160,800],'review bodies use full content height with no minimum or cap')
   assert.deepEqual(surfaceHeights.map(items=>items.map(v=>v.scrollHeight)),[[20,60,160,800],[20,60,160,800]],'both views retain exactly the complete line height')
   // Only the body whose cap actually hides a line carries the ramp; an uncapped
   // review body (`maxHeightOverride={null}`) never masks.
@@ -278,7 +312,8 @@ app.on('window-all-closed',()=>app.quit());`)
   assert.deepEqual(surfaceFades[1],['none','none','none','none'],'an uncapped review body never masks')
   await evaluate('window.checkRoot.unmount()')
   console.log('Transcript and review diffs fit 1-, 3-, 8- and 40-line content without reserved space.')
-  console.log('Passed hover, frame geometry, scroll, pin, keyboard, cold-token, cross-turn and cleanup checks.')
+  console.log(`Large write/edit diffs populate on first paint in ${largeOpenMs.toFixed(1)}ms, keep a bounded DOM, and skip whole-patch highlighting.`)
+  console.log('Passed first-paint hover, frame geometry, scroll, pin, keyboard, cold-token, cross-turn and cleanup checks.')
 } finally {
   ws?.close()
   if (child && child.exitCode===null) {

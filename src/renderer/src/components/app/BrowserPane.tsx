@@ -11,6 +11,7 @@ import { createBrowserPageId, HUMAN_OWNER, buildMarkerUrl, parseMarkerUrl } from
 import { readOpenBrowserPages, snapshotOpenPages, writeOpenBrowserPages, type OpenBrowserPageEntry } from '@/lib/browser/session'
 import { BROWSER_OPEN_LINK_EVENT, drainPendingBrowserOpenLinks } from '@/lib/browser/open-link'
 import { getBrowserZoom, nextBrowserZoom, setBrowserZoom } from '@/lib/browser/zoom'
+import { dispatchGuestIdentity } from '@/lib/shortcuts/shortcut-dispatcher'
 import type { BrowserPanePage, BrowserStore } from '@/lib/browser/store'
 import { BrowserPageView, isEditableTarget, type BrowserNavPatch, type BrowserPageActions, type LocalNavInfo } from './BrowserPageView'
 import { LabelTooltip } from './LabelTooltip'
@@ -304,8 +305,14 @@ export function BrowserPane({
   // layer can still hold focus, and acting there would change the global zoom or
   // open a find bar nobody can see.
   useEffect(() => {
-    return window.pi.onBrowserGuestShortcut(({ key }) => {
-      if (!active) return
+    return window.pi.onBrowserGuestShortcut(({ key, identity }) => {
+      // The pane's rail tab is hidden (keep-alive): a browser-owned key that
+      // is also an app-level command (default ⌘P → files pane) falls through
+      // to the app dispatcher; zoom/find/print stay off while invisible.
+      if (!active) {
+        if (identity) dispatchGuestIdentity(identity)
+        return
+      }
       if (handleZoomShortcut(key)) return
       if (key === 'f') selectedPageActionsRef.current?.openFind()
       else if (key === 'p') selectedPageActionsRef.current?.print()
@@ -892,7 +899,7 @@ export function BrowserPane({
                     <LabelTooltip content={url || undefined} wrap>
                       <TabsTrigger
                         value={page.id}
-                        indicatorClassName="bg-background shadow-xs ring-1 ring-border"
+                        indicatorClassName="bg-background shadow-xs"
                         className={cn('h-7 min-h-0 gap-1.5 pl-2.5 pr-7', isActive && 'text-foreground')}
                       >
                         {nav?.favicon ? (

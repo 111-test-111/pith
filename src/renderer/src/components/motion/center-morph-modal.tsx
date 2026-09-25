@@ -1,3 +1,4 @@
+// local patch (pi-app): keep UI frames and focus rings in this component at 1px.
 "use client";
 // beui.dev/components/motion/center-morph-modal
 
@@ -157,6 +158,10 @@ export interface CenterMorphModalContentProps {
   ariaDescribedBy?: string;
   /** Close on Escape or backdrop press. Default true. */
   dismissible?: boolean;
+  /** local patch (pi-app): space-separated shortcut command ids the app-level
+   *  keyboard dispatcher still admits while this dialog is the open layer
+   *  (lands as data-shortcut-passthrough on the dialog element). */
+  shortcutPassthrough?: string;
   /** Render the close control inside the panel's top-right corner. Default true. */
   showCloseButton?: boolean;
   closeButtonLabel?: string;
@@ -197,6 +202,7 @@ export function CenterMorphModalContent({
   ariaLabel,
   ariaDescribedBy,
   dismissible = true,
+  shortcutPassthrough,
   showCloseButton = true,
   closeButtonLabel = "Close modal",
   className,
@@ -308,6 +314,7 @@ export function CenterMorphModalContent({
                     aria-hidden={suspended || !isPresent ? true : undefined}
                     aria-label={ariaLabel}
                     aria-describedby={ariaDescribedBy}
+                    data-shortcut-passthrough={shortcutPassthrough}
                     tabIndex={-1}
                     initial={{ opacity: 0, scale: reduce ? 1 : 0.96 }}
                     animate={{ opacity: 1, scale: 1 }}
@@ -347,7 +354,7 @@ export function CenterMorphModalContent({
                           ease: EASE_OUT,
                         }}
                         // local patch (pi-app): the close control shares icon geometry.
-                        className="absolute right-4 top-4 inline-flex h-8 w-8 items-center justify-center rounded-icon bg-foreground/[0.05] text-muted-foreground transition-colors hover:bg-foreground/[0.08] hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        className="absolute right-4 top-4 inline-flex h-8 w-8 items-center justify-center rounded-icon bg-foreground/[0.05] text-muted-foreground transition-colors hover:bg-foreground/[0.08] hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                       >
                         <X className="h-4 w-4" aria-hidden="true" />
                       </motion.button>

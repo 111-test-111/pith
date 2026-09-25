@@ -1,3 +1,4 @@
+// local patch (pi-app): keep UI frames and focus rings in this component at 1px.
 "use client";
 
 import { motion, MotionConfig, useReducedMotion } from "motion/react";
@@ -134,12 +135,14 @@ export function RadioGroupItem({
           // Only the point is capsule-by-design — a square point in the square
           // style, a circular one in the squircle style (see
           // --app-radius-capsule in styles.css).
-          "relative inline-flex size-3.5 shrink-0 items-center justify-center rounded-control corner-round border-2 outline-none transition-colors duration-200",
-          "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+          "relative inline-flex size-3.5 shrink-0 items-center justify-center rounded-control corner-round border outline-none transition-colors duration-200",
+          "focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
           "disabled:cursor-not-allowed disabled:opacity-60",
+          // local patch (pi-app): keep the dot and visible frame at rest;
+          // hover changes the fill without changing the border colour.
           selected
-            ? "border-primary"
-            : "border-muted-foreground/50 hover:border-muted-foreground",
+            ? "border-primary bg-primary/15 hover:bg-primary/25"
+            : "border-muted-foreground/50 bg-muted/50 hover:bg-muted",
         )}
       >
         {selected ? (

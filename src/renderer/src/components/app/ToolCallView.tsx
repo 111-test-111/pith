@@ -1,12 +1,14 @@
+import { JEV_ERROR_CODES } from '../../../../shared/types'
 import { submittedPlanRef } from '@/lib/plan-submissions'
 import { useBashTask, bashTaskStatus } from '@/lib/bash-tasks'
 import { BashTaskRow } from './BashTaskView'
-import { memo, useMemo, useState } from 'react'
+import { memo, useMemo, useState, type ReactNode } from 'react'
 import { FileDiff } from '@/components/agents/file-diff'
 import { ToolResult, ToolResultOutput, type ToolResultStatus } from '@/components/agents/tool-result'
 import { parseUnifiedDiff, countDiffChanges, synthesizeWritePatch } from '@/lib/diff'
 import { basename } from '@/lib/format'
 import { displayToolDir, resolveFromCwd } from '@/lib/tool-path'
+import { useFileNavigation } from '@/lib/file-navigation'
 import { ToolIcon } from '@/lib/tool-icons'
 import { cn } from '@/lib/utils'
 import { TRANSCRIPT_ROW, TRANSCRIPT_ROW_WIDTH } from '@/lib/transcript-rhythm'
@@ -169,10 +171,54 @@ function metaOf(run: ToolRun | undefined): { live: boolean; seconds?: number } {
  * so the row scans by file; only the file's directory follows — relative inside
  * the session cwd, absolute outside it — so the filename is never repeated.
  * The directory is omitted when it IS the workspace root.
+ *
+ * The basename is one of the app's own file links (`data-file-link`), styled
+ * the way a path link in the assistant's prose is: clicking it opens the file
+ * in the right rail's preview. The label sits INSIDE the row's disclosure
+ * trigger (a <button>), so the link stays a plain span — nesting another
+ * interactive element in the trigger would be invalid HTML — and swallows its
+ * own click so opening the file never toggles the row.
  */
-function fileToolLabel(tool: string, path: string, cwd: string | null | undefined): string {
+function FileToolLabel({ tool, path, cwd }: { tool: string; path: string; cwd: string | null | undefined }) {
+  const navigation = useFileNavigation()
+  // A call that never named a file has nothing to open — no empty link.
+  if (!path) return <>{`${tool} · `}</>
   const dir = displayToolDir(path, cwd)
-  return `${tool} · ${basename(path)}${dir ? ` — ${dir}` : ''}`
+  return (
+    <>
+      {`${tool} · `}
+      <span
+        data-file-link
+        onClick={(event) => {
+          event.stopPropagation()
+          navigation.openPath(resolveFromCwd(path, cwd))
+        }}
+        className="cursor-pointer font-medium text-primary underline underline-offset-4 hover:opacity-80"
+      >
+        {basename(path)}
+      </span>
+      {dir ? ` — ${dir}` : ''}
+    </>
+  )
+}
+
+/**
+ * The row label for a Jev judgment: the brand, then the raw question TYPES the
+ * model actually sent (`Jev choice · score · noul`). Those are the parameters of
+ * the judgment, so they are shown raw and never as the localized capability
+ * names Settings → Jev uses; repeated types collapse to one, so five yes/no
+ * questions still read `Jev noul`. The tool's schema constrains every type to
+ * the three literals, so this label is bounded.
+ */
+function jevToolLabel(args: Record<string, any>): string {
+  const questions = args.questions
+  if (!questions || typeof questions !== 'object' || Array.isArray(questions)) return 'Jev'
+  const types = new Set<string>()
+  for (const question of Object.values(questions as Record<string, any>)) {
+    const type = question?.type
+    if (typeof type === 'string' && type) types.add(type)
+  }
+  return types.size ? `Jev ${[...types].join(' · ')}` : 'Jev'
 }
 
 /**
@@ -182,8 +228,10 @@ function fileToolLabel(tool: string, path: string, cwd: string | null | undefine
  */
 const WRAP_OUTPUT = '[&_pre]:[overflow-wrap:anywhere]'
 
+const EMPTY_DIFF_LINES: ReturnType<typeof parseUnifiedDiff> = []
+
 interface LazyDiffProps {
-  file: string
+  file: ReactNode
   diff: string
   status: 'streaming' | 'complete'
   /** Tool name whose icon heads the diff row (`edit`/`write`). */
@@ -197,18 +245,36 @@ function LazyDiff({ file, diff, status, tool }: LazyDiffProps) {
   // Counts for the collapsed header; parsing the full diff into rows stays
   // deferred until the user opens it.
   const changes = useMemo(() => countDiffChanges(diff), [diff])
+  // Keep parsing out of collapsed transcript rows, and release the allocated
+  // row objects again on close instead of retaining every large diff a long
+  // session has ever expanded.
+  const lines = useMemo(
+    () => open ? parseUnifiedDiff(diff) : EMPTY_DIFF_LINES,
+    [diff, open]
+  )
+  // Large diffs stay plain: asynchronously tokenizing the complete patch after
+  // the body appears causes a second expensive repaint. Small diffs retain the
+  // existing highlighted presentation.
+  const highlight = diff.length <= 32_000 && lines.length <= 400
   return (
     <FileDiff
       lazyContent
       icon={<ToolIcon name={tool} className="text-muted-foreground" />}
       file={file}
-      lines={open ? parseUnifiedDiff(diff) : []}
+      lines={lines}
       additions={changes.added}
       deletions={changes.removed}
       status={status}
       open={open}
       onOpenChange={setOpen}
       collapseOnComplete={false}
+      highlight={highlight}
+      virtualize
+      // No copy action: the copy footer the vendored component offers is a bar
+      // the reader never asked for — the row's own header already names the
+      // file, and the bar made the card's bottom padding larger than its top
+      // (the same call the tool rows made when they dropped their
+      // "复制 + Completed" footer, see `tool-result`).
     />
   )
 }
@@ -289,6 +355,14 @@ export const ToolCallView = memo(function ToolCallView({ call, result, run, cwd 
   if (submittedPlanRef(result)) return null
 
   switch (call.name) {
+    case 'jev_decide': {
+      const error = JEV_ERROR_CODES.find(code => output.trim() === `JEV_${code}` || output.trim() === `Error: JEV_${code}`)
+      return <ToolResult animateChanges={false} lazyContent open={open} onOpenChange={setOpen}
+        title={jevToolLabel(args)} status={status} icon={<ToolIcon name="jev_decide" />} meta={meta}
+        collapseOnComplete={false} contentClassName={WRAP_OUTPUT}>
+        {renderOutput(error ? t(`jev.error.${error}`) : output || placeholder(t('tool.noOutput')))}
+      </ToolResult>
+    }
     case 'ask_user_question': {
       // The row names the question instead of the bare tool name — the first
       // question is what the user needs to recognize while it waits for them —
@@ -368,7 +442,7 @@ export const ToolCallView = memo(function ToolCallView({ call, result, run, cwd 
         return (
           <LazyDiff
             tool="edit"
-            file={fileToolLabel('edit', path, cwd)}
+            file={<FileToolLabel tool="edit" path={path} cwd={cwd} />}
             diff={diff}
             status={status === 'running' ? 'streaming' : 'complete'}
           />
@@ -380,7 +454,7 @@ export const ToolCallView = memo(function ToolCallView({ call, result, run, cwd 
           lazyContent
           open={open}
           onOpenChange={setOpen}
-          title={fileToolLabel('edit', path, cwd)}
+          title={<FileToolLabel tool="edit" path={path} cwd={cwd} />}
           status={status}
           icon={<ToolIcon name="edit" />}
           meta={meta}
@@ -419,7 +493,7 @@ export const ToolCallView = memo(function ToolCallView({ call, result, run, cwd 
         return (
           <LazyDiff
             tool="write"
-            file={fileToolLabel('write', path, cwd)}
+            file={<FileToolLabel tool="write" path={path} cwd={cwd} />}
             diff={diff}
             // Only reachable once a result landed, so this diff is always
             // settled: it must not spin, auto-open, auto-scroll or defer its
@@ -434,7 +508,7 @@ export const ToolCallView = memo(function ToolCallView({ call, result, run, cwd 
           lazyContent
           open={open}
           onOpenChange={setOpen}
-          title={fileToolLabel('write', path, cwd)}
+          title={<FileToolLabel tool="write" path={path} cwd={cwd} />}
           status={status}
           icon={<ToolIcon name="write" />}
           meta={meta}
@@ -462,7 +536,7 @@ export const ToolCallView = memo(function ToolCallView({ call, result, run, cwd 
           lazyContent
           open={open}
           onOpenChange={setOpen}
-          title={fileToolLabel('read', path, cwd)}
+          title={<FileToolLabel tool="read" path={path} cwd={cwd} />}
           status={status}
           icon={<ToolIcon name="read" />}
           meta={meta}

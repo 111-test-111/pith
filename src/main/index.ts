@@ -5,6 +5,7 @@ import { appendCdpSwitches, pickCdpPort } from './browser/cdp-port.ts'
 import { installBrowserWiring } from './browser/wiring.ts'
 import { broadcast, createPiManager, registerIpc } from './ipc'
 import { installMediaProtocol, registerMediaScheme } from './media-protocol'
+import { installHtmlPreviewWiring } from './html-preview-wiring'
 import { guardExternalNavigation } from './navigation'
 import { loadSettings, saveSettings, type WindowBounds } from './settings'
 import { registerQuitShortcut } from './shutdown'
@@ -94,6 +95,7 @@ function createWindow(): BrowserWindow {
   // looks the singleton up lazily via getBrowserService() — a designed no-op until
   // the service initializes in ipc.ts (registerIpc).
   installBrowserWiring(win, broadcast)
+  installHtmlPreviewWiring(win)
 
   // Restore the maximized state the window was closed in. Reading bounds while
   // maximized or full screen yields the maximized rect, so persistence always
@@ -157,6 +159,9 @@ app.whenReady().then(() => {
   if (process.platform === 'darwin') app.dock?.setIcon(join(iconDirectory, '512x512.png'))
   const pi = createPiManager()
   const isQuitting = registerIpc(pi)
+  // The scheduler boots with the app: cheap when no tasks are saved (the
+  // first tick short-circuits before touching storage or the agent engine).
+  pi.startScheduledTasks()
   installMediaProtocol()
   createWindow()
 

@@ -1,3 +1,4 @@
+// local patch (pi-app): keep UI frames and focus rings in this component at 1px.
 "use client";
 // beui.dev/components/motion/multi-select
 
@@ -45,8 +46,10 @@ export function MultiSelectTrigger({
         context.setOpen(true);
       }}
       className={cn(
-        "relative z-20 flex min-h-11 w-full min-w-52 cursor-text items-center gap-2 rounded-xl border border-border bg-transparent px-2.5 py-1.5 text-sm text-foreground transition-[border-color] hover:border-(--color-border-strong)",
-        "focus-within:ring-2 focus-within:ring-foreground/20",
+        // local patch (pi-app): pointer hover fills the picker without a
+        // highlighted frame; focus remains visible for keyboard entry.
+        "relative z-20 flex min-h-11 w-full min-w-52 cursor-text items-center gap-2 rounded-xl border border-transparent bg-transparent px-2.5 py-1.5 text-sm text-foreground transition-colors",
+        "hover:bg-muted focus-within:ring-1 focus-within:ring-ring",
         context.disabled && "pointer-events-none opacity-50",
         className,
       )}
@@ -145,7 +148,7 @@ export function MultiSelectValue({
                   context.remove(value);
                   context.inputRef.current?.focus({ preventScroll: true });
                 }}
-                className="-mr-1 grid size-5 shrink-0 place-items-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-foreground/10 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                className="-mr-1 grid size-5 shrink-0 place-items-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-foreground/10 hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
               >
                 <X aria-hidden="true" className="size-3" />
               </button>

@@ -1,13 +1,14 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import {
-  Bot,
+  CalendarCheck,
   Chart,
+  ChatText,
+  CheckSquareOffset,
   Folder,
-  Globe,
-  MessageCirclePlus,
+  Ghost,
+  GoogleChromeLogo,
   Plus,
-  ScanSearch,
   SquareTerminal,
   X,
   type IconComponent
@@ -26,6 +27,8 @@ import { Tooltip } from '@/components/motion/tooltip'
 import { DURATION, EASE_OUT } from '@/lib/ease'
 import { useI18n } from '@/i18n'
 import type { MessageKey } from '@/i18n/locales/en'
+import type { ShortcutId } from '@/lib/shortcuts/keyboard-shortcuts'
+import { ShortcutBindingChip } from './ShortcutKeys'
 import { cn } from '@/lib/utils'
 import { basename } from '@/lib/format'
 import { LabelTooltip } from './LabelTooltip'
@@ -38,6 +41,7 @@ import { TerminalPane } from './TerminalPane'
 import { FilesPane } from './FilesPane'
 import { BrowserPane } from './BrowserPane'
 import { SubagentSessionPane } from './SubagentSessionPane'
+import { ScheduledSessionPane } from './ScheduledSessionPane'
 import type { FileBrowserStore } from '@/state/file-browser-store'
 import type { TerminalStore } from '@/state/terminal-store'
 import type { SideChatStore } from '@/state/side-chat-store'
@@ -52,18 +56,23 @@ export const SIDEBAR_PANEL_WIDTH = 400
 /** The panes the right rail can host. Besides the fixed kinds, the rail hosts
  * one tab per open FILE and per open SUBAGENT SESSION (both keyed by path). */
 export type SidebarTabKind = 'review' | 'context' | 'terminal' | 'browser' | 'files' | 'chat'
-export type SidebarTabId = SidebarTabKind | `file:${string}` | `agent:${string}`
+export type SidebarTabId = SidebarTabKind | `file:${string}` | `agent:${string}` | `scheduled:${string}`
 export const fileTabId = (path: string): SidebarTabId => `file:${path}`
 export const filePathForTab = (id: SidebarTabId | null): string | null => id?.startsWith('file:') ? id.slice(5) : null
 /** A subagent child session shown READ-ONLY beside the chat: opening it here
  * keeps the visible conversation in place instead of navigating away from it. */
 export const agentTabId = (path: string): SidebarTabId => `agent:${path}`
 export const agentPathForTab = (id: SidebarTabId | null): string | null => id?.startsWith('agent:') ? id.slice(6) : null
+/** A scheduled run's session shown READ-ONLY beside the chat: the session
+ * itself never lists in the sidebar/search, so the tasks view opens it here. */
+export const scheduledTabId = (path: string): SidebarTabId => `scheduled:${path}`
+export const scheduledPathForTab = (id: SidebarTabId | null): string | null => id?.startsWith('scheduled:') ? id.slice(10) : null
 
 interface SidebarTabSpec {
   id: SidebarTabKind
   labelKey: MessageKey
-  shortcutKey: MessageKey
+  /** The shortcut command that opens this pane; the chip follows rebinding. */
+  shortcutId: ShortcutId
   icon: IconComponent
   /** Content of an opened tab — each pane lands here as it is implemented. */
   render: (props: SidebarPaneProps) => ReactNode
@@ -111,29 +120,29 @@ export const SIDEBAR_TABS: SidebarTabSpec[] = [
   {
     id: 'review',
     labelKey: 'sidebar.review',
-    shortcutKey: 'sidebar.shortcutReview',
-    icon: ScanSearch,
+    shortcutId: 'openReview',
+    icon: CheckSquareOffset,
     render: (props) => <ReviewPane store={props.store} focusTurnId={props.reviewTurnId} />
   },
   {
     id: 'context',
     labelKey: 'sidebar.context',
-    shortcutKey: 'sidebar.shortcutContext',
+    shortcutId: 'openContext',
     icon: Chart,
     render: (props) => <ContextDetailPane store={props.store} />
   },
   {
     id: 'terminal',
     labelKey: 'sidebar.terminal',
-    shortcutKey: 'sidebar.shortcutTerminal',
+    shortcutId: 'openTerminal',
     icon: SquareTerminal,
     render: (props) => <TerminalPane terminals={props.terminals} onNew={props.onNewTerminal} onEmpty={props.onTerminalsEmpty} />
   },
   {
     id: 'browser',
     labelKey: 'sidebar.browser',
-    shortcutKey: 'sidebar.shortcutBrowser',
-    icon: Globe,
+    shortcutId: 'openBrowser',
+    icon: GoogleChromeLogo,
     // Never rendered through this registry: the pane content area below hosts
     // the browser pane itself in a keep-alive layer, because its webviews are
     // process-backed and die on unmount. A second instance here would
@@ -144,15 +153,15 @@ export const SIDEBAR_TABS: SidebarTabSpec[] = [
   {
     id: 'files',
     labelKey: 'sidebar.files',
-    shortcutKey: 'sidebar.shortcutFiles',
+    shortcutId: 'openFiles',
     icon: Folder,
     render: (props) => <FilesPane files={props.files} store={props.store} filePath={null} />
   },
   {
     id: 'chat',
     labelKey: 'sidebar.chat',
-    shortcutKey: 'sidebar.shortcutChat',
-    icon: MessageCirclePlus,
+    shortcutId: 'openSideChat',
+    icon: ChatText,
     render: (props) =>
       props.sideChat ? (
         <SideChatPane
@@ -174,30 +183,23 @@ function specFor(kind: SidebarTabKind): SidebarTabSpec {
   return spec
 }
 
-/** Keyboard hint chip — the panel lists what each pane's shortcut will be. */
-function ShortcutChip({ value }: { value: string }) {
-  return (
-    <span className="inline-flex h-6 min-w-8 shrink-0 items-center justify-center rounded-md bg-muted px-1.5 text-xs font-medium text-muted-foreground">
-      {value}
-    </span>
-  )
-}
-
 /**
  * Shown while the rail has no open tab: the picker centred in the panel, one
- * row per pane (icon, label, shortcut). A row click opens that pane.
+ * row per pane (icon, label, its current shortcut). A row click opens it.
  */
 function SidebarPicker({ onOpen }: { onOpen: (kind: SidebarTabKind) => void }) {
   const { t } = useI18n()
   return (
     <div className="flex h-full items-center px-2">
-      <SharedLayoutBg inset={6}>
+      {/* Extend the hover fill through the wrapper's 8px side padding. */}
+      <SharedLayoutBg inset={8}>
         {SIDEBAR_TABS.map((spec) => (
           <button
             key={spec.id}
             type="button"
             onClick={() => onOpen(spec.id)}
-            className="block w-full rounded-lg px-3 py-2.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            // SharedLayoutBg paints the row's only hover background.
+            className="block w-full rounded-lg px-3 py-2.5 text-left outline-none focus-visible:ring-1 focus-visible:ring-ring"
           >
             <span className="flex w-full items-center gap-3">
               <span className="grid size-5 shrink-0 place-items-center text-muted-foreground">
@@ -206,7 +208,7 @@ function SidebarPicker({ onOpen }: { onOpen: (kind: SidebarTabKind) => void }) {
               <span className="min-w-0 flex-1 truncate text-sm text-foreground">
                 {t(spec.labelKey)}
               </span>
-              <ShortcutChip value={t(spec.shortcutKey)} />
+              <ShortcutBindingChip id={spec.shortcutId} />
             </span>
           </button>
         ))}
@@ -276,21 +278,22 @@ function SidebarTabStrip({
             {tabs.map((kind) => {
               const path = filePathForTab(kind)
               const agentPath = agentPathForTab(kind)
-              // `specFor` only knows the fixed kinds: an agent tab (like a file
-              // tab) takes its own label and icon, and must NOT be resolved
-              // through the registry.
-              const spec = agentPath ? null : specFor(path ? 'files' : kind as SidebarTabKind)
+              const scheduledPath = scheduledPathForTab(kind)
+              // `specFor` only knows the fixed kinds: an agent/scheduled tab
+              // (like a file tab) takes its own label and icon, and must NOT
+              // be resolved through the registry.
+              const spec = agentPath || scheduledPath ? null : specFor(path ? 'files' : kind as SidebarTabKind)
               const label = agentPath
                 ? agentRuns.get(agentPath)?.description ?? t('subagent.sessionTab')
-                : path ? basename(path) : t(spec!.labelKey)
+                : scheduledPath ? t('scheduledTasks.pane.title') : path ? basename(path) : t(spec!.labelKey)
               // A JSX tag name cannot carry a non-null assertion, so the icon
               // component is bound here where the union still narrows.
               const TabIcon = spec?.icon
               const isActive = active === kind
               return (
                 <div key={kind} data-sidebar-tab={kind} className="group/tab relative flex items-center">
-                  <LabelTooltip content={path ?? (agentPath ? label : '')}><TabsTrigger value={kind} className="h-9 min-h-0 gap-2 pl-2.5 pr-8">
-                    {agentPath ? <Bot aria-hidden="true" className="size-3.5 shrink-0" /> : path ? <FileTypeIcon path={path} className="size-4 shrink-0" /> : TabIcon ? <TabIcon aria-hidden="true" className="size-3.5 shrink-0" /> : null}
+                  <LabelTooltip content={path ?? (agentPath ?? scheduledPath ? label : '')}><TabsTrigger value={kind} className="h-9 min-h-0 gap-2 pl-2.5 pr-8">
+                    {agentPath ? <Ghost aria-hidden="true" className="size-3.5 shrink-0" /> : scheduledPath ? <CalendarCheck aria-hidden="true" className="size-3.5 shrink-0" /> : path ? <FileTypeIcon path={path} className="size-4 shrink-0" /> : TabIcon ? <TabIcon aria-hidden="true" className="size-3.5 shrink-0" /> : null}
                     <MiddleEllipsis name={label} className="max-w-32 text-xs" />
                   </TabsTrigger></LabelTooltip>
                   <Tooltip
@@ -353,6 +356,8 @@ function SidebarTabStrip({
 
 interface SidebarPanelProps {
   open: boolean
+  /** Cover the chat within the inset, leaving the session sidebar accessible. */
+  fullscreen?: boolean
   /** Panel width in px, owned by the workspace (it shares one budget with the
    * sidebar and the transcript, and persists what the user dragged). */
   width: number
@@ -378,12 +383,13 @@ interface SidebarPanelProps {
 
 /**
  * Right rail below the app header: a horizontal tab strip over the active
- * pane, or the picker while nothing is open. It is docked, not an overlay — it
- * takes a flex column of its own so the transcript reflows beside it, and the
- * shell animates its width so the slide stays a clip rather than a re-layout.
+ * pane, or the picker while nothing is open. Normally docked beside the chat;
+ * fullscreen anchors to the workspace inset, so its bounds follow window and
+ * session-sidebar resizing directly in CSS without remounting the active pane.
  */
 export function SidebarPanel({
   open,
+  fullscreen = false,
   width,
   resizing = false,
   edgeActive = false,
@@ -446,9 +452,10 @@ export function SidebarPanel({
           aria-label={t('sidebar.title')}
           aria-hidden={!open || undefined}
           data-panel="right"
+          data-panel-fullscreen={fullscreen || undefined}
           initial={{ width: 0, opacity: 0, borderLeftWidth: 0 }}
           animate={{
-            width: open ? (resizing ? 'var(--panel-right)' : width) : 0,
+            width: open ? (fullscreen ? '100%' : resizing ? 'var(--panel-right)' : width) : 0,
             opacity: open ? 1 : 0,
             // A kept-alive fold parks the aside at width 0 for good — a
             // border-box width of 0 would still paint the 1px left rule, so
@@ -461,14 +468,15 @@ export function SidebarPanel({
             reduce || resizing ? { duration: 0 } : { duration: DURATION.base, ease: EASE_OUT }
           }
           className={cn(
-            'relative shrink-0 overflow-hidden border-l bg-background',
+            'shrink-0 overflow-hidden border-l bg-background',
+            fullscreen ? 'absolute inset-y-0 right-0 z-30' : 'relative',
             edgeActive ? 'border-primary' : 'border-border',
             !open && 'pointer-events-none'
           )}
         >
           <div
             className="flex h-full flex-col"
-            style={{ width: resizing ? 'var(--panel-right)' : width }}
+            style={{ width: fullscreen ? '100%' : resizing ? 'var(--panel-right)' : width }}
           >
             {hasTabs ? (
               <SidebarTabStrip
@@ -526,6 +534,10 @@ export function SidebarPanel({
                         onOpenInChat={pane.onOpenSessionInChat}
                       />
                     )
+                  }
+                  const scheduledPath = scheduledPathForTab(activeTab)
+                  if (scheduledPath) {
+                    return <ScheduledSessionPane sessionPath={scheduledPath} />
                   }
                   const path = filePathForTab(activeTab)
                   return path

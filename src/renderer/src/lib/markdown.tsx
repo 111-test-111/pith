@@ -1,4 +1,5 @@
 import {
+  Component,
   createContext,
   memo,
   useContext,
@@ -10,19 +11,22 @@ import {
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import { CodeBlock } from '@/components/agents/code-block'
 import { PreviewThumb } from '@/components/app/ImagePreview'
+import { MarkdownMath } from '@/components/app/MarkdownMath'
 import { REMARK_PLUGINS } from '@/lib/markdown-plugins'
+import { splitMarkdownBlocks } from '@/lib/markdown-blocks'
+import { normalizeQuotedMath } from '@/lib/markdown-quoted-math'
 import { localFileTarget, useFileNavigation } from '@/lib/file-navigation'
 import { codeLanguage } from '@/lib/file-language'
 import { getOpenLinksInBrowserPref, requestBrowserOpenLink } from '@/lib/browser/open-link'
 
 /**
  * Assistant markdown renderer: react-markdown + GFM (tables, task lists,
- * strikethrough) plus the CJK emphasis/autolink fixes in `markdown-plugins`,
+ * strikethrough), math and the CJK emphasis/autolink fixes in `markdown-plugins`,
  * with output styled through beUI theme tokens. Fenced code
  * renders with beUI's CodeBlock; everything else maps to token-styled elements.
  *
  * While `streaming`, the text is split at blank-line boundaries OUTSIDE code
- * fences into stable leading blocks plus a live tail: blocks render through a
+ * and math fences into stable leading blocks plus a live tail: blocks render through a
  * memoized component, so each delta only re-parses the trailing block, and
  * fenced code skips shiki highlighting until the turn completes. Block-level
  * structures that legitimately span a blank line (loose lists, link
@@ -103,7 +107,7 @@ function resolveImage(src: string): Promise<ResolvedImage | null> {
   return promise
 }
 
-function MarkdownImage({ src, alt }: ComponentPropsWithoutRef<'img'>) {
+function MarkdownImage({ src, alt, title }: ComponentPropsWithoutRef<'img'>) {
   const navigation = useFileNavigation()
   const source = typeof src === 'string' && !inlineImageSrc(src) && navigation.cwd ? localFileTarget(src, navigation.cwd)?.path ?? src : src
   const streaming = useContext(StreamingMarkdownContext)
@@ -142,6 +146,7 @@ function MarkdownImage({ src, alt }: ComponentPropsWithoutRef<'img'>) {
       <PreviewThumb
         src={resolved.url}
         alt={alt ?? ''}
+        title={title}
         path={resolved.path}
         className="rounded-xl"
         imageClassName="max-h-72 max-w-full object-contain"
@@ -165,47 +170,6 @@ function extractCodeBlock(children: ReactNode): { code: string; language?: strin
   return { code: code.replace(/\n$/, ''), language: match?.[1] }
 }
 
-function isClosingFence(line: string, fence: string): boolean {
-  const match = new RegExp(`^ {0,3}(${fence[0]}{${fence.length},})\\s*$`).exec(line)
-  return Boolean(match)
-}
-
-/**
- * Cut points (character offsets) where a following block starts: right after
- * each blank line that is not inside a code fence. Cut positions of a growing
- * text are append-only, so block strings stay stable across deltas.
- */
-function markdownCutPoints(text: string): number[] {
-  const cuts: number[] = []
-  let fence: string | null = null
-  let offset = 0
-  for (const line of text.split('\n')) {
-    if (fence) {
-      if (isClosingFence(line, fence)) fence = null
-    } else {
-      const open = /^ {0,3}(`{3,}|~{3,})/.exec(line)
-      if (open) {
-        fence = open[1]
-      } else if (line === '' && offset + 1 <= text.length) {
-        cuts.push(offset + 1)
-      }
-    }
-    offset += line.length + 1
-  }
-  return cuts
-}
-
-function splitMarkdownBlocks(text: string): { stable: string[]; tail: string } {
-  const cuts = markdownCutPoints(text)
-  const stable: string[] = []
-  let start = 0
-  for (const cut of cuts) {
-    stable.push(text.slice(start, cut))
-    start = cut
-  }
-  return { stable, tail: text.slice(start) }
-}
-
 /** Markdown 链接拦截——作用于所有 Markdown 面（聊天、侧聊、摘要行、文件预览），有意
  *  如此（Settings 文案即「Chat and markdown links」）：无修饰键的普通点击 + http(s) 链接 +
  *  「链接在内置浏览器打开」
@@ -221,6 +185,16 @@ function isBrowserOpenLinkClick(href: string, event: { metaKey: boolean; ctrlKey
 type MarkdownComponents = ComponentPropsWithoutRef<typeof ReactMarkdown>['components']
 
 const components: MarkdownComponents = {
+  span({ node, children }) {
+    const props = node?.properties
+    if (props?.['data-math']) return <MarkdownMath
+      source={String(props['data-math-source'] ?? '')}
+      raw={String(props['data-math-raw'] ?? '')}
+      display={props['data-math'] === 'display'}
+      incomplete={props['data-math-incomplete'] === true}
+    />
+    return <span>{children}</span>
+  },
   pre({ children }) {
     const { code, language } = extractCodeBlock(children)
     return (
@@ -234,16 +208,17 @@ const components: MarkdownComponents = {
   code({ children }) {
     // Only inline code reaches this override — fenced code is consumed by `pre`.
     return (
-      <code className="rounded-detail bg-muted px-1.5 py-0.5 font-mono text-[0.85em] text-foreground">
+      <code className="rounded-detail bg-muted px-1.5 py-0.5 font-mono text-xs text-foreground">
         {children}
       </code>
     )
   },
-  a({ href, children }) {
+  a({ href, title, children }) {
     const navigation = useFileNavigation()
     return (
       <a
         href={href}
+        title={title}
         onClick={(event) => {
           if (!href) return
           event.preventDefault()
@@ -276,15 +251,15 @@ const components: MarkdownComponents = {
   thead({ children }) {
     return <thead className="bg-muted/60">{children}</thead>
   },
-  th({ children }) {
+  th({ children, style }) {
     return (
-      <th className="border-b border-border px-3 py-2 text-left font-semibold text-foreground">
+      <th style={{ textAlign: style?.textAlign }} className="border-b border-border px-3 py-2 text-left font-semibold text-foreground">
         {children}
       </th>
     )
   },
-  td({ children }) {
-    return <td className="border-b border-border/60 px-3 py-2 align-top">{children}</td>
+  td({ children, style }) {
+    return <td style={{ textAlign: style?.textAlign }} className="border-b border-border/60 px-3 py-2 align-top">{children}</td>
   },
   tr({ children }) {
     return <tr className="last:[&>td]:border-b-0">{children}</tr>
@@ -292,14 +267,14 @@ const components: MarkdownComponents = {
   ul({ children }) {
     return <ul className="ml-5 list-disc space-y-1 marker:text-muted-foreground">{children}</ul>
   },
-  ol({ children }) {
-    return <ol className="ml-5 list-decimal space-y-1 marker:text-muted-foreground">{children}</ol>
+  ol({ children, start }) {
+    return <ol start={start} className="ml-5 list-decimal space-y-1 marker:text-muted-foreground">{children}</ol>
   },
-  li({ children }) {
-    return <li className="pl-1 [>&]:min-w-0">{children}</li>
+  li({ children, className }) {
+    return <li className={`pl-1 [>&]:min-w-0${className?.split(' ').includes('task-list-item') ? ' list-none' : ''}`}>{children}</li>
   },
   h1({ children }) {
-    return <h1 className="text-lg font-semibold text-foreground">{children}</h1>
+    return <h1 className="text-base font-bold text-foreground">{children}</h1>
   },
   h2({ children }) {
     return <h2 className="text-base font-semibold text-foreground">{children}</h2>
@@ -312,7 +287,7 @@ const components: MarkdownComponents = {
   },
   blockquote({ children }) {
     return (
-      <blockquote className="border-l-2 border-border pl-3 text-muted-foreground">
+      <blockquote className="border-l border-border pl-3 text-muted-foreground">
         {children}
       </blockquote>
     )
@@ -327,14 +302,39 @@ function markdownUrlTransform(url: string): string {
   return /^file:/i.test(url) || /^[a-z]:[\\/]/i.test(url) || /^[^?#:]+\.[\w-]+:\d+(?::\d+)?(?:-\d+)?$/.test(url) ? url : defaultUrlTransform(url)
 }
 
+/** A parser/component/chunk failure belongs to this block, never the app.
+ * Preserve readable source and retry on the next edit or streaming delta,
+ * without remounting healthy blocks (and their formula/code caches). */
+class MarkdownBlockBoundary extends Component<{ source: string; children: ReactNode }, { source: string; failed: boolean }> {
+  state = { source: this.props.source, failed: false }
+
+  static getDerivedStateFromProps(props: { source: string }, state: { source: string }) {
+    return props.source !== state.source ? { source: props.source, failed: false } : null
+  }
+
+  static getDerivedStateFromError() {
+    return { failed: true }
+  }
+
+  render() {
+    return this.state.failed
+      ? <div data-markdown-fallback className="whitespace-pre-wrap">{this.props.source}</div>
+      : this.props.children
+  }
+}
+
+function ParsedMarkdown({ source }: { source: string }) {
+  return (
+    <ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={components} urlTransform={markdownUrlTransform}>
+      {normalizeQuotedMath(source)}
+    </ReactMarkdown>
+  )
+}
+
 /** One already-final markdown block — memoized so stable blocks never
  * re-parse while the tail streams. */
 const MarkdownBlock = memo(function MarkdownBlock({ children }: { children: string }) {
-  return (
-    <ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={components} urlTransform={markdownUrlTransform}>
-      {children}
-    </ReactMarkdown>
-  )
+  return <MarkdownBlockBoundary source={children}><ParsedMarkdown source={children} /></MarkdownBlockBoundary>
 })
 
 export const Markdown = memo(function Markdown({
@@ -360,9 +360,7 @@ export const Markdown = memo(function Markdown({
             {blocks.tail ? <MarkdownBlock>{blocks.tail}</MarkdownBlock> : null}
           </>
         ) : (
-          <ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={components} urlTransform={markdownUrlTransform}>
-            {children}
-          </ReactMarkdown>
+          <MarkdownBlock>{children}</MarkdownBlock>
         )}
       </div>
     </StreamingMarkdownContext.Provider>

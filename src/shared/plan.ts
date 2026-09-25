@@ -33,6 +33,8 @@ export interface PlanStateDTO {
   mode: SessionMode
   planId: string | null
   latest: PlanSubmissionRef | null
+  /** A newer planning user turn exists but has not submitted its replacement. */
+  revisionPending: boolean
   approval: PlanApprovalDTO | null
   /**
    * The transcript turn that executes an approved plan, identified the way the

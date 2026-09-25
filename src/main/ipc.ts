@@ -3,11 +3,14 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { registerPlanIpc } from './pi/plan-ipc'
 import { PiManager } from './pi/manager'
+import { ScheduledTaskError } from './pi/scheduled-tasks/service'
+import type { JevSettingsUpdate, ScheduledTaskResult } from '../shared/types'
 import { TerminalManager } from './terminal/manager'
 import { registerQuitHandler } from './shutdown'
 import { isDefaultWorkspace } from './pi/default-workspace'
 import { loadSettings, saveSettings } from './settings'
 import { getBrowserService, initBrowserService } from './browser/service'
+import { setAppShortcutIdentities } from './browser/wiring.ts'
 import { getCdpPort } from './browser/cdp-port'
 import {
   browserImportRecordPath,
@@ -24,6 +27,7 @@ import { setWindowTheme } from './window-chrome'
 import { listFileDirectory, readFileDocument, readFileGitDiff } from './file-browser'
 import { readPdfRange, readPdfStat } from './pdf'
 import { readFontData } from './font'
+import { htmlPreviews } from './html-preview'
 import { readTableRange, readTableSlice, readTableStat } from './table'
 import { saveFileCopy } from './file-actions'
 import { MAX_CONCURRENT_SUBAGENTS_DEFAULT } from './pi/subagents/runtime'
@@ -45,6 +49,7 @@ import type {
   PromptPayload,
   QueueActionPayload,
   ResendPayload,
+  ContinuePayload,
   SessionSnapshotDTO,
   SessionSearchRequest,
   SandboxEscalationDecision,
@@ -81,7 +86,7 @@ export function registerIpc(pi: PiManager): () => boolean {
   const terminals = new TerminalManager(pi.checkoutCoordinator)
   ipcMain.handle('terminal:create', (event, payload) => terminals.create(event.sender, payload))
   ipcMain.on('terminal:command', (event, command) => terminals.command(event.sender, command))
-  const isQuitting = registerQuitHandler(app, [() => terminals.dispose(), () => pi.dispose(), async () => getBrowserService()?.dispose()])
+  const isQuitting = registerQuitHandler(app, [async () => { pi.stopScheduledTasks() }, () => terminals.dispose(), () => pi.dispose(), async () => getBrowserService()?.dispose(), () => htmlPreviews.dispose()])
 
   // Embedded browser singleton: one per app, owned here and by the quit
   // cleanup above (runs before the window exists — registerIpc is called from
@@ -153,6 +158,13 @@ export function registerIpc(pi: PiManager): () => boolean {
   })
   // ---- Embedded browser: the renderer's only control surface for the service ----
   ipcMain.handle('browser:status', (): BrowserStatusDTO => browser.getStatus())
+  // The renderer's shortcut catalogue (lib/shortcuts) pushes its current
+  // binding identities here; a focused guest's matching keydown is relayed
+  // back as browser:guest-app-shortcut (see wiring.ts). Fire-and-forget:
+  // minimal fixture mains simply have no listener (a silent no-op).
+  ipcMain.on('browser:setAppShortcuts', (_event, identities: unknown) => {
+    setAppShortcutIdentities(identities)
+  })
   // Local-row restore (open-pages snapshot) needs the service's CDP connection
   // to EXIST before its marker guests spawn (iron 7: a guest predating the
   // connection is invisible to it — state-only forever, no runtime, so the
@@ -264,6 +276,28 @@ export function registerIpc(pi: PiManager): () => boolean {
   ipcMain.handle('rewind:patch', (_event, path: string, token: string, file: string, area: 'worktree' | 'index', stage?: number) => pi.rewindPatch(path, token, file, area, stage))
   ipcMain.handle('rewind:restore', (_event, request: RewindRequest) => pi.rewindRestore(request))
   ipcMain.handle('rewind:recover', (_event, path: string, operationId: string) => pi.rewindRecover(path, operationId))
+
+  // Scheduled tasks: handlers forward arguments only and keep
+  // ScheduledTaskError's status across the boundary; prose is the renderer's.
+  const scheduledCall = <T>(work: () => Promise<T>): Promise<ScheduledTaskResult<T>> =>
+    work()
+      .then((value) => ({ ok: true as const, value }))
+      .catch((error) => ({
+        ok: false as const,
+        status: error instanceof ScheduledTaskError ? error.status : 500,
+        error: error instanceof Error ? error.message : String(error)
+      }))
+  ipcMain.handle('scheduled:snapshot', () => scheduledCall(() => pi.scheduledTasksSnapshot()))
+  ipcMain.handle('scheduled:runOutput', (_event, runId: string) => scheduledCall(() => pi.scheduledRunOutput(runId)))
+  ipcMain.handle('scheduled:get', (_event, id: string) => scheduledCall(() => pi.scheduledTasks.get(id)))
+  ipcMain.handle('scheduled:create', (_event, input: unknown) => scheduledCall(() => pi.scheduledTasks.create(input)))
+  ipcMain.handle('scheduled:update', (_event, id: string, patch: Record<string, unknown>, revision?: number) =>
+    scheduledCall(() => pi.scheduledTasks.update(id, patch, revision)))
+  ipcMain.handle('scheduled:delete', (_event, id: string, revision?: number) => scheduledCall(() => pi.scheduledTasks.delete(id, revision)))
+  ipcMain.handle('scheduled:runNow', (_event, id: string, revision?: number) => scheduledCall(() => pi.scheduledTasks.runNow(id, revision)))
+  ipcMain.handle('scheduled:cancelRun', (_event, runId: string) => scheduledCall(() => pi.scheduledTasks.cancelRun(runId)))
+  ipcMain.handle('scheduled:markRead', (_event, runId: string) => scheduledCall(() => pi.scheduledTasks.markRead(runId)))
+  ipcMain.handle('scheduled:deleteRuns', (_event, ids: unknown) => scheduledCall(() => pi.scheduledTasks.deleteRuns(ids)))
   ipcMain.handle('app:setCheckpointsEnabled', (_event, enabled: boolean) => pi.setCheckpointsEnabled(enabled))
   ipcMain.handle('app:setStartup', (_event, mode: StartupSessionMode) => pi.setStartupMode(mode))
   ipcMain.handle('app:setBashMaxWaitMs', (_event, value: number) => pi.setBashMaxWaitMs(value))
@@ -276,6 +310,11 @@ export function registerIpc(pi: PiManager): () => boolean {
     saveSettings({ ...loadSettings(), browserAgentToolsEnabled: enabled })
     return pi.setBrowserAgentTools(enabled)
   })
+  ipcMain.handle('jev:settings', () => pi.jevSettings())
+  ipcMain.handle('jev:updateSettings', (_event, update: JevSettingsUpdate) => pi.updateJevSettings(update))
+  ipcMain.handle('jev:test', () => pi.testJev())
+  ipcMain.handle('jev:traces', (_event, path: string, cursor?: string) => pi.jevTraces(path, cursor))
+  ipcMain.handle('jev:trace', (_event, path: string, id: string) => pi.jevTrace(path, id))
   // The live mode belongs to a session, not to the app: the composer switches
   // this session's mode and gets the refreshed snapshot back.
   registerPlanIpc(pi)
@@ -285,6 +324,9 @@ export function registerIpc(pi: PiManager): () => boolean {
   ipcMain.handle('pi:compact', (_event, sessionPath: string) => pi.compactSession(sessionPath))
   // Manual resource reload, the app's equivalent of `/reload`.
   ipcMain.handle('pi:reload', (_event, sessionPath: string) => pi.reloadSession(sessionPath))
+  // The session's current effective system prompt, read live off the SDK; the
+  // active session answers when no path is given.
+  ipcMain.handle('pi:systemPrompt', (_event, sessionPath?: string) => pi.systemPrompt(sessionPath))
   // Answer one pending sandbox escalation. The session path travels with the id
   // so an answer cannot settle another session's question.
   ipcMain.handle(
@@ -371,6 +413,7 @@ export function registerIpc(pi: PiManager): () => boolean {
     return { accepted: true }
   })
   ipcMain.handle('pi:resendMessage', (_event, payload: ResendPayload) => pi.resendMessage(payload))
+  ipcMain.handle('pi:continueMessage', (_event, payload: ContinuePayload) => pi.continueMessage(payload))
   ipcMain.handle('pi:forkFromMessage', (_event, timestamp: number) => pi.forkFromMessage(timestamp))
   ipcMain.handle('pi:setModel', (_event, providerId: string, modelId: string) =>
     pi.setModel(providerId, modelId)
@@ -427,6 +470,12 @@ export function registerIpc(pi: PiManager): () => boolean {
   ipcMain.handle('files:read', (_event, path: string) => pi.readFile(path))
   ipcMain.handle('files:directory', (_event, request: FileBrowserRequest, offset?: number) => listFileDirectory(request, offset))
   ipcMain.handle('files:document', (_event, request: FileBrowserRequest) => readFileDocument(request))
+  ipcMain.handle('files:htmlPreview', (event, request: FileBrowserRequest) => {
+    // Only our top-level shell can mint a filesystem grant, never a guest/frame.
+    const window = BrowserWindow.fromWebContents(event.sender)
+    if (!window || window.webContents !== event.sender || event.senderFrame !== event.sender.mainFrame) return { error: 'unreadable' }
+    return htmlPreviews.open(request)
+  })
   ipcMain.handle('files:gitDiff', (_event, request: FileBrowserRequest) => readFileGitDiff(request))
   ipcMain.handle('files:pdfStat', (_event, request: FileBrowserRequest) => readPdfStat(request))
   ipcMain.handle('files:pdfRange', (_event, request: FileBrowserRequest, begin: number, end: number) => readPdfRange(request, begin, end))

@@ -307,14 +307,17 @@ app.on('window-all-closed',()=>app.quit());`)
         assert.equal(pill.radius, parseFloat(expected.card), preset + ': the pill container takes the scale card step, so a tall pill list cannot turn into a capsule (got radius ' + pill.radius + ', expected ' + parseFloat(expected.card) + ' — a capsule would clamp to half its width and read as semicircular ends)')
         assert.ok(pill.radius < Math.min(pill.width, pill.height) / 2, preset + ': the pill container keeps small rounded corners, not semicircular ends (radius ' + pill.radius + ' on a ' + pill.width + '×' + pill.height + ' list)')
         assert.equal(pill.shape, 'superellipse(2)', preset + ': the pill container keeps the continuous corner shape, not a forced capsule — a capsule would force `corner-shape: round` and, on a tall list, clamp to semicircular ends')
-        // The moving INDICATOR stays a capsule: a selected row is a normal-height
-        // row, where a capsule is the right shape.
+        // The moving INDICATOR takes the CONTROL step like its tab: a selected
+        // row reads as a normal small-radius block, never a left/right
+        // semicircle pill.
         const pillIndicator = await evaluate('(()=>{const e=document.querySelector("#pill-list [role=tablist] > div > span");if(!e)return null;const r=e.getBoundingClientRect();return {width:r.width,height:r.height,radius:parseFloat(getComputedStyle(e).borderTopLeftRadius)}})()')
         assert.ok(pillIndicator && pillIndicator.width > 0, preset + ': the fixture pill list renders its moving indicator')
-        assert.ok(
-          preset === 'square' ? pillIndicator.radius === 0 : pillIndicator.radius >= Math.min(pillIndicator.width, pillIndicator.height) / 2,
-          preset + ': the pill indicator stays ' + (preset === 'square' ? 'a right angle' : 'a capsule') + ' (radius ' + pillIndicator.radius + ', box ' + pillIndicator.width + '×' + pillIndicator.height + ')'
+        assert.equal(
+          pillIndicator.radius,
+          parseFloat(expected.item),
+          preset + ': the pill indicator takes the control step like its tab, not semicircular capsule ends (got radius ' + pillIndicator.radius + ', expected ' + parseFloat(expected.item) + ', box ' + pillIndicator.width + '×' + pillIndicator.height + ')'
         )
+        assert.ok(pillIndicator.radius < Math.min(pillIndicator.width, pillIndicator.height) / 2, preset + ': the pill indicator keeps small rounded corners, not semicircular ends (radius ' + pillIndicator.radius + ' on a ' + pillIndicator.width + '×' + pillIndicator.height + ' row)')
         // Selection controls, pinned per preset. Both frames take the CONTROL
         // step: hard-edged in the square style, a full circle in the squircle
         // style (the control step is 14px on this 14px box). The MARK is what

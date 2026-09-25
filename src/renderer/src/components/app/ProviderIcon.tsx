@@ -100,11 +100,13 @@ export function ProviderIcon({
     />
   )
   const letter = (name ?? providerId).trim().charAt(0).toUpperCase() || '?'
+  // Keep the fallback letter within the interface's fixed type steps even as
+  // its tile grows; provider SVGs above are artwork and have no text size.
   return (
     <span
       aria-hidden="true"
       className="grid shrink-0 place-items-center rounded-md bg-primary/10 font-semibold leading-none text-primary"
-      style={{ width: size, height: size, fontSize: Math.round(size * 0.7) }}
+      style={{ width: size, height: size, fontSize: size <= 14 ? 10 : size <= 20 ? 14 : 16 }}
     >
       {letter}
     </span>

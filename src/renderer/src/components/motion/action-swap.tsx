@@ -13,7 +13,7 @@ export type ActionSwapItem = {
   ariaLabel?: string;
 };
 
-export type ActionSwapButtonVariant = "primary" | "secondary" | "outline" | "ghost";
+export type ActionSwapButtonVariant = "primary" | "secondary" | "outline" | "ghost" | "destructive";
 export type ActionSwapButtonSize = "sm" | "md" | "lg" | "icon";
 export type ActionSwapAnimation = "blur" | "roll" | "cascade";
 
@@ -144,10 +144,13 @@ const ICON_VARIANTS: Record<CoreAnimation, Variants> = {
 };
 
 const VARIANT_CLASS: Record<ActionSwapButtonVariant, string> = {
-  primary: "bg-primary text-primary-foreground hover:bg-primary/90",
-  secondary: "border border-border bg-card text-foreground hover:border-border",
-  outline: "border border-border bg-transparent text-foreground hover:bg-primary/5",
-  ghost: "text-muted-foreground hover:bg-primary/5 hover:text-foreground",
+  // local patch (pi-app): keep animated actions on the shared borderless
+  // button palette, including their semantic hover fills.
+  primary: "bg-transparent text-primary hover:bg-primary hover:text-primary-foreground",
+  secondary: "bg-transparent text-foreground hover:bg-muted",
+  outline: "bg-transparent text-foreground hover:bg-primary/10",
+  ghost: "bg-transparent text-muted-foreground hover:bg-muted hover:text-foreground",
+  destructive: "bg-transparent text-destructive hover:bg-destructive/10 hover:text-destructive",
 };
 
 // local patch (pi-app): match the shared Button's continuous control geometry.

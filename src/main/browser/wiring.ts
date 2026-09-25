@@ -27,6 +27,7 @@ import { createRequire } from 'node:module'
 import { basename, extname, join } from 'node:path'
 import type { BrowserWindow, BrowserWindowConstructorOptions, WebContents } from 'electron'
 import { BROWSER_PARTITION, parseMarkerUrl } from '../../shared/browser.ts'
+import { HTML_PREVIEW_PARTITION } from '../../shared/html-preview.ts'
 import { getBrowserService } from './service.ts'
 
 const requireElectron = createRequire(import.meta.url)
@@ -214,8 +215,36 @@ const popupContents = new Set<number>()
 const relayedAt = new Map<number, number>()
 const INPUT_RELAY_THROTTLE_MS = 300
 
+/** 渲染层推送的应用级快捷键 identities（lib/shortcuts 的 bindingIdentity 形式：
+ *  Control/Alt/Shift/Meta 排序后 + 物理 code）。guest 持焦点时壳窗口收不到 keydown，
+ *  命中的组合键在这里拦下（preventDefault 挡 guest 原生行为）并转发渲染层 dispatcher。
+ *  只含带修饰键的绑定——裸键（如停止键 Escape）永不中继，页面自己的 Escape 归页面。 */
+let appShortcutIdentities = new Set<string>()
+
+export function setAppShortcutIdentities(identities: unknown): void {
+  appShortcutIdentities = new Set(
+    Array.isArray(identities)
+      ? identities.filter((value): value is string => typeof value === 'string' && value.length > 0)
+      : []
+  )
+}
+
+/** before-input 的组合键 → bindingIdentity 同一形式（修饰键固定序 + 物理 code）。 */
+function guestInputIdentity(input: { control?: boolean; alt?: boolean; shift?: boolean; meta?: boolean; code?: string }): string {
+  return [
+    input.control && 'Control',
+    input.alt && 'Alt',
+    input.shift && 'Shift',
+    input.meta && 'Meta',
+    input.code
+  ].filter(Boolean).join('+')
+}
+
 /** 每个 contents 一份的接线：window-open 路由 + webview guest 的输入中继。 */
 function wireContents(contents: WebContents): void {
+  // HTML file guests have their own navigation, permissions and shortcuts.
+  // They must never inherit the browser's popup or signed-in session behavior.
+  if (contents.session === electron().session.fromPartition(HTML_PREVIEW_PARTITION)) return
   // 1. popup 路由：marker 一律 deny（伪造的记一次日志——marker 命名空间只用于 renderer
   // 建页的初始 src，不是 popup 通道）；壳窗口按既有行为 openExternal + deny（任何 URL）；
   // webview guest 与弹窗窗口按系统浏览器语义分流——窗口形态 `allow` 出真 BrowserWindow，
@@ -292,9 +321,18 @@ function wireContents(contents: WebContents): void {
       Equal: '=', Minus: '-', Digit0: '0', KeyF: 'f', KeyP: 'p'
     }
     const key = GUEST_SHORTCUT_CODES[input.code ?? ''] ?? input.key
-    if (key !== '=' && key !== '+' && key !== '-' && key !== '0' && key !== 'f' && key !== 'p') return
+    const identity = guestInputIdentity(input)
+    if (key === '=' || key === '+' || key === '-' || key === '0' || key === 'f' || key === 'p') {
+      event.preventDefault()
+      // identity 随行：该键同时绑了应用级命令（默认 ⌘P → files 面板）时，
+      // 面板不活跃的 BrowserPane 把它转发给应用 dispatcher。
+      activeEmit?.('browser:guest-shortcut', { key, identity })
+      return
+    }
+    // 应用级快捷键：渲染层推送的 identities 命中即转发其 dispatcher（lib/shortcuts）。
+    if (appShortcutIdentities.size === 0 || !appShortcutIdentities.has(identity)) return
     event.preventDefault()
-    activeEmit?.('browser:guest-shortcut', { key })
+    activeEmit?.('browser:guest-app-shortcut', { identity, repeat: !!input.isAutoRepeat })
   })
   contents.once('destroyed', () => {
     // 与输入中继同一处清理：before-input 监听随 emitter 销毁，这里再显式摘除 + 清节流表。

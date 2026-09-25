@@ -1,3 +1,4 @@
+// local patch (pi-app): keep UI frames and focus rings in this component at 1px.
 "use client";
 // beui.dev/components/agents/chat-app
 
@@ -396,8 +397,7 @@ export function MessageScroller({
       // labels come from data, so streamed assistant resizes do not require a
       // full transcript query/measurement on every chunk.
       if (!railItems) scheduleRailSync();
-      if (!followOutput || !followingRef.current) return;
-      // local patch (pi-app): following cumulative output is always instant.
+      if (!followOutput || !followingRef.current) return;      // local patch (pi-app): following cumulative output is always instant.
       // Smooth resize-follow both burns CPU and exposes top-to-bottom travel
       // while a newly selected transcript finishes laying out.
       // Only scroll when growth actually left the bottom: a width-only reflow
@@ -417,6 +417,29 @@ export function MessageScroller({
 
     return () => observer.disconnect();
   }, [followOutput, scheduleRailSync, scrollToEnd, railItems]);
+
+  // local patch (pi-app): the viewport's own size moves the live edge just
+  // like content growth does — the composer below grows/shrinks with pasted
+  // or removed attachments (and panels resize), cutting lines off at the
+  // bottom without firing any scroll event. A reader at the live edge stays
+  // pinned, instantly (ResizeObserver runs before paint); a reader who
+  // scrolled away keeps their position untouched.
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      if (!followOutput || !followingRef.current) return;
+      if (
+        viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight <=
+        1
+      ) {
+        return;
+      }
+      scrollToEnd("auto");
+    });
+    observer.observe(viewport);
+    return () => observer.disconnect();
+  }, [followOutput, scrollToEnd]);
 
   useEffect(() => {
     if (navigation !== "rail") {
@@ -529,7 +552,7 @@ export function MessageScroller({
         onViewportKeyDown?.(event);
       }}
       className={cn(
-        "h-full overflow-y-auto overscroll-contain outline-none [overflow-anchor:none] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+        "h-full overflow-y-auto overscroll-contain outline-none [overflow-anchor:none] focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring",
         navigation === "rail"
           ? "[-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
           : "[scrollbar-gutter:stable]",

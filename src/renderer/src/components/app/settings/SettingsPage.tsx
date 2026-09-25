@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
-import { ArrowLeft, Bot, Chart, Globe, GraduationCap, KeyRound, Palette, Puzzle, ScrollText, Settings2, Wrench } from '@/lib/icons'
+import { ArrowLeft, Bell, Chart, Flask, Ghost, GoogleChromeLogo, GraduationCap, Keyboard, KeyRound, Palette, Puzzle, Settings2, TextAlignCenter, Wrench } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/motion/tabs'
 import { EASE_OUT } from '@/lib/ease'
@@ -8,8 +8,10 @@ import type { MessageKey } from '@/i18n/locales/en'
 import type { UiStyle } from '@/lib/ui-style'
 import { useI18n } from '@/i18n'
 import { GeneralSection } from './GeneralSection'
+import { NotificationsSection } from './NotificationsSection'
 import { PromptSection } from './PromptSection'
 import { AppearanceSection } from './AppearanceSection'
+import { ShortcutsSection } from './ShortcutsSection'
 import { ProvidersSection } from './ProvidersSection'
 import { ToolsSection } from './ToolsSection'
 import { SubagentsSection } from './SubagentsSection'
@@ -17,6 +19,7 @@ import { ExtensionsSection } from './ExtensionsSection'
 import { SkillsSection } from './SkillsSection'
 import { BrowserSection } from './BrowserSection'
 import { UsageSection } from './UsageSection'
+import { JevSection } from './JevSection'
 import { WindowTitlebar } from '../WindowTitlebar'
 
 interface SectionProps {
@@ -36,6 +39,8 @@ const SECTIONS: {
   id: string
   labelKey: MessageKey
   descriptionKey: MessageKey
+  /** Optional rail tag (e.g. Beta) shown at the end of the tab row. */
+  badgeKey?: MessageKey
   icon: ReactNode
   render: (props: SectionProps) => ReactNode
 }[] = [
@@ -47,10 +52,17 @@ const SECTIONS: {
     render: () => <GeneralSection />
   },
   {
+    id: 'notifications',
+    labelKey: 'settings.notifications',
+    descriptionKey: 'settings.notificationsDesc',
+    icon: <Bell className="size-4" />,
+    render: () => <NotificationsSection />
+  },
+  {
     id: 'prompt',
     labelKey: 'settings.prompt',
     descriptionKey: 'settings.promptDesc',
-    icon: <ScrollText className="size-4" />,
+    icon: <TextAlignCenter className="size-4" />,
     render: () => <PromptSection />
   },
   {
@@ -66,6 +78,13 @@ const SECTIONS: {
         onUiStyleChange={props.onUiStyleChange}
       />
     )
+  },
+  {
+    id: 'shortcuts',
+    labelKey: 'shortcuts.title',
+    descriptionKey: 'shortcuts.description',
+    icon: <Keyboard className="size-4" />,
+    render: () => <ShortcutsSection />
   },
   {
     id: 'providers',
@@ -85,7 +104,7 @@ const SECTIONS: {
     id: 'subagents',
     labelKey: 'subagent.settingsTitle',
     descriptionKey: 'subagent.settingsDesc',
-    icon: <Bot className="size-4" />,
+    icon: <Ghost className="size-4" />,
     render: () => <SubagentsSection />
   },
   {
@@ -106,7 +125,7 @@ const SECTIONS: {
     id: 'browser',
     labelKey: 'settings.browserTitle',
     descriptionKey: 'settings.browserDesc',
-    icon: <Globe className="size-4" />,
+    icon: <GoogleChromeLogo className="size-4" />,
     render: () => <BrowserSection />
   },
   {
@@ -115,6 +134,14 @@ const SECTIONS: {
     descriptionKey: 'settings.usageDesc',
     icon: <Chart className="size-4" />,
     render: () => <UsageSection />
+  },
+  {
+    id: 'jev',
+    labelKey: 'jev.title',
+    descriptionKey: 'jev.description',
+    badgeKey: 'settings.beta',
+    icon: <Flask className="size-4" />,
+    render: () => <JevSection />
   }
 ]
 
@@ -158,6 +185,10 @@ export function SettingsPage({ open, onBack, ...sectionProps }: SettingsPageProp
           exit={{ opacity: 0, x: reduce ? 0 : 24 }}
           transition={reduce ? { duration: 0 } : { duration: 0.22, ease: EASE_OUT }}
           className="absolute inset-0 z-40 flex flex-col bg-background"
+          // A full-page surface: the shortcut dispatcher's layer. Only its
+          // own ⌘, toggle passes through to close it.
+          data-shortcut-layer
+          data-shortcut-passthrough="openSettings"
         >
           <WindowTitlebar className="gap-1.5 border-b border-border/50">
             <Button variant="ghost" size="icon" aria-label={t('settings.back')} onClick={onBack}>
@@ -177,10 +208,21 @@ export function SettingsPage({ open, onBack, ...sectionProps }: SettingsPageProp
                 <TabsTrigger
                   key={entry.id}
                   value={entry.id}
-                  className="w-full justify-start gap-2.5 rounded-control px-3.5 py-2.5"
+                  className="group w-full justify-start gap-2.5 rounded-control px-3.5 py-2.5"
                 >
                   {entry.icon}
                   {t(entry.labelKey)}
+                  {entry.badgeKey ? (
+                    // A rail tag has to read on the idle row and on the selected
+                    // one, where the tab itself is the primary surface — hence
+                    // the `group-aria-selected` pair rather than one palette.
+                    <span
+                      data-tab-badge
+                      className="ml-auto shrink-0 rounded-control bg-muted px-1.5 py-px text-[10px] font-medium leading-3.5 text-muted-foreground group-aria-selected:bg-primary-foreground/20 group-aria-selected:text-primary-foreground"
+                    >
+                      {t(entry.badgeKey)}
+                    </span>
+                  ) : null}
                 </TabsTrigger>
               ))}
             </TabsList>
@@ -188,7 +230,7 @@ export function SettingsPage({ open, onBack, ...sectionProps }: SettingsPageProp
               <TabsContent key={entry.id} value={entry.id} className="mt-0 min-h-0 flex-1">
                 <div className="h-full overflow-y-auto overscroll-contain px-6 py-7 md:px-10">
                   <div className="mx-auto w-full max-w-5xl">
-                    <h2 className="text-lg font-semibold tracking-tight text-foreground">
+                    <h2 className="text-base font-semibold tracking-tight text-foreground">
                       {t(entry.labelKey)}
                     </h2>
                     <p className="mt-1.5 text-sm leading-5 text-muted-foreground">

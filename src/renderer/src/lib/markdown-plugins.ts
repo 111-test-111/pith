@@ -1,11 +1,15 @@
 import remarkCjkFriendly from 'remark-cjk-friendly/parseOnly'
 import remarkGfm from 'remark-gfm'
+import remarkMath from 'remark-math'
+import { remarkTexMath } from './remark-tex-math'
+import { remarkMathNodes } from './remark-math-nodes'
+import { remarkSafeBreaks } from './remark-safe-breaks'
 import type { Link, Parent, PhrasingContent, Text } from 'mdast'
 import type { PluggableList } from 'unified'
 
 /**
  * Remark plugins shared by every ReactMarkdown instance: GFM (tables, task
- * lists, strikethrough, literal autolinks), plus two fixes for CJK prose —
+ * lists, strikethrough, literal autolinks), math, plus two fixes for CJK prose —
  *
  * 1. `remark-cjk-friendly` (parse side only) applies the alternative emphasis
  *    spec in which `**标签：**正文` is bold. Plain CommonMark refuses it: the
@@ -14,7 +18,10 @@ import type { PluggableList } from 'unified'
  * 2. `remarkCjkAutolinkTrim` cuts GFM's literal autolinks at CJK punctuation,
  *    see below.
  */
-export const REMARK_PLUGINS: PluggableList = [remarkGfm, remarkCjkFriendly, remarkCjkAutolinkTrim]
+export const REMARK_PLUGINS: PluggableList = [
+  remarkGfm, remarkCjkFriendly, remarkCjkAutolinkTrim, remarkSafeBreaks,
+  [remarkMath, { singleDollarTextMath: false }], remarkTexMath, remarkMathNodes
+]
 
 /**
  * GFM's literal autolink syntax (`https://…`, `www.…`) ends the link at ASCII

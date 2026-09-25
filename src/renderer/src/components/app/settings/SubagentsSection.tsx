@@ -724,6 +724,7 @@ function CreateProfileForm({
           onChange={setName}
           aria-label={t('subagent.nameLabel')}
           disabled={busy}
+          classNames={{ input: 'text-xs' }}
         />
         {nameInvalid || (attempted && trimmedName === '') ? (
           <p data-subagent-name-error className="text-xs text-destructive">{t('subagent.nameInvalid')}</p>
@@ -739,6 +740,7 @@ function CreateProfileForm({
           onChange={setDescription}
           aria-label={t('subagent.descriptionLabel')}
           disabled={busy}
+          classNames={{ input: 'text-xs' }}
         />
         {attempted && descriptionEmpty ? (
           <p className="text-xs text-destructive">{t('subagent.descriptionRequired')}</p>
@@ -754,6 +756,7 @@ function CreateProfileForm({
           rows={4}
           aria-label={t('subagent.systemPrompt')}
           disabled={busy}
+          classNames={{ input: 'text-xs' }}
         />
       </label>
 

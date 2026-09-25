@@ -1,30 +1,34 @@
 import { useSyncExternalStore } from 'react'
 
 /**
- * Typeface preferences for the whole app.
+ * Typeface preferences for the whole app: interface, code and math.
  *
- * Both typefaces are free text: the user types a family (or a whole family
+ * All three are free text: the user types a family (or a whole family
  * list) and it is written at the head of the stack. Anything the machine has
  * installed applies immediately, and anything it does not simply falls through
  * to the next family — CSS resolves that per glyph, which is what keeps a
  * mixed-script UI whole.
  *
- * The interface stack's own tail is the system sans-serif, so an empty field
- * and an unknown family land in the same place. A value the CSS parser itself
- * rejects drops straight to that tail as well, instead of being written into a
- * declaration that would be invalid at computed-value time (which does not fall
- * back — it discards the whole `font-family`).
+ * Each stack's own tail is its default, so an empty field and an unknown
+ * family land in the same place. A value the CSS parser itself rejects drops
+ * straight to that tail as well, instead of being written into a declaration
+ * that would be invalid at computed-value time (which does not fall back — it
+ * discards the whole `font-family`).
  *
- * Both are applied as CSS variables that `styles.css` maps onto Tailwind's
- * `font-sans`/`font-mono` tokens, so every consumer — vendored beUI components
- * included — follows along without per-element changes. A renderer preference
- * like locale/accent: stored in localStorage and applied before first paint.
+ * The text stacks are applied as CSS variables that `styles.css` maps onto
+ * Tailwind's `font-sans`/`font-mono` tokens, so every consumer — vendored
+ * beUI components included — follows along without per-element changes. The
+ * math stack feeds `lib/math.css`, which styles every MathML formula. A
+ * renderer preference like locale/accent: stored in localStorage and applied
+ * before first paint.
  */
 export interface FontSettings {
   /** Interface family (or full family list); empty = the system sans-serif. */
   ui: string
   /** Monospace family (or full family list) for code; empty = system default. */
   mono: string
+  /** Math family (or full family list) for formulas; empty = the bundled face. */
+  math: string
 }
 
 /** The interface tail: the default, and what an unknown or rejected family
@@ -37,7 +41,14 @@ const UI_FALLBACK =
 const MONO_STACK =
   "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace"
 
-const DEFAULT_SETTINGS: FontSettings = { ui: '', mono: '' }
+/** The math tail: the bundled Latin Modern Math face (registered as
+ * `Pith Math` in `lib/math.css`), then the platform's generic math face.
+ * Unlike the text tails this one must carry an OpenType MATH table — MathML
+ * layout reads radical/fence metrics from it — so a plain text family can
+ * never be the default here. */
+const MATH_STACK = "'Pith Math', math"
+
+const DEFAULT_SETTINGS: FontSettings = { ui: '', mono: '', math: '' }
 
 const STORAGE_KEY = 'pi-app:fonts'
 
@@ -82,6 +93,17 @@ function resolveMonoFont(family: string, ui: string): string {
   return `${mono}, ${resolveUIFont(ui)}`
 }
 
+/** The CSS stack the math setting resolves to: the typed family first, then
+ * the bundled Latin Modern Math face. An empty field, an unknown family and a
+ * rejected stack all land on the bundled face, so a misconfigured value can
+ * never leave formulas in a font without math metrics. */
+function resolveMathFont(family: string): string {
+  const custom = sanitizeFamily(family)
+  if (!custom) return MATH_STACK
+  const stack = `${custom}, ${MATH_STACK}`
+  return isUsableStack(stack) ? stack : MATH_STACK
+}
+
 function read(): FontSettings {
   try {
     const raw = JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? '{}')
@@ -89,7 +111,11 @@ function read(): FontSettings {
     // free-form family now, and both of them mean the sans-serif tail — exactly
     // what an empty field resolves to, so they reset rather than kept as text.
     const ui = typeof raw?.ui === 'string' && raw.ui !== 'sans' && raw.ui !== 'serif' ? raw.ui : ''
-    return { ui, mono: typeof raw?.mono === 'string' ? raw.mono : '' }
+    return {
+      ui,
+      mono: typeof raw?.mono === 'string' ? raw.mono : '',
+      math: typeof raw?.math === 'string' ? raw.math : ''
+    }
   } catch {
     return DEFAULT_SETTINGS
   }
@@ -99,6 +125,7 @@ function apply(settings: FontSettings): void {
   const root = document.documentElement
   root.style.setProperty('--app-font-ui', resolveUIFont(settings.ui))
   root.style.setProperty('--app-font-mono', resolveMonoFont(settings.mono, settings.ui))
+  root.style.setProperty('--app-font-math', resolveMathFont(settings.math))
 }
 
 let current: FontSettings = DEFAULT_SETTINGS

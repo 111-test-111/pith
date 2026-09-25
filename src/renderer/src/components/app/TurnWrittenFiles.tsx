@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useId, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
-import { ChevronDown, Diff, Rewind } from '@/lib/icons'
+import { ChevronDown, Diff } from '@/lib/icons'
 import { getCachedAgentCodeTokens, prefetchAgentCodeTokens } from '@/components/agents/agent-code'
 import { FileDiff, type FileDiffLine } from '@/components/agents/file-diff'
 import { Button } from '@/components/motion/button'
@@ -345,9 +345,7 @@ export const TurnWrittenFiles = memo(function TurnWrittenFiles({
               </Button>
             ) : null}
             {onUndo ? (
-              <Button variant="ghost" size="sm" onClick={onUndo}>
-                {t('tool.filesUndo')}<Rewind aria-hidden="true" className="size-3.5" />
-              </Button>
+              <Button variant="ghost" size="sm" onClick={onUndo}>{t('tool.filesUndo')}</Button>
             ) : null}
             <Button variant="ghost" size="sm" onClick={onReview}>{t('tool.filesReview')}</Button>
           </span>
@@ -368,10 +366,11 @@ export const TurnWrittenFiles = memo(function TurnWrittenFiles({
           ))}
         </ul>
       </div>
-      {/* The portal survives every row hand-over. Close still unmounts it so an
-          invisible exit animation cannot intercept the list's pointer events. */}
-      {preview && (
-        <MorphPopoverContent side={preview.side} align="center" sideOffset={0} radius="var(--app-radius-card)" instant>
+      {/* Keep the content component mounted while closed so its client-only
+          portal gate is ready before the first hover. The portal DOM itself is
+          still absent whenever `open` is false, so it cannot intercept input. */}
+      <MorphPopoverContent side={preview?.side ?? 'bottom'} align="center" sideOffset={0} radius="var(--app-radius-card)" instant>
+        {preview ? (
           <div
             className="bg-muted/80"
             // FileDiff owns the height cap; a short diff or the no-diff message
@@ -384,8 +383,8 @@ export const TurnWrittenFiles = memo(function TurnWrittenFiles({
           >
             <WrittenFileDiff key={preview.file.filePath} file={preview.file} />
           </div>
-        </MorphPopoverContent>
-      )}
+        ) : null}
+      </MorphPopoverContent>
     </MorphPopover>
   )
 })

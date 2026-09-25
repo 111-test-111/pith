@@ -159,23 +159,33 @@ Bugs found and fixed while verifying it in the app (both caught only because the
 ### Verification (this tree)
 `npm run typecheck`, `npm run build`, and a hands-on pass in the isolated real app (real model, CDP-driven): after a delegation completes, clicking the card's action opens the rail with exactly one `agent:` tab — the pane shows the child's own transcript (its prompt, its reasoning fold and answer) and its header reads the roster row (`pane verify | explore · deepseek/deepseek-flash · 已完成 · 5533 tokens · 2 次工具调用`) — while the main chat stays on the parent session (its own transcript untouched). Clicking the action repeatedly keeps ONE tab (no accumulation), and the pane's "open in chat" action navigates the main chat to the read-only child view as expected (the read-only banner appears). No renderer exceptions during the pass.
 
+## Round 8 — human Guide / Continue control from the roster
+
+The runtime and typed `subagents:action` IPC already supported Steer, Stop and Resume, but the roster exposed only Stop and open-session. The parent-session task panel now completes that human control loop:
+
+- An expanded `running` card shows **Guide** beside Stop; every terminal card (`completed`, `failed`, `aborted`, `interrupted`) shows **Continue**.
+- Both actions use one app-level beUI `SubagentActionDialog` with a multiline instruction, initial focus, focus trap, Escape/Cancel and Cmd/Ctrl+Enter submission. Pending submission disables dismissal and duplicate activation; a failed IPC keeps the draft and shows only the renderer's localized error.
+- The dialog pins the opening `{sessionId, runId, action}` and resolves the latest row from the roster. If status or run identity changes, submission becomes stale and stays disabled without silently changing Guide into Continue.
+- Renderer freshness is not trusted as the concurrency boundary: every panel payload carries `expectedRunId`, and main/runtime atomically compare it with the live/roster/disk run before Steer, Stop or Resume. A lagging renderer therefore cannot send an old action to a replacement run.
+- Successful actions never mutate the roster optimistically. `SubagentRuntime` remains authoritative through `subagents_update`, including branch ownership, concurrency, Plan/tool-ceiling and persistence checks.
+- Human control is deliberately independent of `subagentReuseEnabled` and `subagentCommsEnabled`: those settings decide what the parent model may initiate, not what the user may request from the roster.
+
+Regression coverage lives in `check-bash-task-ui.mjs` (action availability, focus/keyboard, real pointer/Escape ownership across the portalled dialog, exact payloads, pending dedupe, localized failure, stale-state fencing, both locales and no optimistic status) and `check-subagents-integration.mjs` (typed manager routing, atomic `expectedRunId` rejection against live and resumed runs, serial Resume and branch/ceiling ownership).
+
 ## Not implemented (honest gaps)
 
-1. **Model-facing companion tools**: no `get_subagent_result` / `steer_subagent`. The parent model's only paths are the foreground wait, the background completion notification, and the user's panel. (Both pi-web versions ship these.)
-2. **Panel resume/steer UI**: the runtime/IPC support resume and steer (`subagents:action`), but the cards expose only Stop and open-session. Resume needs a message input (or a confirmation with an editable draft) — deferred.
-3. **Restart recovery wakeups**: interrupted background runs display as `interrupted` cards and are never re-dispatched automatically (both a deliberate v1 choice and a gap vs the worktree's recovery injection).
-4. **Extensions in children**: children never load extensions (`noExtensions`). A profile cannot opt in. MCP tool delegation is impossible in v1.
-5. **Profile management UI**: profiles are files only (no Settings editor, no per-profile tool picker). The tool description enumerates them; edits apply to sessions created afterwards (a reload re-reads the list only at session build).
-5b. **The rail's child pane is read-only by design**: it has no composer and omits the session-level actions (resend/edit/fork), and its changed-files card shows no Review action because the rail's review pane is bound to the visible session's store. Steering or resuming a child still happens from the roster card, and the child's own todos/bash tasks are not read from its file (the pane's task strip is empty for a finished child).
-6. **Worktree isolation**: all subagents share the parent's working tree; concurrent writers can collide (the tool guidance asks for file-scoped delegation instead). No per-subagent worktree, merge flow or cross-worktree rewind semantics.
-7. **Rewind depth**: child-written files are display-merged into the parent turn but are NOT part of the parent's CAS coverage — a rewind lists them as uncovered paths requiring explicit consent, and restoring them relies on the generic transaction engine, not subagent-aware snapshots. `RewindRecorder` is intentionally absent on children (no checkpoints in child files). Since Round 5 the scan reads the parent branch's own records first and skips an unreadable child file; the remaining limit is a child file deleted before its run recorded any terminal payload — those interrupted-run writes are then unnameable (they were never in the parent's CAS scope either), so the diagnostic degrades instead of blocking the rewind.
-8. **Per-child context ring / transcript stream**: a non-visible child emits no renderer stream; its progress is roster-only. Opening a child session shows its committed transcript (no live streaming overlay integration was verified).
-9. **Search**: subagent child files remain fully indexed in session search (deliberate: they are real sessions; but there is no "hide subagent sessions" preference like the worktree's).
-10. **E2E/regression scripts**: no `check-subagents-ui.mjs`; the shared-path scripts are run manually (see Round 5), and there is still no real-model Electron E2E.
+1. **Result polling**: there is no standalone `get_subagent_result`. The parent model can wait in the foreground, receive the background completion notification, or use `agent_steer` while a child is running; the user can Guide/Continue from the roster.
+2. **Restart recovery wakeups**: interrupted background runs display as `interrupted` cards and are never re-dispatched automatically (a deliberate v1 choice).
+3. **The rail's child pane is read-only by design**: it has no composer and omits session-level actions (resend/edit/fork); changed files have no Review action because the rail's review pane is bound to the visible parent store. Guide/Continue belongs to the roster card, and a finished child's task strip is not reconstructed from its file.
+4. **Worktree isolation**: all subagents share the parent's working tree; concurrent writers can collide. There is no per-subagent worktree, merge flow or cross-worktree rewind semantics.
+5. **Rewind depth**: child-written files are display-merged into the parent turn but are not part of the parent's CAS capture. Rewind lists them as uncovered paths requiring explicit consent and restores through the generic transaction engine. A deleted child file whose interrupted run never wrote a terminal payload can leave writes that are no longer nameable; diagnostics degrade instead of blocking rewind.
+6. **Per-child context ring / live transcript overlay**: a non-visible child emits no renderer stream; progress is roster-only. Opening a child shows its committed transcript.
+7. **Search filtering**: child files are real sessions and remain indexed; there is no preference to hide subagent sessions from search.
+8. **Real-model Electron E2E**: deterministic Node/Electron regressions cover the shared paths, while `check-subagent-e2e.mjs` remains a manual, credentialed and potentially paid check.
 
 ## Follow-ups (recommended order)
 
-1. E2E script with a real model: foreground delegation, background + notification, stop cascade, resume, restart recovery reads.
-2. `get_subagent_result` with bounded `wait_ms` + `steer_subagent`; panel resume/steer UI.
-3. Opt-in extension loading for children (cost-bounded), profile editor in Settings.
-4. Subagent-aware rewind coverage (record child writes into the parent's scope root as a distinct provenance class instead of uncovered-path warnings).
+1. Extend the manual real-model E2E to exercise Guide while running and Continue after completion.
+2. Add bounded `get_subagent_result` polling if model workflows still need it after completion notifications.
+3. Add subagent-aware rewind provenance instead of classifying child writes as uncovered.
+4. Design optional worktree isolation and its merge/rewind semantics.

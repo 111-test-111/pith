@@ -50,7 +50,7 @@ function BashOutput({ task }: { task: BashTaskDTO }) {
         <span>{t('bashTask.elapsed', { seconds: Math.max(0, ((task.endedAt ?? now) - task.startedAt) / 1000).toFixed(1) })}</span>
         {task.lastOutputAt && task.outputChars > 0 ? <span>{t('bashTask.lastOutput', { seconds: Math.max(0, (now - task.lastOutputAt) / 1000).toFixed(0) })}</span> : null}
         {task.exitCode != null ? <span>{t('bashTask.exitCode', { code: task.exitCode })}</span> : null}
-        {bashTaskLive(task) ? <Button variant="ghost" size="sm" disabled={stopping || task.status === 'stopping'} onClick={() => void stop()}>{t('bashTask.stop')}</Button> : null}
+        {bashTaskLive(task) ? <Button variant="destructive" size="sm" disabled={stopping || task.status === 'stopping'} onClick={() => void stop()}>{t('bashTask.stop')}</Button> : null}
         <Button variant="ghost" size="sm" onClick={() => void window.pi.openPath(task.logPath).then((message) => { if (message) setError(true) }).catch(() => setError(true))}>{t('bashTask.openLog')}</Button>
       </div>
       {error ? <p className="text-xs text-destructive" role="status">{t('bashTask.operationFailed')}</p> : null}
@@ -74,7 +74,13 @@ export function BashTaskRow({ task: fallback, completion = false, inset = false 
     // the list's own 4px that is the todo list's 10px, so the three panels lead
     // with an icon on the same line. A transcript row keeps the shared
     // `ToolResult` inset it has beside every other tool row.
-    <div className={inset ? 'px-1.5' : ''} data-bash-task-id={task.id} data-bash-task-status={expired ? 'unavailable' : task.status}>
+    //
+    // A transcript row is a PROCESS row for 「紧凑显示连续工具调用」
+    // (`lib/compact-tools`): the completion notice a steer delivers is a tool
+    // row like the call it reports, so it takes the same tightened gap beside
+    // its neighbours. The panel's `inset` rows are not transcript rows and are
+    // left untagged.
+    <div className={inset ? 'px-1.5' : ''} data-row={inset ? undefined : 'process'} data-bash-task-id={task.id} data-bash-task-status={expired ? 'unavailable' : task.status}>
       <ToolResult animateChanges={false} lazyContent open={open} onOpenChange={setOpen}
         title={completion ? t('bashTask.completedCommand', { command: firstLine }) : `bash · ${firstLine}`}
         status={expired ? 'cancelled' : bashTaskStatus(task)} icon={<ToolIcon name="bash" />}

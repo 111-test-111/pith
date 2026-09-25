@@ -1,3 +1,4 @@
+// local patch (pi-app): keep UI frames and focus rings in this component at 1px.
 // local patch (pi-app): use the shared Lucide icon adapter.
 import {
   Check,
@@ -99,7 +100,8 @@ function SearchResultRow({
   );
   const className = cn(
     "flex min-h-7 items-center gap-2 rounded-md px-1.5 py-1 text-left outline-none transition-colors",
-    result.url && "focus-visible:ring-2 focus-visible:ring-ring",
+    // local patch (pi-app): linked results fill on hover; plain results stay inert.
+    result.url && "hover:bg-muted/50 focus-visible:ring-1 focus-visible:ring-ring",
   );
 
   return result.url ? (

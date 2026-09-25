@@ -43,7 +43,15 @@ export { extractTurnWrittenFiles, extractReviewTurns } from './src/renderer/src/
     bundle: true, platform: 'node', format: 'esm', outfile: bundle,
     plugins: [{ name: 'isolated', setup(builder) {
       builder.onResolve({ filter: /^@earendil-works\/pi-coding-agent$/ }, () => ({ path: fileURLToPath(import.meta.resolve('@earendil-works/pi-coding-agent')), external: true }))
+      // PiManager carries the browser service in its module graph, but this
+      // fixture never connects a browser. Keep Playwright (and its optional
+      // chromium-bidi graph) behind the same absolute external boundary used
+      // by the other isolated main-process checks.
+      builder.onResolve({ filter: /^playwright-core(\/|$)|^chromium-bidi(\/|$)/ }, (args) => ({
+        path: fileURLToPath(import.meta.resolve(args.path)), external: true
+      }))
       builder.onResolve({ filter: /^electron$/ }, () => ({ path: 'electron', namespace: 'fixture' }))
+      builder.onResolve({ filter: /^proper-lockfile$/ }, args => ({ path: fileURLToPath(import.meta.resolve(args.path)), external: true }))
       builder.onLoad({ filter: /.*/, namespace: 'fixture' }, () => ({ contents: `export const app={getPath(){return ${JSON.stringify(temporary)}}}; export const shell={};` }))
     } }] })
   const { PiManager, CheckoutCoordinator, SubagentRuntime, SubagentParentState, PiStore, buildTurns, collectChangeScopes, BashTaskManager, TaskNotifications, createManagedBashTools,
@@ -70,6 +78,36 @@ export { extractTurnWrittenFiles, extractReviewTurns } from './src/renderer/src/
     assert(new SubagentParentState('a').nextSeq() > seq, 'parent reconstruction must not reset roster ordering')
   }
   console.log('PASS: roster session isolation, parked events, snapshot races and parent reconstruction.')
+
+  // The renderer's one typed action surface must route to the existing
+  // runtime methods without creating a parallel control path. Main owns the
+  // blank-message/open-parent guards before a runtime method can be reached.
+  {
+    const actionState = {}
+    const actionSession = {}
+    const routed = []
+    const manager = Object.create(PiManager.prototype)
+    Object.assign(manager, {
+      sessions: new Map([['/parent.jsonl', { session: actionSession, subagents: actionState }]]),
+      subagentRuntimeInstance: {
+        steer: (state, sessionId, message, expectedRunId) => routed.push({ action: 'steer', state, sessionId, message, expectedRunId }),
+        abort: (state, sessionId, expectedRunId) => routed.push({ action: 'abort', state, sessionId, expectedRunId }),
+        resume: async (state, session, sessionId, message, options) => { routed.push({ action: 'resume', state, session, sessionId, message, options }) }
+      }
+    })
+    await manager.subagentAction({ sessionPath: '/parent.jsonl', sessionId: 'child', expectedRunId: 'run-one', action: 'steer', message: 'redirect now' })
+    await manager.subagentAction({ sessionPath: '/parent.jsonl', sessionId: 'child', expectedRunId: 'run-two', action: 'resume', message: 'continue now' })
+    await manager.subagentAction({ sessionPath: '/parent.jsonl', sessionId: 'child', expectedRunId: 'run-three', action: 'abort' })
+    assert.deepEqual(routed, [
+      { action: 'steer', state: actionState, sessionId: 'child', message: 'redirect now', expectedRunId: 'run-one' },
+      { action: 'resume', state: actionState, session: actionSession, sessionId: 'child', message: 'continue now', options: { expectedRunId: 'run-two' } },
+      { action: 'abort', state: actionState, sessionId: 'child', expectedRunId: 'run-three' }
+    ])
+    await assert.rejects(manager.subagentAction({ sessionPath: '/parent.jsonl', sessionId: 'child', action: 'resume', message: 'missing identity' }), /run identity/)
+    await assert.rejects(manager.subagentAction({ sessionPath: '/parent.jsonl', sessionId: 'child', expectedRunId: 'run-one', action: 'steer', message: '   ' }), /required/)
+    await assert.rejects(manager.subagentAction({ sessionPath: '/closed.jsonl', sessionId: 'child', expectedRunId: 'run-one', action: 'resume', message: 'continue' }), /open session/)
+  }
+  console.log('PASS: panel Steer/Resume actions use the typed PiManager route and fail closed before runtime dispatch.')
 
   // One derivation for transcript + Review, across user-steer display groups.
   {
@@ -101,10 +139,12 @@ export { extractTurnWrittenFiles, extractReviewTurns } from './src/renderer/src/
   const parentSession = { sessionId: parent.getSessionId(), sessionManager: parent, getActiveToolNames: () => ['write'], getAllTools: () => [], messages: [] }
   const request = { parentSession, parentSessionPath: parent.getSessionFile(), parentToolCallId: 'call', profile, description: 'test', task: 'test', runInBackground: false }
   const makeRuntime = (over = {}) => {
-    const counters = { prompts: 0, halts: 0, releases: 0, listeners: 0, resources: [] }
+    const counters = { prompts: 0, halts: 0, releases: 0, listeners: 0, resources: [], steers: [] }
     const leases = new Set()
     let settled = over.settled ?? true
-    const host = { isClosing: () => false, subagentsEnabled: () => true, maxConcurrentSubagents: () => over.limit ?? 4, commandTasks: () => null,
+    const host = { isClosing: () => false, subagentsEnabled: () => true, subagentReuseEnabled: () => true,
+      subagentCommsEnabled: () => false, planRestricted: () => false,
+      maxConcurrentSubagents: () => over.limit ?? 4, commandTasks: () => null,
       acquireRunLease: (_cwd, path) => { const lease = { path }; leases.add(lease); return () => leases.delete(lease) },
       resolveModelSpec: async () => ({}), emitSubagents: () => {}, notifySubagentChildWrite: () => {},
       createChildSession: async options => {
@@ -113,7 +153,8 @@ export { extractTurnWrittenFiles, extractReviewTurns } from './src/renderer/src/
         const manager = SessionManager.create(temporary, sessionsDir, { parentSession: parent.getSessionFile() }); await materialize(manager)
         const session = { sessionId: manager.getSessionId(), sessionManager: manager, messages: [], isIdle: true, getLastAssistantText: () => 'done',
           subscribe: () => { counters.listeners++; return () => { counters.listeners-- } },
-          prompt: async () => { counters.prompts++ }, steer: () => {}, abort: async () => {} }
+          prompt: async () => { counters.prompts++; await over.promptGate?.promise },
+          steer: message => { counters.steers.push(message) }, abort: async () => {} }
         if (over.writeFailure) manager.appendCustomEntry = () => { throw Error('injected persistence failure') }
         return { session, sessionManager: manager, path: manager.getSessionFile(), cwd: temporary, resource: options.resource, runId: options.runId,
           parentSessionId: options.parentSessionId, isSettled: () => settled,
@@ -158,6 +199,19 @@ export { extractTurnWrittenFiles, extractReviewTurns } from './src/renderer/src/
     assert.equal(e.leases.size, 0); assert.equal(e.counters.releases, 1)
   }
   {
+    const promptGate = deferred()
+    const e = makeRuntime({ promptGate })
+    const { run, completion } = await e.runtime.start(e.state, request)
+    await tick()
+    assert.throws(() => e.runtime.steer(e.state, run.sessionId, 'stale redirect', 'older-run'), /run changed/)
+    assert.throws(() => e.runtime.abort(e.state, run.sessionId, 'older-run'), /run changed/)
+    e.runtime.steer(e.state, run.sessionId, 'human redirect', run.runId)
+    assert.deepEqual(e.counters.steers, ['human redirect'], 'Steer reaches only the exact live child run')
+    promptGate.resolve()
+    await completion
+    assert.throws(() => e.runtime.steer(e.state, run.sessionId, 'too late'), /not running/)
+  }
+  {
     const e = makeRuntime({ settled: false })
     const { completion } = await e.runtime.start(e.state, request)
     let done = false; void completion.then(() => { done = true })
@@ -166,7 +220,7 @@ export { extractTurnWrittenFiles, extractReviewTurns } from './src/renderer/src/
     assert.equal(e.leases.size, 1)
     e.settle(); await completion
   }
-  console.log('PASS: rejected admission, creation cancellation, async cleanup ownership and child completion handoff.')
+  console.log('PASS: rejected admission, creation cancellation, human Steer ownership, async cleanup and child completion handoff.')
 
   // Actual PiManager and SDK with only provider I/O replaced by local streams.
   const modelRuntime = await ModelRuntime.create({ authPath: join(temporary, 'auth.json'), modelsPath: join(temporary, 'models.json'), modelsStorePath: join(temporary, 'models-store'), refreshOnCreate: false })
@@ -194,14 +248,17 @@ export { extractTurnWrittenFiles, extractReviewTurns } from './src/renderer/src/
     parentToolCallId: 'call', profile: 'worker', description: 'child', task: 'initial task', createdAt: new Date().toISOString(), runInBackground: false, resource })
   child.appendCustomEntry(SUBAGENT_RESULT_TYPE, { version: 1, runId: 'initial', status: 'completed', completedAt: new Date().toISOString() })
   const app = Object.create(PiManager.prototype)
+  app.jevPreferences = { mode: 'workflow', choice: true, score: true, noul: true }
+  app.jevService = { enabledQuestionTypes: () => [], cancel() {}, dispose() {} }
   const refusals = []
-  Object.assign(app, { checkoutCoordinator: new CheckoutCoordinator(), emit: () => {}, sessions: new Map(), sessionBuilds: new Map(),
+  Object.assign(app, { checkoutCoordinator: new CheckoutCoordinator(), emit: () => {}, sessions: new Map(), planSequences: new Map(), sessionBuilds: new Map(),
     disabledExtensions: new Set(), navigationEpoch: 0, closing: false, bashMaxWaitMs: 80, subagentMaxConcurrentSetting: 4, subagentsEnabledFlag: true,
     commandTasksInstance: { list: () => [], stopSession: async () => {} }, servicesFor: async () => services,
     activateSession: managed => { app.activeSession = managed }, routeEvent: () => {}, contextUsageOf: () => null,
     notifyError: message => { refusals.push(message) } })
   const managed = await app.buildSession(child, false); await managed.lifecyclePromise; sessions.push(managed.session)
   assert(managed.subagentChild)
+  assert.equal(managed.jevWorkflow, undefined, 'mandatory Jev never wraps a subagent recursively')
   let calls = 0
   managed.session.agent.streamFunction = () => { calls++; return stream(assistant(text('should not run'))) }
   await app.checkoutCoordinator.withExclusive(temporary, 'restore', async () => {
@@ -218,15 +275,17 @@ export { extractTurnWrittenFiles, extractReviewTurns } from './src/renderer/src/
   const beforeResume = parent.getLeafId()
   let file = join(temporary, 'first.txt'), round = 0
   managed.session.agent.streamFunction = () => stream(assistant(++round % 2 ? [call(`write-${round}`, 'write', { path: file, content: file })] : text('done')))
-  const first = app.subagentRuntime.resume(state, parentSession, child.getSessionId(), 'resume one')
+  await assert.rejects(app.subagentRuntime.resume(state, parentSession, child.getSessionId(), 'stale resume', { expectedRunId: 'older-run' }), /run changed/)
+  const first = app.subagentRuntime.resume(state, parentSession, child.getSessionId(), 'resume one', { expectedRunId: 'initial' })
   await assert.rejects(app.subagentRuntime.resume(state, parentSession, child.getSessionId(), 'racing resume'), /already running/)
-  const firstResult = await first
+  const firstResult = await (await first).completion
   assert.equal(managed.notifications.canStart, true, 'reuse reopens the child bash owner')
   assert.equal(firstResult.writtenFilesScope, 'run')
   assert.deepEqual(firstResult.writtenFiles.map(file => file.displayPath), ['first.txt'])
   const afterFirst = parent.getLeafId()
+  await assert.rejects(app.subagentRuntime.resume(state, parentSession, child.getSessionId(), 'old dialog resume', { expectedRunId: 'initial' }), /run changed/)
   file = join(temporary, 'second.txt')
-  const secondResult = await app.subagentRuntime.resume(state, parentSession, child.getSessionId(), 'resume two')
+  const secondResult = await (await app.subagentRuntime.resume(state, parentSession, child.getSessionId(), 'resume two', { expectedRunId: firstResult.runId })).completion
   assert.deepEqual(secondResult.writtenFiles.map(file => file.displayPath), ['second.txt'], 'resume evidence excludes previous runs')
   assert.equal(await readFile(file, 'utf8'), file)
   const disk = SessionManager.open(child.getSessionFile())
@@ -238,7 +297,7 @@ export { extractTurnWrittenFiles, extractReviewTurns } from './src/renderer/src/
   assert.deepEqual(await app.subagentRuntime.collectSubagentWritePaths(parent, temporary, afterFirst, sessionsDir), [], 'abandoned dispatches do not contribute writes')
   assert.equal(app.sessions.get(child.getSessionFile()), managed, 'resume retains the one managed instance')
   managed.unsubscribe(); managed.notifications.dispose()
-  console.log('PASS: real SDK read-only admission, serial resume, one SessionManager, stopped-owner recovery, per-run writes and branch coverage.')
+  console.log('PASS: real SDK read-only admission, atomic stale-run rejection, serial resume, one SessionManager, stopped-owner recovery, per-run writes and branch coverage.')
 
   // A live run's lease fences restores: rewindRestore can only enter its
   // exclusive window (where stopAll runs) once nothing is running — the
@@ -275,7 +334,8 @@ export { extractTurnWrittenFiles, extractReviewTurns } from './src/renderer/src/
     notifications = new TaskNotifications(drainSession, tasks)
     notifications.onWake = () => {}
     const unsubscribeDrain = drainSession.subscribe(event => notifications.observe(event))
-    const host = { isClosing: () => false, subagentsEnabled: () => true, maxConcurrentSubagents: () => 4,
+    const host = { isClosing: () => false, subagentsEnabled: () => true, subagentReuseEnabled: () => true,
+      subagentCommsEnabled: () => false, planRestricted: () => false, maxConcurrentSubagents: () => 4,
       commandTasks: () => tasks,
       acquireRunLease: () => () => {}, resolveModelSpec: async () => ({}), emitSubagents: () => {}, notifySubagentChildWrite: () => {},
       createChildSession: async () => ({ session: drainSession, sessionManager: drainChild, path: drainChild.getSessionFile(), cwd: temporary,
@@ -310,7 +370,7 @@ export { extractTurnWrittenFiles, extractReviewTurns } from './src/renderer/src/
     const { session: stopSession } = await createAgentSessionFromServices({ services: bashServices, sessionManager: stopChild,
       tools: ['bash'], customTools: [...createManagedBashTools({ tasks: tasks2, services: bashServices,
         sessionId: stopChild.getSessionId(), sessionPath: stopChild.getSessionFile(),
-        maxWaitMs: () => 0, canStart: () => notifications2?.canStart ?? false })] })
+        maxWaitMs: () => 0, sandboxMode: () => 'danger-full-access', canStart: () => notifications2?.canStart ?? false })] })
     sessions.push(stopSession)
     notifications2 = new TaskNotifications(stopSession, tasks2)
     notifications2.onWake = () => {}
@@ -330,7 +390,15 @@ export { extractTurnWrittenFiles, extractReviewTurns } from './src/renderer/src/
     const stopRuntime = new SubagentRuntime(host2)
     const stopState = new SubagentParentState(drainParent.getSessionId())
     const stopped = await stopRuntime.start(stopState, { ...drainRequest, parentSession: { ...drainRequest.parentSession, messages: [] } })
-    await delay(80) // the command is still running
+    // Stop against an observed live command, not a host-timing guess: CI process
+    // startup can make a fixed delay land before launch or after completion.
+    let runningStopTask
+    for (let attempt = 0; attempt < 100 && !runningStopTask; attempt++) {
+      runningStopTask = tasks2.list(stopChild.getSessionFile()).find(task => task.status === 'running')
+      if (!runningStopTask) await delay(10)
+    }
+    assert(runningStopTask, 'the stopped-run command entered the managed running state')
+    assert.equal(stopState.runs.size, 1, 'the child is still owned by the live run before Stop')
     await stopRuntime.stopAll(stopState)
     const stoppedResult = await stopped.completion
     assert.equal(stoppedResult.status, 'aborted')

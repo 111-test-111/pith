@@ -8,7 +8,7 @@ import { TerminalFit } from './terminal-fit'
 
 /** One emulator survives DOM detach/reattach. React only renders its chrome. */
 /** Terminal body font size (px) — shared with the pane's status text. */
-export const TERMINAL_FONT_PX = 13
+export const TERMINAL_FONT_PX = 14
 
 export class TerminalRuntime {
   readonly element = document.createElement('div')

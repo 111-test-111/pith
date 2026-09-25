@@ -32,6 +32,7 @@ export { CheckoutCoordinator } from './src/main/rewind/coordinator';`, resolveDi
       }))
       builder.onResolve({ filter: /^playwright-core(\/|$)/ }, args => ({ path: fileURLToPath(import.meta.resolve(args.path)), external: true }))
       builder.onResolve({ filter: /^electron$/ }, () => ({ path: 'electron', namespace: 'fixture' }))
+      builder.onResolve({ filter: /^proper-lockfile$/ }, args => ({ path: fileURLToPath(import.meta.resolve(args.path)), external: true }))
       builder.onLoad({ filter: /.*/, namespace: 'fixture' }, () => ({ contents:
         `export const app = { getPath() { return ${JSON.stringify(temporary)} } }; export const shell = {};` }))
     } }]
@@ -146,6 +147,9 @@ export { CheckoutCoordinator } from './src/main/rewind/coordinator';`, resolveDi
     // Exercise the production registration/binding path. A hand-picked SDK
     // active list missed duplicate bash entries in PiManager.buildSession.
     const app = Object.create(PiManager.prototype)
+    // This constructor-free fixture keeps Jev explicitly off and network-free.
+    app.jevPreferences = { mode: 'off', choice: true, score: true, noul: true }
+    app.jevService = { enabledQuestionTypes: () => [], cancel() {}, dispose() {} }
     app.checkoutCoordinator = new CheckoutCoordinator()
     app.rewindClient = { call: async () => { throw new Error('Checkpoint storage is outside this fixture') } }
     const routed = []

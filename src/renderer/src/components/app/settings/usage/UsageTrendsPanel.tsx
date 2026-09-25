@@ -533,12 +533,12 @@ export function UsageTrendsPanel({ stats, today }: { stats: UsageStatsDTO; today
         {statCards.map((card) => (
           <div key={card.label} data-usage-stat={card.label} className="rounded-card border border-border/70 bg-card px-4 py-3.5">
             <div className="text-xs text-muted-foreground">{card.label}</div>
-            <div className="mt-1 text-[15px] font-semibold tabular-nums text-foreground">
+            <div className="mt-1 text-base font-semibold tabular-nums text-foreground">
               <NumberTicker
                 value={card.value}
                 format={card.format}
                 duration={0.5}
-                className="text-[15px] font-semibold text-foreground"
+                className="text-base font-semibold text-foreground"
               />
             </div>
           </div>

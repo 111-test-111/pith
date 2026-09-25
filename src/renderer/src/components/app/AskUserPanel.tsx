@@ -370,7 +370,7 @@ export function AskUserPanel({
                 data-ask-user-chip={index}
                 aria-current={index === qi ? 'true' : undefined}
                 aria-label={item.header ?? `${index + 1}`}
-                className="h-6 min-w-0 max-w-40 gap-1 px-2 text-[11px] font-semibold"
+                className={`h-6 min-w-0 max-w-40 gap-1 px-2 text-[11px] font-semibold ${index === qi ? 'bg-muted' : ''}`}
                 onClick={() => goTo(index)}
               >
                 {answers[index]?.length || custom[index]?.trim() ? (

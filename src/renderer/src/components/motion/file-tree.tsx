@@ -1,3 +1,4 @@
+// local patch (pi-app): keep UI frames and focus rings in this component at 1px.
 "use client";
 // beui.dev/components/motion/file-tree
 
@@ -420,7 +421,8 @@ export function FileTree({
                 }}
                 className={cn(
                   "group/file-tree relative flex h-9 w-full items-center gap-2 overflow-hidden rounded-lg pr-2 text-left text-sm text-muted-foreground outline-none",
-                  "transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+                  // local patch (pi-app): SharedLayoutBg owns the hover fill; this row changes text only.
+                  "transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset",
                   "aria-disabled:cursor-not-allowed",
                   isSelected && "bg-muted font-medium text-foreground",
                   classNames?.item,

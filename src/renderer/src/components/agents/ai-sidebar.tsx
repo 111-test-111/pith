@@ -1,3 +1,4 @@
+// local patch (pi-app): keep UI frames and focus rings in this component at 1px.
 "use client";
 // beui.dev/components/agents/chat-app
 
@@ -335,7 +336,7 @@ function ResourceMenuAction({
     <button
       type="button"
       onClick={onSelect}
-      className="flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left text-xs text-foreground outline-none transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
+      className="flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left text-xs text-foreground outline-none transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:ring-1 focus-visible:ring-ring"
     >
       <Icon aria-hidden="true" className="size-3.5 shrink-0" />
       <span className="min-w-0 truncate">{children}</span>
@@ -618,7 +619,7 @@ function ResourceRow({
       className={cn(
         "group/resource relative flex min-h-9 min-w-0 cursor-pointer items-center gap-2.5 rounded-xl pr-3 text-sm outline-none",
         "text-muted-foreground transition-colors hover:bg-muted hover:text-foreground",
-        "focus-visible:bg-muted/70 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+        "focus-visible:bg-muted/70 focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset",
         "data-[menu-open=true]:bg-muted data-[menu-open=true]:text-foreground",
         "data-[dragging=true]:opacity-40",
         "data-[drop=inside]:bg-primary/10 data-[drop=inside]:ring-1 data-[drop=inside]:ring-primary/45",
@@ -658,7 +659,7 @@ function ResourceRow({
               onRenameCancel();
             }
           }}
-          className="mx-1 h-7 min-w-0 flex-1 rounded-md border border-border bg-background px-2 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="mx-1 h-7 min-w-0 flex-1 rounded-md border border-border bg-background px-2 text-sm text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
         />
       ) : (
         <MarqueeLabel active={hovered || menuOpen}>{row.item.label}</MarqueeLabel>
@@ -686,7 +687,9 @@ function ResourceRow({
                 // state can't show the title through the floating menu button.
                 // local patch (pi-app): opaque floating chip so the marquee
                 // title underneath can't show through the action button.
-                "grid size-7 shrink-0 place-items-center rounded-lg bg-background text-muted-foreground shadow-sm ring-1 ring-border/60 outline-none transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring group-hover/resource:opacity-100 group-data-[menu-open=true]/resource:opacity-100",
+                // local patch (pi-app): the floating action has a fill cue
+                // without a persistent outline.
+                "grid size-7 shrink-0 place-items-center rounded-lg bg-background text-muted-foreground shadow-sm outline-none transition-[opacity,color,background-color] hover:bg-muted hover:text-foreground focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-ring group-hover/resource:opacity-100 group-data-[menu-open=true]/resource:opacity-100",
                 // A finger never hovers, and this menu is the only path to
                 // rename and move without a drag — keep it on screen there.
                 canTouch ? "opacity-100" : "opacity-0",

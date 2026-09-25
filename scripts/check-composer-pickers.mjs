@@ -1,16 +1,19 @@
 /**
- * The composer's three pickers — the model, its thinking level and the sandbox
- * mode — are the same `Select`: a panel the LAYOUT anchors to its trigger
- * (`absolute` against the trigger's own box), so it cannot drift off the
- * trigger, be clipped away, or hide behind the landing cards. The model and
- * thinking pickers lead the composer's row; the sandbox picker lives in the
- * bottom-right send cluster, left of the context ring, and aligns its panel
- * to the trigger's RIGHT edge (a left-aligned panel there would run past the
- * window). This runs the real built app in isolated Electron (synthetic IPC,
- * no model calls, no user data) on the landing screen and checks all three
- * panels' geometry, stacking and no-typing rule, plus a panel drag — the
- * composer move that reports neither a window resize nor a scroll, which is
- * what let the old portalled model panel float away from its trigger.
+ * The composer's two pickers — the merged model menu and the sandbox mode —
+ * are layout-anchored: a panel the LAYOUT anchors to its trigger (`absolute`
+ * against the trigger's own box), so it cannot drift off the trigger, be
+ * clipped away, or hide behind the landing cards. Picking a reasoning model
+ * opens its thinking levels beside the model list, centered on that row,
+ * only after its supported levels arrive. The sandbox
+ * picker lives in the bottom-right send
+ * cluster, left of the context ring, and aligns its panel to the trigger's
+ * RIGHT edge (a left-aligned panel there would run past the window). This
+ * runs the real built app in isolated Electron (synthetic IPC, no model
+ * calls, no user data) on the landing screen and checks both panels'
+ * geometry, the cascade's geometry, stacking and no-typing rule, plus a
+ * panel drag — the composer move that reports neither a window resize nor a
+ * scroll, which is what let the old portalled model panel float away from
+ * its trigger.
  *
  * Run after `npm run build`. PI_PICKER_SCREENSHOT_DIR retains the views.
  */
@@ -41,13 +44,18 @@ app.commandLine.appendSwitch('remote-debugging-port','0');
 app.whenReady().then(()=>{
  const model={providerId:'deepseek',providerName:'DeepSeek',id:'fixture',name:'DeepSeek V4.1 Flash',reasoning:true,input:['text','image'],contextWindow:128000,maxTokens:8192,available:true,costInputPerM:0,costOutputPerM:0};
  const other={providerId:'minimax',providerName:'MiniMax CN',id:'m27',name:'MiniMax-M2.7',reasoning:true,input:['text'],contextWindow:205000,available:true,costInputPerM:0,costOutputPerM:0};
- const snapshot=()=>({sessionId:'fixture',sessionPath:'/fixture/new',cwd:'/workspace/pi-app',projectless:false,messages:[],model,thinkingLevel:'high',availableThinkingLevels:['off','high'],isStreaming:false,eventSequence:0});
+ const standard={...other,id:'plain',name:'Standard',reasoning:false};
+ let active=model,thinkingLevel='high';
+ const levels=()=>!active.reasoning?['off']:active===model?['off','minimal','low','medium','high','xhigh','max']:['off','high'];
+ const snapshot=()=>({sessionId:'fixture',sessionPath:'/fixture/new',cwd:'/workspace/pi-app',projectless:false,messages:[],model:active,thinkingLevel,availableThinkingLevels:levels(),isStreaming:false,eventSequence:0});
  ipcMain.handle('app:info',()=>({cwd:'/workspace/pi-app',folders:['/workspace/pi-app'],version:'fixture',contextFiles:true,bashMaxWaitMs:10000}));
  ipcMain.handle('pi:init',()=>snapshot());
  ipcMain.handle('pi:newSession',()=>snapshot());
  ipcMain.handle('pi:listSessions',()=>[]);
- ipcMain.handle('pi:models',()=>[model,other]);
+ ipcMain.handle('pi:models',()=>[model,other,standard]);
  ipcMain.handle('pi:providers',()=>[]);
+ ipcMain.handle('pi:setModel',async(_,providerId,id)=>{await new Promise(r=>setTimeout(r,240));active=id==='plain'?standard:providerId==='minimax'?other:model;return snapshot()});
+ ipcMain.handle('pi:setThinkingLevel',(_,level)=>{thinkingLevel=level;return snapshot()});
  ipcMain.handle('bash:list',()=>[]);
  ipcMain.handle('pi:searchSessions',()=>({sessions:[],groups:[],total:0,hasMore:false}));
  ipcMain.handle('files:read',(_,path)=>({path,relPath:path,kind:'text',size:12}));
@@ -114,24 +122,24 @@ app.whenReady().then(()=>{
 
   await send('Runtime.enable')
   // The left sidebar's strip is `data-panel-handle="right"` (it grows rightward).
-  await waitFor(`document.querySelector('textarea') && document.querySelector('[data-panel-handle]')`)
+  await waitFor(`document.querySelector('[data-prompt-editor]') && document.querySelector('[data-panel-handle]')`)
 
-  // The three composer triggers, told apart by what they carry: the model's
-  // name, the thinking level's label, and the sandbox glyph.
-  const MODEL = `[...document.querySelectorAll('button[aria-haspopup=listbox]')].find(b=>b.textContent.includes('DeepSeek V4.1 Flash'))`
-  const THINKING = `document.querySelector('button[aria-haspopup=listbox]:has(svg[data-app-icon="Brain"])')`
+  // The two composer triggers, told apart by what they carry: the model's
+  // name and the sandbox glyph. The model's thinking level has no trigger of
+  // its own any more — it lives in the model menu's second-level panel.
+  const MODEL = `document.querySelector('button[aria-controls="model-picker-panel"]')`
   const SANDBOX = `document.querySelector('button[aria-haspopup=listbox]:has([data-sandbox-mode-icon])')`
   assert(await evaluate(`Boolean(${MODEL})`), 'the model trigger is in the composer')
-  assert(await evaluate(`Boolean(${THINKING})`), 'the thinking trigger is beside it')
   assert(await evaluate(`Boolean(${SANDBOX})`), 'the sandbox trigger is in the composer')
+  assert.equal(await evaluate(`document.querySelectorAll('form button[aria-haspopup=listbox]').length`), 2, 'the model and thinking pickers merged into one trigger beside the sandbox picker')
 
-  // The layout the split implies: model, then its thinking level, leading the
-  // composer's row; the sandbox picker in the bottom-right send cluster (right
-  // of the textarea's middle, left of the send button).
+  // The layout the merge implies: one model trigger leads the composer's
+  // row; the sandbox picker sits in the bottom-right send cluster (right of
+  // the textarea's middle, left of the send button).
   const leftOf = (trigger) => evaluate(`(${trigger}).getBoundingClientRect().left`)
-  const [modelLeft, thinkingLeft, sandboxLeft] = [await leftOf(MODEL), await leftOf(THINKING), await leftOf(SANDBOX)]
-  const composerArea = await evaluate(`(()=>{const r=document.querySelector('textarea').getBoundingClientRect();return {left:r.left,right:r.right}})()`)
-  assert.ok(modelLeft < thinkingLeft && thinkingLeft < sandboxLeft, `model, thinking, sandbox read left to right (${[modelLeft, thinkingLeft, sandboxLeft]})`)
+  const [modelLeft, sandboxLeft] = [await leftOf(MODEL), await leftOf(SANDBOX)]
+  const composerArea = await evaluate(`(()=>{const r=document.querySelector('[data-prompt-viewport]').getBoundingClientRect();return {left:r.left,right:r.right}})()`)
+  assert.ok(modelLeft < sandboxLeft, `model then sandbox read left to right (${[modelLeft, sandboxLeft]})`)
   assert.ok(
     sandboxLeft > composerArea.left + (composerArea.right - composerArea.left) / 2,
     `the sandbox picker sits in the right half of the composer (sandbox ${Math.round(sandboxLeft)}, composer ${Math.round(composerArea.left)}–${Math.round(composerArea.right)})`
@@ -163,11 +171,11 @@ app.whenReady().then(()=>{
   const isOpen = (trigger) => evaluate(`document.getElementById(${trigger}.getAttribute('aria-controls')).getAttribute('aria-hidden') === 'false'`)
   const show = (value) => JSON.stringify(value)
 
-  // All three composer pickers: the same control, the same anchoring, no
-  // typing. Model and thinking align their panels to the trigger's LEFT edge;
-  // the sandbox picker's trigger sits at the composer's right edge, so its
-  // panel aligns to the trigger's RIGHT edge instead.
-  for (const [name, trigger, width, align] of [['model', MODEL, 320, 'left'], ['thinking', THINKING, 176, 'left'], ['sandbox', SANDBOX, 288, 'right']]) {
+  // Both composer pickers: layout-anchored panels, no typing. The model menu
+  // aligns its panel to the trigger's LEFT edge; the sandbox picker's trigger
+  // sits at the composer's right edge, so its panel aligns to the trigger's
+  // RIGHT edge instead.
+  for (const [name, trigger, width, align] of [['model', MODEL, 320, 'left'], ['sandbox', SANDBOX, 288, 'right']]) {
     await click(trigger)
     await waitFor(`document.getElementById(${trigger}.getAttribute('aria-controls')).getAttribute('aria-hidden') === 'false'`)
     await pause(500)
@@ -186,6 +194,76 @@ app.whenReady().then(()=>{
     assert.equal(await isOpen(trigger), false, `${name}: Escape closes the panel`)
   }
 
+  // The merged model menu's second level: picking a reasoning model pops the
+  // thinking-level panel out BESIDE the model panel — centered on the
+  // clicked row, a tight 4px gap between the two surfaces — layout-anchored
+  // and unclipped, with no field to type in. Record every animation frame
+  // across a delayed switch from seven levels to two: no old-model options
+  // may flash, and the first painted height must already be the final height.
+  await click(MODEL)
+  await waitFor(`document.getElementById(${MODEL}.getAttribute('aria-controls')).getAttribute('aria-hidden') === 'false'`)
+  await pause(500)
+  await evaluate(`window.thinkingFrames=[];window.recordThinking=true;
+    window.sampleThinking=()=>{
+      if(!window.recordThinking)return;
+      const sub=document.querySelector('[data-thinking-panel]');
+      const row=document.querySelector('[data-model-option="minimax/m27"]').getBoundingClientRect();
+      const box=sub?.getBoundingClientRect();
+      window.thinkingFrames.push(sub?{height:sub.offsetHeight,
+        centerDy:box.top+box.height/2-row.top-row.height/2,
+        options:[...sub.querySelectorAll('[data-thinking-option]')].map(o=>o.dataset.thinkingOption)}:null);
+      requestAnimationFrame(window.sampleThinking);
+    };requestAnimationFrame(window.sampleThinking)`)
+  await click(`document.querySelector('[data-model-option="minimax/m27"]')`)
+  await waitFor(`Boolean(document.querySelector('[data-thinking-panel]'))`)
+  await waitFor(`!document.querySelector('[data-thinking-option="off"]').disabled`)
+  await pause(400)
+  const frames = await evaluate(`window.recordThinking=false;window.thinkingFrames`)
+  assert.ok(frames.includes(null), 'the submenu waits for the delayed target snapshot')
+  const painted = frames.filter(Boolean)
+  assert.ok(painted.length > 2, 'the submenu was sampled through its entrance')
+  for (const frame of painted) {
+    assert.deepEqual(frame.options, ['off', 'high'], 'only the target model levels are ever painted')
+    assert.equal(frame.height, painted.at(-1).height, 'the first painted height is already final')
+    assert.ok(Math.abs(frame.centerDy) <= 1, `entrance stays centered on the clicked row (${show(frame)})`)
+  }
+  const cascade = await evaluate(`(()=>{
+    const panel=document.getElementById(${MODEL}.getAttribute('aria-controls'));
+    const sub=document.querySelector('[data-thinking-panel]');
+    const p=panel.getBoundingClientRect(), s=sub.getBoundingClientRect();
+    const hit=document.elementFromPoint(s.left+Math.min(24,s.width/2), s.top+Math.min(20,s.height/2));
+    const clippers=[];
+    for (let a=sub.parentElement;a;a=a.parentElement){
+      const st=getComputedStyle(a);
+      if (st.overflow==='visible'&&st.overflowX==='visible'&&st.overflowY==='visible') continue;
+      const r=a.getBoundingClientRect();
+      if (s.left<r.left-0.5||s.right>r.right+0.5||s.top<r.top-0.5||s.bottom>r.bottom+0.5) clippers.push((a.className||a.tagName).toString().slice(0,60));
+    }
+    const row=document.querySelector('[data-model-option="minimax/m27"]').getBoundingClientRect();
+    return { gapRight: Math.round(s.left-p.right), gapLeft: Math.round(s.right-p.left), dy: Math.round(s.top-p.top),
+      centerDy: s.top+s.height/2-row.top-row.height/2, subWidth: Math.round(s.width),
+      position: getComputedStyle(sub).position,
+      topmost: !!hit && sub.contains(hit), clippers,
+      hasInput: !!sub.querySelector('input,textarea,[contenteditable]') }
+  })()`)
+  assert.equal(cascade.position, 'absolute', `the level panel belongs to the layout, not to a portal (${show(cascade)})`)
+  assert.ok(
+    (cascade.gapRight >= 2 && cascade.gapRight <= 6) || (cascade.gapLeft >= -6 && cascade.gapLeft <= -2),
+    `the level panel pops out beside the model panel with the tight gap (${show(cascade)})`)
+  assert.ok(Math.abs(cascade.centerDy) <= 1, `the level panel is centered on the clicked row (${show(cascade)})`)
+  assert.ok(cascade.subWidth > 100, `the level panel keeps its own width (${show(cascade)})`)
+  assert.equal(cascade.topmost, true, `the level panel is painted above what it overlaps (${show(cascade)})`)
+  assert.deepEqual(cascade.clippers, [], `no ancestor clips the level panel (${show(cascade)})`)
+  assert.equal(cascade.hasInput, false, `the level panel is a pick-one list, with no field to type in (${show(cascade)})`)
+  await screenshot('thinking-cascade')
+  // Picking a level applies it and closes the whole cascade; the merged
+  // trigger now carries the picked level beside the model name.
+  await click(`document.querySelector('[data-thinking-option="off"]')`)
+  await pause(500)
+  assert.equal(await isOpen(MODEL), false, 'picking a level closes the model panel too')
+  const mergedText = await evaluate(`(${MODEL}).textContent`)
+  assert.match(mergedText, /Off|关闭/, `the merged trigger shows the picked level (got "${mergedText}")`)
+
   // The panel overlaps the landing cards, and it must cover them — a panel that
   // dropped into the layout could otherwise be painted underneath them.
   await click(MODEL)
@@ -193,7 +271,7 @@ app.whenReady().then(()=>{
   const overCards = await evaluate(`(()=>{
     const panel=document.getElementById(${MODEL}.getAttribute('aria-controls'));
     const p=panel.getBoundingClientRect();
-    const composer=document.querySelector('textarea').getBoundingClientRect();
+    const composer=document.querySelector('[data-prompt-viewport]').getBoundingClientRect();
     const hit=document.elementFromPoint(p.left+40, p.bottom-6);
     return {reachesPastComposer:p.bottom>composer.bottom+20, hitInside:!!hit&&panel.contains(hit), hitTag:hit?hit.tagName:'none'};
   })()`)
@@ -224,8 +302,68 @@ app.whenReady().then(()=>{
   assert.ok(Math.abs(after.dx) <= 1, `and lands on its trigger's edge there too (${show(after)})`)
   await screenshot('after-panel-drag')
 
+  const thinkingGeometry = (key) => evaluate(`(()=>{
+    const sub=document.querySelector('[data-thinking-panel]'), s=sub.getBoundingClientRect();
+    const row=document.querySelector('[data-model-option="${key}"]').getBoundingClientRect();
+    const p=document.getElementById('model-picker-panel').getBoundingClientRect();
+    return {centerDy:s.top+s.height/2-row.top-row.height/2,top:s.top,bottom:s.bottom,
+      abovePanel:s.top<p.top,side:s.right<p.left?'left':'right',viewportHeight:innerHeight,
+      options:[...sub.querySelectorAll('[data-thinking-option]')].map(o=>o.dataset.thinkingOption)};
+  })()`)
+  // The long menu is taller than this model list. It must be free to extend
+  // above the list to center on its first row (the old panel clamp prevented it).
+  await click(`document.querySelector('[data-model-option="deepseek/fixture"]')`)
+  await waitFor(`document.querySelector('[data-thinking-option="max"]')`)
+  await pause(250)
+  const tall = await thinkingGeometry('deepseek/fixture')
+  assert.equal(tall.options.length, 7)
+  assert.ok(Math.abs(tall.centerDy) <= 1, `the tall menu centers on the first row (${show(tall)})`)
+  assert.equal(tall.abovePanel, true, 'the model panel does not clamp the submenu to its own top')
+  await screenshot('thinking-tall-centered')
+
+  // The previous model's ['off'] list must not suppress a reasoning target.
+  await click(`document.querySelector('[data-model-option="minimax/plain"]')`)
+  await waitFor(`${MODEL}.textContent.includes('Standard')`)
+  assert.equal(await isOpen(MODEL), false, 'a non-reasoning model closes the cascade')
+  await click(MODEL)
+  await click(`document.querySelector('[data-model-option="minimax/m27"]')`)
+  await waitFor(`document.querySelector('[data-thinking-option="high"]')`)
+  await pause(250)
+  assert.deepEqual((await thinkingGeometry('minimax/m27')).options, ['off', 'high'], 'switching from a non-reasoning model opens the target levels')
+
+  // A capped model list scrolls independently of the submenu's containing
+  // panel. Center against the visible row, then follow another scroll.
+  await evaluate(`(()=>{
+    const row=document.querySelector('[data-model-option="minimax/m27"]');
+    const list=document.getElementById('model-picker-panel').firstElementChild;
+    list.style.maxHeight='112px';
+    list.scrollTop=row.offsetTop-list.offsetTop-24;
+  })()`)
+  await pause(200)
+  assert.ok(await evaluate(`document.getElementById('model-picker-panel').firstElementChild.scrollTop>0`), 'the fixture really scrolls the list')
+  assert.ok(Math.abs((await thinkingGeometry('minimax/m27')).centerDy) <= 1, 'a scrolled row retains its centered submenu')
+  await evaluate(`document.getElementById('model-picker-panel').firstElementChild.scrollTop+=8`)
+  await pause(200)
+  assert.ok(Math.abs((await thinkingGeometry('minimax/m27')).centerDy) <= 1, 'the open submenu follows subsequent scrolling')
+
+  // Near the top/right viewport edges, keep the tall menu visible and flip
+  // left. Moving only the fixture's trigger box preserves the real component.
+  await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'}));
+    (()=>{const list=document.getElementById('model-picker-panel').firstElementChild;
+    list.style.maxHeight='';list.scrollTop=0;
+    const root=${MODEL}.parentElement;root.style.position='fixed';root.style.top='0';root.style.left=(innerWidth-328)+'px';})()`)
+  await evaluate(`${MODEL}.click()`)
+  await pause(250)
+  await evaluate(`document.querySelector('[data-model-option="deepseek/fixture"]').click()`)
+  await waitFor(`document.querySelector('[data-thinking-option="max"]')`)
+  await pause(250)
+  const edge = await thinkingGeometry('deepseek/fixture')
+  assert.equal(edge.side, 'left', `the submenu flips left at the right edge (${show(edge)})`)
+  assert.ok(edge.top >= 7 && edge.top <= 9, `the viewport alone limits upward expansion (${show(edge)})`)
+  assert.ok(edge.bottom <= edge.viewportHeight - 7, 'the whole menu remains in the viewport')
+
   assert.deepEqual(exceptions, [], 'no uncaught renderer exceptions')
-  console.log('PASS: composer pickers — model, thinking and sandbox Selects anchored to their triggers (sandbox right-aligned in the send cluster), unclipped and on top, with no field to type in, and following a panel drag')
+  console.log('PASS: composer pickers — centered thinking menus with stable first-frame options/heights, non-reasoning→reasoning switches, scrolling and viewport bounds; model/sandbox panels remain anchored, unclipped and on top through panel dragging')
 } finally {
   ws?.close()
   if (child && child.exitCode === null) { const exited = new Promise((r) => child.once('exit', r)); child.kill(); await exited }

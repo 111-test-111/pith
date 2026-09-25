@@ -9,7 +9,7 @@
  *   (`initReduceMotion` re-applies from storage) and the live flip.
  * - Both halves of the switch: motion's global `skipAnimations` (what makes a
  *   flip instant for everything already mounted) and the CSS rule on
- *   `html[data-reduce-motion]` (transitions → 1ms, keyframes → none, the theme
+ *   `html[data-reduce-motion]` (transitions → 0ms, keyframes → none, the theme
  *   View Transition's snapshots included).
  * - The running-state exception, in all three of its forms: the vendored motion
  *   `Loader`'s rotation is re-added through Tailwind's own keyframes
@@ -21,7 +21,10 @@
  *   measured against the same row mounted without `animateIn` as the resting
  *   oracle.
  * - The Settings row itself: label/description in both locales, the click
- *   flipping store + `<html>` + motion's flag + storage, and clicking back.
+ *   flipping store + `<html>` + motion's flag + storage, and clicking back. The
+ *   neighbouring 「紧凑显示连续工具调用」 row (Appearance) is checked here too —
+ *   its own store key and `<html>` attribute, which the transcript's row spacing
+ *   is styled off (the spacing itself is pinned in `check-transcript-rhythm.mjs`).
  * - The shader backdrop's freeze (its `speed` is not motion's or CSS's to stop).
  * - The documented boundary: the OS `prefers-reduced-motion` preference keeps
  *   beUI's own behaviour (it drops a busy glyph's rotation rather than freezing
@@ -421,7 +424,7 @@ try {
   const rowOn = await evaluate(`window.__sample('[data-spinner-loader] .beui-text-shimmer', 300)`)
   assert.equal(rowOn.first.animationName, 'beui-text-shimmer', 'the sentence sweep is exempt from the switch: ' + json(rowOn.first))
   assert.ok(rowOn.first.running.includes('beui-text-shimmer'), 'and keeps running: ' + json(rowOn.first.running))
-  assert.equal(rowOn.first.transitionDuration, '0.001s', 'while transitions still collapse to 1ms: ' + json(rowOn.first))
+  assert.equal(rowOn.first.transitionDuration, '0s', 'while transitions still are disabled: ' + json(rowOn.first))
   const svgOn = await evaluate(`window.__sample('[aria-label="spin"] svg', 300)`)
   assert.equal(svgOn.first.computedTransform, svgOn.third.computedTransform, "the loader's own rotation is frozen: " + json(svgOn))
 
@@ -491,7 +494,7 @@ try {
   assert.ok(reduceBox, 'Settings → Appearance carries the switch: ' + json(boxes))
   assert.equal(reduceBox.label, 'Disable animations', 'and it is labelled from the dictionary')
   assert.equal(reduceBox.checked, 'true', 'the row renders the live preference: ' + json(reduceBox))
-  assert.equal(reduceBox.transitionDuration, '0.001s', 'its own hover transition is collapsed too: ' + reduceBox.transitionDuration)
+  assert.equal(reduceBox.transitionDuration, '0s', 'its own hover transition is collapsed too: ' + reduceBox.transitionDuration)
   assert.ok(
     (await evaluate(`window.__text()`)).includes(dict.en['settings.motion']),
     "the section is grouped under the locale's own heading"
@@ -528,6 +531,33 @@ try {
   reduceBox = boxes.find((box) => box.label === dict.en['settings.reduceMotion'])
   assert.equal(reduceBox.checked, 'true', 'and the row shows the new state: ' + json(reduceBox))
 
+  // The section's newer transcript switch rides the same pattern — its own
+  // `pi-app:compact-tools` key behind its own `<html>` attribute, which is what
+  // the transcript's row spacing is styled off (the spacing itself is pinned in
+  // check-transcript-rhythm.mjs).
+  let compactBox = boxes.find((box) => box.label === dict.en['settings.compactTools'])
+  assert.ok(compactBox, 'Settings → Appearance also carries the compact-tool-calls switch: ' + json(boxes))
+  compactBox = await evaluate(`window.__reveal(${json(dict.en['settings.compactTools'])})`)
+  await clickAt(compactBox.x, compactBox.y)
+  await pause(250)
+  assert.equal(
+    await evaluate('document.documentElement.dataset.compactTools'),
+    'true',
+    'the compact switch reaches <html>'
+  )
+  assert.equal(await evaluate(`localStorage.getItem('pi-app:compact-tools')`), 'on', 'and persists')
+  boxes = await evaluate(`window.__checkboxes()`)
+  compactBox = boxes.find((box) => box.label === dict.en['settings.compactTools'])
+  assert.equal(compactBox.checked, 'true', 'the compact row shows the new state: ' + json(compactBox))
+  compactBox = await evaluate(`window.__reveal(${json(dict.en['settings.compactTools'])})`)
+  await clickAt(compactBox.x, compactBox.y)
+  await pause(250)
+  assert.equal(
+    await evaluate('document.documentElement.dataset.compactTools'),
+    'false',
+    'clicking again turns the compact switch back off'
+  )
+
   await evaluate(`window.__mount('settings', 'zh-CN')`)
   await pause(200)
   const zhBoxes = await evaluate(`window.__checkboxes()`)
@@ -537,6 +567,10 @@ try {
   )
   assert.ok((await evaluate(`window.__text()`)).includes(dict.zhCN['settings.motion']), 'the row is localised (heading)')
   assert.ok((await evaluate(`window.__text()`)).includes(dict.zhCN['settings.reduceMotionDesc']), 'the row is localised (description)')
+  assert.ok(
+    (await evaluate(`window.__text()`)).includes(dict.zhCN['settings.compactToolsDesc']),
+    'the compact switch is localised (description)'
+  )
   await screenshot('reduce-motion-settings-zh')
 
   // ── 7. The shader backdrop freezes: it is neither motion nor CSS ───────────

@@ -104,17 +104,26 @@ export function SessionSearchTrigger() {
 /** Mounted around the workspace, outside the responsive sidebar which swaps
  * trees at its mobile breakpoint. beUI owns the portal/focus/animation; only
  * the trigger lives in the sidebar. Stable children keep typing off the chat. */
-export function SessionSearch({ sessions, activePath, runningPaths, onOpen, children }: {
+export function SessionSearch({ sessions, activePath, runningPaths, onOpen, open: controlledOpen, onOpenChange, children }: {
   sessions: SessionSummaryDTO[]
   activePath: string | null
   runningPaths: ReadonlySet<string>
   onOpen: (path: string, cwd: string) => Promise<void>
+  /** Controlled open state — the workspace holds it so the shortcut
+   *  dispatcher owns the ⌘⇧F toggle; uncontrolled keeps the old behavior. */
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
   children: ReactNode
 }) {
   const { t, locale } = useI18n()
   const descriptionId = useId()
-  const [isOpen, setIsOpen] = useState(false)
+  const [internalOpen, setInternalOpen] = useState(false)
+  const isOpen = controlledOpen ?? internalOpen
   const [query, setQuery] = useState('')
+  // The search runs on this throttled copy of the trimmed query: while typing
+  // continues it commits on a fixed cadence, so the panel refreshes once per
+  // interval instead of on every keystroke.
+  const [committedQuery, setCommittedQuery] = useState('')
   // local patch (pi-app): the details control reads as an EXCLUSION and is on by
   // default, so the default search behaviour is unchanged — tools, attachments
   // and thinking are left out unless the user opts them in by unchecking it.
@@ -134,9 +143,14 @@ export function SessionSearch({ sessions, activePath, runningPaths, onOpen, chil
   const openingAttempt = useRef(0)
   const input = useRef<HTMLInputElement>(null)
   const results = useRef<HTMLDivElement>(null)
+  /** A scheduled query commit. It deliberately survives further keystrokes,
+   * so continuous typing refreshes on a cadence instead of per change. */
+  const pendingCommit = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  /** The latest trimmed query, read by the scheduled commit when it fires. */
+  const latestQuery = useRef('')
   const trimmed = query.trim()
   const active = Boolean(trimmed)
-  const key = JSON.stringify([trimmed, offset, sort, excludeDetails])
+  const key = JSON.stringify([committedQuery, offset, sort, excludeDetails])
   const value = response?.key === key ? response.value : null
   const dateFormat = useMemo(() => new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }), [locale])
   // The first appearance of a folder in this global activity sort is its
@@ -158,24 +172,65 @@ export function SessionSearch({ sessions, activePath, runningPaths, onOpen, chil
   // Stable identity is important: beUI's focus effect depends on its context.
   // Changing this callback on a keystroke would keep refocusing the input.
   const changeOpen = useCallback((next: boolean) => {
-    setIsOpen(next)
+    setInternalOpen(next)
+    onOpenChange?.(next)
     setComposing(false)
     if (!next) {
       ++openingAttempt.current
       setOpeningPath(null)
     }
+  }, [onOpenChange])
+
+  // Typing schedules ONE commit 200ms ahead; further keystrokes only feed it
+  // (via latestQuery) without pushing it back, so continuous typing refreshes
+  // the results every 200ms instead of on every change. Each commit restarts
+  // from the first page of a fresh scroll.
+  useEffect(() => {
+    latestQuery.current = trimmed
+    const cancelPending = () => {
+      if (pendingCommit.current !== undefined) {
+        clearTimeout(pendingCommit.current)
+        pendingCommit.current = undefined
+      }
+    }
+    // A scheduled commit only makes sense while the modal is open, the IME is
+    // idle and the input still differs from the committed query.
+    if (!isOpen || composing || trimmed === committedQuery) {
+      cancelPending()
+      return
+    }
+    // Clearing the input commits at once — there is no search to wait for.
+    if (!trimmed) {
+      cancelPending()
+      setCommittedQuery('')
+      setOffset(0)
+      results.current?.scrollTo(0, 0)
+      return
+    }
+    if (pendingCommit.current !== undefined) return
+    pendingCommit.current = setTimeout(() => {
+      pendingCommit.current = undefined
+      setCommittedQuery(latestQuery.current)
+      setOffset(0)
+      results.current?.scrollTo(0, 0)
+    }, 200)
+  }, [trimmed, committedQuery, composing, isOpen])
+
+  // Unmounting the panel drops a scheduled commit.
+  useEffect(() => () => {
+    if (pendingCommit.current !== undefined) clearTimeout(pendingCommit.current)
   }, [])
 
   useEffect(() => {
-    if (!trimmed || composing || !isOpen) return
+    if (!committedQuery || !isOpen) return
     let cancelled = false
     let reportedFailure = false
-    let timer: ReturnType<typeof setTimeout>
+    let timer: ReturnType<typeof setTimeout> | undefined
     setError(false)
     setLoading(true)
     const search = async () => {
       try {
-        const next = await window.pi.searchSessions({ query: trimmed, sort, offset, includeDetails: !excludeDetails })
+        const next = await window.pi.searchSessions({ query: committedQuery, sort, offset, includeDetails: !excludeDetails })
         if (cancelled) return
         if (offset > 0 && offset >= next.total) {
           setOffset(Math.max(0, Math.floor((next.total - 1) / 40) * 40))
@@ -200,14 +255,12 @@ export function SessionSearch({ sessions, activePath, runningPaths, onOpen, chil
         }
       }
     }
-    timer = setTimeout(() => { void search() }, 150)
+    void search()
     return () => { cancelled = true; clearTimeout(timer) }
-  }, [trimmed, offset, sort, excludeDetails, key, composing, sessions, isOpen])
+  }, [committedQuery, offset, sort, excludeDetails, key, sessions, isOpen])
 
   const changeQuery = (next: string) => {
     setQuery(next)
-    setOffset(0)
-    results.current?.scrollTo(0, 0)
   }
   const openSession = async (path: string, cwd: string) => {
     if (openingPath) return
@@ -231,6 +284,7 @@ export function SessionSearch({ sessions, activePath, runningPaths, onOpen, chil
         ariaLabel={t('sessionSearch.label')}
         ariaDescribedBy={descriptionId}
         closeButtonLabel={t('sessionSearch.close')}
+        shortcutPassthrough="sessionSearch"
         className="max-w-3xl"
         backdropClassName="bg-background/40 backdrop-blur-sm"
       >
@@ -247,7 +301,7 @@ export function SessionSearch({ sessions, activePath, runningPaths, onOpen, chil
             <div className="p-1">
               <Input ref={input} value={query} onChange={changeQuery} maxLength={512} autoFocus autoComplete="off" spellCheck={false}
                 aria-label={t('sessionSearch.label')} placeholder={t('sessionSearch.placeholder')}
-                classNames={{ rightIcon: 'pr-2' }}
+                classNames={{ input: 'text-xs', rightIcon: 'pr-2' }}
                 leftIcon={<Search aria-hidden="true" />}
                 rightIcon={query ? (
                   // The vendored input pins its right slot to a field-height
@@ -350,7 +404,7 @@ export function SessionSearch({ sessions, activePath, runningPaths, onOpen, chil
                     <Button key={hit.path} variant="ghost" 
                       aria-current={current ? 'page' : undefined} disabled={Boolean(openingPath)}
                       onClick={() => { void openSession(hit.path, hit.cwd) }}
-                      className={cn('group h-auto min-h-9 w-full items-start justify-start gap-2 rounded-lg px-2 py-2 text-left font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset [content-visibility:auto] [contain-intrinsic-size:auto_20px]', active && '[contain-intrinsic-size:auto_62px]', current && 'bg-primary/5')}
+                      className={cn('group h-auto min-h-9 w-full items-start justify-start gap-2 rounded-lg px-2 py-2 text-left font-normal focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset [content-visibility:auto] [contain-intrinsic-size:auto_20px]', active && '[contain-intrinsic-size:auto_62px]', current && 'bg-primary/5')}
                     >
                       <span className={cn('mt-0.5 grid size-4 shrink-0 place-items-center text-muted-foreground/70', current && 'text-primary')}>
                         {pending || runningPaths.has(hit.path) ? <LoaderCircle aria-hidden="true" className="size-3.5 animate-spin" /> : <Chat01 aria-hidden="true" className="size-3.5" />}

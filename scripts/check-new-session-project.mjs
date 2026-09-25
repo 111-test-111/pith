@@ -96,7 +96,7 @@ app.whenReady().then(()=>{
     for (let i = 0; i < 150; i++) { if (await evaluate(`(async()=>Boolean(await (${expression})))()`)) return; await pause(100) }
     throw new Error('Timed out: ' + expression + '\n' + JSON.stringify(exceptions) + '\n' + output.slice(-2000))
   }
-  const ready = () => waitFor(`document.querySelector('textarea')`)
+  const ready = () => waitFor(`document.querySelector('[data-prompt-editor]')`)
   const clickAt = async point => {
     await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...point, button: 'left', clickCount: 1 })
     await send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...point, button: 'left', clickCount: 1 })
@@ -134,12 +134,12 @@ app.whenReady().then(()=>{
   assert.ok(await evaluate(`${projectList}.getBoundingClientRect().height > 60`))
   await screenshot('panel-open-dark')
 
-  // The panel floats OVER the composer. Its input surface (the textarea) is
+  // The panel floats OVER the composer. Its input viewport is
   // the overlap region the panel must paint above — the earlier probe targeted
   // the Combobox model trigger, which the Select migration removed.
   const overlay = await evaluate(`(()=>{
     const list=${projectList};
-    const trigger=document.querySelector('textarea');
+    const trigger=document.querySelector('[data-prompt-viewport]');
     const t=trigger.getBoundingClientRect(), l=list.getBoundingClientRect();
     const top=Math.max(t.top,l.top), bottom=Math.min(t.bottom,l.bottom);
     const left=Math.max(t.left,l.left), right=Math.min(t.right,l.right);
@@ -196,58 +196,6 @@ app.whenReady().then(()=>{
   assert.match(await evaluate(`document.querySelector('${projectRow}').closest('[role=treeitem]').innerText`), /new-project/)
   await screenshot('new-project')
 
-  // Starter cards are beUI TiltCards: the frame that carries the border tilts
-  // with the pointer (reduced motion/touch keep it still), and a press still
-  // only fills the composer draft.
-  const card = `[...document.querySelectorAll('button')].find(b=>/overflow-hidden/.test(b.parentElement?.className||'')&&/will-change-transform/.test(b.parentElement?.className||''))`
-  const geometry = await evaluate(`(()=>{const button=${card};const card=button.parentElement;return{cardHeight:Math.round(card.getBoundingClientRect().height),border:getComputedStyle(card).borderTopWidth,radius:getComputedStyle(card).borderTopLeftRadius,glare:Boolean(card.querySelector('div[aria-hidden]'))}})()`)
-  assert.equal(geometry.border, '1px', 'the card surface owns the frame')
-  assert.equal(geometry.radius, '20px', 'card radius comes from the app token')
-  assert.ok(geometry.cardHeight <= 68, 'compressed card height: ' + geometry.cardHeight)
-  assert.equal(geometry.glare, true, 'the glare layer is mounted')
-  assert.equal(await evaluate(`getComputedStyle(${card}.parentElement.querySelector('div[aria-hidden]')).opacity`), '0.07', 'the app tone down the glare')
-  const accent = await evaluate(`(()=>{const probe=document.createElement('div');probe.style.color='var(--primary)';document.body.appendChild(probe);const value=getComputedStyle(probe).color;probe.remove();return value})()`)
-  assert.ok((await evaluate(`getComputedStyle(${card}.parentElement.querySelector('div[aria-hidden]')).backgroundImage`)).includes(accent), 'the glare washes in the theme accent: ' + accent)
-  await screenshot('starter-cards')
-  const cardTransform = () => evaluate(`getComputedStyle(${card}.parentElement).transform`)
-  // Largest rotation entry of the matrix3d (sin of the tilt angle).
-  const rotationOf = async () => {
-    const text = await cardTransform()
-    return Math.max(...text.replace(/^matrix3d\(|\)$/g, '').split(',').map((v, i) => [1, 2, 4, 6, 8, 9].includes(i) ? Math.abs(Number(v)) : 0))
-  }
-  const restingTransform = await cardTransform()
-  /**
-   * Hover the card and wait for it to react. CDP-injected mouse moves that
-   * land right after a reload — before the fresh document processes input —
-   * leave the card at rest, so the pair is retried (bounded) instead of
-   * asserting on one race; a card that never tilts still fails below.
-   */
-  const hoverCard = async (point, rest) => {
-    for (let attempt = 0; attempt < 8; attempt++) {
-      await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: point.x - 30, y: point.y - 30 })
-      await pause(120)
-      await send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...point })
-      await pause(400)
-      if ((await cardTransform()) !== rest) return
-    }
-  }
-  const cardPoint = await evaluate(`(()=>{const r=${card}.getBoundingClientRect();return{x:r.x+r.width*0.2,y:r.y+r.height*0.3}})()`)
-  const hoverProbe = await evaluate(`(()=>{const el=document.elementFromPoint(${cardPoint.x},${cardPoint.y});return{point:[${cardPoint.x},${cardPoint.y}],hit:el?el.tagName+'.'+(el.className||''):null,onCard:Boolean(el&&${card}.contains(el)),hover:matchMedia('(hover: hover) and (pointer: fine)').matches,reduce:matchMedia('(prefers-reduced-motion: reduce)').matches}})()`)
-  assert.equal(hoverProbe.onCard, true, 'the pointer must be over a starter card: ' + JSON.stringify(hoverProbe))
-  await hoverCard(cardPoint, restingTransform)
-  const tilted = await cardTransform()
-  assert.match(tilted, /^matrix3d\(/, 'the card surface tilts: ' + tilted)
-  assert.notEqual(tilted, restingTransform, 'hover must move the card off its resting transform: ' + JSON.stringify(hoverProbe))
-  const tiltAngle = await rotationOf()
-  assert.ok(tiltAngle > 0.02, 'the tilt must be visible: ' + tiltAngle)
-  assert.ok(tiltAngle < 0.08, 'the tilt must stay slight: ' + tiltAngle)
-  // The vendored Button scales itself 2% on hover, which grew the content past
-  // the still frame (the text appeared to push out of the card).
-  const buttonScale = await evaluate(`(()=>{const m=new DOMMatrixReadOnly(getComputedStyle(${card}).transform);return Math.max(Math.abs(m.a),Math.abs(m.d))})()`)
-  assert.ok(buttonScale < 1.001, 'the card content must not scale on hover: ' + buttonScale)
-  assert.equal(await evaluate(`getComputedStyle(${card}.parentElement.querySelector('div[aria-hidden]')).backgroundImage.includes('radial-gradient')`), true, 'the cursor-tracked glare follows the pointer')
-  await screenshot('starter-cards-hover')
-
   // The landing wears the shader backdrop: present, behind the content,
   // pointer-transparent, and actually animating. A clip over an empty corner
   // isolates the shader from the (static) landing content.
@@ -266,76 +214,39 @@ app.whenReady().then(()=>{
   await pause(700)
   assert.notEqual(await shaderShot(), shaderFrameA, 'the shader animates when motion is allowed')
 
-  // A file attachment is a quiet expandable chip: only its label is on screen
-  // until it is clicked, then the remove action slides out.
+  // A file attachment is a card INSIDE the input frame: as tall as the image
+  // thumbs (h-14), type artwork over the file name and its directory, with a
+  // corner close control that rides in on hover.
   await send('DOM.enable')
   const dom = await send('DOM.getDocument', { depth: -1 })
   const fileInput = (await send('DOM.querySelector', { nodeId: dom.root.nodeId, selector: 'input[type=file]:not([accept])' })).nodeId
   assert.ok(fileInput, 'the composer exposes the file input')
   await send('DOM.setFileInputFiles', { files: [attachmentFile], nodeId: fileInput })
-  await waitFor(`document.querySelector('[data-attachment-chip] button[aria-expanded]')`)
-  const chip = () => evaluate(`(()=>{const root=document.querySelector('[data-attachment-chip]');const label=root.querySelector('button[aria-expanded]');const action=root.querySelectorAll('button')[1];return{label:label.textContent.trim(),expanded:label.getAttribute('aria-expanded'),height:label.getBoundingClientRect().height,actionWidth:action?action.parentElement.getBoundingClientRect().width:0}})()`)
-  const chipBefore = await chip()
-  assert.match(chipBefore.label, /attachment-sample/, 'the chip names the attached file')
-  assert.equal(chipBefore.expanded, 'false', 'the chip starts collapsed')
-  assert.equal(chipBefore.actionWidth, 0, 'the remove action is hidden while the chip is quiet')
-  await click('[data-attachment-chip] button[aria-expanded]')
-  const chipOpen = await chip()
-  assert.equal(chipOpen.expanded, 'true', 'clicking the chip reveals its action')
-  assert.ok(chipOpen.actionWidth > 0, 'the remove action becomes reachable')
-  await screenshot('attachment-chip-expanded')
-  await evaluate(`document.querySelector('[data-attachment-chip]').querySelectorAll('button')[1].click()`)
+  await waitFor(`document.querySelector('[data-attachment-card]')`)
+  const card = () => evaluate(`(()=>{const root=document.querySelector('[data-attachment-card]');const open=root.querySelector('button');const texts=[...open.querySelectorAll('[data-middle-ellipsis]')].map(n=>n.textContent);const close=root.querySelectorAll('button')[1];const form=root.closest('form');return{name:texts[0]??'',dir:texts[1]??'',height:open.getBoundingClientRect().height,insideFrame:Boolean(form&&form.contains(document.querySelector('[data-prompt-editor]'))),closeLabel:close?.getAttribute('aria-label')??''}})()`)
+  const cardBefore = await card()
+  assert.match(cardBefore.name, /attachment-sample/, 'the card names the attached file')
+  assert.ok(cardBefore.dir.length > 0, 'the card shows the containing directory')
+  assert.equal(cardBefore.height, 56, 'the card matches the image thumbs (h-14)')
+  assert.equal(cardBefore.insideFrame, true, 'the card renders inside the input frame')
+  assert.match(cardBefore.closeLabel, /attachment-sample/, 'the corner control removes the card')
+  await screenshot('attachment-card')
+  await evaluate(`document.querySelector('[data-attachment-card]').querySelectorAll('button')[1].click()`)
   await pause(250)
-  assert.equal(await evaluate(`Boolean(document.querySelector('[data-attachment-chip] button[aria-expanded]'))`), false, 'removing drops the chip')
+  assert.equal(await evaluate(`Boolean(document.querySelector('[data-attachment-card]'))`), false, 'removing drops the card')
 
-  // Reduced motion (and touch) keep the surface still and drop the glare.
-  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: cardPoint.x, y: cardPoint.y - 240 })
+  // Reduced motion (and touch) keep the shader still.
   await pause(900)
   await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] })
   // The preference is read at mount, so reload instead of relying on a change event.
   await send('Page.reload'); await pause(500); await ready()
   assert.equal(await evaluate(`matchMedia('(prefers-reduced-motion: reduce)').matches`), true, 'the emulated preference is active')
-  assert.equal(await evaluate(`matchMedia('(hover: hover) and (pointer: fine)').matches`), true, 'emulation must not also report a touch device, or this check proves nothing')
-  const reducedPoint = await evaluate(`(()=>{const r=${card}.getBoundingClientRect();return{x:r.x+r.width*0.2,y:r.y+r.height*0.3}})()`)
-  assert.ok(await rotationOf() < 0.001, 'the card rests level on mount')
-  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...reducedPoint })
-  await pause(600)
-  assert.ok(await rotationOf() < 0.001, 'reduced motion keeps the card still')
-  assert.equal(await evaluate(`Boolean(${card}.parentElement.querySelector('div[aria-hidden]'))`), false, 'reduced motion drops the glare')
   const shaderFrameRestA = await shaderShot()
   await pause(700)
   assert.equal(await shaderShot(), shaderFrameRestA, 'reduced motion freezes the shader')
   await send('Emulation.setEmulatedMedia', { features: [] })
   await send('Page.reload'); await pause(500); await ready()
   assert.equal(await evaluate(`matchMedia('(prefers-reduced-motion: reduce)').matches`), false, 'the emulated preference is cleared')
-
-  // The landing block is centred on its own height, so any content-height
-  // difference between the two starter sets moved the whole page — title and
-  // input box included — by half of it the moment the project chip switched.
-  // Card text is one line at every size now, so the block cannot move.
-  const landingTop = () => evaluate(`(()=>{const h1=document.querySelector('main h1');const inner=h1.parentElement.parentElement;return{top:inner.getBoundingClientRect().top,cards:[...document.querySelectorAll('div[class*="will-change-transform"]')].map(c=>c.getBoundingClientRect().height)}})()`)
-  for (const size of ['16px', '19px', '22px']) {
-    await evaluate(`document.documentElement.style.fontSize=${JSON.stringify(size)}`)
-    await pause(400)
-    const project = await landingTop()
-    await click(TRIGGER); await clickOption('不使用项目'); await pause(900)
-    const none = await landingTop()
-    await click(TRIGGER); await clickOption('pi-app'); await pause(900)
-    assert.equal(none.top, project.top, `the landing must not sink at ${size}: ` + project.top + ' -> ' + none.top)
-    assert.deepEqual(none.cards, project.cards, 'both starter sets keep one card height at ' + size)
-  }
-  // A longer description can never grow a card: it ellipsises instead.
-  const longText = await evaluate(`(()=>{const button=${card};const line=button.children[1];const before=button.parentElement.getBoundingClientRect().height;line.textContent='一段刻意写得很长的说明文字，用来验证它不会把卡片撑高；一旦撑高，垂直居中的整页就会下沉。';const style=getComputedStyle(line);return{after:button.parentElement.getBoundingClientRect().height,before,nowrap:style.whiteSpace,ellipsis:style.textOverflow,overflowing:line.scrollWidth>line.clientWidth}})()`)
-  assert.equal(longText.after, longText.before, 'a longer description must not change the card height')
-  assert.equal(longText.nowrap, 'nowrap')
-  assert.equal(longText.ellipsis, 'ellipsis')
-  assert.equal(longText.overflowing, true, 'the overlong text really does overflow its line')
-  await evaluate(`document.documentElement.style.fontSize='16px'`)
-  await pause(300)
-
-  await clickAt(reducedPoint)
-  await waitFor(`document.querySelector('textarea').value.length > 20`)
-  assert.match(await evaluate(`document.querySelector('textarea').value`), /项目|计划|想法|任务|代码/)
 
   // Narrow window: the panel stays inside the viewport.
   await evaluate(`fixture.resize(760,560)`)
@@ -345,20 +256,8 @@ app.whenReady().then(()=>{
   assert.ok(rect.left >= 0 && rect.right <= rect.width, 'panel must stay inside the viewport: ' + JSON.stringify(rect))
   await screenshot('panel-open-narrow')
 
-  // The card frame and glare must read in both themes.
-  await evaluate(`fixture.resize(1320,880)`)
-  await pause(400)
-  await evaluate(`localStorage.setItem('theme','light')`)
-  await send('Page.reload'); await pause(400); await ready()
-  // A reload rebuilds the DOM: re-enter the card so its onMouseMove fires.
-  const lightPoint = await evaluate(`(()=>{const r=${card}.getBoundingClientRect();return{x:r.x+r.width*0.2,y:r.y+r.height*0.3}})()`)
-  const probe = await evaluate(`(()=>{const el=document.elementFromPoint(${lightPoint.x},${lightPoint.y});return{inner:[innerWidth,innerHeight],point:[${lightPoint.x},${lightPoint.y}],hit:el?el.tagName+'.'+(el.className||''):null,onCard:Boolean(el&&${card}.contains(el)),hover:matchMedia('(hover: hover) and (pointer: fine)').matches,reduce:matchMedia('(prefers-reduced-motion: reduce)').matches}})()`)
-  assert.equal(probe.onCard, true, 'the pointer must be over a starter card: ' + JSON.stringify(probe))
-  await hoverCard(lightPoint, restingTransform)
-  assert.notEqual(await cardTransform(), restingTransform, 'the light card tilts too: ' + JSON.stringify(probe))
-  await screenshot('starter-cards-hover-light')
   assert.deepEqual(exceptions, [])
-  console.log('PASS: new-session project picker — options, project switch, projectless switch, privacy, escape, geometry, tilt cards')
+  console.log('PASS: new-session project picker — options, project switch, projectless switch, privacy, escape, geometry')
 } finally {
   ws?.close()
   if (child && child.exitCode === null) { child.kill('SIGTERM'); await new Promise(resolve => { child.once('exit', resolve); setTimeout(resolve, 3000) }) }

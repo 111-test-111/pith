@@ -1,3 +1,4 @@
+// local patch (pi-app): keep UI frames and focus rings in this component at 1px.
 "use client";
 // beui.dev/components/motion/context-menu
 
@@ -572,8 +573,9 @@ function ContextMenuItemBase({
         if (closeOnSelect) context.setOpen(false);
       }}
       className={cn(
-        "relative isolate flex w-full select-none items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13px] outline-none",
-        "focus-visible:ring-2 focus-visible:ring-foreground/15",
+        // local patch (pi-app): menu text follows the regular 14px body step.
+        "relative isolate flex w-full select-none items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm outline-none",
+        "focus-visible:ring-1 focus-visible:ring-foreground/15",
         "disabled:pointer-events-none disabled:opacity-40",
         inset && "pl-8",
         tone === "destructive" ? "text-destructive" : "text-foreground",

@@ -1,3 +1,4 @@
+// local patch (pi-app): keep UI frames and focus rings in this component at 1px.
 "use client";
 
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
@@ -99,19 +100,16 @@ export function Checkbox({
           // `corner-shape: squircle`, so a semantic radius alone would render a
           // squarish circle on this square box. It is a no-op at the square
           // style's 0px radius, so that style stays pixel-identical.
-          "inline-flex size-3.5 shrink-0 items-center justify-center rounded-control corner-round border-2 outline-none transition-colors duration-200",
-          "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+          "inline-flex size-3.5 shrink-0 items-center justify-center rounded-control corner-round border outline-none transition-colors duration-200",
+          "focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
           "disabled:cursor-not-allowed disabled:opacity-60",
+          // local patch (pi-app): selection keeps a visible frame at rest;
+          // hover changes its fill without changing the border colour.
           showMark
             ? pointMark
-              ? // local patch (pi-app): the square style's point mark draws its
-                // fill INSIDE the frame, so the box's own interior stays open
-                // and only the frame takes the primary border when it is on.
-                // This branch is the square style only (`pointMark` is true only
-                // there); the squircle style always takes the filled box below.
-                "border-primary bg-background"
-              : "border-primary bg-primary text-primary-foreground"
-            : "border-muted-foreground/50 bg-background hover:border-muted-foreground",
+              ? "border-primary bg-primary/15 hover:bg-primary/25"
+              : "border-primary bg-primary text-primary-foreground hover:bg-primary/90"
+            : "border-muted-foreground/50 bg-muted/50 hover:bg-muted",
         )}
       >
         {pointMark ? (

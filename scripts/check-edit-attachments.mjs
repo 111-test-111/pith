@@ -92,18 +92,18 @@ app.whenReady().then(()=>{
   }
   /** Dispatch a real `paste` carrying files — the only way to prove the two
    * surfaces read `clipboardData` rather than a picker's `change`. */
-  const paste = (selector, entries) => evaluate(`(()=>{const el=document.querySelector(${JSON.stringify(selector)});if(!el)throw new Error('no target for paste');const dt=new DataTransfer();${entries}const ev=new ClipboardEvent('paste',{bubbles:true,cancelable:true});Object.defineProperty(ev,'clipboardData',{value:dt});el.dispatchEvent(ev);return el.value})()`)
+  const paste = (selector, entries) => evaluate(`(()=>{const el=document.querySelector(${JSON.stringify(selector)});if(!el)throw new Error('no target for paste');const dt=new DataTransfer();${entries}const ev=new ClipboardEvent('paste',{bubbles:true,cancelable:true});Object.defineProperty(ev,'clipboardData',{value:dt});el.dispatchEvent(ev);return el.value ?? el.textContent})()`)
   const PNG_FILE = `dt.items.add(new File([Uint8Array.from(atob('${PNG}'),c=>c.charCodeAt(0))],'shot.png',{type:'image/png'}));`
   const TEXT_FILE = `dt.items.add(new File(['# notes'],'notes.md',{type:'text/markdown'}));`
   const count = selector => evaluate(`document.querySelectorAll(${JSON.stringify(selector)}).length`)
   await send('Runtime.enable')
-  await waitFor(`document.querySelector('textarea') && document.querySelector('[data-window-titlebar]')`)
+  await waitFor(`document.querySelector('[data-prompt-editor]') && document.querySelector('[data-window-titlebar]')`)
   // The check drives labels, so pin the locale (the app otherwise follows the
   // machine's language).
   await evaluate(`localStorage.setItem('pi-app:locale','en');localStorage.setItem('theme','dark')`)
   await send('Page.reload')
   await pause(300)
-  await waitFor(`document.querySelector('textarea') && document.querySelector('[data-window-titlebar]')`)
+  await waitFor(`document.querySelector('[data-prompt-editor]') && document.querySelector('[data-window-titlebar]')`)
   // A pasted File is named after itself on the chip: the thumbnail's `alt` and
   // the chip's remove label are how each surface proves it took the file.
   const dialogImage = '[role="dialog"] img[alt="shot.png"]'
@@ -112,7 +112,7 @@ app.whenReady().then(()=>{
   // ---- the edit-message dialog --------------------------------------------
   await evaluate(`document.querySelector('button[aria-label="Edit and resend"]').click()`)
   await waitFor(`document.querySelector('[role="dialog"] textarea')`)
-  assert.equal(await count('textarea'), 2, 'the editor is its own field beside the composer')
+  assert.equal(await count('textarea, [data-prompt-editor]'), 2, 'the editor is its own field beside the composer')
   const drafted = await paste('[role="dialog"] textarea', PNG_FILE + TEXT_FILE)
   assert.equal(drafted, 'Please review the layout.', 'a file clipboard does not also paste as text')
   await waitFor(`document.querySelector(${JSON.stringify(dialogImage)})`)
@@ -129,7 +129,7 @@ app.whenReady().then(()=>{
   assert.deepEqual(resends[0].files, ['/workspace/pi-app/docs/notes.md'], 'the pasted file rides the resend as a path')
 
   // ---- the composer (unchanged behaviour, same shared intake) --------------
-  const composer = 'main textarea'
+  const composer = 'main [data-prompt-editor]'
   const composerDraft = await paste(composer, PNG_FILE + TEXT_FILE)
   assert.equal(composerDraft, '', 'the composer swallows the file paste too')
   await waitFor(`document.querySelector('img[alt="shot.png"]')`)

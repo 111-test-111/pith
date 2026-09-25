@@ -11,6 +11,8 @@ export interface ScrollFadeEdges {
 }
 
 export interface ScrollFadeOptions {
+  /** Formulas scroll sideways; existing scrollports remain vertical. */
+  axis?: 'vertical' | 'horizontal'
   /** Ramp height in px; defaults to `SCROLL_FADE`. */
   fadeSize?: number
   /** Content wrapper whose growth moves the extent without a scroll event. */
@@ -40,7 +42,7 @@ export interface ScrollFadeOptions {
  */
 export function useScrollFade(
   viewportRef: RefObject<HTMLElement | null>,
-  { fadeSize = SCROLL_FADE, contentRef, dependsOn }: ScrollFadeOptions = {}
+  { fadeSize = SCROLL_FADE, contentRef, dependsOn, axis = 'vertical' }: ScrollFadeOptions = {}
 ): { edges: ScrollFadeEdges; maskImage: string | undefined } {
   const [edges, setEdges] = useState<ScrollFadeEdges>({ top: false, bottom: false })
 
@@ -48,10 +50,12 @@ export function useScrollFade(
     const viewport = viewportRef.current
     if (!viewport) return
     const update = () => {
-      const overflow = viewport.scrollHeight - viewport.clientHeight
+      const horizontal = axis === 'horizontal'
+      const overflow = horizontal ? viewport.scrollWidth - viewport.clientWidth : viewport.scrollHeight - viewport.clientHeight
+      const position = horizontal ? viewport.scrollLeft : viewport.scrollTop
       const next: ScrollFadeEdges = {
-        top: overflow > 1 && viewport.scrollTop > 1,
-        bottom: overflow > 1 && viewport.scrollTop < overflow - 1
+        top: overflow > 1 && position > 1,
+        bottom: overflow > 1 && position < overflow - 1
       }
       setEdges((prev) => (prev.top === next.top && prev.bottom === next.bottom ? prev : next))
     }
@@ -67,9 +71,10 @@ export function useScrollFade(
       viewport.removeEventListener('scroll', update)
       observer.disconnect()
     }
-  }, [viewportRef, contentRef, fadeSize, dependsOn])
+  }, [viewportRef, contentRef, fadeSize, dependsOn, axis])
 
   const ramp = `${fadeSize}px`
+  const direction = axis === 'horizontal' ? 'right' : 'bottom'
   // The ramp belongs to the edge that HIDES content: content above the viewport
   // fades at the TOP, content below it at the BOTTOM. These two single-edge
   // branches were swapped, so a viewport sitting at its top — the common case —
@@ -77,11 +82,11 @@ export function useScrollFade(
   // everything was.
   const maskImage =
     edges.top && edges.bottom
-      ? `linear-gradient(to bottom, transparent, black ${ramp}, black calc(100% - ${ramp}), transparent)`
+      ? `linear-gradient(to ${direction}, transparent, black ${ramp}, black calc(100% - ${ramp}), transparent)`
       : edges.bottom
-        ? `linear-gradient(to bottom, black calc(100% - ${ramp}), transparent)`
+        ? `linear-gradient(to ${direction}, black calc(100% - ${ramp}), transparent)`
         : edges.top
-          ? `linear-gradient(to bottom, transparent, black ${ramp})`
+          ? `linear-gradient(to ${direction}, transparent, black ${ramp})`
           : undefined
 
   return { edges, maskImage }

@@ -1,3 +1,4 @@
+// local patch (pi-app): keep UI frames and focus rings in this component at 1px.
 "use client";
 // beui.dev/components/agents/chat-app
 
@@ -92,7 +93,7 @@ function ResponseAction({
       // dip inward while pressed (see `button/base`).
       transition={SPRING_PRESS}
       className={cn(
-        "grid size-7 place-items-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
+        "grid size-7 place-items-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring",
         active && "bg-muted text-foreground",
       )}
     >
@@ -190,7 +191,8 @@ export function StreamingResponse({
           // specificity, so every inline code box in the transcript stayed
           // rounded. Kept out of this comment: the literal utility name —
           // Tailwind's scanner reads comments and would generate it again.
-          "text-sm leading-6 text-foreground/90 [&_a]:font-medium [&_a]:underline [&_a]:underline-offset-4 [&_code]:rounded-detail [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[0.9em] [&_ol]:my-3 [&_ol]:list-decimal [&_ol]:space-y-1 [&_ol]:pl-5 [&_p+p]:mt-3 [&_pre:not([data-code-block-pre])]:my-3 [&_pre:not([data-code-block-pre])]:overflow-x-auto [&_pre:not([data-code-block-pre])]:rounded-xl [&_pre:not([data-code-block-pre])]:border [&_pre:not([data-code-block-pre])]:border-border [&_pre:not([data-code-block-pre])]:bg-muted/45 [&_pre:not([data-code-block-pre])]:p-3 [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_pre_code]:rounded-none [&_pre_code]:text-[1em] [&_ul]:my-3 [&_ul]:list-disc [&_ul]:space-y-1 [&_ul]:pl-5",
+          // local patch (pi-app): inline and fenced code use fixed type steps.
+          "text-sm leading-6 text-foreground/90 [&_a]:font-medium [&_a]:underline [&_a]:underline-offset-4 [&_code]:rounded-detail [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-xs [&_ol]:my-3 [&_ol]:list-decimal [&_ol]:space-y-1 [&_ol]:pl-5 [&_p+p]:mt-3 [&_pre:not([data-code-block-pre])]:my-3 [&_pre:not([data-code-block-pre])]:overflow-x-auto [&_pre:not([data-code-block-pre])]:rounded-xl [&_pre:not([data-code-block-pre])]:border [&_pre:not([data-code-block-pre])]:border-border [&_pre:not([data-code-block-pre])]:bg-muted/45 [&_pre:not([data-code-block-pre])]:p-3 [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_pre_code]:rounded-none [&_pre_code]:text-sm [&_ul]:my-3 [&_ul]:list-disc [&_ul]:space-y-1 [&_ul]:pl-5",
           contentClassName,
         )}
       >
@@ -210,7 +212,9 @@ export function StreamingResponse({
             // local patch (pi-app): use the app's shared content duration for
             // the completion-actions row instead of a one-off literal.
             transition={{ duration: reduce ? 0.12 : DURATION.base, ease: EASE_OUT }}
-            className="mt-3"
+            // local patch (pi-app): all transcript action groups share the
+            // same leading gap, including standalone retry/fork footers.
+            data-message-actions
           >
             <div className={cn("flex items-center gap-0.5", actionsClassName)}>
               {canCopy ? (
@@ -268,7 +272,8 @@ export function StreamingResponse({
                   aria-expanded={currentSourcesOpen}
                   aria-controls={sourcesContentId}
                   onClick={() => setSourcesOpen(!currentSourcesOpen)}
-                  className="group ml-1 inline-flex min-h-7 items-center gap-2 rounded-md px-1.5 text-xs text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                  // local patch (pi-app): text actions fill on hover too.
+                  className="group ml-1 inline-flex min-h-7 items-center gap-2 rounded-md px-1.5 text-xs text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
                 >
                   <CitationStack citations={sources} />
                   <span className="tabular-nums">

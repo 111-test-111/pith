@@ -1,3 +1,4 @@
+// local patch (pi-app): keep UI frames and focus rings in this component at 1px.
 "use client";
 // beui.dev/components/motion/expandable-control
 
@@ -121,7 +122,9 @@ export function ExpandableButton({
         className={cn(
           // local patch (pi-app): capsule-by-design trigger, so the shape
           // token follows the UI style.
-          "relative inline-flex h-11 min-w-11 items-center overflow-hidden rounded-capsule border border-border bg-transparent p-1 pr-1 text-sm font-medium text-foreground outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50",
+          // local patch (pi-app): the control keeps its width but paints no
+          // frame; the pointer state is a fill.
+          "relative inline-flex h-11 min-w-11 items-center overflow-hidden rounded-capsule border border-transparent bg-transparent p-1 pr-1 text-sm font-medium text-foreground outline-none transition-colors hover:bg-muted focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50",
           className,
         )}
         onClick={handleClick}
@@ -198,7 +201,7 @@ export function ExpandableChip({
         className={cn(
           // local patch (pi-app): capsule-by-design chip surface, so the shape
           // token follows the UI style.
-          "inline-flex h-10 items-center overflow-hidden rounded-capsule border border-border bg-transparent text-sm text-foreground has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-inset has-[:focus-visible]:ring-ring",
+          "inline-flex h-10 items-center overflow-hidden rounded-capsule border border-transparent bg-transparent text-sm text-foreground has-[:focus-visible]:ring-1 has-[:focus-visible]:ring-inset has-[:focus-visible]:ring-ring",
           className,
         )}
         transition={transition}
@@ -210,7 +213,7 @@ export function ExpandableChip({
           aria-expanded={isExpanded}
           disabled={disabled}
           className={cn(
-            "h-full whitespace-nowrap py-0 pl-3 font-medium outline-none disabled:pointer-events-none disabled:opacity-50",
+            "h-full whitespace-nowrap py-0 pl-3 font-medium outline-none transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-50",
             isExpanded ? "pr-1" : "pr-3",
             labelClassName,
           )}
@@ -245,7 +248,7 @@ export function ExpandableChip({
             className={cn(
               // local patch (pi-app): capsule-by-design action, so the shape
               // token follows the UI style.
-              "flex h-full w-8 shrink-0 items-center justify-center rounded-capsule text-muted-foreground outline-none transition-colors hover:text-foreground disabled:pointer-events-none",
+              "flex h-full w-8 shrink-0 items-center justify-center rounded-capsule text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none",
               disabled && "opacity-50",
               actionClassName,
             )}

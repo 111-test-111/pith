@@ -12,7 +12,7 @@ import {
   useState,
   type ReactNode
 } from 'react'
-import { Brain, ChevronDown, CircleX, FileText, GitFork, Pencil, RefreshCw, Rewind } from '@/lib/icons'
+import { ArrowRight, Brain, ChevronDown, CircleX, FileText, GitFork, Pencil, RefreshCw, Rewind } from '@/lib/icons'
 import { AgentActivity } from '@/components/agents/agent-activity'
 import { AgentDisclosure } from '@/components/agents/agent-disclosure'
 import {
@@ -26,13 +26,14 @@ import { StreamingResponse } from '@/components/agents/streaming-response'
 import { Markdown } from '@/lib/markdown'
 import { SummaryRow } from './SummaryRow'
 import { useFileNavigation } from '@/lib/file-navigation'
-import { ACTIVITY_BODY_INDENT, TRANSCRIPT_ROW, TRANSCRIPT_ROW_TRIGGER, TRANSCRIPT_ROW_WIDTH } from '@/lib/transcript-rhythm'
+import { ACTIVITY_BODY_INDENT, TRANSCRIPT_ROW, TRANSCRIPT_ROW_WIDTH } from '@/lib/transcript-rhythm'
 import { cn } from '@/lib/utils'
 import { ToolIcon } from '@/lib/tool-icons'
 import { formatTime, formatTokenCount, basename } from '@/lib/format'
 import { extractTurnWrittenFiles } from '@/lib/turn-written-files'
 import type { TurnNotice } from '@/lib/chat-turns'
 import { extractUserDisplay } from '@/lib/user-message'
+import { continuationTarget } from '../../../../shared/continuation'
 import type {
   AssistantMsg,
   BashTaskDTO,
@@ -191,11 +192,12 @@ export const UserItem = memo(function UserItem({
   return (
     <Message
       from="user"
+      data-row="text"
       animateIn={Boolean((message as any).__optimistic)}
       data-rail-id={railId}
       className={spaced ? 'mt-4' : undefined}
     >
-      <MessageContent>
+      <MessageContent data-transcript-rows>
         {/* beUI's native gray bubble: `bg-muted` with `text-foreground`, so it
             stays a distinct gray in both light and dark mode and keeps the
             text legible (unlike solid's fixed black/white). */}
@@ -252,10 +254,10 @@ export const UserItem = memo(function UserItem({
 })
 
 /**
- * A compaction or branch summary: the SDK replaces the summarized history (or
- * an abandoned branch) with this entry, so the sentence explains why earlier
- * messages are gone and the expansion is the summary itself. Rendered as a tool
- * row — see `SummaryRow` for why.
+ * A compaction or branch summary. Compaction replaces older MODEL context but
+ * the UI keeps that history visible; a branch summary still represents an
+ * abandoned path. The expandable result is the summary itself. Rendered as a
+ * tool row — see `SummaryRow` for why.
  */
 export const SummaryItem = memo(function SummaryItem({
   message
@@ -333,7 +335,7 @@ export const CustomItem = memo(function CustomItem({ message }: { message: Custo
   // transcript — the Q&A record panel is where the user reads it.
   if (message.customType === 'ask_user_answer') return null
   return (
-    <div className="rounded-xl border border-border bg-card px-3 py-2">
+    <div data-row="text" className="rounded-xl border border-border bg-card px-3 py-2">
       <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
         {t('chat.customMessage', { type: message.customType })}
       </p>
@@ -397,6 +399,8 @@ interface AssistantPartsProps extends ToolContext {
    * indices stay absolute, so `toolPlan` lookups are unaffected. */
   blocksFrom?: number
   blocksTo?: number
+  /** A terminal Stop is hosted outside the process by the group. */
+  showStatus?: boolean
 }
 
 /** One assistant model round (thinking + tool calls + text) inside a merged group. */
@@ -416,6 +420,7 @@ const AssistantParts = memo(function AssistantParts({
   toolPlan,
   blocksFrom,
   blocksTo,
+  showStatus = true,
   toolResults,
   toolRuns,
 }: AssistantPartsProps) {
@@ -470,15 +475,9 @@ const AssistantParts = memo(function AssistantParts({
           // disclosure stays collapsed by default, so the growing text is cheap
           // and the user can expand it live.
           return (
-            <RowReveal key={`thinking-${index}`} animate={streaming} className="w-full">
+            <RowReveal key={`thinking-${index}`} animate={streaming} rowKind="process" className="w-full">
               <AgentActivity
                 status="complete"
-                // One row height for the whole transcript (see TRANSCRIPT_ROW):
-                // the row is the same box as a tool row and centres its own
-                // content, so the space between two rows' text is identical
-                // whichever pair of rows you look at. The trigger takes that
-                // box itself, so opening the reasoning cannot re-centre it.
-                className={TRANSCRIPT_ROW_TRIGGER}
                 summary={
                   // Same leading-icon shape as a tool row, so the Reasoning row
                   // scans like the tool calls under it.
@@ -513,21 +512,10 @@ const AssistantParts = memo(function AssistantParts({
           return (
             <Fragment key={`tool-${index}`}>
               {submissions.map(reference => <SubmissionCard key={reference.submissionEntryId} reference={reference} />)}
-              {/* Adjacent same-category calls fold into one row; everything
-                  else (including a lone categorized call) keeps its own row,
-                  so reasoning or a different category between two calls never
-                  merges them.
-
-                  Deliberately a Fragment, with no wrapper box: every row of a
-                  turn is a flex item of the group's own column, so the gap
-                  between two rows is the same 12px whether they are tool rows,
-                  a group row, a reasoning row or the waiting row. A block-local
-                  wrapper (this used to be `space-y-2`) put sibling rows of one
-                  round on a tighter 8px rhythm than rows of two rounds — the
-                  "spacing suddenly changed" the transcript must not have. */}
+              {/* Each visible row is a direct stack item across SDK rounds. */}
               {rows.flatMap((run) =>
                 run.category && run.items.length > 1 ? (
-                  <RowReveal key={run.items[0].id} animate={streaming} className={TRANSCRIPT_ROW_WIDTH}>
+                  <RowReveal key={run.items[0].id} animate={streaming} rowKind="process" className={TRANSCRIPT_ROW_WIDTH}>
                     <ToolGroupView
                       category={run.category}
                       calls={run.items}
@@ -538,7 +526,7 @@ const AssistantParts = memo(function AssistantParts({
                   </RowReveal>
                 ) : (
                   run.items.map((call) => (
-                    <RowReveal key={call.id} animate={streaming} className={TRANSCRIPT_ROW_WIDTH}>
+                    <RowReveal key={call.id} animate={streaming} rowKind="process" className={TRANSCRIPT_ROW_WIDTH}>
                       <ToolCallView
                         call={call}
                         result={toolResults.get(call.id)}
@@ -566,6 +554,7 @@ const AssistantParts = memo(function AssistantParts({
           <MessageBubble
             key={`text-${index}`}
             variant="ghost"
+            data-row="text"
             // One row height, content centred: a one-line reply then occupies the
             // same box as a tool row, so the space around it matches every other
             // row (a longer reply simply grows past the minimum).
@@ -594,47 +583,61 @@ const AssistantParts = memo(function AssistantParts({
         )
       })}
 
-      {ownsTail && message.errorMessage ? (() => {
-        // A user-stopped round is not a failure: it reads as a neutral
-        // "stopped" row instead of a red error disclosure (the SDK reports the
-        // abort through the same `errorMessage` field).
-        const stopped = message.stopReason === 'aborted'
-        const tone = 'text-muted-foreground'
-        const summary = stopped ? t('subagent.aborted') : t('chat.error')
-        return (
-          // Reuses the reasoning disclosure (beUI AgentActivity): a collapsed row
-          // that expands to the raw provider/SDK error instead of dumping a red
-          // box into the transcript.
-          <RowReveal animate={streaming} className="w-full">
-            <AgentActivity
-              status="complete"
-              summary={
-                <span className={cn(tone, 'inline-flex items-center gap-1.5')}>
-                  {!stopped && <CircleX aria-hidden="true" className="size-3.5" />}
-                  {summary}
-                </span>
-              }
-              defaultOpen={false}
-              collapseOnComplete={false}
-              // Same indent as the reasoning body it shares this disclosure with.
-              contentClassName={cn(WRAP_ANYWHERE, ACTIVITY_BODY_INDENT)}
-              items={[
-                {
-                  id: 'error',
-                  type: 'text' as const,
-                  content: <span className={tone}>{message.errorMessage}</span>,
-                },
-              ]}
-            />
-          </RowReveal>
-        )
-      })() : null}
+      {ownsTail && showStatus ? <AssistantStatus message={message} streaming={streaming} /> : null}
     </>
   )
 }, assistantPartsPropsEqual)
 
+/** Errors belong to the process; the current turn's terminal Stop remains
+ * visible beside its actions, with the regular transcript spacing. */
+function AssistantStatus({ message, streaming = false }: {
+  message: AssistantMsg
+  streaming?: boolean
+}) {
+  const { t } = useI18n()
+  if (!message.errorMessage) return null
+  // A user-stopped round is not a failure: it reads as a neutral
+  // "stopped" row instead of a red error disclosure (the SDK reports the
+  // abort through the same `errorMessage` field).
+  const stopped = message.stopReason === 'aborted'
+  const tone = 'text-muted-foreground'
+  const summary = message.errorMessage === 'JEV_WORKFLOW_PAUSED' ? t('jev.phase.paused') : stopped ? t('subagent.aborted') : t('chat.error')
+  return (
+    // Reuses the reasoning disclosure (beUI AgentActivity): a collapsed row
+    // that expands to the raw provider/SDK error instead of dumping a red
+    // box into the transcript.
+    <RowReveal animate={streaming} rowKind="process" className="w-full">
+      <AgentActivity
+        status="complete"
+        summary={
+          // Same leading-icon shape as the reasoning and tool rows (a
+          // 16px glyph plus an 8px gap = the 24px text indent): a 14px
+          // glyph on a 6px gap made this row's icon hug its label while
+          // every row around it started at the shared indent.
+          <span className={cn(tone, 'inline-flex items-center gap-2')}>
+            {!stopped && <CircleX aria-hidden="true" className="size-4 shrink-0" />}
+            {summary}
+          </span>
+        }
+        defaultOpen={false}
+        collapseOnComplete={false}
+        // Same indent as the reasoning body it shares this disclosure with.
+        contentClassName={cn(WRAP_ANYWHERE, ACTIVITY_BODY_INDENT)}
+        items={[
+          {
+            id: 'error',
+            type: 'text' as const,
+            content: <span className={tone}>{message.errorMessage === 'JEV_WORKFLOW_PAUSED' ? t('jev.workflowResume') : message.errorMessage}</span>,
+          },
+        ]}
+      />
+    </RowReveal>
+  )
+}
+
 function assistantPartsPropsEqual(prev: AssistantPartsProps, next: AssistantPartsProps): boolean {
   if (
+    prev.showStatus !== next.showStatus ||
     prev.message !== next.message ||
     prev.streaming !== next.streaming ||
     prev.showActions !== next.showActions ||
@@ -664,6 +667,8 @@ function assistantPartsPropsEqual(prev: AssistantPartsProps, next: AssistantPart
 }
 
 export interface AssistantGroupProps extends ToolContext {
+  continueFrom?: AssistantMsg
+  onContinue?: (message: AssistantMsg) => void
   notices?: TurnNotice[]
   /** File ownership can span multiple user-steer display groups. */
   writtenMessages?: readonly AssistantMsg[]
@@ -687,10 +692,7 @@ export interface AssistantGroupProps extends ToolContext {
   /** False while a run streams: retry rewinds the session (SDK requires idle)
    * and fork switches the active session mid-observation. */
   showActions?: boolean
-  /** Terminal failure prose for this turn (auto-retry gave up, or compaction
-   * failed). It is prose about the turn, not status chrome: unframed, at body
-   * size, in the error colour, and directly ABOVE the retry/fork row it
-   * explains. */
+  /** Terminal retry failure prose, unframed and inside the turn's process. */
   failure?: string
   /** True only for the transcript's newest turn: its completion-actions row
    * (icons + timestamp) stays visible instead of revealing on hover. */
@@ -714,6 +716,8 @@ export interface AssistantGroupProps extends ToolContext {
  */
 function assistantGroupPropsEqual(prev: AssistantGroupProps, next: AssistantGroupProps): boolean {
   if (
+    prev.continueFrom !== next.continueFrom ||
+    prev.onContinue !== next.onContinue ||
     prev.messages !== next.messages ||
     prev.notices !== next.notices ||
     prev.writtenMessages !== next.writtenMessages ||
@@ -753,20 +757,21 @@ function assistantGroupPropsEqual(prev: AssistantGroupProps, next: AssistantGrou
  * i.e. the turn's LAST non-empty prose block. Everything before it — including
  * the reasoning (and any tool calls) the final round emitted before it wrote
  * that prose — is process and folds away, so a finished turn reads as its
- * answer alone. `round === messages.length` when the turn produced no prose at
- * all, which folds every block it has.
+ * answer alone. Interrupted turns have no completed reply: all their blocks
+ * fold away, with the terminal Stop row hosted separately by the group.
  */
 interface TurnBoundary {
   round: number
   block: number
 }
 
-function replyBoundary(messages: AssistantMsg[], results: Map<string, ToolResultMsg>): TurnBoundary {
+function replyBoundary(messages: AssistantMsg[], results: Map<string, ToolResultMsg>, failed: boolean): TurnBoundary {
   for (let round = 0; round < messages.length; round++) {
     const blocks = groupContent(messages[round].content)
     const block = blocks.findIndex(b => b.kind === 'tool' && b.parts.some(call => submittedPlanRef(results.get(call.id))))
     if (block >= 0) return { round, block }
   }
+  if (failed || continuationTarget(messages)) return { round: messages.length, block: 0 }
   for (let round = messages.length - 1; round >= 0; round--) {
     const blocks = groupContent(messages[round].content)
     for (let block = blocks.length - 1; block >= 0; block--) {
@@ -775,14 +780,6 @@ function replyBoundary(messages: AssistantMsg[], results: Map<string, ToolResult
     }
   }
   return { round: messages.length, block: 0 }
-}
-
-/** The fold boundary: the reply block, pulled back to an errored round — that
- * disclosure IS the turn's outcome and has to stay on screen. */
-function processBoundary(messages: AssistantMsg[], results: Map<string, ToolResultMsg>): TurnBoundary {
-  const reply = replyBoundary(messages, results)
-  const error = messages.findIndex((message) => Boolean(message.errorMessage))
-  return error >= 0 && error < reply.round ? { round: error, block: 0 } : reply
 }
 
 /**
@@ -796,7 +793,8 @@ function foldedRows(
   messages: AssistantMsg[],
   boundary: TurnBoundary,
   plan: ToolPlan,
-  showReasoning: boolean
+  showReasoning: boolean,
+  outsideStatus: AssistantMsg | undefined
 ): number {
   let count = 0
   messages.forEach((message, messageIndex) => {
@@ -816,7 +814,7 @@ function foldedRows(
       // cannot make the folded part look non-empty either.
       else count += showReasoning ? 1 : 0
     })
-    if (message.errorMessage) count += 1
+    if (messageIndex < boundary.round && message !== outsideStatus && message.errorMessage) count += 1
   })
   return count
 }
@@ -872,6 +870,8 @@ function formatDuration(t: Translate, ms: number): string {
  * showing how long the turn took, expandable at any time.
  */
 export const AssistantGroup = memo(function AssistantGroup({
+  continueFrom,
+  onContinue,
   messages,
   notices,
   writtenMessages = messages,
@@ -903,6 +903,8 @@ export const AssistantGroup = memo(function AssistantGroup({
   const [toolGrouping] = useToolGrouping()
   const [processOpen, setProcessOpen] = useState(false)
   const live = streamingIndex >= 0 || pending
+  const lastRound = messages[messages.length - 1]
+  const outsideStatus = !live && lastRound?.stopReason === 'aborted' && lastRound.errorMessage ? lastRound : undefined
   // Frontier step of the live turn, for the waiting row's spinner verb: the
   // newest content part of the newest round — the tool call that is running, or
   // the reasoning/prose the model is writing now. Only the live turn needs it.
@@ -914,7 +916,7 @@ export const AssistantGroup = memo(function AssistantGroup({
   // and the fold appears in the same frame the turn settles. Settled, the
   // boundary is the turn's own final reply block, so every block before it is
   // process — including the reasoning the reply's own round emitted first.
-  const boundary: TurnBoundary = live ? { round: 0, block: 0 } : processBoundary(messages, toolResults)
+  const boundary: TurnBoundary = live ? { round: 0, block: 0 } : replyBoundary(messages, toolResults, Boolean(failure))
   const boundaryRound = messages[boundary.round]
   const foldedMessages = messages.slice(0, boundary.round)
   const tailMessages = messages.slice(boundary.round)
@@ -944,8 +946,9 @@ export const AssistantGroup = memo(function AssistantGroup({
   )
   const foldedRowCount = live
     ? 0
-    : foldedRows(messages, boundary, foldedToolPlan, showReasoning) +
-      (notices?.filter((notice) => notice.beforeRound <= boundary.round).length ?? 0)
+    : foldedRows(messages, boundary, foldedToolPlan, showReasoning, outsideStatus) +
+      (notices?.filter((notice) => notice.beforeRound <= boundary.round).length ?? 0) +
+      (failure ? 1 : 0)
   const noticeRows = (index: number) => notices?.filter((notice) => notice.beforeRound === index)
     .map((notice, index) => <CustomItem key={`notice-${notice.message.timestamp}-${index}`} message={notice.message} />)
   const turnDuration = useMemo(
@@ -953,13 +956,12 @@ export const AssistantGroup = memo(function AssistantGroup({
     [messages, toolResults, retryFrom]
   )
   const turnTimestamp = messages[0]?.timestamp ?? notices?.[0]?.message.timestamp ?? 0
-  const hasParts = live || Boolean(notices?.length) || messages.some((message) => message.content.length > 0 || message.errorMessage)
+  const hasParts = live || Boolean(continueFrom) || Boolean(failure) || Boolean(notices?.length) || messages.some((message) => message.content.length > 0 || message.errorMessage)
   // Copy/feedback actions (and the turn timestamp beside them) belong to the
   // turn's final prose only: phase text that precedes tool calls must stay
   // chrome-free, and an unfinished tool round has no completed answer to act
   // on. Rounds are windowed, so compare against the visible tail instead of
   // absolute indices.
-  const lastRound = messages[messages.length - 1]
   // The completion-actions row (and the retry/fork cells that ride in it) is
   // actually painted only when the round's LAST content block is prose — a
   // round that ends on a tool call renders no row, so it needs the standalone
@@ -976,9 +978,7 @@ export const AssistantGroup = memo(function AssistantGroup({
   // row, which is rendered after the error disclosure — i.e. at the very
   // bottom of the turn.
   const incomplete =
-    lastRound?.stopReason === 'aborted' ||
-    lastRound?.stopReason === 'error' ||
-    Boolean(lastRound?.errorMessage)
+    Boolean(continueFrom) || Boolean(failure) || Boolean(continuationTarget(messages))
   const showTurnActions = !live && lastRoundHasText && !incomplete
   /**
    * The files this turn wrote, derived here rather than passed in: the group's
@@ -1019,6 +1019,7 @@ export const AssistantGroup = memo(function AssistantGroup({
       />
     ) : null
   const writtenFilesInFooter = showTurnActions && Boolean(writtenFilesNode)
+  const showStandaloneActions = !live && showActions && !showTurnActions && Boolean(retryFrom || forkAt || continueFrom)
 
   if (!hasParts) return null
 
@@ -1028,15 +1029,10 @@ export const AssistantGroup = memo(function AssistantGroup({
     // it streams, so the wobble lands on a large block and reads as jitter.
     // The rise-from-the-live-edge entrance stays with sent user messages.
     <Message from="assistant" data-assistant-group={turnTimestamp}>
-      <MessageContent className="gap-3">
+      <MessageContent data-transcript-rows>
         {foldedRowCount > 0 ? (
-          // Trigger + a bare disclosure. The folded rounds are rendered as a
-          // plain `flex flex-col gap-3` (the same container `MessageContent`
-          // uses) instead of through AgentActivity's item/TextRow pipeline:
-          // that pipeline injected its own vertical padding and typography, so
-          // the folded rows sat at a different spacing than the rest of the
-          // transcript. Only the disclosure animates.
-          <>
+          // Header and disclosure form one row, so a closed body has no slot.
+          <div className="w-full" data-row="process" data-transcript-gap-after="divider">
             <AgentActivity
               status="complete"
               summary={t('chat.turnDuration', { duration: formatDuration(t, turnDuration) })}
@@ -1044,30 +1040,20 @@ export const AssistantGroup = memo(function AssistantGroup({
               onOpenChange={setProcessOpen}
               collapseOnComplete={false}
               items={[]}
-              // The trigger renders no items; zero the empty list's padding so
-              // the only space between it and the rounds below is the flex gap.
               contentClassName="py-0"
-              // The fold reads as a section header: a hairline under the trigger
-              // separates the process it hides from the answer below it. The
-              // rule sits on the row's own bottom edge, so the fold's first row
-              // keeps exactly the same spacing as every other pair of rows —
-              // whether the fold is open or closed.
-              className={cn(TRANSCRIPT_ROW_TRIGGER, 'border-b border-border/70')}
+              // The full-width section owns the straight rule. Drawing it on
+              // the rounded, content-width button bends and shortens the line.
+              className="relative after:pointer-events-none after:absolute after:inset-x-0 after:bottom-0 after:border-b after:border-border/70"
             />
-            <AgentDisclosure
-              open={processOpen}
-              // Closed, the (zero-height) body must leave the flex flow — else
-              // it adds its own flex gap and the collapsed spacing would be
-              // 8px larger than the expanded one.
-              className={cn('w-full', !processOpen && 'hidden')}
-            >
-              <div className="flex flex-col gap-3" data-turn-process>
+            <AgentDisclosure open={processOpen} data-agent-body data-transcript-gap-before="divider">
+              <div data-transcript-rows data-turn-process>
                 {foldedMessages.map((message, index) => (
                   <Fragment key={`${message.timestamp}-h${index}`}>
                   {noticeRows(index)}
                   <AssistantParts
                     key={`${message.timestamp}-h${index}`}
                     message={message}
+                    showStatus={message !== outsideStatus}
                     messageIndex={index}
                     toolPlan={foldedToolPlan}
                     streaming={false}
@@ -1088,6 +1074,7 @@ export const AssistantGroup = memo(function AssistantGroup({
                   <AssistantParts
                     key={`${boundaryRound.timestamp}-h${boundary.round}`}
                     message={boundaryRound}
+                    showStatus={boundaryRound !== outsideStatus}
                     messageIndex={boundary.round}
                     blocksTo={boundary.block}
                     toolPlan={foldedToolPlan}
@@ -1100,9 +1087,14 @@ export const AssistantGroup = memo(function AssistantGroup({
                     toolRuns={toolRuns}
                   />
                 ) : null}
+                {failure ? (
+                  <p data-turn-failure data-row="text" className={cn('text-sm leading-6 text-destructive', WRAP_ANYWHERE)}>
+                    {failure}
+                  </p>
+                ) : null}
               </div>
             </AgentDisclosure>
-          </>
+          </div>
         ) : null}
 
         {tailMessages.map((message, index) => (
@@ -1111,6 +1103,7 @@ export const AssistantGroup = memo(function AssistantGroup({
           <AssistantParts
             key={`${message.timestamp}-${boundary.round + index}`}
             message={message}
+            showStatus={message !== outsideStatus}
             messageIndex={boundary.round + index}
             // A folded-away prefix paints nothing, so rendering the round from
             // its reply block on is the same transcript either way.
@@ -1139,40 +1132,43 @@ export const AssistantGroup = memo(function AssistantGroup({
 
         {live ? <TurnStatus step={liveStep} waitingUser={waitingUser} seedKey={spinnerSeed} /> : null}
 
-        {writtenFilesNode && !writtenFilesInFooter ? writtenFilesNode : null}
-
-        {/* A failure the run ended on is prose about the turn, not a banner:
-            no frame, body size, error colour — and always above the actions
-            row it belongs to. */}
-        {!live && failure ? (
-          <p
-            data-turn-failure
-            className={cn('text-sm leading-6 text-destructive', WRAP_ANYWHERE)}
-          >
-            {failure}
-          </p>
+        {/* A standalone file summary keeps the roomy leading gap, including
+            when it immediately follows the collapsed process divider. */}
+        {writtenFilesNode && !writtenFilesInFooter ? (
+          <div data-transcript-gap-before="roomy" className="w-full">
+            {writtenFilesNode}
+          </div>
         ) : null}
 
         {/* Retry/fork normally live inside the final text round's completion
             actions row (so they share a line with copy/feedback and the
             timestamp stays rightmost). A turn that ended on tools or an error
-            renders no such row, so keep the standalone actions row for it. */}
-        {!live && showActions && !showTurnActions && (retryFrom || forkAt) ? (
-          // No completion row to host them (turn ended on tools, or was stopped
-          // / errored): show a visible retry/fork row after the error
-          // disclosure — the very bottom of the turn.
-          <MessageActions alwaysVisible={actionsAlwaysVisible}>
-            {onResend && retryFrom ? (
-              <MessageAction label={t('chat.messageRetry')} onClick={() => onResend(retryFrom)}>
-                <RefreshCw className="size-3.5" />
-              </MessageAction>
+            renders no such row, so keep the standalone actions row for it.
+            Actions own one fixed leading gap, whether the preceding row is
+            Stop, a card or the collapsed process itself. */}
+        {outsideStatus || showStandaloneActions ? (
+          <div data-turn-ending data-transcript-gap-before={outsideStatus ? 'roomy' : 'actions'} className="flex w-full flex-col">
+            {outsideStatus ? <AssistantStatus message={outsideStatus} /> : null}
+            {showStandaloneActions ? (
+              <MessageActions alwaysVisible={actionsAlwaysVisible}>
+                {onContinue && continueFrom ? (
+                  <MessageAction label={t('chat.messageContinue')} onClick={() => onContinue(continueFrom)}>
+                    <ArrowRight className="size-3.5" />
+                  </MessageAction>
+                ) : null}
+                {onResend && retryFrom ? (
+                  <MessageAction label={t('chat.messageRetry')} onClick={() => onResend(retryFrom)}>
+                    <RefreshCw className="size-3.5" />
+                  </MessageAction>
+                ) : null}
+                {onFork && forkAt ? (
+                  <MessageAction label={t('chat.messageFork')} onClick={() => onFork(forkAt)}>
+                    <GitFork className="size-3.5" />
+                  </MessageAction>
+                ) : null}
+              </MessageActions>
             ) : null}
-            {onFork && forkAt ? (
-              <MessageAction label={t('chat.messageFork')} onClick={() => onFork(forkAt)}>
-                <GitFork className="size-3.5" />
-              </MessageAction>
-            ) : null}
-          </MessageActions>
+          </div>
         ) : null}
       </MessageContent>
     </Message>

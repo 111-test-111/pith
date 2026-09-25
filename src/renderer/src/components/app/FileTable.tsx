@@ -147,7 +147,7 @@ export function FileTable({ tab, format, store, generation }: { tab: FileTab; fo
               data-file-table-viewport
               aria-label={t('files.table.viewportAria')}
               onScroll={onScroll}
-              className="min-h-0 flex-1 overflow-auto focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+              className="min-h-0 flex-1 overflow-auto focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset"
               style={{ fontSize: `${BASE_FONT_PX * zoom}px` }}
             >
               <div className="w-max min-w-full">

@@ -1,3 +1,4 @@
+// local patch (pi-app): keep UI frames and focus rings in this component at 1px.
 "use client";
 // beui.dev/components/motion/adaptive-stepper
 
@@ -315,7 +316,7 @@ function StepperAction({
         transition={context.reduce ? { duration: 0 } : SPRING_PRESS}
         style={style}
         className={cn(
-          "grid size-full place-items-center rounded-full border border-transparent bg-transparent bg-clip-padding text-foreground outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none",
+          "grid size-full place-items-center rounded-full border border-transparent bg-transparent bg-clip-padding text-foreground outline-none transition-colors hover:bg-muted focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none",
           hidden && "hover:bg-transparent",
           context.disabled && "opacity-50",
           className,
@@ -397,7 +398,8 @@ export function AdaptiveStepperValue({
         aria-atomic="true"
         style={style}
         className={cn(
-          "flex size-full min-w-0 items-center justify-center overflow-hidden rounded-full border border-transparent bg-transparent bg-clip-padding px-4 text-lg font-semibold tabular-nums text-foreground",
+          // local patch (pi-app): step labels use the shared emphasis size.
+          "flex size-full min-w-0 items-center justify-center overflow-hidden rounded-full border border-transparent bg-transparent bg-clip-padding px-4 text-base font-semibold tabular-nums text-foreground",
           className,
         )}
       >

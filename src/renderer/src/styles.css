@@ -26,6 +26,8 @@
 
 :root {
   --app-titlebar-height: 52px;
+  --transcript-divider-gap: 1.5rem;
+  --transcript-actions-gap: 0.75rem;
   /* Geometry is independent of color, font size and theme. Both beUI's
    * existing size classes and app-owned semantic classes use this scale.
    * Experimental square style (pi-app): every scale step is 0 so cards,
@@ -57,8 +59,8 @@
   /* Typefaces. The defaults below are what the app ships with; Settings →
    * Appearance overwrites them at runtime (inline style on <html>) through
    * lib/fonts.ts, and the `@theme inline` mapping below makes Tailwind's
-   * `font-sans`/`font-mono` utilities follow the change everywhere. Both are
-   * free-form in Settings, so these stand-ins must stay the same stacks
+   * `font-sans`/`font-mono` utilities follow the change everywhere. All three
+   * are free-form in Settings, so these stand-ins must stay the same stacks
    * lib/fonts.ts falls back to — the interface one is the system sans-serif,
    * which is both the default and where an unknown or rejected family lands. */
   --app-font-ui:
@@ -67,6 +69,11 @@
   --app-font-mono:
     ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New',
     monospace;
+  /* MathML formulas (lib/math.css): the bundled Latin Modern Math face,
+   * registered there as `Pith Math`, then the platform's generic math face.
+   * The tail must keep an OpenType MATH table — MathML layout reads its
+   * metrics — so this never resolves to a plain text family. */
+  --app-font-math: 'Pith Math', math;
 
   --background: oklch(0.984 0.003 264);
   --foreground: oklch(0.216 0.02 264);
@@ -163,7 +170,11 @@
   --terminal-selection-inactive-background: #8793ac;
 }
 
-/* Accent presets: indigo (default) / blue / violet / emerald / amber / rose / cyan.
+/* Accent presets: indigo (default) / violet / pink / rose / orange / amber /
+ * green / emerald / teal / cyan / sky / blue, plus a runtime 'custom' slot fed
+ * by the Settings color well (lib/accent.ts writes the four derived values as
+ * inline custom properties on <html>; the fallbacks below are the default
+ * indigo, so a missing inline value can never blank the tokens).
  * Chroma is deliberately kept a notch below the pure hue: these colors fill
  * buttons, badges and links app-wide, and full saturation read as too loud. */
 
@@ -222,6 +233,17 @@
   --ring: oklch(0.795 0.135 75);
 }
 
+[data-accent='pink'] {
+  --primary: oklch(0.56 0.18 345);
+  --primary-foreground: oklch(0.985 0.002 345);
+  --ring: oklch(0.56 0.18 345);
+}
+.dark[data-accent='pink'] {
+  --primary: oklch(0.72 0.145 345);
+  --primary-foreground: oklch(0.15 0.03 345);
+  --ring: oklch(0.72 0.145 345);
+}
+
 [data-accent='rose'] {
   --primary: oklch(0.55 0.175 15);
   --primary-foreground: oklch(0.985 0.002 15);
@@ -242,6 +264,61 @@
   --primary: oklch(0.735 0.105 215);
   --primary-foreground: oklch(0.14 0.03 215);
   --ring: oklch(0.735 0.105 215);
+}
+
+[data-accent='orange'] {
+  --primary: oklch(0.57 0.16 50);
+  --primary-foreground: oklch(0.985 0.002 50);
+  --ring: oklch(0.57 0.16 50);
+}
+.dark[data-accent='orange'] {
+  --primary: oklch(0.74 0.14 55);
+  --primary-foreground: oklch(0.16 0.03 55);
+  --ring: oklch(0.74 0.14 55);
+}
+
+[data-accent='green'] {
+  --primary: oklch(0.53 0.13 148);
+  --primary-foreground: oklch(0.985 0.002 148);
+  --ring: oklch(0.53 0.13 148);
+}
+.dark[data-accent='green'] {
+  --primary: oklch(0.72 0.12 148);
+  --primary-foreground: oklch(0.14 0.03 148);
+  --ring: oklch(0.72 0.12 148);
+}
+
+[data-accent='teal'] {
+  --primary: oklch(0.53 0.105 190);
+  --primary-foreground: oklch(0.985 0.002 190);
+  --ring: oklch(0.53 0.105 190);
+}
+.dark[data-accent='teal'] {
+  --primary: oklch(0.725 0.095 190);
+  --primary-foreground: oklch(0.14 0.03 190);
+  --ring: oklch(0.725 0.095 190);
+}
+
+[data-accent='sky'] {
+  --primary: oklch(0.55 0.13 235);
+  --primary-foreground: oklch(0.985 0.002 235);
+  --ring: oklch(0.55 0.13 235);
+}
+.dark[data-accent='sky'] {
+  --primary: oklch(0.72 0.11 235);
+  --primary-foreground: oklch(0.14 0.03 235);
+  --ring: oklch(0.72 0.11 235);
+}
+
+[data-accent='custom'] {
+  --primary: var(--custom-primary, oklch(0.52 0.185 275));
+  --primary-foreground: var(--custom-primary-foreground, oklch(0.985 0.002 275));
+  --ring: var(--custom-primary, oklch(0.52 0.185 275));
+}
+.dark[data-accent='custom'] {
+  --primary: var(--custom-primary-dark, oklch(0.685 0.145 275));
+  --primary-foreground: var(--custom-primary-foreground-dark, oklch(0.14 0.02 275));
+  --ring: var(--custom-primary-dark, oklch(0.685 0.145 275));
 }
 
 @theme inline {
@@ -265,6 +342,7 @@
   --color-ring: var(--ring);
   --font-sans: var(--app-font-ui);
   --font-mono: var(--app-font-mono);
+  --font-math: var(--app-font-math);
   --radius-xs: var(--app-radius-detail);
   --radius-sm: var(--app-radius-detail);
   --radius-md: var(--app-radius-inner);
@@ -316,6 +394,17 @@
 @utility rounded-inherit {
   border-radius: inherit;
   corner-shape: inherit;
+}
+
+/* Text fields keep their focus outline without repainting their frame. */
+@utility field-highlight {
+  @apply border-transparent ring-1 ring-ring/40;
+}
+
+/* Action surfaces do not paint their own border. Selection controls and
+ * attachment previews retain their frame so they remain visible at rest. */
+:where(button:not([role='checkbox']):not([role='radio']):not([data-attachment-frame]), a[href], [role='button'], [role='tab'], [role='option'], [role='menuitem'], [role='treeitem']) {
+  border-color: transparent;
 }
 
 html,
@@ -412,6 +501,104 @@ body:has([aria-modal="true"]:not([aria-hidden="true"])) .window-titlebar {
   contain-intrinsic-size: auto 400px;
 }
 
+/* Each transcript boundary owns one positive margin, with no flex gap to add
+ * to it. This lets fixed divider/action spacing coexist with either density
+ * without subtracting space or depending on the adjacent content's kind. */
+[data-transcript-rows] {
+  --transcript-row-height: 1.5rem;
+  --transcript-roomy-gap: 1.5rem;
+  --transcript-gap: var(--transcript-roomy-gap);
+  display: flex;
+  flex-direction: column;
+  row-gap: 0;
+}
+html[data-compact-tools='true'] [data-transcript-rows] {
+  --transcript-gap: 0.25rem;
+}
+[data-transcript-rows] > * + * {
+  margin-block-start: var(--transcript-gap);
+}
+/* The outer stack contains message wrappers; read their exposed first/last
+ * row too, so SDK message boundaries never introduce a second rhythm. */
+[data-transcript-rows] > * + :where(
+  [data-row='text'],
+  [data-transcript-gap-before='roomy'],
+  :has(> [data-transcript-rows] > [data-transcript-gap-before='roomy']:first-child),
+  :has(> [data-row='text']),
+  :has(> [data-transcript-rows] > [data-row='text']:first-child)
+),
+[data-transcript-rows] > :where(
+  [data-row='text'],
+  [data-transcript-gap-after='roomy'],
+  :has(> [data-transcript-rows] > [data-transcript-gap-after='roomy']:last-child),
+  :has(> [data-row='text']),
+  :has(> [data-transcript-rows] > [data-row='text']:last-child)
+) + * {
+  margin-block-start: var(--transcript-roomy-gap);
+}
+/* The process divider owns the next content gap, even when the next row is a
+ * card, a notice, a tool or prose. Its open body uses the same token below. */
+[data-transcript-rows] > [data-transcript-gap-after='divider'] + * {
+  margin-block-start: var(--transcript-divider-gap);
+}
+/* Completion actions use the same spacing inside a reply, after Stop, or as
+ * the turn's standalone footer. An actions-only ending takes it at its outer
+ * boundary; the first child must not add a second margin. */
+* + [data-message-actions],
+[data-transcript-rows] > * + [data-transcript-gap-before='actions'] {
+  margin-block-start: var(--transcript-actions-gap);
+}
+.transcript-row {
+  min-height: var(--transcript-row-height, 2.25rem);
+}
+[data-transcript-rows] [data-agent-trigger] {
+  height: var(--transcript-row-height);
+  flex-shrink: 0;
+  min-height: var(--transcript-row-height);
+  padding-block: 0;
+  line-height: var(--transcript-row-height);
+}
+[data-transcript-rows] [data-agent-body][aria-hidden='false'] {
+  /* Activity's live viewport can have a measured height. Its leading space is
+   * outside that height, just as for an auto-height tool or group body. */
+  box-sizing: content-box;
+  padding-block-start: var(--transcript-gap);
+}
+[data-transcript-rows] [data-agent-body][aria-hidden='false']:is(
+  [data-transcript-gap-before='roomy'],
+  :has(> [data-transcript-rows] > [data-row='text']:first-child)
+) {
+  padding-block-start: var(--transcript-roomy-gap);
+}
+[data-transcript-rows] [data-agent-body][aria-hidden='false'][data-transcript-gap-before='divider'] {
+  padding-block-start: var(--transcript-divider-gap);
+}
+[data-transcript-rows] [data-tool-body] {
+  padding-block: 0;
+}
+[data-transcript-rows] [data-diff-body] {
+  margin-block: 0;
+}
+[data-transcript-rows] [data-content='text'] [role='list'] {
+  display: flex;
+  flex-direction: column;
+  gap: var(--transcript-gap);
+  padding-block: 0;
+}
+[data-transcript-rows] [data-content='text'] [role='listitem'] {
+  margin-block: 0;
+}
+[data-transcript-rows] [data-content='text'] [role='listitem'] > * {
+  padding-block: 0;
+}
+/* Motion's global skip flag settles on its next frame. Disclosures must paint
+ * their final state in the commit frame, including a live preference change. */
+[data-disclosure-instant] {
+  transform: none !important;
+  clip-path: none !important;
+  opacity: 1 !important;
+}
+
 /* 「关闭动效」 (Settings → Appearance, `lib/reduce-motion.ts`) — the CSS half of
  * the switch; the same call sets motion's own global flag, which handles every
  * JS animation. What is left for CSS is hover transitions and the few keyframes
@@ -442,7 +629,10 @@ html[data-reduce-motion='true'] *:not(.animate-spin):not(.animate-pulse):not(.be
 html[data-reduce-motion='true'] *,
 html[data-reduce-motion='true'] *::before,
 html[data-reduce-motion='true'] *::after {
-  transition-duration: 1ms !important;
+  /* A nonzero duration also turns the default transition-property: all ON
+   * for elements with no transition utility. Even 1ms defers geometry by one
+   * frame (padding, gaps and heights jump again after an instant disclosure). */
+  transition-duration: 0s !important;
   transition-delay: 0s !important;
 }
 /* The theme switch animates the document's own view-transition snapshots, which

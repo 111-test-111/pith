@@ -2,42 +2,47 @@ import map from './file-icons.map.json'
 import { basename } from './format'
 
 /**
- * File-type artwork is the one deliberate exception to the Lucide-only glyph
- * rule: vscode-icons draws a distinct mark per language, framework and config
- * file, which is what makes a file tree scannable.
+ * File-type artwork is Catppuccin Icons for the whole app: the interface style
+ * preference changes corners, not icons, so 直角 and 超椭圆 draw the same set.
  *
- * The drawings themselves are generated into the renderer's public directory by
- * `scripts/prepare-file-icons.mjs` (see AGENTS.md); this module owns the lookup
- * that turns a path into one of their names. `file-icons.map.json` is generated
- * from vscode-icons' own manifest by `scripts/generate-file-icon-map.mjs`.
+ * `scripts/prepare-file-icons.mjs` writes only the SVGs this map can reach into
+ * the generated, gitignored `src/renderer/public/file-icons/`; the renderer
+ * loads them as relative-URL images instead of bundling the collection.
  */
 type IconMap = {
   source: string
   generated: string
   default: string
   names: Record<string, string>
-  globs: { n: string[]; e: string[]; i: string }[]
+  globs?: { n: string[]; e: string[]; i: string }[]
   extensions: Record<string, string>
 }
 
-const icons = map as IconMap
-
-/** Glob entries by the name they match, so looking one up is not a scan. */
-const globsByName = new Map<string, { extensions: Set<string>; icon: string }[]>()
-for (const glob of icons.globs) {
-  for (const name of glob.n) {
-    const entries = globsByName.get(name)
-    const entry = { extensions: new Set(glob.e), icon: glob.i }
-    if (entries) entries.push(entry)
-    else globsByName.set(name, [entry])
-  }
+type PreparedMap = {
+  icons: IconMap
+  globsByName: Map<string, { extensions: Set<string>; icon: string }[]>
 }
 
+function prepareMap(raw: unknown): PreparedMap {
+  const icons = raw as IconMap
+  const globsByName = new Map<string, { extensions: Set<string>; icon: string }[]>()
+  for (const glob of icons.globs ?? []) {
+    for (const name of glob.n) {
+      const entries = globsByName.get(name)
+      const entry = { extensions: new Set(glob.e), icon: glob.i }
+      if (entries) entries.push(entry)
+      else globsByName.set(name, [entry])
+    }
+  }
+  return { icons, globsByName }
+}
+
+const { icons, globsByName } = prepareMap(map)
+
 /**
- * The most specific match wins, mirroring how VS Code resolves an icon theme:
- * an exact file name (`Dockerfile`, `package.json`), then a known name pattern
- * (`vite.config.ts`), then the longest extension that matches (`tar.gz` before
- * `gz`), and finally the generic file.
+ * The most specific match wins: an exact file name, then a known name pattern,
+ * then the longest extension (`tar.gz` before `gz`), and finally the generic
+ * file icon.
  */
 export function fileIconName(path: string): string {
   const name = basename(path).toLowerCase()
@@ -60,9 +65,8 @@ export function fileIconName(path: string): string {
   return icons.default
 }
 
-/** Public-directory URL of the icon for `path`. Relative on purpose: the
- * packaged renderer is loaded from `file://`, where an absolute path would
- * resolve against the filesystem root instead of the app. */
+/** Relative on purpose: the packaged renderer is loaded from `file://`, where
+ * an absolute path would resolve against the filesystem root instead of the app. */
 export function fileIconSource(path: string): string {
   return `./file-icons/${fileIconName(path)}.svg`
 }

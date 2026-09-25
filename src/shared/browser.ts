@@ -111,6 +111,16 @@ export interface BrowserDownloadInfo {
 /** guest 聚焦时被主进程拦下的浏览器自有按键（⌘±/0 / ⌘F / ⌘P）。 */
 export interface BrowserGuestShortcutInfo {
   key: string
+  /** 完整组合键 identity（渲染层 shortcuts 的 bindingIdentity 形式）：该键同时是
+   *  应用级命令的绑定时，面板不活跃可转发给应用 dispatcher。 */
+  identity?: string
+}
+
+/** guest 聚焦时被主进程拦下的应用级快捷键：渲染层经 browser:setAppShortcuts 推送
+ *  当前绑定 identities（bindingIdentity 形式），命中即转发给其 dispatcher。 */
+export interface BrowserGuestAppShortcutInfo {
+  identity: string
+  repeat: boolean
 }
 
 /** `browser:seen`：渲染层上报一个服务端还不知道的 guest（state-only 登记 +

@@ -189,7 +189,7 @@ try {
   let booted = null
   for (let i = 0; i < 150 && !booted; i++) {
     booted = await evaluate(`(function(){
-      if (!window.pi || !document.querySelector('[data-slot="prompt-input"], textarea')) return null
+      if (!window.pi || !document.querySelector('[data-prompt-editor]')) return null
       return window.pi.appInfo().then ? true : true
     })()`).catch(() => null)
     if (!booted) await pause(200)

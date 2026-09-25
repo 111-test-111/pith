@@ -5,12 +5,11 @@ import {
   type ClipboardEvent as ReactClipboardEvent,
   type KeyboardEvent as ReactKeyboardEvent
 } from 'react'
-import { FileText, ImagePlus, Paperclip, X } from '@/lib/icons'
+import { ImagePlus, LinkSimple, X } from '@/lib/icons'
 import { MorphingModal } from '@/components/motion/morphing-modal'
 import { Button } from '@/components/motion/button'
 import { Tooltip } from '@/components/motion/tooltip'
 import { Input } from '@/components/motion/input'
-import { basename } from '@/lib/format'
 import { extractUserDisplay } from '@/lib/user-message'
 import { readImageAttachment, resolveAttachmentFile } from '@/lib/attachments'
 import { useI18n } from '@/i18n'
@@ -20,9 +19,9 @@ import type {
   ThinkingLevel,
   UserMsg
 } from '../../../../shared/types'
-import { LabelTooltip } from './LabelTooltip'
 import { ModelPicker } from './ModelPicker'
 import { PreviewThumb } from './ImagePreview'
+import { FileAttachmentCard } from './FileAttachmentCard'
 
 /** What the dialog hands back to the resend path: the user's edit, with file
  * references as paths so the main process can re-inline current contents. */
@@ -218,46 +217,40 @@ export function EditMessageDialog({
             aria-label={t('chat.editMessageBodyAria')}
             placeholder={t('composer.placeholder')}
             classNames={{ input: 'text-sm' }}
+            attachments={
+              images.length || files.length ? (
+                <>
+                  {images.map((image) => (
+                    <span key={image.id} className="group relative">
+                      <PreviewThumb
+                        src={image.dataUrl}
+                        alt={image.name}
+                        framed
+                        className="h-14 w-14 rounded-xl"
+                        imageClassName="h-full w-full object-cover"
+                      />
+                      <button
+                        type="button"
+                        aria-label={t('workspace.removeAttachment', { name: image.name })}
+                        onClick={() => removeImage(image.id)}
+                        className="absolute -right-1.5 -top-1.5 grid size-5 place-items-center rounded-capsule text-destructive opacity-0 transition-[opacity,color,background-color] group-hover:opacity-100 hover:bg-destructive/10 focus-visible:opacity-100"
+                      >
+                        <X className="size-3" />
+                      </button>
+                    </span>
+                  ))}
+                  {files.map((file) => (
+                    <FileAttachmentCard
+                      key={file.id}
+                      path={file.path}
+                      label={file.label}
+                      onRemove={() => removeFile(file.id)}
+                    />
+                  ))}
+                </>
+              ) : undefined
+            }
           />
-
-          {images.length || files.length ? (
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-              {images.map((image) => (
-                <span key={image.id} className="group relative">
-                  <PreviewThumb
-                    src={image.dataUrl}
-                    alt={image.name}
-                    className="h-14 w-14 rounded-xl"
-                    imageClassName="h-full w-full object-cover"
-                  />
-                  <button
-                    type="button"
-                    aria-label={t('workspace.removeAttachment', { name: image.name })}
-                    onClick={() => removeImage(image.id)}
-                    className="absolute -right-1.5 -top-1.5 grid size-5 place-items-center rounded-capsule bg-foreground text-background opacity-0 transition-opacity group-hover:opacity-100"
-                  >
-                    <X className="size-3" />
-                  </button>
-                </span>
-              ))}
-              {files.map((file) => (
-                <LabelTooltip key={file.id} content={file.label} wrap>
-                  <span className="inline-flex max-w-56 items-center gap-1.5 rounded-xl border border-border bg-card px-2 py-1.5 text-xs text-foreground">
-                    <FileText className="size-3.5 shrink-0 text-primary" />
-                    <span className="truncate">{basename(file.label)}</span>
-                    <button
-                      type="button"
-                      aria-label={t('workspace.removeAttachment', { name: file.label })}
-                      onClick={() => removeFile(file.id)}
-                      className="grid size-4 shrink-0 place-items-center rounded-capsule text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                    >
-                      <X className="size-3" />
-                    </button>
-                  </span>
-                </LabelTooltip>
-              ))}
-            </div>
-          ) : null}
         </div>
 
         {/* Kept OUT of the scroll container above: that container clips on both
@@ -281,7 +274,7 @@ export function EditMessageDialog({
               aria-label={t('composer.attachFile')}
               onClick={() => fileInputRef.current?.click()}
             >
-              <Paperclip className="size-4" />
+              <LinkSimple className="size-4" />
             </Button>
           </Tooltip>
           <div className="ml-auto">

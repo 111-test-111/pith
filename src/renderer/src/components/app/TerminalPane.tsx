@@ -73,7 +73,7 @@ export function TerminalPane({ terminals, onNew, onEmpty }: {
                 return (
                   <div key={item.id} className="group/terminal relative flex items-center" data-terminal-tab={item.id}>
                     <TabsTrigger value={item.id}
-                      indicatorClassName="bg-background shadow-xs ring-1 ring-border"
+                      indicatorClassName="bg-background shadow-xs"
                       className={cn('h-7 min-h-0 pl-2.5 pr-7', active === item.id && 'text-foreground')}>
                       <LabelTooltip content={item.info?.cwd} wrap wrapperClassName="max-w-36">
                         <span className="truncate text-xs">{label}</span>

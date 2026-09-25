@@ -6,6 +6,7 @@ import type {
   ModelRefDTO,
   PiEvent,
   PlanStateDTO,
+  JevWorkflowDTO,
   RewindErrorDTO,
   QueuedItemDTO,
   SessionSnapshotDTO,
@@ -41,6 +42,7 @@ export interface Notice {
 }
 
 export interface PiState {
+  jevWorkflow: JevWorkflowDTO | null
   initializing: boolean
   todos: TodoSnapshotDTO | null
   /** Every ask_user_question of this session, oldest first (the record panel). */
@@ -68,6 +70,8 @@ export interface PiState {
   isStreaming: boolean
   /** True while the visible session is itself a subagent child (read-only). */
   subagentChild: boolean
+  /** The visible conversation belongs to a scheduled task (read-only). */
+  scheduledTaskSession: boolean
   /** Parent session file for a child view (the composer's "open parent"). */
   subagentParentPath: string | null
   activeChangeScopeId?: string | null
@@ -98,6 +102,7 @@ export interface PiShellState {
   cwd: string | null
   projectless: boolean
   sessionPath: string | null
+  sessionId: string | null
   model: ModelRefDTO | null
   thinkingLevel: ThinkingLevel
   /** Levels the current model supports; cycles through these only. */
@@ -116,6 +121,7 @@ export interface PiShellState {
   queue: { steering: QueuedItemDTO[]; followUp: QueuedItemDTO[] }
   /** True while the visible session is a subagent child (composer disabled). */
   subagentChild: boolean
+  scheduledTaskSession: boolean
   /** Parent session file for a child view, when known. */
   subagentParentPath: string | null
   /** This session's subagent roster: the rail names its agent tabs from it and
@@ -189,6 +195,7 @@ const initialState: PiState = {
   askUserRecords: [],
   subagents: [],
   subagentChild: false,
+  scheduledTaskSession: false,
   subagentParentPath: null,
   ready: false,
   cwd: null,
@@ -198,6 +205,7 @@ const initialState: PiState = {
   model: null,
   thinkingLevel: 'medium',
   plan: null,
+  jevWorkflow: null,
   sandboxMode: DEFAULT_SANDBOX_MODE,
   sandbox: null,
   escalations: [],
@@ -219,6 +227,7 @@ function shellOf(state: PiState, availableThinkingLevels: ThinkingLevel[]): PiSh
     cwd: state.cwd,
     projectless: state.projectless,
     sessionPath: state.sessionPath,
+    sessionId: state.sessionId,
     model: state.model,
     thinkingLevel: state.thinkingLevel,
     availableThinkingLevels,
@@ -231,6 +240,7 @@ function shellOf(state: PiState, availableThinkingLevels: ThinkingLevel[]): PiSh
     contextUsage: state.contextUsage,
     queue: state.queue,
     subagentChild: state.subagentChild,
+    scheduledTaskSession: state.scheduledTaskSession,
     subagentParentPath: state.subagentParentPath,
     subagents: state.subagents
   }
@@ -280,6 +290,14 @@ export class PiStore {
   /** Events may beat an openSession IPC response; retain them without
    * rendering and replay only those newer than the returned snapshot. */
   private planStates = new Map<string, PlanStateDTO>()
+  private jevStates = new Map<string, { seq: number; state: JevWorkflowDTO | null }>()
+  private mergeJevState(path: string | null, state: JevWorkflowDTO | null | undefined, seq = 0): JevWorkflowDTO | null {
+    if (!path) return null
+    const previous = this.jevStates.get(path)
+    if (previous && previous.seq > seq) return previous.state
+    this.jevStates.set(path, { seq, state: state ?? null })
+    return state ?? null
+  }
   private mergePlanState(path: string | null, next?: PlanStateDTO | null): PlanStateDTO | null {
     if (!path) return null
     const previous = this.planStates.get(path)
@@ -322,12 +340,13 @@ export class PiStore {
   applySnapshot(snapshot: SessionSnapshotDTO): void {
     const sessionPath = snapshot.sessionPath ?? null
     const plan = this.mergePlanState(sessionPath, snapshot.plan)
+    const jevWorkflow = this.mergeJevState(sessionPath, snapshot.jevWorkflow, snapshot.jevWorkflowSeq)
     const previousCached = sessionPath ? this.sessionStates.get(sessionPath) : undefined
     const snapshotSequence = snapshot.eventSequence ?? 0
     // Roster revisions are independent of transcript revisions, and belong
     // only to this session. Never merge the outgoing chat into an incoming one.
     const subagents = mergeRoster(previousCached?.subagents ?? [], snapshot.subagents ?? [])
-    const cached = previousCached ? { ...previousCached, subagents, plan } : undefined
+    const cached = previousCached ? { ...previousCached, subagents, plan, jevWorkflow } : undefined
     if (cached) this.sessionStates.set(sessionPath!, cached)
     // A readiness/event push can overtake an IPC snapshot of a cached session.
     // Keep the newer projection (including its sequence), then replay any
@@ -360,10 +379,12 @@ export class PiStore {
       // unchanged snapshot still carries the newest value, and a session that
       // never recorded one keeps what we last saw.
       plan,
+      jevWorkflow,
       sandboxMode: snapshot.sandboxMode ?? cached?.sandboxMode ?? DEFAULT_SANDBOX_MODE,
       sandbox: snapshot.sandbox ?? cached?.sandbox ?? null,
       isStreaming: snapshot.isStreaming,
       subagentChild: snapshot.subagentChild === true,
+      scheduledTaskSession: snapshot.scheduledTaskSession === true,
       subagentParentPath: snapshot.subagentParentPath ?? null,
       activeChangeScopeId: snapshot.activeChangeScopeId ?? null,
       contextUsage: unchanged ? cached.contextUsage : (snapshot.contextUsage ?? null),
@@ -491,6 +512,13 @@ export class PiStore {
   }
 
   dispatch(event: PiEvent): void {
+    if (event.type === 'jev_workflow_update' && event.sessionPath) {
+      const jevWorkflow = this.mergeJevState(event.sessionPath, event.jevWorkflow, event.jevWorkflowSeq)
+      const cached = this.sessionStates.get(event.sessionPath)
+      if (cached) this.sessionStates.set(event.sessionPath, { ...cached, jevWorkflow })
+      if (event.sessionPath === this.state.sessionPath && jevWorkflow !== this.state.jevWorkflow) this.set({ jevWorkflow })
+      return
+    }
     if (event.type === 'plan_state_update' && event.sessionPath && event.plan) {
       const plan = this.mergePlanState(event.sessionPath, event.plan)
       const cached = this.sessionStates.get(event.sessionPath)
@@ -748,8 +776,8 @@ export class PiStore {
       }
 
       case 'compaction_end': {
-        // Main ships the rewritten (compaction-aware) message list with the
-        // event; adopting it keeps the transcript in step with the SDK context.
+        // Main ships the full selected-branch transcript with the new summary;
+        // compacted-out history remains visible even though it left model context.
         // The acknowledgement is the summary row itself — a session entry that
         // renders where it happened (`chat-turns` places it by time) and is
         // still there when the session is reopened, which a UI-only row was not.

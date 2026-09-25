@@ -254,7 +254,7 @@ export function FilePdf({ tab, onOpenFile }: { tab: FileTab; /** Opens a linked 
     <div className="relative min-h-0 flex-1 bg-muted/30">
       {/* pdf.js owns this scroller: its container must be absolutely positioned
           and the page host must carry the `pdfViewer` class. */}
-      <div ref={scrollerRef} data-pdf-scroller tabIndex={0} aria-label={t('files.pdf.viewerAria')} onKeyDown={onKeyDown} onClickCapture={onLinkClick} className={cn('absolute inset-0 overflow-auto outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset')}>
+      <div ref={scrollerRef} data-pdf-scroller tabIndex={0} aria-label={t('files.pdf.viewerAria')} onKeyDown={onKeyDown} onClickCapture={onLinkClick} className={cn('absolute inset-0 overflow-auto outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset')}>
         <div ref={viewerRef} className="pdfViewer" />
       </div>
       {status === 'loading' ? <PdfNotice loading>{t('files.loading')}</PdfNotice> : null}

@@ -1,73 +1,36 @@
 import { forwardRef, type ReactNode } from 'react'
 import { motion, type SVGMotionProps } from 'motion/react'
-import {
-  Cancel01Icon,
-  CheckIcon,
-  CheckmarkCircle02Icon,
-  LoaderCircleIcon,
-  MinusSignIcon
-} from '@hugeicons/core-free-icons'
-import { useIconPack } from './icon-pack'
-import type { IconPack } from './ui-style'
 
-// The animated marks are STROKE geometry: the call sites draw them in with a
-// `pathLength` transition, so they have to be outlines rather than filled
-// artwork. Carbon's square-style glyphs are fill artwork on a 32 grid, so the
-// square column keeps the app-drawn stroke marks this branch already shipped;
-// the squircle column draws HugeIcons' stroke-rounded line art. Both keep
-// beUI's stroke drawing and presence transitions, and keep the tag per node:
-// the completion mark is a ring plus a check, so rendering everything as
-// `<path>` would drop it.
+// Animated marks use centerline geometry because beUI draws them with a
+// pathLength transition. Phosphor's regular icons are fill paths, so each mark
+// carries a compact line-art equivalent on the app's 24px animation grid,
+// reduced from Phosphor's 256 grid to the centerlines the draw-in needs.
 type Node = { tag: 'path'; d: string } | { tag: 'circle'; cx: number; cy: number; r: number }
 
-/** One HugeIcons glyph: an SVG tag and its attributes, in document order. */
-type HugeGlyph = ReadonlyArray<readonly [string, Record<string, string | number>]>
-
-/** Reduce a HugeIcons glyph to the two node shapes these marks draw. */
-function hugeNodes(glyph: HugeGlyph): Node[] {
-  return glyph.map(([tag, attrs]): Node => {
-    if (tag === 'path') return { tag: 'path', d: String(attrs.d) }
-    if (tag === 'circle') {
-      return { tag: 'circle', cx: Number(attrs.cx), cy: Number(attrs.cy), r: Number(attrs.r) }
-    }
-    throw new Error(`animated-icons: unsupported HugeIcons tag ${tag}`)
-  })
-}
-
 const artwork = {
-  carbon: {
-    check: [{ tag: 'path', d: 'M20 6 9 17l-5-5' }],
-    minus: [{ tag: 'path', d: 'M5 12h14' }],
-    cancel: [
-      { tag: 'path', d: 'M18 6 6 18' },
-      { tag: 'path', d: 'm6 6 12 12' }
-    ],
-    complete: [
-      { tag: 'circle', cx: 12, cy: 12, r: 10 },
-      { tag: 'path', d: 'm16 9-5.5 5.5L8 12' }
-    ],
-    spinner: [{ tag: 'path', d: 'M21 12a9 9 0 1 1-6.219-8.56' }]
-  },
-  hugeicons: {
-    check: hugeNodes(CheckIcon),
-    minus: hugeNodes(MinusSignIcon),
-    cancel: hugeNodes(Cancel01Icon),
-    complete: hugeNodes(CheckmarkCircle02Icon),
-    spinner: hugeNodes(LoaderCircleIcon)
-  }
-} satisfies Record<IconPack, Record<string, Node[]>>
+  check: [{ tag: 'path', d: 'M3.75 13.5 9 18.75 20.5 7.25' }],
+  minus: [{ tag: 'path', d: 'M3.75 12h16.5' }],
+  cancel: [
+    { tag: 'path', d: 'M5.25 5.25 18.75 18.75' },
+    { tag: 'path', d: 'M18.75 5.25 5.25 18.75' }
+  ],
+  complete: [
+    { tag: 'circle', cx: 12, cy: 12, r: 9.75 },
+    { tag: 'path', d: 'm7.75 12.5 2.25 2.25 5.25-5.25' }
+  ],
+  spinner: [{ tag: 'path', d: 'M12 3v3m9 6h-3m-.64 5.36-2.12-2.12M12 21v-3m-5.36-.64 2.12-2.12M3 12h3m.64-5.36 2.12 2.12' }]
+} satisfies Record<string, Node[]>
 
 const MOTION_TAGS = {
   path: motion.path,
   circle: motion.circle
 } as const
 
-type Artwork = keyof (typeof artwork)['carbon']
+type Artwork = keyof typeof artwork
 type DrawProps = Pick<SVGMotionProps<SVGPathElement>, 'initial' | 'animate' | 'transition'>
 
 export function IconPaths({ icon, ...props }: { icon: Artwork } & SVGMotionProps<SVGPathElement>) {
-  const pack = useIconPack()
-  return artwork[pack][icon].map((node, index) => {
+  return artwork[icon].map((node, index) => {
     const Tag = MOTION_TAGS[node.tag]
     return <Tag {...node} {...props} key={index} />
   })
@@ -85,12 +48,14 @@ export const AnimatedIcon = forwardRef<SVGSVGElement, Omit<SVGMotionProps<SVGSVG
     height={24}
     viewBox="0 0 24 24"
     fill="none"
+    stroke="currentColor"
+    strokeLinecap="round"
+    strokeLinejoin="round"
     aria-hidden="true"
     focusable="false"
     data-app-icon={icon}
     {...props}
   >
-    {/* Lucide's own default weight, so a drawn mark matches an imported glyph. */}
     <IconPaths icon={icon} {...draw} strokeWidth={props.strokeWidth ?? 2} />
     {children}
   </motion.svg>

@@ -57,6 +57,7 @@ const toolResult = () => entry({ type: 'message', timestamp: '2026-09-01T10:02:0
 const info = (name) => entry({ type: 'session_info', timestamp: '2026-09-01T10:03:00.000Z', name })
 const rewindSelection = (data) => entry({ type: 'custom', customType: 'pith_rewind_selection', timestamp: '2026-09-01T11:00:00.000Z', data })
 const subagentRun = () => entry({ type: 'custom', customType: 'pith_subagent_run', timestamp: '2026-09-01T10:04:00.000Z', data: {} })
+const scheduledRun = () => entry({ type: 'custom', customType: 'pith_scheduled_task', timestamp: '2026-09-01T10:04:30.000Z', data: { version: 1, taskId: 't', runId: 'r', taskName: 'n' } })
 
 const writeSession = async (dir, name, entries) => {
   const path = join(dir, name)
@@ -107,6 +108,11 @@ try {
     header('s-fork', '/tmp/project-a', { parentSession: '/somewhere/parent.jsonl' }),
     user('forked continuation', '2026-09-01T10:11:00.000Z')
   ])
+  const scheduled = await writeSession(dirA, 'scheduled.jsonl', [
+    header('s-scheduled', '/tmp/project-a'),
+    scheduledRun(),
+    user('scheduled turn', '2026-09-01T10:12:00.000Z')
+  ])
   const restoredEmpty = await writeSession(dirA, 'restored-empty.jsonl', [
     header('s-restored', '/tmp/project-a'),
     user('before the restore', '2026-09-01T10:12:00.000Z'),
@@ -149,7 +155,7 @@ try {
   // Membership: the SDK excludes no-header and null-content files; so must the index.
   assert.deepEqual(
     [...rows.keys()].sort(),
-    [normal, named, clearedName, fresh, subagentChild, fork, restoredEmpty, restoredContinued, malformed, other].sort(),
+    [normal, named, clearedName, fresh, subagentChild, fork, scheduled, restoredEmpty, restoredContinued, malformed, other].sort(),
     'index membership matches the listable fixtures'
   )
   assert(!sdk.has(noHeader) && !sdk.has(nullContent), 'SDK excludes the two pathological fixtures')
@@ -175,11 +181,14 @@ try {
   assert.equal(rows.get(clearedName).name, undefined, 'an explicit clear wins as the latest session_info')
   assert.equal(rows.get(subagentChild).subagentChild, true, 'the persisted run marker marks a child')
   assert.equal(rows.get(fork).subagentChild, false, 'a fork (parentSessionPath without a marker) is not a child')
+  assert.equal(rows.get(scheduled).scheduledTask, true, 'the scheduled marker marks a run session')
+  assert.equal(rows.get(scheduled).subagentChild, false, 'the scheduled marker is independent of the subagent one')
+  assert.equal(rows.get(normal).scheduledTask, false, 'ordinary sessions are not scheduled')
   assert.equal(rows.get(restoredEmpty).branchHasMessages, false, 'a tail rewind selection with empty:true hides the branch')
   assert.equal(rows.get(restoredContinued).branchHasMessages, true, 'a message after the selection re-shows the branch')
 
   // ---- 2. Live derivation parity ------------------------------------------
-  for (const path of [normal, subagentChild, fork, restoredEmpty, restoredContinued, named, fresh]) {
+  for (const path of [normal, subagentChild, fork, scheduled, restoredEmpty, restoredContinued, named, fresh]) {
     const manager = SessionManager.open(path)
     const live = rowFromSessionManager(manager)
     const disk = await readSessionRow(path, await stampOf(path))

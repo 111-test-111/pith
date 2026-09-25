@@ -58,35 +58,51 @@ export function SandboxModePicker({
   sessionPath,
   disabled,
   planRestricted,
-  onSnapshot
+  onSnapshot,
+  onModeChange,
+  portal = false,
+  compact = false,
+  inheritLabel
 }: {
-  mode: SandboxMode
+  mode: SandboxMode | null
   status: SandboxStatusDTO | null
   sessionPath: string | null
   disabled?: boolean
   planRestricted?: boolean
-  onSnapshot: (snapshot: SessionSnapshotDTO) => void
+  onSnapshot?: (snapshot: SessionSnapshotDTO) => void
+  /** Draft mode for the scheduled-task editor; no session mutation. */
+  onModeChange?: (mode: SandboxMode | null) => void
+  /** Keep this shared picker visible outside a modal's clipped content. */
+  portal?: boolean
+  /** Match the scheduled-task form's smaller control typography. */
+  compact?: boolean
+  /** Scheduled tasks can reset a saved override to the app default. */
+  inheritLabel?: string
 }) {
   const { t } = useI18n()
   const toast = useToast()
 
   const switchMode = (next: string) => {
+    if (onModeChange) {
+      onModeChange(next === '__inherit__' ? null : next as SandboxMode)
+      return
+    }
     if (!sessionPath || next === mode) return
     void window.pi
       .setSessionSandboxMode(sessionPath, next as SandboxMode)
-      .then(onSnapshot, () => toast.error({ title: t('sandbox.saveFailed') }))
+      .then((snapshot) => onSnapshot?.(snapshot), () => toast.error({ title: t('sandbox.saveFailed') }))
   }
 
   // Only a mode that can actually be enforced is worth offering as safe; the
   // status line stays in Settings, where there is room to explain the host.
   const unenforceable = status?.support === 'dependencies-missing'
-  const CurrentIcon = MODE_ICON[mode]
+  const CurrentIcon = mode ? MODE_ICON[mode] : null
 
   return (
     <Select
-      value={mode}
+      value={mode ?? '__inherit__'}
       onValueChange={switchMode}
-      disabled={disabled || planRestricted || !sessionPath}
+      disabled={disabled || planRestricted || (!sessionPath && !onModeChange)}
       className="w-auto"
     >
       <SelectTrigger
@@ -94,21 +110,22 @@ export function SandboxModePicker({
         className="h-8 w-auto gap-1.5 rounded-control border-0 bg-transparent px-2.5 text-xs hover:bg-muted"
       >
         <span className="flex min-w-0 items-center gap-1.5 whitespace-nowrap">
-          <CurrentIcon
+          {mode && CurrentIcon ? <CurrentIcon
             aria-hidden="true"
             data-sandbox-mode-icon={mode}
             className={cn('size-3.5 shrink-0', modeTone(mode, unenforceable))}
-          />
+          /> : null}
           <span className={cn('max-w-44 truncate', mode === FULL_ACCESS && WARNING_TONE)}>
-            {t(MODE_LABEL[mode])}
+            {mode ? t(MODE_LABEL[mode]) : inheritLabel ?? t('sandbox.modeLabel')}
           </span>
         </span>
       </SelectTrigger>
-      <SelectContent className="right-0 left-auto w-72">
+      <SelectContent className="right-0 left-auto w-72" portal={portal} portalAlign="end" portalWidth={288}>
+        {onModeChange && inheritLabel ? <SelectItem value="__inherit__" className={cn('py-1.5', compact && 'text-xs')}>{inheritLabel}</SelectItem> : null}
         {SANDBOX_MODES.map((option) => {
           const OptionIcon = MODE_ICON[option]
           return (
-            <SelectItem key={option} value={option} className="py-1.5">
+            <SelectItem key={option} value={option} className={cn('py-1.5', compact && 'text-xs')}>
               <span
                 data-sandbox-mode-option={option}
                 className="flex min-w-0 items-start gap-2"

@@ -18,11 +18,14 @@ import { DURATION, EASE_OUT, motionTransition } from '@/lib/ease'
  */
 export function RowReveal({
   animate = false,
+  rowKind,
   className,
   children
 }: {
   /** True only while the row is arriving in a live stream. */
   animate?: boolean
+  /** Semantic row kind; text output alone keeps roomy spacing in compact mode. */
+  rowKind?: 'process'
   className?: string
   children: ReactNode
 }) {
@@ -32,6 +35,7 @@ export function RowReveal({
       initial={animate && !reduce ? { opacity: 0 } : false}
       animate={{ opacity: 1 }}
       transition={motionTransition(reduce, { duration: DURATION.fast, ease: EASE_OUT })}
+      data-row={rowKind}
       className={className}
     >
       {children}

@@ -11,7 +11,10 @@ import { isNothingToCompactError } from '../../../../shared/compaction-errors'
 import {
   ArrowDown,
   ArrowUp,
+  ArrowsInLineHorizontal,
+  ArrowsOutLineHorizontal,
   Chat01,
+  CalendarCheck,
   ChevronDown,
   ChevronRight,
   Copy,
@@ -30,6 +33,7 @@ import {
   Minimize2,
   RefreshCw,
   Settings as SettingsIcon,
+  TextAlignCenter,
   Trash2
 } from '@/lib/icons'
 import { ChatApp } from '@/components/agents/chat-app'
@@ -82,9 +86,21 @@ import { BROWSER_ANNOTATION_EVENT } from './BrowserAnnotate'
 import type { NewSessionContext } from './NewSession'
 import { EditMessageDialog, type EditMessagePayload } from './EditMessageDialog'
 import { SettingsPage } from './settings/SettingsPage'
+import { ScheduledTasksView } from './scheduled-tasks/ScheduledTasksView'
+import { useScheduledTasks } from '@/state/scheduled-tasks-store'
 import { SidebarPanel, agentTabId, fileTabId, filePathForTab, type SidebarTabKind, type SidebarTabId } from './SidebarPanel'
 import { SessionSearch, SessionSearchTrigger } from './SessionSearch'
 import { AppCommandPalette } from './CommandPalette'
+import {
+  dispatchGuestIdentity,
+  guestRelayIdentities
+} from '@/lib/shortcuts/shortcut-dispatcher'
+import {
+  useShortcutBindings,
+  useShortcutDispatcher,
+  useShortcutHandlers,
+  type ShortcutHandlers
+} from '@/lib/shortcuts/use-shortcuts'
 import {
   CHATS_GROUP, PINNED_GROUP, canReorderSession, forgetSidebarSessions,
   loadSidebarPreferences, orderSessions, reorderSession, saveSidebarPreferences,
@@ -117,6 +133,7 @@ import { AuthBridge } from './AuthBridge'
 import { AlertTriangle, Rewind } from '@/lib/icons'
 import { RewindDialog } from './RewindDialog'
 import { ConfirmDialog } from './ConfirmDialog'
+import { SystemPromptDialog } from './SystemPromptDialog'
 import type { AuthNotifyDTO, AuthPromptDTO, BrowserStatusDTO } from '../../../../shared/types'
 import type { UiStyle } from '@/lib/ui-style'
 
@@ -156,7 +173,7 @@ function SidebarRowMenuAction({ icon: Icon, label, tone = 'default', onSelect }:
       size="sm"
       onClick={onSelect}
       className={cn(
-        'flex h-8 w-full items-center justify-start gap-2 rounded-lg px-2.5 text-left text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring',
+        'flex h-8 w-full items-center justify-start gap-2 rounded-lg px-2.5 text-left text-xs outline-none transition-colors focus-visible:ring-1 focus-visible:ring-ring',
         tone === 'destructive'
           ? 'text-destructive hover:bg-destructive/10 focus-visible:bg-destructive/10'
           : 'text-foreground hover:bg-muted focus-visible:bg-muted'
@@ -171,7 +188,26 @@ function SidebarRowMenuAction({ icon: Icon, label, tone = 'default', onSelect }:
 export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleChange }: WorkspaceProps) {
   const { t } = useI18n()
   const toast = useToast()
+  const [continuingPaths, setContinuingPaths] = useState<ReadonlySet<string>>(new Set())
+  const continueRequests = useRef(new Set<string>())
   const titleFade = useOverflowFade()
+  // One keyboard dispatcher owns every app shortcut (lib/shortcuts); the
+  // workspace registers the shell-level commands further down, the composer
+  // registers stopAgent, and the vendored ⌘B/⌘K listeners are disabled.
+  useShortcutDispatcher()
+  const shortcutBindings = useShortcutBindings()
+  // A focused webview guest emits no DOM keydown: push the current binding
+  // identities to main, which relays matching presses back for dispatch.
+  useEffect(() => {
+    window.pi.setBrowserAppShortcuts(guestRelayIdentities())
+  }, [shortcutBindings])
+  useEffect(
+    () =>
+      window.pi.onBrowserGuestAppShortcut(({ identity, repeat }) =>
+        dispatchGuestIdentity(identity, repeat)
+      ),
+    []
+  )
   const [sidebarPreferences, setSidebarPreferences] = useState(loadSidebarPreferences)
   const [sidebarSaveError, setSidebarSaveError] = useState(false)
   /** Frosted-glass session sidebar (Settings → Appearance, default on): only
@@ -196,7 +232,26 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
   const [sessions, setSessions] = useState<SessionSummaryDTO[]>([])
   const [folders, setFolders] = useState<string[]>([])
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [sidePanelOpen, setSidePanelOpen] = useState(false)
+  /** ⌘K palette and ⌘⇧F session search: controlled here so the shortcut
+   * dispatcher owns their toggle keys (each surface re-admits its own key
+   * through data-shortcut-passthrough to toggle closed). */
+  const [paletteOpen, setPaletteOpen] = useState(false)
+  const [sessionSearchOpen, setSessionSearchOpen] = useState(false)
+  // The scheduled tasks surface opens over the chat like Settings does; the
+  // badge count rides the push-fed store.
+  const [scheduledOpen, setScheduledOpen] = useState(false)
+  const { unreadCount: scheduledUnread } = useScheduledTasks()
+  const [sidePanelMode, setSidePanelMode] = useState<'closed' | 'docked' | 'fullscreen'>('closed')
+  const sidePanelOpen = sidePanelMode !== 'closed'
+  const sidePanelFullscreen = sidePanelMode === 'fullscreen'
+  // Every closing path clears fullscreen atomically, including closing the
+  // last tab and the command palette. Opening an already-open tab keeps it.
+  const setSidePanelOpen = useCallback((value: boolean | ((open: boolean) => boolean)) => {
+    setSidePanelMode((mode) => {
+      const open = typeof value === 'function' ? value(mode !== 'closed') : value
+      return open ? (mode === 'closed' ? 'docked' : mode) : 'closed'
+    })
+  }, [])
   /** Left session sidebar open state — controlled so the shell knows how much
    * room the panels actually take, and so the resize strip can toggle it. */
   const [sidebarOpen, setSidebarOpen] = useState(true)
@@ -579,6 +634,22 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
     [store]
   )
 
+  const handleContinue = useCallback(async (message: AssistantMsg) => {
+    const sessionPath = store.getShell().sessionPath
+    if (!sessionPath || continueRequests.current.has(sessionPath)) return
+    continueRequests.current.add(sessionPath)
+    setContinuingPaths(new Set(continueRequests.current))
+    try {
+      await window.pi.continueMessage({ sessionPath, timestamp: message.timestamp })
+    } catch (error) {
+      console.error('continue failed', error)
+      toast.error({ title: t('chat.messageContinueFailed') })
+    } finally {
+      continueRequests.current.delete(sessionPath)
+      setContinuingPaths(new Set(continueRequests.current))
+    }
+  }, [store, t, toast])
+
   /** Open the edit dialog for a user message; capture the session settings so
    * Cancel can restore them. Does not touch the session yet. */
   const handleEditMessage = useCallback(
@@ -699,6 +770,22 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
     }
   }, [store, t, toast])
 
+  /**
+   * The overflow menu's "View system prompt" entry. The prompt is fetched
+   * from main on EVERY open — never cached renderer-side — so the dialog
+   * always shows the session's current effective system prompt: the SDK
+   * rebuilds it on model, tool and resource changes, and a reload lands in
+   * the next read.
+   */
+  const [systemPromptText, setSystemPromptText] = useState<string | null>(null)
+  const showSystemPrompt = useCallback(async () => {
+    try {
+      setSystemPromptText(await window.pi.systemPrompt(store.getShell().sessionPath ?? undefined))
+    } catch {
+      toast.error({ title: t('systemPrompt.loadFailed') })
+    }
+  }, [store, t, toast])
+
   /** Fork the session at an assistant message: the fork opens as the active
    * session, gets its localized "Fork of …" title, and joins the sidebar. */
   const handleFork = useCallback(
@@ -804,7 +891,6 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
   const openAgentPane = useCallback((path: string) => {
     openSidePanelTabId(agentTabId(path))
   }, [openSidePanelTabId])
-
   /** The rail's agent tabs are keyed by the CHILD session file. */
   const agentRuns = useMemo(
     () => new Map((shell.subagents ?? []).map((run) => [run.sessionPath, run])),
@@ -1050,6 +1136,14 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
     [store, refreshFolders]
   )
 
+  /** History's View conversation navigates the main transcript. The task
+   * page sits above the workspace, so close it only after activation succeeds. */
+  const openScheduledConversation = useCallback(async (path: string) => {
+    await openSession(path)
+    setScheduledOpen(false)
+    setSidePanelOpen(false)
+  }, [openSession, setSidePanelOpen])
+
   /** Runs after the confirm dialog's Delete press; trash is reversible. */
   const confirmDelete = useCallback(async () => {
     const target = pendingDelete
@@ -1211,14 +1305,76 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
     return paths
   }, [liveSessionPaths, sessions, shell.isStreaming, shell.sessionPath])
 
+  /**
+   * A pane shortcut toggles: the pane's tab is already active in an open rail
+   * → fold the rail; otherwise open/switch to it (openSidePanelTab also
+   * births the side chat / first terminal their tabs need).
+   */
+  const toggleRailPane = useCallback(
+    (kind: SidebarTabKind) => {
+      if (sidePanelOpen && sidePanelTab === kind) setSidePanelOpen(false)
+      else openSidePanelTab(kind)
+    },
+    [sidePanelOpen, sidePanelTab, openSidePanelTab, setSidePanelOpen]
+  )
+
+  /** ⌘⌥←/→ cycle the rail's tabs in strip order. */
+  const cycleRailTab = useCallback(
+    (direction: 1 | -1) => {
+      if (sidePanelTabs.length < 2) return
+      const index = sidePanelTab ? sidePanelTabs.indexOf(sidePanelTab) : -1
+      const next =
+        sidePanelTabs[(index + direction + sidePanelTabs.length) % sidePanelTabs.length]
+      if (next) selectSidePanelTab(next)
+    },
+    [sidePanelTabs, sidePanelTab, selectSidePanelTab]
+  )
+
+  // The shell's shortcut commands. The record is memoized; registration is a
+  // lease, so a re-render never leaves a stale closure behind.
+  const shortcutHandlers = useMemo<ShortcutHandlers>(
+    () => ({
+      newSession: () => {
+        void newSession()
+      },
+      commandPalette: () => setPaletteOpen((open) => !open),
+      sessionSearch: () => setSessionSearchOpen((open) => !open),
+      openSettings: () => setSettingsOpen((open) => !open),
+      toggleSidebar: () => setSidebarOpen((open) => !open),
+      toggleRail: () => setSidePanelOpen((open) => !open),
+      openReview: () => toggleRailPane('review'),
+      openContext: () => toggleRailPane('context'),
+      openTerminal: () => toggleRailPane('terminal'),
+      openBrowser: () => toggleRailPane('browser'),
+      openFiles: () => toggleRailPane('files'),
+      openSideChat: () => toggleRailPane('chat'),
+      closeRailTab: () => {
+        if (sidePanelTab) closeSidePanelTab(sidePanelTab)
+      },
+      nextRailTab: () => cycleRailTab(1),
+      prevRailTab: () => cycleRailTab(-1)
+    }),
+    [
+      newSession,
+      setSidePanelOpen,
+      toggleRailPane,
+      cycleRailTab,
+      sidePanelTab,
+      closeSidePanelTab
+    ]
+  )
+  useShortcutHandlers(shortcutHandlers)
+
   return (
     <FileNavigationProvider cwd={shell.cwd ?? ''} openFile={openFile}>
-    <SessionSearch sessions={sessions} activePath={shell.sessionPath ?? null} runningPaths={runningPaths} onOpen={openSession}>
+    <SessionSearch sessions={sessions} activePath={shell.sessionPath ?? null} runningPaths={runningPaths} onOpen={openSession} open={sessionSearchOpen} onOpenChange={setSessionSearchOpen}>
     <ChatApp
       className="relative h-full flex-col rounded-none border-0"
       sidebarWidth={`${panelLayout.left}px`}
       open={sidebarOpen}
       onOpenChange={setSidebarOpen}
+      // The dispatcher owns the sidebar's ⌘B; the vendored listener stays off.
+      keyboardShortcut={null}
     >
       {/* The title row owns the shell's top rule: it spans the whole window,
           sidebar included, so the line under the header reaches the app's left
@@ -1243,40 +1399,77 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
           ) : null}
           <span ref={titleFade.viewportRef} className="min-w-0 overflow-hidden whitespace-nowrap font-medium text-foreground data-[overflow]:[mask-image:linear-gradient(to_right,black_calc(100%-24px),transparent)]">
             <span ref={titleFade.textRef} className="inline-block">
-              {isNewSession ? t('workspace.newChat') : sessionsByPath.get(shell.sessionPath ?? '')?.label ?? t('workspace.newChat')}
+              {shell.scheduledTaskSession
+                ? t('scheduledTasks.run.conversationTitle')
+                : isNewSession ? t('workspace.newChat') : sessionsByPath.get(shell.sessionPath ?? '')?.label ?? t('workspace.newChat')}
             </span>
           </span>
         </div>
         <div className="flex shrink-0 items-center gap-1">
           {/* Everything added to this row after its original toolbar lives in
-              here, so the controls that follow keep their places. */}
+              here, so the controls that follow keep their places. The
+              checkpoint entry goes in last because the pocket unfolds
+              leftward: that keeps it next to the chevron, where it sat when it
+              led this group, instead of jumping a width to the left. */}
           <TitlebarOverflow
             actions={[
               {
                 id: 'compact',
                 label: t('palette.compact'),
                 icon: <Minimize2 className="size-4" />,
-                disabled: !shell.sessionPath,
+                disabled: !shell.sessionPath || shell.scheduledTaskSession,
                 onSelect: () => void handleCompact()
               },
               {
                 id: 'reload',
                 label: t('palette.reload'),
                 icon: <RefreshCw className="size-4" />,
-                disabled: !shell.sessionPath,
+                disabled: !shell.sessionPath || shell.scheduledTaskSession,
                 onSelect: () => void handleReload()
-              }
+              },
+              {
+                id: 'system-prompt',
+                label: t('workspace.systemPrompt'),
+                icon: <TextAlignCenter className="size-4" />,
+                // Always available: the manager falls back to the active
+                // session, so an unpersisted chat has a prompt to show too.
+                onSelect: () => void showSystemPrompt()
+              },
+              // A scheduled run owns its own conversation: it has no checkpoint
+              // entry, exactly as it has no rewind affordances anywhere else.
+              ...(shell.scheduledTaskSession ? [] : [{
+                id: 'rewind',
+                label: t(rewindWarning ? 'rewind.captureWarning' : 'rewind.title'),
+                icon: rewindWarning ? <AlertTriangle className="size-4 text-destructive" /> : <Rewind className="size-4" />,
+                disabled: !shell.sessionPath,
+                onSelect: () => { if (shell.sessionPath) setRewindTarget({ path: shell.sessionPath }) }
+              }])
             ]}
           />
-          <Tooltip content={t(rewindWarning ? 'rewind.captureWarning' : 'rewind.title')}>
-            <Button variant="ghost" size="icon" className="size-8" aria-label={t(rewindWarning ? 'rewind.captureWarning' : 'rewind.title')} data-rewind-entry disabled={!shell.sessionPath} onClick={() => { if (shell.sessionPath) setRewindTarget({ path: shell.sessionPath }) }}>{rewindWarning ? <AlertTriangle className="size-4 text-destructive" /> : <Rewind className="size-4" />}</Button>
-          </Tooltip>
           <Tooltip content={t('workspace.settings')} className={settingsOpen ? 'hidden' : undefined}>
             <Button variant="ghost" size="icon" className="size-8" aria-label={t('workspace.settings')} onClick={() => setSettingsOpen(true)}>
               <SettingsIcon className="size-4" />
             </Button>
           </Tooltip>
           <ThemeButton />
+          {/* Fullscreen stays in the row, beside the rail toggle it belongs to,
+              and wears one of the two horizontal arrow pairs rather than the
+              diagonal `Minimize2` it used to share with the pocket's summarize
+              action — two controls, two readings. */}
+          <Tooltip content={t(sidePanelFullscreen ? 'workspace.exitSidebarFullscreen' : 'workspace.sidebarFullscreen')}>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-8"
+              aria-label={t(sidePanelFullscreen ? 'workspace.exitSidebarFullscreen' : 'workspace.sidebarFullscreen')}
+              aria-pressed={sidePanelFullscreen}
+              data-titlebar-action="sidebar-fullscreen"
+              disabled={!sidePanelOpen}
+              onClick={() => setSidePanelMode((mode) => mode === 'closed' ? mode : mode === 'fullscreen' ? 'docked' : 'fullscreen')}
+            >
+              {sidePanelFullscreen ? <ArrowsInLineHorizontal className="size-4" /> : <ArrowsOutLineHorizontal className="size-4" />}
+            </Button>
+          </Tooltip>
           <Tooltip content={t('workspace.sidebar')}>
             <Button variant="ghost" size="icon" aria-label={t('workspace.sidebar')} aria-pressed={sidePanelOpen}
               onClick={() => setSidePanelOpen((open) => !open)} className={cn('size-8', sidePanelOpen && 'bg-primary/5 text-foreground')}>
@@ -1312,10 +1505,14 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
                     icon={<MessageSquarePlus className="size-4" />}
                     onSelect={() => void newSession()}
                     // No resting background: a permanent box on the row read as
-                    // a floating grey slab against the glass panel. The row is
-                    // still the primary action — weight and full-contrast text
-                    // — it just wears no box of its own.
-                    className="font-medium text-foreground"
+                    // a floating grey slab against the glass panel. It wears no
+                    // emphasis of its own either: the primary action reads from
+                    // its position and glyph, and the vendored button's
+                    // `font-medium` plus a full-contrast `text-foreground` made
+                    // this single row heavier and darker than every other
+                    // sidebar label, so both are explicitly turned back to the
+                    // sidebar's shared tone and weight.
+                    className="font-normal"
                   >
                     {t('workspace.newChat')}
                   </AnimatedSidebarMenuButton>
@@ -1338,7 +1535,22 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
               <AnimatedSidebarGroupLabel className="flex h-8 items-center px-2 text-xs font-medium normal-case tracking-normal">
                 {t('workspace.sessions')}
               </AnimatedSidebarGroupLabel>
-              <SessionSearchTrigger />
+              <div className="flex items-center gap-0.5">
+                <Tooltip content={t('scheduledTasks.open')}>
+                  <Button variant="ghost" size="icon" aria-label={t('scheduledTasks.open')} className="relative" onClick={() => setScheduledOpen(true)}>
+                    <CalendarCheck aria-hidden="true" className="size-4" />
+                    {scheduledUnread > 0 ? (
+                      <span
+                        aria-label={t('scheduledTasks.unread', { count: scheduledUnread })}
+                        className="absolute -right-0.5 -top-0.5 grid min-w-4 place-items-center rounded-capsule bg-primary px-1 text-[10px] font-semibold leading-4 text-primary-foreground"
+                      >
+                        {scheduledUnread}
+                      </span>
+                    ) : null}
+                  </Button>
+                </Tooltip>
+                <SessionSearchTrigger />
+              </div>
             </div>
             {sidebarSaveError ? <p role="alert" className="px-2 pb-2 text-xs text-destructive">{t('workspace.sidebarSaveError')}</p> : null}
             <AnimatedSidebarGroupContent className="relative min-h-0 flex-1 overflow-hidden">
@@ -1446,7 +1658,7 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
                             event.stopPropagation()
                             void newSession(cwd)
                           }}
-                          className="grid size-7 place-items-center rounded-lg bg-background text-muted-foreground opacity-0 shadow-sm ring-1 ring-border/60 outline-none transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring group-hover/resource:opacity-100 group-data-[menu-open=true]/resource:opacity-100"
+                          className="grid size-7 place-items-center rounded-lg bg-background text-muted-foreground opacity-0 shadow-sm outline-none transition-[opacity,color,background-color] hover:bg-muted hover:text-foreground focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-ring group-hover/resource:opacity-100 group-data-[menu-open=true]/resource:opacity-100"
                         >
                           <MessageSquarePlus className="size-3.5" />
                         </Button>
@@ -1542,20 +1754,21 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
       {/* No top border here: the rule belongs to the title row. The pull left
           by the resize strip's half-width keeps the pane's own left edge on the
           sidebar's right border, so the strip's 3px overlap costs it nothing. */}
-      <AnimatedSidebarInset className="min-h-0 overflow-hidden bg-background md:-ml-[3px]">
+      <AnimatedSidebarInset className="isolate min-h-0 overflow-hidden bg-background md:-ml-[3px]">
         <div className="flex min-h-0 flex-1">
-          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col" inert={sidePanelFullscreen} aria-hidden={sidePanelFullscreen || undefined}>
             {!isNewSession ? (
               <ChatView
-                onRefinePlan={() => window.dispatchEvent(new CustomEvent('pith:refine-plan', { detail: { sessionPath: shell.sessionPath } }))}
+                onRefinePlan={shell.scheduledTaskSession ? undefined : () => window.dispatchEvent(new CustomEvent('pith:refine-plan', { detail: { sessionPath: shell.sessionPath } }))}
                 store={store}
                 scrollResetKey={scrollResetKey}
                 onDismissError={dismissChatError}
-                onResend={handleResend}
-                onEditMessage={handleEditMessage}
-                onRewindMessage={rewindMessage}
-                onUndoFiles={undoFilesTurn}
-                onFork={handleFork}
+                onResend={shell.scheduledTaskSession ? undefined : handleResend}
+                onContinue={shell.scheduledTaskSession || (shell.sessionPath !== null && continuingPaths.has(shell.sessionPath)) ? undefined : handleContinue}
+                onEditMessage={shell.scheduledTaskSession ? undefined : handleEditMessage}
+                onRewindMessage={shell.scheduledTaskSession ? undefined : rewindMessage}
+                onUndoFiles={shell.scheduledTaskSession ? undefined : undoFilesTurn}
+                onFork={shell.scheduledTaskSession ? undefined : handleFork}
                 onReview={openReview}
                 onOpenSession={openAgentPane}
               />
@@ -1598,10 +1811,11 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
               availableThinkingLevels={shell.availableThinkingLevels}
               busy={shell.isStreaming}
               initializing={shell.initializing}
-              readOnly={shell.subagentChild}
+              readOnly={shell.subagentChild || shell.scheduledTaskSession}
+              readOnlyKind={shell.scheduledTaskSession ? 'scheduled' : 'subagent'}
               readOnlyParentPath={shell.subagentParentPath}
               onOpenSession={(path) => void openSession(path)}
-              escapeStopsRun={!settingsOpen && !authPrompt}
+              escapeStopsRun={!settingsOpen && !scheduledOpen && !authPrompt}
               plan={shell.plan}
               onPlanState={(path, plan) => store.dispatch({ type: 'plan_state_update', sessionPath: path, plan })}
               sandboxMode={shell.sandboxMode}
@@ -1620,7 +1834,7 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
             />
           </div>
 
-          {sidePanelOpen ? (
+          {sidePanelOpen && !sidePanelFullscreen ? (
             <PanelResizeHandle
               grow="left"
               label={t('workspace.resizePanel')}
@@ -1636,6 +1850,7 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
 
           <SidebarPanel
             open={sidePanelOpen}
+            fullscreen={sidePanelFullscreen}
             width={panelLayout.right}
             // Any drag, not just this panel's own: a left-panel drag shrinks
             // this one live (the pair gives way immediately), and a panel that
@@ -1684,6 +1899,18 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
         onUiStyleChange={onUiStyleChange}
       />
 
+      <ScheduledTasksView
+        open={scheduledOpen}
+        onBack={() => setScheduledOpen(false)}
+        currentSessionId={shell.sessionId ?? null}
+        currentCwd={shell.cwd ?? null}
+        currentProjectless={shell.projectless}
+        sessions={sessions}
+        folders={folders}
+        models={models}
+        onOpenRunSession={openScheduledConversation}
+      />
+
       <RewindDialog sessionPath={rewindTarget?.path ?? null} messageTimestamp={rewindTarget?.messageTimestamp} messageEntryId={rewindTarget?.messageEntryId} initialMode={rewindTarget?.mode} onClose={closeRewind} onCommitted={value => {
         if (value.snapshot?.sessionPath === store.getShell().sessionPath) store.applySnapshot(value.snapshot)
         setScrollResetKey(previous => previous + 1)
@@ -1716,6 +1943,8 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
         onClose={() => setPendingDelete(null)}
       />
 
+      <SystemPromptDialog prompt={systemPromptText} onClose={() => setSystemPromptText(null)} />
+
       <EditMessageDialog
         open={editTarget !== null}
         message={editTarget}
@@ -1742,6 +1971,8 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
     </SessionSearch>
     {/* ⌘K. The surface portals, so its place in this tree costs no layout. */}
     <AppCommandPalette
+      open={paletteOpen}
+      onOpenChange={setPaletteOpen}
       sessions={sessions}
       activePath={shell.sessionPath ?? null}
       folders={folders}

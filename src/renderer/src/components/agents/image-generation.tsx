@@ -1,3 +1,4 @@
+// local patch (pi-app): keep UI frames and focus rings in this component at 1px.
 "use client";
 // local patch (pi-app): resolution badges and retry actions use semantic radii.
 // beui.dev/components/agents/chat-app
@@ -381,7 +382,7 @@ export function ImageGeneration({
             // local patch (pi-app): no press scale — this action button must not
             // dip inward while pressed (see `button/base`).
             transition={SPRING_PRESS}
-            className="mt-3 inline-flex min-h-10 items-center gap-2 rounded-control px-3 text-sm font-medium text-foreground outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
+            className="mt-3 inline-flex min-h-10 items-center gap-2 rounded-control px-3 text-sm font-medium text-foreground outline-none transition-colors hover:bg-muted focus-visible:ring-1 focus-visible:ring-ring"
           >
             <RotateCcw aria-hidden="true" className="size-4" />
             Try again

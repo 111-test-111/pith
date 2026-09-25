@@ -25,11 +25,27 @@ export async function checkPlanSubmission() {
     assert.match(JSON.stringify(f.requests[0]), /submit_plan/)
     assert(!readFileSync(f.managed.path, 'utf8').includes('"customType":"pith_plan_context"'))
     assert.equal(f.app.readPlanDocument({ ...req, submissionEntryId: 'missing' }).ok, false)
+    // A revision request remains in Plan mode even if the model answers in
+    // prose instead of submitting. Jev workflow's action router must stay out
+    // of this turn, and the old version must lose approval eligibility.
+    f.app.jevPreferences = { ...f.app.jevPreferences, mode: 'workflow' }
+    f.setRespond(() => [text])
+    await f.session.prompt('Revise step two to include a rollback; do not implement it yet')
+    state = f.app.getPlanState(f.managed.path)
+    assert.equal(state.revisionPending, true)
+    assert(state.blockers.approve.includes('stale-submission'))
+    assert.equal((await f.app.approvePlan(req)).ok, false, 'the old plan cannot start after feedback')
+    assert(!f.session.getActiveToolNames().includes('write'), 'revision feedback retains the read-only tool ceiling')
+    assert.match(f.requests.at(-1).systemPrompt, /previous submitted plan \(version 1\)/)
+    assert.match(f.requests.at(-1).systemPrompt, /Read, then change\.|# Plan/)
+    assert(!JSON.stringify(f.requests.at(-1)).includes('Application-controlled Jev workflow'), 'Plan turns must not receive Jev implementation routing')
+    f.app.jevPreferences = { ...f.app.jevPreferences, mode: 'off' }
     const before = f.requests.length
     f.setRespond(n => n === before + 1 ? [call('revision', '# Revised\nImplement with tests.')] : [text])
-    await f.session.prompt('Revise it')
+    await f.session.prompt('Submit the complete revised plan')
     state = f.app.getPlanState(f.managed.path)
     assert.equal(state.latest.revision, 2)
+    assert.equal(state.revisionPending, false)
     assert(f.app.readPlanDocument(req).ok, 'historical version on the selected branch stays readable')
     assert.equal((await f.app.approvePlan(req)).ok, false, 'the prior revision cannot authorize the new plan')
     f.setRespond(() => [text])

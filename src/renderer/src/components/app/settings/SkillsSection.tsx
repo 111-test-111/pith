@@ -84,6 +84,7 @@ export function SkillsSection() {
         onChange={setQuery}
         placeholder={t('settings.skillSearchPlaceholder')}
         aria-label={t('settings.skillSearchPlaceholder')}
+        classNames={{ input: 'text-xs' }}
       />
 
       {filtered.length === 0 ? (

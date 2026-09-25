@@ -96,7 +96,7 @@ function SummaryFileGroup({ label, paths }: { label: string; paths: string[] }) 
               type="button"
               data-file-link
               onClick={() => navigation.open(path)}
-              className="cursor-pointer text-left font-medium text-primary underline underline-offset-2 hover:opacity-80"
+              className="cursor-pointer rounded-control px-1 text-left font-medium text-primary transition-colors hover:bg-primary/10"
             >
               {path}
             </button>

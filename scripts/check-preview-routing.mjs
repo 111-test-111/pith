@@ -63,6 +63,17 @@ First cue
 00:04.000 --> 00:06.000
 Second cue
 `
+const LRC = `\ufeff[ti:Preview fixture]
+[ar:Example]
+[00:12.34][00:42.345]重复的歌词
+[00:06.5]第一行歌词
+[00:06.500]First lyric line
+[01:02]<01:02.00>逐字<01:02.50>歌词
+[00:08.00]
+[00:99.00]invalid seconds
+untimed text
+[offset:+250]
+`.replaceAll('\n', '\r\n')
 function notebook() {
   return JSON.stringify({
     cells: [
@@ -95,6 +106,8 @@ try {
   await writeFile(join(project, 'notes.ipynb'), notebook())
   await writeFile(join(project, 'captions.srt'), SRT)
   await writeFile(join(project, 'captions.vtt'), VTT)
+  await writeFile(join(project, 'lyrics.lrc'), LRC)
+  await writeFile(join(project, 'untimed.lrc'), '[ti:Untimed]\n没有时间戳的歌词\n')
   await writeFile(join(project, 'diagram.svgz'), gzipSync(Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="48" height="24"><rect width="48" height="24" fill="#0f0"/></svg>')))
   // Extension-only fixtures: the protocol answers from its MIME table, and the
   // pane must never read them as text.
@@ -121,6 +134,7 @@ try {
   const expected = {
     '/a/b.ts': textRow, '/a/b.txt': textRow, '/a/b.xls': textRow, '/a/env': textRow, '/a/Makefile': textRow, '/a/.env': textRow,
     '/a/b.md': rendered('markdown'), '/a/b.markdown': rendered('markdown'), '/a/b.mdx': rendered('markdown'),
+    '/a/b.html': rendered('html'), '/a/b.HTM': rendered('html'),
     '/a/b.csv': rendered('table'), '/a/b.tsv': rendered('table'), '/a/b.psv': rendered('table'),
     '/a/b.xlsx': inline('spreadsheet'), '/a/b.xlsm': inline('spreadsheet'), '/a/b.pdf': inline('pdf'),
     '/a/b.png': inline('image'), '/a/b.apng': inline('image'), '/a/b.jpe': inline('image'),
@@ -128,6 +142,7 @@ try {
     '/a/b.m4b': inline('audio'), '/a/b.flac': inline('audio'),
     '/a/b.patch': rendered('diff'), '/a/b.diff': rendered('diff'),
     '/a/b.ipynb': rendered('notebook'), '/a/b.srt': rendered('subtitle'), '/a/b.vtt': rendered('subtitle'),
+    '/a/b.lrc': rendered('subtitle'), '/a/b.LRC': rendered('subtitle'),
     '/a/b.ttf': inline('font'), '/a/b.otf': inline('font'), '/a/b.woff': inline('font'), '/a/b.woff2': inline('font'),
     '/a/b.heic': inline('unplayable'), '/a/b.avi': inline('unplayable')
   }
@@ -157,20 +172,24 @@ try {
   const fixture = `<!doctype html><html lang="en"><body><div id="root"></div><script type="module">
 import React from 'react';import {createRoot} from 'react-dom/client';
 import {FilesPane} from '/src/components/app/FilesPane.tsx';
+import {parseCues} from '/src/components/app/FileSubtitle.tsx';
+import {initFonts,useFontSettings} from '/src/lib/fonts.ts';
 import {ImagePreviewProvider} from '/src/components/app/ImagePreview.tsx';
 import {I18nProvider} from '/src/i18n/index.tsx';
 import {PiStore} from '/src/state/pi-store.ts';import {FileBrowserStore} from '/src/state/file-browser-store.ts';
 import en from '/src/i18n/locales/en.ts';import zh from '/src/i18n/locales/zh-CN.ts';
 import '/src/styles.css';
+initFonts();
 // Only seed the locale: overwriting it on every load would undo a switch that
 // survives through a real reload.
 if(!localStorage.getItem('pi-app:locale'))localStorage.setItem('pi-app:locale','en');
 const cwd=${JSON.stringify(project)};
 const files=new FileBrowserStore(),pi=new PiStore();
 pi.applySnapshot({cwd,sessionId:crypto.randomUUID(),messages:[],model:null,thinkingLevel:'off',availableThinkingLevels:['off'],isStreaming:false});
-const App=()=>{const state=React.useSyncExternalStore(files.subscribe,files.getSnapshot);return React.createElement(FilesPane,{files,store:pi,filePath:state.active})};
+const App=()=>{const [,setFonts]=useFontSettings();window.setFonts=setFonts;const state=React.useSyncExternalStore(files.subscribe,files.getSnapshot);return React.createElement(FilesPane,{files,store:pi,filePath:state.active})};
 createRoot(document.getElementById('root')).render(React.createElement(React.StrictMode,null,React.createElement(I18nProvider,null,React.createElement(ImagePreviewProvider,null,React.createElement(App)))));
 window.cwd=cwd;window.files=files;window.en=en;window.zh=zh;
+window.parseCues=parseCues;
 window.openFile=name=>files.open(cwd,{path:cwd+'/'+name});
 window.setLocale=value=>{localStorage.setItem('pi-app:locale',value);location.reload()};
 window.__ready=true;</script></body></html>`
@@ -359,6 +378,42 @@ app.on('window-all-closed',()=>app.quit());`, resolveDir: repo, loader: 'ts' }, 
   assert.ok(await evaluate(`document.querySelector('[data-file-subtitle-bar]').innerText.includes('2')`), 'the cue count is shown')
   console.log('PASS: .srt/.vtt render cues with normalized times and no header blocks')
 
+  // The preview inherits the interface face, including live preference edits;
+  // its 14px text and 12px/medium controls intentionally have different metrics.
+  for (const ui of ['', 'serif']) {
+    await evaluate(`window.setFonts({ui:${JSON.stringify(ui)}})`)
+    const fonts = await evaluate(`(()=>{const text=getComputedStyle(document.querySelector('[data-subtitle-cue] > span:last-child'));const bar=getComputedStyle(document.querySelector('[data-file-subtitle-bar]'));return [text.fontFamily,bar.fontFamily,getComputedStyle(document.body).fontFamily,text.fontSize,text.fontWeight]})()`)
+    assert.equal(fonts[0], fonts[1], 'subtitle and interface label share the font stack')
+    assert.equal(fonts[0], fonts[2], 'subtitle follows the interface preference')
+    assert.deepEqual(fonts.slice(3), ['14px', '400'])
+  }
+  await evaluate('window.setFonts({ui:""})')
+  console.log('PASS: subtitle text inherits the default and custom interface fonts')
+
+  await open('lyrics.lrc')
+  await waitFor('document.querySelector("[data-file-subtitle]")', 'LRC preview')
+  const lyricRows = await evaluate(`Array.from(document.querySelectorAll('[data-subtitle-cue]'),row=>[row.firstElementChild.textContent,row.lastElementChild.textContent])`)
+  assert.deepEqual(lyricRows, [
+    ['00:00:06.250', '第一行歌词'], ['00:00:06.250', 'First lyric line'],
+    ['00:00:12.090', '重复的歌词'], ['00:00:42.095', '重复的歌词'], ['00:01:01.750', '逐字歌词']
+  ], 'LRC expands repeated times, preserves translation order, applies offset and strips word tags')
+  assert.equal(await evaluate(`document.querySelector('[data-file-subtitle-bar]').textContent`), '5 lyric lines')
+  await evaluate(`window.files.setView(window.cwd+'/lyrics.lrc','source')`)
+  await waitFor('document.querySelector("[data-file-source]")', 'LRC source')
+  assert.ok((await paneText()).includes('[00:12.34][00:42.345]'), 'the original lyric timestamps remain in source')
+  await evaluate(`window.files.setView(window.cwd+'/lyrics.lrc','preview')`)
+  await waitFor('document.querySelector("[data-file-subtitle]")', 'LRC preview restored')
+  await open('untimed.lrc')
+  await waitFor('document.querySelector("[data-file-subtitle-empty]")', 'untimed LRC notice')
+  assert.equal(await evaluate(`document.querySelector('[data-file-subtitle-empty]').textContent`), await evaluate(`window.en['files.lyrics.empty']`))
+  const parseLrc = text => evaluate(`window.parseCues(${JSON.stringify(text)},'lrc')`)
+  assert.deepEqual(await parseLrc('[offset:-1500]\n[00:01]Later'), [{ start: '00:00:02.500', end: null, text: 'Later' }])
+  assert.deepEqual(await parseLrc('[offset:2500]\n[00:01]Early'), [{ start: '00:00:00.000', end: null, text: 'Early' }])
+  assert.deepEqual(await parseLrc('[ti:Only metadata]\n[00:xx]Bad\n[00:01.0000]Bad\n[00:03]'), [])
+  assert.equal((await parseLrc('[00:01]'.repeat(5002) + 'Bounded')).length, 5000, 'LRC cue count stays bounded even on one line')
+  assert.equal((await parseLrc('[00:01]' + '字'.repeat(4001)))[0].text.length, 4000, 'LRC text stays bounded')
+  console.log('PASS: .lrc opens on timed lyrics, retains source, bounds output and explains untimed files')
+
   // 6. A font preview takes the pane, loads the real face and renders with it.
   if (hasFont) {
     await open('Arial.ttf')
@@ -410,7 +465,7 @@ app.on('window-all-closed',()=>app.quit());`, resolveDir: repo, loader: 'ts' }, 
   // 8. Both locales carry every new string (the Messages type covers the
   //    compile-time half; this is the rendered half).
   for (const key of [...Object.keys(await evaluate('window.en')), ...Object.keys(await evaluate('window.zh'))]) {
-    if (!key.startsWith('files.notebook') && !key.startsWith('files.subtitle') && !key.startsWith('files.font') && !key.startsWith('files.diffPreview')) continue
+    if (!key.startsWith('files.notebook') && !key.startsWith('files.subtitle') && !key.startsWith('files.lyrics') && !key.startsWith('files.font') && !key.startsWith('files.diffPreview')) continue
     assert.ok(await evaluate(`Object.prototype.hasOwnProperty.call(window.en,${JSON.stringify(key)})`), 'en has ' + key)
     assert.ok(await evaluate(`Object.prototype.hasOwnProperty.call(window.zh,${JSON.stringify(key)})`), 'zh has ' + key)
   }
@@ -420,6 +475,19 @@ app.on('window-all-closed',()=>app.quit());`, resolveDir: repo, loader: 'ts' }, 
   const countLabel = await evaluate(`document.querySelector('[data-file-subtitle-bar]').innerText`)
   const expectedLabel = await evaluate(`window.zh['files.subtitle.count'].replace('{count}','2')`)
   assert.equal(countLabel, expectedLabel, 'the cue count is localized')
+  await open('lyrics.lrc')
+  await waitFor('document.querySelector("[data-file-subtitle]")', 'Chinese LRC preview')
+  assert.equal(await evaluate(`document.querySelector('[data-file-subtitle-bar]').textContent`), '共 5 行歌词')
+  if (process.env.PI_PREVIEW_SCREENSHOT_DIR) {
+    await mkdir(process.env.PI_PREVIEW_SCREENSHOT_DIR, { recursive: true })
+    for (const dark of [false, true]) {
+      await evaluate(`document.documentElement.classList.toggle('dark',${dark})`)
+      await pause(100)
+      const shot = await send('Page.captureScreenshot', { format: 'png' })
+      await writeFile(join(process.env.PI_PREVIEW_SCREENSHOT_DIR, `lyrics-${dark ? 'dark' : 'light'}.png`), Buffer.from(shot.data, 'base64'))
+    }
+    await evaluate(`document.documentElement.classList.remove('dark')`)
+  }
   await open('changes.patch')
   await waitFor('document.querySelector("[data-file-diff-preview]")', 'Chinese patch preview')
   assert.ok(await evaluate(`document.querySelector('[data-file-view-tabs] [role=tab][aria-selected=true]').textContent === window.zh['files.preview']`), 'the preview tab is localized')

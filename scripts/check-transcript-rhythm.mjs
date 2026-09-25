@@ -1,30 +1,7 @@
-/**
- * Transcript row-rhythm regression check: every row of a turn — a tool row, a
- * folded tool GROUP row, a reasoning row, prose and the waiting row — sits on
- * one and the same flex rhythm, and a block that paints nothing never takes a
- * slot.
- *
- * The bug this pins: a round that opens with a bare `" "` text part rendered an
- * empty markdown block. Zero height, but a real flex item, so it added a whole
- * extra gap (two tool rows sat 24px apart instead of 12px) AND split a tool run
- * that was visually continuous into two separate GROUP rows.
- *
- * It also pins the second report on the same rows: a row whose own trigger opens
- * a growing body (reasoning, folded group, the settled-turn fold) must not move
- * when it opens. `justify-center` re-centres the trigger inside the 36px row
- * while the row has slack and stops the moment the body exceeds it, so the row
- * jumped 4px up on every expand. The trigger now owns the row's box itself.
- *
- * And the third: an EXPANDED body starts where its row's own text does — 16px
- * icon plus 8px gap — whichever component draws it (a tool body, a reasoning
- * body). A body at the row's left edge reads as belonging to the row above it,
- * which is what a reader reports as "the reasoning content has no indent".
- *
- * Real `ChatView` in isolated Electron against a synthetic store; no SDK, no
- * model calls, no network. Run after building:
- *   node scripts/check-transcript-rhythm.mjs
- * `PI_TRANSCRIPT_SCREENSHOT_DIR` retains the screenshots.
- */
+/** Real ChatView geometry in isolated Electron (no SDK/model calls).
+ * Checks both densities, nested disclosures, prose boundaries, images and
+ * output caps, plus commit-frame stability with animations disabled.
+ * PI_TRANSCRIPT_SCREENSHOT_DIR retains screenshots. */
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
@@ -42,10 +19,9 @@ const temporary = await mkdtemp(join(tmpdir(), 'pith-rhythm-'))
 const fixturePath = '/__transcript_rhythm_check.html'
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
-/** The transcript's own row gap (`MessageContent className="gap-3"`). */
-const ROW_GAP = 12
-/** The one row height every transcript row shares (`min-h-9`). */
-const ROW_HEIGHT = 36
+/** Shared positive gaps and content row height from styles.css. */
+const ROW_GAP = 24
+const ROW_HEIGHT = 24
 
 /**
  * A colour-bar PNG, built here so the fixture carries a CAPTURE-SIZED image.
@@ -107,14 +83,28 @@ import {ChatView} from '/src/components/app/ChatView.tsx';
 import {ImagePreviewProvider} from '/src/components/app/ImagePreview.tsx';
 import {PiStore} from '/src/state/pi-store.ts';
 import {I18nProvider} from '/src/i18n/index.tsx';
+import {initReduceMotion, setReduceMotion} from '/src/lib/reduce-motion.ts';
+import {initCompactTools, setCompactTools} from '/src/lib/compact-tools.ts';
 import '/src/styles.css';
 localStorage.setItem('pi-app:locale','en');
 const params = new URLSearchParams(location.search);
 const caseName = params.get('case') ?? 'invisible';
+document.documentElement.classList.toggle('dark', params.has('dark'));
+document.documentElement.dataset.corners = params.get('style') ?? 'square';
 // The reported turn had "show reasoning blocks" off, so a round's reasoning is
 // not a row; the third case turns it back on to prove the same rhythm holds
 // when reasoning rows alternate with tool rows.
-localStorage.setItem('pi-app:show-reasoning', caseName === 'reasoning' || caseName === 'images' ? 'on' : 'off');
+localStorage.setItem('pi-app:show-reasoning', caseName === 'reasoning' || caseName === 'images' || caseName === 'compact' ? 'on' : 'off');
+// 「紧凑显示连续工具调用」 is read from storage at boot; the fixture boots it the
+// way main.tsx does, so the real html[data-compact-tools] CSS is what runs.
+localStorage.setItem('pi-app:compact-tools', params.get('compact') === '1' ? 'on' : 'off');
+initCompactTools();
+localStorage.setItem('pi-app:reduce-motion', params.get('instant') === '1' ? 'on' : 'off');
+localStorage.setItem('pi-app:tool-grouping', params.get('grouping') === '0' ? 'off' : 'on');
+initReduceMotion();
+window.setDensity = setCompactTools;
+window.setInstant = (value) => flushSync(() => setReduceMotion(value));
+
 
 window.pi = { openPath: async (path) => { window.__opened = path; return ''; }, appInfo: async () => ({ version: 'fixture' }), openExternal: async () => {},
   onBashTask: () => () => {}, listBashTasks: async () => [], onSubagents: () => () => {}, appInfoSync: null };
@@ -122,10 +112,24 @@ window.pi = { openPath: async (path) => { window.__opened = path; return ''; }, 
 const call = (id, name, args) => ({ type: 'toolCall', id, name, arguments: args ?? {} });
 const result = (id, name, timestamp) => ({ role: 'toolResult', toolCallId: id, toolName: name, timestamp, content: [{ type: 'text', text: 'ok' }], isError: false });
 const richResult = (id, name, timestamp, content, isError) => ({ role: 'toolResult', toolCallId: id, toolName: name, timestamp, content, isError: isError === true });
+/** A result that carries a unified patch, so edit/write render a FileDiff. */
+const patchResult = (id, name, timestamp, patch) => ({ role: 'toolResult', toolCallId: id, toolName: name, timestamp, content: [{ type: 'text', text: 'ok' }], isError: false, details: { patch } });
+const PATCH = [
+  'diff --git a/src/renderer/src/styles.css b/src/renderer/src/styles.css',
+  '--- a/src/renderer/src/styles.css',
+  '+++ b/src/renderer/src/styles.css',
+  '@@ -1,2 +1,3 @@',
+  ' @import "tailwindcss";',
+  '+/* native highlights */',
+  ' ::highlight(x) {',
+  '-  color: red;',
+  '+  color: blue;',
+  ' }'
+].join('\\n');
 /** A 1600×900 capture — the image payload a read/screenshot tool result carries. */
 const IMAGE = { type: 'image', data: '${capturePng}', mimeType: 'image/png' };
 const thinking = (text) => ({ type: 'thinking', thinking: text });
-const round = (timestamp, content) => ({ role: 'assistant', timestamp, content, changeScopeId: 'scope-a', stopReason: 'toolUse' });
+const round = (timestamp, content) => ({ role: 'assistant', timestamp, content, changeScopeId: 'scope-a', stopReason: content.some(part => part.type === 'toolCall') ? 'toolUse' : 'stop' });
 
 // Rounds arrive as separate assistant messages; the reported turn opened every
 // round with a one-space text part in front of its hidden reasoning.
@@ -199,16 +203,101 @@ const longTurn = [
   round(20, [call('g1', 'grep')]),
   result('g1', 'grep', 21)
 ];
-const turns = { invisible: invisibleTurn, visible: visibleTurn, reasoning: invisibleTurn, mixed: mixedTurn, images: imageTurn, failure: imageFailureTurn, long: longTurn };
+// 「紧凑显示连续工具调用」: a turn whose rows alternate process → process pairs
+// with a prose row between them. Reasoning rows count as process rows too.
+const compactTurn = [
+  { role: 'user', timestamp: 1, content: 'go' },
+  round(10, [thinking('plan'), call('e1', 'edit'), call('b1', 'bash')]),
+  result('e1', 'edit', 11), result('b1', 'bash', 12),
+  round(20, [{ type: 'text', text: 'Verifying the change now.' }, thinking('check'), call('g1', 'grep'), call('b2', 'bash')]),
+  result('g1', 'grep', 21), result('b2', 'bash', 22)
+];
+// A steer-delivered notice: the parent model's steering data painted as a quiet
+// tool row ("子代理完成" / "任务结束" / a running subagent's message). It sits
+// BETWEEN tool rounds; every kind shares their row geometry and spacing.
+const subagentNotice = (timestamp) => ({
+  role: 'custom', customType: 'subagent_message', display: true, timestamp, content: '',
+  details: { kind: 'pi-app-subagent-message', sessionId: 'sub-1', description: 'explore', profile: 'explore', message: 'Halfway through the reads.', sentAt: new Date(0).toISOString() }
+});
+const noticeTurn = [
+  { role: 'user', timestamp: 1, content: 'go' },
+  round(10, [call('e1', 'edit')]),
+  result('e1', 'edit', 11),
+  subagentNotice(12),
+  { role: 'custom', customType: 'subagent_completion', display: true, timestamp: 13, content: '', details: { subagent: {
+    runId: 'run-1', sessionId: 'child-1', sessionPath: '/ui/child', parentSessionPath: '/ui/rhythm', profile: 'explore', model: 'fixture',
+    description: 'Inspect module', task: 'Inspect module', status: 'completed', runInBackground: true,
+    createdAt: new Date(0).toISOString(), completedAt: new Date(1000).toISOString(), tokens: 100, toolUses: 2, result: 'Inspection complete.'
+  } } },
+  { role: 'custom', customType: 'bash_task_completion', display: true, timestamp: 14, content: '', details: { bashTask: {
+    id: 'task-1', toolCallId: 'background-1', sessionPath: '/ui/rhythm', command: 'echo finished', cwd: '/ui', status: 'succeeded',
+    background: true, startedAt: 0, endedAt: 1000, outputChars: 0, exitCode: 0, revision: 1
+  } } },
+  round(20, [call('b1', 'bash')]),
+  result('b1', 'bash', 21)
+];
+// The Figure-2 shape: a group whose LAST row is expanded, followed by another
+// process row (the next group's header), plus an edit whose patch renders a
+// FileDiff — the one tool body that is its own card rather than a child of
+// data-tool-body.
+const groupOpenTurn = [
+  { role: 'user', timestamp: 1, content: 'go' },
+  round(10, [call('g1', 'grep'), call('r1', 'read', { path: 'src/renderer/src/lib/tool-runs.ts' })]),
+  result('g1', 'grep', 11),
+  result('r1', 'read', 12),
+  round(20, [call('e1', 'edit', { path: 'src/renderer/src/styles.css' })]),
+  patchResult('e1', 'edit', 21, PATCH),
+  round(30, [call('b1', 'bash'), call('b2', 'bash')]),
+  result('b1', 'bash', 31), result('b2', 'bash', 32)
+];
+const boundaryTurn = [
+  { role: 'user', timestamp: 1, content: 'go' },
+  round(10, [{ type: 'text', text: 'A complete answer.' }]),
+  { role: 'compactionSummary', timestamp: 20, summary: 'A compact summary.', tokensBefore: 1000 },
+  { role: 'bashExecution', timestamp: 30, command: 'echo ok', output: 'ok', exitCode: 0, cancelled: false },
+  { role: 'user', timestamp: 40, content: 'Continue.' },
+  round(50, [call('e1', 'edit')]), result('e1', 'edit', 51)
+];
+const turns = { boundary: boundaryTurn, leadingProse: [visibleTurn[0], round(5, [{ type: 'text', text: 'Starting with a plan.' }]), ...visibleTurn.slice(1)], invisible: invisibleTurn, visible: visibleTurn, reasoning: invisibleTurn, mixed: mixedTurn, images: imageTurn, failure: imageFailureTurn, long: longTurn, compact: compactTurn, notice: noticeTurn, groupOpen: groupOpenTurn };
 const messages = turns[caseName] ?? invisibleTurn;
+if (params.has('settled')) messages.push(round(60, [{ type: 'text', text: 'All done.' }]));
 
 window.store = new PiStore();
-window.store.applySnapshot({ sessionId: 'rhythm', sessionPath: '/ui/rhythm', cwd: '/ui', projectless: false, messages, isStreaming: true, activeChangeScopeId: 'scope-a', model: null, thinkingLevel: 'off', eventSequence: 1 });
+window.store.applySnapshot({ sessionId: 'rhythm', sessionPath: '/ui/rhythm', cwd: '/ui', projectless: false, messages, isStreaming: !params.has('settled'), activeChangeScopeId: 'scope-a', model: null, thinkingLevel: 'off', eventSequence: 1 });
 flushSync(() => createRoot(document.getElementById('root')).render(
   React.createElement(I18nProvider, null, React.createElement(ImagePreviewProvider, null,
     React.createElement('div', { id: 'fixture', style: { height: 900, display: 'flex', flexDirection: 'column' } },
       React.createElement(ChatView, { store: window.store, onDismissError: () => {}, onResend: () => {}, onEditMessage: () => {}, onFork: () => {}, onReview: () => {} }))))
 ));
+
+/** Capture the commit frame and every following frame. Geometry uses the whole
+ * real transcript, so a second height change cannot hide behind a stable trigger. */
+window.sampleToggle = async (needle, innerIndex) => {
+  let row = window.findRow(needle);
+  if (innerIndex !== undefined) {
+    row = row.closest('[data-row]').querySelector('[data-transcript-tool-rows]').children[innerIndex];
+  }
+  const trigger = row.firstElementChild;
+  const group = document.querySelector('[data-assistant-group]');
+  const geometry = () => {
+    const rect = (el) => { const b = el.getBoundingClientRect(); return [b.x, b.y, b.width, b.height].map(n => Math.round(n * 100) / 100); };
+    return {
+      trigger: rect(trigger),
+      group: rect(group),
+      bodies: [...group.querySelectorAll('[data-agent-body][aria-hidden="false"]')]
+        .filter(el => !el.parentElement.closest('[aria-hidden="true"]'))
+        .map(el => ({ box: rect(el), padding: getComputedStyle(el).paddingTop, sizing: getComputedStyle(el).boxSizing, opacity: getComputedStyle(el).opacity, transform: getComputedStyle(el).transform, clip: getComputedStyle(el).clipPath }))
+    };
+  };
+  const before = geometry();
+  flushSync(() => trigger.click());
+  const frames = [geometry()];
+  for (let i = 0; i < 18; i++) {
+    await new Promise(requestAnimationFrame);
+    frames.push(geometry());
+  }
+  return { before, open: trigger.getAttribute('aria-expanded'), frames };
+};
 
 /** The turn's row column: the waiting row's parent. */
 const inkBox = (root) => {
@@ -219,7 +308,7 @@ const inkBox = (root) => {
     const node = walker.currentNode
     if (!node.nodeValue || !node.nodeValue.trim()) continue
     // Screen-reader-only copy is not part of what the eye spaces out.
-    if (node.parentElement?.closest('.sr-only')) continue
+    if (node.parentElement?.closest('.sr-only, [aria-hidden="true"]')) continue
     const range = document.createRange()
     range.selectNodeContents(node)
     const box = range.getBoundingClientRect()
@@ -239,9 +328,8 @@ const inkBox = (root) => {
   return { top, bottom, center: (top + bottom) / 2 }
 };
 window.rows = () => {
-  const waiting = document.querySelector('#fixture [data-spinner-verb]');
-  if (!waiting) return null;
-  const column = waiting.parentElement;
+  const column = document.querySelector('#fixture [data-assistant-group] > [data-transcript-rows]');
+  if (!column) return null;
   const style = getComputedStyle(column);
   return {
     gap: style.rowGap,
@@ -258,9 +346,110 @@ window.rows = () => {
         inkTop: ink ? Math.round(ink.top * 10) / 10 : null,
         inkBottom: ink ? Math.round(ink.bottom * 10) / 10 : null,
         boxCenter: Math.round((box.top + box.height / 2) * 10) / 10,
+        process: row.getAttribute('data-row') === 'process',
+        roomyBefore: row.getAttribute('data-transcript-gap-before') === 'roomy',
         text: row.innerText.replace(/\\s+/g, ' ').trim().slice(0, 46)
       };
     })
+  };
+};
+/** Compare the two boundaries around an expanded card. */
+window.openBodyFrame = (needle) => {
+  const row = window.findRow(needle);
+  if (!row) return null;
+  const button = row.firstElementChild;
+  const body = row.querySelector('[data-tool-body], [data-diff-body]');
+  if (!button || !body) return null;
+  // A tool body wraps its card; a diff body IS the card.
+  const card = body.hasAttribute('data-diff-body') ? body : (body.firstElementChild || body);
+  const wrapper = row.closest('[data-row]') || row;
+  const next = wrapper.nextElementSibling;
+  const box = (el) => {
+    const b = el.getBoundingClientRect();
+    return { top: Math.round(b.top * 10) / 10, bottom: Math.round(b.bottom * 10) / 10 };
+  };
+  return {
+    insetTop: Math.round((box(card).top - box(button).bottom) * 10) / 10,
+    insetBottom: next ? Math.round((box(next).top - box(card).bottom) * 10) / 10 : null,
+    paddingTop: getComputedStyle(body).paddingTop,
+    paddingBottom: getComputedStyle(body).paddingBottom,
+    text: (next ? next.innerText : '').replace(/\\s+/g, ' ').trim().slice(0, 20)
+  };
+};
+/**
+ * Open the index-th row INSIDE a group body (see ToolGroupView). The group's
+ * rows are its own ToolCallViews, so they are not [data-row] wrappers and
+ * findRow cannot pick between them by name (the group summary lists every
+ * tool name).
+ */
+window.openInnerRow = (groupNeedle, index) => {
+  const group = window.findRow(groupNeedle);
+  const wrapper = group ? group.closest('[data-row]') : null;
+  const body = wrapper ? wrapper.querySelector('[data-transcript-tool-rows]') : null;
+  const row = body ? [...body.children][index] : null;
+  // The group body's children ARE the ToolCallView roots, so the row itself is
+  // the data-state trigger — querySelector only searches descendants.
+  const trigger = row && row.hasAttribute && row.hasAttribute('data-state') ? row : null;
+  if (!trigger || !trigger.firstElementChild) return false;
+  trigger.firstElementChild.click();
+  return true;
+};
+/**
+ * An OPEN row inside a group body: the inset between its trigger and the card,
+ * against the inset between the card and the NEXT TOP-LEVEL row — the group's
+ * own bottom boundary, which must use the same gap as its internal boundaries.
+ */
+window.innerBodyFrame = (groupNeedle, index) => {
+  const group = window.findRow(groupNeedle);
+  const wrapper = group ? group.closest('[data-row]') : null;
+  const body = wrapper ? wrapper.querySelector('[data-transcript-tool-rows]') : null;
+  const row = body ? [...body.children][index] : null;
+  const trigger = row && row.hasAttribute && row.hasAttribute('data-state') ? row : null;
+  const button = trigger ? trigger.firstElementChild : null;
+  const toolBody = row ? row.querySelector('[data-tool-body]') : null;
+  const card = toolBody ? (toolBody.firstElementChild || toolBody) : null;
+  const next = wrapper ? wrapper.nextElementSibling : null;
+  if (!button || !card) return null;
+  const box = (el) => {
+    const b = el.getBoundingClientRect();
+    return { top: Math.round(b.top * 10) / 10, bottom: Math.round(b.bottom * 10) / 10 };
+  };
+  return {
+    insetTop: Math.round((box(card).top - box(button).bottom) * 10) / 10,
+    insetBottom: next ? Math.round((box(next).top - box(card).bottom) * 10) / 10 : null,
+    nextText: next ? next.innerText.replace(/\\s+/g, ' ').trim().slice(0, 24) : null
+  };
+};
+/**
+ * The rows INSIDE an expanded tool group's body (see ToolGroupView): the body
+ * is the disclosure SIBLING of the group's trigger, so this walks up to the row
+ * wrapper first. Used to measure 「紧凑显示连续工具调用」 inside the body.
+ */
+window.groupRows = (needle) => {
+  const row = window.findRow(needle);
+  const wrapper = row ? row.closest('[data-row]') : null;
+  const body = wrapper ? wrapper.querySelector('[data-transcript-tool-rows]') : null;
+  if (!body) return null;
+  const style = getComputedStyle(body);
+  const items = [...body.children].map((child) => {
+    const box = child.getBoundingClientRect();
+    return {
+      top: Math.round(box.top),
+      bottom: Math.round(box.bottom),
+      height: Math.round(box.height),
+      text: child.innerText.replace(/\s+/g, ' ').trim().slice(0, 40)
+    };
+  });
+  return {
+    gap: style.rowGap,
+    paddingTop: style.paddingTop,
+    paddingBottom: style.paddingBottom,
+    // The header → first row distance a reader sees: the group trigger's box
+    // bottom to the first body row's top (the body's own top inset).
+    headerGap: items.length
+      ? Math.round((items[0].top - row.getBoundingClientRect().bottom) * 10) / 10
+      : null,
+    items
   };
 };
 /**
@@ -356,8 +545,11 @@ window.rowBody = (needle) => {
  * below it, and whether a copy/status footer row sits inside it. */
 window.bodyFrame = (needle) => {
   const row = window.findRow(needle);
-  const body = row ? row.querySelector('[data-tool-body]') : null;
-  const frame = body ? body.querySelector('.rounded-xl') : null;
+  const body = row ? row.querySelector('[data-tool-body], [data-diff-body]') : null;
+  // A tool body wraps its card; a diff body IS the card.
+  const frame = body
+    ? (body.hasAttribute('data-diff-body') ? body : body.querySelector('.rounded-xl'))
+    : null;
   if (!frame) return null;
   // The padding lives ON the content div, so the INK below it is what shows the
   // card's top-to-bottom symmetry.
@@ -365,11 +557,11 @@ window.bodyFrame = (needle) => {
   const content = viewport ? viewport.firstElementChild : null;
   const ink = content && content.firstElementChild ? content.firstElementChild : content;
   const frameBox = frame.getBoundingClientRect();
-  const inkBox = ink.getBoundingClientRect();
+  const inkBox = ink ? ink.getBoundingClientRect() : frameBox;
   return {
     top: Math.round((inkBox.top - frameBox.top) * 10) / 10,
     bottom: Math.round((frameBox.bottom - inkBox.bottom) * 10) / 10,
-    footer: frame.querySelectorAll('[aria-label="Copy result"], [aria-label="Copied"], [aria-label="Run again"]').length,
+    footer: frame.querySelectorAll('[aria-label="Copy result"], [aria-label="Copied"], [aria-label="Run again"], [aria-label="Copy diff"]').length,
     labels: [...frame.querySelectorAll('[aria-label]')].map((el) => el.getAttribute('aria-label'))
   };
 };
@@ -424,6 +616,26 @@ window.imageDialog = () => {
     label: dialog.getAttribute('aria-label'),
     openFile: [...dialog.querySelectorAll('button')].some((b) => (b.textContent || '').indexOf('Open file') !== -1),
     close: Boolean(dialog.querySelector('[aria-label="Close preview"]'))
+  };
+};
+window.previewSurfaces = () => {
+  const dialog = document.querySelector('[role="dialog"]');
+  if (!dialog) return null;
+  const viewport = dialog.querySelector('[role="group"]');
+  const root = viewport && viewport.parentElement;
+  const bars = root ? [...root.children].filter((el) => el !== viewport) : [];
+  const fill = (el) => (el ? getComputedStyle(el).backgroundColor : null);
+  const image = viewport && viewport.querySelector('img');
+  const corner = image ? getComputedStyle(image) : null;
+  return {
+    panel: fill(dialog),
+    viewport: fill(viewport),
+    bars: bars.map(fill),
+    // The picture follows the interface style: item-step radius, app corner shape.
+    image: corner
+      ? { radius: corner.borderTopLeftRadius, shape: corner.cornerShape,
+          item: getComputedStyle(document.documentElement).getPropertyValue('--app-radius-item').trim() }
+      : null
   };
 };
 window.clickDialog = (what) => {
@@ -537,7 +749,7 @@ app.on('window-all-closed',()=>app.quit());`
   const load = async (query) => {
     await send('Page.navigate', { url: origin + (query ?? '') })
     for (let i = 0; i < 200; i++) {
-      if (await evaluate('!!window.fixtureReady && !!document.querySelector("#fixture [data-spinner-verb]")')) return
+      if (await evaluate('!!window.fixtureReady && !!document.querySelector("#fixture [data-assistant-group]")')) return
       await pause(50)
     }
     throw new Error(
@@ -563,7 +775,7 @@ app.on('window-all-closed',()=>app.quit());`
    */
   const assertRhythm = (state, label) => {
     assert.ok(state.items.length >= 2, `${label}: the turn paints rows`)
-    assert.equal(state.gap, `${ROW_GAP}px`, `${label}: the column's row gap is the shared one`)
+    assert.equal(state.gap, '0px', `${label}: no flex gap doubles the boundary spacing`)
     state.items.forEach((row, index) => {
       assert.ok(row.height > 0, `${label}: row ${index} (${row.text}) paints a real row, not an empty slot`)
       assert.ok(
@@ -589,6 +801,7 @@ app.on('window-all-closed',()=>app.quit());`
     })
   }
 
+  if (!process.env.PI_RHYTHM_INSTANT_ONLY) {
   // --- the reported turn: a round that opens with a bare space between tools
   await load()
   await pause(300)
@@ -698,6 +911,59 @@ app.on('window-all-closed',()=>app.quit());`
   )
   await screenshot('reasoning-open')
 
+  // --- a file tool's row label IS one of the app's file links: it opens the
+  //     file (window.pi.openPath stands in for the files pane here) in the
+  //     prose link's style, and never toggles the disclosure the label sits
+  //     in — checked on a plain row nested in a group (read) and on a FileDiff
+  //     header (edit).
+  await load('?case=groupOpen')
+  await pause(250)
+  await evaluate(`window.openRow('Exploration')`)
+  await pause(300)
+  const readLink = await evaluate(`(() => {
+    const row = window.findRow('read · tool-runs');
+    const group = window.findRow('Exploration');
+    const link = row.firstElementChild.querySelector('[data-file-link]');
+    if (!link) return null;
+    const style = getComputedStyle(link);
+    const before = [row.firstElementChild.getAttribute('aria-expanded'), group.firstElementChild.getAttribute('aria-expanded')];
+    link.click();
+    return {
+      text: link.textContent,
+      label: row.firstElementChild.textContent,
+      underline: style.textDecorationLine.includes('underline'),
+      pointer: style.cursor === 'pointer',
+      opened: window.__opened,
+      before,
+      after: [row.firstElementChild.getAttribute('aria-expanded'), group.firstElementChild.getAttribute('aria-expanded')]
+    };
+  })()`)
+  assert.ok(readLink, 'a read row carries a file link in its title')
+  assert.equal(readLink.text, 'tool-runs.ts', 'the link is the file basename')
+  assert.ok(
+    readLink.label.startsWith('read · tool-runs.ts — src/renderer/src/lib'),
+    `the label text is the one it always was: ${readLink.label}`
+  )
+  assert.equal(readLink.underline, true, 'the link is underlined like a prose file link')
+  assert.equal(readLink.pointer, true, 'the link advertises its pointer cursor')
+  assert.equal(readLink.opened, '/ui/src/renderer/src/lib/tool-runs.ts', 'clicking opens the resolved file')
+  assert.deepEqual(readLink.after, readLink.before, 'the click never reaches the disclosures')
+  assert.equal(readLink.after[0], 'false', 'the read row stays collapsed')
+  assert.equal(readLink.after[1], 'true', 'the surrounding group stays open')
+  const editLink = await evaluate(`(() => {
+    const row = window.findRow('edit ·');
+    const link = row.firstElementChild.querySelector('[data-file-link]');
+    if (!link) return null;
+    const before = row.firstElementChild.getAttribute('aria-expanded');
+    link.click();
+    return { text: link.textContent, opened: window.__opened, before, after: row.firstElementChild.getAttribute('aria-expanded') };
+  })()`)
+  assert.ok(editLink, 'a FileDiff header carries the same file link')
+  assert.equal(editLink.text, 'styles.css', 'the diff header links the file basename')
+  assert.equal(editLink.opened, '/ui/src/renderer/src/styles.css', 'the diff link opens the edited file')
+  assert.equal(editLink.after, editLink.before, 'the diff row does not toggle either')
+  await screenshot('tool-file-links')
+
   // --- a tool whose output is an image: the image renders ALONE, without the
   //     framed output box, at the row's own text indent — and clicking it opens
   //     the same preview overlay every other image in the app uses
@@ -794,6 +1060,33 @@ app.on('window-all-closed',()=>app.quit());`
   assert.equal(dialog.label, 'Image 1', `the thumbnail opens the app-wide image preview: ${JSON.stringify(dialog)}`)
   assert.equal(dialog.openFile, true, 'the preview offers the file the tool read')
   assert.equal(dialog.close, true, 'the preview has its close control')
+
+  // The preview is an OPEN frame: neither its panel nor the image viewport
+  // paints a surface, so the blank area around the image is the dimmed page
+  // behind it. Only the caption and control bars carry the app surface.
+  const surfaces = await evaluate('window.previewSurfaces()')
+  assert.equal(surfaces.panel, 'rgba(0, 0, 0, 0)', `the preview panel paints no surface: ${surfaces.panel}`)
+  assert.equal(surfaces.viewport, 'rgba(0, 0, 0, 0)', `the image viewport paints no surface: ${surfaces.viewport}`)
+  assert.equal(surfaces.bars.length, 2, `the caption and control bars are the preview's only fills: ${surfaces.bars.length}`)
+  for (const bar of surfaces.bars) {
+    assert.notEqual(bar, 'rgba(0, 0, 0, 0)', `a preview bar carries the app surface: ${bar}`)
+  }
+  assert.equal(surfaces.bars[0], surfaces.bars[1], `both bars carry the same surface: ${surfaces.bars.join(' / ')}`)
+  assert.ok(surfaces.image, 'the preview really holds an image')
+  assert.equal(surfaces.image.radius, surfaces.image.item, `the picture takes the app's item radius: ${surfaces.image.radius} vs ${surfaces.image.item}`)
+  assert.equal(surfaces.image.shape, 'superellipse(2)', `the picture carries the app's corner shape: ${surfaces.image.shape}`)
+  // The squircle preset must round the picture for real; the screenshot is the
+  // evidence that the painted corner is a superellipse, not a circular inset.
+  const cornerAttribute = await evaluate(`document.documentElement.dataset.corners || ''`)
+  await evaluate(`document.documentElement.dataset.corners = 'squircle'`)
+  await pause(400)
+  const squircleSurfaces = await evaluate('window.previewSurfaces()')
+  assert.equal(squircleSurfaces.image.item, '14px', 'the squircle preset moves the item step')
+  assert.equal(squircleSurfaces.image.radius, '14px', `the squircle style rounds the picture: ${squircleSurfaces.image.radius}`)
+  assert.equal(squircleSurfaces.image.shape, 'superellipse(2)', 'the rounded corner stays a superellipse')
+  await screenshot('image-preview-squircle')
+  await evaluate(cornerAttribute ? `document.documentElement.dataset.corners = ${JSON.stringify(cornerAttribute)}` : `delete document.documentElement.dataset.corners`)
+  await pause(400)
   await screenshot('image-preview')
   assert.equal(await evaluate(`window.clickDialog('open')`), true, 'the open-file action is clickable')
   await pause(200)
@@ -874,15 +1167,202 @@ app.on('window-all-closed',()=>app.quit());`
   )
   assert.ok(!stops[0].includes('rgba(0, 0, 0, 0)'), `the top edge is not faded at the top of the scroll: ${fold.mask}`)
   await screenshot('long-output-fold')
-  assert.deepEqual(exceptions, [], 'no renderer exceptions')
+  // Shared gaps at every depth, with explicit roomy boundaries for prose,
+  // the turn fold and the persistent waiting row.
+  for (const compact of [false, true]) {
+    const gap = compact ? 4 : ROW_GAP
+    const query = '&compact=' + Number(compact)
+    for (const name of ['compact', 'notice', 'groupOpen', 'long']) {
+      await load('?case=' + name + query)
+      await pause(250)
+      const state = await evaluate('window.rows()')
+      for (let index = 1; index < state.items.length; index++) {
+        const prev = state.items[index - 1], row = state.items[index]
+        const expected = prev.process && row.process && !row.roomyBefore ? gap : ROW_GAP
+        assert.equal(row.top - prev.bottom, expected, `${name}/${compact}: ${prev.text} → ${row.text}`)
+      }
+    }
+    await evaluate(`window.openRow('bash ·')`)
+    await pause(300)
+    let frame = await evaluate(`window.openBodyFrame('bash ·')`)
+    assert.equal(frame.insetTop, gap, 'tool header → card')
+    assert.equal(frame.insetBottom, gap, 'card → next row')
+    assert.equal(frame.paddingBottom, '0px', 'a body has no duplicate bottom spacing')
 
-  console.log(
-    `transcript rhythm check ok: every row shares the ${ROW_HEIGHT}px box with a ${ROW_GAP}px gap, so consecutive rows read ${ROW_HEIGHT + ROW_GAP}px apart (±2 for font metrics), a whitespace-only text part neither paints nor separates, opening a row's own growing body moves its trigger by 0px, an expanded body starts where its own row's text does (a tool's framed text 12px further in), an image tool result renders that image alone — bare, with no bookkeeping text and no hover shadow — at the row's indent and opens the app-wide preview overlay onto the file the tool read, an image that did NOT come back cleanly keeps that text instead, a tool card carries no copy/status footer row (its padding is the same top and bottom), and its output caps on a LINE boundary (11 whole 20px lines, the fade on the edge that hides content)`
-  )
+    await load('?case=groupOpen' + query)
+    await pause(250)
+    await evaluate(`window.openRow('Exploration')`)
+    await pause(300)
+    const group = await evaluate(`window.groupRows('Exploration')`)
+    assert.equal(group.headerGap, gap, 'group header → first child')
+    assert.equal(group.gap, '0px', 'nested rows also use one margin per boundary')
+    assert.equal(group.paddingBottom, '0px', 'group has no trailing inset')
+    for (let index = 1; index < group.items.length; index++) {
+      assert.equal(group.items[index].top - group.items[index - 1].bottom, gap, 'group child → child')
+    }
+    await evaluate(`window.openInnerRow('Exploration', 1)`)
+    await pause(300)
+    frame = await evaluate(`window.innerBodyFrame('Exploration', 1)`)
+    assert.equal(frame.insetTop, gap, 'last child header → card')
+    assert.equal(frame.insetBottom, gap, 'last child card → next top-level row')
+    await evaluate(`window.openRow('edit')`)
+    await pause(300)
+    frame = await evaluate(`window.openBodyFrame('edit')`)
+    assert.equal(frame.insetTop, gap, 'diff header → card')
+    assert.equal(frame.insetBottom, gap, 'diff card → next group')
+    assert.equal((await evaluate(`window.bodyFrame('edit')`)).footer, 0, 'diff has no footer bar')
+    await screenshot(compact ? 'compact-nested-open' : 'roomy-nested-open')
+  }
+
+  }
+  const assertInstantToggle = async (needle, innerIndex) => {
+    const sample = await evaluate(`window.sampleToggle(${JSON.stringify(needle)}, ${JSON.stringify(innerIndex)})`)
+    assert.equal(sample.frames[0].trigger[1], sample.before.trigger[1], `${needle}: trigger stays put in the commit frame`)
+    assert.notEqual(sample.frames[0].group[3], sample.before.group[3], `${needle}: disclosure really changes height`)
+    for (const frame of sample.frames) {
+      assert.deepEqual(frame, sample.frames[0], `${needle}: no delayed movement after the commit frame`)
+      for (const body of frame.bodies) {
+        assert.equal(body.opacity, '1', `${needle}: body visible immediately`)
+        assert.equal(body.transform, 'none', `${needle}: no vertical travel`)
+        assert.equal(body.clip, 'none', `${needle}: no deferred reveal`)
+      }
+    }
+  }
+  for (const compact of [false, true]) {
+    const gap = compact ? 4 : ROW_GAP
+    const query = '&instant=1&compact=' + Number(compact)
+    await load('?case=groupOpen' + query)
+    await pause(250)
+    for (let cycle = 0; cycle < 2; cycle++) {
+      await assertInstantToggle('Exploration')
+      await assertInstantToggle('Exploration', 1)
+      await assertInstantToggle('Exploration', 1)
+      await assertInstantToggle('Exploration')
+      await assertInstantToggle('edit')
+      await assertInstantToggle('edit')
+    }
+    await load('?case=reasoning' + query)
+    await pause(250)
+    await assertInstantToggle('Reasoning')
+    await assertInstantToggle('Reasoning')
+    await load('?case=notice' + query)
+    await pause(250)
+    await assertInstantToggle('Subagent message')
+    await assertInstantToggle('Subagent message')
+    for (const needle of ['Subagent completed', 'Task finished']) {
+      // Resolve by the real localized trigger rather than relying on a wrapper.
+      const actual = await evaluate(`document.querySelector(${JSON.stringify(needle === 'Subagent completed' ? '[data-subagent-completion] [data-agent-trigger]' : '[data-bash-task-id] [data-agent-trigger]')}).textContent`)
+      const match = actual.includes('Inspect module') ? 'Inspect module' : 'echo finished'
+      await assertInstantToggle(match)
+      await assertInstantToggle(match)
+    }
+
+    // A settled turn nests the full process under its own disclosure, then
+    // ends on prose. The fold does not add a phantom row when closed.
+    await load('?case=visible&settled=1' + query)
+    await pause(250)
+    assert.equal((await evaluate('window.rows()')).items.length, 2, 'closed fold + final prose only')
+    assert.match((await evaluate('window.rows()')).items[1].text, /^All done\./, 'a completed reply remains outside the fold')
+    await assertInstantToggle('Took')
+    const folded = await evaluate(`(() => {
+      const body = document.querySelector('[data-turn-process]');
+      const trigger = body.parentElement.previousElementSibling.firstElementChild;
+      return { gap: body.firstElementChild.getBoundingClientRect().top - trigger.getBoundingClientRect().bottom,
+        next: body.parentElement.parentElement.nextElementSibling.getBoundingClientRect().top - body.getBoundingClientRect().bottom };
+    })()`)
+    assert.equal(folded.gap, ROW_GAP, 'turn fold → first row always keeps the roomy gap')
+    assert.equal(folded.next, ROW_GAP, 'folded process → final prose stays roomy')
+    await assertInstantToggle('Took')
+
+    await load('?case=leadingProse&settled=1' + query)
+    await pause(250)
+    await assertInstantToggle('Took')
+    const proseGap = await evaluate(`(() => {
+      const body = document.querySelector('[data-turn-process]');
+      return body.firstElementChild.getBoundingClientRect().top - body.parentElement.previousElementSibling.getBoundingClientRect().bottom;
+    })()`)
+    assert.equal(proseGap, ROW_GAP, 'a fold starting on prose keeps the roomy leading gap')
+    await assertInstantToggle('Took')
+
+    await load('?case=mixed&grouping=0' + query)
+    await pause(250)
+    const ungrouped = await evaluate('window.rows()')
+    assert.equal(ungrouped.items.length, 6, 'grouping off paints five calls and waiting')
+    for (let i = 1; i < ungrouped.items.length; i++) {
+      assert.equal(ungrouped.items[i].top - ungrouped.items[i - 1].bottom, ungrouped.items[i].roomyBefore ? ROW_GAP : gap, 'ungrouped rows keep the waiting row exception')
+    }
+  }
+  for (const style of ['square', 'squircle']) {
+    for (const compact of [0, 1]) {
+      await load('?case=groupOpen&instant=1&dark=1&style=' + style + '&compact=' + compact)
+      await pause(250)
+      await assertInstantToggle('Exploration')
+      await assertInstantToggle('Exploration', 1)
+      await screenshot('dark-' + style + '-' + compact)
+    }
+  }
+  for (const compact of [0, 1]) {
+    await load('?case=boundary&instant=1&compact=' + compact)
+    await pause(250)
+    const boundaries = await evaluate(`(() => {
+      const rows = [...document.querySelector('[data-slot="message-group"]').children];
+      return rows.map((row, i) => ({ text: row.innerText.slice(0, 50), gap: i ? row.getBoundingClientRect().top - rows[i-1].getBoundingClientRect().bottom : 0 }));
+    })()`)
+    assert.equal(boundaries.length, 6, JSON.stringify(boundaries))
+    assert.deepEqual(boundaries.slice(1).map(row => row.gap), [24, 24, compact ? 4 : 24, 24, 24],
+      'message boundaries, summaries and user turns share the same spacing rule: ' + JSON.stringify(boundaries))
+  }
+  // The turn rule spans the whole chat column in both corner styles. It is
+  // decoration on the header, so it neither rounds with the button nor adds
+  // height to the shared 24px line. Check collapsed and expanded geometry.
+  for (const style of ['square', 'squircle']) {
+    for (const compact of [0, 1]) {
+      await load('?case=visible&settled=1&instant=1&style=' + style + '&compact=' + compact)
+      await pause(250)
+      const divider = await evaluate(`(() => {
+        const header = document.querySelector('[data-turn-process]').parentElement.previousElementSibling;
+        const trigger = header.firstElementChild;
+        const line = getComputedStyle(header, '::after');
+        return { width: header.getBoundingClientRect().width, height: header.getBoundingClientRect().height,
+          columnWidth: header.closest('[data-transcript-rows]').getBoundingClientRect().width,
+          lineWidth: parseFloat(line.width), lineBorder: line.borderBottomWidth, lineRadius: line.borderBottomLeftRadius,
+          lineBottom: line.bottom, triggerBorder: getComputedStyle(trigger).borderBottomWidth };
+      })()`)
+      assert.equal(divider.width, divider.columnWidth, 'fold header spans the chat column')
+      assert.equal(divider.lineWidth, divider.columnWidth, 'divider reaches both column edges')
+      assert.equal(divider.height, ROW_HEIGHT, 'divider adds no row height')
+      assert.equal(divider.lineBorder, '1px', 'divider remains visible')
+      assert.equal(divider.lineRadius, '0px', 'divider is straight in both corner styles')
+      assert.equal(divider.lineBottom, '0px', 'divider sits on the header bottom edge')
+      assert.equal(divider.triggerBorder, '0px', 'rounded button owns no divider')
+      await screenshot('fold-closed-' + style + '-' + compact)
+      await assertInstantToggle('Took')
+      const firstGap = await evaluate(`(() => {
+        const body = document.querySelector('[data-turn-process]');
+        return body.firstElementChild.getBoundingClientRect().top - body.parentElement.previousElementSibling.getBoundingClientRect().bottom;
+      })()`)
+      assert.equal(firstGap, ROW_GAP, 'divider → first process row stays roomy')
+      await screenshot('fold-open-' + style + '-' + compact)
+    }
+  }
+  // Flipping preferences while a nested row is open preserves its state.
+  await load('?case=groupOpen')
+  await pause(250)
+  await evaluate(`window.openRow('Exploration')`)
+  await pause(250)
+  await evaluate(`window.openInnerRow('Exploration', 1)`)
+  await pause(250)
+  await evaluate('window.setInstant(true); window.setDensity(true)')
+  const liveFlip = await evaluate(`window.innerBodyFrame('Exploration', 1)`)
+  assert.equal(liveFlip.insetTop, 4, 'live density change applies to an open nested body')
+  assert.equal(liveFlip.insetBottom, 4, 'live density change applies to its outer boundary')
+  await assertInstantToggle('Exploration', 1)
+  await assertInstantToggle('Exploration', 1)
+
+  assert.deepEqual(exceptions, [], 'no renderer exceptions')
+  console.log('transcript rhythm check ok: shared positive gaps in both densities, nested groups and cards, prose boundaries, instant frame stability, live preferences, images and output caps')
 } finally {
-  try {
-    ws?.close()
-  } catch {}
+  try { ws?.close() } catch {}
   child?.kill('SIGTERM')
   await server?.close()
 }

@@ -1,3 +1,4 @@
+// local patch (pi-app): keep UI frames and focus rings in this component at 1px.
 "use client";
 // beui.dev/components/agents/chat-app
 
@@ -5,7 +6,6 @@
 import {
   Check,
   ChevronDown,
-  Copy,
   FileCode2,
   LoaderCircle,
 } from "@/lib/icons";
@@ -27,7 +27,7 @@ import {
   useAgentCodeTokens,
 } from "@/components/agents/agent-code";
 import { AgentDisclosure } from "@/components/agents/agent-disclosure";
-import { SPRING_PRESS, SPRING_SWAP } from "@/lib/ease";
+import { SPRING_SWAP } from "@/lib/ease";
 import { cn } from "@/lib/utils";
 // local patch (pi-app): bounded row DOM for the scrollable hover preview.
 import { DIFF_ROW_HEIGHT, useDiffWindow } from "@/lib/hooks/use-diff-window";
@@ -46,6 +46,11 @@ export interface FileDiffLine {
   content: string;
 }
 
+// local patch (pi-app): a hover preview reuses its parsed line array across
+// visits. Cache its width with that array so remounting the small virtual window
+// does not rescan every line of a large patch.
+const widestLineCache = new WeakMap<FileDiffLine[], number>();
+
 export interface FileDiffProps {
   file: ReactNode;
   lines: FileDiffLine[];
@@ -56,8 +61,6 @@ export interface FileDiffProps {
   collapseOnComplete?: boolean;
   maxHeight?: number;
   language?: AgentCodeLanguage;
-  copyText?: string;
-  onCopy?: () => void | Promise<void>;
   /** local patch (pi-app): glyph for the row; the app maps tool names to icons
    * (edit vs write) and falls back to the vendored FileCode2 when omitted. */
   icon?: ReactNode;
@@ -127,8 +130,6 @@ export function FileDiff({
   maxHeightOverride,
   bodyClassName,
   language = "typescript",
-  copyText,
-  onCopy,
   icon,
   headerless = false,
   highlight = true,
@@ -146,8 +147,6 @@ export function FileDiff({
   const contentId = `${baseId}-content`;
   const viewportRef = useRef<HTMLDivElement>(null);
   const previousStatus = useRef(status);
-  const copyTimer = useRef<number | undefined>(undefined);
-  const [copied, setCopied] = useState(false);
   const [internalOpen, setInternalOpen] = useState(defaultOpen);
   const currentOpen = open ?? internalOpen;
   // local patch (pi-app): a mask on whichever end of the cap hides rows. A
@@ -157,7 +156,6 @@ export function FileDiff({
   const streaming = status === "streaming";
   const additions = additionsProp ?? lines.filter((line) => line.type === "added").length;
   const deletions = deletionsProp ?? lines.filter((line) => line.type === "removed").length;
-  const canCopy = Boolean(copyText || onCopy);
   // local patch (pi-app): plain/pretokenized previews need no joined copy of a
   // large file on every scroll-window update.
   const code = useMemo(
@@ -169,8 +167,10 @@ export function FileDiff({
   // `content-visibility`, `w-max` only sees the rows that happen to be rendered,
   // which would cut horizontal scrolling short. Tabs and Unicode use a
   // conservative column bound, while ASCII monospace columns are exact.
-  const widestLine = useMemo(
-    () => lines.reduce((widest, line) => {
+  const widestLine = useMemo(() => {
+    const cached = widestLineCache.get(lines);
+    if (cached !== undefined) return cached;
+    const width = lines.reduce((widest, line) => {
       // local patch (pi-app): tabs and wide Unicode must not truncate horizontal
       // scrolling when the widest line is outside the mounted window. Use a
       // conservative column bound for non-ASCII glyphs (including CJK fonts).
@@ -181,15 +181,17 @@ export function FileDiff({
         else columns += character.codePointAt(0)! > 127 ? 2 : 1;
       }
       return Math.max(widest, columns);
-    }, 0),
-    [lines],
-  );
+    }, 0);
+    widestLineCache.set(lines, width);
+    return width;
+  }, [lines]);
   // local patch (pi-app): Shiki and line DOM are deferred until the user
   // opens the diff, and never rerun for cumulative streaming snapshots.
   const liveTokens = useAgentCodeTokens(code, language, highlight && tokenLines === undefined && currentOpen && !streaming);
   const tokens = tokenLines === undefined ? liveTokens : tokenLines;
   // local patch (pi-app): uncapped reviews and growing transcript diffs retain
-  // their complete DOM. The opt-in preview has fixed 20px, non-wrapping rows.
+  // their complete DOM. Opt-in settled previews have fixed 20px, non-wrapping
+  // rows and keep only the visible window mounted.
   const virtual = virtualize && !streaming && maxHeightOverride !== null;
   const { start, end, onScroll } = useDiffWindow(viewportRef, lines.length, virtual, maxHeightOverride ?? maxHeight);
 
@@ -215,13 +217,6 @@ export function FileDiff({
     previousStatus.current = status;
   }, [collapseOnComplete, setOpen, status]);
 
-  useEffect(
-    () => () => {
-      if (copyTimer.current) window.clearTimeout(copyTimer.current);
-    },
-    [],
-  );
-
   useLayoutEffect(() => {
     const viewport = viewportRef.current;
     if (!viewport || !currentOpen || !streaming) return;
@@ -242,15 +237,6 @@ export function FileDiff({
     return () => cancelAnimationFrame(frame);
   });
 
-  const handleCopy = useCallback(async () => {
-    if (onCopy) await onCopy();
-    else if (copyText) await navigator.clipboard?.writeText(copyText);
-
-    setCopied(true);
-    if (copyTimer.current) window.clearTimeout(copyTimer.current);
-    copyTimer.current = window.setTimeout(() => setCopied(false), 1600);
-  }, [copyText, onCopy]);
-
   return (
     <div
       data-state={status}
@@ -259,12 +245,15 @@ export function FileDiff({
     >
       {headerless ? null : (
         <button
+          // local patch (pi-app): app-owned transcript geometry hook.
+          data-agent-trigger=""
           id={triggerId}
           type="button"
           aria-expanded={currentOpen}
           aria-controls={contentId}
           onClick={() => setOpen(!currentOpen)}
-          className="group flex min-h-9 w-full items-center gap-2 rounded-md py-1 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+          // local patch (pi-app): transcript disclosures stay unfilled on hover.
+          className="group flex min-h-9 w-full items-center gap-2 rounded-md py-1 text-left outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
         >
           {icon ?? (
             <FileCode2
@@ -304,6 +293,8 @@ export function FileDiff({
       )}
 
       <AgentDisclosure
+        // local patch (pi-app): only a real row body owns a leading gap.
+        data-agent-body={!headerless || undefined}
         id={contentId}
         role={headerless ? undefined : "region"}
         aria-labelledby={headerless ? undefined : triggerId}
@@ -311,6 +302,7 @@ export function FileDiff({
       >
         {lazyContent && !currentOpen ? null : (
           <div
+            data-diff-body=""
             className={cn(
               "overflow-hidden rounded-xl bg-muted/80",
               bodyClassName,
@@ -323,7 +315,10 @@ export function FileDiff({
               ref={viewportRef}
               data-slot="file-diff-viewport"
               data-fade={fadeEdges.top && fadeEdges.bottom ? "both" : fadeEdges.bottom ? "bottom" : fadeEdges.top ? "top" : "none"}
-              aria-live="polite"
+              // Settled virtual windows replace their visible row subtree on
+              // scroll; announcing that as live output makes screen readers
+              // repeat the diff. Only a genuinely growing diff is live.
+              aria-live={streaming ? "polite" : undefined}
               onScroll={virtual ? onScroll : undefined}
               className="scrollbar-hide overflow-auto"
               style={{
@@ -404,27 +399,6 @@ export function FileDiff({
                 })}
               </div>
             </div>
-
-            {canCopy ? (
-              <div className="flex justify-end px-2 pb-1.5 pt-1">
-                <motion.button
-                  type="button"
-                  aria-label={copied ? "Copied" : "Copy diff"}
-                  title={copied ? "Copied" : "Copy diff"}
-                  onClick={handleCopy}
-                  // local patch (pi-app): no press scale — a tool-row icon button
-                  // must not dip inward while pressed (see `button/base`).
-                  transition={SPRING_PRESS}
-                  className="grid size-7 place-items-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-background/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-                >
-                  {copied ? (
-                    <Check className="size-3.5" />
-                  ) : (
-                    <Copy className="size-3.5" />
-                  )}
-                </motion.button>
-              </div>
-            ) : null}
           </div>
         )}
       </AgentDisclosure>

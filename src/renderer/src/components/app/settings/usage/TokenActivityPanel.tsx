@@ -128,7 +128,7 @@ export function TokenActivityPanel({ stats, today }: { stats: UsageStatsDTO; tod
               index > 0 && 'sm:shadow-[-1px_0_0_color-mix(in_srgb,var(--foreground)_9%,transparent)]'
             )}
           >
-            <div className="whitespace-nowrap text-[15px] font-medium leading-tight tabular-nums text-foreground">
+            <div className="whitespace-nowrap text-base font-medium leading-tight tabular-nums text-foreground">
               {metric.value}
             </div>
             <div className="mt-1 min-h-[30px] text-[11px] leading-[1.35] text-muted-foreground">{metric.label}</div>

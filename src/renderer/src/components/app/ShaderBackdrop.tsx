@@ -40,7 +40,9 @@ function buildPalette(): string[] {
 
 /**
  * A soft, theme-aware wash behind the welcome and new-chat landing surfaces.
- * The palette follows the live theme tokens (`class`/`data-accent` on <html>),
+ * The palette follows the live theme tokens (`class`/`data-accent` on <html>,
+ * plus `style`: the custom accent's derived tokens ride inline custom
+ * properties there, so dragging the color well must repaint the wash),
  * the layer is pointer-transparent and hidden from assistive tech, and a radial
  * mask keeps it reading as light rather than as an image.
  *
@@ -60,7 +62,7 @@ export function ShaderBackdrop({ className }: { className?: string }) {
     const observer = new MutationObserver(update)
     observer.observe(document.documentElement, {
       attributes: true,
-      attributeFilter: ['class', 'data-accent']
+      attributeFilter: ['class', 'data-accent', 'style']
     })
     return () => observer.disconnect()
   }, [resolvedTheme])

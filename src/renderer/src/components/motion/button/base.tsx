@@ -1,3 +1,4 @@
+// local patch (pi-app): keep UI frames and focus rings in this component at 1px.
 "use client";
 
 import {
@@ -17,7 +18,7 @@ import {
 import { EASE_OUT, SPRING_PRESS } from "@/lib/ease";
 import { cn } from "@/lib/utils";
 
-export type ButtonVariant = "primary" | "secondary" | "ghost" | "outline";
+export type ButtonVariant = "primary" | "secondary" | "ghost" | "outline" | "destructive";
 export type ButtonSize = "sm" | "md" | "lg" | "icon";
 
 export interface ButtonProps extends Omit<
@@ -43,11 +44,13 @@ export interface ButtonLinkProps extends Omit<
 type Ripple = { id: number; x: number; y: number; size: number };
 
 const VARIANT_CLASS: Record<ButtonVariant, string> = {
-  primary: "bg-primary text-primary-foreground hover:bg-primary/90",
-  secondary: "border border-border bg-card text-foreground hover:border-border",
-  ghost: "text-muted-foreground hover:text-foreground hover:bg-primary/5",
-  outline:
-    "border border-border bg-transparent text-foreground hover:bg-primary/5",
+  // local patch (pi-app): actions have no painted frame or resting fill.
+  // Their hover fill carries the variant's emphasis instead.
+  primary: "bg-transparent text-primary hover:bg-primary hover:text-primary-foreground",
+  secondary: "bg-transparent text-foreground hover:bg-muted",
+  ghost: "bg-transparent text-muted-foreground hover:bg-muted hover:text-foreground",
+  outline: "bg-transparent text-foreground hover:bg-primary/10",
+  destructive: "bg-transparent text-destructive hover:bg-destructive/10 hover:text-destructive",
 };
 
 // local patch (pi-app): controls share the semantic squircle scale; full-round
@@ -111,7 +114,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
           "inline-flex items-center justify-center font-medium select-none",
           "transition-colors",
           // local patch (pi-app): keyboard rings follow the same native corners.
-          "outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+          "outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
           "disabled:pointer-events-none disabled:opacity-50",
           ripple && "relative overflow-hidden",
           VARIANT_CLASS[variant],
@@ -174,7 +177,7 @@ export const ButtonLink = forwardRef<HTMLAnchorElement, ButtonLinkProps>(
           "inline-flex items-center justify-center font-medium select-none",
           "transition-colors",
           // local patch (pi-app): links share the button's keyboard focus geometry.
-          "outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+          "outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
           VARIANT_CLASS[variant],
           SIZE_CLASS[size],
           className,

@@ -16,6 +16,7 @@ export interface TitlebarAction {
   icon: ReactNode
   onSelect: () => void
   disabled?: boolean
+  pressed?: boolean
 }
 
 /**
@@ -88,6 +89,7 @@ export function TitlebarOverflow({ actions, className }: {
                     className="size-8"
                     data-titlebar-action={action.id}
                     aria-label={action.label}
+                    aria-pressed={action.pressed}
                     disabled={action.disabled}
                     onClick={() => {
                       close()

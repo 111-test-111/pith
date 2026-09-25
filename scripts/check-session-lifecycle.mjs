@@ -39,6 +39,7 @@ export * from './src/main/shutdown';`, resolveDir: resolve('.') },
       builder.onResolve({ filter: /^@earendil-works\/pi-coding-agent$/ }, () => ({ path: 'sdk', namespace: 'fixture' }))
       builder.onResolve({ filter: /^playwright-core(\/|$)/ }, args => ({ path: fileURLToPath(import.meta.resolve(args.path)), external: true }))
       builder.onResolve({ filter: /^electron$/ }, () => ({ path: 'electron', namespace: 'fixture' }))
+      builder.onResolve({ filter: /^proper-lockfile$/ }, args => ({ path: fileURLToPath(import.meta.resolve(args.path)), external: true }))
       builder.onResolve({ filter: /^\// }, (args) => args.path === sdk ? { path: sdk, external: true } : undefined)
       builder.onLoad({ filter: /^electron$/, namespace: 'fixture' }, () => ({ contents:
         `export const app = { getPath: () => ${JSON.stringify(temporary)} }; export const shell = {};` }))
@@ -281,7 +282,7 @@ app.whenReady().then(async()=>{
   await win.loadURL('data:text/html,<input autofocus>');
   win.webContents.sendInputEvent({type:'keyDown',keyCode:'Q',modifiers:${JSON.stringify(modifiers)}});
   setTimeout(()=>{mark('still-cleaning');app.quit();},30);
-});`,resolveDir:resolve('.'),loader:'ts'},bundle:true,platform:'node',format:'cjs',external:['electron'],outfile:main})
+});`,resolveDir:resolve('.'),loader:'ts'},bundle:true,platform:'node',format:'cjs',external:['electron','proper-lockfile'],outfile:main})
     const child=spawn(electron,[main],{stdio:['ignore','ignore','pipe']})
     let errors=''; child.stderr.on('data',chunk=>{errors+=chunk})
     const code=await new Promise((resolve,reject)=>{

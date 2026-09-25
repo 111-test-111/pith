@@ -37,6 +37,8 @@ const THEME_KEY: Record<ThemeMode, 'settings.light' | 'settings.dark' | 'setting
  * callbacks.
  */
 export function AppCommandPalette({
+  open,
+  onOpenChange,
   sessions,
   activePath,
   folders,
@@ -50,6 +52,9 @@ export function AppCommandPalette({
   onToggleSidebar,
   onToggleRail
 }: {
+  /** Controlled by the workspace: the shortcut dispatcher owns the ⌘K toggle. */
+  open: boolean
+  onOpenChange: (open: boolean) => void
   sessions: SessionSummaryDTO[]
   activePath: string | null
   folders: string[]
@@ -176,6 +181,10 @@ export function AppCommandPalette({
       items={items}
       placeholder={t('palette.placeholder')}
       emptyMessage={t('palette.empty')}
+      // The dispatcher owns the toggle key; the surface keeps only its Esc.
+      shortcut={null}
+      open={open}
+      onOpenChange={onOpenChange}
     />
   )
 }

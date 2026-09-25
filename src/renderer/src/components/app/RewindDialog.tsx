@@ -71,7 +71,7 @@ function HistoryRow({ operation, selected, disabled, dates, onPreview }: {
     <time dateTime={new Date(operation.timestamp).toISOString()} className="text-[11px] tabular-nums text-muted-foreground">{timestamp}</time>
   </>
   const rowClass = 'flex h-auto w-full flex-col items-stretch gap-1.5 px-3 py-2.5 text-left font-normal'
-  return <li data-rewind-history-entry={operation.id} className={cn('rounded-control border border-transparent', selected && 'border-primary/25 bg-primary/10')}>
+  return <li data-rewind-history-entry={operation.id} className={cn('rounded-control border border-transparent', selected && 'bg-primary/10')}>
     {available ? <Button data-rewind-history-preview={operation.canRedo ? 'redo' : 'undo'} variant="ghost" disabled={disabled} aria-current={selected ? 'true' : undefined}
       aria-label={t('rewind.historyPreview', { action: t(operation.canRedo ? 'rewind.redo' : 'rewind.undo'), subject, time: timestamp })}
       className={rowClass} onClick={onPreview}>{content}</Button>
@@ -254,7 +254,11 @@ export function RewindDialog({ sessionPath, messageTimestamp, messageEntryId, in
     if (!sessionPath) return
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null
     return () => {
-      const target = opener?.isConnected ? opener : document.querySelector<HTMLElement>('[data-rewind-entry]')
+      // The opener can be the title-row checkpoint action, whose pocket
+      // unmounts as the dialog opens: then the chevron that owns that pocket
+      // takes the focus, so it never drops to the body.
+      const target = (opener?.isConnected ? opener : null)
+        ?? document.querySelector<HTMLElement>('[data-titlebar-action="rewind"], [data-titlebar-more]')
       target?.focus()
     }
   }, [sessionPath])
@@ -378,7 +382,7 @@ export function RewindDialog({ sessionPath, messageTimestamp, messageEntryId, in
               {!list.enabled ? <p className="p-2 text-xs text-muted-foreground">{t('rewind.disabled')}</p> : null}
               <div className="space-y-2">
                 <h3 className="px-2 text-xs font-medium text-muted-foreground">{t('rewind.checkpoints')}</h3>
-                {!checkpoints?.length ? <p className="p-2 text-xs text-muted-foreground">{t(messageTimestamp === undefined ? (list?.error ? 'rewind.emptyFailed' : 'rewind.empty') : 'rewind.noMessageCheckpoint')}</p> : checkpoints.map(cp => <Button key={cp.id} data-rewind-checkpoint variant="ghost" disabled={loading || fileLoading || executing} aria-pressed={preview?.checkpointId === cp.id} onClick={() => void select(cp.id)} className={cn('h-auto w-full flex-col items-stretch gap-2.5 border border-transparent px-3 py-3 text-left', preview?.checkpointId === cp.id && 'border-primary/25 bg-primary/10')}>
+                {!checkpoints?.length ? <p className="p-2 text-xs text-muted-foreground">{t(messageTimestamp === undefined ? (list?.error ? 'rewind.emptyFailed' : 'rewind.empty') : 'rewind.noMessageCheckpoint')}</p> : checkpoints.map(cp => <Button key={cp.id} data-rewind-checkpoint variant="ghost" disabled={loading || fileLoading || executing} aria-pressed={preview?.checkpointId === cp.id} onClick={() => void select(cp.id)} className={cn('h-auto w-full flex-col items-stretch gap-2.5 border border-transparent px-3 py-3 text-left', preview?.checkpointId === cp.id && 'bg-primary/10')}>
                   <span className="flex items-start gap-2">
                     <span data-rewind-checkpoint-title className="min-w-0 flex-1 line-clamp-2 break-words text-sm font-medium leading-5 text-foreground">{cp.description || t('rewind.untitledTurn')}</span>
                     {preview?.checkpointId === cp.id ? <Check aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-primary" /> : null}
@@ -478,7 +482,7 @@ export function RewindDialog({ sessionPath, messageTimestamp, messageEntryId, in
         {filePreview?.file ? <p className="mt-3 break-all rounded-control bg-muted/40 p-3 text-sm font-medium">{filePreview.file}</p> : null}
         <div className="mt-5 flex justify-end gap-2">
           <Button ref={cancelConfirmRef} variant="outline" size="sm" onClick={cancelConfirm}>{t('common.cancel')}</Button>
-          <Button variant="primary" size="sm" className="bg-destructive text-white hover:bg-destructive/90" onClick={() => void commit(undefined, !!partialPaths.length)}>{t(partialPaths.length ? 'rewind.partialConfirm' : 'rewind.forceConfirm')}</Button>
+          <Button variant="destructive" size="sm" className="hover:bg-destructive hover:text-white" onClick={() => void commit(undefined, !!partialPaths.length)}>{t(partialPaths.length ? 'rewind.partialConfirm' : 'rewind.forceConfirm')}</Button>
         </div>
       </div>
       </CenterMorphModalContent>

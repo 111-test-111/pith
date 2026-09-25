@@ -24,7 +24,7 @@ import { randomUUID } from 'node:crypto'
 import type { SessionManager } from '@earendil-works/pi-coding-agent'
 import type { PlanBlocker, PlanStateDTO, SessionMode } from '../../shared/plan'
 import type { SandboxMode } from '../sandbox/types'
-import { PLAN_MODE_ENTRY, isCurrentPlan, parsePlanSubmission, planExecutionTurnId, reconstructPlan, type PlanBranchState } from './plan-protocol'
+import { PLAN_MODE_ENTRY, isCurrentPlan, isRevisionPending, parsePlanSubmission, planExecutionTurnId, reconstructPlan, type PlanBranchState } from './plan-protocol'
 import { normalizePlan } from './plan-submission'
 import type { PlanStorage } from './plan-storage'
 
@@ -443,6 +443,7 @@ export class PlanController {
       mode: restricted ? 'plan' : 'normal',
       planId: this.branchState.planId,
       latest: this.branchState.latest?.ref ?? null,
+      revisionPending: isRevisionPending(this.branchState),
       approval: this.branchState.approval,
       // Read from the live branch: the assistant message this maps to lands
       // after the approval entry, so it cannot come from the folded state.

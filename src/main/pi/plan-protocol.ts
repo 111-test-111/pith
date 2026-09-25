@@ -224,3 +224,11 @@ export function isCurrentPlan(state: PlanBranchState): boolean {
   if (state.unsupported) return false
   return state.latest.ref.planningTurnEntryId === state.planningTurnEntryId
 }
+
+/** A later user turn invalidates the submitted document until that turn
+ * commits a complete replacement through `submit_plan`. This is a selected-
+ * branch fact, so reopening, compaction and rewind all recover it identically. */
+export function isRevisionPending(state: PlanBranchState): boolean {
+  return state.mode === 'plan' && !state.unsupported && state.latest !== null &&
+    state.planningTurnEntryId !== null && !isCurrentPlan(state)
+}

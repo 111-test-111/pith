@@ -1,3 +1,4 @@
+// local patch (pi-app): keep UI frames and focus rings in this component at 1px.
 "use client";
 // local patch (pi-app): the expand action shares the control radius.
 // beui.dev/components/agents/chat-app
@@ -171,12 +172,13 @@ function bubbleContentClass(
     // the markdown element's own token class on specificity. Kept out of this
     // comment: the literal utility name — Tailwind's scanner reads comments and
     // would generate it again.
-    "[&_a]:font-medium [&_a]:underline [&_a]:underline-offset-4 [&_code]:rounded-detail [&_code]:bg-background/60 [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[0.9em] [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_p+p]:mt-2 [&_pre:not([data-code-block-pre])]:my-2 [&_pre:not([data-code-block-pre])]:overflow-x-auto [&_pre:not([data-code-block-pre])]:rounded-xl [&_pre:not([data-code-block-pre])]:bg-background/60 [&_pre:not([data-code-block-pre])]:p-3 [&_ul:not([data-plain-list])]:my-2 [&_ul:not([data-plain-list])]:list-disc [&_ul:not([data-plain-list])]:pl-5",
+    // local patch (pi-app): inline code uses the shared small-text step.
+    "[&_a]:font-medium [&_a]:underline [&_a]:underline-offset-4 [&_code]:rounded-detail [&_code]:bg-background/60 [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-xs [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_p+p]:mt-2 [&_pre:not([data-code-block-pre])]:my-2 [&_pre:not([data-code-block-pre])]:overflow-x-auto [&_pre:not([data-code-block-pre])]:rounded-xl [&_pre:not([data-code-block-pre])]:bg-background/60 [&_pre:not([data-code-block-pre])]:p-3 [&_ul:not([data-plain-list])]:my-2 [&_ul:not([data-plain-list])]:list-disc [&_ul:not([data-plain-list])]:pl-5",
     variant === "solid" && "text-background",
     variant === "ghost" && "w-full max-w-none rounded-none px-0 py-0",
     variant === "danger" && "text-destructive",
     interactive &&
-      "cursor-pointer text-left outline-none transition-[background-color,color,transform] duration-150 hover:brightness-[0.98] focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.99]",
+      "cursor-pointer text-left outline-none transition-[background-color,color,transform] duration-150 hover:brightness-[0.98] focus-visible:ring-1 focus-visible:ring-ring active:scale-[0.99]",
   );
 }
 
@@ -368,7 +370,7 @@ export function MessageBubbleCollapsible({
         aria-controls={contentId}
         onClick={() => setOpen(!currentOpen)}
         className={cn(
-          "mt-2 inline-flex h-7 items-center gap-1 rounded-control px-2 text-xs font-medium text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
+          "mt-2 inline-flex h-7 items-center gap-1 rounded-control px-2 text-xs font-medium text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring",
           triggerClassName,
         )}
       >

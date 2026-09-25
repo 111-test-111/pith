@@ -13,10 +13,15 @@ import {
  * Shared by the full-screen preview overlay and the file pane's media view, so
  * the wheel classification, clamping and double-click behaviour cannot drift
  * apart between the two.
+ *
+ * Fit-to-viewport is 100% and the range runs from half size to 8×. Because the
+ * floor sits BELOW fit now, "off fit" and "can be dragged" are different
+ * questions: `zoomed` answers the first (reset, double-click) and `pannable`
+ * the second (cursor, pointer capture).
  */
 
-/** Fit-to-viewport is 100%; zooming below it is not offered. */
-export const ZOOM_MIN = 1
+/** Fit-to-viewport is 100%; a shrunk view may go down to half that. */
+export const ZOOM_MIN = 0.5
 export const ZOOM_MAX = 8
 /** One click of the zoom controls. */
 export const ZOOM_STEP = 1.6
@@ -78,6 +83,11 @@ export function useImageZoom({ viewportRef, imageRef, keyboard = 'window' }: Ima
   })
   const [view, setView] = useState<ImageZoomView>(REST)
   const [dragging, setDragging] = useState(false)
+  /** Off the fit view: shrunk, enlarged, or panned away from the centre. */
+  const zoomed = view.scale !== 1 || view.x !== 0 || view.y !== 0
+  /** Grown past fit. At or below fit the scaled image is no bigger than its
+   * box, so `clampView` allows no offset and a drag could never move it. */
+  const pannable = view.scale > 1
 
   /** Clamp scale to the zoom range and the offset so the zoomed image always
    * covers the viewport — no empty gutter can be dragged into view. */
@@ -228,7 +238,7 @@ export function useImageZoom({ viewportRef, imageRef, keyboard = 'window' }: Ima
   }, [keyboard, panBy, reset, viewportRef, zoomAt])
 
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (view.scale <= ZOOM_MIN) return
+    if (!pannable) return
     dragRef.current = {
       pointerId: event.pointerId,
       startX: event.clientX,
@@ -260,7 +270,9 @@ export function useImageZoom({ viewportRef, imageRef, keyboard = 'window' }: Ima
   }
 
   const onDoubleClick = (event: ReactMouseEvent<HTMLDivElement>) => {
-    if (view.scale > ZOOM_MIN) {
+    // Any view away from fit returns to it; only a fitted image is the
+    // shortcut into the image (a shrunk one must not jump straight past fit).
+    if (zoomed) {
       reset()
       return
     }
@@ -274,7 +286,10 @@ export function useImageZoom({ viewportRef, imageRef, keyboard = 'window' }: Ima
   return {
     view,
     dragging,
-    zoomed: view.scale > ZOOM_MIN,
+    /** Away from the fit view — what reset and double-click act on. */
+    zoomed,
+    /** Grown past fit — the only state in which dragging moves the image. */
+    pannable,
     zoomAt,
     panBy,
     reset,

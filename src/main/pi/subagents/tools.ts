@@ -34,9 +34,9 @@ export function subagentGuidelines(flags: SubagentCapabilityFlags = {}): string[
     'Write a complete, self-contained prompt: the subagent sees only your task (plus optional inherited context and input files), not this conversation. Include goals, constraints, exact paths and the expected report format.',
     'Use run_in_background=true to parallelize independent subtasks, then continue other work or end your response; each completion arrives as a subagent_completion steering message. A background subagent that has not reported completion is NOT finished — never claim its work is done.',
     'Choose the narrowest profile that fits (explore for read-only research, implementer for scoped edits, reviewer for review). Do not delegate work whose tool set the profile lacks.',
-    ...(flags.steer ? [
-      'Steer a RUNNING subagent with agent_steer only when the delegation genuinely needs it mid-flight: a corrected goal, an interim report, or "wrap up now and report". A steer lands in its transcript as a message from you; do not use it to poll for progress.'
-    ] : []),
+    // No steer bullet here: agent_steer carries that rule in its own
+    // guidelines, so it follows the tool's availability instead of showing
+    // up twice.
     ...(flags.reuse ? [
       'Continue a FINISHED subagent by passing its session id as continue_session_id — the follow-up inherits everything it already learned. Prefer a fresh subagent when isolation from the earlier task matters more.'
     ] : []),

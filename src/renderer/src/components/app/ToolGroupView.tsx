@@ -3,7 +3,6 @@ import { memo, useMemo, useState } from 'react'
 import { AgentActivity } from '@/components/agents/agent-activity'
 import { AgentDisclosure } from '@/components/agents/agent-disclosure'
 import { useI18n } from '@/i18n'
-import { TRANSCRIPT_ROW_TRIGGER } from '@/lib/transcript-rhythm'
 import type { ToolCallContent, ToolResultMsg } from '../../../../shared/types'
 import type { ToolRun } from '@/state/pi-store'
 import type { ToolCategory } from '@/lib/tool-categories'
@@ -93,10 +92,6 @@ export const ToolGroupView = memo(function ToolGroupView({
           own empty item list. */}
       <AgentActivity
         status="complete"
-        // The group row shares the transcript's one row height, so a group and a
-        // tool row sit the same distance from whatever is above and below them.
-        // Its trigger owns that box, so expanding the group moves nothing.
-        className={TRANSCRIPT_ROW_TRIGGER}
         summary={summary}
         open={open}
         onOpenChange={setOpen}
@@ -104,9 +99,9 @@ export const ToolGroupView = memo(function ToolGroupView({
         items={[]}
         contentClassName="py-0"
       />
-      <AgentDisclosure open={open}>
-        {/* Indented under the group icon; each call keeps its own disclosure. */}
-        <div className="flex flex-col gap-2 py-1.5 pl-6">
+      <AgentDisclosure open={open} data-agent-body>
+        {/* Group children share the transcript stack, including its gap. */}
+        <div className="pl-6" data-transcript-rows data-transcript-tool-rows>
           {calls.map((call) => (
             <ToolCallView
               key={call.id}

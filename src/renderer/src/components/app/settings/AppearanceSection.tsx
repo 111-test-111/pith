@@ -4,26 +4,15 @@ import { RadioGroup, RadioGroupItem } from '@/components/motion/radio'
 import { Input } from '@/components/motion/input'
 import { Checkbox } from '@/components/motion/checkbox'
 import { Tooltip } from '@/components/motion/tooltip'
-import { cn } from '@/lib/utils'
 import { useFontSettings } from '@/lib/fonts'
 import { useSidebarGlass } from '@/lib/sidebar-glass'
 import { setReduceMotion, useReduceMotion } from '@/lib/reduce-motion'
+import { setCompactTools, useCompactTools } from '@/lib/compact-tools'
 import { useI18n, LOCALE_NAMES, type Locale } from '@/i18n'
+import { ACCENT_PRESETS, CUSTOM_ACCENT, useCustomAccent } from '@/lib/accent'
 import type { UiStyle } from '@/lib/ui-style'
+import { AccentColorPicker } from './AccentColorPicker'
 import { SettingsGroup, SettingsRow } from './SettingsRow'
-
-/** Swatch colors: the light-mode `--primary` of each preset, lifted a touch so
- * the dot reads as a paint chip rather than a filled button. Keep the chroma in
- * step with `styles.css` — the swatches are the presets' visual identity. */
-export const ACCENTS = [
-  { id: 'indigo', color: 'oklch(0.59 0.18 275)' },
-  { id: 'blue', color: 'oklch(0.59 0.16 255)' },
-  { id: 'violet', color: 'oklch(0.59 0.2 300)' },
-  { id: 'emerald', color: 'oklch(0.59 0.12 163)' },
-  { id: 'amber', color: 'oklch(0.67 0.13 68)' },
-  { id: 'rose', color: 'oklch(0.61 0.165 15)' },
-  { id: 'cyan', color: 'oklch(0.61 0.105 215)' }
-] as const
 
 /** Interface style: the corner/radius preset and the icon pack that matches it.
  * They are one choice on purpose — the two dimensions can never disagree. */
@@ -32,13 +21,14 @@ export const UI_STYLE_OPTIONS = [
   { id: 'squircle', labelKey: 'settings.uiStyleSquircle' }
 ] as const
 
-/** Free-text family field, shared by both typefaces; empty leaves the app on
- * the system default (the sans-serif tail for the interface, the platform mono for
- * code). The field previews the family it edits — `--app-font-ui`/
- * `--app-font-mono` carry the typed name first, so `font-sans`/`font-mono`
- * here renders the typed value as it is typed — while the monospace field
- * pins its placeholder back to interface text (a normal UI string, not a
- * font sample). */
+/** Free-text family field, shared by the three typefaces; empty leaves the app
+ * on its default (the sans-serif tail for the interface, the platform mono for
+ * code, the bundled Latin Modern Math for formulas). The field previews the
+ * family it edits — `--app-font-ui`/`--app-font-mono`/`--app-font-math` carry
+ * the typed name first, so `font-sans`/`font-mono`/`font-math` here renders
+ * the typed value as it is typed — while the monospace and math fields pin
+ * their placeholders back to interface text (a normal UI string, not a font
+ * sample). */
 function FontPicker({
   label,
   description,
@@ -88,8 +78,10 @@ export function AppearanceSection({
   const { t, locale, setLocale } = useI18n()
   const { theme, setTheme } = useTheme()
   const [fonts, setFonts] = useFontSettings()
+  const [customAccent, setCustomAccent] = useCustomAccent()
   const [sidebarGlass, setSidebarGlass] = useSidebarGlass()
   const reduceMotion = useReduceMotion()
+  const compactTools = useCompactTools()
   const [mounted, setMounted] = useState(false)
 
   // next-themes resolves the stored theme after mount; render the neutral
@@ -160,31 +152,47 @@ export function AppearanceSection({
           inputClassName="font-mono placeholder:font-sans"
           onChange={(mono) => setFonts({ mono })}
         />
+        <FontPicker
+          label={t('settings.mathFont')}
+          description={t('settings.mathFontDesc')}
+          placeholder={t('settings.fontDefault')}
+          value={fonts.math}
+          inputClassName="font-math placeholder:font-sans"
+          onChange={(math) => setFonts({ math })}
+        />
       </SettingsGroup>
 
       <SettingsGroup title={t('settings.accent')} description={t('settings.accentDesc')}>
         <div className="px-4 py-3.5">
           <div className="flex flex-wrap gap-2.5">
-            {ACCENTS.map((preset) => (
+            {ACCENT_PRESETS.map((preset) => (
               <Tooltip key={preset.id} content={t('settings.accentAria', { id: preset.id })}>
+                {/* Compact color samples sit beside the other controls; the last
+                 * well is the custom color, picked through the native color input. */}
                 <button
                   type="button"
                   aria-label={t('settings.accentAria', { id: preset.id })}
                   aria-pressed={accent === preset.id}
                   onClick={() => onAccentChange(preset.id)}
-                  className={cn(
-                    // 24px, not the 32px it started at: seven of them in a row read
-                    // as chunky blocks beside the compact controls every other
-                    // Settings row uses.
-                    'grid size-6 place-items-center rounded-capsule transition-transform hover:scale-110',
-                    accent === preset.id && 'ring-2 ring-foreground/60 ring-offset-2 ring-offset-background'
-                  )}
+                  className="grid size-6 place-items-center rounded-capsule transition-[filter] hover:brightness-110"
                   style={{ background: preset.color }}
                 >
                   {accent === preset.id ? <span className="size-2 rounded-full bg-white/90" /> : null}
                 </button>
               </Tooltip>
             ))}
+            {/* The custom well sits apart from the presets behind a hairline. */}
+            <span aria-hidden="true" className="w-px self-stretch bg-border" />
+            {/* Picking is a draft until confirmed inside the picker's popover —
+             * only then does the accent change. */}
+            <AccentColorPicker
+              color={customAccent}
+              active={accent === CUSTOM_ACCENT}
+              onApply={(hex) => {
+                setCustomAccent(hex)
+                onAccentChange(CUSTOM_ACCENT)
+              }}
+            />
           </div>
         </div>
       </SettingsGroup>
@@ -213,6 +221,20 @@ export function AppearanceSection({
             checked={reduceMotion}
             onCheckedChange={setReduceMotion}
             aria-label={t('settings.reduceMotion')}
+          />
+        </SettingsRow>
+      </SettingsGroup>
+
+      <SettingsGroup title={t('settings.transcript')}>
+        <SettingsRow
+          label={t('settings.compactTools')}
+          description={t('settings.compactToolsDesc')}
+        >
+          <Checkbox
+            mark="square"
+            checked={compactTools}
+            onCheckedChange={setCompactTools}
+            aria-label={t('settings.compactTools')}
           />
         </SettingsRow>
       </SettingsGroup>

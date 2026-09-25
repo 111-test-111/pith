@@ -27,6 +27,7 @@ const fixture = `<!doctype html><html lang="en"><body><div id="root"></div><scri
 import React from 'react';import {createRoot} from 'react-dom/client';import {ThemeProvider} from 'next-themes';
 import {I18nProvider} from '/src/i18n/index.tsx';
 import {AppCommandPalette} from '/src/components/app/CommandPalette.tsx';
+import {installShortcutDispatcher,registerShortcutHandlers} from '/src/lib/shortcuts/shortcut-dispatcher.ts';
 import '/src/styles.css';
 // Pin the locale once: an isolated profile has none, and the fallback follows
 // the host, which would make these assertions depend on the developer's
@@ -38,24 +39,36 @@ window.sessions=[
   {path:'/s/alpha.jsonl',id:'alpha',label:'Fix the parser',modified:new Date().toISOString(),messageCount:4,cwd:'/w/proj-a',projectless:false,running:false},
   {path:'/s/beta.jsonl',id:'beta',label:null,modified:new Date(Date.now()-3600e3).toISOString(),messageCount:1,cwd:'/w/scratch',projectless:true,running:false}
 ];
+// The palette's ⌘K now rides the app's real shortcut dispatcher (the vendored
+// surface's own listener is off): the fixture replicates the Workspace wiring —
+// controlled open state plus the dispatcher's commandPalette handler.
+function PaletteHost(){
+  const [open,setOpen]=React.useState(false);
+  React.useEffect(()=>installShortcutDispatcher(document),[]);
+  React.useEffect(()=>registerShortcutHandlers({commandPalette:()=>setOpen(o=>!o)}),[]);
+  return React.createElement(AppCommandPalette,{
+    open,onOpenChange:setOpen,
+    sessions:window.sessions,
+    activePath:'/s/alpha.jsonl',
+    folders:['/w/proj-a','/w/proj-b'],
+    sidebarOpen:true,
+    sidePanelOpen:false,
+    onOpenSession:spy('openSession'),
+    onNewSession:spy('newSession'),
+    onOpenSettings:spy('settings'),
+    onNewTerminal:spy('terminal'),
+    onCompact:spy('compact'),
+    onToggleSidebar:spy('toggleSidebar'),
+    onToggleRail:spy('toggleRail')
+  });
+}
 createRoot(document.getElementById('root')).render(
   React.createElement(ThemeProvider,{attribute:'class',defaultTheme:'light'},
     React.createElement(I18nProvider,null,
-      React.createElement(AppCommandPalette,{
-        sessions:window.sessions,
-        activePath:'/s/alpha.jsonl',
-        folders:['/w/proj-a','/w/proj-b'],
-        sidebarOpen:true,
-        sidePanelOpen:false,
-        onOpenSession:spy('openSession'),
-        onNewSession:spy('newSession'),
-        onOpenSettings:spy('settings'),
-        onNewTerminal:spy('terminal'),
-        onCompact:spy('compact'),
-        onToggleSidebar:spy('toggleSidebar'),
-        onToggleRail:spy('toggleRail')
-      }))));
-window.pressK=()=>window.dispatchEvent(new KeyboardEvent('keydown',{key:'k',metaKey:true,bubbles:true}));
+      React.createElement(PaletteHost))));
+// The dispatcher matches on the PHYSICAL code (layout-independent), so a
+// synthetic keystroke must carry one.
+window.pressK=()=>window.dispatchEvent(new KeyboardEvent('keydown',{key:'k',code:'KeyK',metaKey:true,bubbles:true}));
 window.pressEscape=()=>window.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
 window.pressEnter=()=>document.querySelector('[role=combobox]').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));
 window.dialog=()=>document.querySelector('[role=dialog]');

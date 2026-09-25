@@ -452,7 +452,7 @@ export function BrowserAnnotate({ wv, wrapEl, pageZoom, active, onExit, page }: 
           <div
             aria-hidden="true"
             data-browser-annotate-highlight
-            className="pointer-events-none absolute z-30 rounded-detail border-2 border-destructive"
+            className="pointer-events-none absolute z-30 rounded-detail border border-destructive"
             style={{ left: highlight.left, top: highlight.top, width: highlight.width, height: highlight.height }}
           />
           {bubble ? (

@@ -21,8 +21,10 @@ export function MessageActions({
 }) {
   return (
     <div
+      data-message-actions
+      data-transcript-gap-before="actions"
       className={cn(
-        'flex min-h-6 items-center gap-0.5 px-1 transition-opacity',
+        'flex min-h-7 items-center gap-0.5 px-1 transition-opacity',
         alwaysVisible
           ? 'opacity-100'
           : 'opacity-0 group-hover/message:opacity-100 focus-within:opacity-100'
@@ -49,7 +51,7 @@ function MessageAction({
         type="button"
         variant="ghost"
         size="icon"
-        className="size-6 rounded-md text-muted-foreground hover:text-foreground"
+        className="size-7 rounded-md text-muted-foreground hover:text-foreground"
         aria-label={label}
         onClick={onClick}
       >

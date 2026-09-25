@@ -1,11 +1,14 @@
 import { useMemo } from 'react'
 import { useI18n } from '@/i18n'
+import { cn } from '@/lib/utils'
+import type { SubtitleFormat } from '../../../../shared/preview'
+import { FadeScroll } from './FadeScroll'
 
 /**
- * Preview for a subtitle file (`.srt`, `.vtt`): the cue list it describes —
- * timestamp range and text — instead of the raw cue blocks.
+ * Preview for subtitles (`.srt`, `.vtt`) and timed lyrics (`.lrc`): the cue
+ * list it describes, with a range for subtitles and a start time for lyrics.
  *
- * Both formats are parsed here in a few regexes; there is no dependency and
+ * These formats are parsed here in a few regexes; there is no dependency and
  * nothing to load, which is the whole reason they are worth previewing at all.
  * The parse is deliberately forgiving: a malformed cue is skipped rather than
  * failing the file, because the source view is always one tab away and a
@@ -21,7 +24,7 @@ const MAX_CUE_CHARS = 4000
 
 interface Cue {
   start: string
-  end: string
+  end: string | null
   text: string
 }
 
@@ -43,7 +46,44 @@ function cueText(lines: string[]): string {
   return lines.join('\n').replace(/<[^>]*>/g, '').replace(/\{\\[^}]*\}/g, '').trim().slice(0, MAX_CUE_CHARS)
 }
 
-export function parseCues(text: string): Cue[] {
+function lyricTime(milliseconds: number): string {
+  const value = Math.max(0, milliseconds)
+  const hours = Math.floor(value / 3600000)
+  const minutes = Math.floor(value / 60000) % 60
+  const seconds = Math.floor(value / 1000) % 60
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}.${String(value % 1000).padStart(3, '0')}`
+}
+
+function parseLyrics(text: string): Cue[] {
+  const source = text.replace(/^\ufeff/, '').replace(/\r\n?/g, '\n')
+  // Offset is global, including when the metadata follows the lyrics.
+  // Positive offsets make a lyric appear earlier in the track.
+  let offset = 0
+  for (const match of source.matchAll(/^\s*\[offset:\s*([+-]?\d{1,9})\]\s*$/gim)) offset = Number(match[1])
+  const lyrics: { time: number; text: string }[] = []
+  for (const line of source.split('\n')) {
+    if (lyrics.length >= MAX_CUES) break
+    // Only leading time tags count; metadata and untimed lines stay in source.
+    const stamps = /\s*\[(\d{1,6}):([0-5]\d)(?:\.(\d{1,3}))?\]/y
+    const times: number[] = []
+    let end = 0
+    let match: RegExpExecArray | null
+    while ((match = stamps.exec(line))) {
+      if (times.length < MAX_CUES - lyrics.length) times.push(Number(match[1]) * 60000 + Number(match[2]) * 1000 + Number((match[3] ?? '').padEnd(3, '0')))
+      end = stamps.lastIndex
+    }
+    // Enhanced LRC's inline word timestamps are markup, not visible prose.
+    const payload = cueText([line.slice(end)])
+    if (!payload) continue
+    for (const time of times) lyrics.push({ time: time - offset, text: payload })
+  }
+  // Repeated timestamps on one line may refer to later choruses. Keep equal
+  // times in source order so translations stay beside their original line.
+  return lyrics.sort((a, b) => a.time - b.time).map(lyric => ({ start: lyricTime(lyric.time), end: null, text: lyric.text }))
+}
+
+export function parseCues(text: string, format: SubtitleFormat = 'srt'): Cue[] {
+  if (format === 'lrc') return parseLyrics(text)
   const cues: Cue[] = []
   // A block is a cue when one of its lines carries an arrow; the lines before it
   // are the cue id (SRT's index, or VTT's optional identifier) and the ones
@@ -62,21 +102,22 @@ export function parseCues(text: string): Cue[] {
   return cues
 }
 
-export function FileSubtitle({ text }: { text: string }) {
+export function FileSubtitle({ text, format = 'srt' }: { text: string; format?: SubtitleFormat }) {
   const { t } = useI18n()
-  const cues = useMemo(() => parseCues(text), [text])
+  const cues = useMemo(() => parseCues(text, format), [text, format])
+  const lyrics = format === 'lrc'
   const truncated = cues.length >= MAX_CUES
-  if (cues.length === 0) return <div role="status" data-file-subtitle-empty className="flex min-h-0 flex-1 items-center justify-center p-5 text-center text-xs leading-5 text-muted-foreground">{t('files.subtitle.empty')}</div>
+  if (cues.length === 0) return <div role="status" data-file-subtitle-empty className="flex min-h-0 flex-1 items-center justify-center p-5 text-center text-xs leading-5 text-muted-foreground">{t(lyrics ? 'files.lyrics.empty' : 'files.subtitle.empty')}</div>
   return <div data-file-subtitle className="flex min-h-0 flex-1 flex-col">
-    <div data-file-subtitle-bar role="status" className="flex h-9 shrink-0 items-center border-b border-border/40 px-3 text-[11px] tabular-nums text-muted-foreground">{t('files.subtitle.count', { count: cues.length })}</div>
-    <div className="min-h-0 flex-1 overflow-auto py-1">
+    <div data-file-subtitle-bar role="status" className="flex h-9 shrink-0 items-center border-b border-border/40 px-3 text-[11px] tabular-nums text-muted-foreground">{t(lyrics ? 'files.lyrics.count' : 'files.subtitle.count', { count: cues.length })}</div>
+    <FadeScroll className="min-h-0 flex-1 py-1">
       <ol className="m-0 list-none p-0">
-        {cues.map((cue, index) => <li key={`${index}:${cue.start}`} data-subtitle-cue={index + 1} className="grid grid-cols-[13.5rem_minmax(0,1fr)] items-baseline gap-3 px-3 py-1.5 hover:bg-primary/5">
-          <span aria-hidden className="select-none text-right font-mono text-[10px] leading-5 tabular-nums text-muted-foreground/60">{cue.start} → {cue.end}</span>
+        {cues.map((cue, index) => <li key={`${index}:${cue.start}`} data-subtitle-cue={index + 1} className={cn('grid items-baseline gap-3 px-3 py-1.5 hover:bg-primary/5', lyrics ? 'grid-cols-[6.5rem_minmax(0,1fr)]' : 'grid-cols-[13.5rem_minmax(0,1fr)]')}>
+          <span aria-hidden className="select-none text-right font-mono text-[10px] leading-5 tabular-nums text-muted-foreground/60">{cue.start}{cue.end !== null ? ` → ${cue.end}` : ''}</span>
           <span className="whitespace-pre-wrap break-words text-sm leading-5">{cue.text}</span>
         </li>)}
       </ol>
-      {truncated ? <p role="status" className="px-3 py-2 text-xs text-muted-foreground">{t('files.subtitle.truncated', { count: MAX_CUES })}</p> : null}
-    </div>
+      {truncated ? <p role="status" className="px-3 py-2 text-xs text-muted-foreground">{t(lyrics ? 'files.lyrics.truncated' : 'files.subtitle.truncated', { count: MAX_CUES })}</p> : null}
+    </FadeScroll>
   </div>
 }

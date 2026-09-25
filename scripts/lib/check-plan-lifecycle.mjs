@@ -86,12 +86,34 @@ async function checkRestoration() {
     // Keep a newer turn so the SDK can cut away the original submission.
     f.setRespond(() => [{ type: 'text', text: 'Additional investigation completed.' }])
     await cold.session.prompt('Investigate alternatives')
+    const transcriptBeforeCompaction = f.app.snapshot().messages
     f.setRespond(() => [{ type: 'text', text: 'Summary retaining the planning decision.' }])
     const before = f.requests.length
     const compacted = await f.app.compactSession(cold.path)
     assert(f.requests.length > before, 'manual compaction must exercise the real SDK summary stream')
     assert.match(f.requests.at(-1).systemPrompt, /Current working mode: Plan Mode/)
     assert(compacted.messages.some(m => m.role === 'compactionSummary'))
+    const messageKey = message => `${message.role}:${message.timestamp}:${message.toolCallId ?? ''}`
+    const contextKeys = new Set(cold.session.messages.map(messageKey))
+    const compactedOut = transcriptBeforeCompaction.filter(message => !contextKeys.has(messageKey(message)))
+    assert(compactedOut.length > 0, 'the SDK must still remove old messages from model context')
+    const displayKeys = new Set(compacted.messages.map(messageKey))
+    for (const message of compactedOut) {
+      assert(displayKeys.has(messageKey(message)), 'a message removed from context must remain in the UI transcript')
+    }
+    const messageText = message => typeof message.content === 'string'
+      ? message.content
+      : Array.isArray(message.content)
+        ? message.content.map(part => part.text ?? part.thinking ?? '').join('\n')
+        : ''
+    const excludedText = compactedOut.map(messageText).find(text => text.length >= 16)
+    assert(excludedText, 'the fixture must compact out message text that can be checked in the next request')
+    f.setRespond(() => [{ type: 'text', text: 'Continued from compacted context.' }])
+    const nextRequestIndex = f.requests.length
+    await cold.session.prompt('Continue after compaction')
+    const nextMessages = JSON.stringify(f.requests[nextRequestIndex].messages)
+    assert(!nextMessages.includes(excludedText), 'the next model request must not regain UI-only history')
+    assert(nextMessages.includes('Summary retaining the planning decision.'), 'the next request must use the compaction summary')
     assert.equal(compacted.plan.latest.hash, ref.hash)
     assert(f.app.readPlanDocument({ sessionPath: cold.path, ...ref }).ok)
 

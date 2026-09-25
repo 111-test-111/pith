@@ -284,6 +284,11 @@ export function ModelEditorDialog({
    * base stays undefined so untouched fields never persist. */
   const buildOverride = (): ModelOverrideDTO => {
     const patch: ModelOverrideDTO = {}
+    // Hiding is a visibility flag the form never edits; carry it across a
+    // save so editing a hidden model's parameters never unhides it.
+    if (target.kind === 'override' && entryRef.current?.modelOverrides?.[target.row.id]?.hidden === true) {
+      patch.hidden = true
+    }
     const nameValue = name.trim()
     if (nameValue && nameValue !== base?.name) patch.name = nameValue
     if (base && reasoning !== base.reasoning) patch.reasoning = reasoning
@@ -410,7 +415,10 @@ export function ModelEditorDialog({
       (draft) => {
         const provider = draft.providers[providerId] ?? {}
         const overrides = { ...(provider.modelOverrides ?? {}) }
+        // Reset restores parameters; the visibility choice survives it.
+        const keepHidden = overrides[rowId]?.hidden === true
         delete overrides[rowId]
+        if (keepHidden) overrides[rowId] = { hidden: true }
         return {
           ...draft,
           providers: {
@@ -516,7 +524,7 @@ export function ModelEditorDialog({
           </Button>
           <button
             type="button"
-            className="ml-auto inline-flex items-center gap-1 text-[11px] text-muted-foreground/70 transition-colors hover:text-muted-foreground"
+            className="ml-auto inline-flex items-center gap-1 rounded-control px-1 text-[11px] text-muted-foreground/70 transition-colors hover:bg-muted hover:text-muted-foreground"
             onClick={() => void window.pi.openExternal('https://models.dev')}
           >
             {t('settings.catalogSource')}
@@ -535,7 +543,7 @@ export function ModelEditorDialog({
             {fillStatus.undo ? (
               <button
                 type="button"
-                className="shrink-0 text-primary hover:underline"
+                className="shrink-0 rounded-control px-1 text-primary transition-colors hover:bg-primary/10"
                 onClick={undoFill}
               >
                 {t('settings.undo')}

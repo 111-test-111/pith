@@ -1,3 +1,4 @@
+// local patch (pi-app): keep UI frames and focus rings in this component at 1px.
 "use client";
 // beui.dev/components/agents/chat-app
 
@@ -8,11 +9,8 @@ import {
   type FormEvent,
   type KeyboardEvent,
   type ReactNode,
-  type TextareaHTMLAttributes,
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useRef,
+  type HTMLAttributes,
+  type Ref,
   useState,
 } from "react";
 import { Button } from "@/components/motion/button";
@@ -28,6 +26,12 @@ import {
   SelectTrigger,
 } from "@/components/motion/select";
 import { SPRING_SWAP } from "@/lib/ease";
+// local patch (pi-app): the height glide honours the app's own 关闭动效
+// switch (the vendored `useReducedMotion` above is the OS signal).
+import { useReduceMotion } from "@/lib/reduce-motion";
+// local patch (pi-app): native plaintext editing preserves selection and undo.
+import { usePromptEditor, type PromptEditorHandle } from "@/lib/hooks/use-prompt-editor";
+import { useScrollFade } from "@/lib/hooks/use-scroll-fade";
 import { cn } from "@/lib/utils";
 
 export interface PromptModel {
@@ -40,15 +44,19 @@ export interface PromptModel {
 export interface PromptAction {
   value: string;
   label: ReactNode;
-  description?: ReactNode;
   icon?: ReactNode;
   disabled?: boolean;
 }
 
+// local patch (pi-app): events belong to the inline plaintext editing host.
 export interface PromptInputProps extends Omit<
-  TextareaHTMLAttributes<HTMLTextAreaElement>,
+  HTMLAttributes<HTMLSpanElement>,
   "value" | "defaultValue" | "onChange" | "onSubmit" | "children"
 > {
+  // local patch (pi-app): the editable span exposes plain-text selection offsets.
+  inputRef?: Ref<PromptEditorHandle>;
+  disabled?: boolean;
+  placeholder?: string;
   value?: string;
   defaultValue?: string;
   onValueChange?: (value: string) => void;
@@ -74,10 +82,15 @@ export interface PromptInputProps extends Omit<
   // context-usage ring immediately left of the send button (the controls
   // row's bottom-right cluster).
   contextIndicator?: ReactNode;
+  // local patch (pi-app): attachment previews (images, file cards) render
+  // INSIDE the frame, above the first text line — pasting grows the input
+  // itself instead of stacking a strip above it.
+  attachments?: ReactNode;
   className?: string;
 }
 
 export function PromptInput({
+  inputRef,
   value,
   defaultValue = "",
   onValueChange,
@@ -96,16 +109,18 @@ export function PromptInput({
   maxRows = 8,
   leadingAction,
   contextIndicator,
+  attachments,
   className,
   disabled,
   placeholder = "Ask the agent to do something…",
   "aria-label": ariaLabel = "Prompt",
   onKeyDown,
-  ...textareaProps
+  ...editorProps
 }: PromptInputProps) {
   const reduce = useReducedMotion() ?? false;
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const measurementRef = useRef<HTMLDivElement>(null);
+  // local patch (pi-app): the app-level 关闭动效 switch (not the OS signal
+  // above) decides whether a draft's height change glides or lands instantly.
+  const appReduceMotion = useReduceMotion();
   const [internalValue, setInternalValue] = useState(defaultValue);
   const [internalModel, setInternalModel] = useState(
     defaultModel ?? models[0]?.value,
@@ -120,47 +135,13 @@ export function PromptInput({
   // local patch (pi-app): a non-empty draft can be queued while streaming.
   const canQueue = Boolean(onQueueSubmit) && Boolean(currentValue.trim()) && !disabled && !submitDisabled;
 
-  const resizeTextarea = useCallback(() => {
-    const textarea = textareaRef.current;
-    const measurement = measurementRef.current;
-    if (!textarea || !measurement || textarea.value !== currentValue) return;
-
-    const lineHeight = 24;
-    // local patch (pi-app): the measurement div mirrors the textarea's text
-    // but not its vertical padding, so the padding must be added AFTER the
-    // row-range clamp. Adding it to the content term only (as an earlier
-    // attempt did) leaves the min-rows clamp short by the same padding, and
-    // the height then jumps by it the moment text wraps — the first line
-    // reads as shifting up.
-    const style = getComputedStyle(textarea);
-    const verticalPadding =
-      (Number.parseFloat(style.paddingTop) || 0) +
-      (Number.parseFloat(style.paddingBottom) || 0);
-    const nextHeight =
-      Math.min(
-        Math.max(measurement.scrollHeight, minRows * lineHeight),
-        maxRows * lineHeight,
-      ) + verticalPadding;
-    const height = `${nextHeight}px`;
-    if (textarea.style.height !== height) textarea.style.height = height;
-  }, [currentValue, maxRows, minRows]);
-
-  useLayoutEffect(() => {
-    resizeTextarea();
-  }, [resizeTextarea]);
-
-  useEffect(() => {
-    const textarea = textareaRef.current;
-    if (!textarea || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(resizeTextarea);
-    observer.observe(textarea);
-    return () => observer.disconnect();
-  }, [resizeTextarea]);
-
   const setValue = (next: string) => {
     if (value === undefined) setInternalValue(next);
     onValueChange?.(next);
   };
+  // local patch (pi-app): Chromium owns editing/IME/undo.
+  const editor = usePromptEditor({ value: currentValue, onValueChange: setValue, inputRef, minRows, maxRows });
+  const { maskImage } = useScrollFade(editor.viewportRef, { contentRef: editor.contentRef });
 
   const setModel = (next: string) => {
     if (model === undefined) setInternalModel(next);
@@ -174,16 +155,16 @@ export function PromptInput({
     if (loading) {
       if (!onQueueSubmit) return;
       onQueueSubmit(prompt, currentModelValue);
-      textareaRef.current?.focus({ preventScroll: true });
+      editor.editorRef.current?.focus({ preventScroll: true });
       return;
     }
 
     onSubmit?.(prompt, currentModelValue);
     if (value === undefined) setInternalValue("");
-    textareaRef.current?.focus({ preventScroll: true });
+    editor.editorRef.current?.focus({ preventScroll: true });
   };
 
-  const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+  const handleKeyDown = (event: KeyboardEvent<HTMLSpanElement>) => {
     onKeyDown?.(event);
     if (
       event.defaultPrevented ||
@@ -206,25 +187,47 @@ export function PromptInput({
         className,
       )}
     >
+      {attachments ? (
+        // local patch (pi-app): the tray sits in the frame's flow, so the
+        // input grows by exactly the previews' height.
+        <div className="mb-1 flex flex-wrap items-center gap-2 px-1 pt-0.5">
+          {attachments}
+        </div>
+      ) : null}
+      {/* local patch (pi-app): native inline flow replaces the textarea overlay. */}
       <div
-        ref={measurementRef}
-        aria-hidden="true"
-        className="pointer-events-none invisible absolute inset-x-2 top-0 whitespace-pre-wrap px-2 text-sm leading-6 [overflow-wrap:break-word]"
+        ref={editor.viewportRef}
+        data-prompt-viewport=""
+        onMouseDown={editor.onMouseDown}
+        className="w-full overflow-y-auto bg-transparent px-2 pt-1.5 text-sm leading-6 text-foreground"
+        style={{ maskImage, ...(appReduceMotion ? null : { transition: "height 120ms ease-out" }) }}
       >
-        {`${currentValue}\u200b`}
+        <div ref={editor.contentRef} className="whitespace-pre-wrap [overflow-wrap:anywhere]">
+          {!currentValue ? <span aria-hidden="true" className="pointer-events-none absolute text-muted-foreground/55">{placeholder}</span> : null}
+          <span
+            {...editorProps}
+            ref={editor.editorRef}
+            data-prompt-editor=""
+            // The stop-run Escape is the app dispatcher's only bare-key
+            // command; it fires from THIS field (pi parity) but from no
+            // other input (see shortcut-dispatcher).
+            data-main-composer=""
+            role="textbox"
+            aria-multiline="true"
+            aria-label={ariaLabel}
+            aria-placeholder={placeholder}
+            aria-disabled={disabled || undefined}
+            contentEditable={disabled ? false : "plaintext-only"}
+            suppressContentEditableWarning
+            tabIndex={disabled ? -1 : 0}
+            onInput={editor.onInput}
+            onCompositionStart={editor.onCompositionStart}
+            onCompositionEnd={editor.onCompositionEnd}
+            onKeyDown={handleKeyDown}
+            className="pr-px outline-none"
+          />
+        </div>
       </div>
-      <textarea
-        ref={textareaRef}
-        value={currentValue}
-        disabled={disabled}
-        placeholder={placeholder}
-        aria-label={ariaLabel}
-        rows={minRows}
-        {...textareaProps}
-        onChange={(event) => setValue(event.target.value)}
-        onKeyDown={handleKeyDown}
-        className="scrollbar-hide block w-full resize-none overflow-y-auto bg-transparent px-2 pt-1.5 text-sm leading-6 text-foreground outline-none placeholder:text-muted-foreground/55"
-      />
 
       <div className="mt-1 flex min-h-8 items-center gap-1">
         {actions.length ? (
@@ -267,22 +270,17 @@ export function PromptInput({
                     onAction?.(action.value);
                     setActionsOpen(false);
                   }}
-                  className="flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left outline-none transition-colors hover:bg-muted focus-visible:bg-muted disabled:pointer-events-none disabled:opacity-50"
+                  // local patch (pi-app): single-line rows — icon and entry
+                  // name only, the second-line explanation is dropped.
+                  className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left outline-none transition-colors hover:bg-muted focus-visible:bg-muted disabled:pointer-events-none disabled:opacity-50"
                 >
                   {action.icon ? (
-                    <span className="mt-0.5 grid size-5 shrink-0 place-items-center text-muted-foreground [&_svg]:size-4">
+                    <span className="grid size-5 shrink-0 place-items-center text-muted-foreground [&_svg]:size-4">
                       {action.icon}
                     </span>
                   ) : null}
-                  <span className="min-w-0">
-                    <span className="block text-sm text-foreground">
-                      {action.label}
-                    </span>
-                    {action.description ? (
-                      <span className="mt-0.5 block text-xs leading-4 text-muted-foreground">
-                        {action.description}
-                      </span>
-                    ) : null}
+                  <span className="min-w-0 text-sm text-foreground">
+                    {action.label}
                   </span>
                 </button>
               ))}
@@ -297,7 +295,7 @@ export function PromptInput({
             disabled={disabled || loading}
             className="min-w-0"
           >
-            <SelectTrigger className="h-8 w-auto max-w-52 rounded-xl border-0 bg-transparent px-2 py-0 text-xs hover:bg-muted focus-visible:ring-2">
+            <SelectTrigger className="h-8 w-auto max-w-52 rounded-xl border-0 bg-transparent px-2 py-0 text-xs hover:bg-muted focus-visible:ring-1">
               <span className="flex min-w-0 items-center gap-1.5">
                 {currentModel?.icon ? (
                   <span className="grid size-4 shrink-0 place-items-center text-muted-foreground [&_svg]:size-3.5">

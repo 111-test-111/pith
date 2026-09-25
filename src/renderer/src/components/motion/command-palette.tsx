@@ -36,8 +36,9 @@ export type CommandItem = {
 
 export interface CommandPaletteProps {
   items: CommandItem[];
-  /** Opens with Cmd/Ctrl + this key. Default: "k" */
-  shortcut?: string;
+  /** Opens with Cmd/Ctrl + this key. Default: "k". Pass `null` when an
+   *  external dispatcher owns the toggle (local patch, pi-app). */
+  shortcut?: string | null;
   placeholder?: string;
   emptyMessage?: string;
   open?: boolean;
@@ -85,6 +86,7 @@ export function CommandPalette({
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (
+        shortcut &&
         (e.metaKey || e.ctrlKey) &&
         e.key.toLowerCase() === shortcut.toLowerCase()
       ) {
@@ -223,6 +225,9 @@ export function CommandPalette({
                 role="dialog"
                 aria-modal="true"
                 aria-label="Command palette"
+                // local patch (pi-app): the app-level shortcut dispatcher
+                // re-admits its own toggle key through the open layer.
+                data-shortcut-passthrough="commandPalette"
                 initial={{
                   opacity: 0,
                   y: reduce ? 0 : -8,

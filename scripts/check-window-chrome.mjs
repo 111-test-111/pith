@@ -97,7 +97,7 @@ app.whenReady().then(()=>{
     for (let i = 0; i < 150; i++) { if (await evaluate(`(async()=>Boolean(await (${expression})))()`)) return; await pause(100) }
     throw new Error('Timed out: ' + expression + '\n' + JSON.stringify(exceptions) + '\n' + output.slice(-2000))
   }
-  const ready = () => waitFor(`document.querySelector('textarea') && document.querySelector('[data-slot="sidebar-trigger"]')`)
+  const ready = () => waitFor(`document.querySelector('[data-prompt-editor]') && document.querySelector('[data-slot="sidebar-trigger"]')`)
   const click = async selector => {
     const point = await evaluate(`(()=>{const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`)
     await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...point, button: 'left', clickCount: 1 })
@@ -128,18 +128,27 @@ app.whenReady().then(()=>{
   // tabbable, unfolds to the LEFT of the chevron that leads the right-hand
   // action group, leaves the controls beside it in place, and a pick reaches
   // main and closes it again.
-  const pocket = () => evaluate(`(()=>{const p=document.querySelector('[data-titlebar-overflow]');const c=document.querySelector('[data-titlebar-more]');const a=document.querySelector('[data-titlebar-action="reload"]');const k=document.querySelector('[data-titlebar-action="compact"]');const r=document.querySelector('[data-rewind-entry]').getBoundingClientRect();return{state:p.dataset.titlebarOverflow,actions:document.querySelectorAll('[data-titlebar-action]').length,expanded:c.getAttribute('aria-expanded'),chevron:c.getBoundingClientRect().toJSON(),neighbour:r.toJSON(),action:a?a.getBoundingClientRect().toJSON():null,compact:k?k.getBoundingClientRect().toJSON():null}})()`)
+  const pocket = () => evaluate(`(()=>{const p=document.querySelector('[data-titlebar-overflow]');const c=document.querySelector('[data-titlebar-more]');const a=p.querySelector('[data-titlebar-action="reload"]');const k=p.querySelector('[data-titlebar-action="compact"]');const g=document.querySelector('[data-titlebar-action="sidebar-fullscreen"]');const r=g.getBoundingClientRect();return{state:p.dataset.titlebarOverflow,actions:p.querySelectorAll('[data-titlebar-action]').length,expanded:c.getAttribute('aria-expanded'),chevron:c.getBoundingClientRect().toJSON(),neighbour:r.toJSON(),glyph:g.querySelector('svg[data-app-icon]').dataset.appIcon,action:a?a.getBoundingClientRect().toJSON():null,compact:k?k.getBoundingClientRect().toJSON():null,compactGlyph:k?k.querySelector('svg[data-app-icon]').dataset.appIcon:null}})()`)
+  // Fullscreen is a row control: it is pressed from the row, never from the
+  // pocket, and an outside press on it closes an open pocket like any other
+  // control beside the chevron.
+  assert.equal(await evaluate(`document.querySelector('[data-titlebar-action="sidebar-fullscreen"]').disabled`), true, 'fullscreen is disabled while the rail is closed')
+  await click('[data-titlebar-action="sidebar-fullscreen"]')
+  assert.equal(await evaluate(`Boolean(document.querySelector('[data-panel="right"]'))`), false, 'a disabled fullscreen action cannot open the rail')
   const resting = await pocket()
   assert.equal(resting.state, 'closed')
   assert.equal(resting.actions, 0, 'a collapsed pocket keeps no tabbable button')
   assert.equal(resting.expanded, 'false')
+  assert.equal(await evaluate(`document.querySelector('[data-titlebar-action="sidebar-fullscreen"]').closest('[data-titlebar-overflow]')===null`), true, 'right-sidebar fullscreen rests in the row, outside the pocket')
   assert.ok(resting.chevron.left < resting.neighbour.left, 'the chevron leads the right-hand action group')
   await click('[data-titlebar-more]')
   await waitFor(`document.querySelector('[data-titlebar-action="reload"]')`)
   const unfolded = await pocket()
   assert.equal(unfolded.state, 'open')
   assert.equal(unfolded.expanded, 'true')
-  assert.equal(unfolded.actions, 2, 'both later actions are in the pocket')
+  assert.equal(unfolded.actions, 4, 'all later actions are in the pocket')
+  assert.equal(await evaluate(`Boolean(document.querySelector('[data-titlebar-overflow] [data-titlebar-action="rewind"]'))`), true, 'the checkpoint entry is one of them')
+  assert.notEqual(unfolded.glyph, unfolded.compactGlyph, 'fullscreen and summarize no longer share one glyph')
   assert.equal(unfolded.action.width, 32, 'the revealed button keeps its full size')
   assert.equal(unfolded.compact.width, 32)
   assert.ok(unfolded.compact.right <= unfolded.action.left, 'the pocket lays its actions out in order')
@@ -170,6 +179,81 @@ app.whenReady().then(()=>{
   assert.equal((await pocket()).actions, 0, 'Escape closes the pocket')
   assert.equal(await evaluate('window.__esc'), true, 'the pocket claims Escape before the rest of the page')
   assert.equal(await evaluate(`document.activeElement===document.querySelector('[data-titlebar-more]')`), true, 'closing hands focus back to the chevron')
+  // The rail fills the inset, which starts at the session sidebar's live edge.
+  // Read geometry before releasing a drag: checking only the final width would
+  // miss a panel that follows React commits but ignores the direct CSS path.
+  const railToggle = 'button[aria-label="切换侧边栏"][aria-pressed],button[aria-label="Toggle sidebar"][aria-pressed]'
+  const fullAction = '[data-titlebar-action="sidebar-fullscreen"]'
+  const toggleFull = async () => {
+    assert.equal(await evaluate(`document.querySelector('${fullAction}').disabled`), false)
+    await click(fullAction)
+  }
+  const railGeometry = () => evaluate(`(()=>{
+    const rail=document.querySelector('[data-panel="right"]'), main=document.querySelector('main');
+    const sidebar=document.querySelector('aside[data-slot="sidebar"]');
+    const r=rail.getBoundingClientRect(), m=main.getBoundingClientRect(), s=sidebar.getBoundingClientRect();
+    return {rail:r.toJSON(),main:m.toJSON(),sidebar:s.toJSON(),viewport:innerWidth,
+      fullscreen:rail.dataset.panelFullscreen==='true',
+      covered:rail.contains(document.elementFromPoint(m.left+10,m.top+80)),
+      sidebarCovered:rail.contains(document.elementFromPoint(s.right-10,s.top+80))};
+  })()`)
+  const assertFull = async () => {
+    const g = await railGeometry()
+    assert.equal(g.fullscreen, true)
+    assert.ok(Math.abs(g.rail.left-g.main.left)<1, 'fullscreen starts at the chat boundary')
+    assert.ok(Math.abs(g.rail.right-g.viewport)<1, 'fullscreen reaches the window edge')
+    assert.equal(g.rail.top, 52, 'fullscreen stays below the title row')
+    assert.equal(g.rail.bottom, g.main.bottom)
+    assert.equal(g.covered, true, 'the rail owns pointer input over the chat')
+    assert.equal(g.sidebarCovered, false, 'the session sidebar stays accessible')
+    return g
+  }
+  await click(railToggle)
+  const docked = await railGeometry()
+  await evaluate(`window.__railBeforeFullscreen=document.querySelector('[data-panel="right"]');window.__composerBeforeFullscreen=document.querySelector('[data-prompt-editor]');void 0`)
+  await toggleFull()
+  await assertFull()
+  assert.equal(await evaluate(`document.querySelector('[data-prompt-editor]').closest('[inert]')!==null`), true, 'the covered composer cannot receive keyboard focus')
+  assert.equal(await evaluate(`document.querySelector('[data-panel-handle="left"]')===null`), true, 'the docked divider is absent in fullscreen')
+  await screenshot('dark-sidebar-fullscreen')
+  await toggleFull()
+  assert.ok(Math.abs((await railGeometry()).rail.width-docked.rail.width)<1, 'leaving fullscreen restores docked width')
+  assert.equal(await evaluate(`document.querySelector('[data-panel="right"]')===window.__railBeforeFullscreen && document.querySelector('[data-prompt-editor]')===window.__composerBeforeFullscreen`), true, 'fullscreen retains rail and composer DOM')
+  await toggleFull()
+  for (const width of [1100, 1400, 1320]) {
+    await evaluate(`fixture.resize(${width},880)`)
+    await pause(400)
+    await assertFull()
+  }
+  const beforeDrag = await railGeometry()
+  const handle = await evaluate(`(()=>{const r=document.querySelector('[data-panel-handle="right"]').getBoundingClientRect();return{x:r.left+r.width/2,y:r.top+120}})()`)
+  await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...handle, button: 'left', clickCount: 1 })
+  for (const dx of [16, 48, -24, 64]) {
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: handle.x+dx, y: handle.y, button: 'left', buttons: 1 })
+    await pause(80)
+    const g = await railGeometry()
+    assert.ok(Math.abs(g.rail.left-g.main.left)<1, 'fullscreen follows every drag frame')
+    assert.ok(Math.abs(g.rail.right-g.viewport)<1)
+  }
+  await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: handle.x+64, y: handle.y, button: 'left', clickCount: 1 })
+  await pause(400)
+  assert.ok((await assertFull()).rail.left > beforeDrag.rail.left+40, 'session resize really changed the fullscreen boundary')
+  await click('[data-slot="sidebar-trigger"]')
+  assert.ok((await assertFull()).rail.left<1, 'fullscreen also follows session-sidebar collapse')
+  await click('[data-slot="sidebar-trigger"]')
+  await assertFull()
+  await click(railToggle)
+  await click(railToggle)
+  assert.equal((await railGeometry()).fullscreen, false, 'folding and reopening never restores fullscreen')
+  await evaluate(`[...document.querySelectorAll('[data-panel="right"] button')].find(b=>b.textContent.includes('审查')).click()`)
+  await pause(400)
+  await toggleFull()
+  await click('[data-sidebar-tab="review"] button[aria-label]')
+  await waitFor(`!document.querySelector('[data-panel="right"]')`)
+  await click(railToggle)
+  assert.equal((await railGeometry()).fullscreen, false, 'closing the last tab also clears fullscreen')
+  await click(railToggle)
+  console.log('PASS: sidebar fullscreen bounds, live resize, retained DOM, restored width and fold reset')
   // The session row menu's own additions: copy-session-ID sits between Rename
   // and the destructive Delete, and copies the session's own ID — not its file
   // path. `navigator.clipboard` refuses an unfocused document, so the write is
@@ -195,7 +279,7 @@ app.whenReady().then(()=>{
   assert.ok(await evaluate(`document.querySelector('main').getBoundingClientRect().width>innerWidth-2`))
   await screenshot('collapsed-sidebar')
   await click('[data-slot="sidebar-trigger"]')
-  await send('Runtime.evaluate', { expression: `document.querySelector('textarea').focus()` })
+  await send('Runtime.evaluate', { expression: `document.querySelector('[data-prompt-editor]').focus()` })
   await send('Input.insertText', { text: '保留这份草稿 / keep this draft' })
   await click('button[aria-label="设置"]')
   assert.ok(await evaluate(`document.querySelector('button[aria-label="返回对话"]').getBoundingClientRect().left>=${process.platform === 'darwin' ? 92 : 12}`))
@@ -211,7 +295,7 @@ app.whenReady().then(()=>{
   assert.deepEqual(await evaluate('fixture.startupChoices()'), ['new'])
   await screenshot('settings')
   await click('button[aria-label="返回对话"]')
-  assert.equal(await evaluate(`document.querySelector('textarea').value`), '保留这份草稿 / keep this draft')
+  assert.equal(await evaluate(`document.querySelector('[data-prompt-editor]').textContent`), '保留这份草稿 / keep this draft')
   await click('button[aria-label="搜索会话"]')
   await waitFor(`document.querySelector('[aria-modal="true"]')`)
   // The "exclude tools, files and thinking" filter is a square point-select
@@ -260,6 +344,16 @@ app.whenReady().then(()=>{
   assert.ok(await evaluate(`Boolean(document.querySelector('[data-window-titlebar] [data-overflow]'))`))
   assert.ok(await evaluate(`document.querySelector('[aria-label="Toggle sidebar"][aria-pressed]').getBoundingClientRect().right<=innerWidth`))
   await screenshot('light-long-title')
+  await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] })
+  await click(railToggle)
+  assert.equal(await evaluate(`document.querySelector('${fullAction}').getAttribute('aria-label')`), 'Expand sidebar over chat')
+  await click(fullAction)
+  await assertFull()
+  await screenshot('light-sidebar-fullscreen-reduced')
+  await toggleFull()
+  assert.equal((await railGeometry()).fullscreen, false, 'fullscreen exits under reduced motion too')
+  await click(railToggle)
+  await send('Emulation.setEmulatedMedia', { features: [] })
   await evaluate(`fixture.scenario('projectless')`)
   await reload()
   assert.doesNotMatch(await evaluate(`document.querySelector('[data-window-titlebar]').innerText`), /internal|private-workspace|pi-app/)

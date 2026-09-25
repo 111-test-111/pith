@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'motion/react'
-import { Clock, FastForward, Image as ImageIcon, Paperclip, Rewind, X, Zap } from '@/lib/icons'
+import { Clock, FastForward, Image as ImageIcon, LinkSimple, Rewind, X, Zap } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
 import { Tooltip } from '@/components/motion/tooltip'
 import { EASE_OUT } from '@/lib/ease'
@@ -111,7 +111,7 @@ export function QueuePanel({
                       ) : null}
                       {row.filePaths.length > 0 ? (
                         <span className="ml-1.5 inline-flex items-center gap-0.5 align-baseline leading-4 text-muted-foreground">
-                          <Paperclip aria-hidden="true" className="size-3" />
+                          <LinkSimple aria-hidden="true" className="size-3" />
                           {row.filePaths.length}
                         </span>
                       ) : null}

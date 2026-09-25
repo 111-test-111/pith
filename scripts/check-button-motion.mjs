@@ -79,7 +79,7 @@ function mount() {
           'data-target': 'menu-row',
           variant: 'ghost',
           size: 'sm',
-          className: 'flex h-8 w-full items-center justify-start gap-2 rounded-lg px-2.5 text-left text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring'
+          className: 'flex h-8 w-full items-center justify-start gap-2 rounded-lg px-2.5 text-left text-xs outline-none transition-colors focus-visible:ring-1 focus-visible:ring-ring'
         }, h('span', { className: 'min-w-0 truncate' }, '置顶会话'))),
         h(Toggle),
         h(RadioGroup, { value: 'a', onValueChange: function () {} }, h(RadioGroupItem, { value: 'a', label: 'option A' })),

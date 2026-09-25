@@ -1,3 +1,4 @@
+// local patch (pi-app): keep UI frames and focus rings in this component at 1px.
 "use client";
 
 import { motion, useReducedMotion } from "motion/react";
@@ -63,7 +64,7 @@ export const MetallicButton = forwardRef<
       className={cn(
         "group relative isolate overflow-hidden border-0 bg-transparent text-foreground",
         "hover:bg-transparent hover:text-foreground",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+        "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-2",
         "shadow-[0_8px_22px_rgba(0,0,0,0.16)]",
         // local patch (pi-app): icon-size metallic button is capsule-by-design,
         // so the shape token follows the UI style.

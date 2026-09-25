@@ -1,8 +1,10 @@
 import { useEffect, useSyncExternalStore } from 'react'
 import type { PiEvent } from '../../../shared/types'
+import { useI18n } from '../i18n'
+import { subscribeScheduledTransitions } from '../state/scheduled-tasks-store'
 
 /**
- * Notification sounds — the app's audio cues.
+ * Completion/question notifications — audio cues plus native OS alerts.
  *
  * Two cues, deliberately distinct in melody, timbre and rhythm so they can be
  * told apart without looking at the screen:
@@ -27,7 +29,7 @@ import type { PiEvent } from '../../../shared/types'
  * change applies to the very next cue with no session reload or IPC round
  * trip.
  */
-export type NotificationSoundKind = 'turnComplete' | 'askUser'
+export type NotificationSoundKind = 'turnComplete' | 'askUser' | 'scheduledTask'
 
 /** One scheduled oscillator: a note of a cue. */
 export interface NotificationTone {
@@ -60,11 +62,20 @@ export const NOTIFICATION_SOUNDS: Record<NotificationSoundKind, readonly Notific
     { frequency: 1760, at: 0, duration: 0.12, wave: 'triangle', gain: 1 },
     { frequency: 1760, at: 0.18, duration: 0.12, wave: 'triangle', gain: 1 },
     { frequency: 1760, at: 0.42, duration: 0.28, wave: 'triangle', gain: 0.9 }
+  ],
+  // A soft two-chime descent (A5 → D5): it must read as "something landed on
+  // its own" — the mirror of `turnComplete`'s rising triad (a run you were
+  // watching ended well), and nothing like the ask pings' single repeated
+  // pitch. Pitches deliberately share none with either cue (the bell owns
+  // C5/E5/G5, the ask owns A6); sine keeps it in the bell family.
+  scheduledTask: [
+    { frequency: 880, at: 0, duration: 0.4, wave: 'sine', gain: 0.9 },
+    { frequency: 587.33, at: 0.16, duration: 0.75, wave: 'sine', gain: 1 }
   ]
 }
 
 /** Every cue the app can play, in the order Settings lists them. */
-export const NOTIFICATION_SOUND_KINDS: readonly NotificationSoundKind[] = ['turnComplete', 'askUser']
+export const NOTIFICATION_SOUND_KINDS: readonly NotificationSoundKind[] = ['turnComplete', 'askUser', 'scheduledTask']
 
 /** Loud enough to be heard over other system audio, but not startling. */
 const MASTER_GAIN = 0.75
@@ -140,16 +151,19 @@ export interface NotificationSoundSettings {
   turnComplete: boolean
   /** The blocked-on-the-user cue. */
   askUser: boolean
+  /** The scheduled-run-finished cue. */
+  scheduledTask: boolean
 }
 
 /** One localStorage key per flag, like the other renderer preferences. */
 const STORAGE_KEYS: Record<keyof NotificationSoundSettings, string> = {
   enabled: 'pi-app:sound-enabled',
   turnComplete: 'pi-app:sound-turn-complete',
-  askUser: 'pi-app:sound-ask-user'
+  askUser: 'pi-app:sound-ask-user',
+  scheduledTask: 'pi-app:sound-scheduled-task'
 }
 
-const DEFAULTS: NotificationSoundSettings = { enabled: true, turnComplete: true, askUser: true }
+const DEFAULTS: NotificationSoundSettings = { enabled: true, turnComplete: true, askUser: true, scheduledTask: true }
 
 function readFlag(key: string): boolean {
   try {
@@ -170,7 +184,8 @@ export function notificationSoundSettings(): NotificationSoundSettings {
     current = {
       enabled: readFlag(STORAGE_KEYS.enabled),
       turnComplete: readFlag(STORAGE_KEYS.turnComplete),
-      askUser: readFlag(STORAGE_KEYS.askUser)
+      askUser: readFlag(STORAGE_KEYS.askUser),
+      scheduledTask: readFlag(STORAGE_KEYS.scheduledTask)
     }
     initialized = true
   }
@@ -183,7 +198,8 @@ export function setNotificationSoundSettings(patch: Partial<NotificationSoundSet
   if (
     next.enabled === previous.enabled &&
     next.turnComplete === previous.turnComplete &&
-    next.askUser === previous.askUser
+    next.askUser === previous.askUser &&
+    next.scheduledTask === previous.scheduledTask
   ) {
     return
   }
@@ -202,7 +218,9 @@ export function setNotificationSoundSettings(patch: Partial<NotificationSoundSet
 export function notificationSoundAllowed(kind: NotificationSoundKind): boolean {
   const settings = notificationSoundSettings()
   if (!settings.enabled) return false
-  return kind === 'turnComplete' ? settings.turnComplete : settings.askUser
+  if (kind === 'turnComplete') return settings.turnComplete
+  if (kind === 'askUser') return settings.askUser
+  return settings.scheduledTask
 }
 
 /**
@@ -221,6 +239,123 @@ export function triggerNotificationSound(kind: NotificationSoundKind): boolean {
  */
 export function previewNotificationSound(kind: NotificationSoundKind): boolean {
   return scheduleSound(kind)
+}
+
+// ── native system notifications ─────────────────────────────────────────────
+
+export interface SystemNotificationCopy {
+  title: string
+  body: string
+}
+
+export interface SystemNotificationSettings {
+  /** Independent of audio: off suppresses automatic OS notifications only. */
+  enabled: boolean
+}
+
+export type SystemNotificationPermission = NotificationPermission | 'unsupported'
+
+const SYSTEM_NOTIFICATION_STORAGE_KEY = 'pi-app:system-notifications-enabled'
+const DEFAULT_SYSTEM_NOTIFICATION_SETTINGS: SystemNotificationSettings = { enabled: false }
+let currentSystemNotifications = DEFAULT_SYSTEM_NOTIFICATION_SETTINGS
+let systemNotificationsInitialized = false
+const systemNotificationListeners = new Set<() => void>()
+let notificationPermissionRequest: Promise<NotificationPermission> | null = null
+
+export function systemNotificationSettings(): SystemNotificationSettings {
+  if (!systemNotificationsInitialized) {
+    let enabled = false
+    try {
+      enabled = window.localStorage.getItem(SYSTEM_NOTIFICATION_STORAGE_KEY) === 'on'
+    } catch {
+      /* use the safe default */
+    }
+    currentSystemNotifications = { enabled }
+    systemNotificationsInitialized = true
+  }
+  return currentSystemNotifications
+}
+
+export function setSystemNotificationSettings(patch: Partial<SystemNotificationSettings>): void {
+  const previous = systemNotificationSettings()
+  const next = { ...previous, ...patch }
+  if (next.enabled === previous.enabled) return
+  currentSystemNotifications = next
+  try {
+    window.localStorage.setItem(SYSTEM_NOTIFICATION_STORAGE_KEY, next.enabled ? 'on' : 'off')
+  } catch {
+    /* persistence is best-effort; the in-memory value still applies */
+  }
+  for (const listener of systemNotificationListeners) listener()
+}
+
+export function systemNotificationPermission(): SystemNotificationPermission {
+  if (typeof window === 'undefined' || typeof window.Notification !== 'function') return 'unsupported'
+  return window.Notification.permission
+}
+
+/**
+ * Request permission only when enabling or previewing notifications (or when a
+ * previously enabled installation has had its OS permission reset). Concurrent
+ * callers share one request and a denial is never requested again.
+ */
+export async function requestSystemNotificationPermission(): Promise<SystemNotificationPermission> {
+  const current = systemNotificationPermission()
+  if (current !== 'default') return current
+  try {
+    if (!notificationPermissionRequest) {
+      const request = window.Notification.requestPermission()
+      notificationPermissionRequest = request
+      const clear = () => {
+        if (notificationPermissionRequest === request) notificationPermissionRequest = null
+      }
+      void request.then(clear, clear)
+    }
+    return await notificationPermissionRequest
+  } catch {
+    return 'default'
+  }
+}
+
+async function showSystemNotification(copy: SystemNotificationCopy): Promise<boolean> {
+  if ((await requestSystemNotificationPermission()) !== 'granted') return false
+  try {
+    const notification = new window.Notification(copy.title, { body: copy.body })
+    notification.onclick = () => {
+      window.focus()
+      notification.close()
+    }
+    return true
+  } catch {
+    // Native notifications are best-effort (for example, unsigned macOS dev
+    // builds cannot post them); audio and the in-app UI must keep working.
+    return false
+  }
+}
+
+/** Automatic event path: obey the independent system-notification switch. */
+export async function triggerSystemNotification(copy: SystemNotificationCopy): Promise<boolean> {
+  if (!systemNotificationSettings().enabled) return false
+  return showSystemNotification(copy)
+}
+
+/** Settings preview: try once even while automatic notifications are off. */
+export async function previewSystemNotification(copy: SystemNotificationCopy): Promise<boolean> {
+  return showSystemNotification(copy)
+}
+
+export function useSystemNotifications(): [
+  SystemNotificationSettings,
+  (patch: Partial<SystemNotificationSettings>) => void
+] {
+  const settings = useSyncExternalStore(
+    (listener) => {
+      systemNotificationListeners.add(listener)
+      return () => systemNotificationListeners.delete(listener)
+    },
+    systemNotificationSettings
+  )
+  return [settings, setSystemNotificationSettings]
 }
 
 /** Subscribable sound preferences, shared by the cue triggers and Settings. */
@@ -303,21 +438,56 @@ export function notificationSoundForEvent(
 }
 
 /**
+ * Scheduled run completions: one cue per snapshot batch (never per run), fed
+ * by the store's active→terminal transition diff, so app boots and already-
+ * read history stay silent. Native copy names the task and its outcome.
+ */
+export function useScheduledTaskCompletionCue(): void {
+  const { t } = useI18n()
+  useEffect(() => {
+    const off = subscribeScheduledTransitions((runs) => {
+      triggerNotificationSound('scheduledTask')
+      const failed = runs.filter((run) => run.status !== 'succeeded').length
+      const copy =
+        runs.length === 1
+          ? {
+              title: t('notification.scheduledTaskTitle'),
+              body: t('notification.scheduledTaskBodyOne', {
+                name: runs[0].taskName,
+                status: t(`scheduledTasks.run.status.${runs[0].status}`)
+              })
+            }
+          : {
+              title: t('notification.scheduledTaskTitle'),
+              body: t('notification.scheduledTaskBodyMany', { count: runs.length, failed })
+            }
+      void triggerSystemNotification(copy)
+    })
+    return () => off()
+  }, [t])
+}
+
+/**
  * Play the app's cues from the live `pi:event` stream. Mounted once, at the top
  * of the app: the events arrive for background sessions too, which is exactly
  * what makes the cues useful — the user is told a chat finished or needs an
  * answer without having to watch it.
  */
 export function useNotificationSoundEvents(): void {
+  const { t } = useI18n()
   useEffect(() => {
     const off = window.pi?.onEvent?.((event) => {
       const decision = notificationSoundForEvent(event, (requestId) => announcedAsks.has(requestId))
       if (!decision) return
-      // Remember before playing: an ask that arrives while a cue is muted is
-      // still "announced", so unmuting later cannot make an old question ping.
+      // Remember before notifying: a republished ask is the same question even
+      // if sound is muted or native notification permission is denied.
       if (decision.announce) rememberAnnouncedAsk(decision.announce)
       triggerNotificationSound(decision.kind)
+      const copy = decision.kind === 'turnComplete'
+        ? { title: t('notification.turnCompleteTitle'), body: t('notification.turnCompleteBody') }
+        : { title: t('notification.askUserTitle'), body: t('notification.askUserBody') }
+      void triggerSystemNotification(copy)
     })
     return () => off?.()
-  }, [])
+  }, [t])
 }

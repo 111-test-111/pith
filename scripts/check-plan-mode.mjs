@@ -66,6 +66,7 @@ export { SessionManager, ModelRuntime, SettingsManager } from '@earendil-works/p
     setup(builder) {
       builder.onResolve({ filter: /^@earendil-works\/pi-coding-agent$/ }, () => ({ path: 'sdk', namespace: 'fixture' }))
       builder.onResolve({ filter: /^electron$/ }, () => ({ path: 'electron', namespace: 'fixture' }))
+      builder.onResolve({ filter: /^proper-lockfile$/ }, args => ({ path: fileURLToPath(import.meta.resolve(args.path)), external: true }))
       builder.onResolve({ filter: /^playwright-core(\/|$)|^chromium-bidi(\/|$)/ }, (args) => {
         const resolved = fileURLToPath(import.meta.resolve(args.path))
         return { path: resolved, external: true }

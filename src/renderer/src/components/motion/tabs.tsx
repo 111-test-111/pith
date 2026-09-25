@@ -91,8 +91,9 @@ export function Tabs({
 // Extensions section lists) is several hundred pixels tall, and a 9999px radius
 // clamps to half the WIDTH, turning its top and bottom into semicircles.
 // `rounded-capsule` is `!important`, so no call site could override it. The
-// moving INDICATOR below is still a capsule — a selected row is a normal-height
-// row. A call site that genuinely wants a true capsule can use `rounded-full`
+// moving INDICATOR below takes the CONTROL step like its tab — a selected row
+// reads as a normal small-radius block, not a left/right-semicircle pill. A
+// call site that genuinely wants a true capsule can use `rounded-full`
 // (also `!important`).
 const listClasses: Record<Variant, string> = {
   pill: "inline-flex items-center gap-1 rounded-card bg-card p-1",
@@ -132,7 +133,9 @@ export function TabsTrigger({
         onClick={() => setValue(value)}
         className={cn(
           "relative isolate px-3 pb-2.5 pt-1 -mb-px text-sm font-medium transition-colors min-h-[44px] inline-flex items-center",
-          active ? "text-foreground" : "text-muted-foreground hover:text-foreground",
+          // local patch (pi-app): inactive tabs use a fill rather than a
+          // border-only or text-only hover cue.
+          active ? "text-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground",
           className,
         )}
       >
@@ -151,7 +154,7 @@ export function TabsTrigger({
     );
   }
 
-  const radius = variant === "pill" ? "rounded-capsule" : "rounded-md";
+  const radius = variant === "pill" ? "rounded-control" : "rounded-md";
 
   return (
     <div className="relative">
@@ -178,7 +181,7 @@ export function TabsTrigger({
           "transition-colors",
           active
             ? "text-primary-foreground"
-            : "text-muted-foreground hover:text-foreground",
+            : "text-muted-foreground hover:bg-muted hover:text-foreground",
           radius,
           className,
         )}

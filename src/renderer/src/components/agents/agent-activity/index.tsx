@@ -1,3 +1,4 @@
+// local patch (pi-app): keep UI frames and focus rings in this component at 1px.
 "use client";
 // beui.dev/components/agents/chat-app
 
@@ -13,6 +14,8 @@ import {
   useRef,
   useState,
 } from "react";
+// local patch (pi-app): no item entrance/layout motion in instant mode.
+import { useReduceMotion } from "@/lib/reduce-motion";
 import { ThinkingShimmer } from "@/components/agents/loading-states/thinking-shimmer";
 import { AgentDisclosure } from "@/components/agents/agent-disclosure";
 import {
@@ -134,7 +137,8 @@ export function AgentActivity({
   className,
   contentClassName,
 }: AgentActivityProps) {
-  const reduce = useReducedMotion() ?? false;
+  const osReduce = useReducedMotion() ?? false;
+  const reduce = useReduceMotion() || osReduce;
   const baseId = useId();
   const triggerId = `${baseId}-trigger`;
   const contentId = `${baseId}-content`;
@@ -152,11 +156,13 @@ export function AgentActivity({
   const contentType = items.length
     ? getContentType(items)
     : (initialContentType ?? "mixed");
-  const cappedHeight = Math.min(contentHeight, Math.max(0, maxHeight));
-  const viewportHeight = working ? Math.max(0, maxHeight) : cappedHeight;
+  // local patch (pi-app): settled bodies use native auto height + a CSS cap.
+  // A ResizeObserver-derived height lags density/width/content changes by a
+  // frame and makes rows below an instant disclosure jump a second time.
+  const viewportHeight = working ? Math.max(0, maxHeight) : undefined;
   const capped = contentHeight > maxHeight;
   const streamOffset = working
-    ? Math.min(0, viewportHeight - contentHeight)
+    ? Math.min(0, (viewportHeight ?? 0) - contentHeight)
     : 0;
 
   useLayoutEffect(() => {
@@ -202,6 +208,8 @@ export function AgentActivity({
     >
       {working ? (
         <div
+          // local patch (pi-app): app-owned transcript geometry hook.
+          data-agent-trigger=""
           id={triggerId}
           role="status"
           className="flex h-7 min-w-0 items-center text-muted-foreground"
@@ -212,14 +220,26 @@ export function AgentActivity({
         </div>
       ) : (
         <button
+          // local patch (pi-app): app-owned transcript geometry hook.
+          data-agent-trigger=""
           id={triggerId}
           type="button"
           aria-expanded={expanded}
           aria-controls={contentId}
           onClick={toggle}
-          className="group flex h-7 min-w-0 items-center gap-1.5 rounded-md text-left font-medium text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+          // local patch (pi-app): transcript disclosures change text on hover without a fill.
+          className="group flex h-7 min-w-0 items-center gap-1.5 rounded-md text-left font-medium text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
         >
-          <span className="truncate">
+          {/* local patch (pi-app): a flex row, not `truncate`. The summary is
+              usually an inline-flex of icon + label, and an inline-flex's
+              baseline is its FIRST item's — the icon's bottom edge — which
+              inflated this span's line box (23px against the row's 20px line)
+              and lifted the label ~1.5px above the trigger's centre. That made
+              a Reasoning/group row's gap to the row below read ~3px larger than
+              its gap above as soon as 「紧凑显示连续工具调用」 closed the box
+              gaps. Long summaries still truncate through their own inner spans
+              (the group row's tool names own the `truncate`). */}
+          <span className="flex min-w-0 items-center">
             {renderCompletedStatus
               ? renderCompletedStatus({ summary: completedSummary, duration })
               : completedSummary}
@@ -236,11 +256,13 @@ export function AgentActivity({
       )}
 
       <AgentDisclosure
+        // local patch (pi-app): only a real row body owns a leading gap.
+        data-agent-body={items.length > 0 || undefined}
         id={contentId}
         role="region"
         aria-labelledby={triggerId}
         open={expanded}
-        openHeight={viewportHeight}
+        openHeight={viewportHeight ?? "auto"}
       >
         <div
           ref={viewportRef}
@@ -248,7 +270,7 @@ export function AgentActivity({
             "scrollbar-hide pr-1",
             capped && expanded && !working ? "overflow-y-auto" : "overflow-y-hidden",
           )}
-          style={{ height: viewportHeight, maskImage, WebkitMaskImage: maskImage }}
+          style={{ height: viewportHeight, maxHeight: Math.max(0, maxHeight), maskImage, WebkitMaskImage: maskImage }}
         >
           <motion.div
             ref={contentRef}
@@ -261,7 +283,7 @@ export function AgentActivity({
             <AnimatePresence mode="popLayout">
               {items.map((item) => (
                 <motion.div
-                  layout="position"
+                  layout={reduce ? false : "position"}
                   key={item.id}
                   role="listitem"
                   initial={reduce ? { opacity: 1 } : { opacity: 0, y: 6 }}

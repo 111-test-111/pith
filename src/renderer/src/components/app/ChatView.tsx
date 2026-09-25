@@ -23,6 +23,7 @@ import { AssistantGroup, BashItem, CustomItem, SummaryItem, UserItem } from './M
 import { RowReveal } from './RowReveal'
 import { SummaryRow } from './SummaryRow'
 import { TurnStatus } from './TurnStatus'
+import { continuationTarget } from '../../../../shared/continuation'
 
 /** Final answer text of a turn: the last round that produced prose. */
 function finalReplyText(assistants: AssistantMsg[]): string {
@@ -159,6 +160,7 @@ export const ChatView = memo(function ChatView({
   scrollResetKey = 0,
   onDismissError,
   onResend,
+  onContinue,
   onEditMessage,
   onRewindMessage,
   onUndoFiles,
@@ -180,6 +182,7 @@ export const ChatView = memo(function ChatView({
    * opened it and re-prompts. The assistant turn's retry cell and the error
    * banner funnel here. */
   onResend?: (message: UserMsg) => void
+  onContinue?: (message: AssistantMsg) => void
   /** Open the edit-and-resend dialog for a user message (does not resend by
    * itself — the dialog's Resend press does). */
   onEditMessage?: (message: UserMsg) => void
@@ -211,6 +214,8 @@ export const ChatView = memo(function ChatView({
   }, [state.messages])
 
   const busy = state.isStreaming || Boolean(state.streaming)
+  const continueFrom = !busy && !state.initializing && !state.subagentChild && !state.scheduledTaskSession &&
+    !state.plan?.blockers.submit.includes('already-submitted') ? continuationTarget(state.messages) : null
   /** Seed for the waiting row's spinner verb: the session, not the turn, so the
    * sentence a user is mid-read never flips when the row moves from the
    * transcript's pending slot into the live turn. */
@@ -293,8 +298,8 @@ export const ChatView = memo(function ChatView({
   })()
   /**
    * A run that ENDED on a retry failure is not status chrome: the turn's own
-   * group renders it as unframed error prose, directly above the retry/fork row
-   * it explains. The in-flight retry notice stays in the framed status row
+   * group renders it as unframed error prose inside the folded process.
+   * The in-flight retry notice stays in the framed status row
    * below, and so does a failure that has no settled assistant turn to host it.
    * A compaction is neither: it is a tool row of its own (below).
    */
@@ -372,11 +377,8 @@ export const ChatView = memo(function ChatView({
   const menuResend = state.subagentChild ? undefined : onResend
   const menuFork = state.subagentChild ? undefined : onFork
 
-  /** One transcript row. Assistant rounds are folded by the group itself —
-   * only when a turn has many steps — so every user prompt and every turn's
-   * final reply stay visible. `previous` lets a user row sit a little further
-   * from the assistant turn above it than turns sit from each other. */
-  const renderTurn = (turn: ChatTurn, previous?: ChatTurn) => {
+  /** Every message boundary participates in the same transcript stack. */
+  const renderTurn = (turn: ChatTurn) => {
     if (turn.key === hiddenUserKey) return null
     if (turn.role === 'user')
       return (
@@ -384,7 +386,6 @@ export const ChatView = memo(function ChatView({
           key={turn.key}
           message={turn.user}
           railId={turn.key}
-          spaced={previous?.role === 'assistant'}
           showActions={!busy}
           // Only the transcript's newest row keeps its actions on screen; every
           // older one reveals them on hover.
@@ -441,6 +442,8 @@ export const ChatView = memo(function ChatView({
         streamingIndex={live ? 0 : isLast && streamingJoinsLastTurn ? turn.assistants.length : -1}
         pending={!live && isLast && waitingInLastTurn}
         retryFrom={retryFrom}
+        continueFrom={continueFrom && turn.assistants.includes(continueFrom) ? continueFrom : undefined}
+        onContinue={onContinue}
         forkAt={turn.assistants[turn.assistants.length - 1]}
         failure={turn === lastTurn ? failureNotice ?? undefined : undefined}
         onResend={state.subagentChild ? undefined : onResend}
@@ -459,7 +462,7 @@ export const ChatView = memo(function ChatView({
 
   return (
     <BashTasksProvider sessionPath={state.sessionPath}>
-      <SessionTasks key={state.sessionPath} todos={state.todos} subagents={state.subagents} askUserRecords={state.askUserRecords} busy={busy} sessionPath={state.sessionPath} onOpenSession={onOpenSession} />
+      <SessionTasks jevState={state.jevWorkflow} key={state.sessionPath} todos={state.todos} subagents={state.subagents} askUserRecords={state.askUserRecords} busy={busy} sessionPath={state.sessionPath} onOpenSession={onOpenSession} />
       <ContextMenu open={menuOpen} onOpenChange={setMenuOpen}>
       <ContextMenuTrigger>
       <MessageScroller
@@ -482,8 +485,8 @@ export const ChatView = memo(function ChatView({
       contentClassName="mx-auto min-h-full w-full max-w-3xl overflow-x-clip"
     >
       <PlanPresentationContext.Provider value={state.plan && state.sessionPath ? { state: state.plan, sessionPath: state.sessionPath, onRefine: onRefinePlan, onReviewExecution: reviewExecution } : null}>
-      <MessageGroup spacing="default">
-        {displayTurns.flatMap((turn, index) => [index === recoveredIndex ? recoveryCard : null, renderTurn(turn, displayTurns[index - 1])])}
+      <MessageGroup data-transcript-rows>
+        {displayTurns.flatMap((turn, index) => [index === recoveredIndex ? recoveryCard : null, renderTurn(turn)])}
         {recoveredIndex < 0 ? recoveryCard : null}
 
         {state.isStreaming && !streaming && !waitingInLastTurn ? (

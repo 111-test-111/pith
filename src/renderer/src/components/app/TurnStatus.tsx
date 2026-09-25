@@ -68,8 +68,10 @@ export function TurnStatus({ className, waitingUser = false, step = THINKING_STE
     <div
       // One row height for the transcript (see `lib/transcript-rhythm`): the
       // waiting row is the same box as the rows above it, with its own line
-      // centred, so the last gap looks like every other one.
-      className={cn('flex min-h-9 items-center gap-2', className)}
+      // centred. The persistent waiting row always keeps a roomy leading gap.
+      className={cn('transcript-row flex items-center gap-2', className)}
+      data-row="process"
+      data-transcript-gap-before="roomy"
       data-spinner-waiting-user={waitingUser ? 'true' : undefined}
       data-spinner-verb={verb?.id}
       data-spinner-loader={verb ? 'dither-plus' : 'spinner'}

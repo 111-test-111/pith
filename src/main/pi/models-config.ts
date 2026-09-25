@@ -195,6 +195,25 @@ export async function builtinProviderBaseUrls(): Promise<Map<string, string>> {
 const modelNameCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' })
 
 /**
+ * `provider/modelId` keys the user hid in Settings → Providers. Hiding is an
+ * app-level visibility flag stored as `modelOverrides.<id>.hidden: true` in
+ * models.json: the SDK's schema tolerates the extra key and its override
+ * application ignores it, so a hidden model still composes and stays usable —
+ * every app-side model selector simply drops it. The provider inventory keeps
+ * listing hidden models so they can be unhidden.
+ */
+export function hiddenModelKeys(config: ModelsConfigDTO): Set<string> {
+  const hidden = new Set<string>()
+  for (const [providerId, provider] of Object.entries(config.providers ?? {})) {
+    if (!isRecord(provider)) continue
+    for (const [modelId, override] of Object.entries(provider.modelOverrides ?? {})) {
+      if (isRecord(override) && override.hidden === true) hidden.add(`${providerId}/${modelId}`)
+    }
+  }
+  return hidden
+}
+
+/**
  * Composed per-model view of one provider, merged the way the runtime
  * composes it (registry + models.json carriers + modelOverrides), with the
  * provenance the editor needs to label rows honestly. Providers that do not
@@ -209,7 +228,19 @@ export async function providerInventory(runtime: ModelRuntime, providerId: strin
       .map((model) => (isRecord(model) && typeof model.id === 'string' ? model.id.trim() : ''))
       .filter(Boolean)
   )
-  const overrideIds = new Set(Object.keys(entry?.modelOverrides ?? {}))
+  const overrideEntries = Object.entries(entry?.modelOverrides ?? {})
+  // A hide-only override is a visibility choice, not a parameter edit — it
+  // earns neither the "edited" badge nor the reset button.
+  const overrideIds = new Set(
+    overrideEntries
+      .filter(([, override]) => isRecord(override) && Object.keys(override).some((key) => key !== 'hidden'))
+      .map(([id]) => id)
+  )
+  const hiddenIds = new Set(
+    overrideEntries
+      .filter(([, override]) => isRecord(override) && override.hidden === true)
+      .map(([id]) => id)
+  )
   const builtinIds = await builtinModelIdsForProvider(providerId)
   const available = new Set(
     runtime
@@ -239,7 +270,8 @@ export async function providerInventory(runtime: ModelRuntime, providerId: strin
         : {}),
       available: available.has(`${anyModel.provider}/${model.id}`),
       source: carrierIds.has(model.id) ? (builtinIds.has(model.id) ? ('both' as const) : ('custom' as const)) : ('builtin' as const),
-      hasOverride: overrideIds.has(model.id)
+      hasOverride: overrideIds.has(model.id),
+      hidden: hiddenIds.has(model.id)
     } satisfies ProviderModelDTO
   })
 
@@ -865,6 +897,9 @@ const sourceNameCollator = new Intl.Collator(undefined, { numeric: true, sensiti
  */
 export async function configuredModels(runtime: ModelRuntime): Promise<ModelConfigSourceDTO[]> {
   const config = readModelsConfig()
+  // Hidden models stay usable but never appear in a picker — including this
+  // copy-source one.
+  const hidden = hiddenModelKeys(config)
   const configuredIds = new Set<string>()
   const authProviderIds = new Set<string>()
   for (const provider of runtime.getProviders()) {
@@ -882,7 +917,11 @@ export async function configuredModels(runtime: ModelRuntime): Promise<ModelConf
   const providerNames = new Map(runtime.getProviders().map((p) => [p.id, p.name ?? p.id]))
   const models: ModelConfigSourceDTO[] = runtime
     .getModels()
-    .filter((model) => configuredIds.has((model as any).provider))
+    .filter(
+      (model) =>
+        configuredIds.has((model as any).provider) &&
+        !hidden.has(`${(model as any).provider}/${model.id}`)
+    )
     .map((model) => {
       const anyModel = model as any
       return {

@@ -1,23 +1,24 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type ClipboardEvent as ReactClipboardEvent,
   type DragEvent as ReactDragEvent
 } from 'react'
-import { Bot, Check, FileText, ImagePlus, ListChecks, Loader2, Paperclip, X } from '@/lib/icons'
+import { CalendarCheck, Check, Ghost, ImagePlus, LinkSimple, Loader2, Siren, X } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
-import { ExpandableChip } from '@/components/motion/expandable-control'
 import { PromptInput } from '@/components/agents/prompt-input'
-import { basename, formatBytes } from '@/lib/format'
+import type { PromptEditorHandle } from '@/lib/hooks/use-prompt-editor'
 import { readImageAttachment, resolveAttachmentFile, type AttachmentTarget } from '@/lib/attachments'
 import {
   otherBehavior,
   useStreamingBehavior,
   type StreamingBehavior
 } from '@/lib/streaming-behavior'
+import { useShortcutHandlers, type ShortcutHandlers } from '@/lib/shortcuts/use-shortcuts'
 import type {
   ContextUsageDTO,
   PlanStateDTO, SessionMode,
@@ -31,6 +32,7 @@ import type {
 import { DEFAULT_SANDBOX_MODE, type SandboxMode, type SandboxStatusDTO, type SessionSnapshotDTO } from '../../../../shared/types'
 import { FileMention, type MentionState } from './FileMention'
 import { PreviewThumb } from './ImagePreview'
+import { FileAttachmentCard } from './FileAttachmentCard'
 import { ModelPicker } from './ModelPicker'
 import { parsePlanCommand, planErrorKey } from '@/lib/plan-submissions'
 import { SandboxModePicker } from './SandboxModePicker'
@@ -39,7 +41,7 @@ import { QueuePanel } from './QueuePanel'
 import { LabelTooltip } from './LabelTooltip'
 import { useI18n } from '@/i18n'
 import { cn } from '@/lib/utils'
-import { NewSessionHeader, NewSessionSuggestions, type NewSessionContext } from './NewSession'
+import { NewSessionHeader, type NewSessionContext } from './NewSession'
 import { ShaderBackdrop } from './ShaderBackdrop'
 
 export interface ImageAttachment {
@@ -66,9 +68,9 @@ interface ComposerProps {
   availableThinkingLevels: ThinkingLevel[]
   busy: boolean
   initializing?: boolean
-  /** A read-only session view (an opened subagent child): typing and submit
-   * are disabled — the child's runs are driven by its parent's runtime. */
+  /** A read-only session view: typing and submit are disabled. */
   readOnly?: boolean
+  readOnlyKind?: 'subagent' | 'scheduled'
   /** Parent session file of a read-only child view, for the banner's action. */
   readOnlyParentPath?: string | null
   /** Open another session (the child banner's "open parent"). */
@@ -106,10 +108,9 @@ interface ComposerProps {
   /** Browser annotation insert (Task 16): Workspace subscribes to
    * `pith:browser-annotation` and hands a fresh { text, seq } per
    * annotation. The draft lives in THIS component's state, so this one-way
-   * append is the only external write path — same semantics as
-   * selectStarter (existing draft kept, \n\n separator), never an overwrite
-   * and never a submit on the user's behalf. seq keeps two identical texts
-   * firing. */
+   * append is the only external write path — keep-the-draft semantics
+   * (existing draft kept, \n\n separator), never an overwrite and never a
+   * submit on the user's behalf. seq keeps two identical texts firing. */
   appendDraft?: { text: string; seq: number } | null
 }
 
@@ -127,6 +128,7 @@ export function Composer({
   busy,
   initializing = false,
   readOnly = false,
+  readOnlyKind = 'subagent',
   readOnlyParentPath = null,
   onOpenSession,
   escapeStopsRun = true,
@@ -147,20 +149,23 @@ export function Composer({
   appendDraft = null
 }: ComposerProps) {
   const { t } = useI18n()
-  const [modePending, setModePending] = useState(false)
+  // Paint the chosen mode in the click's render, while main persists and
+  // applies it. Sending stays gated until that request has settled.
+  const [switchingMode, setSwitchingMode] = useState<SessionMode | null>(null)
+  const modePending = switchingMode !== null
   const [modeError, setModeError] = useState<string | null>(null)
   // A mode chosen while the session is still initializing cannot be admitted
   // by main yet (extension startup may still rewrite the session). The intent
   // is queued here and flushed when initialization ends; until then the
-  // optimistic value drives the UI (sandbox picker hidden, plan chip shown),
+  // optimistic value drives the bottom mode control and disables permissions,
   // and a failed flush reverts it through `setPendingMode(null)` + modeError.
   const [pendingMode, setPendingMode] = useState<SessionMode | null>(null)
   const currentPath = useRef(sessionPath)
   currentPath.current = sessionPath
-  useEffect(() => { setModeError(null); setModePending(false); setPendingMode(null) }, [sessionPath])
-  // What the composer shows: a queued intent wins over the published state
-  // until the flush settles either way.
-  const effectiveMode: SessionMode = pendingMode ?? plan?.mode ?? 'normal'
+  useEffect(() => { setModeError(null); setSwitchingMode(null); setPendingMode(null) }, [sessionPath])
+  // Queued and in-flight choices share the same appearance, so flushing an
+  // initialization intent never flashes the previously published mode.
+  const effectiveMode: SessionMode = pendingMode ?? switchingMode ?? plan?.mode ?? 'normal'
   const flushed = useRef(false)
   const queueMode = (mode: SessionMode) => {
     // Reset the flush guard so the plan-state change that follows retries the
@@ -181,7 +186,7 @@ export function Composer({
     }
     const blocked = readOnly ? 'child-session' : busy ? 'busy' : plan?.blockers.switch[0]
     if (blocked) { setModeError(blocked); return false }
-    setModePending(true); setModeError(null)
+    setSwitchingMode(mode); setModeError(null)
     try {
       const result = await window.pi.setSessionMode({ sessionPath, mode })
       if (result.ok) onPlanState?.(sessionPath, result.value)
@@ -192,7 +197,7 @@ export function Composer({
       }
       return true
     } catch { if (currentPath.current === sessionPath) setModeError('unknown'); return false }
-    finally { if (currentPath.current === sessionPath) setModePending(false) }
+    finally { if (currentPath.current === sessionPath) setSwitchingMode(null) }
   }
   // Flush a queued intent once nothing reports initializing anymore. The
   // blockers guard covers the stale-DTO window between session_initialized
@@ -222,13 +227,13 @@ export function Composer({
   const [dragOver, setDragOver] = useState(false)
   const imageInputRef = useRef<HTMLInputElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const editorRef = useRef<PromptEditorHandle | null>(null)
   const [refining, setRefining] = useState(false)
   useEffect(() => {
     setRefining(false)
     const refine = (event: Event) => {
       if ((event as CustomEvent).detail?.sessionPath !== sessionPath || readOnly) return
-      setRefining(true); textareaRef.current?.focus({ preventScroll: true })
+      setRefining(true); editorRef.current?.focus({ preventScroll: true })
     }
     window.addEventListener('pith:refine-plan', refine)
     return () => window.removeEventListener('pith:refine-plan', refine)
@@ -305,18 +310,12 @@ export function Composer({
 
   const selectMention = (hit: FileHitDTO) => {
     if (!mention) return
-    const textarea = textareaRef.current
-    const caret = textarea?.selectionStart ?? value.length
+    const editor = editorRef.current
+    const caret = editor?.selectionStart ?? value.length
     const start = mention.triggerIndex
-    const nextValue = `${value.slice(0, start)}@${hit.relPath} ${value.slice(caret)}`
-    setValue(nextValue)
+    editor?.replaceRange(start, caret, `@${hit.relPath} `)
     setMention(null)
     addFileHit(hit)
-    requestAnimationFrame(() => {
-      const pos = start + hit.relPath.length + 2
-      textarea?.focus()
-      textarea?.setSelectionRange(pos, pos)
-    })
   }
 
   // ---- submit ---------------------------------------------------------------
@@ -332,7 +331,7 @@ export function Composer({
       return
     }
     // A queued or in-flight mode intent gates the send too: the first prompt
-    // must go out under the mode the chip shows, not race the flush IPC into
+    // must go out under the mode the control shows, not race the flush IPC into
     // a 'busy' refusal (and a revert that silently downgrades the request).
     if (initializing || readOnly || pendingMode !== null || modePending) return
     if (!text && !images.length && !files.length) return
@@ -343,6 +342,7 @@ export function Composer({
     }
     if (busy) onQueue({ ...payload, streamingBehavior: sendBehavior })
     else onSend(payload)
+    setRefining(false)
     setValue('')
     setImages([])
     setFiles([])
@@ -396,7 +396,7 @@ export function Composer({
     const items = await onRecallQueue()
     if (!items.length) return
     await mergeRecalled(items)
-    textareaRef.current?.focus()
+    editorRef.current?.focus()
   }
 
   /**
@@ -413,23 +413,24 @@ export function Composer({
 
   /**
    * Stop on Escape even when focus has left the composer (scrolling the
-   * transcript, a tool disclosure…), where the textarea handler cannot see the
-   * key. Overlays take priority: React handlers (the mention popup, disabled
-   * popovers) run before this window listener and signal via
-   * `defaultPrevented`, while CenterMorphModal registers its Esc handler later
-   * than this one, so its open dialog is detected through `aria-modal`.
+   * transcript, a tool disclosure…), where the editor handler cannot see the
+   * key. The shortcut dispatcher owns Escape: overlay layers (dialogs,
+   * menus) block it outright, React handlers that consumed it signal via
+   * `defaultPrevented`, and text fields other than the main composer keep
+   * their own Escape. Registering nothing while idle leaves Esc untouched.
    */
-  useEffect(() => {
-    if (!busy || !escapeStopsRun) return
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' || event.defaultPrevented) return
-      if (document.querySelector('[aria-modal="true"]')) return
-      event.preventDefault()
-      void handleStop()
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [busy, escapeStopsRun, handleStop])
+  const stopAgentHandlers = useMemo<ShortcutHandlers>(
+    () =>
+      busy && escapeStopsRun
+        ? {
+            stopAgent: () => {
+              void handleStop()
+            }
+          }
+        : {},
+    [busy, escapeStopsRun, handleStop]
+  )
+  useShortcutHandlers(stopAgentHandlers)
 
   const handlePromoteQueued = useCallback((index: number) => {
     void window.pi.queueAction({ action: 'promote', kind: 'followUp', index })
@@ -439,7 +440,8 @@ export function Composer({
     void window.pi.queueAction({ action: 'remove', kind, index })
   }, [])
 
-  const handleKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLSpanElement>) => {
+    if (event.nativeEvent.isComposing) return
     if (mention) {
       if (mentionHits.length) {
         if (event.key === 'ArrowDown') {
@@ -482,48 +484,27 @@ export function Composer({
 
   const handleChange = (next: string) => {
     setValue(next)
-    const caret = textareaRef.current?.selectionStart ?? next.length
+    const caret = editorRef.current?.selectionStart ?? next.length
     detectMention(next, caret)
   }
 
-  const selectStarter = (prompt: string) => {
-    // Keep an existing draft and its attachments; suggestions are editable
-    // starting points and never submit a request on the user's behalf.
-    setValue((current) => current.trim() ? `${current.trimEnd()}\n\n${prompt}` : prompt)
-    setMention(null)
-    requestAnimationFrame(() => {
-      const textarea = inputContainerRef.current?.querySelector('textarea')
-      if (!textarea) return
-      // On a short window the selected card can be below the input. Let
-      // native focus scroll the editor back into view before editing.
-      textarea.focus()
-      textarea.setSelectionRange(textarea.value.length, textarea.value.length)
-    })
-  }
-
   // Browser annotation insert (Task 16): append the composed annotation text
-  // to the internal draft and put the caret at its end — the same
-  // keep-the-draft semantics as selectStarter. Keyed on the appendDraft
-  // object, so a repeated identical annotation still lands.
+  // to the internal draft and put the caret at its end — keep-the-draft
+  // semantics (an existing draft is kept with a \n\n separator). Keyed on the
+  // appendDraft object, so a repeated identical annotation still lands.
   useEffect(() => {
     if (!appendDraft) return
+    const editor = editorRef.current
+    if (!editor) return
     const text = appendDraft.text
-    setValue((current) => (current.trim() ? `${current.trimEnd()}\n\n${text}` : text))
+    const current = editor.value
+    const start = current.trim() ? current.trimEnd().length : 0
+    editor.replaceRange(start, current.length, start ? `\n\n${text}` : text)
     setMention(null)
-    requestAnimationFrame(() => {
-      // textareaRef is only populated after PromptInput's first focus — a
-      // composer never focused this session has no textarea ref yet; fall
-      // back to the container query (selectStarter's path) so the FIRST
-      // annotation still focuses the field.
-      const textarea = textareaRef.current ?? inputContainerRef.current?.querySelector('textarea') ?? null
-      if (!textarea) return
-      textarea.focus()
-      textarea.setSelectionRange(textarea.value.length, textarea.value.length)
-    })
   }, [appendDraft])
 
   // ---- paste & drag/drop --------------------------------------------------
-  const handlePaste = (event: ReactClipboardEvent<HTMLTextAreaElement>) => {
+  const handlePaste = (event: ReactClipboardEvent<HTMLSpanElement>) => {
     const pasted = Array.from(event.clipboardData.files)
     if (!pasted.length) return
     // A clipboard holding files must not also paste their names as text.
@@ -574,15 +555,16 @@ export function Composer({
 
           {modeError && <p role="alert" className="mb-2 text-xs text-destructive">{t(planErrorKey(modeError))}</p>}
           {plan?.mode === 'plan' && plan.shellEnforcement !== 'full' && <p className="mb-2 text-xs text-muted-foreground">{t('plan.shellUnavailable')}</p>}
-          {/* A disabled composer with no explanation reads as a bug: an opened
-              subagent child says why, and where the work actually continues. */}
+          {/* A disabled composer explains who owns the session's turns. */}
           {readOnly ? (
             <div
               data-composer-readonly=""
               className="mb-2 flex items-center gap-2 rounded-control border border-border bg-muted/40 px-2.5 py-1.5 text-xs text-muted-foreground"
             >
-              <Bot aria-hidden="true" className="size-3.5 shrink-0" />
-              <span className="min-w-0 flex-1">{t('subagent.readOnlyNotice')}</span>
+              {readOnlyKind === 'scheduled'
+                ? <CalendarCheck aria-hidden="true" className="size-3.5 shrink-0" />
+                : <Ghost aria-hidden="true" className="size-3.5 shrink-0" />}
+              <span className="min-w-0 flex-1">{t(readOnlyKind === 'scheduled' ? 'scheduledTasks.pane.readOnly' : 'subagent.readOnlyNotice')}</span>
               {readOnlyParentPath && onOpenSession ? (
                 <Button variant="ghost" size="sm" onClick={() => onOpenSession(readOnlyParentPath)}>
                   {t('subagent.openParent')}
@@ -591,65 +573,15 @@ export function Composer({
             </div>
           ) : null}
 
-          {images.length || files.length ? (
-            <div className="mb-2 flex flex-wrap items-center gap-2">
-              {images.map((attachment) => (
-                <span key={attachment.id} className="group relative">
-                  <PreviewThumb
-                    src={attachment.dataUrl}
-                    alt={attachment.name}
-                    className="h-14 w-14 rounded-xl"
-                    imageClassName="h-full w-full object-cover"
-                  />
-                  <button
-                    type="button"
-                    aria-label={t('workspace.removeAttachment', { name: attachment.name })}
-                    onClick={() => removeImage(attachment.id)}
-                    className="absolute -right-1.5 -top-1.5 grid size-5 place-items-center rounded-capsule bg-foreground text-background opacity-0 transition-opacity group-hover:opacity-100"
-                  >
-                    <X className="size-3" />
-                  </button>
-                </span>
-              ))}
-              {files.map((attachment) => (
-                <LabelTooltip
-                  key={attachment.id}
-                  content={`${attachment.relPath} · ${formatBytes(attachment.size)}`}
-                  wrap
-                >
-                  {/* The span owns the tooltip's `aria-describedby` (the chip
-                      forwards no unknown props) and the chip stays quiet until
-                      its label is clicked, when the remove action slides out. */}
-                  <span data-attachment-chip="">
-                    <ExpandableChip
-                      className="h-7"
-                      labelClassName="pl-2.5 pr-2 text-xs"
-                      actionClassName="h-full"
-                      label={
-                        <span className="inline-flex items-center gap-1.5">
-                          <FileText className="size-3.5 shrink-0 text-primary" />
-                          <span className="max-w-44 truncate">{basename(attachment.relPath)}</span>
-                        </span>
-                      }
-                      actionIcon={<X className="size-3" />}
-                      actionLabel={t('workspace.removeAttachment', { name: attachment.relPath })}
-                      onAction={() => removeFile(attachment.id)}
-                    />
-                  </span>
-                </LabelTooltip>
-              ))}
-            </div>
-          ) : null}
-
           <div
-            className={dragOver ? 'rounded-2xl ring-2 ring-primary/60 transition-shadow' : 'transition-shadow'}
+            className={dragOver ? 'rounded-2xl ring-1 ring-primary/60 transition-shadow' : 'transition-shadow'}
           >
             <PromptInput
               aria-label={t('composer.inputAria')}
               className={start ? 'bg-card' : undefined}
               minRows={start ? 3 : 2}
               value={value}
-              onFocus={(event) => { textareaRef.current = event.currentTarget }}
+              inputRef={editorRef}
               onValueChange={handleChange}
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
@@ -660,6 +592,40 @@ export function Composer({
               onSubmit={() => dispatch(behavior)}
               onQueueSubmit={() => dispatch(behavior)}
               maxRows={8}
+              attachments={
+                images.length || files.length ? (
+                  <>
+                    {images.map((attachment) => (
+                      <span key={attachment.id} className="group relative">
+                        <PreviewThumb
+                          src={attachment.dataUrl}
+                          alt={attachment.name}
+                          framed
+                          className="h-14 w-14 rounded-xl"
+                          imageClassName="h-full w-full object-cover"
+                        />
+                        <button
+                          type="button"
+                          aria-label={t('workspace.removeAttachment', { name: attachment.name })}
+                          onClick={() => removeImage(attachment.id)}
+                          className="absolute -right-1.5 -top-1.5 grid size-5 place-items-center rounded-capsule text-destructive opacity-0 transition-[opacity,color,background-color] group-hover:opacity-100 hover:bg-destructive/10 focus-visible:opacity-100"
+                        >
+                          <X className="size-3" />
+                        </button>
+                      </span>
+                    ))}
+                    {files.map((attachment) => (
+                      <FileAttachmentCard
+                        key={attachment.id}
+                        path={attachment.path}
+                        label={attachment.relPath}
+                        size={attachment.size}
+                        onRemove={() => removeFile(attachment.id)}
+                      />
+                    ))}
+                  </>
+                ) : undefined
+              }
               placeholder={
                 busy
                   ? t(behavior === 'steer' ? 'composer.hintSteer' : 'composer.hintFollowUp', {
@@ -668,7 +634,7 @@ export function Composer({
                   : t(refining ? 'plan.refinePrompt' : start ? 'newSession.placeholder' : 'composer.placeholder')
               }
               leadingAction={
-                <span className="flex items-center gap-1">
+                <span className="flex min-w-0 items-center gap-1">
                   <ModelPicker
                     models={models}
                     value={model ? `${model.providerId}/${model.id}` : null}
@@ -678,27 +644,47 @@ export function Composer({
                     onThinkingLevelChange={onThinkingLevelChange}
                     disabled={busy || initializing || readOnly}
                   />
+                  {effectiveMode === 'plan' ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      data-plan-mode-control=""
+                      aria-label={t('plan.exit')}
+                      aria-pressed="true"
+                      disabled={readOnly || busy || modePending || !sessionPath || (plan?.blockers.switch.some((blocker) => blocker !== 'initializing') ?? false)}
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => {
+                        editorRef.current?.focus({ preventScroll: true })
+                        void changeMode('normal')
+                      }}
+                      className="group h-8 gap-1.5 px-2 text-xs text-primary hover:bg-muted hover:text-primary"
+                    >
+                      <span aria-hidden="true" className="relative size-4 shrink-0">
+                        <Siren className="absolute inset-0 size-4 transition-opacity group-hover:opacity-0" />
+                        <X className="absolute inset-0 size-4 opacity-0 transition-opacity group-hover:opacity-100" />
+                      </span>
+                      <span>{t('plan.plan')}</span>
+                    </Button>
+                  ) : null}
                 </span>
               }
               contextIndicator={
                 <span className="flex items-center gap-1">
-                  {/* Plan owns this spot: while it is on, the sandbox picker
-                      is hidden and a plan chip sits in its place — under a
-                      plan the permission is always the read-only overlay.
-                      Hovering (or focusing) the chip slides out the exit
-                      action; leaving restores the picker here. */}
-                  {effectiveMode === 'plan' ? (
-                    <PlanModeChip onClose={() => void changeMode('normal')} />
-                  ) : (
-                    <SandboxModePicker
-                      mode={plan?.effectiveSandboxMode ?? sandboxMode}
-                      status={sandbox}
-                      sessionPath={sessionPath}
-                      disabled={busy || initializing || readOnly}
-                      planRestricted={plan?.mode === 'plan'}
-                      onSnapshot={(snapshot) => onSandboxSnapshot?.(snapshot)}
-                    />
-                  )}
+                  {/* The permission stays readable (and deliberately disabled)
+                      under a plan. The picker's mode is the session's own
+                      stored choice — the snapshot's sandboxMode carries the
+                      EFFECTIVE value, which plan overlays with read-only, so
+                      the stored one comes from the plan DTO (which every plan
+                      state refresh carries, transition or not). */}
+                  <SandboxModePicker
+                    mode={plan?.configuredSandboxMode ?? sandboxMode}
+                    status={sandbox}
+                    sessionPath={sessionPath}
+                    disabled={busy || initializing || readOnly}
+                    planRestricted={effectiveMode === 'plan'}
+                    onSnapshot={(snapshot) => onSandboxSnapshot?.(snapshot)}
+                  />
                   {initializing ? (
                     <LabelTooltip content={t('composer.initializing')}>
                       <span role="status" aria-label={t('composer.initializing')} className="grid size-7 place-items-center text-muted-foreground">
@@ -717,29 +703,25 @@ export function Composer({
                       {effectiveMode === 'plan' ? <Check aria-hidden="true" className="size-3.5 shrink-0 text-primary" /> : null}
                     </span>
                   ),
-                  description: t('plan.modeHelp'),
-                  icon: <ListChecks />,
-                  // Initialization itself is not a blocker here: the intent
-                  // queues and applies when the session reports initialized.
-                  // Every other live switch blocker still disables the item.
+                  icon: <Siren />,
                   disabled: readOnly || busy || modePending || !sessionPath || (plan?.blockers.switch.some((blocker) => blocker !== 'initializing') ?? false)
                 },
                 {
                   value: 'attach-image',
                   label: t('composer.attachImage'),
-                  description: t('composer.attachImageDesc'),
                   icon: <ImagePlus />
                 },
                 {
                   value: 'attach-file',
                   label: t('composer.attachFile'),
-                  description: t('composer.attachFileDesc'),
-                  icon: <Paperclip />
+                  icon: <LinkSimple />
                 }
               ]}
               onAction={(action) => {
-                if (action === 'toggle-plan') void changeMode(effectiveMode === 'plan' ? 'normal' : 'plan')
-                else if (action === 'attach-image') imageInputRef.current?.click()
+                if (action === 'toggle-plan') {
+                  editorRef.current?.focus({ preventScroll: true })
+                  void changeMode(effectiveMode === 'plan' ? 'normal' : 'plan')
+                } else if (action === 'attach-image') imageInputRef.current?.click()
                 else if (action === 'attach-file') fileInputRef.current?.click()
               }}
             />
@@ -778,36 +760,7 @@ export function Composer({
             }}
           />
         </div>
-        {start ? <NewSessionSuggestions {...start} onSelect={selectStarter} /> : null}
       </div>
     </div>
-  )
-}
-
-/**
- * The chip that sits where the sandbox picker was while plan mode is on —
- * the plan state is readable at the permission's own spot. Hover (or
- * keyboard focus) reveals the exit mark, which FLOATS on the chip's corner
- * (the attachment-remove pattern): the chip keeps its width, the close
- * action never joins the row's layout. Activating it leaves plan mode,
- * which restores the sandbox picker in this same position.
- */
-function PlanModeChip({ onClose }: { onClose: () => void }) {
-  const { t } = useI18n()
-  return (
-    <span data-plan-chip="" className="group relative inline-flex">
-      <span className="inline-flex h-8 items-center gap-1.5 rounded-capsule border border-border px-2.5 text-xs">
-        <ListChecks aria-hidden="true" className="size-3.5 text-primary" />
-        {t('plan.plan')}
-      </span>
-      <button
-        type="button"
-        aria-label={t('plan.chipClose')}
-        onClick={onClose}
-        className="absolute -right-1.5 -top-1.5 grid size-5 place-items-center rounded-capsule bg-foreground text-background opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
-      >
-        <X className="size-3" />
-      </button>
-    </span>
   )
 }

@@ -56,6 +56,8 @@ interface ModelRow {
   source: 'builtin' | 'custom' | 'both' | 'draft'
   hasOverride: boolean
   available: boolean
+  /** App-level visibility flag (models.json modelOverrides.<id>.hidden). */
+  hidden: boolean
   /** Index into entry.models when the row maps to a carrier. */
   carrierIndex: number | null
   /** Composed base when the row is editable as an override. */
@@ -132,6 +134,7 @@ export function ProviderDetail({
         source: model.source,
         hasOverride: model.hasOverride,
         available: model.available,
+        hidden: model.hidden,
         carrierIndex: editableAsCarrier ? carrierIndex : null,
         base: editableAsCarrier ? null : model
       }
@@ -152,6 +155,7 @@ export function ProviderDetail({
         source: 'draft' as const,
         hasOverride: false,
         available: false,
+        hidden: false,
         carrierIndex: index,
         base: null
       }))
@@ -192,7 +196,34 @@ export function ProviderDetail({
       (draft) => {
         const current = draft.providers[provider.id] ?? {}
         const overrides = { ...(current.modelOverrides ?? {}) }
+        // Reset restores parameters; the visibility choice survives it.
+        const keepHidden = overrides[modelId]?.hidden === true
         delete overrides[modelId]
+        if (keepHidden) overrides[modelId] = { hidden: true }
+        return {
+          ...draft,
+          providers: { ...draft.providers, [provider.id]: { ...current, modelOverrides: overrides } }
+        }
+      },
+      true
+    )
+  }
+
+  /**
+   * Hiding is a visibility flag, not a parameter edit: it lives in
+   * `modelOverrides` beside any parameter patch and never touches it.
+   * Unhiding a model with no other override keys drops the emptied entry.
+   */
+  const setModelHidden = (modelId: string, hidden: boolean) => {
+    mutate(
+      (draft) => {
+        const current = draft.providers[provider.id] ?? {}
+        const overrides = { ...(current.modelOverrides ?? {}) }
+        const existing = { ...(overrides[modelId] ?? {}) }
+        if (hidden) existing.hidden = true
+        else delete existing.hidden
+        if (Object.keys(existing).length > 0) overrides[modelId] = existing
+        else delete overrides[modelId]
         return {
           ...draft,
           providers: { ...draft.providers, [provider.id]: { ...current, modelOverrides: overrides } }
@@ -426,7 +457,11 @@ export function ProviderDetail({
                     />
                   </Tooltip>
                   <div className="min-w-0">
-                    <p className="flex items-center gap-1.5 truncate text-sm font-medium text-foreground">
+                    <p
+                      className={`flex items-center gap-1.5 truncate text-sm font-medium ${
+                        row.hidden ? 'text-muted-foreground' : 'text-foreground'
+                      }`}
+                    >
                       <span className="truncate">{row.name || row.id || t('settings.modelDraft')}</span>
                       {row.source === 'draft' ? (
                         <span className="shrink-0 rounded-control bg-amber-500/15 px-1.5 py-px text-[10px] font-medium text-amber-600 dark:text-amber-400">
@@ -441,6 +476,11 @@ export function ProviderDetail({
                       {row.hasOverride ? (
                         <span className="shrink-0 rounded-control bg-primary/10 px-1.5 py-px text-[10px] font-medium text-primary">
                           {t('settings.modelEdited')}
+                        </span>
+                      ) : null}
+                      {row.hidden ? (
+                        <span className="shrink-0 rounded-control bg-muted px-1.5 py-px text-[10px] font-medium text-muted-foreground">
+                          {t('settings.modelHidden')}
                         </span>
                       ) : null}
                     </p>
@@ -465,6 +505,21 @@ export function ProviderDetail({
                         }}
                       >
                         <RotateCcw className="size-3.5" />
+                      </Button>
+                    </Tooltip>
+                  ) : null}
+                  {row.source !== 'draft' ? (
+                    <Tooltip content={row.hidden ? t('settings.unhideModel') : t('settings.hideModel')}>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        aria-label={row.hidden ? t('settings.unhideModel') : t('settings.hideModel')}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          setModelHidden(row.id, !row.hidden)
+                        }}
+                      >
+                        {row.hidden ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
                       </Button>
                     </Tooltip>
                   ) : null}

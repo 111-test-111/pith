@@ -2,8 +2,9 @@ import { useSyncExternalStore } from 'react'
 
 /**
  * Interface style — Settings → Appearance. ONE global preference that drives
- * two dimensions so they can never disagree: the corner/radius preset
- * (`data-corners`) and the icon pack (`data-icon-pack`).
+ * the corner/radius preset (`data-corners`). Icons are NOT part of it: the app
+ * has a single icon family (Phosphor for UI glyphs, Catppuccin for file types),
+ * so both styles draw the same artwork and only the geometry differs.
  *
  * The squircle values are recovered from 397f6ed^ (the parent of the commit
  * that squared the branch); the square style is the default and the two token
@@ -20,26 +21,15 @@ import { useSyncExternalStore } from 'react'
 const STORAGE_KEY = 'pi-app:ui-style'
 export const UI_STYLES = ['square', 'squircle'] as const
 export type UiStyle = (typeof UI_STYLES)[number]
-export type IconPack = 'carbon' | 'hugeicons'
 const DEFAULT: UiStyle = 'square'
 
 function isStyle(value: string | null): value is UiStyle {
   return value === 'square' || value === 'squircle'
 }
 
-/** The icon pack is derived, never stored: one preference, two dimensions.
- * The square style's pack is IBM Carbon — squarely drawn artwork for the
- * squarely drawn interface; the squircle style keeps HugeIcons' stroke-rounded
- * family. */
-export function iconPackOf(style: UiStyle): IconPack {
-  return style === 'squircle' ? 'hugeicons' : 'carbon'
-}
-
-/** Write both derived attributes. Idempotent; safe to call on every change. */
+/** Write the derived corner attribute. Idempotent; safe to call on every change. */
 export function applyUiStyle(style: UiStyle): void {
-  const root = document.documentElement
-  root.dataset.corners = style
-  root.dataset.iconPack = iconPackOf(style)
+  document.documentElement.dataset.corners = style
 }
 
 function read(): UiStyle {
@@ -66,7 +56,7 @@ function get(): UiStyle {
 }
 
 /**
- * Apply a style: store, persistence, the derived DOM attributes, listeners.
+ * Apply a style: store, persistence, the derived DOM attribute, listeners.
  * Exported as a plain function (not only through the hook) so a consumer that
  * renders the components without mounting `App` — the geometry check fixture,
  * for one — can drive BOTH the store and `<html>` from one call. Writing the

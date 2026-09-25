@@ -2,7 +2,7 @@
 
 Plan Mode constrains managed model tools to local file investigation, stores a complete versioned Markdown plan in the conversation, and starts implementation in the same session only after the user approves a specific submission. The composer offers Normal / Plan; an exact `/plan` toggles without sending a message. Arguments make it ordinary text; attachments on the toggle are rejected without clearing the draft.
 
-The plan card remains outside the tool/thinking fold even when the assistant sends no final prose. Revise focuses the composer without sending; the next submitted revision replaces the complete document. Copy and Export remain available for historical submissions on the selected branch. Start execution names the exact current submission and shows the original permissions that execution will use. Returning to Normal with the picker does not approve or execute a plan.
+The plan card remains outside the tool/thinking fold even when the assistant sends no final prose. Revise focuses the composer without sending. Once feedback is sent, the previous submission becomes ineligible for execution and the card shows that a revised plan is pending; only a complete new `submit_plan` result ends that state. The model receives the previous document as reference data for the revision. Jev's implementation workflow is disabled during Plan Mode, so its action route cannot tell the model to start coding while the plan awaits approval. Copy and Export remain available for historical submissions on the selected branch. Start execution names the exact current submission and shows the original permissions that execution will use. Returning to Normal with the bottom-row Plan control does not approve or execute a plan.
 
 ## Boundaries
 
@@ -28,7 +28,7 @@ The plan card remains outside the tool/thinking fold even when the assistant sen
 | `main/pi/plan-export.ts`, `plan-ipc.ts` | Authoritative export snapshot and six IPC routes |
 | `main/pi/manager.ts` | Lifecycle wiring, committed message projection, branch restore, session facts |
 | `renderer/state/pi-store.ts` | Per-session monotonic Plan metadata, independent of transcript sequence |
-| `SessionModePicker.tsx`, `Composer.tsx` | Mode selection, permission display and exact slash interception |
+| `Composer.tsx`, `prompt-input.tsx` | Plus-menu mode entry, bottom-row active exit control, permission display and exact slash interception |
 | `PlanCard.tsx`, `lib/plan-submissions.ts` | Verified document loading, actions and restored-card identity |
 | `MessageItems.tsx`, `ChatView.tsx`, `lib/tool-runs.ts` | Submission reply boundaries, grouping barriers and compaction recovery |
 
@@ -55,7 +55,7 @@ Protocol version 1 uses existing JSONL entries; there is no plan file by default
 
 The app generates identities. The model supplies only `plan`; the schema rejects extra properties. Normalize CRLF/CR to LF, trim, reject an empty document or more than 128 KiB **UTF-8 bytes**, then hash the canonical body. Never truncate a submitted document. Revisions increase within a planning cycle. A new user turn invalidates the previous submission's approval eligibility even before a revision arrives.
 
-`PlanSubmissionRef` includes `planId`, `revision`, `submissionEntryId`, `hash`, `planningTurnEntryId`, and `submittedAt`. The immutable submission entry on the selected branch is authoritative. Fold from `SessionManager.getBranch()`, not compacted `session.messages`. Unknown mode/approval protocol versions lock work and cannot be approved. Failed results, invalid hashes and unpersisted results cannot become cards or current plans.
+`PlanSubmissionRef` includes `planId`, `revision`, `submissionEntryId`, `hash`, `planningTurnEntryId`, and `submittedAt`. The immutable submission entry on the selected branch is authoritative. Fold from `SessionManager.getBranch()`, not compacted `session.messages`. `revisionPending` is derived from a later user entry after the latest submission; it survives reopen, compaction and branch changes without a separate mutable flag. Unknown mode/approval protocol versions lock work and cannot be approved. Failed results, invalid hashes and unpersisted results cannot become cards or current plans.
 
 On a successful tool result, an awaited subscriber verifies the SDK already appended that exact message, fsyncs, rechecks canonical body/hash/turn/revision, then publishes and seals. All later tools and background wakes are refused for that planning turn. A genuinely admitted user opening or explicit mode transition lifts the seal. Queued steer/follow-up messages remain queued and block approval.
 

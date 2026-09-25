@@ -1,6 +1,10 @@
 /** Real SVG adapter/interaction checks in isolated Electron. No SDK or user data.
- * PI_ICONS_SCREENSHOT_DIR retains the light/dark icon and control galleries of
- * both packs. */
+ * PI_ICONS_SCREENSHOT_DIR retains the light/dark icon and control galleries.
+ *
+ * Icons are pack-free by design: Phosphor for UI glyphs and Catppuccin for file
+ * types in BOTH interface styles, so this check asserts one gallery instead of
+ * flipping a pack. The source guards at the top fail if a second icon family is
+ * ever reintroduced. */
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { mkdir, mkdtemp, readFile, writeFile, rm } from 'node:fs/promises'
@@ -22,40 +26,25 @@ const providersSource = await readFile(join(repo, 'src/renderer/src/components/a
 const providerMap = providersSource.match(/const PROVIDER_ICONS[^=]+=[^{]*\{([\s\S]+?)\n\}/)[1]
 const providers = [...providerMap.matchAll(/^  (?:'([^']+)'|([\w]+)): /gm)].map(match => match[1] || match[2])
 
-// PACKS — both packs must render every semantic export. The adapter's icon-pack
-// context selects the artwork; this check flips it live and asserts each pass.
-// The packs differ in artwork style (Carbon fill, HugeIcons stroke) and Carbon
-// does not share one grid: its utility glyphs (arrows, carets, search, settings,
-// user, view, upload, …) are drawn on 16 and a few on 20, the rest on 32, so the
-// square pack asserts that each glyph keeps the view box ITS module declares —
-// which is what proves the adapter passes the artwork through untouched instead
-// of rescaling it onto one grid.
-// (The former "no @hugeicons dependency" guard was removed by explicit owner
-// decision — the reason is recorded in AGENTS.md.)
-const PACKS = ['carbon', 'hugeicons']
-const HUGE_VIEW_BOX = '0 0 24 24'
-// The pack table is the only place mapping a semantic name to Carbon's export.
-const carbonExportOf = {}
-for (const [, name, ident] of source.matchAll(/^  (\w+): \{ carbon: Carbon\.([\w]+), huge: /gm)) {
-  carbonExportOf[name] = ident
-}
-assert.equal(Object.keys(carbonExportOf).length, expectedNames.length, 'every export has a Carbon glyph')
-/** The view box each Carbon module actually draws, read from the installed
- * package. 84 of Carbon's components pick their artwork by the `size` prop
- * (defaulting to 16) and fall back to a canonical drawing otherwise; the adapter
- * deliberately does NOT forward `size` — it passes the box as width/height,
- * because the app styles 454 icon call sites with Tailwind size classes and only
- * a dozen with a numeric size, so Carbon's 16px-drawn artwork is the right
- * default. That makes the drawn artwork the `size === 16` branch when the module
- * has one, and otherwise the unconditional final return. */
-const declaredViewBox = {}
-for (const [name, ident] of Object.entries(carbonExportOf)) {
-  const module = await readFile(join(repo, 'node_modules/@carbon/icons-react/es', `${ident}.js`), 'utf8')
-  const matches = [...module.matchAll(/viewBox: "([^"]+)"/g)]
-  assert(matches.length, `carbon: ${ident} declares a view box`)
-  const sixteen = /if \(size === 16[\s\S]{0,600}?viewBox: "([^"]+)"/.exec(module)
-  declaredViewBox[name] = sixteen ? sixteen[1] : matches[matches.length - 1][1]
-}
+// One family, one grid: every Phosphor glyph draws on its native 256 view box,
+// which proves the adapter passes the library's artwork through rather than
+// rescaling paths itself.
+const PHOSPHOR_VIEW_BOX = '0 0 256 256'
+const glyphs = [...source.matchAll(/^  (\w+): (Phosphor\.\w+),$/gm)]
+assert.equal(glyphs.length, expectedNames.length, 'every export has exactly one Phosphor glyph')
+assert.deepEqual(glyphs.map(match => match[1]).sort(), expectedNames, 'the mapping table and the exports agree')
+assert.doesNotMatch(source, /Carbon|Huge|Remix/, 'the adapter names one icon family only')
+
+// The reverse guard: the removed packs must not creep back as a dependency, a
+// map file or a public artwork directory.
+const packageJson = await readFile(join(repo, 'package.json'), 'utf8')
+assert.doesNotMatch(packageJson, /@carbon\/icons-react|@iconify-json\/vscode-icons/, 'no second UI or file-icon package is declared')
+assert.doesNotMatch(await readFile(join(repo, 'src/renderer/src/lib/file-icons.ts'), 'utf8'), /vscode|iconPack|IconPack/, 'the file-icon lookup has one family and no pack parameter')
+assert.deepEqual(
+  (await readFile(join(repo, 'src/renderer/src/lib/file-icons.map.json'), 'utf8').then(JSON.parse)).source.match(/Catppuccin/)?.[0],
+  'Catppuccin',
+  'the committed file-icon map is the Catppuccin one'
+)
 
 const fixture = `<!doctype html><html><head><style>
 body{margin:0!important}main{padding:20px;max-width:1200px;margin:auto}h2{font-size:14px;margin:0 0 12px}
@@ -66,24 +55,22 @@ body{margin:0!important}main{padding:20px;max-width:1200px;margin:auto}h2{font-s
 </style></head><body><div id="root"></div><script type="module">
 import React from 'react';import {createRoot} from 'react-dom/client';
 import * as icons from '/src/lib/icons.tsx';
-import {IconPackProvider} from '/src/lib/icon-pack.tsx';
 import {Checkbox} from '/src/components/motion/checkbox.tsx';
 import {Input} from '/src/components/motion/input.tsx';
 import {Button,StatefulButton} from '/src/components/motion/button';
 import {Loader} from '/src/components/motion/loader.tsx';
 import {TodoList} from '/src/components/agents/todo-list.tsx';
 import {ProviderIcon} from '/src/components/app/ProviderIcon.tsx';
+import {FileTypeIcon} from '/src/components/app/FileTypeIcon.tsx';
 import '/src/styles.css';
 const h=React.createElement;const providers=${JSON.stringify(providers)};
 function Fixture(){
  const [checked,setChecked]=React.useState(false),[mixed,setMixed]=React.useState(false);
- const [pack,setPack]=React.useState('carbon');
- const ref=React.useRef(null);window.controls={setChecked,setMixed,setPack};
+ const ref=React.useRef(null);window.controls={setChecked,setMixed};
  React.useEffect(()=>{window.iconRef=ref;window.fixtureReady=true},[]);
- return h(IconPackProvider,{pack},
- h('main',null,
- h('h2',null,pack+' pack · 12 / 16 / 24 px'),
- h('div',{id:'gallery','data-pack':pack},Object.entries(icons).map(([name,Icon])=>h('div',{key:name,className:'cell'},
+ return h('main',null,
+ h('h2',null,'Phosphor · 12 / 16 / 24 px'),
+ h('div',{id:'gallery'},Object.entries(icons).map(([name,Icon])=>h('div',{key:name,className:'cell'},
    h('div',{className:'samples'},...[12,16,24].map(size=>h(Icon,{key:size,size,'data-sample':name,'data-size':size}))),h('span',{className:'label'},name)))),
  h('div',{className:'row'},h('div',{id:'checkbox'},h(Checkbox,{checked,indeterminate:mixed,onCheckedChange:setChecked,label:'Checkbox'})),
  h(Input,{success:true,defaultValue:'Input success','aria-label':'Success example'}),
@@ -96,7 +83,8 @@ function Fixture(){
  {id:'complete',title:'Completed',status:'completed'},
  {id:'cancelled',title:'Cancelled',status:'cancelled'}]})),
  h('div',{style:{width:300}},h(TodoList,{title:'Complete',defaultOpen:true,items:[{id:'done',title:'Finished',status:'completed'}]}))),
- h('h2',null,'Provider brands · bundled SVG'),h('div',{id:'brands'},...providers.map(providerId=>h(ProviderIcon,{key:providerId,providerId,size:22})))));
+ h('h2',null,'File types · Catppuccin public SVG'),h('div',{id:'file-types',className:'row'},...['index.ts','package.json','README.md','styles.css'].map(path=>h(FileTypeIcon,{key:path,path,className:'size-6'}))),
+ h('h2',null,'Provider brands · bundled SVG'),h('div',{id:'brands'},...providers.map(providerId=>h(ProviderIcon,{key:providerId,providerId,size:22}))));
 }
 createRoot(document.getElementById('root')).render(h(Fixture));
 </script></body></html>`
@@ -134,60 +122,33 @@ try {
   let ready=false
   for(let i=0;i<240&&!ready;i++){ready=await evaluate('!!window.fixtureReady');if(!ready)await pause(50)}
   assert(ready,'Fixture mounted')
-  const setPack=async pack=>{
-    await evaluate(`window.controls.setPack(${JSON.stringify(pack)})`)
-    for(let i=0;i<40;i++){if(await evaluate('document.querySelector("#gallery").dataset.pack')===pack)break;await pause(25)}
-    assert.equal(await evaluate('document.querySelector("#gallery").dataset.pack'),pack,pack+': active pack reflected in the fixture')
-    await pause(60)
+
+  const gallery=async()=>evaluate(`Array.from(document.querySelectorAll('#gallery svg[data-size="24"]')).map(svg=>({name:svg.dataset.sample,width:svg.getBoundingClientRect().width,height:svg.getBoundingClientRect().height,viewBox:svg.getAttribute('viewBox'),hidden:svg.getAttribute('aria-hidden'),paths:svg.querySelectorAll('path,circle,rect,line,polyline,polygon,ellipse').length,box:JSON.stringify([svg.getBBox().x,svg.getBBox().y,svg.getBBox().width,svg.getBBox().height]),html:svg.outerHTML}))`)
+  const rendered=await gallery()
+  assert.deepEqual(rendered.map(icon=>icon.name).sort(),expectedNames,'every export renders')
+  for(const icon of rendered){
+    assert.equal(icon.width,24,icon.name+': width')
+    assert.equal(icon.height,24,icon.name+': height')
+    assert.equal(icon.viewBox,PHOSPHOR_VIEW_BOX,icon.name+': keeps the native 256 grid')
+    assert.equal(icon.hidden,'true',icon.name+': is decorative by default')
+    assert(icon.paths>0,icon.name+': draws real geometry')
+    assert.doesNotMatch(icon.box,/NaN|null/,icon.name+': has no NaN/null geometry')
+    assert.doesNotMatch(icon.html,/NaN|null/,icon.name+': has no NaN/null attribute')
   }
-  const gallery=async()=>evaluate(`Array.from(document.querySelectorAll('#gallery svg[data-size="24"]')).map(svg=>({name:svg.dataset.sample,pack:svg.closest('[data-pack]').dataset.pack,width:svg.getBoundingClientRect().width,height:svg.getBoundingClientRect().height,viewBox:svg.getAttribute('viewBox'),hidden:svg.getAttribute('aria-hidden'),paths:svg.querySelectorAll('path,circle,rect,line,polyline,polygon,ellipse').length,box:JSON.stringify([svg.getBBox().x,svg.getBBox().y,svg.getBBox().width,svg.getBBox().height]),html:svg.outerHTML}))`)
-  const signatures={}
-  for(const pack of PACKS){
-    await setPack(pack)
-    const rendered=await gallery()
-    assert.deepEqual(rendered.map(icon=>icon.name).sort(),expectedNames,pack+': every export renders')
-    for(const icon of rendered){
-      assert.equal(icon.pack,pack,pack+': '+icon.name+' rendered by the active pack')
-      assert.equal(icon.width,24,pack+': '+icon.name+' width')
-      assert.equal(icon.height,24,pack+': '+icon.name+' height')
-      assert.equal(icon.viewBox,pack==='carbon'?declaredViewBox[icon.name]:HUGE_VIEW_BOX,pack+': '+icon.name+' keeps its own view box')
-      assert.equal(icon.hidden,'true',pack+': '+icon.name+' is decorative by default')
-      assert(icon.paths>0,pack+': '+icon.name+' draws real geometry')
-      assert.doesNotMatch(icon.box,/NaN|null/,pack+': '+icon.name+' has no NaN/null geometry')
-      assert.doesNotMatch(icon.html,/NaN|null/,pack+': '+icon.name+' has no NaN/null attribute')
-    }
-    signatures[pack]=rendered.map(icon=>icon.html).join('')
-    assert.equal(await evaluate('window.iconRef.current===document.querySelector("#props-icon")'),true,pack+': forwards the SVG ref')
-    assert.equal(await evaluate('document.querySelector("#props-icon").getAttribute("aria-hidden")'),null,pack+': a named SVG stays accessible')
-    assert.equal(await evaluate('document.querySelector("#css-icon").getBoundingClientRect().width'),16,pack+': Tailwind size overrides the SVG size')
-    for(const arrow of ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight']){
-      const paths=await evaluate(`document.querySelectorAll('[data-sample="${arrow}"][data-size="24"] path').length`)
-      assert.ok(paths>=1,pack+': '+arrow+' renders line artwork')
-    }
-    if(pack==='carbon'){
-      assert.equal(await evaluate('document.querySelector("#props-icon").getAttribute("stroke-width")'),null,'carbon: stroke-only props are dropped')
-      assert.equal(await evaluate('document.querySelector("#props-icon").getAttribute("fill")'),'currentColor','carbon: fill artwork follows currentColor')
-      assert.equal(await evaluate('document.querySelector("#props-icon").getAttribute("viewBox")'),declaredViewBox.Search,'carbon: keeps the artwork\'s own view box')
-    }else{
-      assert.equal(await evaluate('document.querySelector("#props-icon").getAttribute("stroke-width")'),'3','hugeicons: the requested stroke width is applied')
-      assert.equal(await evaluate('document.querySelector("#props-icon").getAttribute("stroke")'),'currentColor','hugeicons: stroke follows currentColor')
-      assert.equal(await evaluate('document.querySelector("#props-icon").getAttribute("stroke-linecap")'),'round','hugeicons: round caps')
-      assert.equal(await evaluate('document.querySelector("#props-icon").getAttribute("stroke-linejoin")'),'round','hugeicons: round joins')
-      assert.equal(await evaluate('document.querySelector("#props-icon").getAttribute("fill")'),'none','hugeicons: stroke artwork is unfilled')
-      assert.equal(await evaluate('document.querySelector("#css-icon").getAttribute("stroke-width")'),'1.5','hugeicons: the default stroke is 1.5')
-    }
+  assert.equal(await evaluate('window.iconRef.current===document.querySelector("#props-icon")'),true,'forwards the SVG ref')
+  assert.equal(await evaluate('document.querySelector("#props-icon").getAttribute("aria-hidden")'),null,'a named SVG stays accessible')
+  assert.equal(await evaluate('document.querySelector("#css-icon").getBoundingClientRect().width'),16,'Tailwind size overrides the SVG size')
+  for(const arrow of ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight']){
+    const paths=await evaluate(`document.querySelectorAll('[data-sample="${arrow}"][data-size="24"] path').length`)
+    assert.ok(paths>=1,arrow+' renders line artwork')
   }
-  assert.notEqual(signatures.carbon,signatures.hugeicons,'the two packs draw different artwork')
-  // Live switch: the same tree, flipped in place, must change the drawn artwork
-  // and flip back — that is what proves no reload/remount is involved.
-  await setPack('carbon')
-  const carbonPath=await evaluate('document.querySelector("#props-icon path").getAttribute("d")')
-  await setPack('hugeicons')
-  const hugePath=await evaluate('document.querySelector("#props-icon path").getAttribute("d")')
-  assert.notEqual(carbonPath,hugePath,'flipping the pack changes the drawn path live')
-  await setPack('carbon')
-  assert.equal(await evaluate('document.querySelector("#props-icon path").getAttribute("d")'),carbonPath,'flipping back restores the Carbon artwork')
-  console.log('PASS: all '+expectedNames.length+' icons in both packs, live pack switch, native SVG props, CSS sizing, ref and accessibility')
+  assert.equal(await evaluate('document.querySelector("#props-icon").getAttribute("stroke-width")'),null,'stroke-only props are dropped')
+  assert.equal(await evaluate('document.querySelector("#props-icon").getAttribute("fill")'),'currentColor','regular fill artwork follows currentColor')
+  assert.equal(await evaluate('document.querySelector("#props-icon").getAttribute("viewBox")'),PHOSPHOR_VIEW_BOX,'keeps the native 256 grid for every size')
+  const fileIcons=await evaluate(`Promise.all(Array.from(document.querySelectorAll('#file-types img')).map(async image=>{await image.decode();return {src:image.getAttribute('src'),width:image.naturalWidth,height:image.naturalHeight}}))`)
+  assert(fileIcons.every(icon=>/^\.\/file-icons\/[^/]+\.svg$/.test(icon.src)),'file icons load Catppuccin artwork from the flat public directory')
+  assert(fileIcons.every(icon=>icon.width>0&&icon.height>0),'file icon SVGs decode')
+  console.log('PASS: all '+expectedNames.length+' icons in the one Phosphor gallery, native SVG props, CSS sizing, ref and accessibility')
 
   await evaluate('document.querySelector("#checkbox button").click()')
   await pause(80)
@@ -213,26 +174,22 @@ try {
   const loaded=await evaluate(`Promise.all(Array.from(document.querySelectorAll('[data-provider-icon]')).map(async element=>{const source=getComputedStyle(element).maskImage.slice(5,-2);const image=new Image();image.src=source;await image.decode();return {id:element.dataset.providerIcon,width:image.naturalWidth,height:image.naturalHeight}}))`)
   assert.equal(loaded.length,providers.length)
   assert(loaded.every(image=>image.width>0&&image.height>0),'All bundled provider masks decode')
-  for(const pack of PACKS){
-    await setPack(pack)
-    for(const theme of ['light','dark']){
-      await evaluate(`document.documentElement.classList.toggle('dark',${theme==='dark'});document.documentElement.style.colorScheme='${theme}'`)
-      await pause(200)
-      assert.equal(await evaluate(`getComputedStyle(document.querySelector('[data-provider-icon]')).backgroundColor===getComputedStyle(document.querySelector('[data-provider-icon]')).color`),true,'Brand inherits theme color')
-      if(process.env.PI_ICONS_SCREENSHOT_DIR){
-        await mkdir(process.env.PI_ICONS_SCREENSHOT_DIR,{recursive:true})
-        const {cssContentSize}=await send('Page.getLayoutMetrics')
-        const screenshot=await send('Page.captureScreenshot',{captureBeyondViewport:true,clip:{x:0,y:0,width:cssContentSize.width,height:cssContentSize.height,scale:1}})
-        await writeFile(join(process.env.PI_ICONS_SCREENSHOT_DIR,theme+'-'+pack+'.png'),Buffer.from(screenshot.data,'base64'))
-        await evaluate('document.querySelector("#brands").scrollIntoView({block:"end"})')
-        await writeFile(join(process.env.PI_ICONS_SCREENSHOT_DIR,theme+'-'+pack+'-controls.png'),Buffer.from((await send('Page.captureScreenshot')).data,'base64'))
-        await evaluate('window.scrollTo(0,0)')
-      }
+  for(const theme of ['light','dark']){
+    await evaluate(`document.documentElement.classList.toggle('dark',${theme==='dark'});document.documentElement.style.colorScheme='${theme}'`)
+    await pause(200)
+    assert.equal(await evaluate(`getComputedStyle(document.querySelector('[data-provider-icon]')).backgroundColor===getComputedStyle(document.querySelector('[data-provider-icon]')).color`),true,'Brand inherits theme color')
+    if(process.env.PI_ICONS_SCREENSHOT_DIR){
+      await mkdir(process.env.PI_ICONS_SCREENSHOT_DIR,{recursive:true})
+      const {cssContentSize}=await send('Page.getLayoutMetrics')
+      const screenshot=await send('Page.captureScreenshot',{captureBeyondViewport:true,clip:{x:0,y:0,width:cssContentSize.width,height:cssContentSize.height,scale:1}})
+      await writeFile(join(process.env.PI_ICONS_SCREENSHOT_DIR,theme+'.png'),Buffer.from(screenshot.data,'base64'))
+      await evaluate('document.querySelector("#brands").scrollIntoView({block:"end"})')
+      await writeFile(join(process.env.PI_ICONS_SCREENSHOT_DIR,theme+'-controls.png'),Buffer.from((await send('Page.captureScreenshot')).data,'base64'))
+      await evaluate('window.scrollTo(0,0)')
     }
   }
-  await setPack('carbon')
   assert.deepEqual(exceptions,[],'No renderer exceptions')
-  console.log('PASS: '+loaded.length+' provider aliases, SVG asset decoding, both packs in light/dark themes')
+  console.log('PASS: '+loaded.length+' provider aliases, SVG asset decoding, light/dark themes')
 } finally {
   ws?.close()
   if(child && child.exitCode === null && child.signalCode === null) await new Promise(resolve=>{

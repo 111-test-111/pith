@@ -1,3 +1,4 @@
+// local patch (pi-app): keep UI frames and focus rings in this component at 1px.
 "use client";
 // beui.dev/components/agents/chat-app
 
@@ -109,12 +110,11 @@ function KindIcon({ kind }: { kind: ToolResultKind }) {
   return <Wrench className="size-4" />;
 }
 
-// local patch (pi-app): the status mark is the app's own pure circle
-// (`lib/status-ring`) instead of a pack glyph. The square pack answers
-// `CircleCheck` with Carbon's square `CheckboxChecked` and `Ban` with
-// `SquareSlash`, so these little rings squared off in 直角 mode while the rows
-// beside them (todo, sidebar) stayed round. Settings controls still follow the
-// pack; a status ring never does.
+// local patch (pi-app): the status mark is the task strip's shared circle
+// (`lib/status-ring`): Phosphor's own `CheckCircle` / `XCircle` / `Prohibit` for
+// a settled row, and the drawn spinning 3/4 arc while it runs. Both are the
+// marks the todo rows and the sidebar's live spin already draw, so one glance
+// reads all three panels the same way.
 function StatusIcon({
   status,
   reduce,
@@ -145,7 +145,7 @@ function ToolResultAction({
       // local patch (pi-app): no press scale — a tool-row icon button must not
       // dip inward while pressed (see `button/base`).
       transition={SPRING_PRESS}
-      className="grid size-7 place-items-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+      className="grid size-7 place-items-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
     >
       {children}
     </motion.button>
@@ -290,12 +290,15 @@ export function ToolResult({
       className={cn("w-full text-sm", className)}
     >
       <button
+        // local patch (pi-app): app-owned transcript geometry hook.
+        data-agent-trigger=""
         id={triggerId}
         type="button"
         aria-expanded={currentOpen}
         aria-controls={contentId}
         onClick={() => setOpen(!currentOpen)}
-        className="group flex min-h-9 w-full items-center gap-2 rounded-md py-1 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+        // local patch (pi-app): transcript disclosures stay unfilled on hover.
+        className="group flex min-h-9 w-full items-center gap-2 rounded-md py-1 text-left outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
       >
         <span
           aria-hidden="true"
@@ -306,8 +309,11 @@ export function ToolResult({
         <span className="flex min-w-0 flex-1 items-baseline gap-2">
           {/* local patch (pi-app): the app renders every tool row through this
               title; muted keeps it distinct from the tool's output text
-              (`text-foreground/80`) while staying on the UI font. */}
-          <span className="min-w-0 truncate font-medium text-muted-foreground">
+              (`text-foreground/80`) while staying on the UI font. The title
+              and smaller meta stay on this parent's shared baseline, matching
+              grouped rows instead of centring their unequal line boxes. Data
+              markers let the shared row geometry regression cover every host. */}
+          <span data-tool-result-title="" className="min-w-0 truncate font-medium text-muted-foreground">
             {animateChanges ? (
               <ActionSwapRollText value={titleKey}>{title}</ActionSwapRollText>
             ) : (
@@ -315,7 +321,7 @@ export function ToolResult({
             )}
           </span>
           {meta ? (
-            <span className="shrink-0 text-xs text-muted-foreground/60">
+            <span data-tool-result-meta="" className="shrink-0 text-xs text-muted-foreground/60">
               {animateChanges ? (
                 <ActionSwapRollText value={metaKey}>{meta}</ActionSwapRollText>
               ) : (
@@ -361,6 +367,8 @@ export function ToolResult({
       </button>
 
       <AgentDisclosure
+        // local patch (pi-app): only a real row body owns a leading gap.
+        data-agent-body={true}
         id={contentId}
         role="region"
         aria-labelledby={triggerId}

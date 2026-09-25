@@ -1,3 +1,4 @@
+// local patch (pi-app): keep UI frames and focus rings in this component at 1px.
 "use client";
 // beui.dev/components/motion/switch
 
@@ -78,9 +79,11 @@ export function Switch({
             // local patch (pi-app): the app's square-style branch owns this
             // control's geometry, so the track keeps no radius at all.
             "group peer inline-flex h-5 w-8 shrink-0 cursor-pointer items-center rounded-control px-0.5 outline-none transition-colors duration-200",
-            "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+            "focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
             "disabled:cursor-not-allowed disabled:opacity-60",
-            checked ? "justify-end bg-primary" : "justify-start bg-muted-foreground/60",
+            // local patch (pi-app): the state fill deepens on hover without
+            // adding a track frame.
+            checked ? "justify-end bg-primary hover:bg-primary/90" : "justify-start bg-muted-foreground/60 hover:bg-muted-foreground/80",
           )}
         >
           <motion.div

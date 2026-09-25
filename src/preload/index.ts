@@ -1,7 +1,9 @@
 import type { AskUserAnswer } from '../shared/ask-user'
+import type { JevSettingsDTO, JevSettingsUpdate, JevActionResult, JevEvaluationDTO, JevTraceDTO, JevTracePageDTO } from '../shared/types'
 import type {
   BrowserDownloadInfo,
   BrowserFocusGuestPayload,
+  BrowserGuestAppShortcutInfo,
   BrowserGuestShortcutInfo,
   BrowserPageMeta,
   BrowserPopupInfo,
@@ -9,6 +11,8 @@ import type {
   ElementAtInfo
 } from '../shared/browser'
 import type { RewindPatchDTO, RewindStatsDTO, RewindStatsTargetDTO } from '../shared/types'
+import type { ScheduledTasksSnapshotDTO, ScheduledRunOutputDTO, ScheduledTaskResult } from '../shared/types'
+import type { ScheduledTask, ScheduledTaskRun } from '../shared/scheduled-tasks'
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type {
   AppInfoDTO,
@@ -39,6 +43,8 @@ import type {
   FileActionResultDTO,
   FileDirectoryDTO,
   FileDocumentDTO,
+  HtmlPreviewDTO,
+  HtmlPreviewLinkDTO,
   FileGitDiffDTO,
   FontDataDTO,
   PdfStatDTO,
@@ -56,6 +62,7 @@ import type {
   QueueActionPayload,
   RecalledItemDTO,
   ResendPayload,
+  ContinuePayload,
   SessionSnapshotDTO,
   SessionSearchRequest,
   SessionSearchResultDTO,
@@ -90,6 +97,27 @@ const api = {
   rewindPatch: (path: string, token: string, file: string, area: 'worktree' | 'index', stage?: number): Promise<RewindResult<RewindPatchDTO>> => ipcRenderer.invoke('rewind:patch', path, token, file, area, stage),
   rewindRestore: (request: RewindRequest): Promise<RewindResult<RewindCommitDTO>> => ipcRenderer.invoke('rewind:restore', request),
   rewindRecover: (path: string, operationId: string): Promise<RewindResult<RewindCommitDTO>> => ipcRenderer.invoke('rewind:recover', path, operationId),
+
+  // Scheduled tasks: preload unwraps ScheduledTaskResult so call sites catch
+  // ordinary Errors (with .status preserved for conflict handling).
+  scheduledSnapshot: (): Promise<ScheduledTasksSnapshotDTO> => ipcRenderer.invoke('scheduled:snapshot').then(scheduledUnwrap<ScheduledTasksSnapshotDTO>),
+  scheduledRunOutput: (runId: string): Promise<ScheduledRunOutputDTO> =>
+    ipcRenderer.invoke('scheduled:runOutput', runId).then(scheduledUnwrap<ScheduledRunOutputDTO>),
+  scheduledGet: (id: string): Promise<{ task: ScheduledTask; runs: ScheduledTaskRun[] }> =>
+    ipcRenderer.invoke('scheduled:get', id).then(scheduledUnwrap<{ task: ScheduledTask; runs: ScheduledTaskRun[] }>),
+  scheduledCreate: (input: unknown): Promise<ScheduledTask> => ipcRenderer.invoke('scheduled:create', input).then(scheduledUnwrap<ScheduledTask>),
+  scheduledUpdate: (id: string, patch: Record<string, unknown>, revision?: number): Promise<ScheduledTask> =>
+    ipcRenderer.invoke('scheduled:update', id, patch, revision).then(scheduledUnwrap<ScheduledTask>),
+  scheduledDelete: (id: string, revision?: number): Promise<void> =>
+    ipcRenderer.invoke('scheduled:delete', id, revision).then(scheduledUnwrap<void>),
+  scheduledRunNow: (id: string, revision?: number): Promise<ScheduledTaskRun> =>
+    ipcRenderer.invoke('scheduled:runNow', id, revision).then(scheduledUnwrap<ScheduledTaskRun>),
+  scheduledCancelRun: (runId: string): Promise<ScheduledTaskRun> =>
+    ipcRenderer.invoke('scheduled:cancelRun', runId).then(scheduledUnwrap<ScheduledTaskRun>),
+  scheduledMarkRead: (runId: string): Promise<ScheduledTaskRun> =>
+    ipcRenderer.invoke('scheduled:markRead', runId).then(scheduledUnwrap<ScheduledTaskRun>),
+  scheduledDeleteRuns: (ids: string[]): Promise<{ deleted: number }> =>
+    ipcRenderer.invoke('scheduled:deleteRuns', ids).then(scheduledUnwrap<{ deleted: number }>),
   onRewind: (listener: (event: { sessionPath: string }) => void) => subscribe('pi:rewind', listener),
   setCheckpointsEnabled: (enabled: boolean): Promise<boolean> => ipcRenderer.invoke('app:setCheckpointsEnabled', enabled),
   /** Toggles the browser_* agent tools for sessions (Settings → Browser). The
@@ -97,6 +125,11 @@ const api = {
    * reloads. */
   setBrowserAgentTools: (enabled: boolean): Promise<void> =>
     ipcRenderer.invoke('app:setBrowserAgentTools', enabled),
+  jevSettings: (): Promise<JevSettingsDTO> => ipcRenderer.invoke('jev:settings'),
+  updateJevSettings: (update: JevSettingsUpdate): Promise<JevActionResult<JevSettingsDTO>> => ipcRenderer.invoke('jev:updateSettings', update),
+  testJev: (): Promise<JevActionResult<JevEvaluationDTO>> => ipcRenderer.invoke('jev:test'),
+  jevTraces: (path: string, cursor?: string): Promise<JevTracePageDTO> => ipcRenderer.invoke('jev:traces', path, cursor),
+  jevTrace: (path: string, id: string): Promise<JevTraceDTO | null> => ipcRenderer.invoke('jev:trace', path, id),
   setStartup: (mode: StartupSessionMode): Promise<StartupSessionMode> =>
     ipcRenderer.invoke('app:setStartup', mode),
   setWindowTheme: (theme: WindowTheme): void => ipcRenderer.send('window:setTheme', theme),
@@ -139,6 +172,10 @@ const api = {
    * `/reload`). Refused while that session runs. */
   reloadSession: (sessionPath: string): Promise<SessionSnapshotDTO> =>
     ipcRenderer.invoke('pi:reload', sessionPath),
+  /** The session's current effective system prompt, read live off the SDK on
+   * every call; the active session answers when no path is given. */
+  systemPrompt: (sessionPath?: string): Promise<string> =>
+    ipcRenderer.invoke('pi:systemPrompt', sessionPath),
   /** Answer one pending sandbox escalation for a session. */
   respondEscalation: (requestId: string, sessionPath: string, decision: SandboxEscalationDecision): Promise<boolean> =>
     ipcRenderer.invoke('sandbox:respondEscalation', requestId, sessionPath, decision),
@@ -210,6 +247,8 @@ const api = {
   abort: (): Promise<{ accepted: boolean }> => ipcRenderer.invoke('pi:abort'),
   resendMessage: (payload: ResendPayload): Promise<SessionSnapshotDTO> =>
     ipcRenderer.invoke('pi:resendMessage', payload),
+  continueMessage: (payload: ContinuePayload): Promise<void> =>
+    ipcRenderer.invoke('pi:continueMessage', payload),
   forkFromMessage: (timestamp: number): Promise<ForkResultDTO> =>
     ipcRenderer.invoke('pi:forkFromMessage', timestamp),
   setModel: (providerId: string, modelId: string): Promise<SessionSnapshotDTO> =>
@@ -264,6 +303,9 @@ const api = {
   readFile: (path: string): Promise<FilePreviewDTO> => ipcRenderer.invoke('files:read', path),
   listFileDirectory: (request: FileBrowserRequest, offset?: number): Promise<FileDirectoryDTO> => ipcRenderer.invoke('files:directory', request, offset),
   readFileDocument: (request: FileBrowserRequest): Promise<FileDocumentDTO> => ipcRenderer.invoke('files:document', request),
+  htmlPreview: (request: FileBrowserRequest): Promise<HtmlPreviewDTO> => ipcRenderer.invoke('files:htmlPreview', request),
+  onHtmlPreviewLink: (listener: (link: HtmlPreviewLinkDTO) => void) => subscribe('files:htmlLink', listener),
+  onHtmlPreviewFind: (listener: (webContentsId: number) => void) => subscribe('files:htmlFind', listener),
   readFileGitDiff: (request: FileBrowserRequest): Promise<FileGitDiffDTO> => ipcRenderer.invoke('files:gitDiff', request),
   /** PDF preview reads: the size, then exactly the byte ranges pdf.js asks for
    * (`end` exclusive, see shared/pdf.ts). */
@@ -346,6 +388,14 @@ const api = {
    *  zoom through the app ladder and f/p to the selected page's find/print. */
   onBrowserGuestShortcut: (cb: (payload: BrowserGuestShortcutInfo) => void) =>
     subscribe('browser:guest-shortcut', cb),
+  /** 渲染层快捷键目录（lib/shortcuts）推送的 identities：guest 持焦点时主进程
+   *  按此拦截组合键并经 browser:guest-app-shortcut 回转给应用 dispatcher。
+   *  send（非 invoke）：推送无需回执，fixture/壳无此 handler 时静默 no-op。 */
+  setBrowserAppShortcuts: (identities: string[]): void => {
+    ipcRenderer.send('browser:setAppShortcuts', identities)
+  },
+  onBrowserGuestAppShortcut: (cb: (payload: BrowserGuestAppShortcutInfo) => void) =>
+    subscribe('browser:guest-app-shortcut', cb),
   /** A pointer press inside a webview guest, relayed by main: guest input never
    *  reaches the host DOM, so host-side overlays use this as their outside-press
    *  (the ⋮ popover closes when the user clicks the page). */
@@ -375,6 +425,12 @@ function subscribe<T>(channel: string, listener: (payload: T) => void): () => vo
   const wrapped = (_event: unknown, payload: T) => listener(payload)
   ipcRenderer.on(channel, wrapped as never)
   return () => ipcRenderer.removeListener(channel, wrapped as never)
+}
+
+/** Unwrap the scheduled tasks IPC result; the error keeps its status code. */
+function scheduledUnwrap<T>(result: ScheduledTaskResult<T>): T {
+  if (!result.ok) throw Object.assign(new Error(result.error), { status: result.status })
+  return result.value
 }
 
 contextBridge.exposeInMainWorld('pi', api)

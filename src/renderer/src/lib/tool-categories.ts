@@ -1,4 +1,4 @@
-import { Compass, FileDiff, SquareTerminal, type IconComponent } from '@/lib/icons'
+import { Compass, Database, Diff, GoogleChromeLogo, SquareTerminal, type IconComponent } from '@/lib/icons'
 import type { MessageKey } from '@/i18n/locales/en'
 
 /**
@@ -7,12 +7,11 @@ import type { MessageKey } from '@/i18n/locales/en'
  * registry is the single place that decides which tools read as one activity.
  *
  * Adding a category = append one entry below (icon + i18n label key + tools).
- * Adding a tool to a category = append its exact name to that category's
- * `tools`. Tools absent from every list render as standalone rows, exactly as
- * before — so a newly installed extension's tool is categorized only once
- * someone opts it in here, mirroring `lib/tool-icons.tsx`.
+ * A category can opt in exact tool names through `tools` and, for a namespaced
+ * family, every matching name through `prefix`. Tools matching neither render
+ * as standalone rows, exactly as before.
  */
-export type ToolCategoryId = 'exploration' | 'terminal' | 'changes' | 'browser'
+export type ToolCategoryId = 'exploration' | 'terminal' | 'changes' | 'context' | 'browser'
 
 export interface ToolCategory {
   id: ToolCategoryId
@@ -21,6 +20,8 @@ export interface ToolCategory {
   icon: IconComponent
   /** Exact tool names as the agent calls them (SDK built-ins + extensions). */
   tools: readonly string[]
+  /** Optional namespace prefix, including its separator (for example `ctx_`). */
+  prefix?: string
 }
 
 export const TOOL_CATEGORIES: readonly ToolCategory[] = [
@@ -39,13 +40,25 @@ export const TOOL_CATEGORIES: readonly ToolCategory[] = [
   {
     id: 'changes',
     labelKey: 'tool.categoryChanges',
-    icon: FileDiff,
+    icon: Diff,
     tools: ['edit', 'write']
+  },
+  {
+    id: 'context',
+    labelKey: 'tool.categoryContext',
+    icon: Database,
+    prefix: 'ctx_',
+    tools: [
+      'ctx_execute', 'ctx_execute_file', 'ctx_batch_execute', 'ctx_index',
+      'ctx_fetch_and_index', 'ctx_search', 'ctx_stats', 'ctx_doctor',
+      'ctx_purge', 'ctx_insight', 'ctx_upgrade'
+    ]
   },
   {
     id: 'browser',
     labelKey: 'tool.categoryBrowser',
-    icon: Compass,
+    icon: GoogleChromeLogo,
+    prefix: 'browser_',
     // The embedded-browser agent tools (src/main/browser/tools.ts's
     // APP_BROWSER_TOOL_NAMES, copied as literals — renderer code does not
     // import from src/main).
@@ -63,10 +76,14 @@ const CATEGORY_BY_TOOL = new Map<string, ToolCategory>(
     category.tools.map((tool) => [tool, category] as const)
   )
 )
+const PREFIXED_CATEGORIES = TOOL_CATEGORIES.filter(
+  (category): category is ToolCategory & { prefix: string } => Boolean(category.prefix)
+)
 
 /** The category a tool belongs to, or `undefined` for an uncategorized tool. */
 export function toolCategory(name: string): ToolCategory | undefined {
   return CATEGORY_BY_TOOL.get(name)
+    ?? PREFIXED_CATEGORIES.find((category) => name.startsWith(category.prefix))
 }
 
 /** One maximal run of adjacent calls sharing a category. */

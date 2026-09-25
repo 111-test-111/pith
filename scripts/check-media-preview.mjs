@@ -248,7 +248,41 @@ app.on('window-all-closed',()=>app.quit());`, resolveDir: repo, loader: 'ts' }, 
   assert.equal(afterReset.percent, '100%', 'reset returns to fit')
   assert.ok(Math.abs(afterReset.scale - 1) < 0.02, 'the reset transform is at fit: ' + afterReset.scale)
   await shot('image-fit')
-  console.log('PASS: image decodes over the scheme, mounts no view tabs, zoom in/reset drive the transform')
+  // The range reaches below fit: two steps down reach half size, which stops
+  // zoom-out without disabling reset (off fit is not the same as pannable).
+  await click('[data-file-media=image] [aria-label="Zoom out"]')
+  await pause(600)
+  await click('[data-file-media=image] [aria-label="Zoom out"]')
+  await pause(600)
+  const shrunk = await zoomed()
+  assert.equal(shrunk.percent, '50%', 'zoom-out reaches half the fit size')
+  assert.ok(Math.abs(shrunk.scale - 0.5) < 0.02, 'the image is really shrunk: ' + shrunk.scale)
+  assert.equal(shrunk.cursor, 'zoom-in', 'a shrunk image offers no pan')
+  assert.equal(await evaluate(`document.querySelector('[data-file-media=image] [aria-label="Zoom out"]').disabled`), true, 'the floor disables further zoom-out')
+  assert.equal(await evaluate(`document.querySelector('[data-file-media=image] [aria-label="Reset zoom"]').disabled`), false, 'a shrunk image can still reset')
+  await shot('image-shrunk')
+  // The picture carries the app's radius step, and the base `corner-shape` rule
+  // turns that radius into a continuous corner: hard-edged in the square style,
+  // a superellipse (never a circular arc) in the squircle style.
+  await click('[data-file-media=image] [aria-label="Reset zoom"]')
+  await pause(600)
+  const imageCorners = async () => evaluate(`(()=>{const img=document.querySelector('[data-file-media=image] img');const root=getComputedStyle(document.documentElement);return {radius:getComputedStyle(img).borderTopLeftRadius,shape:getComputedStyle(img).cornerShape,item:root.getPropertyValue('--app-radius-item').trim(),corners:document.documentElement.dataset.corners||'(none)'}})()`)
+  const originalCorners = await evaluate(`document.documentElement.dataset.corners || ''`)
+  await evaluate(`document.documentElement.dataset.corners='square'`)
+  await pause(400)
+  const squareImage = await imageCorners()
+  assert.equal(squareImage.item, '0px', 'the square preset collapses the item step')
+  assert.equal(squareImage.radius, '0px', `the square style leaves the picture hard-edged: ${squareImage.radius}`)
+  assert.equal(squareImage.shape, 'superellipse(2)', `the picture carries the app's corner shape: ${squareImage.shape}`)
+  await evaluate(`document.documentElement.dataset.corners='squircle'`)
+  await pause(400)
+  const squircleImage = await imageCorners()
+  assert.equal(squircleImage.item, '14px', 'the squircle preset really moved the item step')
+  assert.equal(squircleImage.radius, '14px', `the squircle style rounds the picture: ${squircleImage.radius}`)
+  assert.equal(squircleImage.shape, 'superellipse(2)', 'the rounded corner is a superellipse, not a circular arc')
+  await shot('image-squircle')
+  await evaluate(originalCorners ? `document.documentElement.dataset.corners=${JSON.stringify(originalCorners)}` : `delete document.documentElement.dataset.corners`)
+  console.log('PASS: image decodes over the scheme, mounts no view tabs, zoom in/reset/shrink-to-50% drive the transform, corners follow the interface style')
 
   // 3. Another decodable image format, and a recognized format with no decoder.
   await open('vector.svg')

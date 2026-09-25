@@ -79,12 +79,14 @@ export interface StartSubagentRequest {
 
 /** Model-driven overrides for a continuation: the fresh dispatch's tool
  * call id (receipt barrier + dispatch record), the new description and the
- * new background choice. The panel's IPC path passes none — the stored run's
- * own values apply. */
+ * new background choice. The panel's IPC path passes only `expectedRunId` —
+ * the stored run's own dispatch values still apply. */
 export interface ResumeSubagentOptions {
   parentToolCallId?: string
   description?: string
   runInBackground?: boolean
+  /** Panel-only optimistic concurrency token. Model-driven reuse omits it. */
+  expectedRunId?: string
   /** The continuing tool call's abort signal (a foreground dispatch): wired
    * for the run's WHOLE lifetime, exactly like `start`'s external signal. */
   foregroundSignal?: AbortSignal
@@ -387,10 +389,16 @@ export class SubagentRuntime {
     const text = message.trim()
     if (!text) throw new SubagentError('Resume message is required')
     const rosterEntry = state.roster.get(sessionId)
+    if (options.expectedRunId !== undefined && rosterEntry?.runId !== options.expectedRunId) {
+      throw new SubagentError('Subagent run changed; choose the action again')
+    }
     if (!rosterEntry) throw new SubagentError(`Subagent session not found: ${sessionId}`)
     if (rosterEntry.status === 'running' || state.resuming.has(sessionId) || this.liveRunOf(state, sessionId)) throw new SubagentError('Subagent is already running')
     const cwd = parentSession.sessionManager.getCwd()
     const current = this.readChildRuns(rosterEntry.sessionPath)[0]
+    if (options.expectedRunId !== undefined && current?.start.runId !== options.expectedRunId) {
+      throw new SubagentError('Subagent run changed; choose the action again')
+    }
     if (!current) throw new SubagentError(`Subagent session not found: ${sessionId}`)
     // B1: the child's latest run is only continuable while the parent's
     // SELECTED branch still owns its dispatch — a resume after a rewind past
@@ -492,8 +500,11 @@ export class SubagentRuntime {
     }
   }
 
-  steer(state: SubagentParentState, sessionId: string, message: string): void {
+  steer(state: SubagentParentState, sessionId: string, message: string, expectedRunId?: string): void {
     const live = this.liveRunOf(state, sessionId)
+    if (expectedRunId !== undefined && live?.run.runId !== expectedRunId) {
+      throw new SubagentError('Subagent run changed; choose the action again')
+    }
     if (!live) throw new SubagentError('Subagent is not running')
     live.child.session.steer(message)
   }
@@ -501,8 +512,11 @@ export class SubagentRuntime {
   /** Abort one run. Suppression keeps the completion from waking the parent:
    * a stopped task must not restart the conversation. Fire-and-forget; use
    * {@link stopAll} when the caller must wait for the halt to settle. */
-  abort(state: SubagentParentState, sessionId: string): void {
+  abort(state: SubagentParentState, sessionId: string, expectedRunId?: string): void {
     const live = this.liveRunOf(state, sessionId)
+    if (expectedRunId !== undefined && live?.run.runId !== expectedRunId) {
+      throw new SubagentError('Subagent run changed; choose the action again')
+    }
     if (live) void this.haltLiveRun(state, live).catch(() => {})
   }
 

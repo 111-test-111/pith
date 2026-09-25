@@ -63,9 +63,8 @@ export function buildTurns(messages: ChatMessage[]): ChatTurn[] {
         break
       case 'compactionSummary':
       case 'branchSummary':
-        // Placed after the loop: these are written AFTER the messages they
-        // cover, but sit at the HEAD of the context array (everything they
-        // replaced is gone; only the kept tail follows them).
+        // Placed after the loop so both full branch transcripts and older
+        // compaction-aware snapshots use the entry timestamp as the authority.
         summaries.push({ key: `s${message.timestamp}-${summaries.length}`, role: 'info', message })
         break
       case 'bashExecution':
@@ -109,16 +108,12 @@ function turnEndedAt(turn: ChatTurn): number {
 }
 
 /**
- * Put every summary where it happened instead of where the context array keeps
- * it.
+ * Put every summary where it happened, independent of input array layout.
  *
- * A compaction replaces the summarized history and keeps the recent tail, so
- * the SDK's message list is `[summary, ...kept, ...new]` — the summary is the
- * NEWEST of those three groups by time, yet the array opens with it. Rendering
- * that order verbatim pinned the row above the very conversation it
- * summarizes. Inserting each one after every turn older than it restores the
- * chronological reading (kept tail, then the summary, then what followed),
- * which is the order the user watched happen.
+ * A full selected branch already contains old messages followed by the
+ * compaction entry, while an older/compaction-aware list can start with
+ * `[summary, ...kept, ...new]`. Ordering by timestamp handles both and keeps
+ * the row after the conversation it summarizes and before what followed.
  */
 function placeSummaries(turns: ChatTurn[], summaries: ChatTurn[]): void {
   for (const summary of summaries) {

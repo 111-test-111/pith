@@ -1,4 +1,6 @@
-import type { RewindPatchDTO, RewindStatsDTO, RewindStatsTargetDTO } from '../../shared/types'
+import type { ContinuePayload, RewindPatchDTO, RewindStatsDTO, RewindStatsTargetDTO } from '../../shared/types'
+import { continuationTarget } from '../../shared/continuation'
+import { continuationContent, CONTINUATION_MESSAGE_TYPE } from './continuation'
 import {
   buildSessionContext,
   createAgentSessionFromServices,
@@ -7,6 +9,7 @@ import {
   estimateTokens,
   getAgentDir,
   SessionManager,
+  sessionEntryToContextMessages,
   ModelRuntime,
   SettingsManager,
   type AgentSession,
@@ -19,7 +22,7 @@ import { NOTHING_TO_COMPACT_MESSAGE } from '../../shared/compaction-errors'
 import { app, shell } from 'electron'
 import { settleWithin, SESSION_DISPOSE_TIMEOUT_MS } from '../shutdown'
 import { homedir } from 'node:os'
-import { open as openFile } from 'node:fs/promises'
+import { open as openFile, stat as statPath } from 'node:fs/promises'
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { BashTaskManager } from '../bash/manager'
@@ -29,6 +32,21 @@ import { getBrowserService } from '../browser/service'
 import { agentOwner } from '../../shared/browser'
 import { createSandboxFileTools, APP_FILE_TOOL_NAMES } from './file-tools'
 import { isSandboxMode, sandboxModeFromBranch, SANDBOX_MODE_ENTRY_TYPE } from '../sandbox/mode'
+import { createScheduledTaskTool, SCHEDULED_TASK_TOOL_NAME } from './scheduled-tasks/tool'
+import { ScheduledTaskService, type ScheduledTaskExecutionContext } from './scheduled-tasks/service'
+import { createScheduledTaskRuntime } from './scheduled-tasks/runtime'
+import { isScheduledTasksRoot, prepareScheduledTasksRoot, scheduledTasksRoot, scheduledTasksRunCwd } from './scheduled-tasks/workspace'
+import { createScheduledWorktree, validateScheduledWorktreeSource } from './scheduled-tasks/worktree'
+import { scheduledRunOutputFromMessages } from './scheduled-tasks/output'
+import { SCHEDULED_TASK_ENTRY_TYPE, scheduledTaskRoleFromEntries, type ScheduledTaskMarkerData } from './scheduled-tasks/marker'
+import {
+  isScheduledTaskRunActive,
+  type ScheduledTask,
+  type ScheduledTaskInput,
+  type ScheduledTaskRun,
+  type ScheduledTaskThinkingLevel
+} from '../../shared/scheduled-tasks'
+import { taskIsLive } from '../bash/task-status'
 import { sandboxStatus } from '../sandbox/broker'
 import { resolveEscalatedMode, PLAN_ESCALATION_REFUSED } from '../sandbox/escalation'
 import { clearSessionEscalations, listPendingEscalations, respondToEscalation } from '../sandbox/pending'
@@ -47,6 +65,12 @@ import { RewindFailure, failure as rewindFailure } from '../rewind/types'
 import { ChangeScopes } from './change-scopes'
 import { TodoState, createTodoTool } from './todo'
 import { TODO_TOOL_NAME } from './todo-protocol'
+import { JevCredentials } from './jev/credentials'
+import { JevService } from './jev/service'
+import { JevWorkflow } from './jev/workflow'
+import { createJevTool } from './jev/tool'
+import { JevError, JEV_TOOL_NAME } from './jev/protocol'
+import type { JevSettingsDTO, JevSettingsUpdate, JevActionResult, JevEvaluationDTO, JevTraceDTO, JevTracePageDTO } from '../../shared/types'
 import { PlanController, PlanAdmissionError, planErrorCode, type PlanLiveFacts } from './plan-mode'
 import { installPlanGate, type PlanGate } from './plan-gate'
 import { PlanApprovalController } from './plan-approval'
@@ -85,6 +109,7 @@ import {
   builtinProviderIds,
   configuredModels,
   discoverModels,
+  hiddenModelKeys,
   providerInventory,
   readModelsConfig,
   recommendCatalogPreset,
@@ -225,6 +250,16 @@ function serialize(value: unknown): any {
   )
 }
 
+/**
+ * The selected branch as a DISPLAY transcript. Unlike `buildSessionContext()`
+ * and `AgentSession.messages`, this deliberately does not apply compaction:
+ * compacted messages remain visible to the user while the SDK keeps excluding
+ * them from subsequent model requests.
+ */
+function transcriptMessages(manager: SessionManager): ChatMessage[] {
+  return manager.getBranch().flatMap(sessionEntryToContextMessages) as ChatMessage[]
+}
+
 function modelRef(model: any): ModelRefDTO | null {
   if (!model) return null
   return {
@@ -275,7 +310,24 @@ interface PendingQueuePayload {
   filePaths: string[]
 }
 
+/** Abort-aware delay for the scheduled turn's admission/drain waits. */
+function scheduledDelay(signal: AbortSignal, ms: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const abort = () => {
+      clearTimeout(timer)
+      reject(signal.reason ?? new Error('Cancelled'))
+    }
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', abort)
+      resolve()
+    }, ms)
+    signal.addEventListener('abort', abort, { once: true })
+    if (signal.aborted) abort()
+  })
+}
+
 interface ManagedSession {
+  jevWorkflow?: JevWorkflow
   recoveryOnly?: boolean
   /** This session's DSH mode, folded from its branch; read live by the tools. */
   sandboxMode: SandboxMode
@@ -296,6 +348,10 @@ interface ManagedSession {
   /** Present on subagent child sessions: linkage + frozen tool ceiling. The
    * child's initialization activates only the ceiling, never the full set. */
   subagentChild?: { parentPath: string; toolCeiling: readonly string[]; planRestricted?: true }
+  /** Present on sessions a scheduled run created (or restored from the
+   * persisted marker): hidden from the sidebar/search, read-only for
+   * interactive paths, no ask_user, no sandbox escalation, no Jev workflow. */
+  scheduledTask?: { taskId: string; runId: string }
   initializing: boolean
   lifecyclePromise: Promise<void> | null
   disposePromise: Promise<void> | null
@@ -316,6 +372,8 @@ interface ManagedSession {
    * (its notification cue stays silent for a stop). Cleared on `agent_start`
    * as well, so a stop issued while idle cannot linger onto a later run. */
   userAborted?: boolean
+  /** Owns Continue from admission through settle; Stop also cancels preparation. */
+  continuationRequest?: AbortController
   toolRuns: Record<string, ToolRunDTO>
   /** Rich payload mirror of the SDK's two queues, keyed by queued text. */
   queueMirror: { steering: QueuedItem[]; followUp: QueuedItem[] }
@@ -361,6 +419,55 @@ export class PiManager {
   /** Whether the 14 browser_* agent tools are in the ACTIVE set (the switch lives
    *  in Settings → Browser; registration itself is service-gated at build). */
   private browserToolsFlag = loadSettings().browserAgentToolsEnabled === true
+  private jevPreferences = loadSettings().jev
+  private jevUpdating = false
+  private jevCredentials = new JevCredentials(join(getAgentDir(), 'jev-auth.json'))
+  private jevService = new JevService({ preferences: () => this.jevPreferences, apiKey: () => this.jevCredentials.key() })
+
+  async jevSettings(): Promise<JevSettingsDTO> {
+    return { ...this.jevPreferences, keySource: await this.jevCredentials.source() }
+  }
+
+  async updateJevSettings(update: JevSettingsUpdate): Promise<JevActionResult<JevSettingsDTO>> {
+    if (this.closing) return { ok: false, code: 'cancelled' }
+    if (this.jevUpdating) return { ok: false, code: 'busy' }
+    this.jevUpdating = true
+    this.jevService.cancel()
+    try {
+      if (!update || typeof update !== 'object' || Object.keys(update).length !== 1) throw new JevError('invalid_input')
+      if (Object.hasOwn(update, 'preferences')) {
+        const p = update.preferences
+        if (!p || Object.keys(p).length !== 4 || !['off', 'tools', 'workflow'].includes(p.mode) || !['choice', 'score', 'noul'].every(k => typeof p[k as keyof typeof p] === 'boolean')) throw new JevError('invalid_input')
+        saveSettings({ ...loadSettings(), jev: p })
+        this.jevPreferences = { ...p }
+        // The SDK setter rebuilds the prompt. Initialization also reads the live
+        // preference; a child still intersects its immutable dispatch ceiling.
+        for (const managed of this.sessions.values()) if (!managed.disposing && managed.gate) {
+          managed.jevWorkflow?.settingsChanged()
+          this.applyActiveTools(managed, this.filterExtensions(managed.resourceLoader))
+        }
+        this.catalogCache = null
+      } else if (Object.hasOwn(update, 'apiKey')) await this.jevCredentials.save(update.apiKey)
+      else throw new JevError('invalid_input')
+      return { ok: true, data: await this.jevSettings() }
+    } catch (error) { return { ok: false, code: error instanceof JevError ? error.code : 'storage' } }
+    finally { this.jevUpdating = false }
+  }
+
+  async testJev(): Promise<JevActionResult<JevEvaluationDTO>> {
+    if (this.closing) return { ok: false, code: 'cancelled' }
+    if (this.jevUpdating) return { ok: false, code: 'busy' }
+    try { return { ok: true, data: await this.jevService.probe() } }
+    catch (error) { return { ok: false, code: error instanceof JevError ? error.code : 'network' } }
+  }
+  jevTraces(sessionPath: string, cursor?: string): JevTracePageDTO {
+    if (typeof sessionPath !== 'string' || (cursor !== undefined && typeof cursor !== 'string')) throw new JevError('invalid_input')
+    return this.sessions.get(sessionPath)?.jevWorkflow?.traces.page(cursor) ?? { items: [], nextCursor: null }
+  }
+  jevTrace(sessionPath: string, id: string): JevTraceDTO | null {
+    if (typeof sessionPath !== 'string' || typeof id !== 'string') throw new JevError('invalid_input')
+    return this.sessions.get(sessionPath)?.jevWorkflow?.traces.detail(id) ?? null
+  }
   private subagentMaxConcurrentSetting = loadSettings().subagentMaxConcurrent ?? MAX_CONCURRENT_SUBAGENTS_DEFAULT
   /** Ask-panel auto-settle deadline; read live by every ask_user_question call. */
   private askUserTimeoutMs = clampAskUserTimeoutSeconds(loadSettings().askUserTimeoutSeconds) * 1000
@@ -452,6 +559,7 @@ export class PiManager {
     const managed = this.sessions.get(sessionPath)
     if (!managed) throw new Error('No such session')
     if (managed.subagentChild) throw new Error('A subagent session follows its parent session')
+    if (managed.scheduledTask) throw new Error('A scheduled task session is read-only')
     // A mode change may not race this branch write.
     managed.plan.checkWorkAdmission()
     if (managed.plan.restricted) {
@@ -460,6 +568,11 @@ export class PiManager {
     if (managed.sandboxMode !== mode) {
       managed.session.sessionManager.appendCustomEntry(SANDBOX_MODE_ENTRY_TYPE, { mode })
       managed.sandboxMode = mode
+      // The composer picker reads the stored choice from the plan DTO's
+      // configuredSandboxMode. A same-seq rebuild loses the renderer's
+      // seq-guarded merge, so republish: the picker must reflect the switch
+      // now, not at the next plan transition.
+      managed.plan.refresh()
     }
     return this.snapshotOf(managed)
   }
@@ -589,6 +702,7 @@ export class PiManager {
     const managed = this.sessions.get(sessionPath)
     if (!managed) throw new Error('No such session')
     if (managed.subagentChild) throw new Error('A subagent session follows its parent session')
+    if (managed.scheduledTask) throw new Error('A scheduled task session is read-only')
     if (managed.session.isStreaming) throw new Error('Stop the running turn before compacting')
     const release = managed.plan.beginWork('branch')
     try {
@@ -626,6 +740,7 @@ export class PiManager {
   async reloadSession(sessionPath: string): Promise<SessionSnapshotDTO> {
     const managed = this.sessions.get(sessionPath)
     if (!managed) throw new Error('No such session')
+    if (managed.scheduledTask) throw new Error('A scheduled task session is read-only')
     if (managed.session.isStreaming) throw new Error('Stop the running turn before reloading')
     const release = managed.plan.beginWork('branch')
     try {
@@ -650,16 +765,14 @@ export class PiManager {
    * live snapshot. One that is not is read straight from its file — building a
    * whole AgentSession (extensions, task owner, notifications) just to show a
    * finished transcript would cost seconds and register machinery nobody asked
-   * for. The file path is compaction-aware (`buildContextEntries`) so the pane
-   * shows the same transcript the chat would.
+   * for. The raw selected branch is projected for display so compaction markers
+   * and the history they summarized remain visible without re-entering context.
    */
   peekSession(path: string): SessionSnapshotDTO {
     const managed = this.sessions.get(path)
     if (managed) return this.snapshotOf(managed)
     const manager = SessionManager.open(path)
-    const messages = serialize(manager.buildContextEntries()
-      .filter((entry) => entry.type === 'message')
-      .map((entry) => entry.message)) as ChatMessage[]
+    const messages = serialize(transcriptMessages(manager)) as ChatMessage[]
     const runs = readDiskSubagentRuns(manager.getEntries() as any[])
     const current = runs[runs.length - 1]
     const cwd = manager.getCwd()
@@ -681,6 +794,7 @@ export class PiManager {
       contextUsage: null,
       subagents: [],
       subagentChild: current !== undefined,
+      scheduledTaskSession: scheduledTaskRoleFromEntries(manager.getEntries()) !== undefined,
       ...(current ? { subagentParentPath: current.start.parentSessionPath } : {}),
       eventSequence: 0
     }
@@ -811,6 +925,20 @@ export class PiManager {
   }
 
   /**
+   * The session's CURRENT effective system prompt, read live off the SDK
+   * (`AgentSession.systemPrompt`: base prompt + tool snippets/guidelines +
+   * context files + per-turn extension modifications). The SDK rebuilds it on
+   * model, tool and resource changes (reload included), so every read is what
+   * the next model request would carry. With no path the ACTIVE session
+   * answers, so a chat that is not persisted yet has a prompt too.
+   */
+  systemPrompt(sessionPath?: string): string {
+    const managed = sessionPath ? this.sessions.get(sessionPath) : this.activeSession
+    if (!managed) throw new Error(sessionPath ? 'No such session' : 'Pi session is not initialized')
+    return managed.session.systemPrompt
+  }
+
+  /**
    * Panel actions on a parent's subagent runs. `resume` continues a finished
    * child session under a fresh run, sharing the dispatch admission path.
    */
@@ -818,16 +946,18 @@ export class PiManager {
     const managed = this.sessions.get(payload.sessionPath)
     const state = managed?.subagents
     if (!managed || !state) throw new Error('Subagents are only available on an open session')
+    const expectedRunId = payload.expectedRunId?.trim()
+    if (!expectedRunId) throw new Error('Subagent run identity is required')
     if (payload.action === 'steer') {
       if (!payload.message?.trim()) throw new Error('Steering message is required')
-      this.subagentRuntime.steer(state, payload.sessionId, payload.message)
+      this.subagentRuntime.steer(state, payload.sessionId, payload.message, expectedRunId)
       return
     }
     if (payload.action === 'abort') {
-      this.subagentRuntime.abort(state, payload.sessionId)
+      this.subagentRuntime.abort(state, payload.sessionId, expectedRunId)
       return
     }
-    await this.subagentRuntime.resume(state, managed.session, payload.sessionId, payload.message ?? '')
+    await this.subagentRuntime.resume(state, managed.session, payload.sessionId, payload.message ?? '', { expectedRunId })
   }
 
   /** Toggle subagents; applies to sessions created afterwards (the tool is
@@ -1166,12 +1296,14 @@ export class PiManager {
     if (managed.subagentChild) clearSubagentAskUserRequests(managed.path)
     if (managed.disposePromise) return managed.disposePromise
     managed.disposing = true
+    this.jevService.cancel(managed.path)
     managed.planApproval?.dispose()
     managed.rewind?.dispose()
     // Put the session's own tool setter and hook chain back before disposal,
     // so an SDK path that reaches the session during teardown sees its own
     // methods rather than a gate whose effective view is being discarded.
     managed.gate?.dispose()
+    managed.jevWorkflow?.dispose()
     managed.disposePlanStream?.()
     managed.reloadPending = false
     // Disposal owns the whole subtree: a parent being deleted or the app
@@ -1222,9 +1354,11 @@ export class PiManager {
   private activateSession(managed: ManagedSession, remember = true): void {
     if (this.closing || managed.disposing) return
     this.activeSession = managed
-    // A question asked while the user was viewing another session was
-    // filtered out there; re-announce it or it could never be answered.
+    // A question asked while the user was viewing another session (or while
+    // macOS had no app window) was filtered out there; re-announce it so the
+    // panel and notification router both receive the still-pending request.
     this.publishEscalations(managed)
+    this.publishAskUser(managed)
     if (remember) {
       this.activateFolder(managed.cwd)
       return
@@ -1269,12 +1403,11 @@ export class PiManager {
       ;(routed as any).contextUsage = usage
       managed.contextUsageKey = JSON.stringify(usage)
     }
-    // Compaction rewrites the session's message list (the summary replaces the
-    // summarized tail). Ship the new list with the event so the transcript
-    // collapses at the same moment the notice appears instead of keeping a
-    // pre-compaction view until the next session switch.
+    // Compaction rewrites the MODEL context, not the visible transcript. Ship
+    // the full selected branch plus its new summary marker so history stays on
+    // screen while the SDK's `session.messages` remains compacted for requests.
     if (event.type === 'compaction_end' && !(event as any).aborted) {
-      ;(routed as any).messages = serialize(this.stampPlanMessages(managed, managed.session.messages.map((message) => managed.changeScopes.stamp(message as ChatMessage)), managed.session.messages as ChatMessage[]))
+      ;(routed as any).messages = this.transcriptOf(managed)
     }
 
     if (event.type === 'message_start' || event.type === 'message_update') {
@@ -1559,6 +1692,11 @@ export class PiManager {
     /** Profile name, for the ask-user source badge on live child runs. */
     profile?: string
     model?: any
+  }, scheduledRole?: {
+    taskId: string
+    runId: string
+    model?: { provider: string; modelId: string }
+    thinkingLevel?: ScheduledTaskThinkingLevel
   }): Promise<ManagedSession> {
     await this.checkoutCoordinator.ready()
     if (this.checkoutCoordinator.needsRecovery(sessionManager.getCwd())) {
@@ -1579,13 +1717,23 @@ export class PiManager {
     }
     const role = detectedRole
     const isChild = role !== undefined
+    // A session a scheduled run created keeps its restrictions across reopen
+    // paths: like the subagent run records, the persisted marker is the only
+    // place they live once the creating role is gone.
+    const scheduled = scheduledRole ?? scheduledTaskRoleFromEntries(sessionManager.getEntries())
+    const isScheduled = scheduled !== undefined
     const todos = new TodoState(sessionManager)
     const askRecords = new AskUserRecords(sessionManager)
     const fullServices = await this.servicesFor(
       sessionManager.getCwd(), todos, recoveryOnly,
       isChild ? { appendSystemPrompt: role!.resource.appendSystemPrompt, extensions: role!.resource.extensions } : undefined,
       createPlanContextExtension({ restricted: () => managed.plan.restricted, isChild: () => isChild,
-        toolNames: () => managed.gate?.tools().map(t => t.name) ?? [] })
+        toolNames: () => managed.gate?.tools().map(t => t.name) ?? [],
+        previousPlan: () => {
+          const latest = managed.plan.branch.latest
+          return latest && managed.plan.branch.mode === 'plan'
+            ? { revision: latest.ref.revision, markdown: latest.markdown } : null
+        } })
     )
     const services = { ...fullServices, resourceLoader: this.filterExtensions(fullServices.resourceLoader) }
     let notifications: TaskNotifications | undefined
@@ -1636,7 +1784,7 @@ export class PiManager {
         // come from the session's own Plan state, per call.
         isPlanRestricted: () => managed.plan.restricted,
         planShellEnforcement: () => managed.plan.snapshot.shellEnforcement,
-        ...(isChild ? {} : { escalate: escalateForTools }),
+        ...(isChild || isScheduled ? {} : { escalate: escalateForTools }),
         canStart: () => (notifications?.canStart ?? false) && this.planToolAdmitted(managed) }),
       // The file sandbox replaces the SDK's own edit/write so every mutation
       // passes the DSH path policy; reads are untouched.
@@ -1644,15 +1792,29 @@ export class PiManager {
         cwd: services.cwd,
         getMode: liveSandboxMode,
         isPlanRestricted: () => managed.plan.restricted,
-        ...(isChild ? {} : { escalate: escalateForTools })
+        ...(isChild || isScheduled ? {} : { escalate: escalateForTools })
       }),
       createPlanSubmissionTool(plan),
       createTodoTool(todos, () => (notifications?.canStart ?? false) && this.planToolAdmitted(managed)),
+      // The scheduler's own tool: registered for every session (children
+      // exclude it through their ceilings); the service is resolved lazily in
+      // execute so definition reads never boot the scheduler.
+      createScheduledTaskTool({
+        sessionId: sessionManager.getSessionId(),
+        cwd: sessionManager.getCwd(),
+        getPermissionMode: () => this.effectiveSandboxMode(managed),
+        getService: () => this.scheduledTasks,
+        canStart: () => (notifications?.canStart ?? false) && this.planToolAdmitted(managed)
+      }),
+      createJevTool(this.jevService, sessionManager.getSessionFile() ?? `memory:${sessionManager.getSessionId()}`,
+        () => !this.closing && !this.jevUpdating && (notifications?.canStart ?? false) && this.planToolAdmitted(managed)),
       // ask_user_question suspends on the pending registry until the user
       // answers. A subagent child has no composer of its own, so its
       // questions register under the PARENT's path with a source badge —
       // the parent's panel answers them and the child's call resolves.
-      createAskUserTool({
+      // A scheduled-run session has no human surface at all: the tool stays
+      // unregistered so the model can never block on an unanswerable ask.
+      ...(isScheduled ? [] : [createAskUserTool({
         ownerPath: isChild ? role!.parentPath : (sessionManager.getSessionFile() ?? `memory:${sessionManager.getSessionId()}`),
         ...(isChild ? {
           source: {
@@ -1678,7 +1840,7 @@ export class PiManager {
         // into the conversation the ask belongs to (a child's own, not the
         // parent's, even though the parent's panel answered it).
         deliverAsync: (delivery) => askUserNotifications?.settle(delivery)
-      }),
+      })]),
       // Children never see the delegation tool — recursion is excluded at
       // both the ceiling (allowlist) and the customTools layer.
       ...(subagentState && this.subagentsEnabledFlag ? [
@@ -1725,11 +1887,24 @@ export class PiManager {
         })
         : [])
     ]
+    // Resolve the task's frozen model against the live registry; a model that
+    // is no longer configured fails the run with a precise error.
+    let scheduledModel: ReturnType<ModelRuntime['getModel']>
+    if (isScheduled && scheduledRole?.model) {
+      const runtime = await this.runtime()
+      scheduledModel = runtime.getModel(scheduledRole.model.provider, scheduledRole.model.modelId)
+      if (!scheduledModel)
+        throw new Error(`The scheduled task's model ${scheduledRole.model.provider}/${scheduledRole.model.modelId} is not configured`)
+    }
     const { session } = await createAgentSessionFromServices({ services, sessionManager,
       ...(isChild ? {
         tools: role!.resource.tools,
         ...(role!.model ? { model: role!.model } : {}),
         ...(role!.resource.thinkingLevel ? { thinkingLevel: role!.resource.thinkingLevel as any } : {})
+      } : {}),
+      ...(isScheduled ? {
+        ...(scheduledModel ? { model: scheduledModel } : {}),
+        ...(scheduledRole?.thinkingLevel ? { thinkingLevel: scheduledRole.thinkingLevel as any } : {})
       } : {}),
       customTools
     })
@@ -1740,6 +1915,14 @@ export class PiManager {
       // the child's actual model supports instead of letting it error.
       const levels = session.getAvailableThinkingLevels() as string[]
       const wanted = role!.resource.thinkingLevel as string
+      if (levels.length && !levels.includes(wanted)) {
+        session.setThinkingLevel((levels.includes('medium') ? 'medium' : levels[levels.length - 1]) as any)
+      }
+    }
+    if (isScheduled && scheduledRole?.thinkingLevel) {
+      // Same model-derived clamp for the task's frozen thinking level.
+      const levels = session.getAvailableThinkingLevels() as string[]
+      const wanted = scheduledRole.thinkingLevel as string
       if (levels.length && !levels.includes(wanted)) {
         session.setThinkingLevel((levels.includes('medium') ? 'medium' : levels[levels.length - 1]) as any)
       }
@@ -1755,6 +1938,7 @@ export class PiManager {
       subagents: subagentState,
       plan,
       ...(isChild ? { subagentChild: { parentPath: role!.parentPath, toolCeiling: role!.resource.tools, planRestricted: role!.resource.planRestricted } } : {}),
+      ...(isScheduled ? { scheduledTask: { taskId: scheduled!.taskId, runId: scheduled!.runId } } : {}),
       initializing: true,
       lifecyclePromise: null,
       disposePromise: null,
@@ -1798,6 +1982,7 @@ export class PiManager {
     // touch the session: a sealed planning turn or an in-flight mode transition
     // defers them (pending stays owned, no attempt spent, no retry armed).
     const admitWake = (): (() => void) | null => {
+      if (managed.jevWorkflow?.paused) return null
       try {
         return managed.plan.beginWork('background')
       } catch {
@@ -1853,6 +2038,7 @@ export class PiManager {
       managed.todos.observe(event)
       const previousRecords = managed.askRecords.snapshot
       managed.askRecords.observe(event)
+      if (event.type === 'agent_start' && managed.continuationRequest && !managed.continuationRequest.signal.aborted) managed.changeScopes.continue()
       managed.changeScopes.observe(event)
       const leaf = session.sessionManager.getLeafEntry()
       const userEntryId = event.type === 'message_end' && event.message.role === 'user' && leaf?.type === 'message' && leaf.message === event.message ? leaf.id : undefined
@@ -1886,6 +2072,16 @@ export class PiManager {
     })
     managed.unsubscribe = () => { unsubscribeSession(); unsubscribeCommitted() }
     managed.disposePlanStream = installPlanStreamOverlay(session, () => plan.restricted)
+    if (!isChild && !isScheduled) managed.jevWorkflow = new JevWorkflow({ session, service: this.jevService, owner: path,
+      // Jev's action route asks the model to implement changes. Planning owns
+      // its own submission/approval discipline, so Jev must not route or verify
+      // a planning turn as implementation work.
+      enabled: () => this.jevPreferences.mode === 'workflow' && !plan.restricted,
+      canStart: () => !this.closing && !managed.disposing && !this.jevUpdating && notifications!.canStart,
+      pending: () => { const facts = this.planFacts(managed); return !!(facts.tasks || facts.subagents || facts.deliveries || facts.questions || facts.escalations) },
+      sealed: () => plan.submissionLocked,
+      changed: jevWorkflow => this.emit('pi:event', serialize({ type: 'jev_workflow_update', sessionPath: path, jevWorkflow, jevWorkflowSeq: managed.jevWorkflow?.revision ?? 0 }))
+    })
     // The mode is a fact about the selected branch: fold it (and publish) as
     // soon as the session owns a listener, before extension startup finishes.
     plan.restore()
@@ -2109,7 +2305,7 @@ export class PiManager {
       // Children activate ONLY their frozen ceiling: the normal path below
       // re-activates every built-in + extension tool, which would silently
       // widen a profile's tool restriction.
-      this.setActiveTools(managed, [...managed.subagentChild.toolCeiling])
+      this.setActiveTools(managed, managed.subagentChild.toolCeiling.filter(name => name !== JEV_TOOL_NAME || this.jevActive()))
       return
     }
     // An SDK tools allowlist would also hide extension tools. Activate the
@@ -2117,9 +2313,13 @@ export class PiManager {
     // The delegation tool is gated by its setting here (its customTool is
     // registered at build; the runtime re-checks dispatch live).
     this.setActiveTools(managed, [...new Set([
-      ...BUILTIN_TOOL_NAMES, ...APP_BASH_TOOL_NAMES, ...APP_FILE_TOOL_NAMES, TODO_TOOL_NAME, ASK_USER_TOOL_NAME, 'submit_plan',
+      ...BUILTIN_TOOL_NAMES, ...APP_BASH_TOOL_NAMES, ...APP_FILE_TOOL_NAMES, TODO_TOOL_NAME,
+      // A scheduled-run session has no human surface: ask_user is disabled at
+      // registration AND left out of the active set.
+      ...(managed.scheduledTask ? [] : [ASK_USER_TOOL_NAME]), 'submit_plan', SCHEDULED_TASK_TOOL_NAME,
       ...(managed.subagents ? [SUBAGENT_TOOL_NAME, ...(this.subagentCommsFlag ? [AGENT_STEER_TOOL_NAME] : [])] : []),
       ...(this.browserToolsFlag ? APP_BROWSER_TOOL_NAMES : []),
+      ...(this.jevActive() ? [JEV_TOOL_NAME] : []),
       ...loader.getExtensions().extensions.flatMap((extension) => [...extension.tools.keys()])
     ])])
   }
@@ -2134,6 +2334,369 @@ export class PiManager {
   private setActiveTools(managed: ManagedSession, names: readonly string[]): void {
     if (managed.gate) managed.gate.setAppActiveTools(names)
     else managed.session.setActiveToolsByName([...names])
+  }
+
+  private jevActive(): boolean {
+    const p = this.jevPreferences
+    return p.mode === 'tools' && (p.choice || p.score || p.noul)
+  }
+
+  // ---- Scheduled tasks ---------------------------------------------------
+
+  private scheduledTasksInstance: ScheduledTaskService | null = null
+
+  /**
+   * The local scheduler, wired to this manager's own facilities. Created
+   * lazily: reading definitions or listing tasks must never boot the agent
+   * engine, and with no saved tasks the service never touches storage.
+   */
+  get scheduledTasks(): ScheduledTaskService {
+    if (!this.scheduledTasksInstance) {
+      const service = new ScheduledTaskService({ defaultPermissionMode: () => this.defaultSandboxMode })
+      service.setRuntime(createScheduledTaskRuntime(this))
+      service.subscribe(() => void this.publishScheduledTasks())
+      this.scheduledTasksInstance = service
+    }
+    return this.scheduledTasksInstance
+  }
+
+  /** Boot-time start (index.ts) — cheap when no tasks are saved. */
+  startScheduledTasks(): void {
+    this.scheduledTasks.start()
+  }
+
+  /** Quit-time stop (shutdown.ts) BEFORE sessions dispose: aborts in-memory
+   * run controllers; persisted active runs are marked interrupted by the next
+   * boot's owner-dead check, never replayed. */
+  stopScheduledTasks(): void {
+    this.scheduledTasksInstance?.stop()
+  }
+
+  private async publishScheduledTasks(): Promise<void> {
+    if (!this.scheduledTasksInstance) return
+    try {
+      this.emit('pi:event', serialize({ type: 'scheduled_tasks_update', scheduledTasks: await this.scheduledTasksSnapshot() }))
+    } catch (error) {
+      console.error('[Pith] Could not publish scheduled tasks:', error)
+    }
+  }
+
+  /** Snapshot for IPC/push: the store snapshot plus the unread terminal count. */
+  async scheduledTasksSnapshot(): Promise<{ tasks: ScheduledTask[]; runs: ScheduledTaskRun[]; serverTime: string; defaultPermissionMode: SandboxMode; dedicatedRoot: string; unreadCount: number }> {
+    const snapshot = await this.scheduledTasks.list()
+    return {
+      ...snapshot,
+      defaultPermissionMode: this.defaultSandboxMode,
+      dedicatedRoot: scheduledTasksRoot(),
+      unreadCount: snapshot.runs.filter((run) => !isScheduledTaskRunActive(run) && !run.readAt).length
+    }
+  }
+
+  /** Read one run's complete final answer from its session on demand. The
+   * pushed history keeps only a short excerpt so large answers do not make
+   * every scheduler update or task-list render expensive. */
+  async scheduledRunOutput(runId: string): Promise<{ text: string | null }> {
+    const run = await this.scheduledTasks.getRun(runId)
+    if (!run.sessionPath) return { text: run.summary ?? null }
+    try {
+      const managed = this.sessions.get(run.sessionPath)
+      const messages = managed ? this.transcriptOf(managed) : transcriptMessages(SessionManager.open(run.sessionPath))
+      return { text: scheduledRunOutputFromMessages(run, messages) }
+    } catch {
+      return { text: run.summary ?? null }
+    }
+  }
+
+  /** Resolve + validate an existing_session target. Throws precise errors the
+   * run history can record verbatim. */
+  private async resolveScheduledTaskSession(sessionId: string): Promise<{ path: string; cwd: string }> {
+    await this.sessionIndex.refresh((path) => {
+      const managed = this.sessions.get(path)
+      return (managed ? rowFromSessionManager(managed.session.sessionManager) : null) ?? undefined
+    })
+    const row = this.sessionIndex.list().find((row) => row.id === sessionId)
+    if (!row) throw new Error('The scheduled conversation no longer exists')
+    if (row.subagentChild) throw new Error('Scheduled tasks cannot target a subagent conversation')
+    if (row.scheduledTask) throw new Error('Scheduled tasks cannot target another scheduled run')
+    return { path: row.path, cwd: row.cwd }
+  }
+
+  /** ScheduledTaskRuntime.validate — target checks for create/update/execute. */
+  async validateScheduledTaskTarget(input: ScheduledTaskInput): Promise<void> {
+    if (input.target.type === 'existing_session') {
+      await this.resolveScheduledTaskSession(input.target.sessionId)
+      return
+    }
+    if (await isScheduledTasksRoot(input.target.cwd)) await prepareScheduledTasksRoot()
+    if (input.target.environment === 'worktree') {
+      if (await isScheduledTasksRoot(input.target.cwd)) throw new Error('The scheduled tasks workspace only supports local execution')
+      await validateScheduledWorktreeSource(input.target.cwd)
+    }
+    const info = await statPath(input.target.cwd).catch(() => null)
+    if (!info?.isDirectory()) throw new Error('The scheduled project directory does not exist')
+    if (input.model) {
+      const runtime = await this.runtime()
+      if (!runtime.getModel(input.model.provider, input.model.modelId))
+        throw new Error(`The scheduled task's model ${input.model.provider}/${input.model.modelId} is not configured`)
+    }
+  }
+
+  /** ScheduledTaskRuntime.ready — advisory busy check before claiming. */
+  async scheduledTaskReady(task: ScheduledTask): Promise<boolean> {
+    if (task.target.type !== 'existing_session') return true
+    try {
+      const target = await this.resolveScheduledTaskSession(task.target.sessionId)
+      const managed = this.sessions.get(target.path)
+      if (!managed || managed.disposing) return true
+      return managed.session.isIdle && !managed.initializing
+    } catch {
+      return true // execute records the precise target error
+    }
+  }
+
+  /** Open an existing session file WITHOUT activating it in the renderer —
+   * the same headless path subagent children take. */
+  private async ensureManagedSessionHeadless(path: string): Promise<ManagedSession> {
+    const existing = this.sessions.get(path)
+    if (existing && !existing.disposing) return existing
+    if (this.closing) throw new Error('Application is shutting down')
+    const sessionManager = SessionManager.open(path)
+    let pending = this.sessionBuilds.get(path)
+    if (!pending) {
+      pending = this.createManagedSession(sessionManager)
+      this.sessionBuilds.set(path, pending)
+    }
+    try {
+      return await pending
+    } finally {
+      if (this.sessionBuilds.get(path) === pending) this.sessionBuilds.delete(path)
+    }
+  }
+
+  /** Create the isolated session a new_session run executes in. The marker
+   * entry lands BEFORE the first prompt (bounded head reads must cover it)
+   * and before the managed build folds the branch (sidebar row, scheduledTask
+   * flag, frozen sandbox mode). */
+  private async createScheduledTaskSession(task: ScheduledTask, run: ScheduledTaskRun): Promise<ManagedSession> {
+    const target = task.target
+    if (target.type !== 'new_session') throw new Error('Scheduled task target is not a new session')
+    const cwd = await isScheduledTasksRoot(target.cwd)
+      ? await scheduledTasksRunCwd()
+      : target.environment === 'worktree'
+        ? await createScheduledWorktree(target.cwd, task.id, run.id)
+        : target.cwd
+    const sessionManager = SessionManager.create(cwd)
+    this.materializeSession(sessionManager)
+    const path = sessionManager.getSessionFile()!
+    sessionManager.appendCustomEntry(SCHEDULED_TASK_ENTRY_TYPE, {
+      version: 1,
+      taskId: task.id,
+      runId: run.id,
+      taskName: task.name
+    } satisfies ScheduledTaskMarkerData)
+    if (task.permissionMode) sessionManager.appendCustomEntry(SANDBOX_MODE_ENTRY_TYPE, { mode: task.permissionMode })
+    let pending = this.sessionBuilds.get(path)
+    if (!pending) {
+      pending = this.createManagedSession(sessionManager, undefined, {
+        taskId: task.id,
+        runId: run.id,
+        ...(task.model ? { model: task.model } : {}),
+        ...(task.thinkingLevel ? { thinkingLevel: task.thinkingLevel } : {})
+      })
+      this.sessionBuilds.set(path, pending)
+    }
+    try {
+      const managed = await pending
+      await managed.lifecyclePromise
+      managed.session.setSessionName(task.name)
+      return managed
+    } finally {
+      if (this.sessionBuilds.get(path) === pending) this.sessionBuilds.delete(path)
+    }
+  }
+
+  /** ScheduledTaskRuntime.execute — resolve/create the session, then drive
+   * one fully-drained scheduled turn. */
+  async executeScheduledTask(
+    task: ScheduledTask,
+    run: ScheduledTaskRun,
+    context: ScheduledTaskExecutionContext
+  ): Promise<{ summary?: string }> {
+    let managed: ManagedSession
+    if (task.target.type === 'existing_session') {
+      const target = await this.resolveScheduledTaskSession(task.target.sessionId)
+      managed = await this.ensureManagedSessionHeadless(target.path)
+    } else {
+      managed = await this.createScheduledTaskSession(task, run)
+    }
+    await context.onSession(managed.session.sessionId, managed.path, managed.cwd)
+    context.signal.throwIfAborted()
+    return this.runScheduledTurn(managed, task, context)
+  }
+
+  /**
+   * One scheduled turn on a managed session. Mirrors the composer prompt
+   * entry's admission discipline (idle + Plan admission + lifecycle barrier +
+   * work reservation + wake hold) and the subagent completion rule (settle is
+   * never `prompt()` resolving alone: drain background bash, notification
+   * handoffs and subagent deliveries before reading the outcome). The
+   * scheduled prompt is NEVER queued as a steer into a user's live turn.
+   */
+  private async runScheduledTurn(
+    managed: ManagedSession,
+    task: ScheduledTask,
+    context: ScheduledTaskExecutionContext
+  ): Promise<{ summary?: string }> {
+    const { signal } = context
+    const session = managed.session
+    const promptText =
+      `[Scheduled task: ${task.name}]\nThis is an authorized run of an existing schedule. ` +
+      `Execute the instructions below; do not recreate this schedule.\n\n${task.prompt}`
+    const stop = async (): Promise<void> => {
+      // Subagents first (their cancellation suppresses late notifications),
+      // then the parent turn, then this session's live background bash.
+      if (managed.subagents) await this.subagentRuntime.stopAll(managed.subagents)
+      await session.abort()
+      const tasks = this.commandTasks.list(managed.path).filter(taskIsLive)
+      await Promise.all(tasks.map((task) => this.commandTasks.stop(managed.path, task.id).catch(() => task as never)))
+    }
+    const onAbort = () => {
+      void stop().catch(() => {})
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+    // Publish waiting while the session waits on a human (existing_session
+    // targets: a pending escalation or ask_user in the normal session UI).
+    let waiting = false
+    const waitingTimer = setInterval(() => {
+      void (async () => {
+        const pending = listPendingEscalations(managed.path).length + listPendingAskUser(managed.path).length > 0
+        if (pending === waiting) return
+        waiting = pending
+        try {
+          await context.onWaiting(pending)
+        } catch {
+          /* the lease owner already aborted this run */
+        }
+      })()
+    }, 1000)
+    let settled = false
+    try {
+      while (true) {
+        signal.throwIfAborted()
+        if (managed.disposing || this.closing) throw new Error('The conversation was closed before the scheduled run started')
+        await managed.lifecyclePromise
+        if (!managed.initializing && session.isIdle) {
+          try {
+            managed.plan.checkWorkAdmission()
+            break
+          } catch {
+            /* a mode transition owns the session; wait for it to end */
+          }
+        }
+        await scheduledDelay(signal, 500)
+      }
+      if (session.isIdle) managed.continuationRequest?.abort()
+      managed.notifications.resume()
+      managed.askUser.resume()
+      managed.subagents?.notifications?.resume()
+      const releasePlanWork = managed.plan.beginWork('user')
+      managed.notifications.holdWake()
+      managed.askUser.holdWake()
+      managed.subagents?.notifications?.holdWake()
+      const releaseWakes = () => {
+        managed.notifications.releaseWake()
+        managed.askUser.releaseWake()
+        managed.subagents?.notifications?.releaseWake()
+      }
+      let promptError: string | undefined
+      try {
+        try {
+          await session.prompt(promptText, { source: 'rpc' })
+        } catch (error) {
+          promptError = error instanceof Error ? error.message : String(error)
+        }
+        await this.drainScheduledRun(managed, signal)
+      } finally {
+        releasePlanWork()
+        releaseWakes()
+      }
+      signal.throwIfAborted()
+      settled = true
+      if (promptError) throw new Error(promptError)
+      const last = [...(session.messages as ChatMessage[])].reverse().find((message) => message.role === 'assistant') as
+        | { stopReason?: string; error?: unknown; errorMessage?: unknown }
+        | undefined
+      if (last?.stopReason === 'error') throw new Error(String(last.errorMessage ?? last.error ?? 'The model run ended with an error'))
+      if (last?.stopReason === 'aborted') throw new DOMException('The scheduled run was aborted', 'AbortError')
+      return { summary: session.getLastAssistantText()?.trim() || undefined }
+    } finally {
+      clearInterval(waitingTimer)
+      if (!settled || signal.aborted) {
+        // The cleanup owns the accepted run until every child has stopped. An
+        // already-aborted run signal must not skip this retry or release it.
+        while (true) {
+          // Quit/disposal owns the session from here: further stop attempts
+          // would only fail, and the persisted run recovers as interrupted
+          // on the next boot.
+          if (managed.disposing) break
+          try {
+            await stop()
+            break
+          } catch (error) {
+            try {
+              await context.onWaiting(true, `Stopping failed; retrying: ${error instanceof Error ? error.message : String(error)}`)
+            } catch {
+              /* persistence lost: keep retrying regardless */
+            }
+            await new Promise<void>((resolve) => setTimeout(resolve, 1000))
+          }
+        }
+      }
+      signal.removeEventListener('abort', onAbort)
+    }
+  }
+
+  /** Fully drain a scheduled turn: background bash, pending notification
+   * deliveries and subagent handoffs must all be quiet before the outcome is
+   * read — `agent_end` alone is never completion. */
+  private async drainScheduledRun(managed: ManagedSession, signal: AbortSignal): Promise<void> {
+    const tasks = this.commandTasks
+    const deadline = Date.now() + 5 * 60_000
+    let turnLive = !managed.session.isIdle
+    let wake: (() => void) | null = null
+    const unsubscribe = managed.session.subscribe((event) => {
+      if (event.type === 'agent_start') {
+        turnLive = true
+        wake?.()
+      }
+      if (event.type === 'agent_settled') {
+        turnLive = false
+        wake?.()
+      }
+    })
+    try {
+      for (let cycle = 0; cycle < 600; cycle++) {
+        signal.throwIfAborted()
+        // Process completion and its notification are separate handoffs; give
+        // queued delivery a turn before deciding an empty task list is done.
+        await new Promise<void>((resolve) => setImmediate(resolve))
+        const live = tasks.list(managed.path).filter((task) => task.background && taskIsLive(task))
+        const pendingDelivery =
+          managed.notifications.hasPendingCompletions ||
+          managed.askUser.hasPendingDeliveries ||
+          (managed.subagents?.notifications?.hasPendingDeliveries ?? false)
+        if (!live.length && !pendingDelivery && !turnLive && managed.session.isIdle) return
+        if (Date.now() >= deadline) throw new Error('The scheduled run did not settle')
+        if (live.length) {
+          await Promise.race([tasks.wait(managed.path, live[0].id).catch(() => {}), scheduledDelay(signal, 1000).catch(() => {})])
+        } else {
+          await Promise.race([new Promise<void>((resolve) => (wake = resolve)), scheduledDelay(signal, 1000).catch(() => {})])
+        }
+      }
+      throw new Error('The scheduled run exceeded its continuation limit')
+    } finally {
+      unsubscribe()
+    }
   }
 
   private async initializeSession(managed: ManagedSession, loader: ResourceLoader): Promise<void> {
@@ -2291,7 +2854,7 @@ export class PiManager {
     if (mode !== 'normal' && mode !== 'plan') return { ok: false, code: 'invalid-mode', blockers: [] }
     const managed = this.sessions.get(request.sessionPath)
     if (!managed) return { ok: false, code: 'no-session', blockers: [] }
-    if (managed.subagentChild) return { ok: false, code: 'child-session', blockers: ['child-session'] }
+    if (managed.subagentChild || managed.scheduledTask) return { ok: false, code: 'child-session', blockers: ['child-session'] }
     try {
       const value = await managed.plan.setMode(mode)
       return { ok: true, value }
@@ -2341,10 +2904,22 @@ export class PiManager {
     })
   }
 
+  /** Full selected-branch transcript for display; compaction affects context only. */
+  private transcriptOf(managed: ManagedSession): ChatMessage[] {
+    const originals = transcriptMessages(managed.session.sessionManager)
+    const messages = serialize(this.stampPlanMessages(
+      managed,
+      originals.map(message => managed.changeScopes.stamp(message)),
+      originals
+    )) as ChatMessage[]
+    this.stampCompletedAt(managed, messages)
+    return messages
+  }
+
   /** Serialize one session's current state for the renderer. */
   private snapshotOf(managed: ManagedSession): SessionSnapshotDTO {
     this.flushStreamEvents(managed)
-    const messages = serialize(this.stampPlanMessages(managed, managed.session.messages.map(message => managed.changeScopes.stamp(message as ChatMessage)), managed.session.messages as ChatMessage[])) as ChatMessage[]
+    const messages = this.transcriptOf(managed)
     const live = managed.streaming as ChatMessage | null
     if (live?.role === 'assistant') {
       const index = messages.findLastIndex(
@@ -2352,7 +2927,6 @@ export class PiManager {
       )
       if (index >= 0) messages.splice(index, 1)
     }
-    this.stampCompletedAt(managed, messages)
     return {
       sessionId: managed.session.sessionId,
       sessionPath: managed.path,
@@ -2385,8 +2959,11 @@ export class PiManager {
       contextUsage: this.contextUsageOf(managed),
       subagents: managed.subagents?.snapshot() ?? [],
       subagentChild: Boolean(managed.subagentChild),
+      scheduledTaskSession: Boolean(managed.scheduledTask),
       ...(managed.subagentChild ? { subagentParentPath: managed.subagentChild.parentPath } : {}),
       plan: managed.plan.snapshot,
+      jevWorkflow: managed.jevWorkflow?.snapshot ?? null,
+      jevWorkflowSeq: managed.jevWorkflow?.revision ?? 0,
       eventSequence: managed.eventSequence
     }
   }
@@ -2404,7 +2981,7 @@ export class PiManager {
   private stampCompletedAt(managed: ManagedSession, messages: ChatMessage[]): void {
     const times = new Map<string, number>()
     const userEntries = new Map<string, string[]>()
-    for (const entry of managed.session.sessionManager.buildContextEntries()) {
+    for (const entry of managed.session.sessionManager.getBranch()) {
       if (entry.type !== 'message') continue
       if (entry.message.role === 'user') {
         const key = JSON.stringify([entry.message.timestamp, entry.message.content])
@@ -2632,6 +3209,9 @@ export class PiManager {
         // the sidebar. Only the persisted run marker separates them from
         // forks (which also carry parentSessionPath and do show here).
         if (s.parentSessionPath && s.subagentChild) continue
+        // Scheduled-run sessions are reachable through the scheduled tasks
+        // view (runs record their sessionPath), never through the sidebar.
+        if (s.scheduledTask) continue
         // `messageCount` counts every branch in the file, so a session whose
         // conversation was restored to before its first turn still has all its
         // history in that number while its selected branch is empty. The branch
@@ -2776,10 +3356,19 @@ export class PiManager {
       this.notifyError('This subagent session is read-only. Open its parent session to continue work.')
       return
     }
+    // A scheduled-run session is likewise read-only for interactive paths: its
+    // turns are owned by the scheduler and its task is managed from the
+    // scheduled tasks view.
+    if (managed?.scheduledTask) {
+      this.notifyError('This session belongs to a scheduled task and is read-only.')
+      return
+    }
     if (!managed || !session) {
       this.notifyError('Pi session is not initialized. Pick a working directory first.')
       return
     }
+    // A real new prompt supersedes a Continue still preparing to start.
+    if (session.isIdle) managed.continuationRequest?.abort()
     // A mode change owns the session while it is in flight; a prompt admitted
     // then would race the branch write it is about to make.
     try {
@@ -2890,6 +3479,7 @@ export class PiManager {
       followUp: recallOf(managed.queueMirror.followUp)
     }
     if (stopping) {
+      managed.continuationRequest?.abort()
       managed.notifications.pause()
       managed.askUser.pause()
       managed.subagents?.notifications?.pause()
@@ -2921,7 +3511,7 @@ export class PiManager {
   queueAction(payload: QueueActionPayload): void {
     const managed = this.activeSession
     if (!managed) return
-    if (managed.subagentChild) return // read-only view: nothing to rebuild
+    if (managed.subagentChild || managed.scheduledTask) return // read-only view: nothing to rebuild
     // A mode change owns the session: rebuilding the queues inside it would
     // race the branch write. The action is a no-op (nothing is lost).
     try {
@@ -2981,7 +3571,7 @@ export class PiManager {
     role: 'user' | 'assistant',
     timestamp: number
   ): { id: string; parentId: string | null; message: { role: string; timestamp: number; content: any } } | null {
-    for (const entry of managed.session.sessionManager.buildContextEntries()) {
+    for (const entry of managed.session.sessionManager.getBranch()) {
       if (entry.type !== 'message') continue
       const message = entry.message as { role?: string; timestamp?: number }
       if (message.role === role && message.timestamp === timestamp) {
@@ -2989,6 +3579,53 @@ export class PiManager {
       }
     }
     return null
+  }
+
+  /** Resume the interrupted frontier using its original context and scope. */
+  async continueMessage(payload: ContinuePayload): Promise<void> {
+    const managed = this.activeSession
+    if (!managed || managed.path !== payload.sessionPath || managed.subagentChild || managed.scheduledTask) throw new Error('continue-stale-session')
+    const session = managed.session
+    if (managed.continuationRequest || !session.isIdle) throw new Error('continue-busy')
+    const target = continuationTarget(this.transcriptOf(managed))
+    if (!target || target.timestamp !== payload.timestamp) throw new Error('continue-stale-turn')
+    // A continuation cannot lift a submitted plan's seal or bypass approval.
+    const releasePlan = managed.plan.beginWork('background')
+    const request = managed.continuationRequest = new AbortController()
+    const owners = [managed.notifications, managed.askUser, managed.subagents?.notifications].filter(owner => owner != null)
+    for (const owner of owners) { owner.holdWake(); owner.resume() }
+    let releaseRun: (() => void) | undefined
+    // Rewind's SDK wrappers can await checkout admission once more. Stop in
+    // that window must reach the fresh agent signal before any model/tool work.
+    const unsubscribe = session.agent.subscribe(event => {
+      if (event.type === 'message_start' && event.message.role === 'custom' &&
+        event.message.customType === CONTINUATION_MESSAGE_TYPE &&
+        (request.signal.aborted || this.closing || managed.disposing)) session.agent.abort()
+    })
+    try {
+      await managed.lifecyclePromise
+      releaseRun = await this.checkoutCoordinator.enter(managed.cwd, 'run', managed.path, request.signal)
+      if (request.signal.aborted || this.closing || managed.disposing || !managed.notifications.canStart) return
+      managed.plan.checkWorkAdmission()
+      if (!session.isIdle || continuationTarget(this.transcriptOf(managed))?.timestamp !== payload.timestamp) throw new Error('continue-stale-turn')
+      // A hidden custom message uses the normal SDK run/auto-retry/compaction
+      // lifecycle without a user bubble, new checkpoint, or branch rewrite.
+      managed.jevWorkflow?.resume()
+      await session.sendCustomMessage({
+        customType: CONTINUATION_MESSAGE_TYPE,
+        content: continuationContent(target),
+        display: false,
+        details: { timestamp: target.timestamp }
+      }, { triggerTurn: true })
+    } catch (error) {
+      if (!request.signal.aborted) throw error
+    } finally {
+      unsubscribe()
+      releaseRun?.()
+      if (managed.continuationRequest === request) managed.continuationRequest = undefined
+      releasePlan()
+      for (const owner of owners) owner.releaseWake()
+    }
   }
 
   /**
@@ -3004,6 +3641,8 @@ export class PiManager {
     const session = managed?.session
     if (!managed || !session) throw new Error('No active session')
     if (managed.subagentChild) throw new Error('A subagent session is read-only')
+    if (managed.scheduledTask) throw new Error('A scheduled task session is read-only')
+    if (managed.continuationRequest && session.isIdle) throw new Error('continue-busy')
     // Branch move + fresh user turn: reserve before the first await, and keep
     // the user registration so the new turn can lift a submission seal.
     const releasePlanWork = managed.plan.beginWork('user')
@@ -3096,6 +3735,7 @@ export class PiManager {
     const managed = this.activeSession
     if (!managed) throw new Error('No active session')
     if (managed.subagentChild) throw new Error('A subagent session is read-only')
+    if (managed.scheduledTask) throw new Error('A scheduled task session is read-only')
     const release = managed.plan.beginWork('branch')
     try {
       const entry = this.findMessageEntry(managed, 'assistant', timestamp)
@@ -3112,7 +3752,7 @@ export class PiManager {
 
       let baseLabel = managed.session.sessionName?.trim() || null
       if (!baseLabel) {
-        for (const candidate of sessionManager.buildContextEntries()) {
+        for (const candidate of sessionManager.getBranch()) {
           if (candidate.type !== 'message') continue
           const message = candidate.message as { role?: string; content?: unknown }
           if (message.role !== 'user') continue
@@ -3142,6 +3782,8 @@ export class PiManager {
   abort(): void {
     const managed = this.activeSession
     if (!managed) return
+    managed.continuationRequest?.abort()
+    managed.jevWorkflow?.cancel()
     managed.planApproval?.cancelOpening()
     managed.userAborted = true
     managed.notifications.pause()
@@ -3158,6 +3800,7 @@ export class PiManager {
   async setModel(providerId: string, modelId: string): Promise<SessionSnapshotDTO> {
     const managed = this.activeSession
     if (managed?.subagentChild) throw new Error('A subagent session is read-only')
+    if (managed?.scheduledTask) throw new Error('A scheduled task session is read-only')
     const runtime = await this.runtime()
     const model = runtime.getModel(providerId, modelId)
     if (!model) throw new Error(`Unknown model ${providerId}/${modelId}`)
@@ -3170,6 +3813,7 @@ export class PiManager {
 
   async setThinkingLevel(level: ThinkingLevel): Promise<SessionSnapshotDTO> {
     if (this.activeSession?.subagentChild) throw new Error('A subagent session is read-only')
+    if (this.activeSession?.scheduledTask) throw new Error('A scheduled task session is read-only')
     if (!this.activeSession) throw new Error('No active session')
     this.activeSession.session.setThinkingLevel(level)
     return this.snapshot()
@@ -3579,6 +4223,9 @@ export class PiManager {
 
   async models(): Promise<ModelDTO[]> {
     const runtime = await this.runtime()
+    // Hidden models stay usable by id (default model, sessions already on
+    // them) but never appear in a selector.
+    const hidden = hiddenModelKeys(readModelsConfig())
     const available = new Set(
       (await runtime.getAvailable().catch(() => [])).map((m: any) => `${m.provider}/${m.id}`)
     )
@@ -3587,12 +4234,18 @@ export class PiManager {
     for (const provider of runtime.getProviders()) {
       for (const model of provider.getModels()) {
         const anyModel = model as any
+        if (hidden.has(`${anyModel.provider}/${anyModel.id}`)) continue
         models.push({
           providerId: anyModel.provider,
           providerName: providerName.get(anyModel.provider) ?? anyModel.provider,
           id: anyModel.id,
           name: anyModel.name ?? anyModel.id,
           reasoning: Boolean(anyModel.reasoning),
+          thinkingLevels: !anyModel.reasoning ? ['off'] : (['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as ThinkingLevel[]).filter((level) => {
+            const mapped = anyModel.thinkingLevelMap?.[level]
+            if (mapped === null) return false
+            return level === 'xhigh' || level === 'max' ? mapped !== undefined : true
+          }),
           input: (anyModel.input ?? ['text']) as string[],
           contextWindow: anyModel.contextWindow ?? 0,
           maxTokens: anyModel.maxTokens ?? 0,
@@ -4018,6 +4671,7 @@ export class PiManager {
   dispose(): Promise<void> {
     if (this.disposePromise) return this.disposePromise
     this.closing = true
+    this.jevService.dispose()
     this.checkoutCoordinator.close()
     this.navigationEpoch += 1
     this.sessionSearch.dispose()

@@ -40,13 +40,13 @@ export function RewindActions({ mode, onModeChange, onRestore, actionLabel, disa
     return () => { cancelAnimationFrame(frame); window.removeEventListener('keydown', onKey, true) }
   }, [open])
   return <div className="ml-auto flex shrink-0 items-center gap-1">
-    <div className="flex items-center">
-      <Button ref={actionRef} data-rewind-restore data-rewind-selected-mode={mode} variant="primary" size="sm" className="h-8 gap-1.5 rounded-r-none px-2.5 text-xs" disabled={disabled} aria-label={actionLabel ?? t(`rewind.restoreMode.${mode}`)} onClick={onRestore}>
+    <div className="flex items-center gap-0.5">
+      <Button ref={actionRef} data-rewind-restore data-rewind-selected-mode={mode} variant="primary" size="sm" className="h-8 gap-1.5 px-2.5 text-xs" disabled={disabled} aria-label={actionLabel ?? t(`rewind.restoreMode.${mode}`)} onClick={onRestore}>
         <Rewind aria-hidden="true" className="hidden size-3.5 @min-[500px]:block" />
         {actionLabel ?? <><span className="hidden @min-[500px]:inline">{t(`rewind.restoreMode.${mode}`)}</span><span className="@min-[500px]:hidden">{t(`rewind.shortMode.${mode}`)}</span></>}
       </Button>
       <MorphPopover open={open === 'mode'} onOpenChange={value => setOpen(value ? 'mode' : null)}>
-        <MorphPopoverTrigger><Button ref={modeRef} data-rewind-mode-trigger variant="primary" size="icon" className="h-8 w-7 rounded-l-none border-l border-primary-foreground/25" disabled={modeDisabled} aria-label={t('rewind.chooseMode')}><ChevronDown aria-hidden="true" className="size-3.5" /></Button></MorphPopoverTrigger>
+        <MorphPopoverTrigger><Button ref={modeRef} data-rewind-mode-trigger variant="primary" size="icon" className="h-8 w-7" disabled={modeDisabled} aria-label={t('rewind.chooseMode')}><ChevronDown aria-hidden="true" className="size-3.5" /></Button></MorphPopoverTrigger>
         <MorphPopoverContent instant align="end" radius="var(--app-radius-card)" className="w-max max-w-[calc(100vw-4rem)] p-1.5">
           <div ref={menuRef} data-rewind-mode-options className="flex flex-col gap-1" onKeyDown={event => {
             if (event.key === 'Tab') { event.preventDefault(); close(); return }

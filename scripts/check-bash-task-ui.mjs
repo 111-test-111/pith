@@ -8,6 +8,8 @@ import electron from 'electron'
 import { createServer } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+import { checkContinueUi } from './lib/check-continue-ui.mjs'
+import { checkTurnFoldUi } from './lib/check-turn-fold-ui.mjs'
 
 const repo = resolve('.')
 const temporary = await mkdtemp(join(tmpdir(), 'pith-bash-ui-'))
@@ -32,21 +34,27 @@ import {GeneralSection} from '/src/components/app/settings/GeneralSection.tsx';
 import {TOOL_CATEGORIES} from '/src/lib/tool-categories.ts';
 import '/src/styles.css';
 localStorage.setItem('pi-app:locale','en');
-let listener;window.outputReads=0;window.stops=0;window.savedWait=10000;window.openedSessions=[];window.openPaths=[];
+let listener;window.outputReads=0;window.stops=0;window.savedWait=10000;window.openedSessions=[];window.openPaths=[];window.subagentActions=[];window.subagentActionMode='resolve';window.resolveSubagentAction=null;
 window.task={id:'ui-task',sessionId:'ui-session',sessionPath:'/ui/session',toolCallId:'ui-call',command:'npm run build',cwd:'/ui',status:'running',background:true,reason:'wait_threshold',startedAt:Date.now()-1000,lastOutputAt:Date.now(),outputChars:11,logPath:'/ui/task.log',logTruncated:false,revision:1};
 window.pi={onBashTask:fn=>{listener=fn;return()=>{listener=undefined}},listBashTasks:async path=>path==='/ui/session'?[window.task]:[],
  bashTaskOutput:async request=>{window.outputReads++;const output='build 中文😀';return{task:window.task,output:request.cursor===undefined?output:'',cursor:output.length,truncated:false}},
  stopBashTask:async()=>{window.stops++;window.task={...window.task,status:'cancelled',endedAt:Date.now(),revision:window.task.revision+1};listener?.(window.task);return window.task},
+ subagentAction:request=>{window.subagentActions.push(structuredClone(request));if(window.subagentActionMode==='reject')return Promise.reject(new Error('RAW_MAIN_ERROR'));if(window.subagentActionMode==='pending')return new Promise(resolve=>{window.resolveSubagentAction=()=>{window.resolveSubagentAction=null;resolve()}});return Promise.resolve()},
  openPath:async path=>{window.openPaths.push(path);return ''},appInfo:async()=>({version:'fixture',bashMaxWaitMs:window.savedWait}),setBashMaxWaitMs:async value=>window.savedWait=value,openExternal:async()=>{}};
 const call={type:'toolCall',id:'ui-call',name:'bash',arguments:{command:'npm run build'}};
 const result={role:'toolResult',toolCallId:'ui-call',toolName:'bash',content:[],details:{bashTask:window.task},isError:false,timestamp:1};
 const second={type:'toolCall',id:'read-call',name:'bash',arguments:{command:'pwd'}};
 const secondResult={role:'toolResult',toolCallId:'read-call',toolName:'bash',content:[{type:'text',text:'/ui'}],isError:false,timestamp:2};
+const completedSubagent={runId:'notice-run',sessionId:'notice-child',sessionPath:'/ui/children/notice.jsonl',parentSessionPath:'/ui/session',profile:'reviewer',model:'gpt-mini',description:'Review alignment',task:'Review alignment',status:'completed',runInBackground:true,createdAt:'2025-01-01T00:00:00.000Z',completedAt:'2025-01-01T00:00:02.000Z'};
+const subagentCompletion={role:'custom',customType:'subagent_completion',content:'MODEL_COMPLETION',display:true,details:{subagent:completedSubagent},timestamp:4};
+const subagentMessage={role:'custom',customType:'subagent_message',content:'MODEL_MESSAGE',display:true,details:{kind:'pi-app-subagent-message',sessionId:'notice-child',runId:'notice-run',description:'Review alignment',profile:'reviewer',message:'Alignment note',sentAt:'2025-01-01T00:00:03.000Z'},timestamp:5};
 function Fixture(){const [todos,setTodos]=React.useState(null),[busy,setBusy]=React.useState(false),[taskSession,setTaskSession]=React.useState("a"),[subagents,setSubagents]=React.useState([]);window.setTodos=setTodos;window.setBusy=setBusy;window.setTaskSession=setTaskSession;window.setSubagents=setSubagents;const {setLocale}=useI18n();window.setLocale=setLocale;return React.createElement('div',{style:{width:800,margin:'20px auto'}},
  React.createElement('div',{id:'tasks'},React.createElement(BashTasksProvider,{sessionPath:'/ui/session'},
  React.createElement(SessionTasks,{key:taskSession,todos,busy,subagents,sessionPath:'/ui/session',onOpenSession:path=>window.openedSessions.push(path)}),React.createElement('div',{id:'original'},React.createElement(ToolCallView,{call,result})),
  React.createElement('div',{id:'group'},React.createElement(ToolGroupView,{category:TOOL_CATEGORIES[1],calls:[call,second],toolResults:new Map([['ui-call',result],['read-call',secondResult]]),toolRuns:{}})),
- React.createElement('div',{id:'notice'},React.createElement(CustomItem,{message:{role:'custom',customType:'bash_task_completion',content:'INTERNAL_MODEL_INSTRUCTIONS',display:true,details:{bashTask:{...window.task,id:'completed-ui-task',toolCallId:'completed-call',status:'succeeded'}},timestamp:3}})))),
+ React.createElement('div',{id:'notice'},React.createElement(CustomItem,{message:{role:'custom',customType:'bash_task_completion',content:'INTERNAL_MODEL_INSTRUCTIONS',display:true,details:{bashTask:{...window.task,id:'completed-ui-task',toolCallId:'completed-call',status:'succeeded'}},timestamp:3}})),
+ React.createElement('div',{id:'subagent-completion'},React.createElement(CustomItem,{message:subagentCompletion})),
+ React.createElement('div',{id:'subagent-message'},React.createElement(CustomItem,{message:subagentMessage})))),
  React.createElement('div',{id:'settings',style:{marginTop:24}},React.createElement(GeneralSection)));}
 window.checkRoot=createRoot(document.getElementById('root'));window.checkRoot.render(React.createElement(I18nProvider,null,React.createElement(Fixture)));
 window.finishTask=()=>{window.task={...window.task,status:'succeeded',exitCode:0,endedAt:Date.now(),revision:window.task.revision+1};listener?.(window.task)};window.runForever=()=>{window.task={...window.task,status:'running',endedAt:undefined,revision:window.task.revision+1};listener?.(window.task)};
@@ -109,8 +117,8 @@ window.startTurnFixture=()=>{
  window.resetTurn=()=>{window.expectedCards=0;flushSync(()=>window.turnStore.applySnapshot(window.turnSnapshot(window.initialTurnMessages.map(m=>({...m})))))};
  window.resetTurn();
  flushSync(()=>window.checkRoot.render(React.createElement(I18nProvider,{key:'turn-fixture'},React.createElement(ImagePreviewProvider,null,
-  React.createElement('div',{id:'turn-fixture',style:{height:900,display:'flex',flexDirection:'column'}},React.createElement(ChatView,{store:window.turnStore,onDismissError:()=>{},onResend:m=>window.menuResends.push(m),onEditMessage:m=>window.menuEdits.push(m),onRewindMessage:m=>window.menuRewinds.push(m),onFork:m=>window.menuForks.push(m),onReview:()=>{}}))))));
- window.menuResends=[];window.menuEdits=[];window.menuRewinds=[];window.menuForks=[];
+  React.createElement('div',{id:'turn-fixture',style:{height:900,display:'flex',flexDirection:'column'}},React.createElement(ChatView,{store:window.turnStore,onDismissError:()=>{},onResend:m=>window.menuResends.push(m),onContinue:m=>window.menuContinues.push(m),onEditMessage:m=>window.menuEdits.push(m),onRewindMessage:m=>window.menuRewinds.push(m),onFork:m=>window.menuForks.push(m),onReview:()=>{}}))))));
+ window.menuResends=[];window.menuEdits=[];window.menuRewinds=[];window.menuForks=[];window.menuContinues=[];
  window.turnStep=(event,count=0)=>{window.expectedCards=count;flushSync(()=>window.turnStore.dispatch({...event,sessionPath:'/ui/session',eventSequence:++window.turnSequence}));};
  window.turnRead=()=>({cards:document.querySelectorAll('#turn-fixture ul[data-plain-list]').length,
   paths:[...document.querySelectorAll('#turn-fixture ul[data-plain-list]')].map(list=>list.textContent),
@@ -118,6 +126,22 @@ window.startTurnFixture=()=>{
   notices:document.querySelectorAll('[data-turn-process] [data-bash-task-id]').length,
   reviews:extractReviewTurns(window.turnStore.getState().messages,'/ui').map(turn=>({id:turn.id,files:turn.files.map(f=>f.displayPath)}))});
  const frame=()=>{if(!window.turnStore)return;window.frameCount++;const state=window.turnRead();if(state.cards!==window.expectedCards)window.frameFailures.push({...state,expected:window.expectedCards});requestAnimationFrame(frame)};requestAnimationFrame(frame);
+};
+window.startJevFixture=()=>{
+ window.turnStore=null;window.jevReads=0;window.jevDetailReads=0;
+ const previousList=window.pi.listBashTasks;window.pi.listBashTasks=async path=>path==='/ui/jev'?[{...window.task,id:'jev-background',sessionPath:'/ui/jev',status:'running',background:true}]:previousList(path);
+ const trace={id:'trace-1',stage:'verifier',timestamp:1,status:'completed',choice:'stop',effectiveChoice:'continue',override:'missing_evidence',target:{id:'verify_layout',requirement:'Change the layout',instruction:'Inspect the modified settings layout',evidenceIds:['edit-1']}};
+ window.pi.jevTraces=async()=>{window.jevReads++;return{items:[trace],nextCursor:null}};
+ window.pi.jevTrace=async()=>{window.jevDetailReads++;return{...trace,request:{state:JSON.stringify({request:'Change the layout',attachmentsOmitted:true}),questions:{action:{type:'choice',instructions:'Verify actual changes',criteria:{stop:'Complete',continue:'Incomplete'}}}},evaluation:{model:'jev-fixture',elapsedMs:123,inputTokens:30,outputTokens:5,answers:{action:{type:'choice',choice:'stop',confidence:0.92,probabilities:{stop:0.96,continue:0.04}}}}}};
+ function JevFixture(){
+  const [todos,setTodos]=React.useState(null);window.jevSetTodos=setTodos;
+  const {setLocale}=useI18n();window.setLocale=setLocale;
+  const [state,setState]=React.useState({seq:1,phase:'verifying',route:'act',corrections:4,requests:31,jevInput:300,jevOutput:50,mainInput:100,mainOutput:20,cacheRead:500,cacheWrite:0});window.jevSetState=setState;
+  return React.createElement('div',{id:'jev-fixture',style:{height:700,width:900,margin:'20px auto',display:'flex',flexDirection:'column'}},
+   React.createElement(BashTasksProvider,{sessionPath:'/ui/jev'},React.createElement(SessionTasks,{todos,subagents:[],busy:true,sessionPath:'/ui/jev',jevState:state})),
+   React.createElement('div',{id:'jev-transcript',style:{flex:1}},'TRANSCRIPT'));
+ }
+ flushSync(()=>window.checkRoot.render(React.createElement(I18nProvider,{key:'jev'},React.createElement(JevFixture))));
 };
 window.fixtureReady=true;
 </script></body></html>`
@@ -151,6 +175,22 @@ try {
   ws.addEventListener('message', (event) => { const msg = JSON.parse(event.data); if (msg.id) { pending.get(msg.id)?.(msg); pending.delete(msg.id) } if (msg.method === 'Runtime.exceptionThrown') exceptions.push(msg.params) })
   const send = (method, params = {}) => new Promise((resolve, reject) => { const id = ++sequence; pending.set(id, (msg) => msg.error ? reject(msg.error) : resolve(msg.result)); ws.send(JSON.stringify({ id, method, params })) })
   const evaluate = async (expression) => { const result = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }); if (result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails)); return result.result.value }
+  const assertToolMetaAlignment = async (selectors, label) => {
+    const rows = await evaluate(`(()=>{const group=document.querySelector('#group .items-baseline'),groupTitle=group?.children[0],groupMeta=group?.children[1],gt=groupTitle?.getBoundingClientRect(),gm=groupMeta?.getBoundingClientRect(),expected=gt&&gm?gm.top-gt.top:null;return ${JSON.stringify(selectors)}.map(selector=>{const host=document.querySelector(selector),title=host?.querySelector('[data-tool-result-title]'),meta=host?.querySelector('[data-tool-result-meta]'),parent=title?.parentElement,tr=title?.getBoundingClientRect(),mr=meta?.getBoundingClientRect();return {selector,found:!!title&&!!meta,parentAlign:parent?getComputedStyle(parent).alignItems:null,titleAlign:title?getComputedStyle(title).alignSelf:null,metaAlign:meta?getComputedStyle(meta).alignSelf:null,offset:tr&&mr?mr.top-tr.top:null,expected}})})()`)
+    assert.equal(rows.length, selectors.length)
+    for (const row of rows) {
+      assert.equal(row.found, true, `${label} renders title and meta: ${JSON.stringify(row)}`)
+      assert.equal(row.parentAlign, 'baseline', `${label} shares one text baseline: ${JSON.stringify(row)}`)
+      assert.equal(row.titleAlign, 'auto', `${label} title does not override the shared baseline: ${JSON.stringify(row)}`)
+      assert.equal(row.metaAlign, 'auto', `${label} meta does not override the shared baseline: ${JSON.stringify(row)}`)
+      assert.ok(Math.abs(row.offset - row.expected) < 0.6, `${label} matches the grouped-row title/meta offset: ${JSON.stringify(row)}`)
+    }
+  }
+  const clickSelector = async (selector) => {
+    const point = await evaluate(`(()=>{const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();return{x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)}})()`)
+    await send('Input.dispatchMouseEvent', { type:'mousePressed', button:'left', clickCount:1, x:point.x, y:point.y })
+    await send('Input.dispatchMouseEvent', { type:'mouseReleased', button:'left', clickCount:1, x:point.x, y:point.y })
+  }
   await send('Runtime.enable')
   // The window is not frontmost while the check runs, and `navigator.clipboard`
   // refuses a document that is not focused: the menu's copy assertions need
@@ -161,6 +201,9 @@ try {
   assert.match(await evaluate(`document.querySelector('#original').innerText`), /Running in background/)
   assert.doesNotMatch(await evaluate(`document.querySelector('#group').innerText`), /completed,.*failed/)
   assert.doesNotMatch(await evaluate(`document.querySelector('#notice').innerText`), /INTERNAL_MODEL_INSTRUCTIONS/)
+  assert.doesNotMatch(await evaluate(`document.querySelector('#subagent-completion').innerText`), /MODEL_COMPLETION/)
+  assert.doesNotMatch(await evaluate(`document.querySelector('#subagent-message').innerText`), /MODEL_MESSAGE/)
+  await assertToolMetaAlignment(['#original', '#notice', '#subagent-completion', '#subagent-message'], 'tool and steer rows')
   assert.equal(await evaluate('window.outputReads'), 0, 'closed rows never read logs')
   // The expanded list is an overlay: opening it must move nothing in the page.
   const pageGeometry = `JSON.stringify(['#original','#group','#notice'].map(s=>{const r=document.querySelector(s).getBoundingClientRect();return [Math.round(r.x),Math.round(r.y),Math.round(r.width),Math.round(r.height)]}))`
@@ -181,6 +224,7 @@ try {
   // the drawer clips nothing of it.
   assert.match(await evaluate(`getComputedStyle(document.querySelector('[data-task-panel]')).clipPath`), /^inset\(0px 0px 0%\)/, 'the disclosure still owns its reveal clip')
   assert.equal(await evaluate(`getComputedStyle(document.querySelector('[data-task-panel]').parentElement).overflow`), 'visible', 'the positioning wrapper clips nothing')
+  await assertToolMetaAlignment(['[data-task-panel] [data-bash-task-id]'], 'background-task panel rows')
   const list = `(()=>{const l=document.querySelector('[data-bash-tasks-list]'),box=l.getBoundingClientRect(),pad=parseFloat(getComputedStyle(l).paddingTop),rows=[...l.children].map(r=>r.getBoundingClientRect());const cut=e=>rows.filter(r=>r.top<e-0.5&&r.bottom>e+0.5).length;const style=getComputedStyle(l);return {limit:Math.round(box.height),scrollHeight:l.scrollHeight,rows:rows.length,pitch:rows.length>1?Math.round(rows[1].top-rows[0].top):0,rowHeight:rows.length?Math.round(rows[0].height):0,pad,cutTop:cut(box.top+pad),cutBottom:cut(box.bottom-pad),overflow:style.overflowY,mask:style.maskImage==='none'?null:'mask'}})()`
   assert.equal((await evaluate(list)).cutBottom, 0, 'one task fits whole: ' + JSON.stringify(await evaluate(list)))
   // Whole rows at any count: the cap lands on a row boundary, never mid-row.
@@ -289,9 +333,10 @@ try {
   assert.equal(bashRhythm.list,264,'a long list stops at the shared 16.5rem cap')
   assert.ok(todoRhythm.list < bashRhythm.list,'a short list grows row by row instead of holding the cap: ' + JSON.stringify(todoRhythm))
   assert.deepEqual([todoRhythm.panel-todoRhythm.list,agentRhythm.panel-agentRhythm.list],[bashRhythm.panel-bashRhythm.list,bashRhythm.panel-bashRhythm.list],'one header height across the three panels')
+  await assertToolMetaAlignment(['[data-subagents-list] [data-subagent-id=child-a]'], 'subagent panel rows')
   // Open-session is an entry-level link, not a disclosure control: every
-  // collapsed row shows it, it draws no surface of its own, it never animates,
-  // and it holds the header's own 36px line — which is what keeps the shared
+  // collapsed row shows it with no resting surface, and it holds the header's
+  // own 36px line — which is what keeps the shared
   // row pitch the rhythm check above just pinned down.
   const collapsed = await evaluate(`[...document.querySelectorAll('[data-subagents-list] [data-subagent-id]')].map(row=>row.querySelector('button[aria-expanded]').getAttribute('aria-expanded'))`)
   assert.deepEqual(collapsed, ['false', 'false', 'false'], 'the roster starts collapsed: ' + JSON.stringify(collapsed))
@@ -306,16 +351,17 @@ try {
     assert.equal(link.background, 'rgba(0, 0, 0, 0)', 'the link paints no surface: ' + JSON.stringify(link))
     assert.equal(link.borderWidth, '0px/0px/0px/0px', 'the link draws no frame: ' + JSON.stringify(link))
     assert.equal(link.shadow, 'none', 'the link casts no box: ' + JSON.stringify(link))
-    assert.equal(link.transition, 'none', 'the link declares no transition at all (not even the CSS default `all`): ' + JSON.stringify(link))
-    assert.equal(link.duration, '0s', 'the link animates nothing: ' + JSON.stringify(link))
-    assert.equal(link.decoration, 'none', 'the underline is a hover affordance, never the resting state: ' + JSON.stringify(link))
+    assert.ok(!link.transition.split(', ').includes('all') && !link.transition.split(', ').includes('transform'), 'the link only transitions paint properties: ' + JSON.stringify(link))
+    assert.equal(link.decoration, 'none', 'the link has no resting underline: ' + JSON.stringify(link))
   }
-  // Hovering underlines it (the link affordance), and a press opens that row's
+  // Hovering fills it without a frame, and a press opens that row's
   // own child session without touching the disclosure.
   const linkPoint = await evaluate(`(()=>{const r=document.querySelector('[data-subagent-open=child-a]').getBoundingClientRect();return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)}})()`)
   await send('Input.dispatchMouseEvent',{type:'mouseMoved',x:linkPoint.x,y:linkPoint.y})
   await pause(150)
-  assert.equal(await evaluate(`getComputedStyle(document.querySelector('[data-subagent-open=child-a]')).textDecorationLine`), 'underline', 'hovering the entry link underlines it')
+  const hoveredLink = await evaluate(`(()=>{const s=getComputedStyle(document.querySelector('[data-subagent-open=child-a]'));return {background:s.backgroundColor,decoration:s.textDecorationLine,border:s.borderColor}})()`)
+  assert.notEqual(hoveredLink.background, 'rgba(0, 0, 0, 0)', 'hovering the entry link fills it: ' + JSON.stringify(hoveredLink))
+  assert.equal(hoveredLink.decoration, 'none', 'the hover cue is fill, not underline: ' + JSON.stringify(hoveredLink))
   await send('Input.dispatchMouseEvent',{type:'mousePressed',button:'left',clickCount:1,x:linkPoint.x,y:linkPoint.y})
   await send('Input.dispatchMouseEvent',{type:'mouseReleased',button:'left',clickCount:1,x:linkPoint.x,y:linkPoint.y})
   await pause(150)
@@ -328,6 +374,112 @@ try {
   assert.equal(openedRow.top, openedRow.headTop, 'the link keeps to the first line with the row open: ' + JSON.stringify(openedRow))
   assert.equal(openedRow.top, openedRow.rowTop, 'the link never drifts to the row foot: ' + JSON.stringify(openedRow))
   assert.ok(openedRow.rowBottom > openedRow.top + 40, 'the open row really grew below the link: ' + JSON.stringify(openedRow))
+
+  // Running cards expose Guide + Stop. Guide owns a multiline, focus-trapped
+  // editor; plain Enter is a newline and Ctrl+Enter submits exactly once.
+  const runningActions = await evaluate(`Array.from(document.querySelectorAll('[data-subagent-id=child-b] [data-subagent-actions] button'),button=>({action:button.dataset.subagentAction??null,text:button.innerText.trim()}))`)
+  assert.deepEqual(runningActions, [{ action: 'steer', text: 'Guide' }, { action: null, text: 'Stop' }])
+  await evaluate(`document.querySelector('[data-subagent-id=child-b] [data-subagent-action=steer]').click()`)
+  await pause(300)
+  const actionFocus = await evaluate(`(()=>{const input=document.querySelector('[data-subagent-action-dialog=steer] textarea'),active=document.activeElement;return {same:input===active,active:active?.tagName,aria:active?.getAttribute?.('aria-label')}})()`)
+  assert.equal(actionFocus.same, true, 'the action editor receives initial focus: ' + JSON.stringify(actionFocus))
+  assert.equal(await evaluate(`document.querySelector('[data-subagent-action-dialog=steer] [data-subagent-action=steer]').disabled`), true, 'blank instructions cannot submit')
+  // The portalled modal owns Escape ahead of the task panel underneath.
+  await send('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27})
+  await send('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27})
+  await pause(300)
+  assert.equal(await evaluate(`document.querySelector('[data-subagent-action-dialog]')`), null)
+  assert.equal(await evaluate(`document.querySelector('[data-task-trigger=agents]').getAttribute('aria-expanded')`), 'true', 'modal Escape keeps the task panel open')
+  assert.equal(await evaluate(`document.activeElement.dataset.subagentAction`), 'steer', 'modal Escape restores the action trigger')
+  await evaluate(`document.querySelector('[data-subagent-id=child-b] [data-subagent-action=steer]').click()`)
+  await pause(250)
+  await evaluate(`document.querySelector('[data-subagent-action-dialog=steer] textarea').focus()`)
+  await send('Input.insertText', { text:'first line' })
+  await send('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',windowsVirtualKeyCode:13,text:'\r'})
+  await send('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13})
+  await send('Input.insertText', { text:'second line' })
+  assert.equal(await evaluate(`document.querySelector('[data-subagent-action-dialog=steer] textarea').value`), 'first line\nsecond line')
+  assert.equal(await evaluate('window.subagentActions.length'), 0, 'plain Enter never submits a multiline instruction')
+  await send('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',windowsVirtualKeyCode:13,modifiers:2})
+  await send('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13,modifiers:2})
+  await pause(350)
+  assert.deepEqual(await evaluate('window.subagentActions[0]'), { sessionPath: '/ui/session', sessionId: 'child-b', expectedRunId: 'run-b', action: 'steer', message: 'first line\nsecond line' })
+  assert.equal(await evaluate(`document.querySelector('[data-subagent-action-dialog]')`), null, 'a successful action closes the dialog')
+  assert.equal(await evaluate(`document.querySelector('[data-subagent-id=child-b]').dataset.subagentStatus`), 'running', 'the renderer never invents a roster transition')
+  assert.equal(await evaluate(`document.activeElement.dataset.subagentAction`), 'steer', 'closing returns focus to the invoking action')
+
+  // Main-process failures stay localized and keep the draft available for retry.
+  await evaluate(`window.subagentActionMode='reject';document.querySelector('[data-subagent-id=child-b] [data-subagent-action=steer]').click()`)
+  await pause(250)
+  await evaluate(`document.querySelector('[data-subagent-action-dialog=steer] textarea').focus()`)
+  await send('Input.insertText', { text:'keep this draft' })
+  await clickSelector('[data-subagent-action-dialog=steer] [data-subagent-action=steer]')
+  await pause(150)
+  const failedAction = await evaluate(`(()=>{const dialog=document.querySelector('[data-subagent-action-dialog=steer]');return {text:dialog.innerText,value:dialog.querySelector('textarea').value}})()`)
+  assert.match(failedAction.text, /The subagent action failed\./)
+  assert.doesNotMatch(failedAction.text, /RAW_MAIN_ERROR/, 'raw main-process errors never reach the UI')
+  assert.equal(failedAction.value, 'keep this draft')
+  assert.equal(await evaluate(`document.querySelector('[data-task-trigger=agents]').getAttribute('aria-expanded')`), 'true', 'real pointer Submit never dismisses the task panel')
+  await clickSelector('[data-subagent-action-dialog] [data-subagent-action-cancel]')
+  await evaluate(`window.subagentActionMode='resolve'`)
+  await pause(300)
+  assert.equal(await evaluate(`document.querySelector('[data-task-trigger=agents]').getAttribute('aria-expanded')`), 'true', 'real pointer Cancel never dismisses the task panel')
+
+  // A roster update can invalidate an open action. The draft remains, but the
+  // old operation cannot submit and never changes its semantics automatically.
+  await evaluate(`document.querySelector('[data-subagent-id=child-b] [data-subagent-action=steer]').click()`)
+  await pause(250)
+  await evaluate(`document.querySelector('[data-subagent-action-dialog=steer] textarea').focus()`)
+  await send('Input.insertText', { text:'stale draft' })
+  const actionsBeforeStale = await evaluate('window.subagentActions.length')
+  await evaluate(`window.setSubagents(current=>current.map(run=>run.sessionId==='child-b'?{...run,status:'completed',completedAt:new Date().toISOString()}:run))`)
+  await pause(150)
+  assert.match(await evaluate(`document.querySelector('[data-subagent-action-dialog=steer]').innerText`), /run changed/)
+  assert.equal(await evaluate(`document.querySelector('[data-subagent-action-dialog=steer] textarea').value`), 'stale draft')
+  assert.equal(await evaluate(`document.querySelector('[data-subagent-action-dialog=steer] [data-subagent-action=steer]').disabled`), true)
+  await send('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',windowsVirtualKeyCode:13,modifiers:2})
+  await send('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13,modifiers:2})
+  assert.equal(await evaluate('window.subagentActions.length'), actionsBeforeStale, 'a stale Steer never turns into Resume')
+  await clickSelector('[data-subagent-action-dialog] [data-subagent-action-cancel]')
+  await pause(300)
+  await evaluate(`window.setSubagents(current=>current.map(run=>run.sessionId==='child-b'?{...run,status:'running',completedAt:undefined}:run))`)
+  await pause(150)
+
+  // Terminal cards resume the same session. Pending state blocks duplicate
+  // keyboard submission, and success still waits for the roster to change.
+  await evaluate(`document.querySelector('[data-subagent-id=child-a] button[aria-expanded]').click()`)
+  await pause(250)
+  assert.deepEqual(await evaluate(`Array.from(document.querySelectorAll('[data-subagent-id=child-a] [data-subagent-actions] button'),button=>({action:button.dataset.subagentAction??null,text:button.innerText.trim()}))`), [{ action: 'resume', text: 'Continue' }])
+  await evaluate(`window.subagentActionMode='pending';document.querySelector('[data-subagent-id=child-a] [data-subagent-action=resume]').click()`)
+  await pause(250)
+  await evaluate(`document.querySelector('[data-subagent-action-dialog=resume] textarea').focus()`)
+  await send('Input.insertText', { text:'continue with tests' })
+  const actionsBeforeResume = await evaluate('window.subagentActions.length')
+  await clickSelector('[data-subagent-action-dialog=resume] [data-subagent-action=resume]')
+  await pause(100)
+  assert.equal(await evaluate('window.subagentActions.length'), actionsBeforeResume + 1)
+  assert.equal(await evaluate(`document.querySelector('[data-subagent-action-dialog=resume] [data-subagent-action=resume]').disabled`), true, 'pending submit disables the primary action')
+  await send('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',windowsVirtualKeyCode:13,modifiers:2})
+  await send('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13,modifiers:2})
+  assert.equal(await evaluate('window.subagentActions.length'), actionsBeforeResume + 1, 'pending keyboard activation cannot submit twice')
+  assert.deepEqual(await evaluate('window.subagentActions.at(-1)'), { sessionPath: '/ui/session', sessionId: 'child-a', expectedRunId: 'run-a', action: 'resume', message: 'continue with tests' })
+  await evaluate(`window.resolveSubagentAction();window.subagentActionMode='resolve'`)
+  await pause(350)
+  assert.equal(await evaluate(`document.querySelector('[data-subagent-id=child-a]').dataset.subagentStatus`), 'completed', 'Resume success is not rendered optimistically')
+  assert.equal(await evaluate(`document.activeElement.dataset.subagentAction`), 'resume')
+
+  // Both locale dictionaries own the complete action surface.
+  await evaluate(`window.setLocale('zh-CN');document.querySelector('[data-subagent-id=child-a] [data-subagent-action=resume]').click()`)
+  await pause(250)
+  const localizedAction = await evaluate(`(()=>{const dialog=document.querySelector('[data-subagent-action-dialog=resume]');return {text:dialog.innerText,aria:dialog.querySelector('textarea').getAttribute('aria-label'),button:dialog.querySelector('[data-subagent-action=resume]').innerText.trim()}})()`)
+  assert.match(localizedAction.text, /继续子代理/)
+  assert.deepEqual({ aria: localizedAction.aria, button: localizedAction.button }, { aria: '给子代理的指令', button: '继续' })
+  await clickSelector('[data-subagent-action-dialog] [data-subagent-action-cancel]')
+  await evaluate(`window.setLocale('en')`)
+  await pause(300)
+  await evaluate(`document.querySelector('[data-subagent-id=child-a] button[aria-expanded]').click()`)
+  await pause(200)
+
   await evaluate(`document.querySelector('[data-subagent-id=child-b] button[aria-expanded]').click()`)
   await pause(200)
   // The panel's inset is the panel's alone: a background bash row in the
@@ -432,6 +584,20 @@ try {
   await evaluate(`document.querySelector('[data-task-panel] ol').parentElement.scrollTo({top:0,behavior:'instant'})`)
   await pause(100)
   assert.equal(await evaluate(`document.querySelector('[data-task-panel] ol').parentElement.scrollTop`),0,'long task lists remain scrollable')
+  // A completed title that wraps is struck line by line: the strike is real text
+  // decoration on the title's wrapper — the browser paints it across every line
+  // box — never an overlaid strip, which could only sit at one height.
+  await evaluate(`window.setTodos({toolCallId:'wrap-strike',items:[{id:'wrap',content:'长任务说明'.repeat(24),status:'completed'},{id:'plain',content:'检查任务',status:'pending'}]})`)
+  await pause(250)
+  const strike = await evaluate(`(()=>{const node=document.querySelector('[data-todo-id=wrap]');const wrap=node.parentElement;const style=getComputedStyle(wrap);const range=document.createRange();range.selectNodeContents(node);const rows=new Set(Array.from(range.getClientRects(),rect=>Math.round(rect.top))).size;const pending=getComputedStyle(document.querySelector('[data-todo-id=plain]').parentElement);return{line:style.textDecorationLine,colour:style.textDecorationColor,rows,children:wrap.childElementCount,pendingColour:pending.textDecorationColor}})()`)
+  assert.ok(strike.rows>1,'the completed title really wraps: '+JSON.stringify(strike))
+  assert.equal(strike.line,'line-through')
+  assert.equal(strike.children,1,'no overlaid strip survives beside the title')
+  assert.notEqual(strike.colour,'rgba(0, 0, 0, 0)','a completed strike is visible on every wrapped row')
+  assert.equal(strike.pendingColour,'rgba(0, 0, 0, 0)','an unfinished row keeps its strike invisible')
+  if(process.env.PI_BASH_SCREENSHOT_DIR){
+    await writeFile(join(process.env.PI_BASH_SCREENSHOT_DIR,'todo-wrap-strike.png'),Buffer.from((await send('Page.captureScreenshot')).data,'base64'))
+  }
   // Opening the panel positions the list on the row that matters — the running
   // task, centred — and never parks it on the bottom of the plan the way the
   // vendored list did. Each scenario re-opens the panel, so the list mounts
@@ -675,6 +841,9 @@ try {
   await step(`{type:'agent_end'}`)
   await step(`{type:'agent_settled'}`, 1)
   await step(`{type:'auto_retry_end',success:false,finalError:'429 rate limited'}`, 1)
+  assert.equal(await evaluate(`document.querySelector('#turn-fixture [data-turn-failure]').closest('[data-turn-process]').parentElement.getAttribute('aria-hidden')`), 'true', 'terminal retry failures belong inside the collapsed process')
+  await evaluate(`document.querySelector('#turn-fixture [data-turn-failure]').closest('[data-turn-process]').parentElement.previousElementSibling.querySelector('button').click()`)
+  await pause(260)
   const failure = await evaluate(`(() => {
     const node = document.querySelector('#turn-fixture [data-turn-failure]');
     if (!node) return null;
@@ -844,9 +1013,13 @@ try {
   assert.deepEqual(files.links, ['src/a.ts', '/tmp/shot.png', 'AGENTS.md'], `read then modified, in the summary's order: ${JSON.stringify(files.links)}`)
   assert.equal(files.hrefs, 3)
   assert.equal(files.bullet, 'disc', `the sections are unordered lists: ${files.bullet}`)
-  assert.ok(String(files.underline).includes('underline'), `a path is a file link: ${files.underline}`)
+  assert.equal(files.underline, 'none', `a file action has no resting underline: ${files.underline}`)
   assert.notEqual(files.colour, 'rgb(0, 0, 0)', 'the link wears the theme colour')
   assert.ok(files.quoted, 'the fenced quote of the same tags is still rendered as code')
+  const fileLinkPoint = await evaluate(`(()=>{const r=document.querySelector(${JSON.stringify(summaryRows('compaction', 'success') + ' [data-file-link]')}).getBoundingClientRect();return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)}})()`)
+  await send('Input.dispatchMouseEvent', { type:'mouseMoved', x:fileLinkPoint.x, y:fileLinkPoint.y })
+  await pause(180)
+  assert.notEqual(await evaluate(`getComputedStyle(document.querySelector(${JSON.stringify(summaryRows('compaction', 'success') + ' [data-file-link]')})).backgroundColor`), 'rgba(0, 0, 0, 0)', 'hovering the file action fills it')
   await press(summaryRows('compaction', 'success') + ' [data-file-link]')
   assert.deepEqual(
     await evaluate('window.openPaths.map((path) => path.endsWith("src/a.ts"))'),
@@ -870,18 +1043,23 @@ try {
   assert.deepEqual(await evaluate('window.frameFailures'), [], 'no painted frame may expose an intermediate file list')
   assert.equal(exceptions.length, 0, JSON.stringify(exceptions))
   console.log('PASS: real ChatView/PiStore frame-by-frame steer, idle server continuation, cumulative files/review, distinct user folds and snapshot restoration without flashing cards.')
+  await checkContinueUi(evaluate, pause)
+  await checkTurnFoldUi(evaluate, pause, async name => {
+    if (!process.env.PI_BASH_SCREENSHOT_DIR) return
+    await writeFile(join(process.env.PI_BASH_SCREENSHOT_DIR, name + '.png'), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'))
+  })
   await evaluate('window.startStartupFixture()')
   await evaluate(`window.setLocale('en')`)
   await pause(100)
   assert.equal(await evaluate(`document.querySelector('#startup-fixture [role="status"]').getAttribute('aria-label')`), 'Preparing session tools…')
-  assert.equal(await evaluate(`document.querySelector('#startup-fixture textarea').disabled`), false, 'startup keeps draft editing available')
-  await evaluate(`document.querySelector('#startup-fixture textarea').focus()`)
+  assert.equal(await evaluate(`!document.querySelector('#startup-fixture [data-prompt-editor]').isContentEditable`), false, 'startup keeps draft editing available')
+  await evaluate(`document.querySelector('#startup-fixture [data-prompt-editor]').focus()`)
   await send('Input.insertText', { text:'preserve my draft' })
   assert.equal(await evaluate(`document.querySelector('#startup-fixture button[type="submit"]').disabled`), true)
   await send('Input.dispatchKeyEvent', {type:'keyDown',key:'Enter',code:'Enter',windowsVirtualKeyCode:13})
   await send('Input.dispatchKeyEvent', {type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13})
   assert.equal(await evaluate('window.startupSends.length'), 0, 'Enter cannot submit before tools are ready')
-  assert.equal(await evaluate(`document.querySelector('#startup-fixture textarea').value`), 'preserve my draft')
+  assert.equal(await evaluate(`document.querySelector('#startup-fixture [data-prompt-editor]').textContent`), 'preserve my draft')
   await evaluate(`window.setLocale('zh-CN')`)
   await pause(100)
   assert.equal(await evaluate(`document.querySelector('#startup-fixture [role="status"]').getAttribute('aria-label')`), '正在准备会话工具…')
@@ -894,6 +1072,51 @@ try {
   assert.equal(await evaluate('window.startupSends[0].text'), 'preserve my draft')
   assert.equal(exceptions.length, 0, JSON.stringify(exceptions))
   console.log('PASS: startup shows localized tool preparation, preserves editable drafts and disables click/Enter submit until the readiness event.')
+  await evaluate('window.startJevFixture()'); await pause(150)
+  await evaluate(`window.setLocale('en')`)
+  assert.equal(await evaluate('window.jevReads'), 0, 'closed taskbar entry never fetches audit')
+  const transcriptTop = await evaluate(`document.querySelector('#jev-transcript').getBoundingClientRect().top`)
+  assert.equal(await evaluate(`document.querySelector('#jev-fixture [role=group] [data-jev-trigger]').getAttribute('data-task-trigger')`), 'jev', 'Jev belongs to the shared task toolbar')
+  assert.equal(await evaluate(`document.querySelector('[data-task-trigger=jev]').getBoundingClientRect().top === document.querySelector('[data-task-trigger=bash]').getBoundingClientRect().top`), true, 'Jev sits on the background-task row')
+  await clickSelector('[data-jev-trigger]'); await pause(350)
+  assert.equal(await evaluate(`document.querySelector('#jev-transcript').getBoundingClientRect().top`), transcriptTop, 'Jev overlay never pushes chat')
+  assert.equal(await evaluate(`document.querySelector('[data-task-panel="jev"]').getAttribute('aria-hidden')`), 'false')
+  assert.equal(await evaluate('window.jevDetailReads'), 0, 'full evidence is loaded lazily')
+  await clickSelector('[data-jev-judgment] [data-agent-trigger]'); await pause(350)
+  assert.equal(await evaluate('window.jevDetailReads'), 1)
+  const judgment = await evaluate(`document.querySelector('[data-jev-judgment]').textContent`)
+  assert.match(judgment, /Original Jev output/); assert.match(judgment, /0.92/); assert.match(judgment, /attachmentsOmitted/)
+  assert.match(judgment, /App correction/); assert.match(judgment, /Change the layout/)
+  assert.match(judgment, /Inspect the modified settings layout/)
+  await evaluate(`window.jevSetState(state=>({...state,seq:state.seq+1,phase:'paused',reason:'no_progress'}))`); await pause(120)
+  assert.match(await evaluate(`document.querySelector('[data-task-panel="jev"]').textContent`), /Review did not converge/)
+  assert.equal(await evaluate(`document.querySelector('#jev-transcript').getBoundingClientRect().top`), transcriptTop)
+  for (const theme of ['light', 'dark']) {
+    await evaluate(`document.documentElement.classList.toggle('dark', ${theme === 'dark'})`)
+    await pause(100)
+    const scroll = await evaluate(`(()=>{const el=document.querySelector('#jev-fixture [data-fade-scroll]');return{height:el.clientHeight,width:getComputedStyle(el).scrollbarWidth,fade:el.dataset.fade}})()`)
+    assert(scroll.height <= 264); assert.equal(scroll.width, 'none'); assert.notEqual(scroll.fade, 'none')
+    if (process.env.PI_JEV_SCREENSHOT_DIR) { await mkdir(process.env.PI_JEV_SCREENSHOT_DIR, {recursive:true}); const shot=await send('Page.captureScreenshot',{format:'png'}); await writeFile(join(process.env.PI_JEV_SCREENSHOT_DIR,'jev-panel-'+theme+'.png'),Buffer.from(shot.data,'base64')) }
+  }
+  await evaluate(`window.setLocale('zh-CN')`); await pause(100)
+  assert.match(await evaluate(`document.querySelector('[data-jev-judgment]').textContent`), /Jev 原始输出/)
+  assert.match(await evaluate(`document.querySelector('[data-task-panel="jev"]').textContent`), /校验未收敛/)
+  assert.equal(await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}))`), false, 'closing Jev consumes Escape before stop')
+  await pause(250)
+  assert.equal(await evaluate(`document.activeElement.hasAttribute('data-jev-trigger')`), true, 'Escape restores taskbar focus')
+  assert.equal(await evaluate(`document.querySelector('[data-jev-trigger]').getAttribute('aria-expanded')`), 'false')
+  await evaluate(`window.jevSetTodos({items:[{id:'todo',content:'Task',status:'pending'}],retainedItems:[]})`); await pause(150)
+  await clickSelector('[data-task-trigger="todo"]'); await pause(250)
+  await clickSelector('[data-jev-trigger]'); await pause(250)
+  assert.equal(await evaluate(`document.querySelector('[data-task-panel]').dataset.taskPanel`), 'jev', 'Jev replaces existing task overlay')
+  await clickSelector('[data-task-trigger="todo"]'); await pause(250)
+  assert.equal(await evaluate(`document.querySelector('[data-jev-trigger]').getAttribute('aria-expanded')`), 'false')
+  assert.equal(await evaluate(`document.querySelector('[data-task-panel]').dataset.taskPanel`), 'todo', 'task trigger closes Jev')
+  await clickSelector('[data-jev-trigger]'); await pause(250)
+  await clickSelector('[data-jev-trigger]'); await pause(250)
+  assert.equal(await evaluate(`document.querySelector('[data-jev-trigger]').getAttribute('aria-expanded')`), 'false', 'taskbar button toggles Jev closed')
+  assert.equal(exceptions.length, 0, JSON.stringify(exceptions))
+  console.log('PASS: Jev taskbar entry, shared overlay exclusivity, fixed chat geometry, lazy audit detail, original/corrected decisions, bilingual output, both themes and Escape focus.')
   console.log('PASS: native beUI background rows/group status, completion localization, bounded incremental output, stop action, threshold settings, themes and invisible scrollbars.')
 } finally {
   ws?.close()

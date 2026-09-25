@@ -56,6 +56,10 @@ export interface InputProps extends Omit<
   multiline?: boolean;
   // local patch (pi-app): visible rows for the multiline variant.
   rows?: number;
+  // local patch (pi-app): attachment previews (images, file cards) render
+  // INSIDE the multiline field's frame, above the first text line — pasting
+  // grows the field itself instead of stacking a strip below it.
+  attachments?: ReactNode;
 }
 
 export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
@@ -78,6 +82,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
     type,
     multiline = false,
     rows = 6,
+    attachments,
     ...rest
   },
   ref,
@@ -155,9 +160,11 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
           // is exactly `rows` lines tall and clips at a line boundary.
           // local patch (pi-app): fields use the shared continuous control corner.
           multiline ? "rounded-card py-3" : "h-11 overflow-hidden rounded-control",
-          "border-border",
-          focused && !hasError && "border-foreground/40 ring-2 ring-ring/40",
-          hasError && "border-destructive ring-2 ring-destructive/25",
+          // local patch (pi-app): hover/focus share one thin outer highlight;
+          // its transparent border preserves the field's size without doubling.
+          focused && !hasError ? "field-highlight" : "border-border",
+          !disabled && !hasError && "hover:field-highlight",
+          hasError && "border-transparent ring-1 ring-destructive",
           disabled && "opacity-60",
           classNames?.field,
         )}
@@ -171,6 +178,15 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
           >
             {leftIcon}
           </span>
+        ) : null}
+
+        {multiline && attachments ? (
+          // local patch (pi-app): the tray sits in the field's flow, so the
+          // field grows by exactly the previews' height. px-3.5 matches the
+          // textarea's own inset, so cards align with the text below.
+          <div className="mb-2 flex flex-wrap items-center gap-2 px-3.5">
+            {attachments}
+          </div>
         ) : null}
 
         {multiline ? (
@@ -194,7 +210,9 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
               onBlur?.(event as unknown as FocusEvent<HTMLInputElement>);
             }}
             className={cn(
-              "peer block w-full resize-none bg-transparent py-0 text-base leading-6 text-foreground caret-foreground outline-none",
+              // local patch (pi-app): use the surrounding body size by default;
+              // compact surfaces can still pass text-xs through classNames.input.
+              "peer block w-full resize-none bg-transparent py-0 text-sm leading-6 text-foreground caret-foreground outline-none",
               "placeholder:text-muted-foreground/60",
               leftIcon ? "pl-10" : "pl-3.5",
               rightSlot || success ? "pr-10" : "pr-3.5",
@@ -222,7 +240,8 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
               onBlur?.(event);
             }}
             className={cn(
-              "peer h-full w-full bg-transparent text-base leading-6 text-foreground caret-foreground outline-none",
+              // local patch (pi-app): keep single-line fields at the body size.
+              "peer h-full w-full bg-transparent text-sm leading-6 text-foreground caret-foreground outline-none",
               "placeholder:text-muted-foreground/60",
               leftIcon ? "pl-10" : "pl-3.5",
               rightSlot || success ? "pr-10" : "pr-3.5",

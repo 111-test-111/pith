@@ -115,7 +115,7 @@ app.on('window-all-closed',()=>app.quit());`,
   await send('Runtime.enable')
   await evaluate(`localStorage.setItem('pi-app:locale','zh-CN');localStorage.setItem('theme','light')`)
   await send('Page.reload')
-  await waitFor(`document.querySelector('textarea') && document.querySelector('[role="tree"]')`)
+  await waitFor(`document.querySelector('[data-prompt-editor]') && document.querySelector('[role="tree"]')`)
   await pause(600)
 
   /** The list, its content shell and the row at its foot, as the DOM has them. */

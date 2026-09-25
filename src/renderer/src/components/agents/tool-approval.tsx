@@ -1,3 +1,4 @@
+// local patch (pi-app): keep UI frames and focus rings in this component at 1px.
 "use client";
 // local patch (pi-app): approval status badges use the semantic item radius.
 // beui.dev/components/agents/chat-app
@@ -201,7 +202,8 @@ export function ToolApproval({
               aria-expanded={currentOpen}
               aria-controls={detailsId}
               onClick={() => setOpen(!currentOpen)}
-              className="mt-2 inline-flex items-center gap-1 rounded-md text-xs font-medium text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+              // local patch (pi-app): details control fills instead of only changing text.
+              className="mt-2 inline-flex items-center gap-1 rounded-md px-1 text-xs font-medium text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
             >
               View details
               <motion.span
@@ -250,7 +252,8 @@ export function ToolApproval({
               // local patch (pi-app): no press scale — an approval button must
               // not dip inward while pressed (see `button/base`).
               transition={SPRING_PRESS}
-              className="rounded-xl bg-foreground px-3 py-1.5 text-xs font-medium text-background outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              // local patch (pi-app): primary approval is unfilled until hover.
+              className="rounded-xl bg-transparent px-3 py-1.5 text-xs font-medium text-primary outline-none transition-colors hover:bg-primary hover:text-primary-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-2"
             >
               Allow once
             </motion.button>
@@ -260,7 +263,7 @@ export function ToolApproval({
                 onClick={onAlwaysAllow}
                 // local patch (pi-app): no press scale — see `button/base`.
                 transition={SPRING_PRESS}
-                className="rounded-xl border border-border/60 bg-background px-3 py-1.5 text-xs font-medium text-foreground outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
+                className="rounded-xl border border-transparent bg-transparent px-3 py-1.5 text-xs font-medium text-foreground outline-none transition-colors hover:bg-muted focus-visible:ring-1 focus-visible:ring-ring"
               >
                 Always allow
               </motion.button>
@@ -268,7 +271,7 @@ export function ToolApproval({
             <button
               type="button"
               onClick={onDeny}
-              className="rounded-xl px-3 py-1.5 text-xs font-medium text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+              className="rounded-xl px-3 py-1.5 text-xs font-medium text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
             >
               Deny
             </button>

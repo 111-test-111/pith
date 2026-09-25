@@ -1,40 +1,14 @@
 /**
- * One row height for the entire transcript.
+ * Transcript geometry lives in styles.css: a 24px content row plus a 24px
+ * roomy / 4px compact gap, owned by each sibling boundary (no additive flex
+ * gap). Prose and waiting rows stay roomy. A process divider always leads
+ * content by 24px; completion buttons follow their content by 12px, matching
+ * a normal text reply. The same rules apply at every nesting depth.
  *
- * Every row of a turn — a tool row, a folded tool group, a reasoning row, prose
- * and the waiting row — is a flex item of the group's own column, and the
- * column's 12px `gap` is only HALF of the space a reader sees: the rest is the
- * empty part of each row's own box. A 36px tool row centres its 20px line with
- * 8px above and below, a 28px group row with 4px, and a 24px prose or waiting
- * row has no slack at all — so equal gaps still read as unequal spacing, which
- * is exactly what a reader reports as "the first two rows sit further apart".
- *
- * Rows therefore share ONE box height — the vendored tool/FileDiff row's own
- * `min-h-9`, which the task panels already use — and centre their own content,
- * so the distance between the text of any two consecutive rows is the same
- * `row gap + row height`, whichever pair you look at. Pass this class to any
- * row whose content is not already a full-height box.
+ * Outside a transcript, keep the task panels' 36px row. A disclosure trigger
+ * owns its height; never centre a trigger together with its growing body.
  */
-export const TRANSCRIPT_ROW = 'flex min-h-9 flex-col justify-center'
-
-/**
- * The same row box for a row that OPENS a growing body below its own trigger —
- * a reasoning row, a folded tool group, the settled-turn fold.
- *
- * `justify-center` is only free-space arithmetic: a trigger and a zero-height
- * closed body leave 8px of slack in the 36px floor, so the trigger sits 4px
- * down. The moment the body opens taller than that slack the column has no free
- * space left and the trigger snaps to the top — during the reveal animation, so
- * the row visibly jumps up 4px on every expand, in either direction, which the
- * reader reports as "the reasoning row moves up a little when I open it". Tool
- * rows don't: their trigger IS the row.
- *
- * Giving the trigger the row's own 36px box removes the slack, so the centring
- * has nothing left to redistribute and expanding moves nothing. The trigger's
- * text keeps its exact resting position (a 36px box centres the same 18px line
- * the 28px trigger was centred in), and the click target becomes the whole row.
- */
-export const TRANSCRIPT_ROW_TRIGGER = `${TRANSCRIPT_ROW} [&>*:first-child]:min-h-9`
+export const TRANSCRIPT_ROW = 'transcript-row flex flex-col justify-center'
 
 /**
  * Every row of a turn is a flex item of the group's column, and that column

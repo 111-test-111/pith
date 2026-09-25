@@ -1,10 +1,11 @@
 import { memo, useEffect, useRef, useState } from 'react'
 import { ToolResult } from '@/components/agents/tool-result'
 import { Button } from '@/components/motion/button'
-import { Bot, FileDiff, MessageSquareText } from '@/lib/icons'
+import { FileDiff, Ghost, MessageSquareText } from '@/lib/icons'
 import { formatTime } from '@/lib/format'
 import { useI18n } from '@/i18n'
 import { useCappedListFade } from '@/lib/hooks/use-capped-list-fade'
+import { SubagentActionDialog, type SubagentActionTarget, type SubagentHumanAction } from './SubagentActionDialog'
 import { SUBAGENT_READ_ONLY_TOOLS, type SubagentMessageDetails, type SubagentRunDTO } from '../../../../shared/types'
 
 /**
@@ -18,11 +19,14 @@ export const SubagentCompletionRow = memo(function SubagentCompletionRow({ run }
   const [open, setOpen] = useState(false)
   const status = run.status === 'completed' ? 'success' : run.status === 'failed' ? 'error' : 'cancelled'
   return (
-    <div data-subagent-completion={run.runId} data-subagent-status={run.status}>
+    // A PROCESS row for 「紧凑显示连续工具调用」 (`lib/compact-tools`): the notice
+    // is a tool row, so it takes the transcript's tightened gap beside the rows
+    // around it.
+    <div data-row="process" data-subagent-completion={run.runId} data-subagent-status={run.status}>
       <ToolResult animateChanges={false} lazyContent open={open} onOpenChange={setOpen}
         title={t('subagent.completedTitle', { description: run.description })}
         status={status}
-        icon={<Bot aria-hidden="true" className="size-4" />}
+        icon={<Ghost aria-hidden="true" className="size-4" />}
         meta={[run.profile, run.model, ...(run.runInBackground ? [t('subagent.background')] : []), ...(run.status === 'interrupted' ? [t('subagent.interrupted')] : []), ...(run.limitReached ? [t('subagent.turnLimit')] : []), ...(run.writtenFiles?.length ? [t('subagent.filesCount', { count: run.writtenFiles.length })] : [])].filter(Boolean).join(' · ')}
         collapseOnComplete={false}>
         {open ? (
@@ -82,7 +86,8 @@ export const SubagentMessageRow = memo(function SubagentMessageRow({ details }: 
   const [open, setOpen] = useState(false)
   const sentAt = Date.parse(details.sentAt)
   return (
-    <div data-subagent-message={details.sessionId} data-subagent-message-sent={details.sentAt}>
+    // A PROCESS row like the completion notice above: see `lib/compact-tools`.
+    <div data-row="process" data-subagent-message={details.sessionId} data-subagent-message-sent={details.sentAt}>
       <ToolResult animateChanges={false} lazyContent open={open} onOpenChange={setOpen}
         title={t('subagent.messageTitle', { description: details.description })}
         status="success"
@@ -113,16 +118,18 @@ function formatElapsed(seconds: number, t: ReturnType<typeof useI18n>['t']): str
   return t('subagent.elapsedHours', { hours: Math.floor(seconds / 3600), minutes: Math.floor((seconds % 3600) / 60) })
 }
 
-function SubagentRow({ run, sessionPath, onOpenSession }: {
+function SubagentRow({ run, sessionPath, onOpenSession, onAction }: {
   run: SubagentRunDTO
   sessionPath: string
   onOpenSession?: (path: string) => void
+  onAction: (run: SubagentRunDTO, action: SubagentHumanAction, trigger: HTMLButtonElement) => void
 }) {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
   const [stopping, setStopping] = useState(false)
   const [error, setError] = useState(false)
   const live = run.status === 'running'
+  const humanAction: SubagentHumanAction = live ? 'steer' : 'resume'
   const [now, setNow] = useState(Date.now)
   useEffect(() => {
     if (!live) return
@@ -133,7 +140,7 @@ function SubagentRow({ run, sessionPath, onOpenSession }: {
   const stop = async () => {
     setStopping(true)
     try {
-      await window.pi.subagentAction({ sessionPath, sessionId: run.sessionId, action: 'abort' })
+      await window.pi.subagentAction({ sessionPath, sessionId: run.sessionId, expectedRunId: run.runId, action: 'abort' })
     } catch {
       setError(true)
     } finally {
@@ -171,24 +178,30 @@ function SubagentRow({ run, sessionPath, onOpenSession }: {
       <ToolResult className="w-auto min-w-0 flex-1" animateChanges={false} lazyContent open={open} onOpenChange={setOpen}
         title={`agent · ${run.description}`}
         status={run.status === 'running' ? 'running' : run.status === 'completed' ? 'success' : run.status === 'aborted' || run.status === 'interrupted' ? 'cancelled' : 'error'}
-        icon={<Bot aria-hidden="true" className="size-4" />}
+        icon={<Ghost aria-hidden="true" className="size-4" />}
         meta={meta}
         collapseOnComplete={false}>
         {open ? (
           <div className="space-y-2">
-            {/* Only a live run (Stop) or an interrupted one (the word) has a
-                footer: open-session moved up to the row, so an empty flex line
-                would otherwise leave a stray 8px gap above the result. */}
-            {live || run.status === 'interrupted' ? (
-              <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                {/* The vendored row's own footer already names the status in
-                    English; only `interrupted` needs a localized word here. */}
-                {run.status === 'interrupted' ? <span>{t('subagent.interrupted')}</span> : null}
-                {live ? (
-                  <Button variant="ghost" size="sm" disabled={stopping} onClick={() => void stop()}>{t('subagent.stop')}</Button>
-                ) : null}
-              </div>
-            ) : null}
+            {/* Human control lives only in the expanded body, so the shared
+                36px collapsed row and its open-session link never move. The
+                latest roster remains authoritative after an action. */}
+            <div data-subagent-actions="" className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+              {/* The vendored row's own footer already names the status in
+                  English; only `interrupted` needs a localized word here. */}
+              {run.status === 'interrupted' ? <span>{t('subagent.interrupted')}</span> : null}
+              <Button
+                data-subagent-action={humanAction}
+                variant="ghost"
+                size="sm"
+                onClick={(event) => onAction(run, humanAction, event.currentTarget)}
+              >
+                {t(humanAction === 'steer' ? 'subagent.steer' : 'subagent.resume')}
+              </Button>
+              {live ? (
+                <Button variant="destructive" size="sm" disabled={stopping} onClick={() => void stop()}>{t('subagent.stop')}</Button>
+              ) : null}
+            </div>
             {error ? <p className="text-xs text-destructive" role="status">{t('subagent.operationFailed')}</p> : null}
             {run.writtenFiles?.length ? (
               <div className="space-y-1 text-xs">
@@ -218,7 +231,7 @@ function SubagentRow({ run, sessionPath, onOpenSession }: {
           only the hover underline. */}
       {onOpenSession ? (
         <button type="button" data-subagent-open={run.sessionId}
-          className="flex min-h-9 shrink-0 items-center whitespace-nowrap text-xs text-primary transition-none hover:underline focus-visible:text-foreground focus-visible:underline focus-visible:outline-none"
+          className="flex min-h-9 shrink-0 items-center whitespace-nowrap rounded-control px-2 text-xs text-primary transition-colors hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           onClick={() => onOpenSession(run.sessionPath)}>
           {t('subagent.openSession')}
         </button>
@@ -232,21 +245,66 @@ export function SubagentList({ runs, sessionPath, onOpenSession }: {
   sessionPath: string
   onOpenSession?: (path: string) => void
 }) {
+  const [actionTarget, setActionTarget] = useState<SubagentActionTarget | null>(null)
+  const actionTriggerRef = useRef<HTMLButtonElement | null>(null)
   // The drawer's list frame (see the bash list): the same 16.5rem cap, 4px edge
   // padding, 8px row gaps and edge fade, so all four panels match.
   const { list, mask } = useCappedListFade(runs.map((run) => run.sessionId).join('\n'))
+
+  useEffect(() => {
+    setActionTarget(null)
+    actionTriggerRef.current = null
+  }, [sessionPath])
+
+  const openAction = (run: SubagentRunDTO, action: SubagentHumanAction, trigger: HTMLButtonElement) => {
+    actionTriggerRef.current = trigger
+    setActionTarget({
+      action,
+      sessionId: run.sessionId,
+      runId: run.runId,
+      description: run.description
+    })
+  }
+  const closeAction = () => {
+    setActionTarget(null)
+    requestAnimationFrame(() => {
+      if (actionTriggerRef.current?.isConnected) actionTriggerRef.current.focus({ preventScroll: true })
+      actionTriggerRef.current = null
+    })
+  }
+  const actionRun = actionTarget
+    ? runs.find((run) => run.sessionId === actionTarget.sessionId) ?? null
+    : null
+
   return (
-    <div
-      ref={list}
-      data-subagents-list=""
-      // The drawer's list frame (see the bash list): the same 16.5rem cap,
-      // 4px edge padding, 8px row gaps and edge fade, so all four panels match.
-      className="max-h-[16.5rem] space-y-2 overflow-y-auto p-1"
-      style={{ maskImage: mask, WebkitMaskImage: mask }}
-    >
-      {runs.map((run) => (
-        <SubagentRow key={run.sessionId} run={run} sessionPath={sessionPath} onOpenSession={onOpenSession} />
-      ))}
-    </div>
+    <>
+      <div
+        ref={list}
+        data-subagents-list=""
+        // The drawer's list frame (see the bash list): the same 16.5rem cap,
+        // 4px edge padding, 8px row gaps and edge fade, so all four panels match.
+        className="max-h-[16.5rem] space-y-2 overflow-y-auto p-1"
+        style={{ maskImage: mask, WebkitMaskImage: mask }}
+      >
+        {runs.map((run) => (
+          <SubagentRow
+            key={run.sessionId}
+            run={run}
+            sessionPath={sessionPath}
+            onOpenSession={onOpenSession}
+            onAction={openAction}
+          />
+        ))}
+      </div>
+      {actionTarget ? (
+        <SubagentActionDialog
+          key={`${actionTarget.sessionId}:${actionTarget.runId}:${actionTarget.action}`}
+          target={actionTarget}
+          run={actionRun}
+          sessionPath={sessionPath}
+          onClose={closeAction}
+        />
+      ) : null}
+    </>
   )
 }

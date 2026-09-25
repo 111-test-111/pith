@@ -89,10 +89,10 @@ export function AuthBridge({ prompt, notify, onReply, onCancel }: AuthBridgeProp
                 key={option.id}
                 type="button"
                 onClick={() => onReply(prompt.requestId, option.id)}
-                className="w-full rounded-xl border border-border px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-muted"
+                className="w-full rounded-xl border border-transparent px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-muted"
               >
                 <span className="flex items-center gap-2">
-                  <span className="grid size-5 shrink-0 place-items-center rounded-capsule border border-border text-[10px] text-muted-foreground">
+                  <span className="grid size-5 shrink-0 place-items-center rounded-capsule bg-muted text-[10px] text-muted-foreground">
                     {index + 1}
                   </span>
                   {option.label}

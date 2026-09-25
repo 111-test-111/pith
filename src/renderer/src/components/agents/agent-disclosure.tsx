@@ -3,6 +3,8 @@
 import { motion, type HTMLMotionProps, useReducedMotion } from "motion/react";
 import type { CSSProperties } from "react";
 import { EASE_OUT } from "@/lib/ease";
+// local patch (pi-app): the app switch must settle in the commit frame.
+import { useReduceMotion } from "@/lib/reduce-motion";
 import { cn } from "@/lib/utils";
 
 export interface AgentDisclosureProps
@@ -21,15 +23,17 @@ export function AgentDisclosure({
   ...props
 }: AgentDisclosureProps) {
   const reduce = useReducedMotion() ?? false;
+  const instant = useReduceMotion() || reduce;
 
   return (
     <motion.div
       {...props}
+      data-disclosure-instant={instant || undefined}
       aria-hidden={!open}
       inert={!open}
       initial={false}
       animate={
-        reduce
+        instant
           ? { opacity: open ? 1 : 0 }
           : {
               opacity: open ? 1 : 0,
@@ -39,7 +43,7 @@ export function AgentDisclosure({
       }
       transition={
         transition ?? {
-          duration: reduce ? 0 : open ? 0.22 : 0.14,
+          duration: instant ? 0 : open ? 0.22 : 0.14,
           ease: EASE_OUT,
         }
       }

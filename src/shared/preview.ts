@@ -29,6 +29,7 @@ export type PreviewKind =
   | MediaKind
   | 'text'
   | 'markdown'
+  | 'html'
   | 'table'
   | 'spreadsheet'
   | 'pdf'
@@ -40,16 +41,22 @@ export type PreviewKind =
   | 'font'
 
 const MARKDOWN = new Set(['.md', '.markdown', '.mdown', '.mkd', '.mdx'])
+const HTML = new Set(['.html', '.htm'])
 const DIFF = new Set(['.diff', '.patch'])
 const NOTEBOOK = new Set(['.ipynb'])
-const SUBTITLE = new Set(['.srt', '.vtt'])
+export type SubtitleFormat = 'srt' | 'vtt' | 'lrc'
+const SUBTITLE: Readonly<Record<string, SubtitleFormat>> = { '.srt': 'srt', '.vtt': 'vtt', '.lrc': 'lrc' }
+
+export function subtitleFormatOf(path: string): SubtitleFormat | null {
+  return SUBTITLE[fileExtension(path)] ?? null
+}
 const FONT = new Set(['.ttf', '.otf', '.woff', '.woff2'])
 
 const MEDIA_KIND_SET: ReadonlySet<PreviewKind> = new Set<PreviewKind>(['image', 'video', 'audio'])
 /** Kinds whose bytes are decoded as text by `files:document`. */
-const TEXT_KINDS: ReadonlySet<PreviewKind> = new Set<PreviewKind>(['text', 'markdown', 'table', 'diff', 'notebook', 'subtitle'])
+const TEXT_KINDS: ReadonlySet<PreviewKind> = new Set<PreviewKind>(['text', 'markdown', 'html', 'table', 'diff', 'notebook', 'subtitle'])
 /** Kinds that own a rendered preview, i.e. get a 预览 tab next to the source. */
-const PREVIEW_KINDS: ReadonlySet<PreviewKind> = new Set<PreviewKind>(['markdown', 'table', 'diff', 'notebook', 'subtitle'])
+const PREVIEW_KINDS: ReadonlySet<PreviewKind> = new Set<PreviewKind>(['markdown', 'html', 'table', 'diff', 'notebook', 'subtitle'])
 /** Kinds that take the whole pane: no view tabs, and never a document read. */
 const INLINE_KINDS: ReadonlySet<PreviewKind> = new Set<PreviewKind>(['image', 'video', 'audio', 'pdf', 'unplayable', 'spreadsheet', 'font'])
 
@@ -77,9 +84,10 @@ export function previewKindOf(path: string): PreviewKind {
   const ext = fileExtension(path)
   if (FONT.has(ext)) return 'font'
   if (MARKDOWN.has(ext)) return 'markdown'
+  if (HTML.has(ext)) return 'html'
   if (DIFF.has(ext)) return 'diff'
   if (NOTEBOOK.has(ext)) return 'notebook'
-  if (SUBTITLE.has(ext)) return 'subtitle'
+  if (subtitleFormatOf(path)) return 'subtitle'
   if (isUnsupportedMedia(path)) return 'unplayable'
   return 'text'
 }

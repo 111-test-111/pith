@@ -46,9 +46,9 @@ export function ConfirmDialog({
           {t('common.cancel')}
         </Button>
         <Button
-          variant="primary"
+          variant="destructive"
           size="sm"
-          className="bg-destructive text-white hover:bg-destructive/90"
+          className="hover:bg-destructive hover:text-white"
           onClick={() => {
             onClose()
             onConfirm()

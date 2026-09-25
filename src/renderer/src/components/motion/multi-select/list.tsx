@@ -82,7 +82,8 @@ export function MultiSelectLabel({
 }: MultiSelectLabelProps) {
   const groupId = useContext(MultiSelectGroupContext);
   const labelClassName = cn(
-    "w-full px-2 py-1.5 text-[0.68rem] font-medium uppercase tracking-[0.12em] text-muted-foreground",
+    // local patch (pi-app): use the shared compact-label step.
+    "w-full px-2 py-1.5 text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground",
     className,
   );
   return groupId ? (

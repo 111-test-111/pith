@@ -1,3 +1,4 @@
+// local patch (pi-app): keep UI frames and focus rings in this component at 1px.
 "use client";
 
 // local patch (pi-app): use the shared Lucide icon adapter.
@@ -20,6 +21,9 @@ import {
   useRef,
   useState,
 } from "react";
+// local patch (pi-app): let modal callers portal the same select panel above
+// clipped dialog and scroll surfaces without changing the ordinary layout path.
+import { createPortal } from "react-dom";
 import { EASE_OUT } from "@/lib/ease";
 import { cn } from "@/lib/utils";
 
@@ -57,6 +61,7 @@ interface SelectContextValue {
   disabled: boolean;
   placement: Placement;
   setPlacement: (p: Placement) => void;
+  panelRef: React.RefObject<HTMLDivElement | null>;
 }
 
 const SelectContext = createContext<SelectContextValue | null>(null);
@@ -104,6 +109,7 @@ export function Select({
   const reduce = useReducedMotion() ?? false;
   const baseId = useId();
   const rootRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
   const [internalOpen, setInternalOpen] = useState(defaultOpen);
   const [internal, setInternal] = useState(defaultValue);
   const [labels, setLabels] = useState<Map<string, string>>(new Map());
@@ -148,7 +154,7 @@ export function Select({
     if (!open) return;
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
     const onPointer = (e: PointerEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node))
+      if (rootRef.current && !rootRef.current.contains(e.target as Node) && !panelRef.current?.contains(e.target as Node))
         setOpen(false);
     };
     window.addEventListener("keydown", onKey);
@@ -174,6 +180,7 @@ export function Select({
       disabled,
       placement,
       setPlacement,
+      panelRef,
     }),
     [
       current,
@@ -249,8 +256,10 @@ export function SelectTrigger({ className, "aria-label": ariaLabel, children }: 
       animate={{ "--select-corner-progress": kf }}
       transition={{ "--select-corner-progress": kfT }}
       className={cn(
-        "relative z-10 flex w-full items-center justify-between gap-2 rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground outline-none transition-colors",
-        "hover:border-(--color-border-strong) focus-visible:ring-2 focus-visible:ring-foreground/20",
+        // local patch (pi-app): reserve the transparent border's layout space;
+        // pointer hover fills the trigger, keyboard focus keeps a visible ring.
+        "relative z-10 flex w-full items-center justify-between gap-2 rounded-xl border border-transparent bg-background px-3 py-2 text-sm text-foreground outline-none transition-colors",
+        "hover:bg-muted focus-visible:ring-1 focus-visible:ring-ring",
         "disabled:pointer-events-none disabled:opacity-50",
         className,
       )}
@@ -288,12 +297,18 @@ export function SelectValue({ placeholder, className }: SelectValueProps) {
 export interface SelectContentProps {
   className?: string;
   children: ReactNode;
+  /** local patch (pi-app): modal selects keep the vendored control and escape clipping. */
+  portal?: boolean;
+  portalAlign?: "start" | "end";
+  portalWidth?: number;
 }
 
-export function SelectContent({ className, children }: SelectContentProps) {
+export function SelectContent({ className, children, portal = false, portalAlign = "start", portalWidth }: SelectContentProps) {
   const ctx = useSelectContext("SelectContent");
   const innerRef = useRef<HTMLDivElement>(null);
   const [height, setHeight] = useState(0);
+  const [floatingPosition, setFloatingPosition] = useState({ left: 0, top: 0, width: 0 });
+  const [portalReady, setPortalReady] = useState(false);
   const open = ctx.open;
   const { setPlacement } = ctx;
 
@@ -316,6 +331,7 @@ export function SelectContent({ className, children }: SelectContentProps) {
   }, []);
 
   useLayoutEffect(() => {
+    if (portal) return;
     const node = innerRef.current;
     if (!node) return;
     const measure = () => setHeight(panelHeight());
@@ -323,11 +339,11 @@ export function SelectContent({ className, children }: SelectContentProps) {
     const observer = new ResizeObserver(measure);
     observer.observe(node);
     return () => observer.disconnect();
-  }, [panelHeight]);
+  }, [panelHeight, portal]);
 
   // On open, flip upward when there isn't room below and there's more above.
   useLayoutEffect(() => {
-    if (!open) return;
+    if (!open || portal) return;
     const trigger = document.getElementById(ctx.triggerId);
     if (!trigger || !innerRef.current) return;
     const rect = trigger.getBoundingClientRect();
@@ -335,7 +351,50 @@ export function SelectContent({ className, children }: SelectContentProps) {
     const below = window.innerHeight - rect.bottom;
     const above = rect.top;
     setPlacement(below < h + 16 && above > below ? "top" : "bottom");
-  }, [open, ctx.triggerId, setPlacement, panelHeight]);
+  }, [open, portal, ctx.triggerId, setPlacement, panelHeight]);
+
+  // local patch (pi-app): set the real trigger width BEFORE measuring the
+  // portalled list. Its initial fixed width is zero; measuring at that width
+  // made option text wrap, then the panel flashed tall before shrinking.
+  // The first visible frame uses the final width, height and placement.
+  useLayoutEffect(() => {
+    if (!portal) return;
+    if (!open) { setPortalReady(false); return; }
+    const update = () => {
+      const trigger = document.getElementById(ctx.triggerId);
+      const panel = ctx.panelRef.current;
+      if (!trigger || !panel) return;
+      const rect = trigger.getBoundingClientRect();
+      const width = Math.min(portalWidth ?? rect.width, window.innerWidth - 16);
+      panel.style.width = `${width}px`;
+      const measuredHeight = panelHeight();
+      setHeight((previous) => previous === measuredHeight ? previous : measuredHeight);
+      const below = window.innerHeight - rect.bottom;
+      const above = rect.top;
+      const nextPlacement = below < measuredHeight + 16 && above > below ? "top" : "bottom";
+      setPlacement(nextPlacement);
+      const left = Math.max(8, Math.min(
+        portalAlign === "end" ? rect.right - width : rect.left,
+        window.innerWidth - width - 8,
+      ));
+      const top = nextPlacement === "top" ? rect.top - measuredHeight - 8 : rect.bottom + 8;
+      setFloatingPosition((previous) =>
+        previous.left === left && previous.top === top && previous.width === width
+          ? previous : { left, top, width },
+      );
+      setPortalReady(true);
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    if (innerRef.current) observer.observe(innerRef.current);
+    window.addEventListener("scroll", update, true);
+    window.addEventListener("resize", update);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("scroll", update, true);
+      window.removeEventListener("resize", update);
+    };
+  }, [portal, open, ctx.triggerId, ctx.panelRef, setPlacement, panelHeight, portalAlign, portalWidth]);
 
   // Specify EVERY corner + both margins each render. The near edge (facing the
   // trigger) animates flat->round and the gap opens on that side; the far edge
@@ -357,8 +416,9 @@ export function SelectContent({ className, children }: SelectContentProps) {
   // Items stay mounted (open just animates the panel) so each item's label
   // registration persists — otherwise the trigger would fall back to the
   // placeholder the moment the panel closes.
-  return (
+  const panel = (
     <motion.div
+      ref={ctx.panelRef}
       id={ctx.listId}
       role="listbox"
       aria-labelledby={ctx.triggerId}
@@ -373,6 +433,8 @@ export function SelectContent({ className, children }: SelectContentProps) {
         borderTopRightRadius: isTop ? radius : nearRadius,
         borderBottomLeftRadius: isTop ? nearRadius : radius,
         borderBottomRightRadius: isTop ? nearRadius : radius,
+        ...(portal ? floatingPosition : {}),
+        visibility: portal && !portalReady ? "hidden" : undefined,
       }}
       animate={
         ctx.reduce
@@ -385,8 +447,8 @@ export function SelectContent({ className, children }: SelectContentProps) {
               opacity: open ? 1 : 0,
               height: open ? height : 0,
               // gap opens on the side facing the trigger
-              marginTop: isTop ? 0 : nearGap,
-              marginBottom: isTop ? nearGap : 0,
+              marginTop: portal || isTop ? 0 : nearGap,
+              marginBottom: portal || !isTop ? 0 : nearGap,
               // near corners go flat->round; far corners stay rounded
               "--select-corner-progress": open ? 1 : 0,
             }
@@ -410,8 +472,9 @@ export function SelectContent({ className, children }: SelectContentProps) {
       // sits above or below depending on available space
       className={cn(
         // local patch (pi-app): all floating surfaces share themed elevation.
-        "absolute left-0 right-0 z-20 rounded-xl border border-border bg-background shadow-overlay",
-        isTop ? "bottom-full" : "top-full",
+        portal ? "fixed z-[110]" : "absolute left-0 right-0 z-20",
+        "rounded-xl border border-border bg-background shadow-overlay",
+        !portal && (isTop ? "bottom-full" : "top-full"),
         className,
       )}
     >
@@ -426,6 +489,7 @@ export function SelectContent({ className, children }: SelectContentProps) {
       </motion.div>
     </motion.div>
   );
+  return portal ? createPortal(panel, document.body) : panel;
 }
 
 export interface SelectItemProps {

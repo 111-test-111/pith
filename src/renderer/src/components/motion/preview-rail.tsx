@@ -1,3 +1,4 @@
+// local patch (pi-app): keep UI frames and focus rings in this component at 1px.
 "use client";
 
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
@@ -201,7 +202,7 @@ export function PreviewRail({
           );
 
           const sharedClassName = cn(
-            "relative flex text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+            "relative flex text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
             isHorizontal
               ? "h-12 w-6 items-end justify-center"
               : "h-6 w-12 items-center",

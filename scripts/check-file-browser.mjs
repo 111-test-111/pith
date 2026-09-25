@@ -37,6 +37,9 @@ try {
   await writeFile(join(project, 'src/AuthenticationProviderWithAVeryLongName.tsx'), 'export const authentication = true;\n')
   await writeFile(join(project, 'src/App.tsx'), 'export const original = true;\n')
   await writeFile(join(project, 'README.md'), '# File preview\n\n**中文粗体**\n\n[Open source](src/App.tsx:2)\n\n[Guide](docs/guide.md)\n\n```python\nprint("hello")\n```\n')
+  const skillFrontmatter = 'name: preview-example\ndescription: |\n  Use the preview to read a longer description that wraps naturally within the narrow sidebar while keeping the YAML block scalar indentation and all original line breaks.\n  Second line.'
+  const skillPreview = `---\n${skillFrontmatter}\n---\n\n# Preview example\n\n<outer>\n  <inner>\n    Keep the original indentation.\n  </inner>\n</outer>\n\n**Rendered Markdown**\n\n\`\`\`xml\n<code-tag>\n  remains code\n</code-tag>\n\`\`\`\n`
+  await writeFile(join(project, 'SKILL.md'), skillPreview)
   await writeFile(join(project, 'find.txt'), 'SDK SDK sdk SDKish\n中文 SDK sdk 文档\n'+'long '.repeat(200)+'SDK\n'+Array.from({length:1000},(_,i)=>'row '+i).join('\n')+'\n'+'a'.repeat(10000)+'!\nSDK')
   await writeFile(join(project, 'package.json'), '{}\n')
   await writeFile(join(project, 'data.json'), '{}\n')
@@ -63,6 +66,13 @@ try {
   await symlink(project, join(project, 'cycle'))
   await build({ entryPoints: [join(repo, 'src/main/file-browser.ts')], outfile: join(temporary,'files.mjs'), bundle:true, platform:'node',format:'esm' })
   const { listFileDirectory, readFileDocument, readFileGitDiff } = await import(pathToFileURL(join(temporary,'files.mjs')))
+  await build({ entryPoints: [join(repo, 'src/renderer/src/lib/file-markdown.ts')], outfile: join(temporary,'file-markdown.mjs'), bundle:true, platform:'node',format:'esm' })
+  const { splitFileMarkdown } = await import(pathToFileURL(join(temporary,'file-markdown.mjs')))
+  assert.equal(splitFileMarkdown(skillPreview).frontmatter, skillFrontmatter)
+  assert.equal(splitFileMarkdown('---\nname: unfinished\n# Body').frontmatter, null,'an unclosed frontmatter fence stays Markdown')
+  assert.equal(splitFileMarkdown('---\nordinary prose\n---\n').frontmatter, null,'a horizontal rule is not metadata')
+  assert.deepEqual(splitFileMarkdown('<unclosed>\n<complete>\n  child\n</complete>').sections.map(section=>section.kind),['markdown','tag-block'],'a later complete tag block survives an unmatched opener')
+  assert.deepEqual(splitFileMarkdown('```xml\n<code>\n  child\n</code>\n```').sections.map(section=>section.kind),['markdown'],'fenced tags stay Markdown code')
   const request = path => ({cwd:project,path})
   const beforeIndex = await readFile(join(project, '.git/index'))
   assert.equal((await readFileDocument(request('unknown.custom'))).text, 'readable unknown extension\n')
@@ -144,6 +154,7 @@ const io={directories:[],documents:[],opened:[],saved:[],revealed:[],escalationA
 ipcMain.handle('files:directory',async(_,r,offset)=>{io.directories.push({path:r.path,offset,time:Date.now()});if(${perfOnly})await new Promise(r=>setTimeout(r,30));return listFileDirectory(r,offset)});ipcMain.handle('files:document',(_,r)=>{io.documents.push({path:r.path,time:Date.now()});return readFileDocument(r)});ipcMain.handle('files:gitDiff',(_,r)=>readFileGitDiff(r));
 ipcMain.handle('files:saveCopy',(_,path)=>{io.saved.push(path);return {status:'cancelled'}});ipcMain.handle('shell:showInFolder',(_,path)=>{io.revealed.push(path)});ipcMain.handle('shell:openPath',(_,path)=>{io.opened.push(path);return io.opened.length===1?'failed to open':''});ipcMain.handle('shell:openExternal',()=>{});
 ipcMain.handle('sandbox:respondEscalation',(_,requestId,sessionPath,decision)=>{io.escalationAnswers.push({requestId,sessionPath,decision});return true});
+ipcMain.handle('browser:theme',()=>{});
 const w=new BrowserWindow({show:false,width:1500,height:950,webPreferences:{preload:${JSON.stringify(join(repo,'out/preload/index.mjs'))},contextIsolation:true,nodeIntegration:false,sandbox:false,backgroundThrottling:false}});w.loadURL(${JSON.stringify(`http://127.0.0.1:${server.httpServer.address().port}${fixturePath}`)});});app.on('window-all-closed',()=>app.quit());`,resolveDir:repo,loader:'ts'},bundle:true,platform:'node',format:'cjs',packages:'external',outfile:main})
   child=spawn(electron,[main],{stdio:['ignore','ignore','pipe']})
   let stderr=''
@@ -577,6 +588,27 @@ const w=new BrowserWindow({show:false,width:1500,height:950,webPreferences:{prel
   await evaluate(`document.querySelector('[data-file-tree] [data-file-icon$="/README.md"]').closest('[role=treeitem]').click()`)
   await waitFor('document.querySelector("[data-file-markdown]")','first chooser file opens preview')
   assert.deepEqual(await evaluate('Array.from(document.querySelectorAll("[data-sidebar-tabs] [role=tab]")).map(tab=>tab.textContent)'),['README.md'],'chosen file replaces Files chooser without nesting')
+  await evaluate(`files.open(${JSON.stringify(project)},{path:${JSON.stringify(join(project,'SKILL.md'))}})`)
+  await waitFor('document.querySelector("[data-file-frontmatter]") && document.querySelector("[data-file-tag-block]")','SKILL.md preview formatting')
+  assert.equal(await evaluate('document.querySelector("[data-file-frontmatter]").textContent'),skillFrontmatter,'frontmatter is a literal metadata block without delimiters')
+  assert.ok(await evaluate('(()=>{const block=document.querySelector("[data-file-frontmatter]");return block.scrollWidth<=block.clientWidth})()'),'frontmatter wraps within the narrow file preview')
+  assert.equal(await evaluate('document.querySelector("[data-file-markdown] h1")?.textContent'),'Preview example','frontmatter does not become a heading')
+  assert.equal(await evaluate('document.querySelector("[data-file-tag-block]").textContent'),'<outer>\n  <inner>\n    Keep the original indentation.\n  </inner>\n</outer>','nested tags keep their source indentation')
+  assert.equal(await evaluate('getComputedStyle(document.querySelector("[data-file-tag-block]")).whiteSpace'),'pre-wrap','tag indentation is visible')
+  assert.equal(await evaluate('document.querySelector("[data-file-markdown] strong")?.textContent'),'Rendered Markdown','ordinary Markdown still renders')
+  assert.ok(await evaluate('document.querySelector("[data-code-block-pre]")?.textContent.includes("<code-tag>")'),'fenced tags stay in beUI CodeBlock')
+  if (process.env.PI_FILE_MARKDOWN_SCREENSHOT_PATH) {
+    const wasDark = await evaluate('document.documentElement.classList.contains("dark")')
+    await evaluate('document.documentElement.classList.remove("dark")')
+    await pause(80)
+    const { data } = await send('Page.captureScreenshot', { format: 'png' })
+    await writeFile(process.env.PI_FILE_MARKDOWN_SCREENSHOT_PATH, Buffer.from(data, 'base64'))
+    if (wasDark) await evaluate('document.documentElement.classList.add("dark")')
+  }
+  await view('Source')
+  await waitFor('document.querySelector("[data-file-source]")?.textContent.includes("name: preview-example")','SKILL.md source view')
+  assert.ok(await evaluate('document.querySelector("[data-file-source]").textContent.includes("---")'),'source keeps frontmatter delimiters')
+  console.log('PASS: SKILL.md frontmatter and nested tags display with literal indentation; source remains intact')
   assert.equal(exceptions.length,0,JSON.stringify(exceptions))
 
   // Right-rail tab menu: one menu for the strip, resolved from the tab under the

@@ -8,7 +8,7 @@ import {
 } from 'react'
 import { motion, useReducedMotion } from 'motion/react'
 import { ExternalLink, ZoomIn, ZoomOut } from '@/lib/icons'
-import { useImageZoom, ZOOM_MAX, ZOOM_SPRING, ZOOM_STEP } from '@/lib/hooks/use-image-zoom'
+import { useImageZoom, ZOOM_MAX, ZOOM_MIN, ZOOM_SPRING, ZOOM_STEP } from '@/lib/hooks/use-image-zoom'
 import {
   CenterMorphModal,
   CenterMorphModalContent
@@ -22,9 +22,11 @@ import { cn } from '@/lib/utils'
 /**
  * Full-screen image preview for every image the app renders: composer
  * attachments, images inside user bubbles and images embedded in assistant
- * markdown. The overlay is beUI's CenterMorphModal (a surface that unfolds from
- * its own centre); everything inside it — zoom/pan, caption, controls — is
- * composed from beUI primitives and theme tokens.
+ * markdown. The overlay is beUI's CenterMorphModal as an OPEN frame: it unfolds
+ * from its own centre but paints no surface, so the image floats over the
+ * dimmed page and only the caption and control bars are filled. Everything
+ * inside it — zoom/pan, caption, controls — is composed from beUI primitives
+ * and theme tokens.
  */
 
 /** An image the preview can show. `src` must be browser-loadable: a `data:` or
@@ -39,7 +41,7 @@ export interface PreviewImage {
   path?: string
 }
 
-/** Fit-to-viewport is 100%; zooming below it is not offered. */
+/** Opens the overlay for one image; an image without a `src` is ignored. */
 type OpenImage = (image: PreviewImage) => void
 
 const ImagePreviewContext = createContext<OpenImage | null>(null)
@@ -87,13 +89,16 @@ function ImagePreviewHost({
         if (!open) onClose()
       }}
     >
-      {/* Chromeless-ish panel: the frame is beUI's own surface (border, radius,
-          motion), only its size is the viewer's. `pr-14` on the caption keeps it
-          clear of the modal's own close control. */}
+      {/* Open-frame panel: beUI still owns the frame (border, radius, motion),
+          but the surface itself paints nothing — the blank area around the image
+          shows the dimmed page behind instead of a white fill. The caption and
+          control bars carry their own `bg-background`, so the panel reads as a
+          window onto the image rather than a white card. `pr-14` on the caption
+          keeps it clear of the modal's own close control. */}
       <CenterMorphModalContent
         ariaLabel={request?.image.label || t('imagePreview.dialogLabel')}
         closeButtonLabel={t('imagePreview.close')}
-        className="h-[min(78vh,48rem)] max-w-[min(92vw,72rem)]"
+        className="h-[min(78vh,48rem)] max-w-[min(92vw,72rem)] bg-transparent"
       >
         {request ? <ImageZoom key={request.id} image={request.image} /> : null}
       </CenterMorphModalContent>
@@ -107,7 +112,7 @@ function ImageZoom({ image }: { image: PreviewImage }) {
   const viewportRef = useRef<HTMLDivElement>(null)
   const imgRef = useRef<HTMLImageElement>(null)
   // The overlay owns the window, so its zoom shortcuts are global.
-  const { view, dragging, zoomed, zoomAt, reset, handlers } = useImageZoom({ viewportRef, imageRef: imgRef })
+  const { view, dragging, zoomed, pannable, zoomAt, reset, handlers } = useImageZoom({ viewportRef, imageRef: imgRef })
   const [size, setSize] = useState<{ width: number; height: number } | null>(null)
   const [failed, setFailed] = useState(false)
 
@@ -119,7 +124,7 @@ function ImageZoom({ image }: { image: PreviewImage }) {
     <div className="flex h-full min-h-0 flex-col">
       {/* h-16 centres this row on the modal's own close control (16px inset +
           32px button = 32px centre), which a h-14 row left 4px above. */}
-      <div className="flex h-16 flex-none items-center gap-3 border-b border-border px-4 pr-14">
+      <div className="flex h-16 flex-none items-center gap-3 border-b border-border bg-background px-4 pr-14">
         <p className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
           {image.label || t('imagePreview.dialogLabel')}
         </p>
@@ -132,8 +137,10 @@ function ImageZoom({ image }: { image: PreviewImage }) {
         aria-label={t('imagePreview.viewportAria')}
         {...handlers}
         className={cn(
-          'relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-muted/30 [touch-action:none] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset',
-          zoomed ? (dragging ? 'cursor-grabbing' : 'cursor-grab') : 'cursor-zoom-in'
+          // No fill of its own: whatever surrounds the image is the page behind
+          // the overlay, so an image is never boxed in by a white pane.
+          'relative flex min-h-0 flex-1 items-center justify-center overflow-hidden [touch-action:none] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset',
+          pannable ? (dragging ? 'cursor-grabbing' : 'cursor-grab') : 'cursor-zoom-in'
         )}
       >
         <motion.img
@@ -151,16 +158,25 @@ function ImageZoom({ image }: { image: PreviewImage }) {
           animate={{ scale: view.scale, x: view.x, y: view.y }}
           // Dragging must track the pointer 1:1; everything else springs.
           transition={dragging || reduce ? { duration: 0 } : ZOOM_SPRING}
-          className="max-h-full max-w-full select-none object-contain will-change-transform"
+          // The picture itself follows the interface style, like every other
+          // image surface: `rounded-item` is the app's item step (0 in the square
+          // style, 14px in the squircle style) and the base `corner-shape` rule
+          // supplies the shape, so those corners are a superellipse rather than a
+          // circular arc. A replaced element is clipped by its own radius, so the
+          // element box — which the fit sizing keeps equal to the painted image —
+          // is exactly what gets rounded, at every zoom level.
+          className="max-h-full max-w-full select-none rounded-item object-contain will-change-transform"
         />
         {failed ? (
-          <p className="absolute inset-x-6 text-center text-sm text-muted-foreground">
+          // The viewport has no surface of its own, so the notice brings one:
+          // mid-tone text over an arbitrary blurred page would not be readable.
+          <p className="absolute inset-x-6 mx-auto w-fit max-w-full rounded-control border border-border bg-background/90 px-4 py-2 text-center text-sm text-muted-foreground shadow-overlay backdrop-blur-sm">
             {t('imagePreview.failed')}
           </p>
         ) : null}
       </div>
 
-      <div className="flex h-14 flex-none items-center justify-end gap-2 border-t border-border px-4">
+      <div className="flex h-14 flex-none items-center justify-end gap-2 border-t border-border bg-background px-4">
         {subtitle ? (
           <p className="mr-auto min-w-0 truncate text-xs tabular-nums text-muted-foreground">
             {subtitle}
@@ -171,7 +187,7 @@ function ImageZoom({ image }: { image: PreviewImage }) {
             variant="ghost"
             size="icon"
             aria-label={t('imagePreview.zoomOut')}
-            disabled={!zoomed}
+            disabled={view.scale <= ZOOM_MIN}
             onClick={() => zoomAt(1 / ZOOM_STEP)}
           >
             <ZoomOut className="size-4" aria-hidden="true" />
@@ -233,7 +249,9 @@ function ImageZoom({ image }: { image: PreviewImage }) {
 export function PreviewThumb({
   src,
   alt,
+  title,
   path,
+  framed = false,
   className,
   imageClassName,
   onError
@@ -241,7 +259,11 @@ export function PreviewThumb({
   src: string
   /** Image alt text — also the preview caption. */
   alt?: string
+  /** Optional title supplied by Markdown. */
+  title?: string
   path?: string
+  /** Keep a visible frame when the thumbnail sits inside an input. */
+  framed?: boolean
   /** Classes for the trigger (border/radius/size live here). */
   className?: string
   /** Classes for the `<img>` itself. */
@@ -256,14 +278,18 @@ export function PreviewThumb({
   return (
     <button
       type="button"
+      data-attachment-frame={framed ? '' : undefined}
       onClick={() => openImage({ src, label: name, path })}
       aria-label={t('imagePreview.open', { name })}
+      title={title}
       className={cn(
-        'group/preview inline-block cursor-zoom-in overflow-hidden border border-border align-middle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+        'group/preview relative inline-block cursor-zoom-in overflow-hidden border align-middle focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+        framed ? 'border-border' : 'border-transparent',
         className
       )}
     >
       <img src={src} alt={alt ?? ''} onError={onError} className={cn('block', imageClassName)} />
+      <span aria-hidden="true" className="pointer-events-none absolute inset-0 rounded-inherit bg-transparent transition-colors group-hover/preview:bg-primary/10" />
     </button>
   )
 }

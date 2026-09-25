@@ -1,8 +1,6 @@
 import { useState } from 'react'
-import { ArrowUpRight, Chat01, Compass, Folder, FolderPlus, GitPullRequest, Lightbulb, Shapes, WandSparkles } from '@/lib/icons'
-import { Button } from '@/components/motion/button'
+import { Chat01, Folder, FolderPlus } from '@/lib/icons'
 import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/motion/select'
-import { TiltCard } from '@/components/motion/tilt-card'
 import { useI18n } from '@/i18n'
 import { PithIcon } from './PithIcon'
 
@@ -116,68 +114,9 @@ export function NewSessionHeader({ projectName, cwd, projects, onProjectChange, 
           </SelectContent>
         </Select>
       </div>
-      <h1 className="text-2xl font-medium tracking-tight text-foreground @lg:text-[32px] @lg:leading-tight">
+      <h1 className="text-2xl font-medium tracking-tight text-foreground @lg:leading-tight">
         {t('newSession.title')}
       </h1>
-    </div>
-  )
-}
-
-const PROJECT_STARTERS = [
-  { key: 'explore', icon: Compass },
-  { key: 'feature', icon: WandSparkles },
-  { key: 'review', icon: GitPullRequest }
-] as const
-
-const GENERAL_STARTERS = [
-  { key: 'plan', icon: Lightbulb },
-  { key: 'create', icon: WandSparkles },
-  { key: 'learn', icon: Shapes }
-] as const
-
-export function NewSessionSuggestions({ projectName, onSelect }: NewSessionContext & {
-  onSelect: (prompt: string) => void
-}) {
-  const { t } = useI18n()
-  const starters = projectName ? PROJECT_STARTERS : GENERAL_STARTERS
-
-  return (
-    <div className="mt-5">
-      <div className="grid grid-cols-1 gap-2 @xl:grid-cols-3">
-        {starters.map(({ key, icon: Icon }) => (
-          <TiltCard
-            key={key}
-            max={8}
-            glareOpacity={0.07}
-            glareColor="var(--primary)"
-            className="group border border-border/50 bg-card/30 transition-colors hover:border-border"
-          >
-            {/* The card surface carries the frame, so the tilt moves it with
-                the content; the button only owns focus, hover and the press.
-                Its own 2% hover scale is cancelled — growing the content
-                inside a frame that stays put pushed the text out of the card. */}
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={() => onSelect(t(`newSession.${key}.prompt`))}
-              className="h-full w-full min-w-0 flex-col items-start justify-start gap-1 rounded-none bg-transparent px-3 py-2.5 text-left hover:bg-transparent"
-            >
-              <span className="flex w-full items-center gap-2.5">
-                <Icon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground transition-colors group-hover:text-primary" />
-                <span className="min-w-0 truncate text-sm font-medium text-foreground">{t(`newSession.${key}.title`)}</span>
-                <ArrowUpRight aria-hidden="true" className="ml-auto size-3.5 shrink-0 text-muted-foreground/50" />
-              </span>
-              {/* One line, always: the landing block is centred on its own
-                  height, so a description that wrapped here (another UI font,
-                  a longer translation) grew this row and sank the whole page
-                  — including the title and the input box — by half the delta. */}
-              <span className="w-full truncate text-xs font-normal leading-4 text-muted-foreground">
-                {t(`newSession.${key}.description`)}
-              </span>
-            </Button>
-          </TiltCard>
-        ))}
-      </div>
     </div>
   )
 }
