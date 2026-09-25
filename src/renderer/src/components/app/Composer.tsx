@@ -8,7 +8,7 @@ import {
   type ClipboardEvent as ReactClipboardEvent,
   type DragEvent as ReactDragEvent
 } from 'react'
-import { CalendarCheck, Check, Ghost, ImagePlus, LinkSimple, Loader2, Siren, X } from '@/lib/icons'
+import { CalendarCheck, Check, Subagent, ImagePlus, LinkSimple, Loader2, Siren, X } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
 import { PromptInput } from '@/components/agents/prompt-input'
 import type { PromptEditorHandle } from '@/lib/hooks/use-prompt-editor'
@@ -563,7 +563,7 @@ export function Composer({
             >
               {readOnlyKind === 'scheduled'
                 ? <CalendarCheck aria-hidden="true" className="size-3.5 shrink-0" />
-                : <Ghost aria-hidden="true" className="size-3.5 shrink-0" />}
+                : <Subagent aria-hidden="true" className="size-3.5 shrink-0" />}
               <span className="min-w-0 flex-1">{t(readOnlyKind === 'scheduled' ? 'scheduledTasks.pane.readOnly' : 'subagent.readOnlyNotice')}</span>
               {readOnlyParentPath && onOpenSession ? (
                 <Button variant="ghost" size="sm" onClick={() => onOpenSession(readOnlyParentPath)}>

@@ -46,12 +46,12 @@ import {
   CloudDownload as CloudDownloadGlyph,
   Command as CommandGlyph,
   Compass as CompassGlyph,
-  Cookie as CookieGlyph,
   Copy as CopyGlyph,
   Database as DatabaseGlyph,
   Delete as DeleteGlyph,
   Diff as DiffGlyph,
   Download as DownloadGlyph,
+  Earth as EarthGlyph,
   ExternalLink as ExternalLinkGlyph,
   Eye as EyeGlyph,
   EyeOff as EyeOffGlyph,
@@ -71,12 +71,11 @@ import {
   FolderPlus as FolderPlusGlyph,
   FolderTree as FolderTreeGlyph,
   FoldHorizontal as FoldHorizontalGlyph,
-  Ghost as GhostGlyph,
   GitFork as GitForkGlyph,
   GitPullRequest as GitPullRequestGlyph,
-  Globe as GlobeGlyph,
   Globe2 as Globe2Glyph,
   GraduationCap as GraduationCapGlyph,
+  HatGlasses as HatGlassesGlyph,
   History as HistoryGlyph,
   Image as ImageGlyph,
   ImageIcon as ImageIconGlyph,
@@ -191,13 +190,16 @@ import {
  * The table below is the app's ONE mapping: semantic name → Lucide drawing. Most
  * names are Lucide's own (the vocabulary came from Lucide originally); the ones
  * Lucide has no drawing for take the nearest it carries, and those are called
- * out here rather than left to be rediscovered — `Cookie` for the Chrome cookie
- * import, `MessageCircleMore` for the chat-text mark, `BoxSelect` for a
- * marquee selection, `ChevronUp` for the ⌃ key cap (so `ChevronUp` and
- * `Control` share one drawing), `Newspaper` for an article, `Delete` for the
- * backspace key, `SquareCheckBig` for the offset checkbox, `FoldHorizontal` /
- * `UnfoldHorizontal` for the side-panel fullscreen pair. Names that share a
- * drawing stay shared: a name exists per meaning, not per drawing.
+ * out here rather than left to be rediscovered — `Earth` for the app's web and
+ * browser marks (Lucide ships no brand drawings, so the browser tab, the browser
+ * tool category and the in-pane page placeholders all draw it), `HatGlasses`
+ * for the subagent mark (an undercover helper), `MessageCircleMore` for the
+ * chat-text mark, `BoxSelect` for a marquee selection, `ChevronUp` for the ⌃
+ * key cap (so `ChevronUp` and `Control` share one drawing), `Newspaper` for
+ * an article, `Delete` for the backspace key, `SquareCheckBig` for the offset
+ * checkbox, `FoldHorizontal` / `UnfoldHorizontal` for the side-panel
+ * fullscreen pair. Names that share a drawing stay shared: a name exists per
+ * meaning, not per drawing.
  *
  * `@phosphor-icons/react` stays declared in package.json on purpose: it is the
  * previous family, kept so a revert is a `git revert` of this file — nothing in
@@ -291,12 +293,11 @@ const GLYPHS = {
   FolderOpen: FolderOpenGlyph,
   FolderPlus: FolderPlusGlyph,
   FolderTree: FolderTreeGlyph,
-  Ghost: GhostGlyph,
+  Subagent: HatGlassesGlyph,
   GitFork: GitForkGlyph,
   GitPullRequest: GitPullRequestGlyph,
-  Globe: GlobeGlyph,
+  Globe: EarthGlyph,
   Globe2: Globe2Glyph,
-  GoogleChromeLogo: CookieGlyph,
   GraduationCap: GraduationCapGlyph,
   History: HistoryGlyph,
   Image: ImageGlyph,
@@ -487,12 +488,11 @@ export const FolderKanban = /* @__PURE__ */ createIcon('FolderKanban', GLYPHS.Fo
 export const FolderOpen = /* @__PURE__ */ createIcon('FolderOpen', GLYPHS.FolderOpen)
 export const FolderPlus = /* @__PURE__ */ createIcon('FolderPlus', GLYPHS.FolderPlus)
 export const FolderTree = /* @__PURE__ */ createIcon('FolderTree', GLYPHS.FolderTree)
-export const Ghost = /* @__PURE__ */ createIcon('Ghost', GLYPHS.Ghost)
+export const Subagent = /* @__PURE__ */ createIcon('Subagent', GLYPHS.Subagent)
 export const GitFork = /* @__PURE__ */ createIcon('GitFork', GLYPHS.GitFork)
 export const GitPullRequest = /* @__PURE__ */ createIcon('GitPullRequest', GLYPHS.GitPullRequest)
 export const Globe = /* @__PURE__ */ createIcon('Globe', GLYPHS.Globe)
 export const Globe2 = /* @__PURE__ */ createIcon('Globe2', GLYPHS.Globe2)
-export const GoogleChromeLogo = /* @__PURE__ */ createIcon('GoogleChromeLogo', GLYPHS.GoogleChromeLogo)
 export const GraduationCap = /* @__PURE__ */ createIcon('GraduationCap', GLYPHS.GraduationCap)
 export const History = /* @__PURE__ */ createIcon('History', GLYPHS.History)
 export const Image = /* @__PURE__ */ createIcon('Image', GLYPHS.Image)

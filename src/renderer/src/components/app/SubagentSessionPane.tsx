@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useState } from 'react'
-import { Ghost } from '@/lib/icons'
+import { Subagent } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
 import { RunningLoader } from './RunningLoader'
 import { PiStore } from '@/state/pi-store'
@@ -80,7 +80,7 @@ export const SubagentSessionPane = memo(function SubagentSessionPane({
   return (
     <div className="flex h-full min-h-0 flex-col" data-subagent-pane={sessionPath}>
       <header className="flex shrink-0 items-start gap-2 border-b border-border px-3 py-2">
-        <Ghost aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+        <Subagent aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
         <div className="min-w-0 flex-1">
           <p className="truncate text-xs font-medium text-foreground" title={run?.description}>
             {run?.description ?? t('subagent.sessionTab')}

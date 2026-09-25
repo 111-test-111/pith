@@ -1,4 +1,4 @@
-import { Compass, Database, Diff, GoogleChromeLogo, SquareTerminal, type IconComponent } from '@/lib/icons'
+import { Compass, Database, Diff, Globe, SquareTerminal, type IconComponent } from '@/lib/icons'
 import type { MessageKey } from '@/i18n/locales/en'
 
 /**
@@ -57,7 +57,7 @@ export const TOOL_CATEGORIES: readonly ToolCategory[] = [
   {
     id: 'browser',
     labelKey: 'tool.categoryBrowser',
-    icon: GoogleChromeLogo,
+    icon: Globe,
     prefix: 'browser_',
     // The embedded-browser agent tools (src/main/browser/tools.ts's
     // APP_BROWSER_TOOL_NAMES, copied as literals — renderer code does not

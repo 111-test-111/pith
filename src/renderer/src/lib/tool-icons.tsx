@@ -19,7 +19,7 @@ import {
   FirstAidKit,
   Flask,
   FolderTree,
-  Ghost,
+  Subagent,
   Globe,
   InstallingUpdates,
   Keyboard,
@@ -74,7 +74,7 @@ const TOOL_ICONS: Record<string, IconComponent> = {
   scheduled_task: CalendarCheck,
   jev_decide: Flask,
   ask_user_question: CircleHelp,
-  agent: Ghost,
+  agent: Subagent,
   // Subagent communications (Settings → Subagents): the parent steering a
   // running child is a send; a child's message up to its parent is the
   // text-filled speech bubble.

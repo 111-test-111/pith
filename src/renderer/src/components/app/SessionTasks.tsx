@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useId, useRef, useState } from 'react'
-import { ChevronDown, CircleHelp, Ghost, ListTodo, Terminal, X } from '@/lib/icons'
+import { ChevronDown, CircleHelp, Subagent, ListTodo, Terminal, X } from '@/lib/icons'
 import { AgentDisclosure } from '@/components/agents/agent-disclosure'
 import { TodoList } from '@/components/agents/todo-list'
 import { Button } from '@/components/motion/button'
@@ -87,7 +87,7 @@ export const SessionTasks = memo(function SessionTasks({ todos, subagents = [], 
         {(['todo', 'bash', 'agents', 'ask', 'jev'] as const).map((panel) => {
           if (panel === 'jev' ? !jevState : panel === 'todo' ? !items.length : panel === 'bash' ? !tasks.length : panel === 'agents' ? !subagents.length : !records.length) return null
           const active = open && selected === panel
-          const Icon = panel === 'todo' ? ListTodo : panel === 'bash' ? Terminal : panel === 'agents' ? Ghost : CircleHelp
+          const Icon = panel === 'todo' ? ListTodo : panel === 'bash' ? Terminal : panel === 'agents' ? Subagent : CircleHelp
           const label = panel === 'jev' ? t('jev.title') : panel === 'todo' ? t('todo.title') : panel === 'bash' ? t('taskPanel.background') : panel === 'agents' ? t('taskPanel.agents') : t('askUser.recordsTitle')
           const count = panel === 'jev' ? String(jevState?.requests ?? 0) : panel === 'todo'
             ? `${done}/${items.length}`

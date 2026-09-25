@@ -6,8 +6,8 @@ import {
   ChatText,
   CheckSquareOffset,
   Folder,
-  Ghost,
-  GoogleChromeLogo,
+  Subagent,
+  Globe,
   Plus,
   SquareTerminal,
   X,
@@ -142,7 +142,7 @@ export const SIDEBAR_TABS: SidebarTabSpec[] = [
     id: 'browser',
     labelKey: 'sidebar.browser',
     shortcutId: 'openBrowser',
-    icon: GoogleChromeLogo,
+    icon: Globe,
     // Never rendered through this registry: the pane content area below hosts
     // the browser pane itself in a keep-alive layer, because its webviews are
     // process-backed and die on unmount. A second instance here would
@@ -293,7 +293,7 @@ function SidebarTabStrip({
               return (
                 <div key={kind} data-sidebar-tab={kind} className="group/tab relative flex items-center">
                   <LabelTooltip content={path ?? (agentPath ?? scheduledPath ? label : '')}><TabsTrigger value={kind} className="h-9 min-h-0 gap-2 pl-2.5 pr-8">
-                    {agentPath ? <Ghost aria-hidden="true" className="size-3.5 shrink-0" /> : scheduledPath ? <CalendarCheck aria-hidden="true" className="size-3.5 shrink-0" /> : path ? <FileTypeIcon path={path} className="size-4 shrink-0" /> : TabIcon ? <TabIcon aria-hidden="true" className="size-3.5 shrink-0" /> : null}
+                    {agentPath ? <Subagent aria-hidden="true" className="size-3.5 shrink-0" /> : scheduledPath ? <CalendarCheck aria-hidden="true" className="size-3.5 shrink-0" /> : path ? <FileTypeIcon path={path} className="size-4 shrink-0" /> : TabIcon ? <TabIcon aria-hidden="true" className="size-3.5 shrink-0" /> : null}
                     <MiddleEllipsis name={label} className="max-w-32 text-xs" />
                   </TabsTrigger></LabelTooltip>
                   <Tooltip

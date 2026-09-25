@@ -1,7 +1,7 @@
 import { memo, useEffect, useRef, useState } from 'react'
 import { ToolResult } from '@/components/agents/tool-result'
 import { Button } from '@/components/motion/button'
-import { FileDiff, Ghost, MessageSquareText } from '@/lib/icons'
+import { FileDiff, Subagent, MessageSquareText } from '@/lib/icons'
 import { formatTime } from '@/lib/format'
 import { useI18n } from '@/i18n'
 import { useCappedListFade } from '@/lib/hooks/use-capped-list-fade'
@@ -26,7 +26,7 @@ export const SubagentCompletionRow = memo(function SubagentCompletionRow({ run }
       <ToolResult animateChanges={false} lazyContent open={open} onOpenChange={setOpen}
         title={t('subagent.completedTitle', { description: run.description })}
         status={status}
-        icon={<Ghost aria-hidden="true" className="size-4" />}
+        icon={<Subagent aria-hidden="true" className="size-4" />}
         meta={[run.profile, run.model, ...(run.runInBackground ? [t('subagent.background')] : []), ...(run.status === 'interrupted' ? [t('subagent.interrupted')] : []), ...(run.limitReached ? [t('subagent.turnLimit')] : []), ...(run.writtenFiles?.length ? [t('subagent.filesCount', { count: run.writtenFiles.length })] : [])].filter(Boolean).join(' · ')}
         collapseOnComplete={false}>
         {open ? (
@@ -178,7 +178,7 @@ function SubagentRow({ run, sessionPath, onOpenSession, onAction }: {
       <ToolResult className="w-auto min-w-0 flex-1" animateChanges={false} lazyContent open={open} onOpenChange={setOpen}
         title={`agent · ${run.description}`}
         status={run.status === 'running' ? 'running' : run.status === 'completed' ? 'success' : run.status === 'aborted' || run.status === 'interrupted' ? 'cancelled' : 'error'}
-        icon={<Ghost aria-hidden="true" className="size-4" />}
+        icon={<Subagent aria-hidden="true" className="size-4" />}
         meta={meta}
         collapseOnComplete={false}>
         {open ? (

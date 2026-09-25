@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
-import { ArrowLeft, Bell, Chart, Flask, Ghost, GoogleChromeLogo, GraduationCap, Keyboard, KeyRound, Palette, Puzzle, Settings2, TextAlignCenter, Wrench } from '@/lib/icons'
+import { ArrowLeft, Bell, Chart, Flask, Globe, GraduationCap, Keyboard, KeyRound, Palette, Puzzle, Settings2, Subagent, TextAlignCenter, Wrench } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/motion/tabs'
 import { EASE_OUT } from '@/lib/ease'
@@ -104,7 +104,7 @@ const SECTIONS: {
     id: 'subagents',
     labelKey: 'subagent.settingsTitle',
     descriptionKey: 'subagent.settingsDesc',
-    icon: <Ghost className="size-4" />,
+    icon: <Subagent className="size-4" />,
     render: () => <SubagentsSection />
   },
   {
@@ -125,7 +125,7 @@ const SECTIONS: {
     id: 'browser',
     labelKey: 'settings.browserTitle',
     descriptionKey: 'settings.browserDesc',
-    icon: <GoogleChromeLogo className="size-4" />,
+    icon: <Globe className="size-4" />,
     render: () => <BrowserSection />
   },
   {
