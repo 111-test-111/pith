@@ -46,6 +46,7 @@ import type {
   SubagentProfileCreatePayload,
   CustomModelDTO,
   ModelsConfigDTO,
+  McpUpsertServerPayload,
   PromptPayload,
   QueueActionPayload,
   ResendPayload,
@@ -453,6 +454,14 @@ export function registerIpc(pi: PiManager): () => boolean {
   ipcMain.handle('pi:setAppendPrompt', (_event, text: string) => pi.setAppendPrompt(text))
 
   ipcMain.handle('pi:toolsCatalog', () => pi.catalog())
+  ipcMain.handle('pi:mcpState', () => pi.mcpState())
+  ipcMain.handle('pi:mcpWriteConfig', (_event, scope: 'global' | 'project', content: string) =>
+    pi.writeMcpConfig(scope, content)
+  )
+  ipcMain.handle('pi:mcpSetServerDisabled', (_event, name: string, disabled: boolean) =>
+    pi.setMcpServerDisabled(name, disabled)
+  )
+  ipcMain.handle('pi:mcpServerDetail', (_event, name: string) => pi.mcpServerDetail(name))
   ipcMain.handle('pi:setExtensionEnabled', (_event, id: string, enabled: boolean) =>
     pi.setExtensionEnabled(id, enabled)
   )

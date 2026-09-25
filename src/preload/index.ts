@@ -55,6 +55,11 @@ import type {
   ModelConfigSourceDTO,
   ModelDTO,
   ModelsConfigDTO,
+  McpConfigScope,
+  McpServerDetailDTO,
+  McpStateDTO,
+  McpStatusPushDTO,
+  McpUpsertServerPayload,
   PiEvent,
   PromptPayload,
   ProviderDTO,
@@ -285,6 +290,20 @@ const api = {
     ipcRenderer.invoke('pi:setAppendPrompt', text),
 
   toolsCatalog: (): Promise<ToolCatalogDTO> => ipcRenderer.invoke('pi:toolsCatalog'),
+  // ---- Settings → MCP (pi-mcp-adapter config files, roster, live status) ----
+  mcpState: (): Promise<McpStateDTO> => ipcRenderer.invoke('pi:mcpState'),
+  mcpWriteConfig: (scope: McpConfigScope, content: string): Promise<McpStateDTO> =>
+    ipcRenderer.invoke('pi:mcpWriteConfig', scope, content),
+  mcpSetServerDisabled: (name: string, disabled: boolean): Promise<McpStateDTO> =>
+    ipcRenderer.invoke('pi:mcpSetServerDisabled', name, disabled),
+  mcpServerDetail: (name: string): Promise<McpServerDetailDTO> =>
+    ipcRenderer.invoke('pi:mcpServerDetail', name),
+  mcpUpsertServer: (payload: McpUpsertServerPayload): Promise<McpStateDTO> =>
+    ipcRenderer.invoke('pi:mcpUpsertServer', payload),
+  mcpDeleteServer: (path: string, name: string): Promise<McpStateDTO> =>
+    ipcRenderer.invoke('pi:mcpDeleteServer', path, name),
+  /** Sequence-free live status snapshots from the adapter's extension bus. */
+  onMcpStatus: (listener: (push: McpStatusPushDTO) => void) => subscribe('pi:mcp-status', listener),
   setExtensionEnabled: (id: string, enabled: boolean): Promise<ToolCatalogDTO> =>
     ipcRenderer.invoke('pi:setExtensionEnabled', id, enabled),
   updateExtension: (source: string): Promise<ToolCatalogDTO> =>

@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
-import { ArrowLeft, Bell, Chart, Flask, Globe, Keyboard, KeyRound, Palette, Puzzle, Settings2, Skills, Subagent, TextAlignCenter, Wrench } from '@/lib/icons'
+import { ArrowLeft, Bell, Chart, Flask, Globe, Keyboard, KeyRound, Palette, Plug, Puzzle, Settings2, Skills, Subagent, TextAlignCenter, Wrench } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/motion/tabs'
 import { EASE_OUT } from '@/lib/ease'
@@ -16,6 +16,7 @@ import { ProvidersSection } from './ProvidersSection'
 import { ToolsSection } from './ToolsSection'
 import { SubagentsSection } from './SubagentsSection'
 import { ExtensionsSection } from './ExtensionsSection'
+import { McpSection } from './McpSection'
 import { SkillsSection } from './SkillsSection'
 import { BrowserSection } from './BrowserSection'
 import { UsageSection } from './UsageSection'
@@ -113,6 +114,13 @@ const SECTIONS: {
     descriptionKey: 'settings.extensionsDesc',
     icon: <Puzzle className="size-4" />,
     render: () => <ExtensionsSection />
+  },
+  {
+    id: 'mcp',
+    labelKey: 'settings.mcp',
+    descriptionKey: 'settings.mcpDesc',
+    icon: <Plug className="size-4" />,
+    render: () => <McpSection />
   },
   {
     id: 'skills',

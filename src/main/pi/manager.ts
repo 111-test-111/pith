@@ -5,6 +5,7 @@ import {
   buildSessionContext,
   createAgentSessionFromServices,
   createAgentSessionServices,
+  createEventBus,
   DefaultPackageManager,
   estimateTokens,
   getAgentDir,
@@ -58,6 +59,17 @@ import type { SandboxMode } from '../sandbox/types'
 import type { SandboxEscalationDecision } from '../../shared/types'
 import { TaskNotifications } from './task-notifications'
 import { RewindClient } from '../rewind/client'
+import {
+  buildMcpRoster,
+  deleteMcpServerEntry,
+  findAdapterInstall,
+  loadAdapterModules,
+  mcpServerDetail,
+  readMcpConfigFile,
+  setMcpServerDisabled,
+  upsertMcpServerEntry,
+  writeMcpConfigFile
+} from './mcp'
 import { checkoutRoot, CheckoutCoordinator } from '../rewind/coordinator'
 import { classifyUncoveredWrites, uncoveredWrites } from '../rewind/coverage'
 import { RewindRecorder } from '../rewind/recorder'
@@ -183,7 +195,12 @@ import type {
   ToolRunDTO,
   SkillContentDTO,
   SubagentActionPayload,
-  SubagentRunDTO
+  SubagentRunDTO,
+  McpRuntimeStatus,
+  McpServerDetailDTO,
+  McpStateDTO,
+  McpStatusPushDTO,
+  McpUpsertServerPayload
 } from '../../shared/types'
 
 /** How many opened folders to keep in the sidebar/settings list. */
@@ -1090,6 +1107,10 @@ export class PiManager {
   /** Tools a now-disabled extension had registered at runtime, so a lazily
    * registering extension (pi-fff) keeps its tools listed while switched off. */
   private knownExtensionTools = new Map<string, ToolInfoDTO[]>()
+  /** Latest pi-mcp-adapter status snapshot per workspace cwd (Settings → MCP). */
+  private mcpLiveByCwd = new Map<string, Map<string, { status: McpRuntimeStatus; toolCount: number; disabled: boolean }>>()
+  /** Unsubscribes for the per-session extension event buses, keyed by loader. */
+  private mcpBusCleanup = new Map<ResourceLoader, () => void>()
 
   constructor(
     private emit: (channel: string, payload: unknown) => void,
@@ -1237,11 +1258,19 @@ export class PiManager {
     // exactly the SDK's own default for this path.
     const settingsManager = SettingsManager.create(cwd, getAgentDir())
     this.applyResponseTimeout(settingsManager)
-    return createAgentSessionServices({
+    // An app-owned event bus per session: extensions (pi-mcp-adapter) receive it
+    // as `pi.events`, so the adapter's `pi-mcp-adapter/status/v1` snapshots land
+    // here and feed Settings → MCP. One bus per loader keeps sessions isolated.
+    const extensionEventBus = createEventBus()
+    const unsubscribeMcpStatus = extensionEventBus.on('pi-mcp-adapter/status/v1', (data) =>
+      this.onMcpStatusSnapshot(cwd, data)
+    )
+    const services = await createAgentSessionServices({
       cwd,
       settingsManager,
       modelRuntime: await this.runtime(),
       resourceLoaderOptions: {
+        eventBus: extensionEventBus,
         // A subagent child loads extensions ONLY when its frozen ceiling
         // names an extension-attributed tool (web_search, mcp, ctx_*…): the
         // ceiling create-allowlist then admits them by name, and
@@ -1257,6 +1286,11 @@ export class PiManager {
         agentsFilesOverride: (base) => (this.includeContextFiles ? base : { agentsFiles: [] })
       }
     })
+    this.mcpBusCleanup.set(services.resourceLoader, () => {
+      unsubscribeMcpStatus()
+      extensionEventBus.clear()
+    })
+    return services
   }
 
   /**
@@ -1334,6 +1368,8 @@ export class PiManager {
       ], SESSION_DISPOSE_TIMEOUT_MS)
       if (!settled) managed.session.dispose()
       managed.unsubscribe()
+      this.mcpBusCleanup.get(managed.resourceLoader)?.()
+      this.mcpBusCleanup.delete(managed.resourceLoader)
       if (managed.streamFlushTimer) clearTimeout(managed.streamFlushTimer)
       managed.pendingStreamEvents.clear()
       if (this.sessions.get(managed.path) === managed) this.sessions.delete(managed.path)
@@ -4161,6 +4197,111 @@ export class PiManager {
       }
     }
     return this.catalog()
+  }
+
+  // ---- MCP servers (Settings → MCP; pi-mcp-adapter) ----
+
+  /**
+   * The adapter publishes `pi-mcp-adapter/status/v1` snapshots on the session's
+   * extension event bus (the app injects one per session in servicesFor). Keep
+   * the latest per cwd and relay it to the renderer as a sequence-free push.
+   */
+  private onMcpStatusSnapshot(cwd: string, data: unknown): void {
+    if (!data || typeof data !== 'object') return
+    const snapshot = data as { version?: unknown; servers?: unknown }
+    if (snapshot.version !== 1 || !Array.isArray(snapshot.servers)) return
+    const servers = new Map<string, { status: McpRuntimeStatus; toolCount: number; disabled: boolean }>()
+    for (const entry of snapshot.servers) {
+      if (!entry || typeof entry !== 'object') continue
+      const { name, status, toolCount, disabled } = entry as Record<string, unknown>
+      if (typeof name !== 'string' || typeof status !== 'string') continue
+      servers.set(name, {
+        status: status as McpRuntimeStatus,
+        toolCount: typeof toolCount === 'number' ? toolCount : 0,
+        disabled: disabled === true
+      })
+    }
+    this.mcpLiveByCwd.set(cwd, servers)
+    const push: McpStatusPushDTO = { cwd, servers: [...servers.entries()].map(([name, s]) => ({ name, ...s })) }
+    this.emit('pi:mcp-status', push)
+  }
+
+  /**
+   * Everything Settings → MCP renders: the editable config files (raw text for
+   * the JSON editor) plus the merged server roster with provenance, cache and
+   * live status. The adapter package's own compiled modules do the merge when
+   * installed; without it the two editable files are the roster.
+   */
+  async mcpState(): Promise<McpStateDTO> {
+    const cwd = this.activeSession?.cwd ?? null
+    const agentDir = getAgentDir()
+    const adapter = findAdapterInstall(cwd, agentDir)
+    const modules = adapter ? await loadAdapterModules(adapter.installedPath) : null
+    return {
+      adapterInstalled: adapter !== null,
+      adapterVersion: adapter?.version,
+      projectCwd: cwd,
+      global: readMcpConfigFile('global', null, agentDir)!,
+      project: cwd ? readMcpConfigFile('project', cwd, agentDir) : null,
+      servers: buildMcpRoster({ cwd, agentDir, adapter, modules, live: cwd ? (this.mcpLiveByCwd.get(cwd) ?? null) : null })
+    }
+  }
+
+  /**
+   * Save one config file's raw text (the JSON editor) and rebuild the live
+   * sessions so the adapter re-reads it. Throws on invalid JSON; the renderer
+   * validates first, so a throw here is a bug or a race.
+   */
+  async writeMcpConfig(scope: 'global' | 'project', content: string): Promise<McpStateDTO> {
+    const cwd = this.activeSession?.cwd ?? null
+    writeMcpConfigFile(scope, content, cwd, getAgentDir())
+    this.catalogCache = null
+    await this.reloadLiveSessions()
+    return this.mcpState()
+  }
+
+  /** Toggle one server's `disabled` flag (in its defining file, or through the
+   * adapter's project override for externally-defined servers), then reload. */
+  async setMcpServerDisabled(name: string, disabled: boolean): Promise<McpStateDTO> {
+    const cwd = this.activeSession?.cwd ?? null
+    const agentDir = getAgentDir()
+    const adapter = findAdapterInstall(cwd, agentDir)
+    const modules = adapter ? await loadAdapterModules(adapter.installedPath) : null
+    setMcpServerDisabled(name, disabled, { cwd, agentDir, modules })
+    this.catalogCache = null
+    await this.reloadLiveSessions()
+    return this.mcpState()
+  }
+
+  /** One server's cached tool/resource/prompt metadata (Settings → MCP detail). */
+  async mcpServerDetail(name: string): Promise<McpServerDetailDTO> {
+    const cwd = this.activeSession?.cwd ?? null
+    const agentDir = getAgentDir()
+    const adapter = findAdapterInstall(cwd, agentDir)
+    const modules = adapter ? await loadAdapterModules(adapter.installedPath) : null
+    return mcpServerDetail(name, agentDir, modules)
+  }
+
+  /**
+   * Save one server from the visual editor. The entry lands in its defining
+   * file (or the chosen scope's default for a new server); main validates the
+   * target path so a renderer bug cannot turn this into an arbitrary write.
+   */
+  async mcpUpsertServer(payload: McpUpsertServerPayload): Promise<McpStateDTO> {
+    const cwd = this.activeSession?.cwd ?? null
+    upsertMcpServerEntry(payload, { cwd, agentDir: getAgentDir() })
+    this.catalogCache = null
+    await this.reloadLiveSessions()
+    return this.mcpState()
+  }
+
+  /** Delete one server from its defining config file (path validated as editable). */
+  async mcpDeleteServer(path: string, name: string): Promise<McpStateDTO> {
+    const cwd = this.activeSession?.cwd ?? null
+    deleteMcpServerEntry(path, name, { cwd, agentDir: getAgentDir() })
+    this.catalogCache = null
+    await this.reloadLiveSessions()
+    return this.mcpState()
   }
 
   /**

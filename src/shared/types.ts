@@ -1581,3 +1581,90 @@ export interface ScheduledRunOutputDTO {
 
 /** IPC result wrapper: ScheduledTaskError's status survives the boundary. */
 export type ScheduledTaskResult<T> = { ok: true; value: T } | { ok: false; status: number; error: string }
+
+// ---- MCP servers (Settings → MCP; backed by the pi-mcp-adapter extension) ----
+
+/** Which config file an edit targets: `<agentDir>/mcp.json` or `<cwd>/.mcp.json`. */
+export type McpConfigScope = 'global' | 'project'
+
+/**
+ * Live/cache status of one MCP server. Mirrors pi-mcp-adapter's
+ * `McpServerRuntimeStatus` (`pi-mcp-adapter/status/v1` snapshots); `cached`
+ * means the server is not connected but its cached tool metadata is usable.
+ */
+export type McpRuntimeStatus = 'connected' | 'cached' | 'failed' | 'needs-auth' | 'not-connected' | 'disabled'
+
+/** Raw text of one MCP config file, for the JSON editor. */
+export interface McpConfigFileDTO {
+  path: string
+  exists: boolean
+  content: string
+  parseError: string | null
+}
+
+/** One configured MCP server as the merged view reports it (later layers win). */
+export interface McpServerDTO {
+  name: string
+  transport: 'stdio' | 'http' | 'socket'
+  /** One-line command/URL summary. */
+  summary: string
+  disabled: boolean
+  /**
+   * Layer that last defined the server: the app-editable global or project
+   * file, or an external source (shared/ancestor/imported/host config) the
+   * settings page shows but cannot edit in place.
+   */
+  scope: 'global' | 'project' | 'external'
+  /** File the winning definition lives in, when known. */
+  sourcePath?: string
+  /** True when the definition sits in a file this page edits directly. */
+  editable: boolean
+  /** Live status from the adapter's event bus, else a cache-derived value. */
+  status: McpRuntimeStatus | null
+  toolCount: number | null
+  cachedAt: number | null
+  /** The winning raw definition, for the visual editor. */
+  entry: Record<string, unknown>
+}
+
+/** Everything Settings → MCP renders: files for editing plus the merged server roster. */
+export interface McpStateDTO {
+  adapterInstalled: boolean
+  adapterVersion?: string
+  /** Active workspace cwd; the project scope stays empty without one. */
+  projectCwd: string | null
+  global: McpConfigFileDTO
+  project: McpConfigFileDTO | null
+  servers: McpServerDTO[]
+}
+
+/** Tool/resource/prompt metadata of one server, from the adapter's metadata cache. */
+export interface McpServerDetailDTO {
+  name: string
+  tools: { name: string; description?: string }[]
+  resources: { uri: string; name: string; description?: string }[]
+  prompts: { name: string; description?: string }[]
+  cachedAt: number | null
+}
+
+/**
+ * Sequence-free push on `pi:mcp-status`: the adapter's latest live snapshot
+ * for one workspace cwd (it publishes on `pi.events` as
+ * `pi-mcp-adapter/status/v1`; the app injects that bus per session).
+ */
+export interface McpStatusPushDTO {
+  cwd: string
+  servers: { name: string; status: McpRuntimeStatus; toolCount: number; disabled: boolean }[]
+}
+
+/** One visual-editor save: the server entry as a plain object plus where it lands. */
+export interface McpUpsertServerPayload {
+  /** Existing server's defining file (`McpServerDTO.sourcePath`); wins over scope. */
+  targetPath?: string
+  /** New server's target layer; resolves to that scope's default file. */
+  scope?: McpConfigScope
+  /** Set when a rename should drop the old key. */
+  originalName?: string | null
+  name: string
+  entry: Record<string, unknown>
+}
