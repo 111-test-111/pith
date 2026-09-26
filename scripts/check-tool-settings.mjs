@@ -1,8 +1,10 @@
 /**
- * Settings → Tools redesign regression check: namespaced tool families
- * (`ctx_*`, `web_*`) collapse into one group row that reveals its members, and
- * a long tool description sits in a bounded scroll viewport whose clipped edge
- * fades instead of cutting a line.
+ * Settings → Tools redesign regression check: tool families collapse into one
+ * group row that reveals its members — a family the registry declares
+ * (`ctx_*`, the MCP whole) keeps its own key, and every other tool folds under
+ * the extension that owns it (one extension is one family however its tools are
+ * named) — and a long tool description sits in a bounded scroll viewport whose
+ * clipped edge fades instead of cutting a line.
  *
  * Real `ToolsSection` in isolated Electron against a synthetic catalog; no SDK,
  * no model calls, no network. Run after building:
@@ -84,7 +86,11 @@ const REORDERED_CATALOG = {
     tool('write', 'Write a file in the workspace.', { source: { kind: 'builtin', label: 'built-in' }, parameters: {} }),
     tool('ctx_execute', LONG_DESCRIPTION),
     tool('ctx_execute_file', 'Read a file into a sandboxed FILE_CONTENT variable.'),
-    tool('ctx_index', 'Store content in a searchable knowledge base.')
+    tool('ctx_index', 'Store content in a searchable knowledge base.'),
+    // One extension whose tool names share no prefix at all (pi-lens).
+    tool('lens_diagnostics', 'Run LSP diagnostics for a file.', { source: { kind: 'extension', label: 'pi-lens' } }),
+    tool('ast_grep_search', 'Search source by AST structure.', { source: { kind: 'extension', label: 'pi-lens' } }),
+    tool('read_symbol', 'Read one symbol body.', { source: { kind: 'extension', label: 'pi-lens' } })
   ],
   extensions: [],
   skills: [],
@@ -98,7 +104,8 @@ import React from 'react';
 import {createRoot} from 'react-dom/client';
 import {ToolsSection} from '/src/components/app/settings/ToolsSection.tsx';
 import {I18nProvider} from '/src/i18n/index.tsx';
-import {buildToolList, toolPrefix, toolGroupKey, groupPrefixOf} from '/src/lib/tool-groups.ts';
+import {buildToolList, extensionLabelOf, toolGroupKey, groupPrefixOf} from '/src/lib/tool-groups.ts';
+import {declaredToolFamily} from '/src/lib/tool-categories.ts';
 import {refreshCatalog} from '/src/lib/extensions-catalog.ts';
 import en from '/src/i18n/locales/en.ts';
 import zhCN from '/src/i18n/locales/zh-CN.ts';
@@ -108,7 +115,7 @@ window.pi = { toolsCatalog: async () => catalog };
 window.refreshCatalog = refreshCatalog;
 // Pin the first run to English; the zh-CN pass stores its own locale first.
 if (!window.localStorage.getItem('pi-app:locale')) window.localStorage.setItem('pi-app:locale','en');
-window.toolGrouping = { buildToolList, toolPrefix, toolGroupKey, groupPrefixOf, entries: buildToolList(catalog.tools) };
+window.toolGrouping = { buildToolList, extensionLabelOf, toolGroupKey, declaredToolFamily, groupPrefixOf, entries: buildToolList(catalog.tools, { extensionOf: extensionLabelOf }) };
 window.locales = { en, 'zh-CN': zhCN };
 const h = React.createElement;
 createRoot(document.getElementById('root')).render(h(I18nProvider, null, h(ToolsSection)));
@@ -270,9 +277,12 @@ app.on('window-all-closed',()=>app.quit());`)
     const header = row && row.querySelector('[aria-controls]');
     return header ? header.getAttribute('aria-controls') : row ? 'tool:' + row.getAttribute('data-tool') : null;
   })()`)
-  const secondListChild = () => evaluate(
-    `document.querySelector('[role=tablist] > *:nth-child(2)').getAttribute('data-tool')`
-  )
+  const listChild = (index) => evaluate(`(() => {
+    const row = document.querySelector('[role=tablist] > *:nth-child(${index})');
+    if (!row) return null;
+    const header = row.querySelector('[aria-controls]');
+    return header ? header.getAttribute('aria-controls') : 'tool:' + row.getAttribute('data-tool');
+  })()`)
   const scrollDescription = (top) => evaluate(
     `(() => { const el = document.querySelector('[data-fade-scroll]'); el.scrollTop = ${top}; return el.scrollTop; })()`
   )
@@ -280,20 +290,39 @@ app.on('window-all-closed',()=>app.quit());`)
   await ready()
   await pause(300)
 
-  // --- pure grouping: order-preserving, family-first, lone prefixes stay plain
-  const grouping = await evaluate('(() => { const g = window.toolGrouping; return { entries: g.entries, prefixes: g.entries.map(e => e.kind === "group" ? "group:" + e.prefix : "tool:" + e.tool.name), single: g.toolPrefix("read"), nested: g.toolPrefix("mcp__context7"), leading: g.toolPrefix("_x"), three: g.toolPrefix("a_b_c"), registryKey: g.toolGroupKey("mcpScript"), proxyKey: g.toolGroupKey("mcp__beui"), prefixedKey: g.toolGroupKey("ctx_execute"), plainKey: g.toolGroupKey("read"), held: g.groupPrefixOf(g.entries, "ctx_stats"), notHeld: g.groupPrefixOf(g.entries, "read"), foreign: g.buildToolList([{name:"ctx_a"},{name:"read"},{name:"ctx_b"}]).map(e => e.kind === "group" ? "group:" + e.prefix + "(" + e.tools.length + ")" : "tool:" + e.tool.name) }; })()')
+  // --- pure grouping: order-preserving, family-first, DECLARED families only
+  const grouping = await evaluate(`(() => { const g = window.toolGrouping; return {
+    entries: g.entries,
+    prefixes: g.entries.map((e) => (e.kind === 'group' ? 'group:' + e.prefix : 'tool:' + e.tool.name)),
+    mcpKey: g.toolGroupKey('mcpScript'),
+    proxyKey: g.toolGroupKey('mcp__beui'),
+    declaredProxy: g.declaredToolFamily('mcp__context7'),
+    declaredPrefix: g.declaredToolFamily('ctx_execute'),
+    declaredApp: g.declaredToolFamily('browser_click'),
+    notDeclared: g.declaredToolFamily('read_symbol'),
+    declaredKey: g.toolGroupKey('ctx_execute', 'context-mode'),
+    extensionKey: g.toolGroupKey('read_symbol', 'pi-lens'),
+    segmentOnly: g.toolGroupKey('a_b_c'),
+    plainKey: g.toolGroupKey('read'),
+    held: g.groupPrefixOf(g.entries, 'ctx_stats'),
+    notHeld: g.groupPrefixOf(g.entries, 'read'),
+    foreign: g.buildToolList([{ name: 'ctx_a' }, { name: 'read' }, { name: 'ctx_b' }])
+      .map((e) => (e.kind === 'group' ? 'group:' + e.prefix + '(' + e.tools.length + ')' : 'tool:' + e.tool.name))
+  }; })()`)
   assert.deepEqual(grouping.prefixes, [
-    'group:web', 'group:ctx', 'tool:mcp__context7', 'tool:read', 'tool:write', 'tool:bash', 'tool:bash_task'
-  ], 'families render as one entry each at the head, then the standalone tools; a lone prefix stays a row')
-  assert.equal(grouping.entries[0].tools.length, 2, 'web family holds both web tools')
+    'group:Tavily', 'group:ctx', 'tool:mcp__context7', 'tool:read', 'tool:write', 'tool:bash', 'tool:bash_task'
+  ], 'families render as one entry each at the head, then the standalone tools; a lone family member stays a row')
+  assert.equal(grouping.entries[0].tools.length, 2, 'the Tavily family holds both of its web tools')
   assert.equal(grouping.entries[1].tools.length, 6, 'ctx family holds all six ctx tools')
-  assert.equal(grouping.single, null, 'an unnamespaced name has no prefix')
-  assert.equal(grouping.nested, 'mcp', 'a double underscore still yields one prefix')
-  assert.equal(grouping.leading, null, 'a leading underscore is not a prefix')
-  assert.equal(grouping.three, 'a', 'only the first segment is the prefix')
-  assert.equal(grouping.registryKey, 'mcp', 'the registry folds mcpScript into the mcp family')
+  assert.equal(grouping.mcpKey, 'mcp', 'the registry folds mcpScript into the mcp family')
   assert.equal(grouping.proxyKey, 'mcp', 'a server proxy lands in the same mcp family')
-  assert.equal(grouping.prefixedKey, 'ctx', 'a category without a group key still groups by its prefix')
+  assert.equal(grouping.declaredProxy, 'mcp', 'the declared mcp whole covers every server proxy')
+  assert.equal(grouping.declaredPrefix, 'ctx', 'a declared namespace prefix is a family')
+  assert.equal(grouping.declaredApp, 'browser', 'an app tool family is declared too')
+  assert.equal(grouping.notDeclared, null, 'a name that merely reads like a namespace is no declaration')
+  assert.equal(grouping.declaredKey, 'ctx', 'a declared family keeps its own key, not the extension label')
+  assert.equal(grouping.extensionKey, 'pi-lens', 'everything else folds under the extension that owns the tool')
+  assert.equal(grouping.segmentOnly, null, 'a first _ segment alone is not a family')
   assert.equal(grouping.plainKey, null, 'an unnamespaced built-in belongs to no family')
   assert.equal(grouping.held, 'ctx', 'groupPrefixOf resolves a member')
   assert.equal(grouping.notHeld, null, 'groupPrefixOf rejects a standalone tool')
@@ -307,10 +336,36 @@ app.on('window-all-closed',()=>app.quit());`)
   const mcpGroupOf = await evaluate('window.toolGrouping.groupPrefixOf(window.toolGrouping.buildToolList([{name:"mcp"},{name:"mcpScript"},{name:"mcp__context7"}]), "mcp__context7")')
   assert.equal(mcpGroupOf, 'mcp', 'the open-on-selection lookup resolves the mcp family')
 
+  // --- one extension is ONE family however its tools are named. pi-lens ships
+  //     `lens_*`, `ast_grep_*`, `read_symbol` and `lsp_navigation`; the prefix
+  //     rule this replaces split it across three rows and left the rest plain.
+  const piLens = await evaluate(`window.toolGrouping.buildToolList([
+    { name: 'lens_diagnostics', source: { kind: 'extension', label: 'pi-lens' } },
+    { name: 'ast_grep_search', source: { kind: 'extension', label: 'pi-lens' } },
+    { name: 'read_symbol', source: { kind: 'extension', label: 'pi-lens' } },
+    { name: 'read', source: { kind: 'builtin', label: 'builtin' } }
+  ], { extensionOf: window.toolGrouping.extensionLabelOf })
+    .map((e) => (e.kind === 'group' ? 'group:' + e.prefix + '(' + e.tools.length + ')' : 'tool:' + e.tool.name))`)
+  assert.deepEqual(piLens, ['group:pi-lens(3)', 'tool:read'], 'one extension folds into one family whatever its name prefixes')
+  const twoExtensions = await evaluate(`window.toolGrouping.buildToolList([
+    { name: 'read_symbol', source: { kind: 'extension', label: 'pi-lens' } },
+    { name: 'read_enclosing', source: { kind: 'extension', label: 'other-tools' } },
+    { name: 'read', source: { kind: 'builtin', label: 'builtin' } }
+  ], { extensionOf: window.toolGrouping.extensionLabelOf })
+    .map((e) => (e.kind === 'group' ? 'group:' + e.prefix : 'tool:' + e.tool.name))`)
+  assert.deepEqual(twoExtensions, ['tool:read_symbol', 'tool:read_enclosing', 'tool:read'], 'a segment two extensions happen to share is not one family')
+  const declaredWhole = await evaluate(`window.toolGrouping.buildToolList([
+    { name: 'ctx_execute', source: { kind: 'extension', label: 'context-mode' } },
+    { name: 'ctx_search', source: { kind: 'extension', label: 'context-mode' } },
+    { name: 'lens_diagnostics', source: { kind: 'extension', label: 'pi-lens' } }
+  ], { extensionOf: window.toolGrouping.extensionLabelOf })
+    .map((e) => (e.kind === 'group' ? 'group:' + e.prefix + '(' + e.tools.length + ')' : 'tool:' + e.tool.name))`)
+  assert.deepEqual(declaredWhole, ['group:ctx(2)', 'tool:lens_diagnostics'], 'a declared family outranks the extension label, and a lone extension tool stays a plain row')
+
   // --- default state: the selected tool's family is open, the rest collapsed
-  assert.equal(await visibleRows(), 7, 'collapsed families hide their members (2 web + 5 standalone)')
-  assert.equal(await firstListChild(), 'tool-group-web', 'the list leads with the web family')
-  assert.equal(await groupExpanded('web'), 'true', 'the family holding the selected tool is open')
+  assert.equal(await visibleRows(), 7, 'collapsed families hide their members (2 Tavily + 5 standalone)')
+  assert.equal(await firstListChild(), 'tool-group-Tavily', 'the list leads with the family of the catalog\'s first tool')
+  assert.equal(await groupExpanded('Tavily'), 'true', 'the family holding the selected tool is open')
   assert.equal(await groupExpanded('ctx'), 'false', 'other families start collapsed')
   assert.equal(await groupPanelHeight('ctx'), 0, 'a collapsed family takes no height')
   assert.equal(
@@ -364,7 +419,7 @@ app.on('window-all-closed',()=>app.quit());`)
   await pause(400)
   assert.equal(await detailName(), 'ctx_execute', 'selecting a member switches the detail pane')
   assert.equal(await groupExpanded('ctx'), 'true', 'selecting inside a family keeps it open')
-  assert.equal(await groupExpanded('web'), 'false', 'the family left behind folds away')
+  assert.equal(await groupExpanded('Tavily'), 'false', 'the family left behind folds away')
 
   // --- a long description is bounded and fades at the clipped edge
   const top = await fadeState()
@@ -431,11 +486,25 @@ app.on('window-all-closed',()=>app.quit());`)
   await evaluate(`window.pi.toolsCatalog = async () => (${JSON.stringify(REORDERED_CATALOG)}); true`)
   await evaluate('window.refreshCatalog()')
   await pause(300)
-  assert.equal(await firstListChild(), 'tool-group-ctx', 'the family leads although its members came last in the catalog')
-  assert.equal(await secondListChild(), 'read', 'the standalone tools follow the families')
+  assert.equal(await listChild(1), 'tool-group-ctx', 'the family leads although its members came last in the catalog')
+  assert.equal(await listChild(2), 'tool-group-pi-lens', 'the second family follows it, ahead of the standalone tools')
+  assert.equal(await listChild(3), 'tool:read', 'the standalone tools follow the families')
+  assert.equal(await listChild(4), 'tool:write', 'in catalog order')
   assert.equal(
     await evaluate('document.querySelector(\'[aria-controls="tool-group-ctx"] [data-tool-group-count]\').textContent'),
     '3', 'the reseeded family counts only its own members'
+  )
+  assert.equal(
+    await evaluate(`document.querySelector('[aria-controls="tool-group-pi-lens"] [data-tool-group-count]').textContent`),
+    '3', 'the pi-lens family counts every tool the extension owns, whatever its name prefix'
+  )
+  assert.equal(
+    await evaluate(`['lens', 'ast', 'read'].some((p) => !!document.querySelector('[aria-controls="tool-group-' + p + '"]'))`),
+    false, 'the name prefixes inside it are not families of their own any more'
+  )
+  assert.equal(
+    await evaluate(`!!document.querySelector('[data-tool="read_symbol"]').closest('#tool-group-pi-lens')`),
+    true, 'its member renders inside the extension family, not as a row of its own'
   )
   assert.equal(await visibleRows(), 5, 'the still-open family keeps its 3 members, then the 2 standalone rows')
   await screenshot('families-first-light')

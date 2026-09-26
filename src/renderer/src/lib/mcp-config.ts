@@ -217,6 +217,37 @@ export function isValidMcpServerName(name: string): boolean {
   return SERVER_NAME_RE.test(name)
 }
 
+export type McpSnippetIssue = 'json' | 'shape' | 'multiple'
+
+/**
+ * Parse a pasted server snippet for the add dialog. Both documented shapes
+ * unwrap to one (name, entry) pair: the full `{"mcpServers": {"name": …}}`
+ * document and the bare `{"name": …}` map. Anything else (a bare entry with
+ * no name, several servers at once, non-object values) is a specific issue.
+ */
+export function parseMcpServerSnippet(
+  text: string
+):
+  | { ok: true; name: string; entry: McpServerEntry }
+  | { ok: false; issue: McpSnippetIssue; detail?: string; count?: number } {
+  let raw: unknown
+  try {
+    raw = JSON.parse(text)
+  } catch (error) {
+    return { ok: false, issue: 'json', detail: error instanceof Error ? error.message : String(error) }
+  }
+  if (!isRecord(raw)) return { ok: false, issue: 'shape' }
+  const servers = raw.mcpServers ?? raw['mcp-servers'] ?? raw
+  if (!isRecord(servers)) return { ok: false, issue: 'shape' }
+  const entries = Object.entries(servers).filter(([, value]) => isRecord(value))
+  if (entries.length === 0) return { ok: false, issue: 'shape' }
+  if (entries.length > 1) return { ok: false, issue: 'multiple', count: entries.length }
+  const first = entries[0]
+  if (!first) return { ok: false, issue: 'shape' }
+  const [name, entry] = first
+  return { ok: true, name, entry: entry as McpServerEntry }
+}
+
 /**
  * Stable issue ids for the visual editor. Empty means the form can be saved.
  */

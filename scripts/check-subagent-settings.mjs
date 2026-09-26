@@ -79,6 +79,8 @@ const catalog = {
     { name: 'ctx_one', description: 'Extension tool one.', parameters: { type: 'object' }, source: { kind: 'extension', extensionId: '/ext/ctx', label: 'context-mode' }, active: true, disabledByExtension: false },
     { name: 'ctx_two', description: 'Extension tool two.', parameters: { type: 'object' }, source: { kind: 'extension', extensionId: '/ext/ctx', label: 'context-mode' }, active: true, disabledByExtension: false },
     { name: 'ffgrep', description: 'pi-fff grep.', parameters: { type: 'object' }, source: { kind: 'extension', extensionId: '/ext/fff', label: 'pi-fff' }, active: true, disabledByExtension: false },
+    { name: 'lens_diagnostics', description: 'Run LSP diagnostics.', parameters: { type: 'object' }, source: { kind: 'extension', extensionId: '/ext/lens', label: 'pi-lens' }, active: true, disabledByExtension: false },
+    { name: 'read_symbol', description: 'Read one symbol body.', parameters: { type: 'object' }, source: { kind: 'extension', extensionId: '/ext/lens', label: 'pi-lens' }, active: true, disabledByExtension: false },
     { name: 'mcp', description: 'MCP gateway.', parameters: { type: 'object' }, source: { kind: 'extension', extensionId: '/ext/mcp', label: 'mcp-adapter' }, active: true, disabledByExtension: false },
     { name: 'mcpScript', description: 'MCP scripting.', parameters: { type: 'object' }, source: { kind: 'extension', extensionId: '/ext/mcp', label: 'mcp-adapter' }, active: true, disabledByExtension: false },
     { name: 'mcp__beui', description: 'One server proxy.', parameters: { type: 'object' }, source: { kind: 'extension', extensionId: '/ext/mcp', label: 'mcp-adapter' }, active: true, disabledByExtension: false }
@@ -336,7 +338,7 @@ app.on('window-all-closed',()=>app.quit());`
   // Switching to explicit starts from everything; Reset returns to the saved state.
   await evaluate(`window.radioOf('Choose tools').click()`)
   await frame()
-  assert.equal(await evaluate(`window.checkedTools().length`), 15, 'explicit mode starts from the full universe (11 built-ins + 3 extensions + MCP as one)')
+  assert.equal(await evaluate(`window.checkedTools().length`), 17, 'explicit mode starts from the full universe (11 built-ins + 5 extension tools + MCP as one)')
   assert.equal(await evaluate(`document.querySelector('[data-subagent-tools-reset]').disabled`), false, 'an edit in progress can be reset')
   await evaluate(`document.querySelector('[data-subagent-tools-reset]').click()`)
   await frame()
@@ -393,10 +395,16 @@ app.on('window-all-closed',()=>app.quit());`
   //     a tri-state checkbox for the whole series beside its disclosure, with
   //     every member still individually checkable underneath.
   const families = await evaluate(`(()=>{const inSection=(section)=>[...document.querySelectorAll('[data-subagent-tool-group="'+section+'"] [data-subagent-tool-family]')].map((f)=>f.dataset.subagentToolFamily);return {builtin:inSection('builtin'),extension:inSection('extension'),unknown:inSection('unknown'),mcp:inSection('mcp')}})()`)
-  assert.deepEqual(families.extension, ['ctx'], 'the extension section groups ctx_* into one family row')
+  assert.deepEqual(families.extension, ['ctx', 'pi-lens'], 'the extension section groups a declared family by its key and one extension as one family')
   assert.deepEqual(families.builtin, ['browser'], 'a namespaced app tool family groups under the built-ins')
   assert.deepEqual(families.unknown, [], 'the unknown group has no family of its own')
   assert.deepEqual(families.mcp, [], 'the MCP whole is deliberately not a family (the gateway reaches every server)')
+  assert.deepEqual(await evaluate(`window.familyMembers('pi-lens')`), ['lens_diagnostics', 'read_symbol'], 'an extension whose tool names share no prefix is ONE family row')
+  assert.deepEqual(
+    await evaluate(`[...document.querySelector('[data-subagent-tool-family="pi-lens"] [data-subagent-tool-family-toggle]').querySelectorAll('span')].map((s) => s.textContent)`),
+    ['pi-lens', '0/2'],
+    'a family named after its extension does not repeat that name as a source chip'
+  )
   assert.equal(await evaluate(`!!document.querySelector('[data-subagent-tool="ffgrep"]').closest('[data-subagent-tool-family]')`), false, 'a lone prefix member stays a plain row')
   assert.equal(await evaluate(`!!document.querySelector('[data-subagent-tool="MCP"]').closest('[data-subagent-tool-family]')`), false, 'the MCP row is not nested in a family')
   assert.deepEqual(await evaluate(`window.familyMembers('ctx')`), ['ctx_one', 'ctx_two'], 'the family holds its members')

@@ -1074,6 +1074,14 @@ const en = {
   'mcp.error.command': 'A command is required for stdio servers.',
   'mcp.error.url': 'A URL is required for HTTP servers.',
   'mcp.error.socket': 'A socket path is required for socket servers.',
+  'mcp.error.snippetJson': 'The snippet is not valid JSON.',
+  'mcp.error.snippetShape': 'Expected {"mcpServers": {"name": {…}}} or {"name": {…}}.',
+  'mcp.error.snippetMultiple': 'Add one server at a time — the snippet contains {count}.',
+  'mcp.modeVisual': 'Visual',
+  'mcp.modeJson': 'JSON',
+  'mcp.snippetLabel': 'Server JSON snippet',
+  'mcp.snippetHint':
+    'Paste {"mcpServers": {"name": {…}}} or just {"name": {…}} — the app assembles and validates it.',
 
   // skills
   'settings.skills': 'Skills',

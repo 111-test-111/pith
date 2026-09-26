@@ -66,6 +66,7 @@ import {
   FileSearch2 as FileSearch2Glyph,
   FileText as FileTextGlyph,
   FlaskConical as FlaskConicalGlyph,
+  Focus as FocusGlyph,
   Folder as FolderGlyph,
   FolderInput as FolderInputGlyph,
   FolderKanban as FolderKanbanGlyph,
@@ -89,7 +90,9 @@ import {
   Lightbulb as LightbulbGlyph,
   Link2 as Link2Glyph,
   ListChecks as ListChecksGlyph,
+  ListIndentIncrease as ListIndentIncreaseGlyph,
   ListTodo as ListTodoGlyph,
+  ListTree as ListTreeGlyph,
   Loader2 as Loader2Glyph,
   LoaderCircle as LoaderCircleGlyph,
   LogOut as LogOutGlyph,
@@ -110,6 +113,8 @@ import {
   MousePointer2 as MousePointer2Glyph,
   MousePointerClick as MousePointerClickGlyph,
   Music as MusicGlyph,
+  Navigation as NavigationGlyph,
+  Network as NetworkGlyph,
   Newspaper as NewspaperGlyph,
   Option as OptionGlyph,
   PackageOpen as PackageOpenGlyph,
@@ -125,14 +130,17 @@ import {
   Plug as PlugGlyph,
   PlugZap as PlugZapGlyph,
   Plus as PlusGlyph,
+  Power as PowerGlyph,
   Printer as PrinterGlyph,
   Puzzle as PuzzleGlyph,
   RefreshCw as RefreshCwGlyph,
+  Replace as ReplaceGlyph,
   RotateCcw as RotateCcwGlyph,
   ScanSearch as ScanSearchGlyph,
   ScanText as ScanTextGlyph,
   ScrollText as ScrollTextGlyph,
   Search as SearchGlyph,
+  SearchCode as SearchCodeGlyph,
   SearchX as SearchXGlyph,
   Send as SendGlyph,
   Settings as SettingsGlyph,
@@ -146,7 +154,9 @@ import {
   SquareArrowOutUpRight as SquareArrowOutUpRightGlyph,
   SquareCheckBig as SquareCheckBigGlyph,
   SquareCode as SquareCodeGlyph,
+  SquareFunction as SquareFunctionGlyph,
   SquareTerminal as SquareTerminalGlyph,
+  Stamp as StampGlyph,
   Stethoscope as StethoscopeGlyph,
   Sun as SunGlyph,
   Terminal as TerminalGlyph,
@@ -288,6 +298,7 @@ const GLYPHS = {
   FileText: FileTextGlyph,
   FirstAidKit: BriefcaseMedicalGlyph,
   Flask: FlaskConicalGlyph,
+  Focus: FocusGlyph,
   Folder: FolderGlyph,
   FolderInput: FolderInputGlyph,
   FolderKanban: FolderKanbanGlyph,
@@ -313,7 +324,9 @@ const GLYPHS = {
   Link2: Link2Glyph,
   LinkSimple: Link2Glyph,
   ListChecks: ListChecksGlyph,
+  ListIndentIncrease: ListIndentIncreaseGlyph,
   ListTodo: ListTodoGlyph,
+  ListTree: ListTreeGlyph,
   Loader2: Loader2Glyph,
   LoaderCircle: LoaderCircleGlyph,
   LogOut: LogOutGlyph,
@@ -332,6 +345,8 @@ const GLYPHS = {
   MousePointer2: MousePointer2Glyph,
   MousePointerClick: MousePointerClickGlyph,
   MusicNote: MusicGlyph,
+  Navigation: NavigationGlyph,
+  Network: NetworkGlyph,
   Option: OptionGlyph,
   Palette: PaletteGlyph,
   Printer: PrinterGlyph,
@@ -346,13 +361,16 @@ const GLYPHS = {
   Plug: PlugGlyph,
   PlugZap: PlugZapGlyph,
   Plus: PlusGlyph,
+  Power: PowerGlyph,
   Puzzle: PuzzleGlyph,
   RefreshCw: RefreshCwGlyph,
+  Replace: ReplaceGlyph,
   RotateCcw: RotateCcwGlyph,
   ScanSearch: ScanSearchGlyph,
   ScanText: ScanTextGlyph,
   ScrollText: ScrollTextGlyph,
   Search: SearchGlyph,
+  SearchCode: SearchCodeGlyph,
   SearchX: SearchXGlyph,
   Selection: BoxSelectGlyph,
   Send: SendGlyph,
@@ -366,7 +384,9 @@ const GLYPHS = {
   SourceCode: SquareCodeGlyph,
   Square: SquareGlyph,
   SquareArrowOutUpRight: SquareArrowOutUpRightGlyph,
+  SquareFunction: SquareFunctionGlyph,
   SquareTerminal: SquareTerminalGlyph,
+  Stamp: StampGlyph,
   Stethoscope: StethoscopeGlyph,
   Subtitle: CaptionsGlyph,
   Sun: SunGlyph,
@@ -483,6 +503,7 @@ export const FileSearch2 = /* @__PURE__ */ createIcon('FileSearch2', GLYPHS.File
 export const FileText = /* @__PURE__ */ createIcon('FileText', GLYPHS.FileText)
 export const FirstAidKit = /* @__PURE__ */ createIcon('FirstAidKit', GLYPHS.FirstAidKit)
 export const Flask = /* @__PURE__ */ createIcon('Flask', GLYPHS.Flask)
+export const Focus = /* @__PURE__ */ createIcon('Focus', GLYPHS.Focus)
 export const Folder = /* @__PURE__ */ createIcon('Folder', GLYPHS.Folder)
 export const FolderInput = /* @__PURE__ */ createIcon('FolderInput', GLYPHS.FolderInput)
 export const FolderKanban = /* @__PURE__ */ createIcon('FolderKanban', GLYPHS.FolderKanban)
@@ -508,7 +529,9 @@ export const Lightbulb = /* @__PURE__ */ createIcon('Lightbulb', GLYPHS.Lightbul
 export const Link2 = /* @__PURE__ */ createIcon('Link2', GLYPHS.Link2)
 export const LinkSimple = /* @__PURE__ */ createIcon('LinkSimple', GLYPHS.LinkSimple)
 export const ListChecks = /* @__PURE__ */ createIcon('ListChecks', GLYPHS.ListChecks)
+export const ListIndentIncrease = /* @__PURE__ */ createIcon('ListIndentIncrease', GLYPHS.ListIndentIncrease)
 export const ListTodo = /* @__PURE__ */ createIcon('ListTodo', GLYPHS.ListTodo)
+export const ListTree = /* @__PURE__ */ createIcon('ListTree', GLYPHS.ListTree)
 export const Loader2 = /* @__PURE__ */ createIcon('Loader2', GLYPHS.Loader2)
 export const LoaderCircle = /* @__PURE__ */ createIcon('LoaderCircle', GLYPHS.LoaderCircle)
 export const LogOut = /* @__PURE__ */ createIcon('LogOut', GLYPHS.LogOut)
@@ -527,6 +550,8 @@ export const MoreVertical = /* @__PURE__ */ createIcon('MoreVertical', GLYPHS.Mo
 export const MousePointer2 = /* @__PURE__ */ createIcon('MousePointer2', GLYPHS.MousePointer2)
 export const MousePointerClick = /* @__PURE__ */ createIcon('MousePointerClick', GLYPHS.MousePointerClick)
 export const MusicNote = /* @__PURE__ */ createIcon('MusicNote', GLYPHS.MusicNote)
+export const Navigation = /* @__PURE__ */ createIcon('Navigation', GLYPHS.Navigation)
+export const Network = /* @__PURE__ */ createIcon('Network', GLYPHS.Network)
 export const Option = /* @__PURE__ */ createIcon('Option', GLYPHS.Option)
 export const Palette = /* @__PURE__ */ createIcon('Palette', GLYPHS.Palette)
 export const Printer = /* @__PURE__ */ createIcon('Printer', GLYPHS.Printer)
@@ -541,13 +566,16 @@ export const PinOff = /* @__PURE__ */ createIcon('PinOff', GLYPHS.PinOff)
 export const Plug = /* @__PURE__ */ createIcon('Plug', GLYPHS.Plug)
 export const PlugZap = /* @__PURE__ */ createIcon('PlugZap', GLYPHS.PlugZap)
 export const Plus = /* @__PURE__ */ createIcon('Plus', GLYPHS.Plus)
+export const Power = /* @__PURE__ */ createIcon('Power', GLYPHS.Power)
 export const Puzzle = /* @__PURE__ */ createIcon('Puzzle', GLYPHS.Puzzle)
 export const RefreshCw = /* @__PURE__ */ createIcon('RefreshCw', GLYPHS.RefreshCw)
+export const Replace = /* @__PURE__ */ createIcon('Replace', GLYPHS.Replace)
 export const RotateCcw = /* @__PURE__ */ createIcon('RotateCcw', GLYPHS.RotateCcw)
 export const ScanSearch = /* @__PURE__ */ createIcon('ScanSearch', GLYPHS.ScanSearch)
 export const ScanText = /* @__PURE__ */ createIcon('ScanText', GLYPHS.ScanText)
 export const ScrollText = /* @__PURE__ */ createIcon('ScrollText', GLYPHS.ScrollText)
 export const Search = /* @__PURE__ */ createIcon('Search', GLYPHS.Search)
+export const SearchCode = /* @__PURE__ */ createIcon('SearchCode', GLYPHS.SearchCode)
 export const SearchX = /* @__PURE__ */ createIcon('SearchX', GLYPHS.SearchX)
 export const Selection = /* @__PURE__ */ createIcon('Selection', GLYPHS.Selection)
 export const Send = /* @__PURE__ */ createIcon('Send', GLYPHS.Send)
@@ -561,7 +589,9 @@ export const Sparkles = /* @__PURE__ */ createIcon('Sparkles', GLYPHS.Sparkles)
 export const SourceCode = /* @__PURE__ */ createIcon('SourceCode', GLYPHS.SourceCode)
 export const Square = /* @__PURE__ */ createIcon('Square', GLYPHS.Square)
 export const SquareArrowOutUpRight = /* @__PURE__ */ createIcon('SquareArrowOutUpRight', GLYPHS.SquareArrowOutUpRight)
+export const SquareFunction = /* @__PURE__ */ createIcon('SquareFunction', GLYPHS.SquareFunction)
 export const SquareTerminal = /* @__PURE__ */ createIcon('SquareTerminal', GLYPHS.SquareTerminal)
+export const Stamp = /* @__PURE__ */ createIcon('Stamp', GLYPHS.Stamp)
 export const Stethoscope = /* @__PURE__ */ createIcon('Stethoscope', GLYPHS.Stethoscope)
 export const Subtitle = /* @__PURE__ */ createIcon('Subtitle', GLYPHS.Subtitle)
 export const Sun = /* @__PURE__ */ createIcon('Sun', GLYPHS.Sun)

@@ -24,6 +24,7 @@ import {
   createEmptyMcpServerForm,
   formToServerEntry,
   parseMcpConfigJson,
+  parseMcpServerSnippet,
   serverEntryToForm,
   validateMcpServerForm,
   type McpAuthKind,
@@ -76,6 +77,9 @@ interface EditorState {
   form: McpServerForm
   /** Existing server: its defining file. New server: absent (lands global). */
   targetPath?: string
+  /** Adding offers a paste-a-snippet mode beside the visual form. */
+  mode: 'visual' | 'json'
+  snippet: string
 }
 
 const STATUS_META: Record<McpRuntimeStatus, { dot: string; labelKey: MessageKey }> = {
@@ -94,7 +98,6 @@ function shortenPath(path: string): string {
 export function McpSection() {
   const { t } = useI18n()
   const { status, data, error, busy, actionError } = useMcpStore()
-  const catalog = useToolCatalog()
   const [editor, setEditor] = useState<EditorState | null>(null)
   const [editorError, setEditorError] = useState<string | null>(null)
   const [toolsTarget, setToolsTarget] = useState<string | null>(null)
@@ -129,17 +132,54 @@ export function McpSection() {
 
   const startNew = () => {
     setEditorError(null)
-    setEditor({ form: createEmptyMcpServerForm() })
+    setEditor({ form: createEmptyMcpServerForm(), mode: 'visual', snippet: '' })
   }
 
   const startEdit = (server: McpServerDTO) => {
     if (!server.editable || !server.sourcePath) return
     setEditorError(null)
-    setEditor({ form: serverEntryToForm(server.name, server.entry), targetPath: server.sourcePath })
+    setEditor({
+      form: serverEntryToForm(server.name, server.entry),
+      targetPath: server.sourcePath,
+      mode: 'visual',
+      snippet: ''
+    })
   }
 
   const saveEditor = async () => {
     if (!editor || busy) return
+    if (editor.mode === 'json') {
+      const parsed = parseMcpServerSnippet(editor.snippet)
+      if (!parsed.ok) {
+        setEditorError(
+          parsed.issue === 'json'
+            ? `${t('mcp.error.snippetJson')} ${parsed.detail ?? ''}`.trim()
+            : parsed.issue === 'multiple'
+              ? t('mcp.error.snippetMultiple', { count: parsed.count ?? 0 })
+              : t('mcp.error.snippetShape')
+        )
+        return
+      }
+      // The raw snippet entry is the payload (extras survive untouched); the
+      // form round-trip only reuses the validator's name/endpoint rules. A new
+      // server has no rename source, so originalName must stay empty — else
+      // the duplicate check exempts the pasted name against itself.
+      const snippetForm = serverEntryToForm(parsed.name, parsed.entry)
+      delete snippetForm.originalName
+      const snippetIssues = validateMcpServerForm(snippetForm, existingNames)
+      if (snippetIssues.length > 0) {
+        setEditorError(t(`mcp.error.${snippetIssues[0]}` as MessageKey, { name: parsed.name }))
+        return
+      }
+      const ok = await upsertMcpServer({
+        scope: 'global',
+        originalName: null,
+        name: parsed.name,
+        entry: parsed.entry
+      })
+      if (ok) setEditor(null)
+      return
+    }
     const issues = validateMcpServerForm(editor.form, existingNames)
     if (issues.length > 0) {
       setEditorError(t(`mcp.error.${issues[0]}` as MessageKey, { name: editor.form.name.trim() }))
@@ -238,6 +278,14 @@ export function McpSection() {
         onChange={(form) => {
           setEditorError(null)
           setEditor((prev) => (prev ? { ...prev, form } : prev))
+        }}
+        onModeChange={(mode) => {
+          setEditorError(null)
+          setEditor((prev) => (prev ? { ...prev, mode } : prev))
+        }}
+        onSnippetChange={(snippet) => {
+          setEditorError(null)
+          setEditor((prev) => (prev ? { ...prev, snippet } : prev))
         }}
         onClose={() => setEditor(null)}
         onSave={() => void saveEditor()}
@@ -508,6 +556,8 @@ function ServerEditorDialog({
   error,
   saving,
   onChange,
+  onModeChange,
+  onSnippetChange,
   onClose,
   onSave
 }: {
@@ -515,6 +565,8 @@ function ServerEditorDialog({
   error: string | null
   saving: boolean
   onChange: (form: McpServerForm) => void
+  onModeChange: (mode: 'visual' | 'json') => void
+  onSnippetChange: (snippet: string) => void
   onClose: () => void
   onSave: () => void
 }) {
@@ -532,6 +584,37 @@ function ServerEditorDialog({
             {form.originalName ? t('mcp.editTitle') : t('mcp.addTitle')}
           </h2>
           <div className="mt-3 min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain p-1">
+            {!editor.targetPath ? (
+              <RadioGroup
+                value={editor.mode}
+                onValueChange={(mode) => onModeChange(mode as 'visual' | 'json')}
+                orientation="horizontal"
+                className="w-full"
+              >
+                <RadioGroupItem value="visual" label={t('mcp.modeVisual')} className="flex-1" />
+                <RadioGroupItem value="json" label={t('mcp.modeJson')} className="flex-1" />
+              </RadioGroup>
+            ) : null}
+
+            {editor.mode === 'json' ? (
+              <div>
+                <Input
+                  multiline
+                  rows={12}
+                  label={t('mcp.snippetLabel')}
+                  value={editor.snippet}
+                  placeholder={'{\n  "mcpServers": {\n    "my-server": {\n      "url": "https://example.com/mcp"\n    }\n  }\n}'}
+                  spellCheck={false}
+                  autoComplete="off"
+                  className="font-mono text-xs leading-5"
+                  onChange={onSnippetChange}
+                />
+                <p className="mt-1.5 px-1 text-[11px] leading-4 text-muted-foreground/70">
+                  {t('mcp.snippetHint')}
+                </p>
+              </div>
+            ) : (
+              <>
             <Input
               label={t('mcp.name')}
               value={form.name}
@@ -651,6 +734,8 @@ function ServerEditorDialog({
               />
               {t('mcp.disabledOnSave')}
             </label>
+              </>
+            )}
           </div>
 
           {error ? <p className="mt-2 break-words px-1 text-xs text-destructive">{error}</p> : null}

@@ -3,6 +3,7 @@ import {
   Article,
   BookDownload,
   BookSearch,
+  Braces,
   CalendarCheck,
   Camera,
   Chart,
@@ -18,26 +19,38 @@ import {
   FileSearch2,
   FirstAidKit,
   Flask,
+  Focus,
   FolderTree,
   Subagent,
   Globe,
   InstallingUpdates,
   Keyboard,
   Layers,
+  ListIndentIncrease,
   ListTodo,
+  ListTree,
   MousePointer2,
   MousePointerClick,
   MessageSquareText,
+  Navigation,
+  Network,
   PenNib,
   Plug,
+  Power,
+  Replace,
   ScanText,
   ScanSearch,
   Search,
+  SearchCode,
   Selection,
   Send,
+  Settings2,
   Siren,
   SourceCode,
   SquareArrowOutUpRight,
+  SquareFunction,
+  Stamp,
+  Stethoscope,
   Terminal,
   TextSearch,
   Timer,
@@ -56,10 +69,10 @@ import { cn } from '@/lib/utils'
  *
  * The mapping is exhaustive for the tools that exist today: the SDK's built-ins
  * plus what the bundled extensions register (`@tavily/pi-extension`,
- * `pi-mcp-adapter`, `@ff-labs/pi-fff`, `context-mode`). Everything else — a tool
- * a new extension registers after this list was written — falls back to the
- * wrench, until it gets an explicit entry here. MCP namespaces are the one
- * exception, handled by prefix below.
+ * `pi-mcp-adapter`, `@ff-labs/pi-fff`, `context-mode`, `pi-lens`). Everything
+ * else — a tool a new extension registers after this list was written — falls
+ * back to the wrench, until it gets an explicit entry here. MCP namespaces are
+ * the one exception, handled by prefix below.
  */
 const TOOL_ICONS: Record<string, IconComponent> = {
   // Built-in file + shell tools. The shell rows use the plain `Terminal` glyph;
@@ -113,6 +126,25 @@ const TOOL_ICONS: Record<string, IconComponent> = {
   ctx_purge: Trash2,
   ctx_insight: Dashboard,
   ctx_upgrade: InstallingUpdates,
+  // pi-lens (code feedback: LSP diagnostics, symbol comprehension, structural
+  // analysis). One glyph per job, and the pairs stay tellable apart: the check-up
+  // and the verdict it produces, one symbol and the scope enclosing it, the
+  // project graph and the module inside it, the situational-tool switch, and the
+  // ast-grep trio (structural search / rewrite / outline) against `symbol_search`
+  // (a name, not a pattern) and `read_symbol` (a symbol body, not a listing).
+  lens_diagnostics: Stethoscope,
+  lens_diagnostic_mark: Stamp,
+  symbol_search: Braces,
+  read_symbol: SquareFunction,
+  read_enclosing: Focus,
+  lsp_navigation: Navigation,
+  project_report: Network,
+  module_report: ListTree,
+  effective_config: Settings2,
+  pi_lens_activate_tools: Power,
+  ast_grep_search: SearchCode,
+  ast_grep_replace: Replace,
+  ast_grep_outline: ListIndentIncrease,
   // MCP adapter — `mcp`, the batch script tool `mcpScript` and every per-server
   // namespace proxy (`mcp__context7`, …) share one MCP glyph; the proxies are
   // matched by prefix in `toolIconComponent` rather than listed here.

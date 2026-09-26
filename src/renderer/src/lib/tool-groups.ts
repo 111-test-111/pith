@@ -1,19 +1,29 @@
 /**
- * Tool-family grouping for Settings → Tools. A tool's "family" is the registry's
- * own group key when the category declares one (the MCP family: `mcp`,
- * `mcpScript` and every `mcp__<server>` proxy share no prefix), otherwise the
- * segment before its first underscore (`ctx_execute` / `ctx_search` → `ctx`),
- * which is how extensions namespace large tool sets (`ctx_*`, `web_*`). Pure and
- * order-preserving: families always render at the head of the list in the
- * order their first member appeared, and the standalone tools follow in
+ * Tool-family grouping for Settings → Tools. A tool's family is the one the
+ * registry *declares* — the MCP whole (`mcp`, `mcpScript` and every
+ * `mcp__<server>` proxy share no prefix, so only `tool-categories.ts` can say
+ * they belong together), or a declared namespace prefix (`ctx_*`, `browser_*`)
+ * — and otherwise the extension that registers it, so a package whose tools
+ * carry several prefixes or none at all still folds into ONE row (pi-lens:
+ * `lens_*`, `ast_grep_*`, `read_symbol`, `lsp_navigation`).
+ *
+ * A leading `prefix_` segment is deliberately NOT a family on its own: that
+ * rule scattered one extension across `lens`/`ast`/`read` and left the rest as
+ * standalone rows. Prefix grouping stays a registry declaration, never a guess
+ * about a name.
+ *
+ * Pure and order-preserving: families always render at the head of the list in
+ * the order their first member appeared, and the standalone tools follow in
  * catalog order, so grouping never reshuffles what the main process returned
  * beyond lifting the families up.
  */
 
-import { toolCategory } from './tool-categories'
+import { declaredToolFamily } from './tool-categories'
 
 export interface ToolGroup<T> {
   kind: 'group'
+  /** The family as it renders: a declared family key (`ctx`, `mcp`) or the
+   * owning extension's label (`pi-lens`). */
   prefix: string
   tools: T[]
 }
@@ -25,55 +35,71 @@ export interface ToolEntry<T> {
 
 export type ToolListEntry<T> = ToolGroup<T> | ToolEntry<T>
 
-/** Members needed before a shared prefix becomes a group (a lone `bash_task`
- * stays a plain row — grouping one tool only adds a click). */
+/** Members needed before a shared family becomes a group (a lone member stays
+ * a plain row — grouping one tool only adds a click). */
 export const TOOL_GROUP_MIN_SIZE = 2
 
-/** The leading `prefix_` segment of a namespaced tool name, else null. */
-export function toolPrefix(name: string): string | null {
-  const index = name.indexOf('_')
-  if (index <= 0) return null
-  return name.slice(0, index)
+/**
+ * The tool's owning extension as the catalog reports it, else `undefined`.
+ *
+ * Structural on purpose: the catalog's `ToolInfoDTO` satisfies it, and so does
+ * a hand-built fixture. A disabled extension still names its tools (`source` is
+ * the last definition that won), so its family keeps its identity while struck
+ * through.
+ */
+export function extensionLabelOf(tool: {
+  source: { kind: 'builtin' | 'extension'; label: string }
+}): string | undefined {
+  return tool.source.kind === 'extension' ? tool.source.label : undefined
 }
 
 /**
- * The family Settings → Tools folds a tool under. A category that declares its
- * own `groupKey` wins — that is the only way `mcp` and `mcpScript`, which carry
- * no `prefix_` segment, join the `mcp__<server>` proxies — and everything else
- * falls back to the name's leading segment.
+ * The family Settings → Tools folds a tool under: the one the registry declares
+ * (which keeps its own key, so the MCP whole and `ctx_*`/`browser_*` read as
+ * they always have), else the extension that owns it. `null` means standalone.
  */
-export function toolGroupKey(name: string): string | null {
-  return toolCategory(name)?.groupKey ?? toolPrefix(name)
+export function toolGroupKey(name: string, extensionLabel?: string): string | null {
+  return declaredToolFamily(name) ?? extensionLabel ?? null
+}
+
+export interface ToolListOptions<T> {
+  /** The owning extension's label for a tool, when an extension owns it: one
+   * extension is one family even when its tool names share nothing. */
+  extensionOf?: (tool: T) => string | undefined
+  minSize?: number
 }
 
 /** Collapse same-family tools into one entry each; every family leads the
  * list, so a large extension cannot push the grouped families down the page. */
 export function buildToolList<T extends { name: string }>(
   tools: T[],
-  minSize = TOOL_GROUP_MIN_SIZE
+  options: ToolListOptions<T> = {}
 ): ToolListEntry<T>[] {
+  const { extensionOf, minSize = TOOL_GROUP_MIN_SIZE } = options
+  const familyOf = (tool: T): string | null => toolGroupKey(tool.name, extensionOf?.(tool))
+
   const buckets = new Map<string, T[]>()
   for (const tool of tools) {
-    const prefix = toolGroupKey(tool.name)
-    if (!prefix) continue
-    const bucket = buckets.get(prefix)
+    const family = familyOf(tool)
+    if (!family) continue
+    const bucket = buckets.get(family)
     if (bucket) bucket.push(tool)
-    else buckets.set(prefix, [tool])
+    else buckets.set(family, [tool])
   }
 
   const families: ToolListEntry<T>[] = []
   const standalone: ToolListEntry<T>[] = []
   const emitted = new Set<string>()
   for (const tool of tools) {
-    const prefix = toolGroupKey(tool.name)
-    const bucket = prefix ? buckets.get(prefix) : undefined
-    if (!prefix || !bucket || bucket.length < minSize) {
+    const family = familyOf(tool)
+    const bucket = family ? buckets.get(family) : undefined
+    if (!family || !bucket || bucket.length < minSize) {
       standalone.push({ kind: 'tool', tool })
       continue
     }
-    if (emitted.has(prefix)) continue
-    emitted.add(prefix)
-    families.push({ kind: 'group', prefix, tools: bucket })
+    if (emitted.has(family)) continue
+    emitted.add(family)
+    families.push({ kind: 'group', prefix: family, tools: bucket })
   }
   return [...families, ...standalone]
 }

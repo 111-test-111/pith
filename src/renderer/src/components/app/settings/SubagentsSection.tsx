@@ -815,14 +815,14 @@ function CreateProfileForm({
  * extension's package label) sits on the same line as the name, and the
  * group's own shared note rides under the title.
  *
- * An option whose name carries a shared `prefix_` family (`ctx_*`,
- * `browser_*`, `web_*`) is replaced by ONE family row: a tri-state checkbox
- * that selects or clears the whole family in one gesture, beside a quiet
- * disclosure that opens the individual checkboxes. Selecting members one by
- * one is the same path as before, one click deeper; the collapsed form is
- * what keeps a 14-tool family from burying the rest of the picker. The MCP
- * whole is deliberately NOT a family: the gateway alone reaches every server,
- * so per-server toggles would offer a distinction that does not exist. */
+ * An option that belongs to a tool family is replaced by ONE family row: a
+ * tri-state checkbox that selects or clears the whole family in one gesture,
+ * beside a quiet disclosure that opens the individual checkboxes. Selecting
+ * members one by one is the same path as before, one click deeper; the
+ * collapsed form is what keeps a 14-tool family from burying the rest of the
+ * picker. The MCP whole is deliberately NOT a family: the gateway alone
+ * reaches every server, so per-server toggles would offer a distinction that
+ * does not exist. */
 function ToolGroup({
   id,
   title,
@@ -905,7 +905,7 @@ function ToolOption({
   )
 }
 
-/** A `prefix_*` family: selection for the whole series beside its disclosure. */
+/** A tool family: selection for the whole series beside its disclosure. */
 function ToolFamily({
   id,
   prefix,
@@ -929,8 +929,10 @@ function ToolFamily({
   const chosen = options.filter((option) => option.names.every((name) => selected.has(name))).length
   const all = chosen === total
   const panelId = `subagent-tool-family-${id.replace(/[^a-z0-9]+/gi, '-')}`
-  // Only a label every member agrees on can speak for the family.
-  const meta = options.every((option) => option.meta === options[0].meta) ? options[0].meta : undefined
+  // Only a label every member agrees on can speak for the family — and a
+  // family that IS an extension already says its name in `prefix`.
+  const shared = options.every((option) => option.meta === options[0].meta) ? options[0].meta : undefined
+  const meta = shared === prefix ? undefined : shared
   return (
     <div data-subagent-tool-family={prefix} data-family-state={all ? 'all' : chosen > 0 ? 'some' : 'none'}>
       <div className="flex items-center gap-2 py-0.5">

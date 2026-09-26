@@ -7,7 +7,7 @@ import { FadeScroll } from '@/components/app/FadeScroll'
 import { useI18n } from '@/i18n'
 import type { MessageKey } from '@/i18n/locales/en'
 import { refreshCatalog, useToolCatalog } from '@/lib/extensions-catalog'
-import { buildToolList, groupPrefixOf } from '@/lib/tool-groups'
+import { buildToolList, extensionLabelOf, groupPrefixOf } from '@/lib/tool-groups'
 import { getToolParameterFields } from '@/lib/tool-schema'
 import { ToolIcon } from '@/lib/tool-icons'
 import { cn } from '@/lib/utils'
@@ -25,9 +25,14 @@ const BASH_PARAMETERS: Record<string, MessageKey> = {
  * description, source and JSON-Schema parameters. Tools whose owning extension
  * is switched off in Settings → Extensions stay listed, marked inactive.
  *
- * Namespaced families (`ctx_*`, `web_*`) collapse into one group row so a large
- * extension cannot bury the built-ins; the group holding the selected tool is
- * the one left open, and an explicit toggle always wins over that default.
+ * Namespaced families collapse into one group row so a large extension cannot
+ * bury the built-ins. A tool folds under the family the registry declares —
+ * the MCP whole (`mcp`, `mcpScript`, every `mcp__<server>` proxy), `ctx_*`,
+ * `browser_*` — and otherwise under the extension that registers it, so a
+ * package whose tools share no name prefix (pi-lens: `lens_*`, `ast_grep_*`,
+ * `read_symbol`, `lsp_navigation`) is still one row instead of several. The
+ * group holding the selected tool is the one left open, and an explicit toggle
+ * always wins over that default.
  *
  * beUI-native: the list/detail split is a `Tabs` (list on the left, detail on
  * the right), the group headers are `Button`s with `AgentDisclosure` reveals,
@@ -52,7 +57,7 @@ export function ToolsSection() {
       ),
     [data.tools]
   )
-  const entries = useMemo(() => buildToolList(ordered), [ordered])
+  const entries = useMemo(() => buildToolList(ordered, { extensionOf: extensionLabelOf }), [ordered])
   const current = ordered.find((tool) => tool.name === selected) ?? ordered[0]
   const openPrefix = groupPrefixOf(entries, current?.name)
 

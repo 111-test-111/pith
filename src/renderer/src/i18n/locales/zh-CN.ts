@@ -1043,6 +1043,13 @@ const zhCN: Messages = {
   'mcp.error.command': 'stdio 服务器需要填写命令。',
   'mcp.error.url': 'HTTP 服务器需要填写 URL。',
   'mcp.error.socket': 'Socket 服务器需要填写 socket 路径。',
+  'mcp.error.snippetJson': '片段不是合法的 JSON。',
+  'mcp.error.snippetShape': '应为 {"mcpServers": {"名称": {…}}} 或 {"名称": {…}} 的形式。',
+  'mcp.error.snippetMultiple': '一次只添加一个服务器——片段中包含 {count} 个。',
+  'mcp.modeVisual': '可视化',
+  'mcp.modeJson': 'JSON',
+  'mcp.snippetLabel': '服务器 JSON 片段',
+  'mcp.snippetHint': '可直接粘贴 {"mcpServers": {"名称": {…}}} 或 {"名称": {…}}——由应用完成拼接与校验。',
 
   // skills
   'settings.skills': '技能',

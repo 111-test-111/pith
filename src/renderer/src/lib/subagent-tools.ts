@@ -1,6 +1,6 @@
 import { SDK_BUILTIN_TOOL_NAMES, type ToolInfoDTO } from '../../../shared/types'
 import { isMcpTool } from './tool-categories'
-import { TOOL_GROUP_MIN_SIZE, toolPrefix } from './tool-groups'
+import { TOOL_GROUP_MIN_SIZE, toolGroupKey } from './tool-groups'
 
 /**
  * Pure grouping for the subagent profile tool picker (Settings → Subagents).
@@ -9,9 +9,12 @@ import { TOOL_GROUP_MIN_SIZE, toolPrefix } from './tool-groups'
  * every extension tool, one row per name, exactly what Settings → Tools
  * shows — with two collapsible levels: the MCP family (the `mcp` gateway,
  * `mcpScript` and every `mcp__<server>` proxy) answers ONE checkbox, because
- * the gateway alone reaches every server; and a namespaced family inside a
- * section (`ctx_*`, `browser_*`, `web_*`) becomes one row with a tri-state
- * checkbox that selects the whole family or opens to pick members one by one.
+ * the gateway alone reaches every server; and one family per tool family inside
+ * a section becomes one row with a tri-state checkbox that selects the whole
+ * family or opens to pick members one by one. A family is the one the registry
+ * declares (`ctx_*`, `browser_*`) or else the extension that owns the tool, so
+ * an extension whose names share no prefix (pi-lens: `lens_*`, `ast_grep_*`,
+ * `read_symbol`, `lsp_navigation`) is one row rather than several.
  * When no live session exists to read a catalog from, the SDK built-ins alone
  * stand in so the editor still works.
  *
@@ -33,9 +36,11 @@ export interface SubagentToolOption {
   meta?: string
 }
 
-/** One expanded `prefix_*` family inside a section. */
+/** One expanded family inside a section. */
 export interface SubagentToolFamily {
   kind: 'family'
+  /** The family as it renders: a declared family key (`ctx`) or the owning
+   * extension's label (`pi-lens`). */
   prefix: string
   options: SubagentToolOption[]
 }
@@ -58,7 +63,7 @@ export interface SubagentToolGroups {
 }
 
 /**
- * Nest namespaced tools into one entry per family, IN PLACE: the first member
+ * Nest same-family tools into one entry per family, IN PLACE: the first member
  * of a family emits the family entry (holding its members in their existing
  * relative order) and the rest are skipped. Unlike Settings → Tools' list,
  * which lifts families to the head of an otherwise unsorted catalog, every
@@ -94,12 +99,13 @@ export function toToolEntries(
   return entries
 }
 
-/** The `prefix_` segment of a single-name row, else null. The MCP whole is
- * many names by construction and is never a family inside a section. */
+/** The family a single-name row belongs to: the one the registry declares,
+ * else the extension that owns it. The MCP whole is many names by construction
+ * and is never a family inside a section. */
 function familyOf(option: SubagentToolOption): string | null {
   const name = option.names[0]
   if (option.names.length !== 1 || !name) return null
-  return toolPrefix(name)
+  return toolGroupKey(name, option.meta)
 }
 
 /** Every option an entry list carries, in render order. */

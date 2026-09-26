@@ -369,6 +369,51 @@ app.on('window-all-closed',()=>app.quit());`
   assert.equal(addCall[1].originalName, null, 'a new server has no rename source')
   assert.deepEqual(addCall[1].entry, { command: 'npx test-server' }, 'the stdio form builds the entry')
 
+  // 6b. JSON paste mode: invalid snippets are rejected without an IPC write;
+  //     both documented shapes save with the raw entry preserved verbatim.
+  const upsertCount = await evaluate(`window.calls.filter((c) => c[0] === 'mcpUpsertServer').length`)
+  await evaluate(`[...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Add server').click()`)
+  await pause(250)
+  // The mode picker offers Visual / JSON radios when adding.
+  await evaluate(`[...document.querySelectorAll('[role=dialog] [role=radio]')].find((r) => r.closest('label')?.textContent.trim() === 'JSON').click()`)
+  await pause(150)
+  assert.ok(await evaluate(`!!document.querySelector('[role=dialog] textarea')`), 'JSON mode renders the snippet editor')
+  await typeInto('[role=dialog] textarea', '{ nope')
+  await evaluate(`[...document.querySelectorAll('[role=dialog] button')].find((b) => b.textContent.trim() === 'Save').click()`)
+  await pause(150)
+  assert.ok(await evaluate(`document.querySelector('[role=dialog]').textContent.includes('not valid JSON')`), 'an invalid snippet is rejected')
+  // A duplicate name is blocked before the write.
+  await typeInto('[role=dialog] textarea', '{"mcpServers":{"beui":{"url":"https://x.test/mcp"}}}')
+  await evaluate(`[...document.querySelectorAll('[role=dialog] button')].find((b) => b.textContent.trim() === 'Save').click()`)
+  await pause(150)
+  assert.ok(await evaluate(`document.querySelector('[role=dialog]').textContent.includes('already exists')`), 'a duplicate name is rejected')
+  assert.equal(
+    await evaluate(`window.calls.filter((c) => c[0] === 'mcpUpsertServer').length`),
+    upsertCount,
+    'invalid snippets never reach the IPC write'
+  )
+  // From the mcpServers top level — unknown fields survive verbatim.
+  await typeInto('[role=dialog] textarea', '{"mcpServers":{"pasted":{"url":"https://x.test/mcp","customField":42}}}')
+  await evaluate(`[...document.querySelectorAll('[role=dialog] button')].find((b) => b.textContent.trim() === 'Save').click()`)
+  await pause(250)
+  const topCall = (await evaluate(`window.calls.filter((c) => c[0] === 'mcpUpsertServer')`)).at(-1)
+  assert.equal(topCall[1].scope, 'global', 'a pasted server lands global')
+  assert.equal(topCall[1].originalName, null, 'a pasted server has no rename source')
+  assert.equal(topCall[1].name, 'pasted', 'the snippet name wins')
+  assert.deepEqual(topCall[1].entry, { url: 'https://x.test/mcp', customField: 42 }, 'the raw entry is preserved verbatim')
+  assert.equal(await evaluate(`!!document.querySelector('[role=dialog]')`), false, 'the dialog closes on save')
+  // From the bare name map.
+  await evaluate(`[...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Add server').click()`)
+  await pause(250)
+  await evaluate(`[...document.querySelectorAll('[role=dialog] [role=radio]')].find((r) => r.closest('label')?.textContent.trim() === 'JSON').click()`)
+  await pause(150)
+  await typeInto('[role=dialog] textarea', '{"pasted2":{"command":"npx","args":["-y","srv"]}}')
+  await evaluate(`[...document.querySelectorAll('[role=dialog] button')].find((b) => b.textContent.trim() === 'Save').click()`)
+  await pause(250)
+  const bareCall = (await evaluate(`window.calls.filter((c) => c[0] === 'mcpUpsertServer')`)).at(-1)
+  assert.equal(bareCall[1].name, 'pasted2', 'the bare name map unwraps')
+  assert.deepEqual(bareCall[1].entry, { command: 'npx', args: ['-y', 'srv'] }, 'the bare entry is preserved verbatim')
+
   // 7. Tools viewer: tools/resources/prompts render from the detail read.
   await evaluate(`document.querySelector(${JSON.stringify(rowSelector('beui'))} + ' button[aria-label="Browse tools"]').click()`)
   await pause(300)

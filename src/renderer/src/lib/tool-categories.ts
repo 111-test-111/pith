@@ -11,9 +11,11 @@ import type { MessageKey } from '@/i18n/locales/en'
  * family, every matching name through `prefix`. Tools matching neither render
  * as standalone rows, exactly as before.
  *
- * A category that declares `groupKey` additionally owns one folded row in
- * Settings → Tools, which groups by name prefix otherwise (see
- * `lib/tool-groups.ts`).
+ * A category that declares `groupKey` or a `prefix` additionally owns one
+ * folded row in Settings → Tools — a *declared family*: `mcp` + `mcpScript` +
+ * every `mcp__<server>` proxy, one `ctx_*` row, one `browser_*` row. Tools no
+ * declared family claims fold under the extension that registers them instead
+ * (see `lib/tool-groups.ts`).
  */
 export type ToolCategoryId = 'exploration' | 'terminal' | 'changes' | 'context' | 'browser' | 'mcp'
 
@@ -102,6 +104,24 @@ const PREFIXED_CATEGORIES = TOOL_CATEGORIES.filter(
 export function toolCategory(name: string): ToolCategory | undefined {
   return CATEGORY_BY_TOOL.get(name)
     ?? PREFIXED_CATEGORIES.find((category) => name.startsWith(category.prefix))
+}
+
+/**
+ * The family this registry *declares* for a tool name, else null: a category's
+ * explicit `groupKey` (`mcp`), or the key of its declared namespace `prefix`
+ * (`ctx_` → `ctx`).
+ *
+ * Only a declaration counts here. A name's first `_` segment is no evidence on
+ * its own: one extension names its tools across several prefixes or none at all
+ * — pi-lens ships `lens_*`, `ast_grep_*`, `read_symbol` and `lsp_navigation` —
+ * and grouping those by segment split a single extension across `lens`/`ast`/
+ * `read` and left the rest as standalone rows.
+ */
+export function declaredToolFamily(name: string): string | null {
+  const category = toolCategory(name)
+  if (!category) return null
+  if (category.groupKey) return category.groupKey
+  return category.prefix ? category.prefix.replace(/_+$/, '') : null
 }
 
 /** The MCP family — the gateway, its scripting wrapper and every per-server
