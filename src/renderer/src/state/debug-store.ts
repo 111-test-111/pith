@@ -1,4 +1,4 @@
-import type { DebugBreakpointDTO, DebugSessionDTO } from '../../../shared/types'
+import type { DebugBreakpointDTO, DebugSessionDTO, DebugSteppingGranularity } from '../../../shared/types'
 
 /** Stable empty list: a missing session must not re-render subscribers. */
 const NO_WATCHES: string[] = []
@@ -18,6 +18,7 @@ export class DebugStore {
   private off?: () => void
   private snapshot: { revision: number; sessions: DebugSessionDTO[] } = { revision: 0, sessions: [] }
   /** Watch expressions per debug target; renderer-local, evaluated at stops. */
+  private stepping = new Map<string, DebugSteppingGranularity>()
   private watches = new Map<string, string[]>()
   /** Breakpoints per debug target, refreshed on demand by panes. */
   private breakpoints = new Map<string, DebugBreakpointDTO[]>()
@@ -71,6 +72,14 @@ export class DebugStore {
     this.notifyWatchChange()
   }
 
+  steppingFor(session: DebugSessionDTO): DebugSteppingGranularity {
+    return this.stepping.get(session.id) ?? (session.capabilities?.supportsSteppingGranularity && session.location?.instructionPointerReference && !session.location.file ? 'instruction' : 'statement')
+  }
+  setStepping(debugId: string, granularity: DebugSteppingGranularity): void {
+    this.stepping.set(debugId, granularity)
+    this.notifyWatchChange()
+  }
+
   watchList(debugId: string | null): string[] {
     if (!debugId) return NO_WATCHES
     return this.watches.get(debugId) ?? NO_WATCHES
@@ -118,6 +127,7 @@ export class DebugStore {
     if (!current && dto.replacesId) {
       const previous = this.sessions.get(dto.replacesId)
       if (previous?.sessionPath === dto.sessionPath) {
+        if (this.stepping.has(previous.id)) this.stepping.set(dto.id, this.stepping.get(previous.id)!)
         this.watches.set(dto.id, [...this.watchList(previous.id)])
         // The same target can be selected in its own chat and its parent's view.
         for (const [view, selected] of this.selected) {
@@ -136,7 +146,7 @@ export class DebugStore {
     }
     const settled = [...this.sessions.values()].filter(s => s.status === 'terminated' || s.status === 'failed').sort((a, b) => b.startedAt - a.startedAt)
     for (const old of settled.slice(10)) {
-      this.sessions.delete(old.id); this.breakpoints.delete(old.id); this.watches.delete(old.id)
+      this.sessions.delete(old.id); this.breakpoints.delete(old.id); this.watches.delete(old.id); this.stepping.delete(old.id)
     }
     this.snapshot = {
       revision: this.snapshot.revision + 1,

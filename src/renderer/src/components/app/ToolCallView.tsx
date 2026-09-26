@@ -397,8 +397,9 @@ export const ToolCallView = memo(function ToolCallView({ call, result, run, cwd 
       const details = (result?.details ?? (run?.partial as { details?: unknown } | undefined)?.details) as
         { debugSession?: DebugSessionDTO } | undefined
       const session = details?.debugSession
-      const action = typeof args.action === 'string' ? args.action : ''
-      const location = session?.location ? `${session.location.file}:${session.location.line}` : undefined
+      const request = (args.request && typeof args.request === 'object' ? args.request : args) as Record<string, unknown>
+      const action = typeof request.action === 'string' ? request.action : ''
+      const location = session?.location ? session.location.file ? `${session.location.file}:${session.location.line}` : session.location.instructionPointerReference ?? session.location.source?.name : undefined
       const title = ['debug', action, session?.adapterLabel,
         session ? t(`debug.status.${session.status}`) : undefined, location].filter(Boolean).join(' · ')
       return (

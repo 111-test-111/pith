@@ -4,13 +4,14 @@ import { createServer } from 'node:net'
 import { appendFileSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 const mode = process.argv[2]
+const nativeMode = mode?.startsWith('native')
 const childMode = mode?.startsWith('child')
 const log = process.env.PI_DAP_PROTOCOL_LOG
 const targets = new Map()
 let targetSerial = 0
 let seq = 0
 function serve(input, output) {
-  let buffer = Buffer.alloc(0), launch, points = [], epoch = 0
+  let buffer = Buffer.alloc(0), launch, points = [], instructionPoints = [], functionPoints = [], epoch = 0
   const send = message => { const text = JSON.stringify({ seq: ++seq, ...message }); output.write(`Content-Length: ${Buffer.byteLength(text)}\r\n\r\n${text}`) }
   const event = (event, body) => send({ type: 'event', event, body })
   const reply = (request, body = {}, success = true) => send({ type: 'response', request_seq: request.seq, command: request.command, body, success })
@@ -30,7 +31,7 @@ function serve(input, output) {
       switch (r.command) {
         case 'initialize':
           if (mode === 'fail') { reply(r, {}, false); break }
-          reply(r, { supportsConfigurationDoneRequest: true, supportsRestartRequest: mode === 'child-native' }); break
+          reply(r, { supportsConfigurationDoneRequest: true, supportsRestartRequest: mode === 'child-native' || nativeMode, ...(nativeMode ? { supportsDisassembleRequest: true, supportsReadMemoryRequest: true, supportsInstructionBreakpoints: true, supportsFunctionBreakpoints: true, supportsSteppingGranularity: true, supportsModulesRequest: true } : {}), ...(mode === 'identity' ? { supportsDisassembleRequest: true, supportsReadMemoryRequest: true, supportsSteppingGranularity: true } : {}) }); break
         case 'launch': case 'attach':
           launch = r
           if (childMode && a.__pendingTargetId) targets.set(a.__pendingTargetId, () => event('terminated'))
@@ -53,23 +54,49 @@ function serve(input, output) {
           break
         case 'threads': reply(r, { threads: [{ id: 1, name: 'main' }] }); break
         case 'stackTrace': {
+          if (mode === 'identity' || nativeMode) { reply(r, { stackFrames: [{ id: 1, name: 'virtual', instructionPointerReference: '0xFFFFFFFFFFFFFFF0', moduleId: 'mod-1', line: 3, source: { name: 'assembly', path: '/not/a/real/file', sourceReference: 1, adapterData: { token: launch.arguments.program } } }] }); break }
           const answer = () => reply(r, { stackFrames: [{ id: 1, name: 'main', line: 7, source: { path: '/fixture/demo.c' } }] })
           if (mode === 'slow-stack' && epoch === 2) setTimeout(answer, 150)
           else answer()
           break
         }
-        case 'scopes': reply(r, { scopes: [{ name: 'Locals', variablesReference: 100 }] }); break
+        case 'source':
+          reply(r, { content: 'virtual ' + a.source.adapterData.token + ':' + epoch, mimeType: 'text/x-asm' }); break
+        case 'scopes': reply(r, { scopes: [{ name: 'Locals', variablesReference: 100, presentationHint: 'registers', namedVariables: 1 }] }); break
         case 'variables': {
           if (mode?.startsWith('variables-')) {
             const all = Array.from({ length: a.variablesReference }, (_, i) => ({ name: String(i), value: String(i), variablesReference: 0 }))
             reply(r, { variables: mode === 'variables-paged' ? all.slice(a.start ?? 0, a.count ? (a.start ?? 0) + a.count : undefined) : all })
-          } else setTimeout(() => reply(r, { variables: [{ name: 'value', value: String(epoch), variablesReference: 0 }] }), a.start === 99 ? 100 : 0)
+          } else setTimeout(() => reply(r, { variables: [{ name: 'value', value: String(epoch), variablesReference: 0, memoryReference: 'opaque:memory:' + epoch, evaluateName: 'value' }] }), a.start === 99 ? 100 : 0)
           break
         }
         case 'evaluate':
+          if (a.expression === 'invalidate-refs') event('invalidated', { areas: ['variables', 'stacks'] })
+          if (a.expression === 'remove-instruction') event('breakpoint', { reason: 'removed', breakpoint: { id: 201 } })
+          if (a.expression === 'invalidate') { event('loadedSource', { reason: 'changed', source: { sourceReference: 1 } }); event('capabilities', { capabilities: { supportsDisassembleRequest: false } }) }
           if (a.expression === 'broken') reply(r, { error: { format: 'Cannot evaluate {expression}: unknown return type', variables: { expression: 'broken' } } }, false)
           else reply(r, { result: '42', variablesReference: 0 })
           break
+        case 'disassemble': {
+          const answer = () => reply(r, { instructions: Array.from({ length: a.instructionCount }, (_, i) => ({ address: '0x' + (0x2000000000000001n + BigInt((a.instructionOffset ?? 0) + i) * 4n).toString(16), instruction: 'nop', instructionBytes: '0000', location: { path: '/fake', sourceReference: 1 } })) })
+          if (a.offset === 99) setTimeout(answer, 100); else answer()
+          break
+        }
+        case 'readMemory': {
+          const answer = () => reply(r, { address: a.memoryReference, data: a.offset === 1 ? '' : 'AQIDBA==', unreadableBytes: a.count - (a.offset === 1 ? 0 : 4) })
+          if (a.offset === 99) setTimeout(answer, 100); else answer()
+          break
+        }
+        case 'modules': {
+          const all = Array.from({ length: 51 }, (_, i) => ({ id: i, name: 'module-' + i, symbolStatus: 'Symbols loaded', addressRange: '0x2000000000000001' }))
+          reply(r, { modules: mode === 'native-unpaged' ? all : all.slice(mode === 'native-ignore-start' ? 0 : a.startModule ?? 0, a.moduleCount ? (mode === 'native-ignore-start' ? 0 : a.startModule ?? 0) + a.moduleCount : undefined), totalModules: all.length }); break
+        }
+        case 'setInstructionBreakpoints':
+          instructionPoints = a.breakpoints.map((point, i) => ({ ...point, id: 201 + i, verified: true }))
+          setTimeout(() => reply(r, { breakpoints: instructionPoints }), 20); break
+        case 'setFunctionBreakpoints':
+          functionPoints = a.breakpoints.map((point, i) => ({ ...point, id: 301 + i, verified: true }))
+          reply(r, { breakpoints: functionPoints }); break
         case 'setBreakpoints':
           points = a.breakpoints.map((p, i) => ({ ...p, id: i + 1, verified: true }))
           reply(r, { breakpoints: points }); break
@@ -85,6 +112,7 @@ function serve(input, output) {
           event('output', { output: 'x'.repeat(70000) + 'TAIL' }); break
         case 'pause': stopped(); reply(r); break
         case 'restart':
+          if (nativeMode) { event('continued', { threadId: 1 }); stopped(); reply(r); break }
           if (mode !== 'child-native') { reply(r, {}, false); break }
           for (const terminate of targets.values()) terminate()
           targets.clear()

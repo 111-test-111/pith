@@ -13,8 +13,10 @@ import type {
   DebugVariableDTO,
   DebugVariablesPageDTO
 } from '../../shared/types'
+import type { DebugSourceDTO, DebugSourceContentDTO, DebugCapabilitiesDTO, DebugSteppingGranularity, DebugDisassemblyDTO, DebugMemoryDTO, DebugModulesPageDTO, DebugInstructionBreakpointInput, DebugFunctionBreakpointInput, DebugNativeBreakpointsDTO, DebugNativeBreakpointBinding, DebugInstructionBreakpointDTO } from '../../shared/types'
 import { DapClient } from './dap-client'
 import { debugAdapterSpec, type DebugAdapterSpec } from './adapters'
+import { debugCapabilities, debugSource } from './identity'
 
 /**
  * Owns DAP sessions: the lifecycle state machine, a bounded output ring, and
@@ -52,6 +54,7 @@ export interface DebugStartOptions {
   signal?: AbortSignal
   canStart?: () => boolean
   initialBreakpoints?: Map<string, SourceBreakpoint[]>
+  initialFunctionBreakpoints?: DebugFunctionBreakpointInput[]
   program?: string
   args?: string[]
   env?: Record<string, string>
@@ -109,6 +112,11 @@ interface Session {
   terminals: Set<() => Promise<void>>
   /** A one-item probe distinguishes adapters that ignore DAP paging. */
   variablePaging: Map<number, boolean>
+  sources: Map<number, Record<string, unknown>>
+  sourceCache: Map<number, DebugSourceContentDTO>
+  nativeBreakpoints: DebugNativeBreakpointsDTO
+  functionRequests: DebugFunctionBreakpointInput[]
+  modulePaging?: boolean
   progressTimer?: ReturnType<typeof setTimeout>
   exitTimer?: ReturnType<typeof setTimeout>
   finishing: boolean
@@ -208,14 +216,14 @@ export class DebugManager {
         ...(options.name ? { name: options.name } : {}), ...(parent ? { parentId: parent.dto.id } : {}),
         ...(!parent && options.replacesId ? { replacesId: options.replacesId } : {}),
         target: options.kind === 'core' ? options.coreFile! : options.kind === 'attach' ? `pid ${options.pid}` : options.program ?? asString(requestArguments.module) ?? options.name ?? spec.label,
-        status: 'starting', startedAt: Date.now(), outputChars: 0, revision: 0, stopId: 0
+        status: 'starting', startedAt: Date.now(), outputChars: 0, revision: 0, stopId: 0, sourceVersion: 0
       },
       controller: new AbortController(), startOptions: { ...options, signal: undefined },
       requested: new Map(options.initialBreakpoints ?? parent?.launchBreakpoints ?? parent?.requested),
       launchBreakpoints: parent?.launchBreakpoints ?? (spec.childSessions ? new Map(options.initialBreakpoints) : undefined),
       breakpointWork: Promise.resolve(),
       outputTail: '', pendingBreakpoints: [], breakpoints: [], configurationReady: false, stopEpoch: 0,
-      waiters: [], terminals: new Set(), variablePaging: new Map(), finishing: false, done: new Promise<void>(resolve => { resolveDone = resolve }), resolveDone: () => resolveDone()
+      waiters: [], terminals: new Set(), variablePaging: new Map(), sources: new Map(), sourceCache: new Map(), nativeBreakpoints: { instruction: [], function: [] }, functionRequests: options.initialFunctionBreakpoints ?? [], finishing: false, done: new Promise<void>(resolve => { resolveDone = resolve }), resolveDone: () => resolveDone()
     }
     this.sessions.set(session.dto.id, session)
     const abort = () => { void this.stop(options.sessionPath, session.dto.id) }
@@ -277,14 +285,17 @@ export class DebugManager {
       client.capabilities = await client.request('initialize', {
         clientID: 'pith', clientName: 'Pith', adapterID: spec.id, locale: 'en', linesStartAt1: true, columnsStartAt1: true, pathFormat: 'path',
         supportsRunInTerminalRequest: !!options.runInTerminal && options.kind !== 'core', supportsVariableType: true,
-        supportsVariablePaging: true, supportsStartDebuggingRequest: spec.childSessions === true
+        supportsVariablePaging: true, supportsStartDebuggingRequest: spec.childSessions === true,
+        supportsMemoryReferences: true, supportsInvalidatedEvent: true
       }) ?? {}
+      session.dto.capabilities = debugCapabilities(client.capabilities)
       this.admitted(session)
       const launching = client.request(options.kind === 'launch' ? 'launch' : 'attach', requestArguments)
       void launching.catch(() => { void client.dispose() })
       await initialized
       this.admitted(session)
       for (const [file, points] of session.requested) await this.sendDefinitions(session, file, points, false)
+      if (session.functionRequests.length) await this.sendFunctionBreakpoints(session, session.functionRequests)
       while (session.pendingBreakpoints.length) {
         const entry = session.pendingBreakpoints.shift()!
         await this.sendBreakpoints(session, entry.file, entry.lines, entry.extras).then(entry.resolve, entry.reject)
@@ -399,9 +410,14 @@ export class DebugManager {
 
   /** Blocking step: sends the control request and waits for the next stop
    * (or termination) within waitMs. The result always carries the live DTO. */
-  async control(sessionPath: string, action: 'continue' | 'pause' | 'next' | 'stepIn' | 'stepOut', threadId?: number, waitMs?: number, id?: string, stopId?: number): Promise<DebugControlResultDTO> {
+  async control(sessionPath: string, action: 'continue' | 'pause' | 'next' | 'stepIn' | 'stepOut', threadId?: number, waitMs?: number, id?: string, stopId?: number, granularity?: DebugSteppingGranularity): Promise<DebugControlResultDTO> {
     const session = this.owned(sessionPath, id)
     const dto = session.dto
+    if (granularity !== undefined) {
+      if (action === 'continue' || action === 'pause') throw new Error('Stepping granularity is only valid for next/stepIn/stepOut')
+      if (!['statement', 'line', 'instruction'].includes(granularity)) throw new Error('Invalid stepping granularity')
+      this.requireCapability(session, 'supportsSteppingGranularity')
+    }
     if (stopId !== undefined && stopId !== session.stopEpoch) throw new Error('Debug stop changed; refresh before controlling the target')
     if (dto.kind === 'core') throw new Error('Core files cannot execute')
     if (session.controlling) throw new Error('A debug control request is already in flight')
@@ -426,7 +442,11 @@ export class DebugManager {
       if (thread === undefined) throw noThread()
       const command = action === 'continue' ? 'continue' : action
       session.controlling = true
-      try { await client.request(command, { threadId: thread }) } finally { session.controlling = false }
+      try {
+        await session.breakpointWork
+        this.assertStop(session, epoch)
+        await client.request(command, { threadId: thread, ...(granularity ? { granularity } : {}) })
+      } finally { session.controlling = false }
       if (session.stopEpoch === epoch && session.dto.status === 'stopped') {
         // Some adapters answer without a `continued` event.
         session.dto.status = 'running'
@@ -457,7 +477,7 @@ export class DebugManager {
     const body = await this.requireLive(session).request('stackTrace', { threadId, startFrame: 0, levels: cap })
     this.assertStop(session, epoch)
     const frames = Array.isArray(body?.stackFrames) ? body.stackFrames : []
-    return frames.map((item) => this.mapFrame(item as Record<string, unknown>))
+    return frames.slice(0, cap).map((item) => this.mapFrame(session, item as Record<string, unknown>))
   }
 
   async scopes(sessionPath: string, frameId: number, id?: string, stopId?: number): Promise<DebugScopeDTO[]> {
@@ -471,6 +491,9 @@ export class DebugManager {
       return {
         name: asString(record.name) ?? 'scope',
         variablesReference: asVariablesReference(record.variablesReference),
+        ...(asString(record.presentationHint) ? { presentationHint: asString(record.presentationHint) } : {}),
+        ...(asNumber(record.namedVariables) !== undefined ? { namedVariables: asNumber(record.namedVariables) } : {}),
+        ...(asNumber(record.indexedVariables) !== undefined ? { indexedVariables: asNumber(record.indexedVariables) } : {}),
         ...(asBoolean(record.expensive) ? { expensive: true } : {})
       }
     })
@@ -513,6 +536,8 @@ export class DebugManager {
     return {
       name: asString(record.name) ?? '?',
       value: truncate(asString(record.value) ?? '', VALUE_MAX_CHARS),
+      ...(asString(record.memoryReference) ? { memoryReference: asString(record.memoryReference) } : {}),
+      ...(asString(record.evaluateName) ? { evaluateName: asString(record.evaluateName) } : {}),
       ...(asString(record.type) ? { type: asString(record.type) } : {}),
       variablesReference: asVariablesReference(record.variablesReference),
       ...(asNumber(record.namedVariables) ? { namedVariables: asNumber(record.namedVariables) } : {}),
@@ -520,7 +545,7 @@ export class DebugManager {
     }
   }
 
-  async evaluate(sessionPath: string, expression: string, frameId?: number, id?: string, stopId?: number, context: 'repl' | 'watch' = 'repl'): Promise<{ result: string; type?: string; variablesReference: number }> {
+  async evaluate(sessionPath: string, expression: string, frameId?: number, id?: string, stopId?: number, context: 'repl' | 'watch' = 'repl'): Promise<{ result: string; type?: string; variablesReference: number; memoryReference?: string }> {
     const session = this.requireStopped(id, sessionPath, stopId)
     const epoch = session.stopEpoch
     if (session.dto.kind === 'core') throw new Error('Core inspection exposes stack/scopes/variables, not executable expressions')
@@ -545,6 +570,7 @@ export class DebugManager {
     this.assertStop(session, epoch)
     return {
       result: truncate(asString(body?.result) ?? '', EVALUATE_MAX_CHARS),
+      ...(asString(body?.memoryReference) ? { memoryReference: asString(body?.memoryReference) } : {}),
       ...(asString(body?.type) ? { type: asString(body?.type) } : {}),
       variablesReference: asVariablesReference(body?.variablesReference)
     }
@@ -562,6 +588,182 @@ export class DebugManager {
     } catch {
       return undefined
     }
+  }
+
+  private requireCapability(session: Session, capability: keyof DebugCapabilitiesDTO): void {
+    if (!session.dto.capabilities?.[capability]) throw new Error(`Debug adapter does not support ${capability}`)
+  }
+
+  async disassemble(sessionPath: string, memoryReference: string, instructionOffset = 0, count = 64, id?: string, stopId?: number, offset = 0): Promise<DebugDisassemblyDTO> {
+    const session = this.requireStopped(id, sessionPath, stopId), epoch = session.stopEpoch
+    this.requireCapability(session, 'supportsDisassembleRequest')
+    const wanted = bounded(count, 200)
+    validateReference(memoryReference); validateOffset(instructionOffset); validateOffset(offset)
+    const body = await this.requireLive(session).request('disassemble', { memoryReference, offset, instructionOffset, instructionCount: wanted, resolveSymbols: true })
+    this.assertStop(session, epoch)
+    const list = Array.isArray(body?.instructions) ? body.instructions : []
+    return { memoryReference, instructionOffset, instructions: list.slice(0, wanted).map(item => {
+      const row = item as Record<string, unknown>
+      return { address: asString(row.address) ?? '', instruction: truncate(asString(row.instruction) ?? '', 2048),
+        instructionBytes: asString(row.instructionBytes), symbol: asString(row.symbol),
+        source: this.mapSource(session, row.location), line: asNumber(row.line), presentationHint: asString(row.presentationHint) }
+    }) }
+  }
+
+  async readMemory(sessionPath: string, memoryReference: string, offset = 0, count = 128, id?: string, stopId?: number): Promise<DebugMemoryDTO> {
+    const session = this.requireStopped(id, sessionPath, stopId), epoch = session.stopEpoch
+    this.requireCapability(session, 'supportsReadMemoryRequest')
+    validateReference(memoryReference); validateOffset(offset)
+    const wanted = bounded(count, 4096)
+    const body = await this.requireLive(session).request('readMemory', { memoryReference, offset, count: wanted })
+    this.assertStop(session, epoch)
+    const encoded = asString(body?.data) ?? ''
+    // Never turn absent/unreadable bytes into zero-filled memory.
+    if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded)) throw new Error('Invalid base64 memory response')
+    const bytes = Buffer.from(encoded.slice(0, Math.ceil(wanted / 3) * 4), 'base64').subarray(0, wanted)
+    const unreadableBytes = Math.min(wanted - bytes.length, Math.max(0, Math.floor(asNumber(body?.unreadableBytes) ?? 0)))
+    return { address: asString(body?.address) ?? memoryReference, data: bytes.toString('base64'),
+      hex: [...bytes].map(value => value.toString(16).padStart(2, '0')).join(' '), bytesRead: bytes.length,
+      requestedCount: wanted, unreadableBytes, truncated: bytes.length < wanted }
+  }
+
+  async modules(sessionPath: string, start = 0, count = 50, id?: string, stopId?: number): Promise<DebugModulesPageDTO> {
+    const session = this.requireStopped(id, sessionPath, stopId), epoch = session.stopEpoch
+    this.requireCapability(session, 'supportsModulesRequest')
+    if (!Number.isSafeInteger(start) || start < 0) throw new Error('Invalid module start')
+    const wanted = bounded(count, 100)
+    const request = async (startModule: number, moduleCount: number) => {
+      const body = await this.requireLive(session).request('modules', { startModule, moduleCount })
+      this.assertStop(session, epoch)
+      return { rows: Array.isArray(body?.modules) ? body.modules as Record<string, unknown>[] : [], total: asNumber(body?.totalModules) }
+    }
+    let page
+    if (session.modulePaging === undefined) {
+      page = await request(0, 1)
+      session.modulePaging = page.rows.length <= 1
+      if (page.rows.length === 1) {
+        const second = await request(1, 1)
+        if (second.rows.length > 1 || second.rows[0]?.id === page.rows[0].id) {
+          session.modulePaging = false
+          page = undefined // count was honored but start was ignored; fetch the full list.
+        }
+      }
+    }
+    page = session.modulePaging ? await request(start, wanted + 1) : page ?? await request(0, 0)
+    const from = session.modulePaging ? 0 : start
+    const rows = page.rows.slice(from, from + wanted)
+    const total = page.total ?? (!session.modulePaging ? page.rows.length : undefined)
+    return { modules: rows.map(row => ({ id: asString(row.id) ?? asNumber(row.id) ?? '', name: asString(row.name) ?? '',
+      path: asString(row.path), addressRange: asString(row.addressRange), symbolStatus: asString(row.symbolStatus),
+      symbolFilePath: asString(row.symbolFilePath), version: asString(row.version) })), totalModules: total,
+      truncated: from + wanted < page.rows.length || total !== undefined && start + rows.length < total }
+  }
+
+  nativeBreakpoints(sessionPath: string, id?: string): DebugNativeBreakpointsDTO {
+    const points = this.owned(sessionPath, id).nativeBreakpoints
+    return { instruction: points.instruction.map(point => ({ ...point })), function: points.function.map(point => ({ ...point })) }
+  }
+
+  private nativeBinding(record: unknown, condition?: string): DebugNativeBreakpointBinding {
+    const row = (record ?? {}) as Record<string, unknown>
+    return { id: asNumber(row.id), verified: asBoolean(row.verified) ?? false, message: asString(row.message),
+      ...(condition ? { conditionStatus: 'unvalidated' } : {}) }
+  }
+
+  async setInstructionBreakpoints(sessionPath: string, points: DebugInstructionBreakpointInput[], id: string, stopId: number): Promise<DebugNativeBreakpointsDTO> {
+    const session = this.requireStopped(id, sessionPath, stopId)
+    if (session.dto.kind === 'core') throw new Error('Core files cannot have breakpoints')
+    this.requireCapability(session, 'supportsInstructionBreakpoints')
+    if (session.controlling) throw new Error('A debug control request is already in flight')
+    return this.serializeBreakpoints(session, () => this.sendInstructionBreakpoints(session, points, stopId))
+  }
+
+  async toggleInstructionBreakpoint(sessionPath: string, instructionReference: string, id: string, stopId: number): Promise<DebugNativeBreakpointsDTO> {
+    const session = this.requireStopped(id, sessionPath, stopId)
+    if (session.dto.kind === 'core') throw new Error('Core files cannot have breakpoints')
+    this.requireCapability(session, 'supportsInstructionBreakpoints')
+    if (session.controlling) throw new Error('A debug control request is already in flight')
+    return this.serializeBreakpoints(session, () => {
+      const current = session.nativeBreakpoints.instruction
+      const existing = current.find(point => instructionBreakpointMatches(point, instructionReference))
+      const points = existing ? current.filter(point => point !== existing) : [...current, { instructionReference }]
+      return this.sendInstructionBreakpoints(session, points, stopId)
+    })
+  }
+
+  /** UI edits merge against the authoritative set inside the same write queue
+   * as model replacements, never a renderer snapshot of the other points. */
+  async updateInstructionBreakpoint(sessionPath: string, instructionReference: string, offset: number, enabled: boolean, id: string, stopId: number): Promise<DebugNativeBreakpointsDTO> {
+    const session = this.requireStopped(id, sessionPath, stopId)
+    if (session.dto.kind === 'core') throw new Error('Core files cannot have breakpoints')
+    this.requireCapability(session, 'supportsInstructionBreakpoints')
+    if (session.controlling) throw new Error('A debug control request is already in flight')
+    validateReference(instructionReference); validateOffset(offset)
+    return this.serializeBreakpoints(session, () => {
+      const current = session.nativeBreakpoints.instruction
+      const existing = current.find(point => point.instructionReference === instructionReference && (point.offset ?? 0) === offset)
+      const points = enabled ? existing ? current : [...current, { instructionReference, offset }]
+        : current.filter(point => point !== existing)
+      return this.sendInstructionBreakpoints(session, points, stopId)
+    })
+  }
+
+  private async sendInstructionBreakpoints(session: Session, points: DebugInstructionBreakpointInput[], epoch: number): Promise<DebugNativeBreakpointsDTO> {
+    this.assertStop(session, epoch)
+    if (points.length > 256) throw new Error('Too many instruction breakpoints')
+    const requested = points.map(({ instructionReference, offset, condition, hitCondition }) => {
+      validateReference(instructionReference); if (offset !== undefined) validateOffset(offset)
+      return { instructionReference, offset, condition, hitCondition }
+    })
+    const body = await this.requireLive(session).request('setInstructionBreakpoints', { breakpoints: requested })
+    this.assertStop(session, epoch)
+    const rows = Array.isArray(body?.breakpoints) ? body.breakpoints : []
+    session.nativeBreakpoints.instruction = requested.map((point, i) => ({ ...point, ...this.nativeBinding(rows[i], point.condition),
+      boundInstructionReference: asString((rows[i] as Record<string, unknown> | undefined)?.instructionReference), boundOffset: asNumber((rows[i] as Record<string, unknown> | undefined)?.offset) }))
+    this.publish(session)
+    return this.nativeBreakpoints(session.dto.sessionPath, session.dto.id)
+  }
+
+  async setFunctionBreakpoints(sessionPath: string, points: DebugFunctionBreakpointInput[], id?: string, stopId?: number): Promise<DebugNativeBreakpointsDTO> {
+    const session = this.requireStopped(id, sessionPath, stopId), epoch = session.stopEpoch
+    if (session.dto.kind === 'core') throw new Error('Core files cannot have breakpoints')
+    this.requireCapability(session, 'supportsFunctionBreakpoints')
+    if (session.controlling) throw new Error('A debug control request is already in flight')
+    return this.serializeBreakpoints(session, async () => {
+      this.assertStop(session, epoch)
+      await this.sendFunctionBreakpoints(session, points)
+      this.assertStop(session, epoch)
+      return this.nativeBreakpoints(sessionPath, session.dto.id)
+    })
+  }
+
+  private async sendFunctionBreakpoints(session: Session, points: DebugFunctionBreakpointInput[]): Promise<void> {
+    if (session.dto.kind === 'core') throw new Error('Core files cannot have breakpoints')
+    this.requireCapability(session, 'supportsFunctionBreakpoints')
+    if (points.length > 256) throw new Error('Too many function breakpoints')
+    const requested = points.map(({ name, condition, hitCondition }) => { validateReference(name); return { name, condition, hitCondition } })
+    const body = await this.requireLive(session).request('setFunctionBreakpoints', { breakpoints: requested })
+    const rows = Array.isArray(body?.breakpoints) ? body.breakpoints : []
+    session.functionRequests = requested
+    session.nativeBreakpoints.function = requested.map((point, i) => ({ ...point, ...this.nativeBinding(rows[i], point.condition) }))
+    this.publish(session)
+  }
+
+  async updateFunctionBreakpoint(sessionPath: string, name: string, enabled: boolean, id: string, stopId: number): Promise<DebugNativeBreakpointsDTO> {
+    const session = this.requireStopped(id, sessionPath, stopId)
+    if (session.dto.kind === 'core') throw new Error('Core files cannot have breakpoints')
+    this.requireCapability(session, 'supportsFunctionBreakpoints')
+    if (session.controlling) throw new Error('A debug control request is already in flight')
+    validateReference(name)
+    return this.serializeBreakpoints(session, async () => {
+      this.assertStop(session, stopId)
+      const current = session.functionRequests
+      const points = enabled ? current.some(point => point.name === name) ? current : [...current, { name }]
+        : current.filter(point => point.name !== name)
+      await this.sendFunctionBreakpoints(session, points)
+      this.assertStop(session, stopId)
+      return this.nativeBreakpoints(sessionPath, id)
+    })
   }
 
   /** Cursor-paged console output; same contract as bash_task output. */
@@ -620,7 +822,15 @@ export class DebugManager {
     if (!session.finishing && client?.isOpen && client.capabilities.supportsRestartRequest === true) {
       const epoch = session.stopEpoch
       session.controlling = true
-      try { await client.request('restart', {}) } finally { session.controlling = false }
+      try {
+        await session.breakpointWork
+        // Absolute instruction references cannot survive relocation/ASLR.
+        if (session.nativeBreakpoints.instruction.length) {
+          await client.request('setInstructionBreakpoints', { breakpoints: [] })
+          session.nativeBreakpoints.instruction = []
+        }
+        await client.request('restart', {})
+      } finally { session.controlling = false }
       if (!session.finishing && session.stopEpoch === epoch) {
         session.dto.location = undefined
         this.clearStop(session)
@@ -630,7 +840,7 @@ export class DebugManager {
       return { ...session.dto }
     }
     await this.stop(sessionPath, session.dto.id)
-    return this.start({ ...options, signal, canStart: canStart ?? options.canStart, replacesId: session.dto.id, initialBreakpoints: new Map(session.launchBreakpoints ?? session.requested) })
+    return this.start({ ...options, signal, canStart: canStart ?? options.canStart, replacesId: session.dto.id, initialBreakpoints: new Map(session.launchBreakpoints ?? session.requested), initialFunctionBreakpoints: session.functionRequests.map(point => ({ ...point })) })
   }
 
   async stopSession(sessionPath: string): Promise<void> {
@@ -662,12 +872,51 @@ export class DebugManager {
     return session.client
   }
 
-  private mapFrame(record: Record<string, unknown>): DebugStackFrameDTO {
-    const source = record.source as Record<string, unknown> | undefined
+  private mapSource(session: Session, raw: unknown): DebugSourceDTO | undefined {
+    const source = debugSource(raw)
+    if (source?.kind === 'adapter') {
+      session.sources.set(source.sourceReference, raw as Record<string, unknown>)
+      if (session.sources.size > 512) session.sources.delete(session.sources.keys().next().value!)
+    }
+    return source
+  }
+
+  async source(sessionPath: string, sourceReference: number, sourceVersion: number, id: string, stopId: number): Promise<DebugSourceContentDTO> {
+    const session = this.requireStopped(id, sessionPath, stopId)
+    const epoch = session.stopEpoch
+    if (sourceVersion !== session.dto.sourceVersion) throw new Error('Debug source changed; refresh stack')
+    const source = session.sources.get(sourceReference)
+    if (!source) throw new Error('Unknown adapter source; refresh stack or disassembly for this target')
+    const cached = session.sourceCache.get(sourceReference)
+    if (cached) return { ...cached }
+    const body = await this.requireLive(session).request('source', { sourceReference, source })
+    this.assertStop(session, epoch)
+    if (sourceVersion !== session.dto.sourceVersion) throw new Error('Debug source changed; refresh stack')
+    const content = asString(body?.content) ?? ''
+    const result: DebugSourceContentDTO = { debugId: id, sourceReference, sourceVersion,
+      content: content.slice(0, 262_144), truncated: content.length > 262_144,
+      ...(asString(body?.mimeType) ? { mimeType: asString(body?.mimeType) } : {}) }
+    // At most eight 256 Ki-character documents; separate from file previews.
+    session.sourceCache.set(sourceReference, result)
+    if (session.sourceCache.size > 8) session.sourceCache.delete(session.sourceCache.keys().next().value!)
+    return { ...result }
+  }
+
+  private invalidateSources(session: Session, identities = true): void {
+    session.dto.sourceVersion = (session.dto.sourceVersion ?? 0) + 1
+    if (identities) session.sources.clear()
+    session.sourceCache.clear()
+  }
+
+  private mapFrame(session: Session, record: Record<string, unknown>): DebugStackFrameDTO {
+    const source = this.mapSource(session, record.source)
     return {
       id: asNumber(record.id) ?? 0,
       name: asString(record.name) ?? '<anonymous>',
-      ...(asString(source?.path) ? { file: asString(source?.path) } : {}),
+      ...(source ? { source } : {}),
+      ...(source?.kind === 'file' ? { file: source.path } : {}),
+      ...(asString(record.instructionPointerReference) ? { instructionPointerReference: asString(record.instructionPointerReference) } : {}),
+      ...(asString(record.moduleId) !== undefined || asNumber(record.moduleId) !== undefined ? { moduleId: record.moduleId as string | number } : {}),
       ...(asNumber(record.line) !== undefined ? { line: asNumber(record.line) } : {}),
       ...(asNumber(record.column) !== undefined ? { column: asNumber(record.column) } : {})
     }
@@ -679,6 +928,41 @@ export class DebugManager {
     switch (event) {
       case 'initialized':
         break // The transport's event waiter owns the handshake.
+      case 'capabilities':
+        if (body?.capabilities && typeof body.capabilities === 'object' && session.client) {
+          Object.assign(session.client.capabilities, body.capabilities)
+          session.dto.capabilities = debugCapabilities(session.client.capabilities)
+          this.publish(session)
+        }
+        break
+      case 'loadedSource':
+        this.invalidateSources(session, false)
+        if (body?.reason === 'removed') {
+          const source = debugSource(body.source)
+          if (source?.kind === 'adapter') session.sources.delete(source.sourceReference)
+        }
+        this.publish(session)
+        break
+      case 'invalidated':
+        // Frames and variable references can change without a continued event.
+        this.invalidateSources(session)
+        session.variablePaging.clear()
+        if (session.dto.status === 'stopped') {
+          session.dto.stopId = ++session.stopEpoch
+          session.dto.location = undefined
+          const epoch = session.stopEpoch
+          const filling = this.fillTopFrame(session, epoch).then(() => {
+            if (session.filling === filling) session.filling = undefined
+            if (!session.finishing && session.dto.status === 'stopped' && session.stopEpoch === epoch) this.settleWaiters(session)
+          })
+          session.filling = filling
+        }
+        this.publish(session)
+        break
+      case 'module':
+        session.modulePaging = undefined
+        this.publish(session)
+        break
       case 'stopped':
         this.clearStop(session)
         session.dto.status = 'stopped'
@@ -719,7 +1003,7 @@ export class DebugManager {
             const match = session.dto.adapterId === 'lldb-dap' && /error evaluating condition of breakpoint (\d+)(?:\.\d+)?/i.exec(session.dto.stopDiagnostics)
             if (match) {
               session.dto.conditionError = true
-              const breakpoint = session.breakpoints.find(bp => bp.id === Number(match[1]) && bp.condition)
+              const breakpoint = [...session.breakpoints, ...session.nativeBreakpoints.instruction, ...session.nativeBreakpoints.function].find(bp => bp.id === Number(match[1]) && bp.condition)
               if (breakpoint) { breakpoint.conditionStatus = 'error'; breakpoint.conditionError = session.dto.stopDiagnostics }
             }
             this.publish(session)
@@ -731,6 +1015,23 @@ export class DebugManager {
         const record = body?.breakpoint as Record<string, unknown> | undefined
         const id = asNumber(record?.id)
         if (id === undefined) break
+        const native = [...session.nativeBreakpoints.instruction, ...session.nativeBreakpoints.function].find(point => point.id === id)
+        if (native) {
+          if (body?.reason === 'removed') {
+            session.nativeBreakpoints.instruction = session.nativeBreakpoints.instruction.filter(point => point.id !== id)
+            session.nativeBreakpoints.function = session.nativeBreakpoints.function.filter(point => point.id !== id)
+            if ('name' in native) session.functionRequests = session.functionRequests.filter(point => point.name !== native.name)
+          } else {
+            native.verified = asBoolean(record?.verified) ?? native.verified
+            native.message = asString(record?.message)
+            if ('instructionReference' in native) {
+              native.boundInstructionReference = asString(record?.instructionReference) ?? native.boundInstructionReference
+              native.boundOffset = asNumber(record?.offset) ?? native.boundOffset
+            }
+          }
+          this.publish(session)
+          break
+        }
         const current = session.breakpoints.find(bp => bp.id === id)
         if (!current) {
           const source = record?.source as Record<string, unknown> | undefined
@@ -789,9 +1090,12 @@ export class DebugManager {
     const frames = Array.isArray(body?.stackFrames) ? body.stackFrames : []
     const record = frames[0] as Record<string, unknown> | undefined
     if (!record || session.finishing || session.dto.status !== 'stopped') return
-    const frame = this.mapFrame(record)
+    const frame = this.mapFrame(session, record)
     session.dto.location = {
-      file: frame.file ?? frame.name,
+      ...(frame.file ? { file: frame.file } : {}),
+      ...(frame.source ? { source: frame.source } : {}),
+      ...(frame.instructionPointerReference ? { instructionPointerReference: frame.instructionPointerReference } : {}),
+      ...(frame.moduleId !== undefined ? { moduleId: frame.moduleId } : {}),
       line: frame.line ?? 0,
       ...(frame.column !== undefined ? { column: frame.column } : {}),
       name: frame.name
@@ -839,6 +1143,7 @@ export class DebugManager {
   }
 
   private clearStop(session: Session): void {
+    this.invalidateSources(session)
     session.dto.stopReason = undefined
     session.dto.stopDescription = undefined
     session.dto.stopText = undefined
@@ -846,6 +1151,7 @@ export class DebugManager {
     session.dto.stopDiagnostics = undefined
     session.dto.conditionError = undefined
     session.variablePaging.clear()
+    session.modulePaging = undefined
   }
 
   private publish(session: Session): void {
@@ -908,4 +1214,22 @@ function availablePort(host: string): Promise<number> {
       server.close(error => error ? reject(error) : resolve(port))
     })
   })
+}
+
+function bounded(value: number, maximum: number): number {
+  if (!Number.isSafeInteger(value) || value < 1) throw new Error('Invalid debug page count')
+  return Math.min(value, maximum)
+}
+function validateReference(value: string): void {
+  if (typeof value !== 'string' || !value.length || value.length > 8192) throw new Error('Invalid debug reference')
+}
+function validateOffset(value: number): void {
+  if (!Number.isSafeInteger(value) || value < -0x8000_0000 || value > 0x7fff_ffff) throw new Error('Invalid debug offset')
+}
+
+function instructionBreakpointMatches(point: DebugInstructionBreakpointDTO, address: string): boolean {
+  const reference = point.boundInstructionReference ?? point.instructionReference
+  const offset = point.boundInstructionReference ? point.boundOffset ?? 0 : point.offset ?? 0
+  if (/^0x[\da-f]+$/i.test(reference) && /^0x[\da-f]+$/i.test(address)) return BigInt(reference) + BigInt(offset) === BigInt(address)
+  return reference === address && offset === 0
 }

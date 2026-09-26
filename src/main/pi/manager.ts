@@ -30,6 +30,8 @@ import { BashTaskManager } from '../bash/manager'
 import { createManagedBashTools, APP_BASH_TOOL_NAMES } from './bash-tools'
 import { createDebugTools, APP_DEBUG_TOOL_NAMES, type DebugRunInTerminal } from '../debug/tools'
 import { DebugManager } from '../debug/manager'
+import { dispatchDebugPanel, dispatchDebugAction } from '../debug/action-registry'
+import type { DebugSourceRequest, DebugSourceContentDTO } from '../../shared/types'
 import { APP_BROWSER_TOOL_NAMES, createBrowserTools } from '../browser/tools'
 import { getBrowserService } from '../browser/service'
 import { agentOwner } from '../../shared/browser'
@@ -545,22 +547,13 @@ export class PiManager {
   /** Panel-driven debug actions against the same DebugManager the model's
    * `debug` tool drives — the user and the agent share one live session. */
   async debugPanelAction(request: DebugPanelRequest): Promise<unknown> {
-    if (typeof request.debugId !== 'string' || !request.debugId) throw new Error('Missing debug target')
-    const manager = this.debugManager
-    const { sessionPath, debugId, stopId } = request
-    switch (request.action) {
-      case 'stop': return manager.stop(sessionPath, debugId)
-      case 'restart': return manager.restart(sessionPath, debugId)
-      case 'control': return manager.control(sessionPath, request.control, request.threadId, undefined, debugId, stopId)
-      case 'threads': return manager.threads(sessionPath, debugId)
-      case 'stack': return manager.stack(sessionPath, request.threadId, request.levels, debugId, stopId)
-      case 'scopes': return manager.scopes(sessionPath, request.frameId, debugId, stopId)
-      case 'variables': return manager.variables(sessionPath, request.variablesReference, request.start, request.count, debugId, stopId)
-      case 'evaluate': return manager.evaluate(sessionPath, request.expression, request.frameId, debugId, stopId, request.context)
-      case 'output': return manager.output(sessionPath, request.cursor, request.maxChars, debugId)
-      case 'breakpoints': return manager.breakpoints(sessionPath, debugId)
-      case 'breakpoint-toggle': return manager.toggleBreakpoint(sessionPath, request.file, request.line, debugId)
-    }
+    return dispatchDebugPanel(this.debugManager, request)
+  }
+
+  async debugSource(request: DebugSourceRequest): Promise<DebugSourceContentDTO> {
+    const { sessionPath, debugId, stopId, sourceReference, sourceVersion } = request
+    return await dispatchDebugAction({ manager: this.debugManager, sessionPath, debugId, stopId },
+      { action: 'source', sourceReference, sourceVersion }) as DebugSourceContentDTO
   }
 
   bashTaskOutput(request: BashTaskRequest): BashTaskOutputDTO {

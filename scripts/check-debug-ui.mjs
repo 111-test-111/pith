@@ -17,10 +17,23 @@ import React from 'react';import {createRoot} from 'react-dom/client';
 import {DebugPane} from '/src/components/app/DebugPane.tsx';import {DebugStore} from '/src/state/debug-store.ts';import {I18nProvider,useI18n} from '/src/i18n/index.tsx';import {FileNavigationProvider} from '/src/lib/file-navigation.tsx';import '/src/styles.css';
 import {FileSource} from '/src/components/app/FileSource.tsx';import {FilesPane} from '/src/components/app/FilesPane.tsx';import {FileBrowserStore} from '/src/state/file-browser-store.ts';
 localStorage.setItem('pi-app:locale','en');
-window.calls=[];window.values={a:'1',b:'other'};window.consoleText='';window.listeners=[];window.listCalls=[];
+window.fileReads=[];window.sourceCalls=[];window.nativePoints={instruction:[],function:[]};window.nativeSource={kind:'adapter',sourceReference:1,name:'virtual.asm',path:'/not-a-file'};window.calls=[];window.values={a:'1',b:'other'};window.consoleText='';window.listeners=[];window.listCalls=[];
 const base={sessionPath:'/review',sessionId:'chat',adapterId:'fake',adapterLabel:'Fake',kind:'launch',status:'stopped',activeThreadId:1,outputChars:0,revision:1,stopId:1,location:{file:'/tmp/demo.c',line:7,name:'main'}};
 window.sessions=[{...base,id:'a',target:'Alpha',startedAt:1},{...base,id:'b',target:'Beta',startedAt:2}];
-window.pi={onDebugEvent:fn=>{listeners.push(fn);return()=>{}},debugList:async path=>{listCalls.push(path);return sessions.filter(s=>s.sessionPath===path)},openExternal:()=>{},openPath:()=>{},readFileDocument:async r=>({path:r.path,relativePath:'demo.c',gitRoot:null,size:100,truncated:false,text:Array.from({length:20},(_,i)=>'int value'+i+' = '+i+';').join('\\n')}),debugAction:async r=>{calls.push(r);const dto=sessions.find(s=>s.id===r.debugId);if(!dto||dto.sessionPath!==r.sessionPath)throw Error('Missing target or wrong owner');switch(r.action){
+window.pi={onDebugEvent:fn=>{listeners.push(fn);return()=>{}},debugList:async path=>{listCalls.push(path);return sessions.filter(s=>s.sessionPath===path)},openExternal:()=>{},openPath:()=>{},readFileDocument:async r=>(fileReads.push(r.path),r.path==='/missing.c'?{error:'missing'}:{path:r.path,relativePath:'demo.c',gitRoot:null,size:100,truncated:false,text:Array.from({length:20},(_,i)=>'int value'+i+' = '+i+';').join('\\n')}),debugSource:async r=>{sourceCalls.push(r);return{debugId:r.debugId,sourceReference:r.sourceReference,sourceVersion:r.sourceVersion,content:Array.from({length:12},(_,i)=>'VIRTUAL SOURCE '+(i+1)).join('\\n'),truncated:false}},debugAction:async r=>{calls.push(r);const dto=sessions.find(s=>s.id===r.debugId);if(!dto||dto.sessionPath!==r.sessionPath)throw Error('Missing target or wrong owner');if(dto.native){switch(r.action){
+case 'stack':return [{id:r.threadId,name:'native_frame',source:window.nativeSource,file:window.nativeSource.kind==='file'?window.nativeSource.path:undefined,line:3,instructionPointerReference:'0x2000000000000001',moduleId:'native-module'}];
+case 'scopes':return [{name:'General registers',presentationHint:'registers',variablesReference:500}];
+case 'variables':{const value=window.nativeValue??'0x2000000000000001';if(window.nativeDelay)await new Promise(done=>setTimeout(done,window.nativeDelay));return {variables:Array.from({length:r.start?1:50},(_,i)=>({name:r.start?'r50':i?'r'+i:'pc',value,memoryReference:i?undefined:'opaque:memory',variablesReference:0})),truncated:!r.start};}
+case 'disassemble':return {memoryReference:r.memoryReference,instructionOffset:r.instructionOffset,instructions:Array.from({length:8},(_,i)=>({address:'0x'+(0x2000000000000001n+BigInt((r.instructionOffset??0)+i)*4n).toString(16),instruction:'mov x0, x1',instructionBytes:'00000000'}))};
+case 'memory.read':return {address:r.memoryReference,data:'AQIDBA==',hex:'01 02 03 04',bytesRead:4,requestedCount:r.count,unreadableBytes:r.count-4,truncated:true};
+case 'modules':return {modules:Array.from({length:r.start?1:20},(_,i)=>({id:(r.start??0)+i,name:'module-'+((r.start??0)+i),path:'/lib/native.so',symbolStatus:'Symbols loaded'})),totalModules:21,truncated:!r.start};
+case 'breakpoints.native':return nativePoints;
+case 'breakpoints.instruction.toggle':nativePoints={...nativePoints,instruction:nativePoints.instruction.length?[]:[{instructionReference:r.instructionReference,verified:true,id:1}]};return nativePoints;
+case 'breakpoints.instruction':nativePoints={...nativePoints,instruction:r.items.map((p,i)=>({...p,verified:true,id:i+1}))};return nativePoints;
+case 'breakpoints.function.update':nativePoints={...nativePoints,function:r.enabled?[...nativePoints.function.filter(p=>p.name!==r.name),{name:r.name,verified:true,id:101}]:nativePoints.function.filter(p=>p.name!==r.name)};return nativePoints;
+case 'breakpoints.instruction.update':nativePoints={...nativePoints,instruction:nativePoints.instruction.filter(p=>p.instructionReference!==r.instructionReference)};return nativePoints;
+case 'breakpoints.function':nativePoints={...nativePoints,function:r.items.map((p,i)=>({...p,verified:true,id:i+101}))};return nativePoints;
+}}switch(r.action){
 case 'restart': {publish(dto.id,{status:'terminated'});const next={...dto,id:dto.id+'-restart',replacesId:dto.id,revision:1,stopId:1,status:'stopped',startedAt:Date.now()};sessions.push(next);values[next.id]='restarted';return next;}
 case 'threads':return [{id:1,name:'main'},{id:2,name:'worker'}];case 'stack':return [{id:r.threadId===1?1:2,name:r.threadId===1?'main':'worker',file:'/tmp/demo.c',line:r.threadId===1?7:9}];case 'scopes':return [{name:'Locals',variablesReference:100}];case 'variables':return {variables:[{name:'value',value:values[r.debugId],variablesReference:200}],truncated:false};case 'breakpoints':return [{file:'/tmp/demo.c',line:12,verified:true}];case 'output':return{session:dto,output:consoleText.slice(-r.maxChars),cursor:consoleText.length,truncated:consoleText.length>r.maxChars};case 'evaluate':return {result:'frame:'+r.frameId,variablesReference:0};default:return{};}}};
 window.publish=(id,patch)=>{const i=sessions.findIndex(s=>s.id===id);sessions[i]={...sessions[i],...patch,revision:sessions[i].revision+1};for(const fn of listeners)fn(sessions[i])};
@@ -170,6 +183,78 @@ try {
   assert.ok(await gutter.evaluate(e=>e.tabIndex>=0))
   assert.equal(await page.locator('[data-source-line="7"]').evaluate(e=>e.getBoundingClientRect().height),20)
   assert.ok(await page.locator('[data-source-line]').count()<100, 'gutter controls remain windowed')
+  // Source-less inspection uses the selected child's owner and exact stop token.
+  await page.evaluate(()=>{
+    const dto={...sessions.find(s=>s.id==='child-b'),id:'native-child',sessionPath:'/native-child',native:true,revision:1,sourceVersion:1,stopId:1,status:'stopped',kind:'launch',target:'Stripped native target',location:{name:'native_frame',line:3,source:nativeSource,instructionPointerReference:'0x2000000000000001'},capabilities:{supportsDisassembleRequest:true,supportsReadMemoryRequest:true,supportsSteppingGranularity:true,supportsInstructionBreakpoints:true,supportsFunctionBreakpoints:true,supportsModulesRequest:true}};
+    sessions.push(dto);listeners.forEach(fn=>fn(dto));setShell({sessionPath:'/native-parent',subagents:[{sessionPath:'/native-child',profile:'debugger',description:'Native crash'}]});showDebug();document.getElementById('root').style.width='320px';
+  })
+  const native=page.locator('[data-debug-native]')
+  await page.waitForSelector('[data-debug-pc="true"]')
+  assert.match(await page.getByRole('button',{name:'Stepping mode',exact:true}).innerText(),/Instruction/)
+  const virtualReads=await page.evaluate(()=>fileReads.length)
+  await page.getByRole('tab',{name:'Source',exact:true}).click()
+  await page.waitForSelector('[data-debug-source-line="3"]')
+  assert.match(await page.locator('[data-debug-source-line="3"]').innerText(),/VIRTUAL SOURCE 3/)
+  assert.equal(await page.evaluate(()=>fileReads.length),virtualReads,'virtual source must never reach disk file IPC')
+  assert.deepEqual(await page.evaluate(()=>sourceCalls.at(-1)),{sessionPath:'/native-child',debugId:'native-child',stopId:1,sourceReference:1,sourceVersion:1})
+  await page.getByRole('tab',{name:'Assembly',exact:true}).click()
+  await native.getByRole('button',{name:'Set instruction breakpoint at 0x2000000000000001',exact:true}).click()
+  await page.waitForFunction(()=>nativePoints.instruction.length===1)
+  assert.deepEqual(await page.evaluate(()=>{const r=calls.filter(c=>c.action==='breakpoints.instruction.toggle').at(-1);return [r.sessionPath,r.debugId,r.stopId,r.instructionReference]}),['/native-child','native-child',1,'0x2000000000000001'])
+  await page.getByRole('textbox',{name:'Function name',exact:true}).fill('checkpoint')
+  await page.getByRole('button',{name:'Add function breakpoint',exact:true}).click()
+  await page.waitForFunction(()=>nativePoints.function.length===1)
+  await native.getByRole('button',{name:'Inspect memory at 0x2000000000000001',exact:true}).click()
+  await page.waitForSelector('[data-debug-memory] pre')
+  assert.match(await page.locator('[data-debug-memory]').innerText(),/4 of 128.*124 unreadable/)
+  assert.match(await page.locator('[data-debug-memory] pre').innerText(),/01 02 03 04/)
+  assert.ok(!(await page.locator('[data-debug-memory] pre').innerText()).includes('00 00'),'unreadable bytes must not become zeros')
+  await page.getByRole('button',{name:'General registers',exact:true}).click()
+  await page.getByRole('button',{name:'Load more variables',exact:true}).click()
+  await page.waitForFunction(()=>calls.some(c=>c.action==='variables'&&c.start===50))
+  await page.waitForFunction(()=>document.querySelector('[aria-label="Registers"]')?.textContent.includes('r50'))
+  await page.getByRole('button',{name:'Inspect memory of pc',exact:true}).click()
+  await page.waitForFunction(()=>calls.some(c=>c.action==='memory.read'&&c.memoryReference==='opaque:memory'))
+  await page.getByRole('tab',{name:'Modules',exact:true}).click()
+  await page.waitForSelector('[data-debug-modules]')
+  await native.getByRole('button',{name:'Next page',exact:true}).click()
+  await page.waitForFunction(()=>calls.some(c=>c.action==='modules'&&c.start===20))
+  await page.getByRole('tab',{name:'Assembly',exact:true}).click()
+  await native.getByRole('button',{name:'Next page',exact:true}).click()
+  await page.waitForFunction(()=>calls.some(c=>c.action==='disassemble'&&c.instructionOffset===32))
+  assert.ok(await native.evaluate(e=>e.scrollWidth<=e.clientWidth),'native inspection stays inside the 320px rail')
+  await page.getByRole('button',{name:'Step over',exact:true}).click()
+  assert.equal(await page.evaluate(()=>calls.filter(c=>c.action==='control').at(-1).granularity),'instruction')
+  await page.evaluate(()=>publish('native-child',{stopId:2,sourceVersion:2}))
+  await page.waitForSelector('[data-debug-pc="true"]')
+  assert.match(await page.getByRole('button',{name:'Stepping mode',exact:true}).innerText(),/Instruction/)
+  if(screenshots)await page.locator('#root').screenshot({path:join(screenshots,'native-light-en.png')})
+  await page.evaluate(()=>{document.documentElement.classList.add('dark');setLocale('zh-CN')})
+  await page.waitForTimeout(300)
+  if(screenshots)await page.locator('#root').screenshot({path:join(screenshots,'native-dark-zh.png')})
+  await page.evaluate(()=>{setLocale('en');document.documentElement.classList.remove('dark');nativeSource={kind:'file',path:'/missing.c',name:'missing.c'};publish('native-child',{sourceVersion:3})})
+  await page.waitForFunction(()=>fileReads.includes('/missing.c'))
+  await page.waitForSelector('[data-debug-assembly]')
+  assert.match(await native.innerText(),/Source unavailable/)
+  await page.evaluate(()=>publish('native-child',{kind:'core',stopId:3,sourceVersion:4}))
+  await page.waitForSelector('[data-debug-assembly]')
+  assert.equal(await page.getByRole('button',{name:'Step over',exact:true}).isDisabled(),true)
+  assert.equal(await native.locator('[data-debug-native-breakpoints]').count(),0)
+  assert.equal(await native.getByRole('button',{name:'Remove instruction breakpoint at 0x2000000000000001',exact:true}).isDisabled(),true)
+  // Unsupported capabilities remove native operations rather than invoking an adapter anyway.
+  await page.evaluate(()=>{nativeSource={kind:'file',path:'/missing.c'};publish('native-child',{capabilities:{},sourceVersion:5})})
+  await page.waitForFunction(()=>!document.querySelector('[data-debug-assembly]'))
+  assert.equal(await page.getByRole('tab',{name:'Assembly',exact:true}).count(),0)
+  await page.evaluate(()=>{nativeValue='OLD_FRAME';nativeDelay=200;publish('native-child',{stopId:4})})
+  await page.getByRole('button',{name:'General registers',exact:true}).click()
+  await page.evaluate(()=>{nativeValue='NEW_FRAME';nativeDelay=0})
+  await page.getByRole('button',{name:'worker',exact:true}).click()
+  await page.waitForFunction(()=>calls.some(c=>c.debugId==='native-child'&&c.stopId===4&&c.action==='scopes'&&c.frameId===2))
+  await page.getByRole('button',{name:'General registers',exact:true}).click()
+  await page.waitForFunction(()=>document.querySelector('[aria-label="Registers"]')?.textContent.includes('NEW_FRAME'))
+  await page.waitForTimeout(220)
+  assert.ok(!(await page.locator('[aria-label="Registers"]').innerText()).includes('OLD_FRAME'),'late variables cannot populate reused references in a different frame')
+  console.log('[PASS] native debug UI: virtual-source IPC, missing-file assembly fallback, PC/high addresses, instruction step/breakpoints, register memory, gaps, modules paging, owner/stop routing, 320px, core and capability gating')
   assert.deepEqual(errors,[])
   console.log('[PASS] debug UI: parent/subagent target selection, child refresh/roster isolation, owning-path controls/gutter/restart, watches and completed output, both locales/themes, stop/frame freshness, keyboard variables and gutter, condition diagnostics, core controls')
 } finally {await app?.close();await server?.close();await rm(temp,{recursive:true,force:true})}

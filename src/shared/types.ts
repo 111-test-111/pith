@@ -1684,8 +1684,28 @@ export interface McpUpsertServerPayload {
  * the `debug:event` broadcast and pulls detail pages over `debug:*` IPC. */
 export type DebugSessionStatus = 'starting' | 'running' | 'stopped' | 'terminated' | 'failed'
 
+/** A positive DAP sourceReference always wins over path. Adapter paths may
+ * describe synthetic disassembly and must never be sent to the file browser. */
+export type DebugSourceDTO = ({ name?: string; presentationHint?: string; origin?: string } & (
+  | { kind: 'file'; path: string }
+  | { kind: 'adapter'; sourceReference: number; path?: string }
+))
+
+export interface DebugCapabilitiesDTO {
+  supportsDisassembleRequest: boolean
+  supportsReadMemoryRequest: boolean
+  supportsInstructionBreakpoints: boolean
+  supportsFunctionBreakpoints: boolean
+  supportsSteppingGranularity: boolean
+  supportsModulesRequest: boolean
+}
+
 export interface DebugLocationDTO {
-  file: string
+  /** Compatibility field: real file sources only. */
+  file?: string
+  source?: DebugSourceDTO
+  instructionPointerReference?: string
+  moduleId?: string | number
   line: number
   column?: number
   name?: string
@@ -1707,6 +1727,9 @@ export interface DebugSessionDTO {
   replacesId?: string
   /** Incremented at every stop, even when React batches running/stopped events. */
   stopId: number
+  capabilities?: DebugCapabilitiesDTO
+  /** Invalidates cached virtual sources, independently of console revisions. */
+  sourceVersion?: number
   /** Human-readable target summary (program path or attached pid). */
   target: string
   status: DebugSessionStatus
@@ -1746,6 +1769,9 @@ export interface DebugStackFrameDTO {
   id: number
   name: string
   file?: string
+  source?: DebugSourceDTO
+  instructionPointerReference?: string
+  moduleId?: string | number
   line?: number
   column?: number
 }
@@ -1754,6 +1780,9 @@ export interface DebugScopeDTO {
   name: string
   variablesReference: number
   expensive?: boolean
+  presentationHint?: string
+  namedVariables?: number
+  indexedVariables?: number
 }
 
 export interface DebugVariableDTO {
@@ -1763,7 +1792,75 @@ export interface DebugVariableDTO {
   variablesReference: number
   namedVariables?: number
   indexedVariables?: number
+  /** Opaque DAP reference; never convert through a JS Number. */
+  memoryReference?: string
+  evaluateName?: string
 }
+
+export interface DebugSourceContentDTO {
+  debugId: string
+  sourceReference: number
+  sourceVersion: number
+  content: string
+  mimeType?: string
+  truncated: boolean
+}
+
+export interface DebugSourceRequest {
+  sessionPath: string
+  debugId: string
+  stopId: number
+  sourceReference: number
+  sourceVersion: number
+}
+
+export type DebugSteppingGranularity = 'statement' | 'line' | 'instruction'
+
+export interface DebugInstructionDTO {
+  address: string
+  instruction: string
+  instructionBytes?: string
+  symbol?: string
+  source?: DebugSourceDTO
+  line?: number
+  /** Invalid rows may pad a disassembly range outside mapped memory. */
+  presentationHint?: string
+}
+export interface DebugDisassemblyDTO {
+  instructions: DebugInstructionDTO[]
+  memoryReference: string
+  instructionOffset: number
+}
+export interface DebugMemoryDTO {
+  address: string
+  data: string
+  hex: string
+  bytesRead: number
+  requestedCount: number
+  unreadableBytes: number
+  /** Fewer bytes returned than requested, even if the adapter omits gaps. */
+  truncated: boolean
+}
+export interface DebugModuleDTO {
+  id: string | number
+  name: string
+  path?: string
+  addressRange?: string
+  symbolStatus?: string
+  symbolFilePath?: string
+  version?: string
+}
+export interface DebugModulesPageDTO { modules: DebugModuleDTO[]; totalModules?: number; truncated: boolean }
+export interface DebugInstructionBreakpointInput { instructionReference: string; offset?: number; condition?: string; hitCondition?: string }
+export interface DebugFunctionBreakpointInput { name: string; condition?: string; hitCondition?: string }
+export interface DebugNativeBreakpointBinding { id?: number; verified: boolean; message?: string; conditionStatus?: 'unvalidated' | 'error'; conditionError?: string }
+export interface DebugInstructionBreakpointDTO extends DebugInstructionBreakpointInput, DebugNativeBreakpointBinding {
+  /** Actual binding may differ from the requested reference. */
+  boundInstructionReference?: string
+  boundOffset?: number
+}
+export interface DebugFunctionBreakpointDTO extends DebugFunctionBreakpointInput, DebugNativeBreakpointBinding {}
+export interface DebugNativeBreakpointsDTO { instruction: DebugInstructionBreakpointDTO[]; function: DebugFunctionBreakpointDTO[] }
 
 /** One page of a variable's children. DAP answers carry no total, so
  * `truncated` (detected by a one-row overfetch) is the "more pages" signal —
@@ -1823,7 +1920,7 @@ export type DebugTerminalResult =
 export type DebugPanelRequest = { sessionPath: string; debugId: string; stopId?: number } & (
   | { action: 'stop' }
   | { action: 'restart' }
-  | { action: 'control'; control: 'continue' | 'pause' | 'next' | 'stepIn' | 'stepOut'; threadId?: number }
+  | { action: 'control'; control: 'continue' | 'pause' | 'next' | 'stepIn' | 'stepOut'; threadId?: number; granularity?: DebugSteppingGranularity }
   | { action: 'threads' }
   | { action: 'stack'; threadId: number; levels?: number }
   | { action: 'scopes'; frameId: number }
@@ -1832,4 +1929,13 @@ export type DebugPanelRequest = { sessionPath: string; debugId: string; stopId?:
   | { action: 'output'; cursor?: number; maxChars?: number }
   | { action: 'breakpoints' }
   | { action: 'breakpoint-toggle'; file: string; line: number }
+  | { action: 'disassemble'; memoryReference: string; offset?: number; instructionOffset?: number; count?: number }
+  | { action: 'memory.read'; memoryReference: string; offset?: number; count?: number }
+  | { action: 'modules'; start?: number; count?: number }
+  | { action: 'breakpoints.native' }
+  | { action: 'breakpoints.instruction'; items: DebugInstructionBreakpointInput[] }
+  | { action: 'breakpoints.instruction.toggle'; instructionReference: string }
+  | { action: 'breakpoints.instruction.update'; instructionReference: string; offset?: number; enabled: boolean }
+  | { action: 'breakpoints.function'; items: DebugFunctionBreakpointInput[] }
+  | { action: 'breakpoints.function.update'; name: string; enabled: boolean }
 )

@@ -7,11 +7,13 @@ import type {
   DebugStackFrameDTO,
   DebugThreadDTO,
   DebugVariableDTO,
-  DebugVariablesPageDTO
+  DebugVariablesPageDTO,
+  DebugSteppingGranularity
 } from '../../../../shared/types'
 import { ArrowDownToLine, ArrowUpFromLine, Bug, ChevronDown, ChevronRight, Pause, Play, Plus, RotateCcw, Square, StepForward, X } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/motion/select'
+import { DebugNativeView } from './DebugNativeView'
 import { FadeScroll } from './FadeScroll'
 import { Input } from '@/components/motion/input'
 import { Tooltip } from '@/components/motion/tooltip'
@@ -68,11 +70,11 @@ export function DebugPane({ store, debug }: { store: PiStore; debug: DebugStore 
         </SelectItem>)}</FadeScroll></SelectContent>
       </Select>
     </div>
-    <DebugDetails key={`${session.id}:${session.stopId}:${session.status}`} session={session} debug={debug} />
+    <DebugDetails key={`${session.id}:${session.stopId}:${session.status}`} session={session} debug={debug} cwd={shell.cwd ?? ""} />
   </div>
 }
 
-function DebugDetails({ session, debug }: { session: DebugSessionDTO; debug: DebugStore }) {
+function DebugDetails({ session, debug, cwd }: { session: DebugSessionDTO; debug: DebugStore; cwd: string }) {
   const { t } = useI18n()
   const navigation = useFileNavigation()
   useSyncExternalStore(debug.subscribe, debug.getSnapshot)
@@ -94,6 +96,9 @@ function DebugDetails({ session, debug }: { session: DebugSessionDTO; debug: Deb
   const [outputTruncated, setOutputTruncated] = useState(false)
   const [busy, setBusy] = useState<string | null>(null)
   const [actionError, setActionError] = useState(false)
+  const [frameVisit, setFrameVisit] = useState(0)
+  const [memorySelection, setMemorySelection] = useState<{ reference: string; serial: number }>()
+  const granularity = debug.steppingFor(session)
   const [watchDraft, setWatchDraft] = useState('')
   const [watchResults, setWatchResults] = useState<ReadonlyMap<string, { result?: string; error?: boolean }>>(new Map())
 
@@ -118,7 +123,7 @@ function DebugDetails({ session, debug }: { session: DebugSessionDTO; debug: Deb
       setFrames(entries); setSelectedFrame(entries[0]?.id)
     }).catch(() => {})
     return () => { alive = false }
-  }, [sessionPath, debugId, stopId, status, selectedThread])
+  }, [sessionPath, debugId, stopId, status, selectedThread, session.sourceVersion])
 
   const frameEpoch = useRef(0)
   useEffect(() => {
@@ -156,32 +161,40 @@ function DebugDetails({ session, debug }: { session: DebugSessionDTO; debug: Deb
 
   const control = (kind: 'continue' | 'pause' | 'next' | 'stepIn' | 'stepOut'): void => {
     if (!sessionPath) return
-    runAction(kind, () => window.pi.debugAction({ ...target, action: 'control', control: kind, threadId: selectedThread }))
+    runAction(kind, () => window.pi.debugAction({ ...target, action: 'control', control: kind, threadId: selectedThread, ...((session.capabilities?.supportsSteppingGranularity || granularity !== 'statement') && !['continue', 'pause'].includes(kind) ? { granularity } : {}) }))
   }
 
-  const toggleVariables = (reference: number): void => {
-    if (!sessionPath) return
-    if (expanded.has(reference)) {
-      setExpanded((current) => { const next = new Set(current); next.delete(reference); return next })
-      return
-    }
-    setExpanded((current) => new Set(current).add(reference))
-    if (!variables.has(reference)) {
-      const epoch = frameEpoch.current
-      void window.pi.debugAction({ ...target, action: 'variables', variablesReference: reference })
-        .then((page) => {
-          if (!mounted.current || epoch !== frameEpoch.current) return
-          const result = page as DebugVariablesPageDTO
-          setVariables((current) => new Map(current).set(reference, result.variables))
-          setTruncatedRefs((current) => {
-            const next = new Set(current)
-            if (result.truncated) next.add(reference); else next.delete(reference)
-            return next
-          })
+  const loadingVariables = useRef(new Map<number, number>())
+  const [pendingVariables, setPendingVariables] = useState<ReadonlySet<number>>(new Set())
+  const loadVariables = (reference: number, start = 0): void => {
+    const epoch = frameEpoch.current
+    if (loadingVariables.current.get(reference) === epoch) return
+    loadingVariables.current.set(reference, epoch); setPendingVariables(new Set(loadingVariables.current.keys()))
+    void window.pi.debugAction({ ...target, action: 'variables', variablesReference: reference, start })
+      .then(page => {
+        if (!mounted.current || epoch !== frameEpoch.current) return
+        const result = page as DebugVariablesPageDTO
+        setVariables(current => new Map(current).set(reference, start ? [...(current.get(reference) ?? []), ...result.variables] : result.variables))
+        setTruncatedRefs(current => {
+          const next = new Set(current)
+          if (result.truncated && result.variables.length) next.add(reference); else next.delete(reference)
+          return next
         })
-        .catch(() => {})
+      }).catch(() => { if (mounted.current && epoch === frameEpoch.current) setActionError(true) })
+      .finally(() => {
+        if (loadingVariables.current.get(reference) === epoch) loadingVariables.current.delete(reference)
+        if (mounted.current) setPendingVariables(new Set(loadingVariables.current.keys()))
+      })
+  }
+  const toggleVariables = (reference: number): void => {
+    if (expanded.has(reference)) {
+      setExpanded(current => { const next = new Set(current); next.delete(reference); return next })
+    } else {
+      setExpanded(current => new Set(current).add(reference))
+      if (!variables.has(reference)) loadVariables(reference)
     }
   }
+  const moreVariables = (reference: number) => truncatedRefs.has(reference) ? <Button variant="ghost" className="h-6 px-2 text-[11px]" disabled={pendingVariables.has(reference)} onClick={() => loadVariables(reference, variables.get(reference)?.length ?? 0)}>{t('debug.loadMoreVariables')}</Button> : null
 
   // Watch expressions evaluate at every stop (and right after being added
   // while stopped). The store's list identity drives re-evaluation.
@@ -221,6 +234,7 @@ function DebugDetails({ session, debug }: { session: DebugSessionDTO; debug: Deb
     const children = variables.get(variable.variablesReference)
     return (
       <div key={`${variable.variablesReference}:${variable.name}`}>
+        <div className="flex min-w-0 items-center">
         <Button variant="ghost" aria-expanded={expandable ? isOpen : undefined} disabled={!expandable}
           className={cn('h-auto w-full justify-start disabled:opacity-100', 'flex min-w-0 items-center gap-1 rounded-control px-1 py-0.5 font-mono text-xs', expandable && 'cursor-pointer hover:bg-muted/60')}
           style={{ paddingLeft: `${depth * 12 + 4}px` }}
@@ -235,12 +249,10 @@ function DebugDetails({ session, debug }: { session: DebugSessionDTO; debug: Deb
             {variable.value}{variable.type ? ` : ${variable.type}` : ''}
           </span>
         </Button>
+        {variable.memoryReference && session.capabilities?.supportsReadMemoryRequest ? <Button variant="ghost" className="h-6 shrink-0 px-1 text-[11px]" aria-label={t('debug.variableMemory', { name: variable.name })} onClick={() => setMemorySelection({ reference: variable.memoryReference!, serial: Date.now() })}>{t('debug.memory')}</Button> : null}
+        </div>
         {isOpen && children ? children.map((child) => renderVariable(child, depth + 1, new Set(ancestors).add(variable.variablesReference))) : null}
-        {isOpen && truncatedRefs.has(variable.variablesReference) ? (
-          <p className="text-[11px] text-muted-foreground/70" style={{ paddingLeft: `${(depth + 1) * 12 + 4}px` }}>
-            {t('debug.variablesTruncated')}
-          </p>
-        ) : null}
+        {isOpen ? moreVariables(variable.variablesReference) : null}
       </div>
     )
   }
@@ -281,21 +293,21 @@ function DebugDetails({ session, debug }: { session: DebugSessionDTO; debug: Deb
         )}
         <Tooltip content={t('debug.next')}>
           <span>
-            <Button variant="ghost" size="icon" className="size-7" aria-label={t('debug.next')} disabled={core || !stopped || busy !== null} onClick={() => control('next')}>
+            <Button variant="ghost" size="icon" className="size-7" aria-label={t('debug.next')} disabled={core || !stopped || busy !== null || granularity !== 'statement' && !session.capabilities?.supportsSteppingGranularity} onClick={() => control('next')}>
               <StepForward aria-hidden="true" className="size-3.5" />
             </Button>
           </span>
         </Tooltip>
         <Tooltip content={t('debug.stepIn')}>
           <span>
-            <Button variant="ghost" size="icon" className="size-7" aria-label={t('debug.stepIn')} disabled={core || !stopped || busy !== null} onClick={() => control('stepIn')}>
+            <Button variant="ghost" size="icon" className="size-7" aria-label={t('debug.stepIn')} disabled={core || !stopped || busy !== null || granularity !== 'statement' && !session.capabilities?.supportsSteppingGranularity} onClick={() => control('stepIn')}>
               <ArrowDownToLine aria-hidden="true" className="size-3.5" />
             </Button>
           </span>
         </Tooltip>
         <Tooltip content={t('debug.stepOut')}>
           <span>
-            <Button variant="ghost" size="icon" className="size-7" aria-label={t('debug.stepOut')} disabled={core || !stopped || busy !== null} onClick={() => control('stepOut')}>
+            <Button variant="ghost" size="icon" className="size-7" aria-label={t('debug.stepOut')} disabled={core || !stopped || busy !== null || granularity !== 'statement' && !session.capabilities?.supportsSteppingGranularity} onClick={() => control('stepOut')}>
               <ArrowUpFromLine aria-hidden="true" className="size-3.5" />
             </Button>
           </span>
@@ -323,6 +335,18 @@ function DebugDetails({ session, debug }: { session: DebugSessionDTO; debug: Deb
         ) : null}
       </div>
 
+      {stopped && !core && (session.capabilities?.supportsSteppingGranularity || granularity !== 'statement') ? <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border/60 px-3 py-1.5">
+        <span className="text-xs text-muted-foreground">{t('debug.steppingMode')}</span>
+        <Select value={granularity} onValueChange={value => debug.setStepping(debugId, value as DebugSteppingGranularity)}>
+          <SelectTrigger aria-label={t('debug.steppingMode')} className="h-7 w-36 text-xs"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="statement">{t('debug.stepStatement')}</SelectItem>
+            <SelectItem value="line" disabled={!session.capabilities?.supportsSteppingGranularity}>{t('debug.stepLine')}</SelectItem>
+            <SelectItem value="instruction" disabled={!session.capabilities?.supportsSteppingGranularity}>{t('debug.stepInstruction')}</SelectItem>
+          </SelectContent>
+        </Select>
+      </div> : null}
+
       {actionError ? <p role="alert" className="shrink-0 px-3 py-1 text-xs text-destructive">{t('debug.actionFailed')}</p> : null}
       {session.error ? <p role="alert" className="shrink-0 whitespace-pre-wrap px-3 py-1 text-xs text-destructive">{session.error}</p> : null}
 
@@ -339,7 +363,7 @@ function DebugDetails({ session, debug }: { session: DebugSessionDTO; debug: Deb
         {stopped && session.location ? (
           <Button variant="ghost"
             type="button"
-            onClick={() => openSource(session.location?.file, session.location?.line)}
+            onClick={() => { setSelectedThread(activeThreadId ?? selectedThread); setSelectedFrame(frames[0]?.id); setMemorySelection(undefined); setFrameVisit(visit => visit + 1); openSource(session.location?.file, session.location?.line) }}
             className="h-auto justify-start flex w-full min-w-0 items-center gap-2 border-b border-border/60 px-3 py-1.5 text-left hover:bg-muted/50"
           >
             <span className="shrink-0 rounded-item bg-amber-500/15 px-1.5 py-0.5 text-[11px] text-amber-600 dark:text-amber-400">
@@ -349,7 +373,7 @@ function DebugDetails({ session, debug }: { session: DebugSessionDTO; debug: Deb
               {session.location.name ?? ''}
             </span>
             <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
-              {session.location.file}:{session.location.line}
+              {session.location.file ? `${session.location.file}:${session.location.line}` : session.location.instructionPointerReference ?? session.location.source?.name}
             </span>
           </Button>
         ) : null}
@@ -406,12 +430,12 @@ function DebugDetails({ session, debug }: { session: DebugSessionDTO; debug: Deb
               {frames.map((frame) => (
                 <li key={frame.id}>
                   <Button variant="ghost" type="button"
-                    onClick={() => { setSelectedFrame(frame.id); openSource(frame.file, frame.line) }}
+                    onClick={() => { setSelectedFrame(frame.id); setMemorySelection(undefined); setFrameVisit(visit => visit + 1); openSource(frame.file, frame.line) }}
                     className={cn('h-auto justify-start flex w-full min-w-0 items-center gap-2 rounded-control px-1 py-0.5 text-left',
                       frame.id === selectedFrame ? 'bg-accent' : 'hover:bg-muted/50')}>
                     <span className="shrink-0 font-mono text-xs text-foreground">{frame.name}</span>
                     <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground">
-                      {frame.file ? `${frame.file}${frame.line !== undefined ? `:${frame.line}` : ''}` : ''}
+                      {frame.file ? `${frame.file}${frame.line !== undefined ? `:${frame.line}` : ''}` : frame.instructionPointerReference ?? frame.source?.name ?? ''}
                     </span>
                   </Button>
                 </li>
@@ -420,12 +444,16 @@ function DebugDetails({ session, debug }: { session: DebugSessionDTO; debug: Deb
           </section>
         ) : null}
 
+        {stopped && selectedFrame !== undefined ? <DebugNativeView key={`${selectedFrame}:${session.sourceVersion ?? 0}:${frameVisit}`} session={session} frame={frames.find(frame => frame.id === selectedFrame)} cwd={cwd} memorySelection={memorySelection} /> : null}
+
         {/* Variables of the selected frame (stopped only) */}
-        {stopped ? (
-          <section aria-label={t('debug.variables')} className="border-b border-border/60 px-3 py-2">
-            <h3 className="mb-1 text-xs font-medium text-muted-foreground">{t('debug.variables')}</h3>
+        {stopped ? (['variables', 'registers'] as const).map(group => {
+          const entries = scopes.filter(scope => (scope.presentationHint === 'registers' || scope.name.toLowerCase() === 'registers') === (group === 'registers'))
+          if (group === 'registers' && !entries.length) return null
+          return <section key={group} aria-label={t(group === 'registers' ? 'debug.registers' : 'debug.variables')} className="border-b border-border/60 px-3 py-2">
+            <h3 className="mb-1 text-xs font-medium text-muted-foreground">{t(group === 'registers' ? 'debug.registers' : 'debug.variables')}</h3>
             <div>
-              {scopes.map((scope) => (
+              {entries.map((scope) => (
                 <div key={scope.variablesReference}>
                   <Button variant="ghost" type="button"
                     aria-expanded={expanded.has(scope.variablesReference)}
@@ -439,11 +467,12 @@ function DebugDetails({ session, debug }: { session: DebugSessionDTO; debug: Deb
                   {expanded.has(scope.variablesReference)
                     ? (variables.get(scope.variablesReference) ?? []).map((variable) => renderVariable(variable, 1))
                     : null}
+                  {expanded.has(scope.variablesReference) ? moreVariables(scope.variablesReference) : null}
                 </div>
               ))}
             </div>
           </section>
-        ) : null}
+        }) : null}
 
         {/* Watch expressions */}
         {!core ? <section aria-label={t('debug.watch')} className="border-b border-border/60 px-3 py-2">

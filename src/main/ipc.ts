@@ -388,6 +388,7 @@ export function registerIpc(pi: PiManager): () => boolean {
     saveSettings({ ...loadSettings(), debugEnabled: enabled })
     return pi.setDebugEnabled(enabled)
   })
+  ipcMain.handle('debug:source', (_event, request: import('../shared/types').DebugSourceRequest) => pi.debugSource(request))
   ipcMain.handle('debug:list', (_event, sessionPath: string) => pi.listDebugSessions(sessionPath))
   ipcMain.handle('debug:action', (_event, request: DebugPanelRequest) => pi.debugPanelAction(request))
   ipcMain.handle('jev:settings', () => pi.jevSettings())

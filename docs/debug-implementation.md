@@ -1,4 +1,4 @@
-# DAP debugging: ownership and P2 boundaries
+# DAP debugging: actions, ownership and native inspection
 
 `debug` is an app-owned custom tool. Settings → General enables exposure; it is
 registered independently of that switch so existing sessions can apply the live
@@ -7,7 +7,7 @@ setting. The right-rail pane and file gutter use the same main-process manager.
 ## Ownership
 
 - A chat owns up to 16 live targets (32 app-wide), each with a unique `debugId`.
-  `debug({action: "sessions"})` lists only the calling chat's targets. An explicit
+  `debug({request: {action: "sessions"}})` lists only the calling chat's targets. An explicit
   id is always checked against the owning `sessionPath`; it cannot address a
   parent or sibling agent's debugger. Calls without an id reject ambiguity.
 - Renderer requests always include `debugId`. The selector and gutter use the
@@ -63,17 +63,99 @@ tool access. Completed targets retain their bounded console, and replacement
 targets carry selection/watches across a restart even in the parent's view.
 
 See [next steps and the Oh My Pi comparison](debug-next-steps.md) for the
-source-less debugging investigation and proposed tool schema evolution.
+original investigation and Oh My Pi comparison. The registry, source identity
+and LLDB native inspection described below are now implemented.
+
+## Action registry and compatibility
+
+`src/main/debug/action-registry.ts` owns each action's TypeBox schema, handler,
+read/execute policy, stopped/target requirement, core allowance and capability
+requirement. It generates the tool's nested discriminated union. The model tool
+and renderer dispatcher use these same handlers; only context-dependent start,
+adapters and launch-configuration discovery are supplied by the tool wrapper.
+The outer schema stays at five fields: `debugId`, `stopId`, `request`,
+`sandbox_permissions`, and `justification`. No generic DAP escape hatch is exposed.
+
+```json
+{"debugId":"target-id","stopId":3,"request":{"action":"disassemble","memoryReference":"0x100003cc","count":32}}
+```
+
+SDK 0.85.x `prepareArguments` normalizes existing flat calls before validation;
+`execute` also normalizes direct callers. Legacy source breakpoint arrays become
+`items: [{line, condition?, hitCondition?, logMessage?}]`. Mismatched parallel
+arrays, extra fields from another action, and mixed old/new envelopes reject.
+`help` lists action policies. This reduces parameter coupling, not the cost of
+sending the complete schema to the model. OMP-style lazy discovery still needs
+an SDK/provider integration; no unsupported `loadMode` property is simulated.
+
+Execution policy still belongs to the live tool owner: discovery, start/stop,
+restart, controls, evaluate and all breakpoint writes require executable sandbox
+mode. Enablement/Plan admission is checked again after awaiting permission.
+The panel represents direct human actions. Its reference requests require a
+stop token; new model native-reference actions require `debugId` and `stopId` too.
+Legacy inspection calls without stop tokens remain compatible.
+
+## Source identity and native LLDB workflow
+
+`DebugSourceDTO` distinguishes `{kind:"file",path}` from
+`{kind:"adapter",sourceReference,path?}`. A positive reference always wins over
+path, including LLDB's synthetic `binary` + backtick + `symbol` paths. Only file
+sources populate the legacy `file` field. Frames and stop locations retain
+`instructionPointerReference` and `moduleId`; variables/evaluate retain opaque
+`memoryReference`; scopes retain `presentationHint` and child counts. Addresses
+stay strings. Explicit hex comparisons/offsets use BigInt, never Number.
+
+Virtual source uses the typed `debug:source` preload/IPC method and DAP `source`,
+with main-owned raw source metadata. Its cache is per target/reference/version,
+separate from disk previews, at most eight 256 Ki-character documents per target.
+Stop/resume/termination and `loadedSource`/`invalidated` events invalidate content;
+old responses check both stop and source version before publishing. Invalidated
+frame/variable references advance the stop token even without a continued event.
+Capabilities are a typed, selected snapshot and follow DAP capability updates.
+
+The pane provides Source / Assembly / Memory / Modules tabs. Missing local source
+falls back to assembly; adapter source never reaches file IO. PC is highlighted,
+instruction rows toggle instruction breakpoints, addresses and variable memory
+references open memory, and register scopes have a separate expandable group.
+Step granularity persists per target across stops and replacement restarts.
+Unsupported operations are hidden/disabled and main independently rejects them.
+
+| Action | Contract / bound |
+| --- | --- |
+| `source` | `sourceReference` plus session `sourceVersion`; 256 Ki characters, explicit truncation |
+| `disassemble` | Opaque `memoryReference`, distinct byte `offset` and `instructionOffset`; default 64, max 200 instructions |
+| `memory.read` | Default 128, max 4096 bytes; bounded base64 + hex, actual byte count, unreadable count and short-read flag; never zero-fill gaps |
+| `registers` | Selected frame's register scopes, expanded/paged with `variables`; no invented DAP register request |
+| `modules` | Default 50, max 100 modules, symbol status/path; probes ignored count/start paging and bounds displayed results |
+| `control` | Optional statement/line/instruction granularity, forwarded to next/stepIn/stepOut only when supported |
+| `breakpoints.instruction` | Complete `items` set, max 256; serialized with source/function writes and fenced to a stop |
+| `breakpoints.function` | Complete named `items` set, max 256; same permission and conditional-diagnostic rules |
+| `breakpoints.native` | Current instruction/function bindings; condition binding is never evaluation validation |
+
+Absolute instruction breakpoints are cleared before native restart and omitted
+from fallback restart, because ASLR can relocate the program. Function and source
+intent survives restart. Breakpoint events update native bindings/removal, and
+instruction toggles resolve bound offsets without discarding another breakpoint.
+Panel add/remove actions merge inside the main write queue (`breakpoints.*.update`),
+so a stale renderer list cannot overwrite another writer's breakpoint or its
+conditions. A control waits for previously admitted breakpoint writes before resuming.
+
+Core reads still depend on the dump's captured pages and matching binaries.
+Missing pages produce adapter errors or explicit short reads. A symbols-bearing
+core with deleted local source is covered by the real test; complete code/memory
+availability for every sparse or foreign core is not promised. Data watchpoints,
+memory writes and remote adapter profiles are outside this increment.
 
 ## Core dump inspection
 
 ```json
-{"action":"start","adapter":"lldb-dap","kind":"core","coreFile":"/absolute/path/app.core","program":"/absolute/path/app"}
+{"request":{"action":"start","adapter":"lldb-dap","kind":"core","coreFile":"/absolute/path/app.core","program":"/absolute/path/app"}}
 ```
 
 This uses LLDB's DAP `attach` request with `coreFile`, corresponding to `lldb -c`.
 `program` is optional and supplies the executable/symbols when needed. The core
-exposes threads, stack, scopes and variables. Execution control, restart,
+exposes threads, stack, scopes, variables/registers, adapter sources, disassembly,
+read-only memory and modules when supported. Execution control, restart,
 breakpoints and executable evaluate expressions are rejected; the pane reflects
 that boundary. Core mode rejects adapter command overrides from launch.json.
 Symbols, source mapping and core portability still depend on the local LLDB and
@@ -159,9 +241,12 @@ key with `state=2`. A single missed hit is not evidence of broken simple conditi
 
 | Check | Coverage |
 | --- | --- |
+| `node scripts/check-debug-actions.mjs` | Registry and installed SDK validation; legacy normalization; shared panel routing; core/permission/capability checks; source identity/ownership/invalidation; opaque and >53-bit references; memory gaps; honored/ignored module paging; stale async replies; serialized native breakpoint writes/events and restart clearing |
+| `node scripts/check-debug-native.mjs` | Real stripped binary with source deleted: virtual source → PC/disassembly → register groups/memory/modules → instruction step → instruction breakpoint hit → restart; separate symbols-without-source function breakpoint hit/retention; real generated core reads and execution rejection |
+| `node scripts/check-debug-native-ui.mjs` (after build) | Real Electron + production manager/registry + built preload IPC + LLDB; stripped binary, virtual source, instruction step and breakpoint hit, memory, registers and modules |
 | `node scripts/check-debug-protocol.mjs` | Production client/manager, deterministic stdio/TCP peers: handshake, silent import, child targets, ownership, cancellation, crash cleanup with a SIGTERM-resistant child, terminal cleanup leases, read-only discovery/evaluate denial, replacement ids, stale fills, paged/unpaged 1/50/51/105-item lists, structured errors, bounded output, JSONC and POSIX/Windows command construction |
 | `node scripts/check-debug-regressions.mjs` | Cross-checkout leases through cancellation/restart/cleanup, launch-tree breakpoint retention and isolation, imported Python module requests; real LLDB external-cwd restore fences, debugpy module debugging and js-debug native restart/clear |
-| `node scripts/check-debug-ui.mjs` | Real Electron/beUI pane: parent/subagent selection, roster/missed-event recovery, owner-scoped controls and file gutter, restart watch transfer, explicit-selection preservation, both locales/themes, keyboard variables/gutter, 20px bounded source rows, condition diagnostics, repeated stops, frame-specific watches, source lines, final console tail, core controls |
+| `node scripts/check-debug-ui.mjs` | Real Electron/beUI pane: parent/subagent selection, roster/missed-event recovery, owner-scoped controls and file gutter, restart watch transfer, explicit-selection preservation, both locales/themes, keyboard variables/gutter, 20px bounded source rows, condition diagnostics, repeated stops, frame-specific watches, source lines, final console tail, core controls; native virtual-source IPC, missing-file fallback, PC, register memory, gaps, modules paging, instruction/function breakpoints, owner/stop routing at 320px in both locales/themes |
 | `node scripts/check-debug-conditions.mjs` | Real LLDB raw strcmp error diagnostics and recovery, correctly typed function condition, non-function condition, and unconditional breakpoints |
 | `node scripts/check-debug-sessions.mjs` | Real LLDB launch/attach/control, variables, conditional/log breakpoints, restart, TCP, JSONC, and generating/loading an actual core dump |
 | `node scripts/check-debug.mjs` | Adapter doctor using production detection/manager; available adapters run real fixture programs, missing adapters print SKIP |
@@ -172,7 +257,9 @@ key with `state=2`. A single missed hit is not evidence of broken simple conditi
 On the macOS host (2026-09-27), real launch, breakpoint, stack, scopes, variables,
 evaluate and disconnect pass for **all four** adapters: Apple LLDB 21.0.0,
 debugpy 1.8.21, Delve 1.27.2 and js-debug 1.140.0. Actual LLDB core dump inspection
-also passes. At the user's request, debugpy was installed in the current Python
+also passes. `PI_DEBUG_SCREENSHOT_DIR` retains native and subagent panel screenshots
+for either UI suite. The new native loop passes on Apple ARM64; this does not
+imply native runtime coverage on other operating systems. At the user's request, debugpy was installed in the current Python
 user environment, Delve in `~/.local/bin`, and the official standalone js-debug
 release in `~/.pi/agent/debug-adapters/js-debug`. The release archive's SHA-256 was
 checked against its published digest. Detection now checks that standalone

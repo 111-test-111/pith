@@ -2,11 +2,17 @@
 
 调查时间：2026-09-27。以当前工作区代码和 Oh My Pi 提交
 [`09dee778d6d321cc2957105a87742efe3b1b2ac2`](https://github.com/can1357/oh-my-pi/tree/09dee778d6d321cc2957105a87742efe3b1b2ac2)
-为准。**本次已实现子代理调试视图；下面的无源码能力和工具接口是后续设计建议，尚未接入产品。**
+为准。下文保留初次调查的缺口与方案，作为设计依据。
+
+**实施更新（2026-09-27）：已完成 action registry、嵌套参数与旧格式兼容、DTO/source identity，
+以及 LLDB 无源码闭环（虚拟源、反汇编、寄存器、内存、模块、函数/指令断点、指令单步与 core 只读检查）。
+真实 LLDB 和真实 Electron/preload/IPC 联调均通过。** 当前契约、边界及验收脚本见
+[实现文档](debug-implementation.md#action-registry-and-compatibility)。数据断点、写内存、远程 profile、
+动态工具发现仍属于后续能力，不计入本次验收。
 
 ## 1. 无源码调试需要完整的地址工作流
 
-现有后端可以调试二进制和加载 LLDB core，但数据模型与 UI 仍以本地源码为中心：
+初次调查时，后端可以调试二进制和加载 LLDB core，但数据模型与 UI 仍以本地源码为中心：
 
 - `DebugManager.mapFrame` 只保留文件、行列和名称，丢失 `instructionPointerReference`、`moduleId` 和 `sourceReference`。
 - `mapVariable` / `evaluate` 丢失 `memoryReference`；`scopes` 丢失 `presentationHint`，寄存器虽可作为普通 scope 展开，却没有稳定的语义标识。

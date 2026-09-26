@@ -29,6 +29,8 @@ import type {
   BashTaskDTO,
   BashTaskOutputDTO,
   DebugPanelRequest,
+  DebugSourceRequest,
+  DebugSourceContentDTO,
   DebugSessionDTO,
   DebugTerminalRequest,
   DebugTerminalResult,
@@ -170,6 +172,7 @@ const api = {
    * paging); shares the live session with the model's debug tool. */
   debugAction: (request: DebugPanelRequest): Promise<unknown> =>
     ipcRenderer.invoke('debug:action', request),
+  debugSource: (request: DebugSourceRequest): Promise<DebugSourceContentDTO> => ipcRenderer.invoke('debug:source', request),
   onDebugEvent: (listener: (session: DebugSessionDTO) => void) => subscribe('debug:event', listener),
   /** DAP runInTerminal relay: main asks the renderer to host the debuggee in a
    * sidebar terminal tab; answer with debugTerminalResponse. */
