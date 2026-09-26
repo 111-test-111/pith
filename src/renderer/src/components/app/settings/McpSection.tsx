@@ -19,6 +19,7 @@ import { Tooltip } from '@/components/motion/tooltip'
 import { useI18n } from '@/i18n'
 import type { MessageKey } from '@/i18n/locales/en'
 import { cn } from '@/lib/utils'
+import { FadeScroll } from '@/components/app/FadeScroll'
 import {
   MCP_ADAPTER_DOCS_URL,
   createEmptyMcpServerForm,
@@ -525,7 +526,7 @@ function JsonConfigCard({ file }: { file: McpConfigFileDTO }) {
           placeholder='{\n  "mcpServers": {}\n}'
           spellCheck={false}
           autoComplete="off"
-          className="font-mono text-xs leading-5"
+          classNames={{ input: 'font-mono text-xs leading-5' }}
           error={draft.parseError ? `${t('mcp.parseError')}: ${draft.parseError}` : undefined}
           onChange={(text) => {
             const parsed = parseMcpConfigJson(text)
@@ -606,7 +607,8 @@ function ServerEditorDialog({
                   placeholder={'{\n  "mcpServers": {\n    "my-server": {\n      "url": "https://example.com/mcp"\n    }\n  }\n}'}
                   spellCheck={false}
                   autoComplete="off"
-                  className="font-mono text-xs leading-5"
+                  // Monospace belongs to the textarea, not the label above it.
+                  classNames={{ input: 'font-mono text-xs leading-5' }}
                   onChange={onSnippetChange}
                 />
                 <p className="mt-1.5 px-1 text-[11px] leading-4 text-muted-foreground/70">
@@ -774,6 +776,7 @@ function StringListEditor({
         {rows.map((row, index) => (
           <div key={index} className="flex items-center gap-1.5">
             <Input
+              className="min-w-0 flex-1"
               value={row}
               placeholder={placeholder}
               aria-label={placeholder}
@@ -823,6 +826,7 @@ function KeyValueListEditor({
         {rows.map((row, index) => (
           <div key={index} className="flex items-center gap-1.5">
             <Input
+              className="min-w-0 flex-1"
               value={row.key}
               placeholder={keyPlaceholder}
               aria-label={keyPlaceholder}
@@ -831,6 +835,7 @@ function KeyValueListEditor({
               onChange={(key) => onChange(rows.map((item, i) => (i === index ? { ...item, key } : item)))}
             />
             <Input
+              className="min-w-0 flex-1"
               value={row.value}
               placeholder={valuePlaceholder}
               aria-label={valuePlaceholder}
@@ -1015,7 +1020,13 @@ function ToolDetailBlock({ tool }: { tool: McpServerDetailDTO['tools'][number] }
       <code className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-xs font-semibold text-foreground">
         {tool.name}
       </code>
-      {tool.description ? <p className="mt-1.5 text-xs leading-4 text-muted-foreground">{tool.description}</p> : null}
+      {tool.description ? (
+        // Long server-provided prose (context7's instructions are infamous)
+        // scrolls inside a bounded area instead of stretching the dialog.
+        <FadeScroll className="mt-1.5 max-h-44">
+          <p className="text-xs leading-4 text-muted-foreground">{tool.description}</p>
+        </FadeScroll>
+      ) : null}
       {fields.length > 0 ? (
         <div className="mt-2 divide-y divide-border/60 border-t border-border/60">
           {fields.map((field) => (
