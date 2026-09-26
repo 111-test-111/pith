@@ -548,6 +548,7 @@ export class PiManager {
     const manager = this.debugManager
     switch (request.action) {
       case 'stop': return manager.stop(request.sessionPath)
+      case 'restart': return manager.restart(request.sessionPath)
       case 'control': return manager.control(request.sessionPath, request.control, request.threadId)
       case 'threads': return manager.threads(request.sessionPath)
       case 'stack': return manager.stack(request.sessionPath, request.threadId, request.levels)
@@ -556,6 +557,7 @@ export class PiManager {
       case 'evaluate': return manager.evaluate(request.sessionPath, request.expression, request.frameId)
       case 'output': return manager.output(request.sessionPath, request.cursor, request.maxChars)
       case 'breakpoints': return manager.breakpoints(request.sessionPath)
+      case 'breakpoints-set': return manager.setBreakpoints(request.sessionPath, request.file, request.lines)
     }
   }
   bashTaskOutput(request: BashTaskRequest): BashTaskOutputDTO {

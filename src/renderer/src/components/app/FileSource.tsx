@@ -8,6 +8,7 @@ import { useI18n } from '@/i18n'
 import { EMPTY_FILE_SEARCH, type FileSearchResult } from '@/lib/file-search'
 import { useFileSearchHighlights } from '@/lib/hooks/use-file-search-highlights'
 import type { FileBrowserStore, FileTab } from '@/state/file-browser-store'
+import type { DebugBreakpointDTO } from '../../../../shared/types'
 
 /** 3.5rem gutter + 1rem row padding: the horizontal inset around code text. */
 const CODE_INSET = 72
@@ -89,7 +90,7 @@ function displayRow(wrapped: WrappedSource | null, line: number, offset = 0) {
  * Soft wrap re-segments lines into fixed 20px display rows, so the fixed-row
  * virtualizer, line anchors and search Highlights stay exact with no DOM
  * measurement. Even one huge logical line mounts only its visible segments. */
-export function FileSource({ text, tab, store, search, wrap }: { text: string; tab: FileTab; store: FileBrowserStore; search?: { result: FileSearchResult; current: number }; wrap: boolean }) {
+export function FileSource({ text, tab, store, search, wrap, debugBreakpoints, onToggleBreakpoint }: { text: string; tab: FileTab; store: FileBrowserStore; search?: { result: FileSearchResult; current: number }; wrap: boolean; debugBreakpoints?: DebugBreakpointDTO[]; onToggleBreakpoint?: (line: number) => void }) {
   const { t } = useI18n()
   const ref = useRef<HTMLDivElement>(null)
   const ruler = useRef<HTMLSpanElement>(null)
@@ -173,6 +174,32 @@ export function FileSource({ text, tab, store, search, wrap }: { text: string; t
   }, [active, wrapped, lineStarts, onScroll])
   const highlightVersion = useMemo(() => ({ tokens, wrapped }), [tokens, wrapped])
   useFileSearchHighlights(ref, lineStarts, search?.result.matches ?? EMPTY_FILE_SEARCH.matches, search?.current ?? 0, highlightVersion, start, end)
+  /** The gutter cell: a red dot for a bound breakpoint (hollow when unbound),
+   * and the line number as a toggle button while a debug session is live. */
+  const gutterCell = (number: number, showNumber: boolean) => {
+    const breakpoint = debugBreakpoints?.find((item) => item.line === number)
+    return (
+      <span className="relative select-none pr-4 text-right tabular-nums text-muted-foreground/45">
+        {breakpoint ? (
+          <span aria-hidden className={cn(
+            'absolute left-1.5 top-1/2 size-2 -translate-y-1/2 rounded-full',
+            breakpoint.verified ? 'bg-destructive' : 'border border-muted-foreground/60'
+          )} />
+        ) : null}
+        {onToggleBreakpoint && showNumber ? (
+          <button
+            type="button"
+            tabIndex={-1}
+            aria-label={t('debug.toggleBreakpoint', { line: number })}
+            onClick={() => onToggleBreakpoint(number)}
+            className={cn('hover:text-foreground', breakpoint && 'text-foreground/80')}
+          >
+            {number}
+          </button>
+        ) : showNumber ? number : null}
+      </span>
+    )
+  }
   return <div ref={ref} data-file-source role="region" aria-label={t('files.source')} tabIndex={0} className="min-h-0 flex-1 overflow-auto outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
     onScroll={() => { onScroll(); if (ref.current) store.saveScroll(tab.path, 'source', ref.current.scrollTop, ref.current.scrollLeft) }}>
     <span ref={ruler} aria-hidden className="pointer-events-none invisible fixed m-0 font-mono text-xs" style={{ width: '100ch' }} />
@@ -186,7 +213,7 @@ export function FileSource({ text, tab, store, search, wrap }: { text: string; t
               const offset = wrapped.boundaries[firstSegment * 2]
               const lineTokens = tokens?.[firstLine + index]
               return <span key={number} data-source-line={number} data-source-offset={offset} className={cn('grid grid-cols-[3.5rem_minmax(0,1fr)]', !search && tab.line === number && 'bg-primary/10')}>
-                <span aria-hidden className="select-none pr-4 text-right tabular-nums text-muted-foreground/45">{firstSegment === wrapped.prefix[number - 1] ? number : null}</span>
+                {gutterCell(number, firstSegment === wrapped.prefix[number - 1])}
                 <span className="min-w-0 pr-4">
                   {Array.from({ length: lastSegment - firstSegment }, (_, segment) => {
                     const from = wrapped.boundaries[(firstSegment + segment) * 2], to = wrapped.boundaries[(firstSegment + segment) * 2 + 1]
@@ -196,7 +223,7 @@ export function FileSource({ text, tab, store, search, wrap }: { text: string; t
               </span>
             })
           : lines.slice(start, end).map((line, index) => <span key={start + index} data-source-line={start + index + 1} className={cn('grid h-5 grid-cols-[3.5rem_minmax(0,1fr)]', !search && tab.line === start + index + 1 && 'bg-primary/10')}>
-              <span aria-hidden className="select-none pr-4 text-right tabular-nums text-muted-foreground/45">{start + index + 1}</span>
+              {gutterCell(start + index + 1, true)}
               <AgentCodeLine code={line} tokens={tokens?.[start + index]} className="whitespace-pre pr-4" />
             </span>)}
       </code>

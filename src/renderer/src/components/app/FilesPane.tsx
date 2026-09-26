@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react'
+import type { DebugBreakpointDTO } from '../../../../shared/types'
 import { AgentCode } from '@/components/agents/agent-code'
 import { Button } from '@/components/motion/button'
 import { Tabs, TabsList, TabsTrigger } from '@/components/motion/tabs'
@@ -10,6 +11,7 @@ import { cn } from '@/lib/utils'
 import { useI18n } from '@/i18n'
 import { type FileBrowserStore, type FileTab, type FileView } from '@/state/file-browser-store'
 import type { PiStore } from '@/state/pi-store'
+import type { DebugStore } from '@/state/debug-store'
 import type { FileDocumentDTO, FileGitDiffDTO } from '../../../../shared/types'
 import { hasPreviewView, isInlineOnly, isMediaKind, previewKindOf, readsAsText, subtitleFormatOf, textReadLimit, type PreviewKind } from '../../../../shared/preview'
 import { FileDiffPreview } from './FileDiffPreview'
@@ -43,7 +45,7 @@ function Notice({ children, loading = false }: { children: ReactNode; loading?: 
   </div>
 }
 
-function FileContent({ tab, kind, document, store, search, refresh, wrap }: { tab: FileTab; kind: PreviewKind; document: FileDocumentDTO; store: FileBrowserStore; search?: { result: FileSearchResult; current: number }; refresh: number; wrap: boolean }) {
+function FileContent({ tab, kind, document, store, search, refresh, wrap, debugBreakpoints, onToggleBreakpoint }: { tab: FileTab; kind: PreviewKind; document: FileDocumentDTO; store: FileBrowserStore; search?: { result: FileSearchResult; current: number }; refresh: number; wrap: boolean; debugBreakpoints?: DebugBreakpointDTO[]; onToggleBreakpoint?: (line: number) => void }) {
   const { t } = useI18n()
   const scroll = useRef<HTMLDivElement>(null)
   const [diff, setDiff] = useState<FileGitDiffDTO | null>(null)
@@ -86,10 +88,35 @@ function FileContent({ tab, kind, document, store, search, refresh, wrap }: { ta
       </FileNavigationProvider>
     </div>
   }
-  return <FileSource key={tab.path} text={document.text ?? ''} tab={tab} store={store} search={search} wrap={wrap} />
+  return <FileSource key={tab.path} text={document.text ?? ''} tab={tab} store={store} search={search} wrap={wrap} debugBreakpoints={debugBreakpoints} onToggleBreakpoint={onToggleBreakpoint} />
 }
 
-export function FilesPane({ files, store, filePath }: { files: FileBrowserStore; store: PiStore; filePath: string | null }) {
+/** Breakpoint data and the toggle action for the gutter, while a debug
+ * session is live; undefined for both means a read-only gutter. */
+function useDebugGutter(debug: DebugStore, sessionPath: string | null, file: string | undefined): {
+  debugBreakpoints?: DebugBreakpointDTO[]
+  onToggleBreakpoint?: (line: number) => void
+} {
+  const snapshot = useSyncExternalStore(debug.subscribe, debug.getSnapshot)
+  const sessions = sessionPath ? snapshot.sessions.filter((item) => item.sessionPath === sessionPath) : []
+  const live = sessions.some((item) => item.status === 'starting' || item.status === 'running' || item.status === 'stopped')
+  useEffect(() => {
+    if (sessionPath && live) void debug.refreshBreakpoints(sessionPath)
+  }, [sessionPath, live, debug, snapshot.revision])
+  if (!sessionPath || !live || !file) return {}
+  return {
+    debugBreakpoints: debug.breakpointsFor(sessionPath, file),
+    onToggleBreakpoint: (line) => {
+      const current = debug.breakpointsFor(sessionPath, file).map((bp) => bp.line)
+      const lines = current.includes(line) ? current.filter((item) => item !== line) : [...current, line].sort((a, b) => a - b)
+      void window.pi.debugAction({ sessionPath, action: 'breakpoints-set', file, lines })
+        .then(() => debug.refreshBreakpoints(sessionPath))
+        .catch(() => {})
+    }
+  }
+}
+
+export function FilesPane({ files, store, filePath, debug }: { files: FileBrowserStore; store: PiStore; filePath: string | null; debug: DebugStore }) {
   const { t } = useI18n()
   const state = useSyncExternalStore(files.subscribe, files.getSnapshot)
   const shell = useSyncExternalStore(store.subscribe, store.getShell)
@@ -100,6 +127,7 @@ export function FilesPane({ files, store, filePath }: { files: FileBrowserStore;
   // Keep its last file frame until unmount, instead of mounting a fresh chooser
   // (and new tree animations) inside an already-exiting presence boundary.
   const tab = currentTab ?? (lastTab.current?.path === filePath ? lastTab.current : undefined)
+  const gutter = useDebugGutter(debug, shell.sessionPath, tab?.path)
   const treeOpen = tab?.treeOpen ?? state.treeOpen
   const cwd = tab?.cwd ?? shell.cwd ?? ''
   const root = tab && tab.path !== cwd && !tab.path.startsWith(cwd.replace(/\/$/, '') + '/') ? fileDirname(tab.path) : cwd
@@ -265,7 +293,7 @@ export function FilesPane({ files, store, filePath }: { files: FileBrowserStore;
             </div>
           </div>}
           {!inlineOnly && !spreadsheet && find ? <FileFindBar inputRef={findRef} query={query} options={findOptions} result={searchResult} current={selectedMatch} searching={searching} onQuery={value => { setQuery(value); setMatchIndex(0) }} onOptions={value => { setFindOptions(value); setMatchIndex(0) }} onMove={moveMatch} onClose={closeFind} /> : null}
-          {mediaKind ? <FileMedia tab={tab} kind={mediaKind} refresh={refresh} /> : kind === 'pdf' ? <FilePdf key={tab.path} tab={tab} onOpenFile={target => files.open(tab.cwd, { path: target })} /> : kind === 'font' ? <FileFont key={`${tab.path}:${refresh}`} tab={tab} /> : kind === 'unplayable' ? <Notice>{t('files.media.unsupported')}</Notice> : kind === 'html' && view === 'preview' ? <FileHtml key={tab.path} tab={tab} refresh={refresh} onFind={showFind} /> : table && view === 'preview' ? <FileTable key={tab.path} tab={tab} format={table} store={files} generation={refresh} /> : ready ? <FileContent key={tab.path} tab={tab} kind={kind} document={ready} store={files} search={find ? { result: searchResult, current: selectedMatch } : undefined} refresh={refresh} wrap={state.wrapLines} /> : <Notice loading>{t('files.loading')}</Notice>}
+          {mediaKind ? <FileMedia tab={tab} kind={mediaKind} refresh={refresh} /> : kind === 'pdf' ? <FilePdf key={tab.path} tab={tab} onOpenFile={target => files.open(tab.cwd, { path: target })} /> : kind === 'font' ? <FileFont key={`${tab.path}:${refresh}`} tab={tab} /> : kind === 'unplayable' ? <Notice>{t('files.media.unsupported')}</Notice> : kind === 'html' && view === 'preview' ? <FileHtml key={tab.path} tab={tab} refresh={refresh} onFind={showFind} /> : table && view === 'preview' ? <FileTable key={tab.path} tab={tab} format={table} store={files} generation={refresh} /> : ready ? <FileContent key={tab.path} tab={tab} kind={kind} document={ready} store={files} search={find ? { result: searchResult, current: selectedMatch } : undefined} refresh={refresh} wrap={state.wrapLines} debugBreakpoints={gutter.debugBreakpoints} onToggleBreakpoint={gutter.onToggleBreakpoint} /> : <Notice loading>{t('files.loading')}</Notice>}
           {/* A table's preview is not the truncated source text, so the source
               notice belongs to the source view only. */}
           {ready?.truncated && !((table || kind === 'html') && view === 'preview') ? <p role="status" className="shrink-0 border-t border-border/40 px-3 py-2 text-xs text-muted-foreground">{t('files.truncated', { size: formatBytes(textReadLimit(kind)) })}</p> : null}

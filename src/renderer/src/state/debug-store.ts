@@ -1,4 +1,8 @@
-import type { DebugSessionDTO } from '../../../shared/types'
+import type { DebugBreakpointDTO, DebugSessionDTO } from '../../../shared/types'
+
+/** Stable empty list: a missing session must not re-render subscribers. */
+const NO_WATCHES: string[] = []
+const NO_BREAKPOINTS: DebugBreakpointDTO[] = []
 
 /**
  * Workspace-lifetime mirror of every debug session, fed by the main process's
@@ -11,6 +15,54 @@ export class DebugStore {
   private listeners = new Set<() => void>()
   private off?: () => void
   private snapshot: { revision: number; sessions: DebugSessionDTO[] } = { revision: 0, sessions: [] }
+  /** Watch expressions per chat session; renderer-local, evaluated at stops. */
+  private watches = new Map<string, string[]>()
+  /** Breakpoints per chat session, refreshed on demand by panes. */
+  private breakpoints = new Map<string, DebugBreakpointDTO[]>()
+
+  breakpointsFor(sessionPath: string | null, file?: string): DebugBreakpointDTO[] {
+    if (!sessionPath) return NO_BREAKPOINTS
+    const list = this.breakpoints.get(sessionPath) ?? NO_BREAKPOINTS
+    return file ? list.filter((bp) => bp.file === file) : list
+  }
+
+  /** Pull the session's breakpoints; notifies only on a real change, so an
+   * effect that refreshes on every revision cannot loop. */
+  async refreshBreakpoints(sessionPath: string): Promise<void> {
+    try {
+      const list = await window.pi.debugAction({ sessionPath, action: 'breakpoints' }) as DebugBreakpointDTO[]
+      const previous = this.breakpoints.get(sessionPath)
+      if (previous && previous.length === list.length && previous.every((bp, index) => bp.file === list[index].file && bp.line === list[index].line && bp.verified === list[index].verified)) return
+      this.breakpoints.set(sessionPath, list)
+      this.notifyWatchChange()
+    } catch { /* the session ended between render and fetch */ }
+  }
+
+  watchList(sessionPath: string | null): string[] {
+    if (!sessionPath) return NO_WATCHES
+    return this.watches.get(sessionPath) ?? NO_WATCHES
+  }
+
+  addWatch(sessionPath: string, expression: string): void {
+    const trimmed = expression.trim()
+    if (!trimmed) return
+    const list = this.watches.get(sessionPath) ?? []
+    if (list.includes(trimmed)) return
+    this.watches.set(sessionPath, [...list, trimmed])
+    this.notifyWatchChange()
+  }
+
+  removeWatch(sessionPath: string, expression: string): void {
+    const list = this.watches.get(sessionPath)
+    if (!list) return
+    this.watches.set(sessionPath, list.filter((item) => item !== expression))
+    this.notifyWatchChange()
+  }
+
+  private notifyWatchChange(): void {
+    this.snapshot = { revision: this.snapshot.revision + 1, sessions: this.snapshot.sessions }
+    for (const listener of this.listeners) listener()
+  }
 
   subscribe = (listener: () => void): (() => void) => {
     this.ensureBridge()

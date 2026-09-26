@@ -9,8 +9,9 @@ import type {
   DebugVariableDTO,
   DebugVariablesPageDTO
 } from '../../../../shared/types'
-import { ArrowDownToLine, ArrowUpFromLine, Bug, ChevronDown, ChevronRight, Pause, Play, Square, StepForward, X } from '@/lib/icons'
+import { ArrowDownToLine, ArrowUpFromLine, Bug, ChevronDown, ChevronRight, Pause, Play, Plus, RotateCcw, Square, StepForward, X } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
+import { Input } from '@/components/motion/input'
 import { Tooltip } from '@/components/motion/tooltip'
 import { useI18n } from '@/i18n'
 import { cn } from '@/lib/utils'
@@ -66,6 +67,8 @@ export function DebugPane({ store, debug }: { store: PiStore; debug: DebugStore 
   const outputCursor = useRef(0)
   const [busy, setBusy] = useState<string | null>(null)
   const [actionError, setActionError] = useState(false)
+  const [watchDraft, setWatchDraft] = useState('')
+  const [watchResults, setWatchResults] = useState<ReadonlyMap<string, { result?: string; error?: boolean }>>(new Map())
 
   const sessionId = session?.id
   const status = session?.status
@@ -172,6 +175,33 @@ export function DebugPane({ store, debug }: { store: PiStore; debug: DebugStore 
     }
   }
 
+  // Watch expressions evaluate at every stop (and right after being added
+  // while stopped). The store's list identity drives re-evaluation.
+  const watchExpressions = sessionPath ? debug.watchList(sessionPath) : []
+  useEffect(() => {
+    if (!sessionPath || status !== 'stopped') return
+    let alive = true
+    void (async () => {
+      const results = new Map<string, { result?: string; error?: boolean }>()
+      for (const expression of watchExpressions) {
+        try {
+          const evaluated = await window.pi.debugAction({ sessionPath, action: 'evaluate', expression }) as { result: string }
+          results.set(expression, { result: evaluated.result })
+        } catch (error) {
+          results.set(expression, { result: error instanceof Error ? error.message : String(error), error: true })
+        }
+      }
+      if (alive) setWatchResults(results)
+    })()
+    return () => { alive = false }
+  }, [sessionPath, sessionId, status, revision, watchExpressions])
+
+  const addWatch = (): void => {
+    if (!sessionPath || !watchDraft.trim()) return
+    debug.addWatch(sessionPath, watchDraft)
+    setWatchDraft('')
+  }
+
   const openSource = (file: string | undefined): void => {
     if (file) navigation.open(file)
   }
@@ -266,6 +296,15 @@ export function DebugPane({ store, debug }: { store: PiStore; debug: DebugStore 
           <span>
             <Button variant="ghost" size="icon" className="size-7" aria-label={t('debug.stepOut')} disabled={!stopped || busy !== null} onClick={() => control('stepOut')}>
               <ArrowUpFromLine aria-hidden="true" className="size-3.5" />
+            </Button>
+          </span>
+        </Tooltip>
+        <Tooltip content={t('debug.restartHint')}>
+          <span>
+            <Button variant="ghost" size="icon" className="size-7" aria-label={t('debug.restart')}
+              disabled={session.status === 'starting' || busy !== null}
+              onClick={() => sessionPath && runAction('restart', () => window.pi.debugAction({ sessionPath, action: 'restart' }))}>
+              <RotateCcw aria-hidden="true" className="size-3.5" />
             </Button>
           </span>
         </Tooltip>
@@ -390,6 +429,48 @@ export function DebugPane({ store, debug }: { store: PiStore; debug: DebugStore 
             </div>
           </section>
         ) : null}
+
+        {/* Watch expressions */}
+        <section aria-label={t('debug.watch')} className="border-b border-border/60 px-3 py-2">
+          <h3 className="mb-1 text-xs font-medium text-muted-foreground">{t('debug.watch')}</h3>
+          <form className="mb-1.5 flex items-center gap-1" onSubmit={(event) => { event.preventDefault(); addWatch() }}>
+            <Input
+              value={watchDraft}
+              onChange={(value) => setWatchDraft(value)}
+              placeholder={t('debug.watchPlaceholder')}
+              aria-label={t('debug.watchPlaceholder')}
+              classNames={{ field: 'h-7', input: 'px-2 font-mono text-xs' }}
+            />
+            <Button type="submit" variant="ghost" size="icon" className="size-7 shrink-0" aria-label={t('debug.watchAdd')} disabled={!watchDraft.trim()}>
+              <Plus aria-hidden="true" className="size-4" />
+            </Button>
+          </form>
+          {watchExpressions.length === 0 ? (
+            <p className="text-xs text-muted-foreground/70">{t('debug.watchEmpty')}</p>
+          ) : (
+            <ul className="space-y-0.5">
+              {watchExpressions.map((expression) => {
+                const result = watchResults.get(expression)
+                return (
+                  <li key={expression} className="group flex min-w-0 items-center gap-1.5 rounded-control px-1 py-0.5">
+                    <span className="shrink-0 font-mono text-xs text-foreground">{expression}</span>
+                    <span className={cn('min-w-0 flex-1 truncate font-mono text-xs', result?.error ? 'text-destructive' : 'text-muted-foreground')}>
+                      {result?.result ?? (stopped ? '…' : '—')}
+                    </span>
+                    <Button
+                      variant="ghost" size="icon"
+                      className="size-5 shrink-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+                      aria-label={t('debug.watchRemove', { expression })}
+                      onClick={() => sessionPath && debug.removeWatch(sessionPath, expression)}
+                    >
+                      <X aria-hidden="true" className="size-3" />
+                    </Button>
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+        </section>
 
         {/* Debug console */}
         <section aria-label={t('debug.output')} className="px-3 py-2">

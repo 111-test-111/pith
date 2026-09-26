@@ -1800,6 +1800,7 @@ export type DebugTerminalResult =
  * so the user and the agent drive one and the same live session. */
 export type DebugPanelRequest =
   | { sessionPath: string; action: 'stop' }
+  | { sessionPath: string; action: 'restart' }
   | { sessionPath: string; action: 'control'; control: 'continue' | 'pause' | 'next' | 'stepIn' | 'stepOut'; threadId?: number }
   | { sessionPath: string; action: 'threads' }
   | { sessionPath: string; action: 'stack'; threadId: number; levels?: number }
@@ -1808,3 +1809,4 @@ export type DebugPanelRequest =
   | { sessionPath: string; action: 'evaluate'; expression: string; frameId?: number }
   | { sessionPath: string; action: 'output'; cursor?: number; maxChars?: number }
   | { sessionPath: string; action: 'breakpoints' }
+  | { sessionPath: string; action: 'breakpoints-set'; file: string; lines: number[] }

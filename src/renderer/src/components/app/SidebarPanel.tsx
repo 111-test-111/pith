@@ -167,7 +167,7 @@ export const SIDEBAR_TABS: SidebarTabSpec[] = [
     labelKey: 'sidebar.files',
     shortcutId: 'openFiles',
     icon: Folder,
-    render: (props) => <FilesPane files={props.files} store={props.store} filePath={null} />
+    render: (props) => <FilesPane files={props.files} store={props.store} debug={props.debug} filePath={null} />
   },
   {
     id: 'chat',
@@ -563,7 +563,7 @@ export function SidebarPanel({
                   }
                   const path = filePathForTab(activeTab)
                   return path
-                    ? <FilesPane files={pane.files} store={pane.store} filePath={path} />
+                    ? <FilesPane files={pane.files} store={pane.store} debug={pane.debug} filePath={path} />
                     : specFor(activeTab as SidebarTabKind).render(pane)
                 })()
               )}

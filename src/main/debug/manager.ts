@@ -47,6 +47,9 @@ export interface DebugStartOptions {
   env?: Record<string, string>
   stopOnEntry?: boolean
   pid?: number
+  /** Adapter-specific request keys (e.g. from a launch.json configuration),
+   * merged into the launch/attach request after the adapter template. */
+  extraArguments?: Record<string, unknown>
   /** Answers the adapter's runInTerminal reverse request with a sidebar
    * terminal tab. Absent handler means the capability is not advertised. */
   runInTerminal?: (input: { title: string; cwd: string; args: string[]; env?: Record<string, string | null> }) => Promise<{ shellProcessId: number; terminalId: string }>
@@ -78,6 +81,8 @@ interface Session {
   stopEpoch: number
   /** In-flight top-frame fill for the current stop. `start()` awaits this so the first snapshot already has location and remapped stopReason. */
   filling?: Promise<void>
+  /** The options this session was started with; `restart` re-runs them. */
+  startOptions?: DebugStartOptions
   waiters: StoppedWaiter[]
   progressTimer?: ReturnType<typeof setTimeout>
   finishing: boolean
@@ -179,6 +184,7 @@ export class DebugManager {
     let resolveDone!: () => void
     const session: Session = {
       dto,
+      startOptions: options,
       outputTail: '',
       pendingBreakpoints: [],
       breakpoints: [],
@@ -219,7 +225,16 @@ export class DebugManager {
     }
 
     try {
-      await client.start({ command: resolved.command, args: resolved.args, cwd: options.cwd })
+      if (spec.listen) {
+        const args = resolved.args.map((arg) => arg.replaceAll('${port}', String(spec.listen!.port)))
+        await client.connectTcp({
+          host: spec.listen.host,
+          port: spec.listen.port,
+          ...(spec.listen.spawn ? { spawn: { command: resolved.command, args, cwd: options.cwd } } : {})
+        })
+      } else {
+        await client.start({ command: resolved.command, args: resolved.args, cwd: options.cwd })
+      }
       const initialized = this.waitEvent(session, 'initialized', HANDSHAKE_TIMEOUT_MS)
       const body = await client.request('initialize', {
         clientID: 'pith',
@@ -235,15 +250,18 @@ export class DebugManager {
       })
       client.capabilities = body ?? {}
       if (options.kind === 'launch') {
-        await client.request('launch', spec.launchArguments({
-          program: options.program!,
-          args: options.args ?? [],
-          cwd: options.cwd,
-          ...(options.env ? { env: options.env } : {}),
-          ...(options.stopOnEntry ? { stopOnEntry: true } : {})
-        }))
+        await client.request('launch', {
+          ...spec.launchArguments({
+            program: options.program!,
+            args: options.args ?? [],
+            cwd: options.cwd,
+            ...(options.env ? { env: options.env } : {}),
+            ...(options.stopOnEntry ? { stopOnEntry: true } : {})
+          }),
+          ...(options.extraArguments ?? {})
+        })
       } else {
-        await client.request('attach', spec.attachArguments({ pid: options.pid }))
+        await client.request('attach', { ...spec.attachArguments({ pid: options.pid }), ...(options.extraArguments ?? {}) })
       }
       await initialized
       session.configurationReady = true
@@ -316,6 +334,7 @@ export class DebugManager {
       }
     })
     session.breakpoints = [...session.breakpoints.filter((bp) => bp.file !== file), ...mapped]
+    this.publish(session)
     return mapped
   }
 
@@ -511,6 +530,26 @@ export class DebugManager {
     }
     await this.finish(session, 'terminated')
     return { ...session.dto }
+  }
+
+  /** Restart the debuggee. Adapters advertising supportsRestartRequest get
+   * the native path; everyone else gets stop+start with the recorded
+   * options, which ends one session and begins the next (the id changes). */
+  async restart(sessionPath: string, id?: string): Promise<DebugSessionDTO> {
+    const session = this.owned(sessionPath, id)
+    const options = session.startOptions
+    if (!options) throw new Error('This session was not started by the app and cannot be restarted')
+    const client = session.client
+    if (!session.finishing && client?.isOpen && client.capabilities.supportsRestartRequest === true) {
+      session.dto.location = undefined
+      session.dto.stopReason = undefined
+      session.dto.status = 'running'
+      this.publish(session)
+      await client.request('restart', {})
+      return { ...session.dto }
+    }
+    await this.stop(sessionPath, session.dto.id)
+    return this.start(options)
   }
 
   async stopSession(sessionPath: string): Promise<void> {

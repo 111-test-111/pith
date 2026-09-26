@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process'
+import { connect, type Socket } from 'node:net'
 
 /**
  * Minimal Debug Adapter Protocol client over stdio.
@@ -20,6 +21,21 @@ export interface DapLaunchSpec {
   args: string[]
   cwd: string
   env?: NodeJS.ProcessEnv
+}
+
+/** TCP transport: connect to an adapter's listen port, optionally spawning
+ * the adapter process first (its args already carry the port). */
+export interface DapConnectSpec {
+  host: string
+  port: number
+  spawn?: DapLaunchSpec
+  /** Budget for the listen port to come up when spawning, in ms. */
+  readyTimeoutMs?: number
+}
+
+/** The framed write side of either transport (child stdin or TCP socket). */
+interface DapSink {
+  write: (text: string, callback: (error?: Error | null) => void) => void
 }
 
 interface PendingRequest {
@@ -46,6 +62,8 @@ export class DapClient {
   private received = Buffer.alloc(0)
   private pending = new Map<number, PendingRequest>()
   private child?: ChildProcess
+  private socket?: Socket
+  private sink?: DapSink
   private stderrTail = ''
   private closed = false
 
@@ -70,7 +88,7 @@ export class DapClient {
   /** Spawn the adapter and wire the transport. Resolves once the process is
    * up; rejects if the spawn itself fails. */
   start(spec: DapLaunchSpec): Promise<void> {
-    if (this.child || this.closed) return Promise.reject(new Error('DAP client already started'))
+    if (this.child || this.socket || this.closed) return Promise.reject(new Error('DAP client already started'))
     return new Promise<void>((resolve, reject) => {
       let child: ChildProcess
       try {
@@ -85,6 +103,7 @@ export class DapClient {
         return
       }
       this.child = child
+      this.sink = { write: (text, callback) => child.stdin!.write(text, callback) }
       child.once('error', (error) => {
         // A spawn error before 'spawn' rejects start(); afterwards it closes.
         if (!this.closed && this.pending.size === 0 && !child.pid) {
@@ -103,9 +122,70 @@ export class DapClient {
     })
   }
 
+  /** Connect over TCP: optionally spawn the adapter, then retry the socket
+   * until it listens (or the budget runs out). */
+  async connectTcp(spec: DapConnectSpec): Promise<void> {
+    if (this.child || this.socket || this.closed) return Promise.reject(new Error('DAP client already started'))
+    if (spec.spawn) {
+      let child: ChildProcess
+      try {
+        child = spawn(spec.spawn.command, spec.spawn.args, {
+          cwd: spec.spawn.cwd,
+          env: spec.spawn.env ? { ...process.env, ...spec.spawn.env } : process.env,
+          stdio: ['ignore', 'ignore', 'pipe'],
+          windowsHide: true
+        })
+      } catch (error) {
+        throw error instanceof Error ? error : new Error(String(error))
+      }
+      this.child = child
+      child.stderr!.on('data', (data: Buffer) => {
+        this.stderrTail = (this.stderrTail + data.toString('utf8')).slice(-STDERR_TAIL_CHARS)
+      })
+      child.once('exit', (code, signal) => this.finish(`exit: ${code ?? signal ?? 'unknown'}`))
+      await new Promise<void>((resolve, reject) => {
+        child.once('spawn', () => resolve())
+        child.once('error', (error) => reject(new Error(`Failed to start debug adapter: ${error.message}`)))
+      })
+    }
+    const deadline = Date.now() + Math.max(500, spec.readyTimeoutMs ?? 5000)
+    let lastError: Error | undefined
+    for (;;) {
+      try {
+        await this.tryConnect(spec.host, spec.port)
+        return
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error))
+        if (Date.now() >= deadline || this.closed) break
+        await new Promise((resolve) => setTimeout(resolve, 100))
+      }
+    }
+    const stderr = this.stderrTail.trim()
+    this.finish('connect failed')
+    throw new Error(`Cannot connect to debug adapter at ${spec.host}:${spec.port}: ${lastError?.message ?? 'connection refused'}${stderr ? `\nadapter stderr: ${stderr.slice(0, 500)}` : ''}`)
+  }
+
+  private tryConnect(host: string, port: number): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const socket = connect({ host, port })
+      const onError = (error: Error) => { socket.destroy(); reject(error) }
+      socket.once('error', onError)
+      socket.once('connect', () => {
+        socket.removeListener('error', onError)
+        this.socket = socket
+        this.sink = { write: (text, callback) => socket.write(text, callback) }
+        socket.on('data', (data: Buffer) => this.ingest(data))
+        socket.on('error', () => { /* the close event reports teardown */ })
+        socket.once('close', () => this.finish('socket closed'))
+        resolve()
+      })
+    })
+  }
+
   /** Send a request; resolves with the response body (or undefined). */
   request(command: string, args?: Record<string, unknown>, timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS): Promise<Record<string, unknown> | undefined> {
-    if (this.closed || !this.child?.stdin?.writable) {
+    const sink = this.sink
+    if (this.closed || !sink) {
       return Promise.reject(new Error(`Debug adapter is not connected (cannot ${command})`))
     }
     const seq = this.seq++
@@ -118,7 +198,7 @@ export class DapClient {
         reject(new Error(`DAP request timed out: ${command}`))
       }, timeoutMs)
       this.pending.set(seq, { command, resolve, reject, timer })
-      this.child!.stdin!.write(`Content-Length: ${Buffer.byteLength(message)}\r\n\r\n${message}`, (error) => {
+      sink.write(`Content-Length: ${Buffer.byteLength(message)}\r\n\r\n${message}`, (error) => {
         if (!error) return
         clearTimeout(timer)
         if (this.pending.delete(seq)) reject(new Error(`Cannot write to debug adapter: ${error.message}`))
@@ -129,7 +209,10 @@ export class DapClient {
   /** End the transport and terminate the adapter process. Idempotent. */
   dispose(): void {
     const child = this.child
+    const socket = this.socket
     this.finish('disposed')
+    this.sink = undefined
+    if (socket) { socket.destroy(); this.socket = undefined }
     if (!child) return
     try { child.stdin?.end() } catch { /* transport already gone */ }
     const killer = setTimeout(() => { try { child.kill('SIGKILL') } catch { /* gone */ } }, 1500)
@@ -203,9 +286,9 @@ export class DapClient {
     } catch (error) {
       payload = { ...base, success: false, message: error instanceof Error ? error.message : String(error) }
     }
-    if (this.closed || !this.child?.stdin?.writable) return
+    if (this.closed || !this.sink) return
     const text = JSON.stringify(payload)
-    this.child.stdin.write(`Content-Length: ${Buffer.byteLength(text)}\r\n\r\n${text}`, () => {})
+    this.sink.write(`Content-Length: ${Buffer.byteLength(text)}\r\n\r\n${text}`, () => {})
   }
 
   private finish(reason: string): void {

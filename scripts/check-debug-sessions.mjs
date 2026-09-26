@@ -32,6 +32,10 @@
  * conditional breakpoints gate by expression, and logpoints print to the
  * console without stopping (see scripts/debug-fixtures/array.c).
  *
+ * P1 adds: restart re-runs under either path, the DAP handshake works over a
+ * TCP socket, launch.json maps (JSONC, env forms, workspace substitution,
+ * passthrough), and a js-debug roundtrip runs when VS Code's adapter exists.
+ *
  * Drives real debuggees, so it needs lldb-dap + clang (reports [SKIP] without).
  *
  *   node scripts/check-debug-sessions.mjs
@@ -39,6 +43,7 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -61,16 +66,36 @@ async function until(predicate, label, ms = 20_000) {
 }
 
 /** lldb-dap is the only adapter this host-independent check can rely on. */
-function lldbAvailable() {
+function lldbPath() {
   try {
     if (process.platform === 'darwin') {
       const resolved = String(execFileSync('xcrun', ['-f', 'lldb-dap'], { timeout: 5000 })).trim()
-      return resolved !== '' && existsSync(resolved)
+      return resolved !== '' && existsSync(resolved) ? resolved : null
     }
-    return execFileSync('sh', ['-c', 'command -v lldb-dap'], { timeout: 5000 }).toString().trim() !== ''
+    const resolved = execFileSync('sh', ['-c', 'command -v lldb-dap'], { timeout: 5000 }).toString().trim()
+    return resolved !== '' ? resolved : null
   } catch {
-    return false
+    return null
   }
+}
+
+/** One-shot event wait over the bundled DapClient's single onEvent callback. */
+function waitEvent(client, name, timeoutMs = 15_000) {
+  return new Promise((resolve, reject) => {
+    const previous = client.onEvent
+    const timer = setTimeout(() => {
+      client.onEvent = previous
+      reject(new Error(`timed out waiting for event "${name}"`))
+    }, timeoutMs)
+    client.onEvent = (event, body) => {
+      previous(event, body)
+      if (event === name) {
+        clearTimeout(timer)
+        client.onEvent = previous
+        resolve(body)
+      }
+    }
+  })
 }
 
 const temporary = mkdtempSync(join(tmpdir(), 'pith-debug-session-check-'))
@@ -79,7 +104,9 @@ try {
   const outfile = join(temporary, 'modules.mjs')
   await build({
     stdin: {
-      contents: `export { DebugManager } from './src/main/debug/manager';`,
+      contents: `export { DebugManager } from './src/main/debug/manager';
+export { DapClient } from './src/main/debug/dap-client';
+export { readLaunchConfigurations } from './src/main/debug/adapters';`,
       resolveDir: resolve('.')
     },
     bundle: true,
@@ -96,9 +123,10 @@ try {
       }
     }]
   })
-  const { DebugManager } = await import(pathToFileURL(outfile).href)
+  const { DebugManager, DapClient, readLaunchConfigurations } = await import(pathToFileURL(outfile).href)
 
-  if (!lldbAvailable()) {
+  const lldb = lldbPath()
+  if (!lldb) {
     console.log('[SKIP] debug sessions: lldb-dap not available on this host')
   } else {
     const clang = process.platform === 'darwin' ? 'xcrun' : 'clang'
@@ -292,6 +320,112 @@ try {
     await until(() => TERMINAL.has(manager.get(SESSION_PATH, logged.id).status), 'the logpoint run to finish without stopping')
     const consoleTail = manager.output(SESSION_PATH, undefined, undefined, logged.id).output
     assert.match(consoleTail, /hit the loop/, 'the logpoint message never reached the console')
+
+    // 14. restart re-runs the debuggee and the same breakpoint fires again:
+    //     natively when the adapter advertises it, else via stop+start.
+    const restarting = await launch()
+    await manager.setBreakpoints(SESSION_PATH, join(FIXTURES, 'demo.c'), [4])
+    await until(() => manager.get(SESSION_PATH, restarting.id).status === 'stopped', 'the first run to hit the breakpoint')
+    const restarted = await manager.restart(SESSION_PATH)
+    if (restarted.id === restarting.id) {
+      // Native restart: the same session re-runs and re-hits the breakpoint.
+      await until(() => manager.get(SESSION_PATH, restarting.id).location?.line === 4, 'the native restart to re-hit the breakpoint')
+    } else {
+      // stop+start fallback: a new session id; the manager re-binds and hits.
+      assert.notEqual(restarted.id, restarting.id, 'the fallback restart must yield a new session id')
+      assert.ok(['starting', 'running', 'stopped'].includes(restarted.status), `the fallback restart left the session ${restarted.status}`)
+      await manager.setBreakpoints(SESSION_PATH, join(FIXTURES, 'demo.c'), [4])
+      await until(() => manager.get(SESSION_PATH).status === 'stopped', 'the fallback restart to hit the breakpoint')
+    }
+    await manager.stop(SESSION_PATH)
+
+    // 15. TCP transport: the same DAP handshake over a socket instead of stdio.
+    {
+      const tcpClient = new DapClient()
+      const tcpPort = 17600 + Math.floor(Math.random() * 2000)
+      await tcpClient.connectTcp({
+        host: '127.0.0.1',
+        port: tcpPort,
+        spawn: { command: lldb, args: ['--connection', `listen://127.0.0.1:${tcpPort}`], cwd: FIXTURES },
+        readyTimeoutMs: 10_000
+      })
+      await tcpClient.request('initialize', { clientID: 'pith-check-debug', adapterID: 'lldb-dap', linesStartAt1: true, columnsStartAt1: true, pathFormat: 'path', supportsRunInTerminalRequest: false })
+      const initialized = waitEvent(tcpClient, 'initialized', 15_000)
+      await tcpClient.request('launch', { program: binary, args: [], cwd: FIXTURES, stopOnEntry: false })
+      await initialized
+      const bound = await tcpClient.request('setBreakpoints', { source: { path: join(FIXTURES, 'demo.c') }, breakpoints: [{ line: 4 }] })
+      assert.equal(bound?.breakpoints?.[0]?.verified, true, 'the TCP breakpoint did not bind')
+      await tcpClient.request('configurationDone').catch(() => undefined)
+      const stopped = await waitEvent(tcpClient, 'stopped', 15_000)
+      assert.equal(stopped?.reason, 'breakpoint', `the TCP session stopped for ${stopped?.reason}`)
+      await tcpClient.dispose()
+    }
+
+    // 16. launch.json import: JSONC tolerance, type mapping, env forms,
+    //     workspace substitution, extra-key passthrough, `adapter` override.
+    {
+      const workspace = join(temporary, 'ws')
+      await mkdir(join(workspace, '.vscode'), { recursive: true })
+      await writeFile(join(workspace, '.vscode', 'launch.json'), `{
+        // comment tolerance
+        "configurations": [
+          {
+            "name": "Demo (lldb)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "\${workspaceFolder}/demo",
+            "args": ["--fast",],
+            "stopOnEntry": true,
+            "env": { "MODE": "test" },
+            "initCommands": ["settings set target.inline-breakpoint-location true"],
+          },
+          {
+            "name": "Attach (custom)",
+            "type": "cppdbg",
+            "adapter": "my-adapter",
+            "request": "attach",
+            "processId": 4321,
+            "environment": [{ "name": "A", "value": "1" }],
+            "MIMode": "gdb",
+          },
+        ]
+      }`)
+      const configurations = readLaunchConfigurations(workspace)
+      assert.equal(configurations.length, 2, `launch.json yielded ${configurations.length} configurations, expected 2`)
+      const [demoConfig, customConfig] = configurations
+      assert.equal(demoConfig.adapterId, 'lldb-dap', 'the lldb type did not map to lldb-dap')
+      assert.equal(demoConfig.program, join(workspace, 'demo'), 'workspaceFolder substitution failed')
+      assert.deepEqual(demoConfig.args, ['--fast'], 'trailing-comma args were not tolerated')
+      assert.equal(demoConfig.stopOnEntry, true, 'stopOnEntry was not mapped')
+      assert.deepEqual(demoConfig.env, { MODE: 'test' }, 'object env was not mapped')
+      assert.deepEqual(demoConfig.extraArguments.initCommands, ['settings set target.inline-breakpoint-location true'], 'extra keys did not pass through')
+      assert.equal(customConfig.adapterId, 'my-adapter', 'the explicit adapter key did not win')
+      assert.equal(customConfig.kind, 'attach', 'the attach request was not mapped')
+      assert.equal(customConfig.pid, 4321, 'processId was not mapped')
+      assert.deepEqual(customConfig.env, { A: '1' }, "cppdbg's environment array was not mapped")
+      assert.equal(Object.keys(customConfig.extraArguments).includes('MIMode'), false, 'MIMode should be dropped')
+    }
+
+    // 17. js-debug roundtrip (SKIP without a VS Code js-debug install).
+    try {
+      const jsSession = await manager.start({
+        sessionId: SESSION_ID, sessionPath: SESSION_PATH, cwd: FIXTURES,
+        adapterId: 'js-debug', kind: 'launch', program: join(FIXTURES, 'demo.js'), args: []
+      })
+      await manager.setBreakpoints(SESSION_PATH, join(FIXTURES, 'demo.js'), [2])
+      await until(() => manager.get(SESSION_PATH, jsSession.id).status === 'stopped', 'the js-debug run to hit its breakpoint', 30_000)
+      const jsThread = manager.get(SESSION_PATH).activeThreadId
+      const jsFrames = await manager.stack(SESSION_PATH, jsThread)
+      const evaluated = await manager.evaluate(SESSION_PATH, 'a', jsFrames[0].id)
+      assert.match(evaluated.result, /2/, `js-debug evaluated a to ${evaluated.result}`)
+      await manager.stop(SESSION_PATH)
+    } catch (error) {
+      if (/not available|missing-adapter/.test(String(error instanceof Error ? error.message : error))) {
+        console.log('[SKIP] js-debug: not installed on this host')
+      } else {
+        throw error
+      }
+    }
 
     assert.ok(revisions.length > 0, 'the manager published no DTO revisions')
     console.log(`[PASS] debug sessions: ${manager.list(SESSION_PATH).length} sessions, id-less actions followed the live one`)

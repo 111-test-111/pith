@@ -1,7 +1,7 @@
 import { Type } from 'typebox'
 import type { AgentSessionServices, ToolDefinition } from '@earendil-works/pi-coding-agent'
 import type { DebugManager } from './manager'
-import { detectDebugAdapters } from './adapters'
+import { detectDebugAdapters, readLaunchConfigurations, type DebugLaunchConfiguration } from './adapters'
 import { escalationHintMarker, planFileDenialMarker, SANDBOX_ESCALATION_PROPERTIES, sandboxDenialMarker } from '../sandbox/escalation'
 import type { SandboxMode } from '../sandbox/types'
 import type { DebugSessionDTO } from '../../shared/types'
@@ -20,13 +20,17 @@ const DEBUG_GUIDELINES = [
   'breakpoints replaces the whole breakpoint set of one file: pass every line that should keep a breakpoint, not just the new ones. A breakpoint with verified=false did not bind — check the file path is absolute and matches the debuggee\'s sources. Parallel conditions/hitConditions/logMessages arrays refine a line: a condition stops only when true, a hitCondition gates by hit count (">=3"), a logMessage makes a logpoint that prints without stopping.',
   'output pages the debug console with a cursor, like bash_task output.',
   'Launching or stopping a debuggee is process control: the session sandbox mode gates it, and read-only refuses it. The debuggee itself is never file-sandboxed — a debugger needs full process-inspection rights by design.',
-  'When a debug session ends (stop, termination, crash), its status is terminal: start a fresh session instead of retrying control actions.'
+  'When a debug session ends (stop, termination, crash), its status is terminal: start a fresh session instead of retrying control actions.',
+  'restart re-runs the debuggee: native DAP restart when the adapter supports it, otherwise stop+start with the same options (the session id changes). Breakpoints persist across a native restart; the fallback keeps the ones the manager knows.',
+  'configurations lists .vscode/launch.json entries mapped onto adapters; start with configuration="<name>" to use one — explicit arguments override its values. Adapter-specific keys (sourceMaps, justMyCode, mode, …) pass through into the DAP request.'
 ]
 
 const debugParameters = Type.Object({
   action: Type.Union([
     Type.Literal('adapters'),
+    Type.Literal('configurations'),
     Type.Literal('start'),
+    Type.Literal('restart'),
     Type.Literal('stop'),
     Type.Literal('breakpoints'),
     Type.Literal('control'),
@@ -36,8 +40,9 @@ const debugParameters = Type.Object({
     Type.Literal('variables'),
     Type.Literal('evaluate'),
     Type.Literal('output')
-  ], { description: 'adapters: list detected debug adapters. start: launch a program or attach to a pid. breakpoints: replace one file\'s breakpoints. control: continue/pause/next/stepIn/stepOut, blocking until the next stop. threads/stack/scopes/variables/evaluate: inspect a stopped debuggee. output: page the debug console. stop: end the session.' }),
+  ], { description: 'adapters: list detected debug adapters. configurations: list .vscode/launch.json entries mapped onto adapters. start: launch a program or attach to a pid, optionally from a launch.json configuration. restart: re-run the debuggee. breakpoints: replace one file\'s breakpoints. control: continue/pause/next/stepIn/stepOut, blocking until the next stop. threads/stack/scopes/variables/evaluate: inspect a stopped debuggee. output: page the debug console. stop: end the session.' }),
   adapter: Type.Optional(Type.String({ description: 'start: adapter id from the adapters list (e.g. "lldb-dap", "debugpy", "dlv").' })),
+  configuration: Type.Optional(Type.String({ description: 'start: launch.json configuration name to start from (see action="configurations"); explicit arguments override its values.' })),
   kind: Type.Optional(Type.Union([Type.Literal('launch'), Type.Literal('attach')], { description: 'start: default launch. attach requires pid.' })),
   program: Type.Optional(Type.String({ description: 'start (launch): absolute path of the binary/script/package to debug.' })),
   args: Type.Optional(Type.Array(Type.String(), { description: 'start (launch): debuggee arguments.' })),
@@ -99,6 +104,18 @@ export type DebugRunInTerminal = (input: {
 
 const json = (value: unknown): string => JSON.stringify(value)
 
+/** One launch.json configuration by name, with a useful error otherwise. */
+function resolveConfiguration(cwd: string, name: string): DebugLaunchConfiguration {
+  const configurations = readLaunchConfigurations(cwd)
+  const config = configurations.find((item) => item.name === name)
+  if (!config) {
+    throw new Error(configurations.length === 0
+      ? 'No launch configurations found (.vscode/launch.json is missing or has no mappable entries)'
+      : `Unknown configuration "${name}". Available: ${configurations.map((item) => item.name).join(', ')}`)
+  }
+  return config
+}
+
 export function createDebugTools(options: DebugToolOptions): ToolDefinition[] {
   const { manager, services, sessionId, sessionPath } = options
   const details = (session: DebugSessionDTO) => ({ debugSession: session })
@@ -132,23 +149,41 @@ export function createDebugTools(options: DebugToolOptions): ToolDefinition[] {
         case 'adapters': {
           return { content: text(await detectDebugAdapters(cwd)), details: undefined }
         }
+        case 'configurations': {
+          const configurations = readLaunchConfigurations(cwd)
+          // Values of pass-through keys are adapter-specific and bulky: the
+          // key names are enough to tell configurations apart.
+          return { content: text(configurations.map(({ extraArguments, ...summary }) => ({ ...summary, extraKeys: Object.keys(extraArguments) }))), details: undefined }
+        }
         case 'start': {
           if (signal?.aborted || !options.canStart()) throw new Error('Debug session cancelled before launch')
           await requireExecMode(toolCallId, args, signal)
-          const kind = args.kind ?? 'launch'
+          // A named launch.json configuration supplies the defaults; explicit
+          // tool arguments win over every one of them.
+          const config = args.configuration !== undefined ? resolveConfiguration(cwd, args.configuration) : undefined
+          const program = args.program ?? config?.program
+          const configArgs = args.args ?? config?.args
+          const env = args.env ?? config?.env
+          const pid = args.pid ?? config?.pid
           const dto = await manager.start({
             sessionId,
             sessionPath,
-            cwd,
-            adapterId: args.adapter ?? '',
-            kind,
-            ...(args.program !== undefined ? { program: args.program } : {}),
-            ...(args.args !== undefined ? { args: args.args } : {}),
-            ...(args.env !== undefined ? { env: args.env } : {}),
-            ...(args.stopOnEntry !== undefined ? { stopOnEntry: args.stopOnEntry } : {}),
-            ...(args.pid !== undefined ? { pid: args.pid } : {}),
+            cwd: args.cwd ?? config?.cwd ?? cwd,
+            adapterId: args.adapter ?? config?.adapterId ?? '',
+            kind: args.kind ?? config?.kind ?? 'launch',
+            ...(program !== undefined ? { program } : {}),
+            ...(configArgs !== undefined ? { args: configArgs } : {}),
+            ...(env !== undefined ? { env } : {}),
+            ...(args.stopOnEntry ?? config?.stopOnEntry ? { stopOnEntry: true } : {}),
+            ...(pid !== undefined ? { pid } : {}),
+            ...(config?.extraArguments !== undefined && Object.keys(config.extraArguments).length > 0 ? { extraArguments: config.extraArguments } : {}),
             ...(options.runInTerminal() ? { runInTerminal: options.runInTerminal()! } : {})
           })
+          return { content: text(dto), details: details(dto) }
+        }
+        case 'restart': {
+          await requireExecMode(toolCallId, args, signal)
+          const dto = await manager.restart(sessionPath)
           return { content: text(dto), details: details(dto) }
         }
         case 'stop': {
