@@ -1715,6 +1715,8 @@ const en = {
   "scheduledTasks.editor.noMatches": "No matching options.",
   "scheduledTasks.editor.project": "Project directory",
   "scheduledTasks.editor.projectDedicated": "Scheduled tasks workspace",
+  "scheduledTasks.editor.projectPlaceholder": "Choose a project directory…",
+  "scheduledTasks.editor.projectBrowse": "Choose a folder…",
   "scheduledTasks.editor.environment": "Environment",
   "scheduledTasks.editor.environmentLocal": "Local project",
   "scheduledTasks.editor.environmentWorktree": "Git worktree",

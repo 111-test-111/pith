@@ -335,6 +335,30 @@ app.on('window-all-closed',()=>app.quit());`
   await pause(250)
   assert.ok(await evaluate(`!!document.querySelector('[role=dialog]')`), 'editor dialog opens')
   assert.equal(await evaluate(`window.fieldByLabel('Name')?.value`), 'beui', 'name field is populated')
+  // One form row for the whole visual editor: every field title — beUI Input
+  // labels and the hand-rolled headings over radio groups and key/value lists —
+  // reads at the form's 14px, sits flush with its control (no label inset of its
+  // own), shares one colour, and keeps one 10px gap to that control. Insets are
+  // measured against the parent's CONTENT box, so a padded body never reads as an
+  // indent.
+  const editorTitleFacts = await evaluate(`(()=>{const d=document.querySelector('[role=dialog]'),titles=[...d.querySelectorAll('label.text-sm.font-medium,p.text-sm.font-medium')],box=e=>({l:e.getBoundingClientRect().left,p:parseFloat(getComputedStyle(e).paddingLeft)}),inset=e=>{const a=box(e),b=box(e.parentElement);return Math.round(a.l+a.p-b.l-b.p)},gap=e=>Math.round(e.nextElementSibling.getBoundingClientRect().top-e.getBoundingClientRect().bottom);return{titles:titles.map(e=>e.textContent?.trim()),insets:[...new Set(titles.map(inset))],colors:[...new Set(titles.map(e=>getComputedStyle(e).color))],gaps:[...new Set(titles.map(gap))]}})()`)
+  assert.ok(editorTitleFacts.titles.length >= 5 && editorTitleFacts.insets.length === 1 && editorTitleFacts.insets[0] === 0, `every editor field title is flush with its control: ${JSON.stringify(editorTitleFacts)}`)
+  assert.equal(editorTitleFacts.colors.length, 1, `every editor field title shares one colour: ${JSON.stringify(editorTitleFacts.colors)}`)
+  assert.ok(editorTitleFacts.gaps.length === 1 && editorTitleFacts.gaps[0] >= 8, `every editor field title keeps one gap to its control: ${JSON.stringify(editorTitleFacts.gaps)}`)
+  // Edit items are separated by one roomier rhythm (20px), the body's only
+  // spacing source.
+  const itemGaps = await evaluate(`(()=>{const items=[...document.querySelectorAll('[data-form-items] > *')].map(e=>e.getBoundingClientRect()),steps=[];for(const r of items){const next=items.filter(o=>o.top>=r.bottom-1).sort((a,b)=>a.top-b.top)[0];if(next)steps.push(Math.round(next.top-r.bottom))}return{count:items.length,steps:[...new Set(steps)]}})()`)
+  assert.ok(
+    itemGaps.count >= 4 && itemGaps.steps.length === 1 && itemGaps.steps[0] >= 16,
+    `edit items keep one roomier rhythm: ${JSON.stringify(itemGaps)}`
+  )
+  const editorColumns = await evaluate(`(()=>{const body=document.querySelector('[data-form-items]');return{columns:getComputedStyle(body).gridTemplateColumns.split(' ').length,scroll:body.scrollHeight,client:body.clientHeight}})()`)
+  assert.equal(editorColumns.columns, 2, `the MCP editor lays out in two columns: ${JSON.stringify(editorColumns)}`)
+  assert.ok(
+    editorColumns.scroll <= editorColumns.client + 2,
+    `every MCP editor item shows at once, nothing clipped: ${JSON.stringify(editorColumns)}`
+  )
+  assert.deepEqual(await evaluate(`[...document.querySelectorAll('[role=dialog] input, [role=dialog] textarea')].map(e=>getComputedStyle(e).fontSize).filter(s=>s!=='14px')`), [], 'editor fields carry the form type scale')
   await evaluate(`(()=>{
     const el = window.fieldByLabel('Name');
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, 'beui2');

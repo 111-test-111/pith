@@ -3,6 +3,7 @@ import { ChevronRight, FileText, FolderOpen, Plus, RefreshCw } from '@/lib/icons
 import { AgentDisclosure } from '@/components/agents/agent-disclosure'
 import { Button } from '@/components/motion/button'
 import { Input } from '@/components/motion/input'
+import { FORM_FIELD_TITLE, FORM_PANEL_TITLE } from '@/lib/form-standard'
 import { Checkbox } from '@/components/motion/checkbox'
 import { RadioGroup, RadioGroupItem } from '@/components/motion/radio'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/motion/tabs'
@@ -712,19 +713,18 @@ function CreateProfileForm({
   }
 
   return (
-    <div data-subagent-create-form className="space-y-4 rounded-xl border border-border/70 bg-card px-4 py-3">
-      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+    <div data-subagent-create-form className="grid gap-5 rounded-xl border border-border/70 bg-card px-4 py-3 md:grid-cols-2">
+      <p className={`${FORM_PANEL_TITLE} md:col-span-2`}>
         {t('subagent.createTitle')}
       </p>
 
-      <label className="block space-y-1.5">
-        <span className="text-xs font-medium text-muted-foreground">{t('subagent.nameLabel')}</span>
+      <label className="flex flex-col gap-1.5">
+        <span className={FORM_FIELD_TITLE}>{t('subagent.nameLabel')}</span>
         <Input
           value={name}
           onChange={setName}
           aria-label={t('subagent.nameLabel')}
           disabled={busy}
-          classNames={{ input: 'text-xs' }}
         />
         {nameInvalid || (attempted && trimmedName === '') ? (
           <p data-subagent-name-error className="text-xs text-destructive">{t('subagent.nameInvalid')}</p>
@@ -733,22 +733,21 @@ function CreateProfileForm({
         ) : null}
       </label>
 
-      <label className="block space-y-1.5">
-        <span className="text-xs font-medium text-muted-foreground">{t('subagent.descriptionLabel')}</span>
+      <label className="flex flex-col gap-1.5">
+        <span className={FORM_FIELD_TITLE}>{t('subagent.descriptionLabel')}</span>
         <Input
           value={description}
           onChange={setDescription}
           aria-label={t('subagent.descriptionLabel')}
           disabled={busy}
-          classNames={{ input: 'text-xs' }}
         />
         {attempted && descriptionEmpty ? (
           <p className="text-xs text-destructive">{t('subagent.descriptionRequired')}</p>
         ) : null}
       </label>
 
-      <label className="block space-y-1.5">
-        <span className="text-xs font-medium text-muted-foreground">{t('subagent.systemPrompt')}</span>
+      <label className="flex flex-col gap-1.5 md:col-span-2">
+        <span className={FORM_FIELD_TITLE}>{t('subagent.systemPrompt')}</span>
         <Input
           value={prompt}
           onChange={setPrompt}
@@ -756,12 +755,11 @@ function CreateProfileForm({
           rows={4}
           aria-label={t('subagent.systemPrompt')}
           disabled={busy}
-          classNames={{ input: 'text-xs' }}
         />
       </label>
 
-      <div className="space-y-1.5">
-        <p className="text-xs font-medium text-muted-foreground">{t('subagent.scopeLabel')}</p>
+      <div className="flex flex-col gap-1.5">
+        <p className={FORM_FIELD_TITLE}>{t('subagent.scopeLabel')}</p>
         <RadioGroup
           orientation="horizontal"
           value={scope}

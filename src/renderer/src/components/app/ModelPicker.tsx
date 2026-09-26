@@ -40,6 +40,9 @@ interface ModelPickerProps {
   onInheritModel?: () => void
   onInheritThinking?: () => void
   inheritLabel?: string
+  /** Trigger type scale. The composer keeps its 12px control type; the
+   * scheduled-task form passes the form's own scale (14px). */
+  textClassName?: string
   /** Portalled placement keeps this exact picker usable inside a modal scrollport. */
   portal?: boolean
   /** Separate simultaneous picker instances keep distinct ARIA panel targets. */
@@ -80,6 +83,7 @@ export function ModelPicker({
   onInheritModel,
   onInheritThinking,
   inheritLabel,
+  textClassName = 'text-xs',
   portal = false,
   panelId,
   disabled
@@ -441,7 +445,7 @@ export function ModelPicker({
           if (open) setSubmenu(null)
           setOpen(!open)
         }}
-        className="relative z-10 flex h-8 w-auto items-center justify-between gap-2 rounded-control border-0 bg-transparent px-2.5 text-xs outline-none transition-colors hover:bg-muted focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
+        className={cn("relative z-10 flex h-8 w-auto items-center justify-between gap-2 rounded-control border-0 bg-transparent px-2.5 outline-none transition-colors hover:bg-muted focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50", textClassName)}
       >
         <span className="flex min-w-0 items-center gap-1.5 whitespace-nowrap">
           {current ? (

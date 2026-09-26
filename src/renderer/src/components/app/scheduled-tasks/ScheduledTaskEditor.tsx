@@ -1,5 +1,5 @@
 import { memo, useMemo, useState } from 'react'
-import { AlertCircle } from '@/lib/icons'
+import { AlertCircle, FolderOpen } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
 import { Input } from '@/components/motion/input'
 import { Checkbox } from '@/components/motion/checkbox'
@@ -14,6 +14,7 @@ import { refreshScheduledTasks, scheduledErrorStatus } from '@/state/scheduled-t
 import { ModelPicker } from '../ModelPicker'
 import { SandboxModePicker } from '../SandboxModePicker'
 import { FadeScroll } from '../FadeScroll'
+import { FORM_FIELD_TITLE, FORM_PANEL_TITLE } from '@/lib/form-standard'
 import type { ModelDTO, SandboxMode, SessionSummaryDTO, ThinkingLevel } from '../../../../../shared/types'
 import type { ScheduledTask, ScheduledTaskInput, ScheduledTaskThinkingLevel } from '../../../../../shared/scheduled-tasks'
 
@@ -48,6 +49,14 @@ type ScheduleKind = ScheduledTaskInput['schedule']['type']
 type Errors = Partial<Record<'name' | 'prompt' | 'project' | 'session' | 'at' | 'minutes' | 'time' | 'timeZone' | 'weekdays' | 'form', string>>
 
 const THINKING_LEVELS: readonly ThinkingLevel[] = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+
+/**
+ * The folder picker sits in the project list as its own row, kept apart from
+ * the known folders: a SelectItem value is what the trigger would echo, so a
+ * sentinel intercepts the choice and opens the dialog without ever becoming
+ * the field's value. No absolute path equals it.
+ */
+const BROWSE_PROJECT_DIRECTORY = '\u0000browse'
 
 export const ScheduledTaskEditor = memo(function ScheduledTaskEditor({
   open,
@@ -111,6 +120,12 @@ export const ScheduledTaskEditor = memo(function ScheduledTaskEditor({
     if (sessionId && !options.some((item) => item.value === sessionId)) options.unshift({ value: sessionId, label: sessionId })
     return options
   }, [sessions, sessionId])
+
+  const browseProjectDirectory = async () => {
+    const result = await window.pi.scheduledPickDirectory()
+    // A cancelled dialog keeps the current folder; there is nothing to undo.
+    if ('path' in result) setProject(result.path)
+  }
 
   const validate = (): Errors => {
     const next: Errors = {}
@@ -193,7 +208,7 @@ export const ScheduledTaskEditor = memo(function ScheduledTaskEditor({
     extra?: React.ReactNode
   ) => (
     <div className="flex flex-col gap-1.5">
-      <span className="text-xs font-medium text-foreground">{label}</span>
+      <span data-scheduled-field-title className={FORM_FIELD_TITLE}>{label}</span>
       {content}
       {error ? (
         <p role="alert" className="flex items-center gap-1 text-[11px] text-destructive">
@@ -208,37 +223,60 @@ export const ScheduledTaskEditor = memo(function ScheduledTaskEditor({
   return (
     <CenterMorphModal open={open} onOpenChange={onOpenChange}>
       <CenterMorphModalContent ariaLabel={t(editing ? 'scheduledTasks.editor.editTitle' : 'scheduledTasks.editor.newTitle')} className="flex max-h-[min(43rem,calc(100vh-3rem))] w-[min(58rem,calc(100vw-3rem))] max-w-none flex-col gap-3 p-5">
-        <h2 className="shrink-0 pr-10 text-sm font-semibold text-foreground">
+        <h2 className={`shrink-0 pr-10 ${FORM_PANEL_TITLE}`}>
           {t(editing ? 'scheduledTasks.editor.editTitle' : 'scheduledTasks.editor.newTitle')}
         </h2>
 
         <FadeScroll className="min-h-0 flex-1 p-1">
-          <div className="grid gap-5 md:grid-cols-2 md:grid-rows-[auto_auto_auto_auto_auto] md:gap-y-3">
-            <div className="grid min-w-0 gap-3 md:col-start-1 md:row-start-1 md:row-span-5 md:grid-rows-subgrid">
+          <div className="grid gap-5 md:grid-cols-2 md:grid-rows-[auto_auto_auto_auto_auto]">
+            <div className="grid min-w-0 md:col-start-1 md:row-start-1 md:row-span-5 md:grid-rows-subgrid">
 
               {field(t('scheduledTasks.editor.name'), errors.name, (
-                <Input value={name} onChange={setName} placeholder={t('scheduledTasks.editor.namePlaceholder')} aria-invalid={!!errors.name || undefined} classNames={{ field: 'h-9', input: 'text-xs' }} />
+                <Input value={name} onChange={setName} placeholder={t('scheduledTasks.editor.namePlaceholder')} aria-invalid={!!errors.name || undefined} classNames={{ field: 'h-9', input: 'text-sm' }} />
               ))}
 
               {field(t('scheduledTasks.editor.prompt'), errors.prompt, (
-                <Input multiline rows={4} value={prompt} onChange={setPrompt} placeholder={t('scheduledTasks.editor.promptPlaceholder')} aria-invalid={!!errors.prompt || undefined} classNames={{ input: 'text-xs' }} />
+                <Input multiline rows={4} value={prompt} onChange={setPrompt} placeholder={t('scheduledTasks.editor.promptPlaceholder')} aria-invalid={!!errors.prompt || undefined} classNames={{ input: 'text-sm' }} />
               ))}
 
               {field(t('scheduledTasks.editor.target'), undefined, (
                 <Select value={targetKind} onValueChange={(value) => setTargetKind(value as typeof targetKind)}>
-                  <SelectTrigger aria-label={t('scheduledTasks.editor.target')} className="h-9 text-xs">
+                  <SelectTrigger aria-label={t('scheduledTasks.editor.target')} className="h-9 text-sm">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent portal>
-                    <SelectItem value="new_session" className="text-xs">{t('scheduledTasks.editor.targetNew')}</SelectItem>
-                    {sessions.length || sessionId ? <SelectItem value="existing_session" className="text-xs">{t('scheduledTasks.editor.targetCurrent')}</SelectItem> : null}
+                    <SelectItem value="new_session" className="text-sm">{t('scheduledTasks.editor.targetNew')}</SelectItem>
+                    {sessions.length || sessionId ? <SelectItem value="existing_session" className="text-sm">{t('scheduledTasks.editor.targetCurrent')}</SelectItem> : null}
                   </SelectContent>
                 </Select>
               ))}
 
               {targetKind === 'new_session'
                 ? field(t('scheduledTasks.editor.project'), errors.project, (
-                    <ScheduledSearchSelect value={project} onChange={setProject} options={projectOptions} label={t('scheduledTasks.editor.project')} invalid={!!errors.project} />
+                    <Select
+                      value={project}
+                      onValueChange={(value) => (value === BROWSE_PROJECT_DIRECTORY ? void browseProjectDirectory() : setProject(value))}
+                    >
+                      <SelectTrigger
+                        aria-label={t('scheduledTasks.editor.project')}
+                        className={`h-9 text-sm ${errors.project ? 'text-destructive hover:bg-destructive/10' : ''}`}
+                      >
+                        <SelectValue className={`truncate ${errors.project ? 'text-destructive' : ''}`} placeholder={t('scheduledTasks.editor.projectPlaceholder')} />
+                      </SelectTrigger>
+                      <SelectContent portal>
+                        {projectOptions.map((option) => (
+                          <SelectItem key={option.value} value={option.value} className="text-sm">{option.label}</SelectItem>
+                        ))}
+                        {/* The browse row is a different kind of choice, so it is set apart from the folder list. */}
+                        <div role="separator" className="mx-1 my-1 border-t border-border/60" />
+                        <SelectItem value={BROWSE_PROJECT_DIRECTORY} className="text-sm">
+                          <span className="flex min-w-0 items-center gap-2">
+                            <FolderOpen aria-hidden="true" className="size-3.5 shrink-0" />
+                            <span className="truncate">{t('scheduledTasks.editor.projectBrowse')}</span>
+                          </span>
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
                   ))
                 : field(t('scheduledTasks.editor.session'), errors.session, (
                     <ScheduledSearchSelect value={sessionId} onChange={setSessionId} options={sessionOptions} label={t('scheduledTasks.editor.session')} invalid={!!errors.session} />
@@ -246,42 +284,42 @@ export const ScheduledTaskEditor = memo(function ScheduledTaskEditor({
 
               {targetKind === 'new_session' && project !== dedicatedRoot ? field(t('scheduledTasks.editor.environment'), undefined, (
                 <Select value={environment} onValueChange={(value) => setEnvironment(value as typeof environment)}>
-                  <SelectTrigger aria-label={t('scheduledTasks.editor.environment')} className="h-9 text-xs"><SelectValue /></SelectTrigger>
+                  <SelectTrigger aria-label={t('scheduledTasks.editor.environment')} className="h-9 text-sm"><SelectValue /></SelectTrigger>
                   <SelectContent portal>
-                    <SelectItem value="local" className="text-xs">{t('scheduledTasks.editor.environmentLocal')}</SelectItem>
-                    <SelectItem value="worktree" className="text-xs">{t('scheduledTasks.editor.environmentWorktree')}</SelectItem>
+                    <SelectItem value="local" className="text-sm">{t('scheduledTasks.editor.environmentLocal')}</SelectItem>
+                    <SelectItem value="worktree" className="text-sm">{t('scheduledTasks.editor.environmentWorktree')}</SelectItem>
                   </SelectContent>
                 </Select>
               ), <p className="text-[11px] leading-4 text-muted-foreground">{t('scheduledTasks.editor.environmentHint')}</p>) : null}
 
             </div>
-            <div className="grid min-w-0 gap-3 md:col-start-2 md:row-start-1 md:row-span-5 md:grid-rows-subgrid">
+            <div className="grid min-w-0 md:col-start-2 md:row-start-1 md:row-span-5 md:grid-rows-subgrid">
 
               {field(t('scheduledTasks.editor.scheduleType'), undefined, (
                 <Select value={scheduleKind} onValueChange={(value) => setScheduleKind(value as ScheduleKind)}>
-                  <SelectTrigger aria-label={t('scheduledTasks.editor.scheduleType')} className="h-9 text-xs">
+                  <SelectTrigger aria-label={t('scheduledTasks.editor.scheduleType')} className="h-9 text-sm">
                     {scheduleKind === 'weekly' ? t('scheduledTasks.editor.schedule.weekly') : <SelectValue />}
                   </SelectTrigger>
                   <SelectContent portal>
-                    <SelectItem value="once" className="text-xs">{t('scheduledTasks.editor.schedule.once')}</SelectItem>
-                    <SelectItem value="interval" className="text-xs">{t('scheduledTasks.editor.schedule.interval')}</SelectItem>
-                    <SelectItem value="daily" className="text-xs">{t('scheduledTasks.editor.schedule.daily')}</SelectItem>
+                    <SelectItem value="once" className="text-sm">{t('scheduledTasks.editor.schedule.once')}</SelectItem>
+                    <SelectItem value="interval" className="text-sm">{t('scheduledTasks.editor.schedule.interval')}</SelectItem>
+                    <SelectItem value="daily" className="text-sm">{t('scheduledTasks.editor.schedule.daily')}</SelectItem>
                   </SelectContent>
                 </Select>
               ))}
 
-              <div className="flex min-w-0 flex-col gap-3">
+              <div className="flex min-w-0 flex-col gap-5">
                 {scheduleKind === 'once' ? field(t('scheduledTasks.editor.at'), errors.at, <DateTimeField value={at} onChange={setAt} invalid={!!errors.at} />) : null}
 
                 {scheduleKind === 'interval'
                   ? field(t('scheduledTasks.editor.minutes'), errors.minutes, (
-                      <Input value={minutes} onChange={setMinutes} inputMode="numeric" aria-invalid={!!errors.minutes || undefined} classNames={{ field: 'h-9', input: 'text-xs' }} />
+                      <Input value={minutes} onChange={setMinutes} inputMode="numeric" aria-invalid={!!errors.minutes || undefined} classNames={{ field: 'h-9', input: 'text-sm' }} />
                     ))
                   : null}
 
                 {scheduleKind === 'daily' || scheduleKind === 'weekly' ? (
                   <>
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="grid grid-cols-2 gap-5">
                       {field(t('scheduledTasks.editor.time'), errors.time, (
                         <TimeOfDayField value={time} onChange={setTime} invalid={!!errors.time} />
                       ))}
@@ -293,7 +331,7 @@ export const ScheduledTaskEditor = memo(function ScheduledTaskEditor({
                       ? field(t('scheduledTasks.editor.weekdays'), errors.weekdays, (
                           <div className="flex flex-wrap gap-3">
                             {([0, 1, 2, 3, 4, 5, 6] as const).map((day) => (
-                              <label key={day} className="flex items-center gap-1.5 text-xs text-foreground">
+                              <label key={day} className="flex items-center gap-1.5 text-sm text-foreground">
                                 <Checkbox
                                   checked={weekdays.includes(day)}
                                   onCheckedChange={(checked) =>
@@ -326,6 +364,7 @@ export const ScheduledTaskEditor = memo(function ScheduledTaskEditor({
                           inheritLabel={t('scheduledTasks.editor.modelDefault')}
                           portal
                           panelId="scheduled-model-picker-panel"
+                          textClassName="text-sm"
                           disabled={saving}
                         />
                       </div>
@@ -336,16 +375,16 @@ export const ScheduledTaskEditor = memo(function ScheduledTaskEditor({
 
               {targetKind === 'new_session' ? field(t('scheduledTasks.editor.permission'), undefined, (
                 <div className="w-fit max-w-full">
-                  <SandboxModePicker mode={permissionMode} status={null} sessionPath={null} onModeChange={setPermissionMode} inheritLabel={t('scheduledTasks.editor.modelDefault')} portal compact disabled={saving} />
+                  <SandboxModePicker mode={permissionMode} status={null} sessionPath={null} onModeChange={setPermissionMode} inheritLabel={t('scheduledTasks.editor.modelDefault')} portal textClassName="text-sm" disabled={saving} />
                 </div>
               )) : null}
 
               {field(t('scheduledTasks.editor.status'), undefined, (
                 <Select value={status} onValueChange={(value) => setStatus(value as typeof status)} disabled={saving}>
-                  <SelectTrigger aria-label={t('scheduledTasks.editor.status')} className="h-9 text-xs"><SelectValue /></SelectTrigger>
+                  <SelectTrigger aria-label={t('scheduledTasks.editor.status')} className="h-9 text-sm"><SelectValue /></SelectTrigger>
                   <SelectContent portal>
-                    <SelectItem value="active" className="text-xs">{t('scheduledTasks.status.active')}</SelectItem>
-                    <SelectItem value="paused" className="text-xs">{t('scheduledTasks.status.paused')}</SelectItem>
+                    <SelectItem value="active" className="text-sm">{t('scheduledTasks.status.active')}</SelectItem>
+                    <SelectItem value="paused" className="text-sm">{t('scheduledTasks.status.paused')}</SelectItem>
                   </SelectContent>
                 </Select>
               ))}

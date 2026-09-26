@@ -52,7 +52,7 @@ export const TimeZoneField = memo(function TimeZoneField({
         aria-invalid={invalid || undefined}
         spellCheck={false}
         className="min-w-0 flex-1"
-        classNames={{ field: 'h-9', input: 'text-xs' }}
+        classNames={{ field: 'h-9', input: 'text-sm' }}
       />
       <MorphPopover open={open} onOpenChange={setOpen}>
         <MorphPopoverTrigger>
@@ -67,7 +67,7 @@ export const TimeZoneField = memo(function TimeZoneField({
                 key={zone}
                 variant="ghost"
                 size="sm"
-                className="h-8 w-full justify-start truncate px-2 text-xs"
+                className="h-8 w-full justify-start truncate px-2 text-sm"
                 onClick={() => { onChange(zone); setOpen(false) }}
               >
                 {zone}

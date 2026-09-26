@@ -123,6 +123,12 @@ export function TabsTrigger({
 }) {
   const { value: current, setValue, layoutId, variant } = useTabs();
   const active = current === value;
+  // local patch (pi-app): a tab's fill takes the scale's radius, so no tab
+  // paints a hard-edged rectangle in the squircle style. The pill nav (the
+  // Settings list, one row per section) takes the control step like the rows
+  // it sits among; the compact horizontal strips — the segment variant's
+  // browser pages and this underline variant — share the inner step.
+  const fillRadius = variant === "pill" ? "rounded-control" : "rounded-md";
 
   if (variant === "underline") {
     return (
@@ -132,7 +138,16 @@ export function TabsTrigger({
         aria-selected={active}
         onClick={() => setValue(value)}
         className={cn(
-          "relative isolate px-3 pb-2.5 pt-1 -mb-px text-sm font-medium transition-colors min-h-[44px] inline-flex items-center",
+          // local patch (pi-app): the registry's `pt-1 pb-2.5 -mb-px` recipe
+          // is drawn for a tab that hangs below its own rule; the app's strips
+          // stretch the trigger over the whole row instead (the rail's
+          // `h-9 min-h-0`), and the asymmetric padding then pushed the icon and
+          // label 2.5px above the row's centre — off the close button that
+          // shares the row and off the add button at its end. Symmetric padding
+          // and no negative margin put the box, its content and the indicator's
+          // 1px rule on the row's own centre line.
+          "relative isolate px-3 py-1 text-sm font-medium transition-colors min-h-[44px] inline-flex items-center",
+          fillRadius,
           // local patch (pi-app): inactive tabs use a fill rather than a
           // border-only or text-only hover cue.
           active ? "text-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground",
@@ -154,8 +169,6 @@ export function TabsTrigger({
     );
   }
 
-  const radius = variant === "pill" ? "rounded-control" : "rounded-md";
-
   return (
     <div className="relative">
       {active ? (
@@ -166,7 +179,7 @@ export function TabsTrigger({
           // indicator and its tab; inline numbers bypass the shared scale.
           className={cn(
             "absolute inset-0 bg-primary",
-            radius,
+            fillRadius,
             indicatorClassName,
           )}
         />
@@ -182,7 +195,7 @@ export function TabsTrigger({
           active
             ? "text-primary-foreground"
             : "text-muted-foreground hover:bg-muted hover:text-foreground",
-          radius,
+          fillRadius,
           className,
         )}
       >

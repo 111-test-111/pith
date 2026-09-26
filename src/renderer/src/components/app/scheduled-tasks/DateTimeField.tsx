@@ -99,7 +99,7 @@ export const DateTimeField = memo(function DateTimeField({ value, onChange, inva
             aria-invalid={invalid || undefined}
             aria-label={t('scheduledTasks.editor.at')}
             className={cn(
-              'h-9 w-full justify-start gap-2 rounded-control border border-transparent bg-transparent px-2.5 text-xs font-normal',
+              'h-9 w-full justify-start gap-2 rounded-control border border-transparent bg-transparent px-2.5 text-sm font-normal',
               invalid && 'text-destructive hover:bg-destructive/10',
               !valid && 'text-muted-foreground'
             )}

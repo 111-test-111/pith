@@ -12,6 +12,7 @@ import {
 import { useI18n } from '@/i18n'
 import type { ModelsConfigDTO } from '../../../../../../shared/types'
 import type { ModelsConfigMutate } from './use-models-config'
+import { FORM_FIELD_HEADING, FORM_INPUT_LABEL, FORM_PANEL_TITLE } from '@/lib/form-standard'
 
 /** Wire APIs a custom provider entry can speak. */
 export const API_OPTIONS = [
@@ -95,11 +96,11 @@ export function AddProviderDialog({
   }
 
   return (
-    <MorphingModal viewId={open ? 'add-provider' : null} onClose={onClose} placement="center" className="max-w-md">
-      <h2 className="text-base font-semibold text-foreground">{t('settings.addProviderTitle')}</h2>
+    <MorphingModal viewId={open ? 'add-provider' : null} onClose={onClose} placement="center" className="w-[min(40rem,calc(100vw-3rem))] max-w-none">
+      <h2 className={FORM_PANEL_TITLE}>{t('settings.addProviderTitle')}</h2>
       <p className="mt-1 text-xs leading-5 text-muted-foreground">{t('settings.addProviderDesc')}</p>
 
-      <div className="mt-4 space-y-3">
+      <div data-form-items className="mt-4 grid gap-5 md:grid-cols-2">
         <Input
           label={t('settings.providerId')}
           value={providerId}
@@ -108,14 +109,14 @@ export function AddProviderDialog({
             setError(null)
           }}
           placeholder="ollama"
-          classNames={{ input: 'font-mono text-sm' }}
+          classNames={{ ...FORM_INPUT_LABEL, input: 'font-mono text-sm' }}
           error={error ?? undefined}
           reserveErrorLine
           autoFocus
         />
 
         <div>
-          <label className="mb-1.5 block px-1 text-sm font-medium text-foreground">
+          <label className={`block ${FORM_FIELD_HEADING}`}>
             {t('settings.api')}
           </label>
           <Select value={api} onValueChange={setApi}>
@@ -140,7 +141,7 @@ export function AddProviderDialog({
             setError(null)
           }}
           placeholder="http://localhost:11434/v1"
-          classNames={{ input: 'font-mono text-sm' }}
+          classNames={{ ...FORM_INPUT_LABEL, input: 'font-mono text-sm' }}
         />
 
         <Input
@@ -149,6 +150,7 @@ export function AddProviderDialog({
           onChange={setApiKey}
           type="password"
           placeholder="ollama"
+          classNames={FORM_INPUT_LABEL}
         />
       </div>
 

@@ -1674,6 +1674,8 @@ const zhCN: Messages = {
   "scheduledTasks.editor.noMatches": "没有匹配的选项。",
   "scheduledTasks.editor.project": "项目目录",
   "scheduledTasks.editor.projectDedicated": "定时任务专属工作目录",
+  "scheduledTasks.editor.projectPlaceholder": "选择项目目录…",
+  "scheduledTasks.editor.projectBrowse": "选择目录…",
   "scheduledTasks.editor.environment": "运行环境",
   "scheduledTasks.editor.environmentLocal": "本地项目",
   "scheduledTasks.editor.environmentWorktree": "Git 工作树",

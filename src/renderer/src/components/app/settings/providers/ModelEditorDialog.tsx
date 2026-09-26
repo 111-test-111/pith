@@ -16,6 +16,7 @@ import type {
   TestModelResultDTO
 } from '../../../../../../shared/types'
 import type { ModelsConfigMutate } from './use-models-config'
+import { FORM_FIELD_HEADING, FORM_INPUT_LABEL, FORM_PANEL_TITLE } from '@/lib/form-standard'
 import { applyCatalogFill, applyConfigCopy, type CopyExtras, type FormSnapshot } from './model-editor-form'
 import { CopyConfigDialog } from './CopyConfigDialog'
 
@@ -458,10 +459,10 @@ export function ModelEditorDialog({
     value > 0 ? String(value) : fallback
 
   return (
-    <MorphingModal viewId={target ? 'model-editor' : null} onClose={onClose} placement="center" className="max-w-md">
+    <MorphingModal viewId={target ? 'model-editor' : null} onClose={onClose} placement="center" className="w-[min(44rem,calc(100vw-3rem))] max-w-none">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <h2 className="text-base font-semibold text-foreground">
+          <h2 className={FORM_PANEL_TITLE}>
             {target.kind === 'new' ? t('settings.addModel') : t('settings.editModel')}
           </h2>
           <p className="mt-0.5 truncate font-mono text-xs text-muted-foreground">
@@ -476,7 +477,7 @@ export function ModelEditorDialog({
       </div>
 
       {/* p-1 keeps the inputs' focus rings from being clipped by the scroll box. */}
-      <div className="mt-4 max-h-[55vh] space-y-3 overflow-y-auto p-1">
+      <div data-form-items className="mt-4 grid max-h-[min(40rem,calc(100vh-3rem))] gap-5 overflow-y-auto p-1 md:grid-cols-2">
         {target.kind === 'override' ? (
           <div className="rounded-xl bg-muted/60 px-3 py-2">
             <p className="font-mono text-sm text-foreground">{target.row.id}</p>
@@ -491,7 +492,7 @@ export function ModelEditorDialog({
               setFormError(null)
             }}
             placeholder="qwen3-32b"
-            classNames={{ input: 'font-mono text-sm' }}
+            classNames={{ ...FORM_INPUT_LABEL, input: 'font-mono text-sm' }}
             autoFocus={target.kind === 'new'}
           />
         )}
@@ -501,9 +502,10 @@ export function ModelEditorDialog({
           value={name}
           onChange={setName}
           placeholder={target.kind === 'override' ? (base?.name ?? '') : t('settings.modelNamePlaceholder')}
+          classNames={FORM_INPUT_LABEL}
         />
 
-        <div className="flex flex-wrap items-center gap-1.5 px-1">
+        <div className="flex flex-wrap items-center gap-1.5">
           <Button
             variant="ghost"
             size="sm"
@@ -535,7 +537,7 @@ export function ModelEditorDialog({
         {fillStatus ? (
           <div
             aria-live="polite"
-            className={`flex min-h-5 items-center justify-between gap-2 px-1 text-xs ${
+            className={`flex min-h-5 items-center justify-between gap-2 text-xs ${
               fillStatus.error ? 'text-destructive' : 'text-muted-foreground'
             }`}
           >
@@ -552,12 +554,12 @@ export function ModelEditorDialog({
           </div>
         ) : null}
 
-        <div className="flex flex-wrap gap-x-6 gap-y-2 px-1">
+        <div className="flex flex-wrap gap-x-6 gap-y-2">
           <Checkbox mark="square" checked={reasoning} onCheckedChange={setReasoning} label={t('settings.reasoning')} />
           <Checkbox mark="square" checked={image} onCheckedChange={setImage} label={t('settings.imageInput')} />
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-2 gap-5 md:col-span-2">
           <Input
             label={t('settings.contextWindow')}
             value={contextWindow}
@@ -567,6 +569,7 @@ export function ModelEditorDialog({
             }}
             inputMode="numeric"
             placeholder={target.kind === 'override' ? placeholder(base?.contextWindow ?? 0, '—') : '131072'}
+            classNames={FORM_INPUT_LABEL}
           />
           <Input
             label={t('settings.maxTokens')}
@@ -577,12 +580,13 @@ export function ModelEditorDialog({
             }}
             inputMode="numeric"
             placeholder={target.kind === 'override' ? placeholder(base?.maxTokens ?? 0, '—') : '16384'}
+            classNames={FORM_INPUT_LABEL}
           />
         </div>
 
-        <div>
-          <p className="px-1 pb-1.5 text-sm font-medium text-foreground">{t('settings.pricing')}</p>
-          <div className="grid grid-cols-2 gap-3">
+        <div className="md:col-span-2">
+          <p className={FORM_FIELD_HEADING}>{t('settings.pricing')}</p>
+          <div className="grid grid-cols-2 gap-5">
             {COST_FIELDS.map(({ key, labelKey }) => (
               <Input
                 key={key}
@@ -596,7 +600,7 @@ export function ModelEditorDialog({
                 placeholder={
                   target.kind === 'override' && base?.cost ? String(base.cost[key]) : '0'
                 }
-                classNames={{ label: 'text-xs' }}
+                classNames={FORM_INPUT_LABEL}
               />
             ))}
           </div>
@@ -604,7 +608,7 @@ export function ModelEditorDialog({
       </div>
 
       {formError ? (
-        <p className="mt-3 flex items-center gap-1.5 px-1 text-xs text-destructive">
+        <p className="mt-3 flex items-center gap-1.5 text-xs text-destructive">
           <AlertCircle className="size-3.5 shrink-0" />
           {formError}
         </p>

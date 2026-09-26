@@ -45,6 +45,7 @@ import {
   writeMcpConfig
 } from '@/lib/mcp-store'
 import { getToolParameterFields } from '@/lib/tool-schema'
+import { FORM_FIELD_HEADING, FORM_INPUT_LABEL } from '@/lib/form-standard'
 import { installExtension, useToolCatalog } from '@/lib/extensions-catalog'
 import type {
   McpConfigFileDTO,
@@ -552,6 +553,7 @@ function JsonConfigCard({ file }: { file: McpConfigFileDTO }) {
 
 // ---- visual server editor dialog ----
 
+
 function ServerEditorDialog({
   editor,
   error,
@@ -578,19 +580,19 @@ function ServerEditorDialog({
   }
 
   return (
-    <MorphingModal viewId={editor ? 'mcp-server-editor' : null} onClose={onClose} placement="center" className="max-w-lg">
+    <MorphingModal viewId={editor ? 'mcp-server-editor' : null} onClose={onClose} placement="center" className="w-[min(52rem,calc(100vw-3rem))] max-w-none">
       {form && editor ? (
-        <div role="dialog" aria-modal="true" aria-label={t('mcp.editTitle')} className="flex max-h-[70vh] flex-col">
+        <div role="dialog" aria-modal="true" aria-label={t('mcp.editTitle')} className="flex max-h-[min(40rem,calc(100vh-3rem))] flex-col">
           <h2 className="text-base font-semibold text-foreground">
             {form.originalName ? t('mcp.editTitle') : t('mcp.addTitle')}
           </h2>
-          <div className="mt-3 min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain p-1">
+          <div data-form-items className="mt-3 grid min-h-0 flex-1 gap-5 overflow-y-auto overscroll-contain p-1 md:grid-cols-2">
             {!editor.targetPath ? (
               <RadioGroup
                 value={editor.mode}
                 onValueChange={(mode) => onModeChange(mode as 'visual' | 'json')}
                 orientation="horizontal"
-                className="w-full"
+                className="w-full md:col-span-2"
               >
                 <RadioGroupItem value="visual" label={t('mcp.modeVisual')} className="flex-1" />
                 <RadioGroupItem value="json" label={t('mcp.modeJson')} className="flex-1" />
@@ -598,7 +600,7 @@ function ServerEditorDialog({
             ) : null}
 
             {editor.mode === 'json' ? (
-              <div>
+              <div className="md:col-span-2">
                 <Input
                   multiline
                   rows={12}
@@ -608,10 +610,10 @@ function ServerEditorDialog({
                   spellCheck={false}
                   autoComplete="off"
                   // Monospace belongs to the textarea, not the label above it.
-                  classNames={{ input: 'font-mono text-xs leading-5' }}
+                  classNames={{ ...FORM_INPUT_LABEL, input: 'font-mono text-sm leading-5' }}
                   onChange={onSnippetChange}
                 />
-                <p className="mt-1.5 px-1 text-[11px] leading-4 text-muted-foreground/70">
+                <p className="mt-1.5 text-[11px] leading-4 text-muted-foreground/70">
                   {t('mcp.snippetHint')}
                 </p>
               </div>
@@ -623,11 +625,12 @@ function ServerEditorDialog({
               placeholder={t('mcp.namePlaceholder')}
               spellCheck={false}
               autoComplete="off"
+              classNames={FORM_INPUT_LABEL}
               onChange={(name) => set({ name })}
             />
 
             <div>
-              <p className="mb-1.5 text-xs font-medium text-muted-foreground">{t('mcp.type')}</p>
+              <p className={FORM_FIELD_HEADING}>{t('mcp.type')}</p>
               <RadioGroup
                 value={form.transport}
                 onValueChange={(transport) => set({ transport: transport as McpTransportKind })}
@@ -648,6 +651,7 @@ function ServerEditorDialog({
                   placeholder={t('mcp.commandPlaceholder')}
                   spellCheck={false}
                   autoComplete="off"
+                  classNames={FORM_INPUT_LABEL}
                   onChange={(command) => set({ command })}
                 />
                 <StringListEditor
@@ -671,6 +675,7 @@ function ServerEditorDialog({
                   placeholder={t('mcp.cwdPlaceholder')}
                   spellCheck={false}
                   autoComplete="off"
+                  classNames={FORM_INPUT_LABEL}
                   onChange={(cwd) => set({ cwd })}
                 />
               </>
@@ -682,6 +687,7 @@ function ServerEditorDialog({
                   placeholder={t('mcp.urlPlaceholder')}
                   spellCheck={false}
                   autoComplete="off"
+                  classNames={FORM_INPUT_LABEL}
                   onChange={(url) => set({ url })}
                 />
                 <KeyValueListEditor
@@ -693,7 +699,7 @@ function ServerEditorDialog({
                   onChange={(headers) => set({ headers })}
                 />
                 <div>
-                  <p className="mb-1.5 text-xs font-medium text-muted-foreground">{t('mcp.auth')}</p>
+                  <p className={FORM_FIELD_HEADING}>{t('mcp.auth')}</p>
                   <RadioGroup
                     value={form.auth}
                     onValueChange={(auth) => set({ auth: auth as McpAuthKind })}
@@ -712,6 +718,7 @@ function ServerEditorDialog({
                     value={form.bearerToken}
                     placeholder={t('mcp.bearerTokenPlaceholder')}
                     autoComplete="off"
+                    classNames={FORM_INPUT_LABEL}
                     onChange={(bearerToken) => set({ bearerToken })}
                   />
                 ) : null}
@@ -723,11 +730,12 @@ function ServerEditorDialog({
                 placeholder={t('mcp.socketPlaceholder')}
                 spellCheck={false}
                 autoComplete="off"
+                classNames={FORM_INPUT_LABEL}
                 onChange={(socket) => set({ socket })}
               />
             )}
 
-            <label className="flex items-center gap-2 px-1 text-xs text-muted-foreground">
+            <label className="flex items-center gap-2 text-sm text-foreground">
               <Checkbox
                 mark="square"
                 checked={form.disabled}
@@ -740,7 +748,7 @@ function ServerEditorDialog({
             )}
           </div>
 
-          {error ? <p className="mt-2 break-words px-1 text-xs text-destructive">{error}</p> : null}
+          {error ? <p className="mt-2 break-words text-xs text-destructive">{error}</p> : null}
           <div className="mt-4 flex justify-end gap-2">
             <Button variant="outline" size="sm" onClick={onClose}>
               {t('common.cancel')}
@@ -771,7 +779,7 @@ function StringListEditor({
   const { t } = useI18n()
   return (
     <div>
-      <p className="mb-1.5 text-xs font-medium text-muted-foreground">{label}</p>
+      <p className={FORM_FIELD_HEADING}>{label}</p>
       <div className="space-y-1.5">
         {rows.map((row, index) => (
           <div key={index} className="flex items-center gap-1.5">
@@ -821,7 +829,7 @@ function KeyValueListEditor({
   const { t } = useI18n()
   return (
     <div>
-      <p className="mb-1.5 text-xs font-medium text-muted-foreground">{label}</p>
+      <p className={FORM_FIELD_HEADING}>{label}</p>
       <div className="space-y-1.5">
         {rows.map((row, index) => (
           <div key={index} className="flex items-center gap-1.5">

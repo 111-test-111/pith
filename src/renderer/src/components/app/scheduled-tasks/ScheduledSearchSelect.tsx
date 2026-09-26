@@ -7,7 +7,7 @@ import { useI18n } from '@/i18n'
 
 interface Option { value: string; label: string }
 
-/** A bounded composition of beUI's portalled Combobox for project/session lists. */
+/** A bounded composition of beUI's portalled Combobox for the session list. */
 export const ScheduledSearchSelect = memo(function ScheduledSearchSelect({
   value,
   onChange,
@@ -34,13 +34,13 @@ export const ScheduledSearchSelect = memo(function ScheduledSearchSelect({
 
   return (
     <Combobox value={value} onValueChange={onChange} query={query} onQueryChange={setQuery}>
-      <ComboboxTrigger className={`h-9 min-w-0 text-xs ${invalid ? 'text-destructive hover:bg-destructive/10' : ''}`}>
-        <ComboboxInput aria-label={label} placeholder={label} className="text-xs" />
+      <ComboboxTrigger className={`h-9 min-w-0 text-sm ${invalid ? 'text-destructive hover:bg-destructive/10' : ''}`}>
+        <ComboboxInput aria-label={label} placeholder={label} className="text-sm" />
       </ComboboxTrigger>
       <ComboboxContent>
         <ComboboxList ariaLabel={label}>
           {visible.map((option) => (
-            <ComboboxItem key={option.value} value={option.value} textValue={option.label} className="text-xs">{option.label}</ComboboxItem>
+            <ComboboxItem key={option.value} value={option.value} textValue={option.label} className="text-sm">{option.label}</ComboboxItem>
           ))}
           <ComboboxEmpty>{t('scheduledTasks.editor.noMatches')}</ComboboxEmpty>
         </ComboboxList>

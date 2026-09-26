@@ -513,6 +513,19 @@ app.on('window-all-closed',()=>app.quit());`
   assert.equal(await evaluate(`!!document.querySelector('[data-subagent-tools-editor]')`), false, 'the form replaces the detail panel')
   assert.equal(await evaluate(`document.querySelector('[data-subagent-new]').disabled`), true, 'the New button is disabled while the form is open')
 
+  // The create panel follows the app's create/edit form standard: a 16px panel
+  // title, flush 14px field titles in one colour, a 10px title-to-control gap,
+  // 14px controls, and 20px between editing items (lib/form-standard.ts).
+  const formFacts = await evaluate(`(()=>{const root=document.querySelector('[data-subagent-create-form]'),titles=[...root.querySelectorAll('label.text-sm.font-medium,p.text-sm.font-medium,span.text-sm.font-medium')],box=e=>({l:e.getBoundingClientRect().left,p:parseFloat(getComputedStyle(e).paddingLeft)}),inset=e=>{const a=box(e),b=box(e.parentElement);return Math.round(a.l+a.p-b.l-b.p)},gap=e=>Math.round(e.nextElementSibling.getBoundingClientRect().top-e.getBoundingClientRect().bottom),heading=root.querySelector('p.text-base'),items=[...root.children];return{title:heading?{size:getComputedStyle(heading).fontSize,weight:Number(getComputedStyle(heading).fontWeight)}:null,titles:titles.map(e=>e.textContent.trim()),insets:[...new Set(titles.map(inset))],colors:[...new Set(titles.map(e=>getComputedStyle(e).color))],sizes:[...new Set(titles.map(e=>getComputedStyle(e).fontSize))],gaps:[...new Set(titles.map(gap))],controls:[...new Set([...root.querySelectorAll('input,textarea')].map(e=>getComputedStyle(e).fontSize))],columns:getComputedStyle(root).gridTemplateColumns.split(' ').length,itemGaps:[...new Set(items.slice(1).map((el,i)=>Math.round(el.getBoundingClientRect().top-items[i].getBoundingClientRect().bottom)).filter(gap=>gap>0))]}})()`)
+  assert.ok(formFacts.title?.size === '16px' && formFacts.title.weight >= 600, `the create form has a 16px semibold panel title: ${JSON.stringify(formFacts.title)}`)
+  assert.ok(formFacts.titles.length >= 4 && formFacts.insets.length === 1 && formFacts.insets[0] === 0, `create form titles are flush with their controls: ${JSON.stringify(formFacts)}`)
+  assert.deepEqual(formFacts.sizes, ['14px'], `create form titles share the form type scale: ${JSON.stringify(formFacts.sizes)}`)
+  assert.equal(formFacts.colors.length, 1, `create form titles share one colour: ${JSON.stringify(formFacts.colors)}`)
+  assert.ok(formFacts.gaps.length === 1 && formFacts.gaps[0] === 10, `every create form title sits 10px above its control: ${JSON.stringify(formFacts.gaps)}`)
+  assert.deepEqual(formFacts.controls, ['14px'], `create form controls carry the form type scale: ${JSON.stringify(formFacts.controls)}`)
+  assert.ok(formFacts.itemGaps.every(gap => gap >= 16) && formFacts.itemGaps.includes(20), `create form items keep the 20px rhythm: ${JSON.stringify(formFacts.itemGaps)}`)
+  assert.equal(formFacts.columns, 2, `the create form lays out in two columns: ${formFacts.columns}`)
+
   // An invalid name is explained live and never reaches the IPC.
   assert.equal(await evaluate(`window.type('Name', 'My Agent!')`), 'My Agent!', 'the name field accepts typing')
   await frame()

@@ -299,6 +299,15 @@ export function registerIpc(pi: PiManager): () => boolean {
   ipcMain.handle('scheduled:cancelRun', (_event, runId: string) => scheduledCall(() => pi.scheduledTasks.cancelRun(runId)))
   ipcMain.handle('scheduled:markRead', (_event, runId: string) => scheduledCall(() => pi.scheduledTasks.markRead(runId)))
   ipcMain.handle('scheduled:deleteRuns', (_event, ids: unknown) => scheduledCall(() => pi.scheduledTasks.deleteRuns(ids)))
+  // A folder chosen for a scheduled task is only a value in the editor, so this
+  // is the dialog alone: unlike app:pickDirectory it must not move the app's
+  // current folder (that handler persists the pick as the session folder).
+  ipcMain.handle('scheduled:pickDirectory', async (): Promise<{ path: string } | { cancelled: true }> => {
+    const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+    const result = await dialog.showOpenDialog(win, { properties: ['openDirectory', 'createDirectory'] })
+    if (result.canceled || !result.filePaths[0]) return { cancelled: true }
+    return { path: result.filePaths[0] }
+  })
   ipcMain.handle('app:setCheckpointsEnabled', (_event, enabled: boolean) => pi.setCheckpointsEnabled(enabled))
   ipcMain.handle('app:setStartup', (_event, mode: StartupSessionMode) => pi.setStartupMode(mode))
   ipcMain.handle('app:setBashMaxWaitMs', (_event, value: number) => pi.setBashMaxWaitMs(value))

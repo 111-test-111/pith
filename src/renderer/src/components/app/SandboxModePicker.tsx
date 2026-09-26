@@ -61,7 +61,7 @@ export function SandboxModePicker({
   onSnapshot,
   onModeChange,
   portal = false,
-  compact = false,
+  textClassName = 'text-xs',
   inheritLabel
 }: {
   mode: SandboxMode | null
@@ -74,8 +74,9 @@ export function SandboxModePicker({
   onModeChange?: (mode: SandboxMode | null) => void
   /** Keep this shared picker visible outside a modal's clipped content. */
   portal?: boolean
-  /** Match the scheduled-task form's smaller control typography. */
-  compact?: boolean
+  /** Trigger type scale. The composer keeps its 12px control type; the
+   * scheduled-task form passes the form's own scale (14px). */
+  textClassName?: string
   /** Scheduled tasks can reset a saved override to the app default. */
   inheritLabel?: string
 }) {
@@ -107,7 +108,7 @@ export function SandboxModePicker({
     >
       <SelectTrigger
         aria-label={t('sandbox.modeLabel')}
-        className="h-8 w-auto gap-1.5 rounded-control border-0 bg-transparent px-2.5 text-xs hover:bg-muted"
+        className={cn("h-8 w-auto gap-1.5 rounded-control border-0 bg-transparent px-2.5 hover:bg-muted", textClassName)}
       >
         <span className="flex min-w-0 items-center gap-1.5 whitespace-nowrap">
           {mode && CurrentIcon ? <CurrentIcon
@@ -121,11 +122,11 @@ export function SandboxModePicker({
         </span>
       </SelectTrigger>
       <SelectContent className="right-0 left-auto w-72" portal={portal} portalAlign="end" portalWidth={288}>
-        {onModeChange && inheritLabel ? <SelectItem value="__inherit__" className={cn('py-1.5', compact && 'text-xs')}>{inheritLabel}</SelectItem> : null}
+        {onModeChange && inheritLabel ? <SelectItem value="__inherit__" className="py-1.5">{inheritLabel}</SelectItem> : null}
         {SANDBOX_MODES.map((option) => {
           const OptionIcon = MODE_ICON[option]
           return (
-            <SelectItem key={option} value={option} className={cn('py-1.5', compact && 'text-xs')}>
+            <SelectItem key={option} value={option} className="py-1.5">
               <span
                 data-sandbox-mode-option={option}
                 className="flex min-w-0 items-start gap-2"

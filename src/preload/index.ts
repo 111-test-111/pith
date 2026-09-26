@@ -123,6 +123,10 @@ const api = {
     ipcRenderer.invoke('scheduled:markRead', runId).then(scheduledUnwrap<ScheduledTaskRun>),
   scheduledDeleteRuns: (ids: string[]): Promise<{ deleted: number }> =>
     ipcRenderer.invoke('scheduled:deleteRuns', ids).then(scheduledUnwrap<{ deleted: number }>),
+  /** Folder dialog for the scheduled-task editor; unlike pickDirectory it never
+   * rewrites the app's current folder, so its result is not a task envelope. */
+  scheduledPickDirectory: (): Promise<{ path: string } | { cancelled: true }> =>
+    ipcRenderer.invoke('scheduled:pickDirectory'),
   onRewind: (listener: (event: { sessionPath: string }) => void) => subscribe('pi:rewind', listener),
   setCheckpointsEnabled: (enabled: boolean): Promise<boolean> => ipcRenderer.invoke('app:setCheckpointsEnabled', enabled),
   /** Toggles the browser_* agent tools for sessions (Settings → Browser). The

@@ -96,6 +96,12 @@ function Fixture(){
      h('span',{id:'status-dot',className:'size-1.5 rounded-full bg-primary'}),
      h('span',{id:'pseudo','data-drop':'before',className:'data-[drop=before]:before:rounded-full'}),h(Loader,{variant:'dots',size:16})),
     h('div',{id:'segment'},h(Tabs,{variant:'segment',value:tab,onValueChange:setTab},h(TabsList,null,h(TabsTrigger,{value:'one'},'Terminal'),h(TabsTrigger,{value:'two'},'Review')))),
+    // The underline variant at the COMPACT size the app's file pane uses
+    // (min-h-0 px-2 py-1 text-[11px] inside an h-7 list). Its inactive tab
+    // carries the hover fill, and this is the smallest tab the shared inner
+    // radius step has to serve: the radius must stay under half the box, or
+    // the strip's tabs would read as capsules.
+    h('div',{id:'underline'},h(Tabs,{variant:'underline',value:tab,onValueChange:setTab},h(TabsList,{className:'h-7 gap-1 border-b-0 p-0'},h(TabsTrigger,{value:'one',className:'min-h-0 px-2 py-1 text-[11px]'},'Source'),h(TabsTrigger,{value:'two',className:'min-h-0 px-2 py-1 text-[11px]'},'Preview')))),
     h('div',{className:'lab-section'},selectControl)),
    h('section',null,h('div',{className:'lab-label'},'Transcript and layers'),
     h(MessageBubble,{align:'end'},h(MessageBubbleContent,null,'Apply continuous corners across the interface.')),
@@ -318,6 +324,24 @@ app.on('window-all-closed',()=>app.quit());`)
           preset + ': the pill indicator takes the control step like its tab, not semicircular capsule ends (got radius ' + pillIndicator.radius + ', expected ' + parseFloat(expected.item) + ', box ' + pillIndicator.width + '×' + pillIndicator.height + ')'
         )
         assert.ok(pillIndicator.radius < Math.min(pillIndicator.width, pillIndicator.height) / 2, preset + ': the pill indicator keeps small rounded corners, not semicircular ends (radius ' + pillIndicator.radius + ' on a ' + pillIndicator.width + '×' + pillIndicator.height + ' row)')
+        // Every tab fill takes the scale's step, so no tab paints a
+        // hard-edged rectangle in the squircle style: the pill nav takes the
+        // control step (asserted above through its moving indicator) and the
+        // compact horizontal strips the inner step — the segment variant's
+        // browser pages AND the underline variant's rail/file tabs, which the
+        // rail check (check-rail-tabs.mjs) measures in the real Workspace.
+        const underline = await evaluate('(()=>{const e=document.querySelector("#underline [role=tab][aria-selected=false]"),s=getComputedStyle(e),r=e.getBoundingClientRect();return {width:r.width,height:r.height,radius:parseFloat(s.borderTopLeftRadius),shape:s.cornerShape}})()')
+        assert.ok(underline.width > 0 && underline.height > 0, `${preset}: the fixture underline tab renders`)
+        assert.equal(
+          underline.radius,
+          parseFloat(expected.inner),
+          `${preset}: the underline tab fill takes the scale inner step (got ${underline.radius}, expected ${parseFloat(expected.inner)})`
+        )
+        assert.ok(
+          underline.radius < underline.height / 2,
+          `${preset}: the compact tab fill keeps small rounded corners rather than clamping into a capsule (radius ${underline.radius} on a ${underline.height}px row)`
+        )
+        assert.equal(underline.shape, 'superellipse(2)', `${preset}: the underline tab fill keeps the continuous corner shape`)
         // Selection controls, pinned per preset. Both frames take the CONTROL
         // step: hard-edged in the square style, a full circle in the squircle
         // style (the control step is 14px on this 14px box). The MARK is what
@@ -482,6 +506,7 @@ app.on('window-all-closed',()=>app.quit());`)
     }
     assert.equal(await style('[aria-modal="true"]', 'border-top-left-radius'), '34px')
     assert.equal(await style('#segment .absolute', 'border-top-left-radius'), '7px')
+    assert.equal(await style('#underline [role="tab"][aria-selected="false"]', 'border-top-left-radius'), '7px', 'the underline tab fill carries the inner token live')
     await evaluate('window.controls.setTab("two")'); await pause(500)
     assert.equal(await style('#segment .absolute', 'border-top-left-radius'), '7px', 'moving tab indicator keeps the token')
     // Reopen near the bottom edge to exercise Select's opposite corner pair.

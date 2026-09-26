@@ -97,7 +97,7 @@ export const TimeOfDayField = memo(function TimeOfDayField({
             size="sm"
             aria-label={t('scheduledTasks.editor.time')}
             aria-invalid={invalid || undefined}
-            className={cn('h-9 w-full justify-start gap-2 rounded-control border border-transparent bg-transparent px-2.5 text-xs font-normal', invalid && 'text-destructive hover:bg-destructive/10')}
+            className={cn('h-9 w-full justify-start gap-2 rounded-control border border-transparent bg-transparent px-2.5 text-sm font-normal', invalid && 'text-destructive hover:bg-destructive/10')}
           >
             <Clock aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
             <span className="tabular-nums">{value}</span>

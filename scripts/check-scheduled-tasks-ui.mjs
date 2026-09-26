@@ -59,6 +59,7 @@ app.whenReady().then(()=>{
  ipcMain.handle('pi:searchSessions',()=>({sessions:[],groups:[],total:0,hasMore:false}));
  ipcMain.handle('scheduled:snapshot',()=>({ok:true,value:tasks()}));
  ipcMain.handle('scheduled:runOutput',(_,runId)=>({ok:true,value:{text:runId==='fixture-run'?${JSON.stringify(sampleRunOutput)}:'Older result'}}));
+ ipcMain.handle('scheduled:pickDirectory',()=>({path:'/fixture/picked-folder'}));
  ipcMain.handle('files:read',(_,path)=>({path,relPath:path,kind:'text',size:12}));
  const w=new BrowserWindow({...windowChromeOptions(),width:1280,height:800,minWidth:760,minHeight:560,title:'Scheduled UI check',backgroundColor:'#0b0b0d',webPreferences:{preload:${JSON.stringify(join(repo, 'out/preload/index.mjs'))},contextIsolation:true,nodeIntegration:false,sandbox:false,backgroundThrottling:false}});
  ipcMain.on('window:setTheme',(event,theme)=>setWindowTheme(BrowserWindow.fromWebContents(event.sender),theme));
@@ -141,11 +142,26 @@ app.whenReady().then(()=>{
   await screenshot('editor')
 
   const modal = `[role="dialog"][aria-modal="true"]`
-  const layout = await evaluate(`(()=>{const d=document.querySelector(${JSON.stringify(modal)}),s=d.querySelector('[data-fade-scroll]'),r=d.getBoundingClientRect();return{width:r.width,height:r.height,scroll:s.scrollHeight,client:s.clientHeight,model:!!d.querySelector('button[aria-controls="scheduled-model-picker-panel"]'),sandbox:!!d.querySelector('button[aria-label="Sandbox mode"],button[aria-label="沙箱模式"]'),font:[...d.querySelectorAll('input,textarea,button[aria-haspopup="listbox"]')].map(e=>({label:e.getAttribute('aria-label'),size:getComputedStyle(e).fontSize})).filter(x=>x.size!=='12px')}})()`)
+  const layout = await evaluate(`(()=>{const d=document.querySelector(${JSON.stringify(modal)}),s=d.querySelector('[data-fade-scroll]'),r=d.getBoundingClientRect();return{width:r.width,height:r.height,scroll:s.scrollHeight,client:s.clientHeight,model:!!d.querySelector('button[aria-controls="scheduled-model-picker-panel"]'),sandbox:!!d.querySelector('button[aria-label="Sandbox mode"],button[aria-label="沙箱模式"]'),font:[...d.querySelectorAll('input,textarea,button[aria-haspopup="listbox"]')].map(e=>({label:e.getAttribute('aria-label'),size:getComputedStyle(e).fontSize})).filter(x=>x.size!=='14px')}})()`)
   assert.ok(layout.width > 800 && layout.height < 700, `compact wide dialog: ${JSON.stringify(layout)}`)
   assert.ok(layout.scroll <= layout.client + 2, `default editor fits without body scrolling: ${JSON.stringify(layout)}`)
   assert.ok(layout.model && layout.sandbox, 'editor uses the shared composer model and permission controls')
-  assert.deepEqual(layout.font, [], `input and picker typography matches 12px controls: ${JSON.stringify(layout.font)}`)
+  assert.deepEqual(layout.font, [], `input and picker typography matches the 14px form scale: ${JSON.stringify(layout.font)}`)
+  // Field titles sit flush with the control below them (no label inset of their
+  // own), share one colour, and keep one gap to that control; edit items keep one
+  // roomier rhythm, measured from each field wrapper to the next one that starts
+  // below it (a side-by-side pair is not a vertical step). Insets are measured
+  // against the parent's CONTENT box, so a padded column never reads as an indent.
+  const titleFacts = await evaluate(`(()=>{const d=document.querySelector(${JSON.stringify(modal)}),titles=[...d.querySelectorAll('[data-scheduled-field-title]')],box=e=>({l:e.getBoundingClientRect().left,p:parseFloat(getComputedStyle(e).paddingLeft)}),inset=e=>{const a=box(e),b=box(e.parentElement);return Math.round(a.l+a.p-b.l-b.p)},gap=e=>Math.round(e.nextElementSibling.getBoundingClientRect().top-e.getBoundingClientRect().bottom),fields=titles.map(t=>({name:t.textContent?.trim(),r:t.parentElement.getBoundingClientRect()})),steps=[];for(const f of fields){const next=fields.filter(o=>o.r.top>=f.r.bottom-1).sort((a,b)=>a.r.top-b.r.top)[0];if(next)steps.push({from:f.name,to:next.name,gap:Math.round(next.r.top-f.r.bottom)})};return{count:titles.length,insets:[...new Set(titles.map(inset))],colors:[...new Set(titles.map(e=>getComputedStyle(e).color))],gaps:[...new Set(titles.map(gap))],steps}})()`)
+  assert.ok(titleFacts.count >= 6 && titleFacts.insets.length === 1 && titleFacts.insets[0] === 0, `every field title is flush with its control: ${JSON.stringify(titleFacts)}`)
+  assert.equal(titleFacts.colors.length, 1, `every field title shares one colour: ${JSON.stringify(titleFacts.colors)}`)
+  assert.ok(titleFacts.gaps.length === 1 && titleFacts.gaps[0] >= 8, `every field title keeps one gap to its control: ${JSON.stringify(titleFacts.gaps)}`)
+  const byGap = new Map()
+  for (const step of titleFacts.steps) byGap.set(step.gap, (byGap.get(step.gap) ?? 0) + 1)
+  const commonGap = [...byGap.entries()].sort((a, b) => b[1] - a[1])[0][0]
+  // The model field sits behind a divider, so its own step is the one wider one
+  // (rhythm + the divider's 12px padding); everything else is the shared rhythm.
+  assert.ok([...byGap.keys()].every(gap => gap >= 16) && commonGap === 20, `edit items keep a 20px rhythm: ${JSON.stringify(titleFacts.steps)}`)
   const editorAlignment = () => evaluate(`(()=>{const d=document.querySelector(${JSON.stringify(modal)}),labels=[...d.querySelectorAll('span')],top=(en,zh)=>labels.find(e=>[en,zh].includes(e.textContent?.trim()))?.getBoundingClientRect().top;return{target:top('Run in','执行位置'),permission:top('Permissions','权限'),project:top('Project directory','项目目录'),status:top('Save as','保存状态'),projectHint:/Each run uses a folder named|每次运行使用当天日期命名的子目录/.test(d.textContent??'')}})()`)
   const assertAligned = async (schedule) => {
     const rows = await editorAlignment()
@@ -156,7 +172,7 @@ app.whenReady().then(()=>{
   await assertAligned('daily')
 
   const recurringTrigger = `document.querySelector(${JSON.stringify(`${modal} [data-scheduled-time] button[aria-haspopup="dialog"]`)})`
-  assert.equal(await evaluate(`getComputedStyle(${recurringTrigger}).fontSize`), '12px')
+  assert.equal(await evaluate(`getComputedStyle(${recurringTrigger}).fontSize`), '14px')
   await evaluate(`(()=>{window.__timeFrames=[];const until=performance.now()+500;const sample=()=>{if(performance.now()>until)return;const p=[...document.querySelectorAll('[data-morph-popover-portal]')].find(e=>e.querySelector('[data-time-picker-grid]'));if(p){const r=p.getBoundingClientRect();window.__timeFrames.push({visible:getComputedStyle(p).visibility==='visible',width:r.width,height:r.height,opacity:getComputedStyle(p).opacity})}requestAnimationFrame(sample)};requestAnimationFrame(sample)})()`)
   await click(recurringTrigger)
   await waitFor(`document.querySelector('[data-time-picker-grid="hour"]')`)
@@ -186,13 +202,29 @@ app.whenReady().then(()=>{
     assert.ok(Math.abs(facts.first.naturalHeight - facts.last.naturalHeight) <= 1, `${name}: content height does not flash on first open: ${JSON.stringify(facts)}`)
   }
   const permissionTrigger = `document.querySelector(${JSON.stringify(`${modal} button[aria-label="Sandbox mode"],${modal} button[aria-label="沙箱模式"]`)})`
+
+  // The project directory is a plain dropdown — no typing surface — and the
+  // folder dialog is its own row, set apart from the known folders.
+  const projectTrigger = `document.querySelector(${JSON.stringify(`${modal} button[aria-label="Project directory"],${modal} button[aria-label="项目目录"]`)})`
+  const projectField = await evaluate(`(()=>{const t=${projectTrigger};return{tag:t.tagName,typed:!!document.querySelector(${JSON.stringify('input[aria-label="Project directory"],input[aria-label="项目目录"]')}),font:getComputedStyle(t).fontSize}})()`)
+  assert.ok(projectField.tag === 'BUTTON' && !projectField.typed && projectField.font === '14px', `project directory is a dropdown button, not a text field: ${JSON.stringify(projectField)}`)
+  const projectMenu = await menuFacts(projectTrigger)
+  assert.ok(projectMenu.open && projectMenu.topmost && projectMenu.position === 'fixed', `project directory menu escapes the dialog: ${JSON.stringify(projectMenu)}`)
+  stableFirstFrame('project directory', projectMenu)
+  const projectRows = await evaluate(`(()=>{const p=document.getElementById(${projectTrigger}.getAttribute('aria-controls')),rows=[...p.querySelectorAll('[role="option"]')],browse=rows.at(-1);return{options:rows.map(r=>r.textContent?.trim()),separated:browse?.parentElement?.previousElementSibling?.getAttribute('role')==='separator',folders:rows.length-1}})()`)
+  assert.ok(projectRows.folders >= 1 && projectRows.separated && /^(Choose a folder|选择目录)/.test(projectRows.options.at(-1) ?? ''), `folder picker is a separated row below the known folders: ${JSON.stringify(projectRows)}`)
+  await screenshot('project-directory')
+  await click(`[...document.querySelectorAll('[role="listbox"] button[role="option"]')].find(b=>/^(Choose a folder|选择目录)/.test(b.textContent?.trim()??''))`)
+  await waitFor(`${projectTrigger}.textContent.includes('/fixture/picked-folder')`)
   const permission = await menuFacts(permissionTrigger)
   assert.ok(permission.open && permission.topmost && permission.position === 'fixed', `permission menu escapes the dialog: ${JSON.stringify(permission)}`)
   stableFirstFrame('permissions', permission)
   await screenshot('permissions')
   await click(permissionTrigger)
 
-  const scheduleTrigger = `document.querySelectorAll(${JSON.stringify(`${modal} button[aria-haspopup="listbox"]`)})[1]`
+  // The project directory and schedule selects are both listbox buttons, so the
+  // schedule one is addressed by name rather than by form order.
+  const scheduleTrigger = `document.querySelector(${JSON.stringify(`${modal} button[aria-label="Schedule"],${modal} button[aria-label="时间规则"]`)})`
   const schedule = await menuFacts(scheduleTrigger)
   assert.ok(schedule.open && schedule.topmost && schedule.position === 'fixed', `schedule select escapes the dialog: ${JSON.stringify(schedule)}`)
   stableFirstFrame('schedule', schedule)
@@ -202,7 +234,7 @@ app.whenReady().then(()=>{
   await waitFor(`document.querySelector(${JSON.stringify(modal)})?.querySelector('[data-scheduled-datetime]')`)
   await assertAligned('once')
   const dateTimeTrigger = `document.querySelector(${JSON.stringify(`${modal} [data-scheduled-datetime] button[aria-haspopup="dialog"]`)})`
-  assert.equal(await evaluate(`getComputedStyle(${dateTimeTrigger}).fontSize`), '12px')
+  assert.equal(await evaluate(`getComputedStyle(${dateTimeTrigger}).fontSize`), '14px')
   assert.ok(await evaluate(`!document.querySelector(${JSON.stringify(modal)}).querySelector('[data-scheduled-datetime] input,[data-scheduled-datetime] button[aria-haspopup="listbox"]')`), 'one-time date and HH:mm use one dedicated picker')
   await click(dateTimeTrigger)
   await waitFor(`document.querySelector('[data-scheduled-calendar]')`)

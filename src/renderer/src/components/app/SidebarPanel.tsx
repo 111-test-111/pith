@@ -453,29 +453,39 @@ export function SidebarPanel({
           aria-hidden={!open || undefined}
           data-panel="right"
           data-panel-fullscreen={fullscreen || undefined}
-          initial={{ width: 0, opacity: 0, borderLeftWidth: 0 }}
+          initial={{ width: 0, opacity: 0 }}
           animate={{
             width: open ? (fullscreen ? '100%' : resizing ? 'var(--panel-right)' : width) : 0,
-            opacity: open ? 1 : 0,
-            // A kept-alive fold parks the aside at width 0 for good — a
-            // border-box width of 0 would still paint the 1px left rule, so
-            // the rule collapses with the panel. Animating the WIDTH (never
-            // the colour) keeps the theme token intact.
-            borderLeftWidth: open ? 1 : 0
+            opacity: open ? 1 : 0
           }}
-          exit={{ width: 0, opacity: 0, borderLeftWidth: 0 }}
+          exit={{ width: 0, opacity: 0 }}
           transition={
             reduce || resizing ? { duration: 0 } : { duration: DURATION.base, ease: EASE_OUT }
           }
           className={cn(
-            'shrink-0 overflow-hidden border-l bg-background',
+            'shrink-0 overflow-hidden bg-background',
             fullscreen ? 'absolute inset-y-0 right-0 z-30' : 'relative',
-            edgeActive ? 'border-primary' : 'border-border',
             !open && 'pointer-events-none'
           )}
         >
+          {/* The 1px left rule is drawn by this column, never by the aside:
+              the aside's animated width is its BORDER box, so a border up
+              there would shrink its content box by a pixel while this column —
+              pinned to the rail's docked width so a fold clips instead of
+              reflowing the pane — kept asking for the whole width. The column
+              then spilt 1px past the rail's right edge (clipped by the aside),
+              and every right-aligned control inside it sat 1px further right
+              than the same control in fullscreen: switching the rail to
+              fullscreen nudged the pane's whole right edge. On this box the
+              column's border box IS the aside's content box, so both states
+              resolve to identical pixels, and a fold (or the kept-alive fold at
+              width 0) clips the rule away with the panel — no animated border
+              width, and the theme token stays intact. */}
           <div
-            className="flex h-full flex-col"
+            className={cn(
+              'flex h-full flex-col border-l',
+              edgeActive ? 'border-primary' : 'border-border'
+            )}
             style={{ width: fullscreen ? '100%' : resizing ? 'var(--panel-right)' : width }}
           >
             {hasTabs ? (
