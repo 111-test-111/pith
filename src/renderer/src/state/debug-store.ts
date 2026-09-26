@@ -11,51 +11,84 @@ const NO_BREAKPOINTS: DebugBreakpointDTO[] = []
  * panel actually shows them, mirroring how bash task logs are fetched.
  */
 export class DebugStore {
+  private selected = new Map<string, string>()
+  private explicitSelection = new Set<string>()
   private sessions = new Map<string, DebugSessionDTO>()
   private listeners = new Set<() => void>()
   private off?: () => void
   private snapshot: { revision: number; sessions: DebugSessionDTO[] } = { revision: 0, sessions: [] }
-  /** Watch expressions per chat session; renderer-local, evaluated at stops. */
+  /** Watch expressions per debug target; renderer-local, evaluated at stops. */
   private watches = new Map<string, string[]>()
-  /** Breakpoints per chat session, refreshed on demand by panes. */
+  /** Breakpoints per debug target, refreshed on demand by panes. */
   private breakpoints = new Map<string, DebugBreakpointDTO[]>()
+  private refreshes = new Map<string, Promise<void>>()
 
-  breakpointsFor(sessionPath: string | null, file?: string): DebugBreakpointDTO[] {
-    if (!sessionPath) return NO_BREAKPOINTS
-    const list = this.breakpoints.get(sessionPath) ?? NO_BREAKPOINTS
+  breakpointsFor(debugId: string | null, file?: string): DebugBreakpointDTO[] {
+    if (!debugId) return NO_BREAKPOINTS
+    const list = this.breakpoints.get(debugId) ?? NO_BREAKPOINTS
     return file ? list.filter((bp) => bp.file === file) : list
   }
 
   /** Pull the session's breakpoints; notifies only on a real change, so an
    * effect that refreshes on every revision cannot loop. */
-  async refreshBreakpoints(sessionPath: string): Promise<void> {
+  async refreshBreakpoints(sessionPath: string, debugId: string): Promise<void> {
     try {
-      const list = await window.pi.debugAction({ sessionPath, action: 'breakpoints' }) as DebugBreakpointDTO[]
-      const previous = this.breakpoints.get(sessionPath)
-      if (previous && previous.length === list.length && previous.every((bp, index) => bp.file === list[index].file && bp.line === list[index].line && bp.verified === list[index].verified)) return
-      this.breakpoints.set(sessionPath, list)
+      const list = await window.pi.debugAction({ sessionPath, debugId, action: 'breakpoints' }) as DebugBreakpointDTO[]
+      const previous = this.breakpoints.get(debugId)
+      if (JSON.stringify(previous) === JSON.stringify(list)) return
+      this.breakpoints.set(debugId, list)
       this.notifyWatchChange()
     } catch { /* the session ended between render and fetch */ }
   }
 
-  watchList(sessionPath: string | null): string[] {
-    if (!sessionPath) return NO_WATCHES
-    return this.watches.get(sessionPath) ?? NO_WATCHES
+  /** A human may inspect the visible chat's children; tool ownership stays in main. */
+  forView(sessionPath: string | null, childPaths: readonly string[] = []): DebugSessionDTO[] {
+    if (!sessionPath) return []
+    const owners = new Set([sessionPath, ...childPaths])
+    return this.snapshot.sessions.filter(session => owners.has(session.sessionPath))
   }
 
-  addWatch(sessionPath: string, expression: string): void {
-    const trimmed = expression.trim()
-    if (!trimmed) return
-    const list = this.watches.get(sessionPath) ?? []
-    if (list.includes(trimmed)) return
-    this.watches.set(sessionPath, [...list, trimmed])
+  selectedFor(sessionPath: string | null, childPaths: readonly string[] = []): DebugSessionDTO | undefined {
+    if (!sessionPath) return undefined
+    const sessions = this.forView(sessionPath, childPaths)
+    return sessions.find(s => s.id === this.selected.get(sessionPath))
+      ?? sessions.find(s => ['starting', 'running', 'stopped'].includes(s.status) && !sessions.some(child => child.parentId === s.id && ['starting', 'running', 'stopped'].includes(child.status))) ?? sessions.at(-1)
+  }
+
+  select(sessionPath: string, debugId: string, childPaths: readonly string[] = []): void {
+    if (!this.forView(sessionPath, childPaths).some(s => s.id === debugId)) return
+    this.selected.set(sessionPath, debugId)
+    this.explicitSelection.add(sessionPath)
     this.notifyWatchChange()
   }
 
-  removeWatch(sessionPath: string, expression: string): void {
-    const list = this.watches.get(sessionPath)
+  /** Pin an automatic choice too, so a child's exit keeps its console visible. */
+  retainSelection(sessionPath: string, childPaths: readonly string[]): void {
+    const session = this.selectedFor(sessionPath, childPaths)
+    if (!session || this.selected.get(sessionPath) === session.id) return
+    this.selected.set(sessionPath, session.id)
+    this.explicitSelection.delete(sessionPath)
+    this.notifyWatchChange()
+  }
+
+  watchList(debugId: string | null): string[] {
+    if (!debugId) return NO_WATCHES
+    return this.watches.get(debugId) ?? NO_WATCHES
+  }
+
+  addWatch(debugId: string, expression: string): void {
+    const trimmed = expression.trim()
+    if (!trimmed) return
+    const list = this.watches.get(debugId) ?? []
+    if (list.includes(trimmed)) return
+    this.watches.set(debugId, [...list, trimmed])
+    this.notifyWatchChange()
+  }
+
+  removeWatch(debugId: string, expression: string): void {
+    const list = this.watches.get(debugId)
     if (!list) return
-    this.watches.set(sessionPath, list.filter((item) => item !== expression))
+    this.watches.set(debugId, list.filter((item) => item !== expression))
     this.notifyWatchChange()
   }
 
@@ -82,6 +115,29 @@ export class DebugStore {
     const current = this.sessions.get(dto.id)
     if (current && current.revision >= dto.revision) return
     this.sessions.set(dto.id, dto)
+    if (!current && dto.replacesId) {
+      const previous = this.sessions.get(dto.replacesId)
+      if (previous?.sessionPath === dto.sessionPath) {
+        this.watches.set(dto.id, [...this.watchList(previous.id)])
+        // The same target can be selected in its own chat and its parent's view.
+        for (const [view, selected] of this.selected) {
+          if (selected === previous.id) this.selected.set(view, dto.id)
+        }
+      }
+    }
+    for (const [view, selected] of this.selected) {
+      if (!this.explicitSelection.has(view) && dto.parentId === selected && this.sessions.get(selected)?.sessionPath === dto.sessionPath) {
+        this.selected.set(view, dto.id)
+      }
+    }
+    const selected = this.selected.get(dto.sessionPath)
+    if (!selected || !this.sessions.has(selected) || (!this.explicitSelection.has(dto.sessionPath) && dto.parentId === selected)) {
+      this.selected.set(dto.sessionPath, dto.id)
+    }
+    const settled = [...this.sessions.values()].filter(s => s.status === 'terminated' || s.status === 'failed').sort((a, b) => b.startedAt - a.startedAt)
+    for (const old of settled.slice(10)) {
+      this.sessions.delete(old.id); this.breakpoints.delete(old.id); this.watches.delete(old.id)
+    }
     this.snapshot = {
       revision: this.snapshot.revision + 1,
       sessions: [...this.sessions.values()].sort((a, b) => a.startedAt - b.startedAt)
@@ -89,13 +145,19 @@ export class DebugStore {
     for (const listener of this.listeners) listener()
   }
 
+  acceptRestart(dto: DebugSessionDTO): void { this.upsert(dto) }
+
   /** Pull the authoritative list (covers events missed before the first
    * subscription, e.g. a renderer reload mid-session). */
-  async refresh(sessionPath: string): Promise<void> {
-    try {
-      const list = await window.pi.debugList(sessionPath)
+  refresh(sessionPath: string): Promise<void> {
+    const pending = this.refreshes.get(sessionPath)
+    if (pending) return pending
+    const work = window.pi.debugList(sessionPath).then(list => {
       for (const dto of list) this.upsert(dto)
-    } catch { /* A closing window loses the bridge; the next mount retries. */ }
+    }).catch(() => { /* A closing window loses the bridge; the next mount retries. */ })
+      .finally(() => { this.refreshes.delete(sessionPath) })
+    this.refreshes.set(sessionPath, work)
+    return work
   }
 
   forSession(sessionPath: string | null): DebugSessionDTO[] {

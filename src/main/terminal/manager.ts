@@ -14,6 +14,8 @@ interface OwnedTerminal {
   resolve: (result: TerminalCreateResult) => void
   timer: ReturnType<typeof setTimeout>
   pid?: number
+  closed: Promise<void>
+  resolveClosed: () => void
 }
 const dimension = (value: number, max: number): number => Math.max(2, Math.min(max, Math.floor(value) || 24))
 
@@ -44,8 +46,10 @@ export class TerminalManager {
       })
     }
     return new Promise((resolve) => {
+      let resolveClosed!: () => void
       const entry: OwnedTerminal = {
         owner, resolve, release,
+        closed: new Promise<void>(done => { resolveClosed = done }), resolveClosed: () => resolveClosed(),
         timer: setTimeout(() => this.close(owner, payload.id, 'host'), 15_000)
       }
       this.terminals.set(payload.id, entry)
@@ -61,6 +65,14 @@ export class TerminalManager {
         } catch { this.close(owner, payload.id, 'host') }
       }, () => this.close(owner, payload.id, 'directory'))
     })
+  }
+
+  /** A debug target owns its terminal until the PTY host confirms tree exit. */
+  async closeAndWait(owner: WebContents, id: string): Promise<void> {
+    const entry = this.terminals.get(id)
+    if (!entry || entry.owner !== owner) return
+    this.close(owner, id)
+    await entry.closed
   }
 
   command(owner: WebContents, command: Exclude<TerminalCommand, { type: 'create' | 'dispose' }>): void {
@@ -79,7 +91,7 @@ export class TerminalManager {
     entry.closing = true
     clearTimeout(entry.timer)
     entry.resolve({ error })
-    if (!entry.sent) { entry.release?.(); this.terminals.delete(id); return }
+    if (!entry.sent) { entry.release?.(); this.terminals.delete(id); entry.resolveClosed(); return }
     this.host?.postMessage({ type: 'close', id } satisfies TerminalCommand)
   }
 
@@ -97,12 +109,15 @@ export class TerminalManager {
         if (entry.closing) { host.postMessage({ type: 'close', id } satisfies TerminalCommand); return }
         entry.resolve({ terminal: event.terminal })
       } else {
-        if (!entry.closing && !entry.owner.isDestroyed()) entry.owner.send('terminal:event', event)
+        // Programmatic debug cleanup leaves a status page in the renderer.
+        // Deliver exit even when main initiated the close; suppress late data.
+        if ((!entry.closing || event.type === 'exit') && !entry.owner.isDestroyed()) entry.owner.send('terminal:event', event)
         if (event.type === 'exit' || (event.type === 'error' && event.error === 'spawn')) {
           clearTimeout(entry.timer)
           entry.resolve({ error: event.type === 'error' ? event.error : 'closed' })
           this.terminals.delete(id)
           entry.release?.()
+          entry.resolveClosed()
         }
       }
     })
@@ -116,6 +131,7 @@ export class TerminalManager {
         entry.release?.()
         clearTimeout(entry.timer)
         entry.resolve({ error: 'host' })
+        entry.resolveClosed() // markTerminalHostLost above retains the restore fence
         if (!entry.owner.isDestroyed()) entry.owner.send('terminal:event', { type: 'error', id, error: 'host' })
       }
       this.terminals.clear()
@@ -132,7 +148,7 @@ export class TerminalManager {
     // processes. Killing the host first can leave shell children orphaned.
     return new Promise((resolve) => {
       const timer = setTimeout(() => { host.kill(); resolve() }, 1000)
-      host.once('exit', () => { clearTimeout(timer); for (const entry of this.terminals.values()) entry.release?.(); this.terminals.clear(); resolve() })
+      host.once('exit', () => { clearTimeout(timer); for (const entry of this.terminals.values()) { entry.release?.(); entry.resolveClosed() }; this.terminals.clear(); resolve() })
       host.postMessage({ type: 'dispose' } satisfies TerminalCommand)
     })
   }

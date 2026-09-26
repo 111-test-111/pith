@@ -10,7 +10,7 @@ import { fileDirname, FileBaseDirectory, FileNavigationProvider } from '@/lib/fi
 import { cn } from '@/lib/utils'
 import { useI18n } from '@/i18n'
 import { type FileBrowserStore, type FileTab, type FileView } from '@/state/file-browser-store'
-import type { PiStore } from '@/state/pi-store'
+import type { PiShellState, PiStore } from '@/state/pi-store'
 import type { DebugStore } from '@/state/debug-store'
 import type { FileDocumentDTO, FileGitDiffDTO } from '../../../../shared/types'
 import { hasPreviewView, isInlineOnly, isMediaKind, previewKindOf, readsAsText, subtitleFormatOf, textReadLimit, type PreviewKind } from '../../../../shared/preview'
@@ -34,6 +34,7 @@ import { PanelResizeHandle } from './PanelResizeHandle'
 import { FileFindBar } from './FileFindBar'
 import { useFileSearch } from '@/lib/hooks/use-file-search'
 import type { FileSearchOptions, FileSearchResult } from '@/lib/file-search'
+import { useDebugTargets } from '@/lib/hooks/use-debug-targets'
 
 function ToolButton({ label, icon: Icon, onClick, active, disabled }: { label: string; icon: IconComponent; onClick: () => void; active?: boolean; disabled?: boolean }) {
   return <Tooltip content={label}><Button variant="ghost" size="icon" className={cn('size-7 shrink-0', active && 'bg-primary/10 text-primary')} aria-label={label} aria-pressed={active} disabled={disabled} onClick={onClick}><Icon aria-hidden className="size-3.5" /></Button></Tooltip>
@@ -93,24 +94,23 @@ function FileContent({ tab, kind, document, store, search, refresh, wrap, debugB
 
 /** Breakpoint data and the toggle action for the gutter, while a debug
  * session is live; undefined for both means a read-only gutter. */
-function useDebugGutter(debug: DebugStore, sessionPath: string | null, file: string | undefined): {
+function useDebugGutter(debug: DebugStore, shell: PiShellState, file: string | undefined): {
   debugBreakpoints?: DebugBreakpointDTO[]
   onToggleBreakpoint?: (line: number) => void
 } {
-  const snapshot = useSyncExternalStore(debug.subscribe, debug.getSnapshot)
-  const sessions = sessionPath ? snapshot.sessions.filter((item) => item.sessionPath === sessionPath) : []
-  const live = sessions.some((item) => item.status === 'starting' || item.status === 'running' || item.status === 'stopped')
+  const { session: selected, revision } = useDebugTargets(debug, shell)
+  const sessionPath = selected?.sessionPath
+  const debugId = selected?.id
+  const live = selected?.kind !== 'core' && (selected?.status === 'running' || selected?.status === 'stopped')
   useEffect(() => {
-    if (sessionPath && live) void debug.refreshBreakpoints(sessionPath)
-  }, [sessionPath, live, debug, snapshot.revision])
-  if (!sessionPath || !live || !file) return {}
+    if (sessionPath && live && debugId) void debug.refreshBreakpoints(sessionPath, debugId)
+  }, [sessionPath, live, debugId, debug, revision])
+  if (!sessionPath || !live || !file || !debugId) return {}
   return {
-    debugBreakpoints: debug.breakpointsFor(sessionPath, file),
+    debugBreakpoints: debug.breakpointsFor(debugId, file),
     onToggleBreakpoint: (line) => {
-      const current = debug.breakpointsFor(sessionPath, file).map((bp) => bp.line)
-      const lines = current.includes(line) ? current.filter((item) => item !== line) : [...current, line].sort((a, b) => a - b)
-      void window.pi.debugAction({ sessionPath, action: 'breakpoints-set', file, lines })
-        .then(() => debug.refreshBreakpoints(sessionPath))
+      void window.pi.debugAction({ sessionPath, debugId, action: 'breakpoint-toggle', file, line })
+        .then(() => debug.refreshBreakpoints(sessionPath, debugId))
         .catch(() => {})
     }
   }
@@ -127,7 +127,7 @@ export function FilesPane({ files, store, filePath, debug }: { files: FileBrowse
   // Keep its last file frame until unmount, instead of mounting a fresh chooser
   // (and new tree animations) inside an already-exiting presence boundary.
   const tab = currentTab ?? (lastTab.current?.path === filePath ? lastTab.current : undefined)
-  const gutter = useDebugGutter(debug, shell.sessionPath, tab?.path)
+  const gutter = useDebugGutter(debug, shell, tab?.path)
   const treeOpen = tab?.treeOpen ?? state.treeOpen
   const cwd = tab?.cwd ?? shell.cwd ?? ''
   const root = tab && tab.path !== cwd && !tab.path.startsWith(cwd.replace(/\/$/, '') + '/') ? fileDirname(tab.path) : cwd

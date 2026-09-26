@@ -798,6 +798,7 @@ export interface SubagentProfileDTO {
   systemPrompt: string
   /** 'all' resolves against the parent session's active tools at dispatch. */
   tools: 'all' | string[]
+  debugEnabled: boolean
   /** Where `tools` came from — an unresolved preset is flagged so the settings
    * row can say why the set is only read-only. */
   toolsSource?: 'explicit' | 'preset' | 'unresolved-preset' | 'default'
@@ -1697,12 +1698,26 @@ export interface DebugSessionDTO {
   sessionPath: string
   adapterId: string
   adapterLabel: string
-  kind: 'launch' | 'attach'
+  kind: 'launch' | 'attach' | 'core'
+  /** User label, independent of adapter-generated target names. */
+  name?: string
+  /** Adapter-owned child target (js-debug). Stopping its parent stops it too. */
+  parentId?: string
+  /** Replacement created by a stop+start restart; retains selection/watches. */
+  replacesId?: string
+  /** Incremented at every stop, even when React batches running/stopped events. */
+  stopId: number
   /** Human-readable target summary (program path or attached pid). */
   target: string
   status: DebugSessionStatus
   /** DAP stop reason while status is 'stopped' (breakpoint, step, pause, …). */
   stopReason?: string
+  stopDescription?: string
+  stopText?: string
+  hitBreakpointIds?: number[]
+  /** Bounded adapter diagnostics for this stop, including late output events. */
+  stopDiagnostics?: string
+  conditionError?: boolean
   activeThreadId?: number
   /** Top frame at the last stop; cleared when running resumes. */
   location?: DebugLocationDTO
@@ -1762,7 +1777,15 @@ export interface DebugBreakpointDTO {
   id?: number
   file: string
   line: number
+  /** Original requested line, retained when the adapter relocates it. */
+  requestedLine?: number
+  condition?: string
+  hitCondition?: string
+  logMessage?: string
   verified: boolean
+  /** Binding is not evidence that an expression compiled or evaluated true. */
+  conditionStatus?: 'unvalidated' | 'error'
+  conditionError?: string
   message?: string
 }
 
@@ -1782,12 +1805,11 @@ export interface DebugControlResultDTO {
 }
 
 /** Main → renderer: a DAP runInTerminal reverse request needs a sidebar
- * terminal tab. The command line arrives pre-quoted and ready to type. */
+ * terminal tab. Main sends the command only after checking the reply and cancellation. */
 export interface DebugTerminalRequest {
   requestId: string
   title: string
   cwd: string
-  command: string
 }
 
 /** Renderer → main answer for a DebugTerminalRequest. */
@@ -1798,15 +1820,16 @@ export type DebugTerminalResult =
 /** Renderer panel → main: user-driven debug actions (step buttons, variable
  * expansion, console paging). Shares the DebugManager with the model's tool,
  * so the user and the agent drive one and the same live session. */
-export type DebugPanelRequest =
-  | { sessionPath: string; action: 'stop' }
-  | { sessionPath: string; action: 'restart' }
-  | { sessionPath: string; action: 'control'; control: 'continue' | 'pause' | 'next' | 'stepIn' | 'stepOut'; threadId?: number }
-  | { sessionPath: string; action: 'threads' }
-  | { sessionPath: string; action: 'stack'; threadId: number; levels?: number }
-  | { sessionPath: string; action: 'scopes'; frameId: number }
-  | { sessionPath: string; action: 'variables'; variablesReference: number; start?: number; count?: number }
-  | { sessionPath: string; action: 'evaluate'; expression: string; frameId?: number }
-  | { sessionPath: string; action: 'output'; cursor?: number; maxChars?: number }
-  | { sessionPath: string; action: 'breakpoints' }
-  | { sessionPath: string; action: 'breakpoints-set'; file: string; lines: number[] }
+export type DebugPanelRequest = { sessionPath: string; debugId: string; stopId?: number } & (
+  | { action: 'stop' }
+  | { action: 'restart' }
+  | { action: 'control'; control: 'continue' | 'pause' | 'next' | 'stepIn' | 'stepOut'; threadId?: number }
+  | { action: 'threads' }
+  | { action: 'stack'; threadId: number; levels?: number }
+  | { action: 'scopes'; frameId: number }
+  | { action: 'variables'; variablesReference: number; start?: number; count?: number }
+  | { action: 'evaluate'; expression: string; frameId?: number; context?: 'repl' | 'watch' }
+  | { action: 'output'; cursor?: number; maxChars?: number }
+  | { action: 'breakpoints' }
+  | { action: 'breakpoint-toggle'; file: string; line: number }
+)

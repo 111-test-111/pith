@@ -70,7 +70,7 @@ app.commandLine.appendSwitch('remote-debugging-port','0');
 app.whenReady().then(()=>{
  const manager=new TerminalManager();
  ipcMain.handle('terminal:create',(event,payload)=>manager.create(event.sender,payload));
- ipcMain.on('terminal:command',(event,command)=>manager.command(event.sender,command));
+ ipcMain.on('terminal:command',(event,command)=>command.type==='close'?void manager.closeAndWait(event.sender,command.id):manager.command(event.sender,command));
  ipcMain.handle('app:info',()=>({cwd:${JSON.stringify(project)},folders:[${JSON.stringify(project)}],contextFiles:true,version:'test'}));
  ipcMain.handle('pi:models',()=>[]);ipcMain.handle('pi:listSessions',()=>[]);
  let quitting=false;app.on('before-quit',event=>{if(quitting)return;event.preventDefault();quitting=true;void manager.dispose().finally(()=>app.quit())});
@@ -294,6 +294,16 @@ app.whenReady().then(()=>{
   assert.ok(paused<512*1024,'IPC backlog is bounded')
   await evaluate('window.pi.terminalClose(rawId)')
   console.log('PASS: flow control bounds stalled consumer to',paused,'characters')
+
+  // Debug cleanup closes from main, retaining a terminal status page in UI.
+  const debugTerminal = await evaluate(`tc.spawnForDebug(${JSON.stringify(project)},'Debug fixture')`)
+  assert.ok(debugTerminal.id)
+  await evaluate(`window.pi.terminalClose(${JSON.stringify(debugTerminal.id)})`)
+  await waitFor(`tc.getSnapshot().tabs.find(t=>t.id===${JSON.stringify(debugTerminal.id)})?.status==='exited'`, 'main-initiated terminal cleanup')
+  assert.equal(await evaluate(`tc.sessions.get(${JSON.stringify(debugTerminal.id)}).runtime`), undefined)
+  assert.throws(()=>process.kill(debugTerminal.pid,0), 'debug shell is gone before its status page settles')
+  await evaluate(`tc.close(${JSON.stringify(debugTerminal.id)})`)
+  console.log('PASS: main-initiated debug cleanup retains exit status and releases the emulator')
 
   await input('exit 7\r',second)
   await waitFor(`tc.getSnapshot().tabs.find(t=>t.id===${JSON.stringify(second)}).status==='exited'`,'shell exit')

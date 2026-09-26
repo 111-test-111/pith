@@ -107,7 +107,7 @@ import { SUBAGENT_TOOL_NAME, AGENT_STEER_TOOL_NAME, MESSAGE_PARENT_TOOL_NAME, SU
 import type { SubagentMessageDetails, SubagentRunStartData } from './subagents/protocol'
 import { createSubagentTool, createAgentSteerTool, createMessageParentTool, installSubagentResultHook } from './subagents/tools'
 import { subagentModelSpecError } from './subagents/model-spec'
-import { ensureDefaultProfiles, createSubagentProfileFile, listSubagentProfiles, toSubagentProfileDTO, writeSubagentProfileTools } from './subagents/profiles'
+import { ensureDefaultProfiles, createSubagentProfileFile, listSubagentProfiles, toSubagentProfileDTO, writeSubagentProfileDebug, writeSubagentProfileTools } from './subagents/profiles'
 import { isSubagentSessionFile } from './subagents/session-filter'
 import { SessionListIndex, rowFromSessionManager } from './session-list'
 import { BASH_MIN_WAIT_MS, BASH_MAX_WAIT_MS, SDK_BUILTIN_TOOL_NAMES, type StartupSessionMode, type SubagentProfileCreatePayload, type SubagentProfileDTO, type SubagentProfilesDTO } from '../../shared/types'
@@ -529,7 +529,7 @@ export class PiManager {
   /** DAP sessions are in-memory only: debuggees die with the app, so there is
    * nothing durable to restore — unlike bash task records. */
   private get debugManager(): DebugManager {
-    return this.debugManagerInstance ??= new DebugManager((dto) => this.emit('debug:event', dto))
+    return this.debugManagerInstance ??= new DebugManager((dto) => this.emit('debug:event', dto), this.checkoutCoordinator)
   }
 
   /** Set by ipc.ts once the renderer terminal bridge exists; read live at
@@ -545,21 +545,24 @@ export class PiManager {
   /** Panel-driven debug actions against the same DebugManager the model's
    * `debug` tool drives — the user and the agent share one live session. */
   async debugPanelAction(request: DebugPanelRequest): Promise<unknown> {
+    if (typeof request.debugId !== 'string' || !request.debugId) throw new Error('Missing debug target')
     const manager = this.debugManager
+    const { sessionPath, debugId, stopId } = request
     switch (request.action) {
-      case 'stop': return manager.stop(request.sessionPath)
-      case 'restart': return manager.restart(request.sessionPath)
-      case 'control': return manager.control(request.sessionPath, request.control, request.threadId)
-      case 'threads': return manager.threads(request.sessionPath)
-      case 'stack': return manager.stack(request.sessionPath, request.threadId, request.levels)
-      case 'scopes': return manager.scopes(request.sessionPath, request.frameId)
-      case 'variables': return manager.variables(request.sessionPath, request.variablesReference, request.start, request.count)
-      case 'evaluate': return manager.evaluate(request.sessionPath, request.expression, request.frameId)
-      case 'output': return manager.output(request.sessionPath, request.cursor, request.maxChars)
-      case 'breakpoints': return manager.breakpoints(request.sessionPath)
-      case 'breakpoints-set': return manager.setBreakpoints(request.sessionPath, request.file, request.lines)
+      case 'stop': return manager.stop(sessionPath, debugId)
+      case 'restart': return manager.restart(sessionPath, debugId)
+      case 'control': return manager.control(sessionPath, request.control, request.threadId, undefined, debugId, stopId)
+      case 'threads': return manager.threads(sessionPath, debugId)
+      case 'stack': return manager.stack(sessionPath, request.threadId, request.levels, debugId, stopId)
+      case 'scopes': return manager.scopes(sessionPath, request.frameId, debugId, stopId)
+      case 'variables': return manager.variables(sessionPath, request.variablesReference, request.start, request.count, debugId, stopId)
+      case 'evaluate': return manager.evaluate(sessionPath, request.expression, request.frameId, debugId, stopId, request.context)
+      case 'output': return manager.output(sessionPath, request.cursor, request.maxChars, debugId)
+      case 'breakpoints': return manager.breakpoints(sessionPath, debugId)
+      case 'breakpoint-toggle': return manager.toggleBreakpoint(sessionPath, request.file, request.line, debugId)
     }
   }
+
   bashTaskOutput(request: BashTaskRequest): BashTaskOutputDTO {
     return this.commandTasks.output(request.sessionPath, request.taskId, request.cursor)
   }
@@ -1093,6 +1096,12 @@ export class PiManager {
     return this.subagentProfiles()
   }
 
+  async setSubagentProfileDebug(filePath: string, enabled: boolean): Promise<SubagentProfilesDTO> {
+    if (!listSubagentProfiles(this.cwd ?? null).some(profile => profile.filePath === filePath)) throw new Error('Unknown subagent profile')
+    writeSubagentProfileDebug(filePath, enabled)
+    return this.subagentProfiles()
+  }
+
   /** Persist which session the next launch opens. */
   setStartupMode(mode: StartupSessionMode): StartupSessionMode {
     if (mode !== 'resume' && mode !== 'new') throw new Error('Invalid startup preference')
@@ -1178,6 +1187,7 @@ export class PiManager {
       subagentsEnabled: () => this.subagentsEnabledFlag && !this.closing,
       subagentReuseEnabled: () => this.subagentReuseFlag && !this.closing,
       subagentCommsEnabled: () => this.subagentCommsFlag && !this.closing,
+      profileDebugEnabled: (cwd, name) => listSubagentProfiles(cwd).some(p => p.name === name && p.enabled && p.debugEnabled),
       planRestricted: path => this.sessions.get(path)?.plan.restricted ?? false,
       commandTasks: () => this.commandTasks,
       acquireRunLease: (cwd, sessionPath) => {
@@ -2304,6 +2314,8 @@ export class PiManager {
         await managed.session.abort().catch(() => {})
       },
       release: async () => {
+        // A completed child retains its transcript, never a live debuggee.
+        await this.debugManagerInstance?.stopSession(managed.path)
         // A child the user is currently viewing stays alive; it is disposed by
         // its own lifecycle (navigation away is non-destructive in pi-app).
         if (this.sessions.get(managed.path) === managed && this.activeSession !== managed) {
@@ -2399,7 +2411,7 @@ export class PiManager {
       // Children activate ONLY their frozen ceiling: the normal path below
       // re-activates every built-in + extension tool, which would silently
       // widen a profile's tool restriction.
-      this.setActiveTools(managed, managed.subagentChild.toolCeiling.filter(name => name !== JEV_TOOL_NAME || this.jevActive()))
+      this.setActiveTools(managed, managed.subagentChild.toolCeiling.filter(name => (name !== JEV_TOOL_NAME || this.jevActive()) && (name !== 'debug' || this.debugEnabledFlag)))
       return
     }
     // An SDK tools allowlist would also hide extension tools. Activate the

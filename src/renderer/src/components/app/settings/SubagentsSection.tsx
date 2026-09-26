@@ -116,6 +116,8 @@ export function SubagentsSection() {
   const [draft, setDraft] = useState<ToolsDraft | null>(null)
   const [savingTools, setSavingTools] = useState(false)
   const [toolsError, setToolsError] = useState(false)
+  const [savingDebug, setSavingDebug] = useState(false)
+  const [debugError, setDebugError] = useState<string | null>(null)
 
   useEffect(() => {
     void window.pi
@@ -139,7 +141,7 @@ export function SubagentsSection() {
     profiles?.find((profile) => profile.filePath === selected) ?? profiles?.[0] ?? null
   const { data: catalog } = useToolCatalog()
   const groups = useMemo(
-    () => (current ? subagentToolGroups(catalog.tools, current.tools) : null),
+    () => (current ? subagentToolGroups(catalog.tools.filter(tool => tool.name !== 'debug'), current.tools === 'all' ? 'all' : current.tools.filter(name => name !== 'debug')) : null),
     [catalog.tools, current]
   )
   // Switching profiles (or a save landing its fresh list) restarts the editor
@@ -401,6 +403,13 @@ export function SubagentsSection() {
               {createForm ?? (
                 <ProfileDetail
                   profile={current}
+                  savingDebug={savingDebug}
+                  debugError={debugError === current.filePath}
+                  onDebug={(enabled) => {
+                    setSavingDebug(true); setDebugError(null)
+                    void window.pi.setSubagentProfileDebug(current.filePath, enabled)
+                      .then(applyList, () => setDebugError(current.filePath)).finally(() => setSavingDebug(false))
+                  }}
                   groups={groups}
                   universeEmpty={catalog.tools.length === 0}
                   active={active}
@@ -428,7 +437,7 @@ export function SubagentsSection() {
 }
 
 function ProfileDetail({
-  profile,
+  profile, savingDebug, debugError, onDebug,
   groups,
   universeEmpty,
   active,
@@ -444,6 +453,9 @@ function ProfileDetail({
   onReset
 }: {
   profile: SubagentProfileDTO
+  savingDebug: boolean
+  debugError: boolean
+  onDebug: (enabled: boolean) => void
   groups: SubagentToolGroups
   universeEmpty: boolean
   active: ToolsDraft | null
@@ -531,6 +543,13 @@ function ProfileDetail({
         </Button>
       </div>
 
+      <div data-subagent-debug>
+        <SettingsRow label={t('subagent.debugTitle')} description={t('subagent.debugDesc')}>
+          <Checkbox mark="square" checked={profile.debugEnabled === true} disabled={savingDebug}
+            aria-label={t('subagent.debugTitle')} onCheckedChange={onDebug} />
+        </SettingsRow>
+        {debugError ? <p role="alert" className="text-xs text-destructive">{t('subagent.debugFailed')}</p> : null}
+      </div>
       <div data-subagent-tools-editor className="space-y-3 rounded-xl border border-border/70 bg-card px-4 py-3">
         <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
           {t('subagent.toolsTitle')}

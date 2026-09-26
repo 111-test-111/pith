@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto'
+import { createServer } from 'node:net'
+import { checkoutRoot, type CheckoutCoordinator } from '../rewind/coordinator'
 import type {
   DebugBreakpointDTO,
   DebugControlResultDTO,
@@ -12,12 +14,12 @@ import type {
   DebugVariablesPageDTO
 } from '../../shared/types'
 import { DapClient } from './dap-client'
-import { debugAdapterSpec } from './adapters'
+import { debugAdapterSpec, type DebugAdapterSpec } from './adapters'
 
 /**
  * Owns DAP sessions: the lifecycle state machine, a bounded output ring, and
- * the blocking-step contract. P0 admits one live session per chat; the tool
- * surfaces that as an explicit error so the model stops the old one first.
+ * the blocking-step contract. Multiple independent targets may share a chat. Every action resolves an
+ * explicit target or fails on ambiguity; it never guesses the newest live one.
  *
  * State machine: starting → running ⇄ stopped → terminated | failed.
  * `starting` covers the DAP handshake (initialize → launch/attach →
@@ -39,9 +41,17 @@ const HANDSHAKE_TIMEOUT_MS = 15_000
 export interface DebugStartOptions {
   sessionId: string
   sessionPath: string
+  /** The owning chat's workspace, independent of the debuggee's cwd. */
+  workspaceCwd: string
   cwd: string
   adapterId: string
-  kind: 'launch' | 'attach'
+  kind: 'launch' | 'attach' | 'core'
+  coreFile?: string
+  name?: string
+  replacesId?: string
+  signal?: AbortSignal
+  canStart?: () => boolean
+  initialBreakpoints?: Map<string, SourceBreakpoint[]>
   program?: string
   args?: string[]
   env?: Record<string, string>
@@ -52,7 +62,7 @@ export interface DebugStartOptions {
   extraArguments?: Record<string, unknown>
   /** Answers the adapter's runInTerminal reverse request with a sidebar
    * terminal tab. Absent handler means the capability is not advertised. */
-  runInTerminal?: (input: { title: string; cwd: string; args: string[]; env?: Record<string, string | null> }) => Promise<{ shellProcessId: number; terminalId: string }>
+  runInTerminal?: (input: { title: string; cwd: string; args: string[]; env?: Record<string, string | null>; signal?: AbortSignal }) => Promise<{ shellProcessId: number; terminalId: string; dispose?: () => Promise<void> }>
 }
 
 interface StoppedWaiter {
@@ -69,7 +79,19 @@ export interface DebugBreakpointExtras {
   logMessages?: string[]
 }
 
+interface SourceBreakpoint { line: number; condition?: string; hitCondition?: string; logMessage?: string }
 interface Session {
+  controller: AbortController
+  endpoint?: { host: string; port: number }
+  requested: Map<string, SourceBreakpoint[]>
+  /** Successful edits retained across adapter-owned target replacement. This
+   * belongs to one launch tree; per-target binding ids remain in breakpoints. */
+  launchBreakpoints?: Map<string, SourceBreakpoint[]>
+  breakpointWork: Promise<unknown>
+  releaseCheckout?: () => void
+  cleanup?: Promise<void>
+  stopping?: Promise<DebugSessionDTO>
+  controlling?: boolean
   dto: DebugSessionDTO
   client?: DapClient
   outputTail: string
@@ -84,7 +106,11 @@ interface Session {
   /** The options this session was started with; `restart` re-runs them. */
   startOptions?: DebugStartOptions
   waiters: StoppedWaiter[]
+  terminals: Set<() => Promise<void>>
+  /** A one-item probe distinguishes adapters that ignore DAP paging. */
+  variablePaging: Map<number, boolean>
   progressTimer?: ReturnType<typeof setTimeout>
+  exitTimer?: ReturnType<typeof setTimeout>
   finishing: boolean
   done: Promise<void>
   resolveDone: () => void
@@ -98,8 +124,7 @@ const asNumber = (value: unknown): number | undefined => typeof value === 'numbe
 const asBoolean = (value: unknown): boolean | undefined => typeof value === 'boolean' ? value : undefined
 
 const LIVE_STATUSES: ReadonlySet<DebugSessionStatus> = new Set(['starting', 'running', 'stopped'])
-/** Single definition of "the live session", shared by `live()` and `owned()` so
- * the start guard and the action resolver can never disagree. */
+/** Includes startup reservations as well as connected targets. */
 const isLive = (session: Session): boolean => LIVE_STATUSES.has(session.dto.status)
 
 /** DAP reserves 0 for "not expandable", and adapters hand back sentinels for a
@@ -114,8 +139,9 @@ const asVariablesReference = (value: unknown): number => {
 
 export class DebugManager {
   private sessions = new Map<string, Session>()
+  private closing = false
 
-  constructor(private changed: (dto: DebugSessionDTO) => void) {}
+  constructor(private changed: (dto: DebugSessionDTO) => void, private coordinator?: CheckoutCoordinator) {}
 
   list(sessionPath: string): DebugSessionDTO[] {
     return [...this.sessions.values()]
@@ -124,16 +150,10 @@ export class DebugManager {
       .sort((a, b) => a.startedAt - b.startedAt)
   }
 
-  /**
-   * Resolves the session an id-less action addresses: the live session the
-   * caller is driving, else the newest settled one so its console stays
-   * pageable. Newest-first matters — taking the oldest session here made a
-   * chat unusable as soon as its first session ended, because `start` still
-   * saw the new live session while every other action kept addressing the
-   * terminated one.
-   */
+  /** Explicit ids are scoped to the owning chat. Id-less calls require one
+   * live target, or fall back to the newest retained console once all end. */
   private owned(sessionPath: string, id?: string): Session {
-    const ordered = [...this.sessions.values()]
+    const ordered = [...this.sessions.values()].reverse()
       .filter((session) => session.dto.sessionPath === sessionPath)
       .sort((a, b) => b.dto.startedAt - a.dto.startedAt)
     if (id !== undefined) {
@@ -141,7 +161,9 @@ export class DebugManager {
       if (!session) throw new Error(`No debug session with id "${id}" in this chat.`)
       return session
     }
-    const session = ordered.find(isLive) ?? ordered[0]
+    const live = ordered.filter(isLive)
+    if (live.length > 1) throw new Error('Multiple debug sessions are active; pass debugId from action="sessions".')
+    const session = live[0] ?? ordered[0]
     if (!session) throw new Error('No debug session in this chat. Start one first.')
     return session
   }
@@ -150,149 +172,167 @@ export class DebugManager {
     return { ...this.owned(sessionPath, id).dto }
   }
 
-  private live(sessionPath: string): Session | undefined {
-    return [...this.sessions.values()].find((session) =>
-      session.dto.sessionPath === sessionPath && isLive(session))
+  /** Synchronous registration is the launch reservation. Stop can cancel it
+   * during adapter discovery or while waiting for checkout admission. */
+  async start(options: DebugStartOptions): Promise<DebugSessionDTO> {
+    const spec = debugAdapterSpec(options.cwd, options.adapterId)
+    if (!spec) throw new Error(`Unknown debug adapter ${options.adapterId}`)
+    if (options.kind === 'attach' && options.pid === undefined) throw new Error('pid is required for attach')
+    if (options.kind === 'core' && (spec.id !== 'lldb-dap' || !options.coreFile)) throw new Error('Core inspection requires lldb-dap and coreFile')
+    if (options.kind === 'core' && options.extraArguments && Object.keys(options.extraArguments).length) throw new Error('Core inspection does not accept executable adapter commands')
+    const requestArguments = options.kind === 'core'
+      ? { coreFile: options.coreFile, ...(options.program ? { program: options.program } : {}) }
+      : options.kind === 'launch' ? {
+        ...spec.launchArguments({ program: options.program, args: options.args ?? [], cwd: options.cwd, env: options.env, stopOnEntry: options.stopOnEntry }),
+        ...(options.extraArguments ?? {}), ...(options.runInTerminal ? {} : { console: 'internalConsole' })
+      } : { ...spec.attachArguments({ pid: options.pid }), ...(options.extraArguments ?? {}) }
+    if (options.kind === 'launch') spec.validateLaunch(requestArguments)
+    return this.startTarget(options, spec, requestArguments)
   }
 
-  async start(options: DebugStartOptions): Promise<DebugSessionDTO> {
-    const existing = this.live(options.sessionPath)
-    if (existing) {
-      throw new Error(`A debug session is already active (${existing.dto.adapterLabel}, status ${existing.dto.status}). Stop it first with action="stop".`)
+  private admitted(session: Session): void {
+    if (this.closing || session.finishing || session.controller.signal.aborted || session.startOptions?.canStart?.() === false) {
+      throw new Error('Debug session cancelled before launch')
     }
-    const spec = debugAdapterSpec(options.cwd, options.adapterId)
-    if (!spec) throw new Error(`Unknown debug adapter "${options.adapterId}". Call action="adapters" to list what is available.`)
-    if (options.kind === 'launch' && !options.program) throw new Error('program is required for a launch session')
-    if (options.kind === 'attach' && options.pid === undefined) throw new Error('pid is required for an attach session')
-    const resolved = await spec.detect(options.cwd)
-    if (!resolved) throw new Error(`Debug adapter "${spec.label}" is not available: ${spec.unavailableHint}`)
+  }
 
-    const id = randomUUID()
-    const dto: DebugSessionDTO = {
-      id,
-      sessionId: options.sessionId,
-      sessionPath: options.sessionPath,
-      adapterId: spec.id,
-      adapterLabel: spec.label,
-      kind: options.kind,
-      target: options.kind === 'launch' ? options.program! : `pid ${options.pid}`,
-      status: 'starting',
-      startedAt: Date.now(),
-      outputChars: 0,
-      revision: 0
-    }
+  private async startTarget(options: DebugStartOptions, spec: DebugAdapterSpec, requestArguments: Record<string, unknown>, parent?: Session): Promise<DebugSessionDTO> {
+    if (this.closing || options.signal?.aborted || options.canStart?.() === false) throw new Error('Debug session cancelled before launch')
+    const live = [...this.sessions.values()].filter(isLive)
+    if (live.length >= 32 || live.filter(s => s.dto.sessionPath === options.sessionPath).length >= 16) throw new Error('Debug session limit reached (16 per chat, 32 total)')
     let resolveDone!: () => void
     const session: Session = {
-      dto,
-      startOptions: options,
-      outputTail: '',
-      pendingBreakpoints: [],
-      breakpoints: [],
-      configurationReady: false,
-      stopEpoch: 0,
-      waiters: [],
-      finishing: false,
-      done: new Promise<void>((resolve) => { resolveDone = resolve }),
-      resolveDone: () => resolveDone()
+      dto: {
+        id: randomUUID(), sessionId: options.sessionId, sessionPath: options.sessionPath,
+        adapterId: spec.id, adapterLabel: spec.label, kind: options.kind,
+        ...(options.name ? { name: options.name } : {}), ...(parent ? { parentId: parent.dto.id } : {}),
+        ...(!parent && options.replacesId ? { replacesId: options.replacesId } : {}),
+        target: options.kind === 'core' ? options.coreFile! : options.kind === 'attach' ? `pid ${options.pid}` : options.program ?? asString(requestArguments.module) ?? options.name ?? spec.label,
+        status: 'starting', startedAt: Date.now(), outputChars: 0, revision: 0, stopId: 0
+      },
+      controller: new AbortController(), startOptions: { ...options, signal: undefined },
+      requested: new Map(options.initialBreakpoints ?? parent?.launchBreakpoints ?? parent?.requested),
+      launchBreakpoints: parent?.launchBreakpoints ?? (spec.childSessions ? new Map(options.initialBreakpoints) : undefined),
+      breakpointWork: Promise.resolve(),
+      outputTail: '', pendingBreakpoints: [], breakpoints: [], configurationReady: false, stopEpoch: 0,
+      waiters: [], terminals: new Set(), variablePaging: new Map(), finishing: false, done: new Promise<void>(resolve => { resolveDone = resolve }), resolveDone: () => resolveDone()
     }
-    this.sessions.set(id, session)
+    this.sessions.set(session.dto.id, session)
+    const abort = () => { void this.stop(options.sessionPath, session.dto.id) }
+    options.signal?.addEventListener('abort', abort, { once: true })
     this.publish(session)
-
     const client = new DapClient()
     session.client = client
     client.onEvent = (event, body) => this.handleEvent(session, event, body)
-    client.onClose = (reason) => {
-      if (session.finishing) return
-      session.dto.error = session.dto.error ?? `adapter closed (${reason})`
-      void this.finish(session, session.dto.status === 'starting' ? 'failed' : 'terminated')
+    client.onClose = reason => {
+      if (!session.finishing) {
+        if (isLive(session)) session.dto.error = `adapter closed (${reason})`
+        void this.finish(session, session.dto.status === 'starting' ? 'failed' : 'terminated')
+      }
     }
     client.onReverseRequest = async (command, args) => {
-      if (command !== 'runInTerminal' || !options.runInTerminal) throw new Error('not supported')
+      this.admitted(session)
+      if (command === 'startDebugging' && spec.childSessions && session.endpoint) {
+        const configuration = args?.configuration
+        if (!configuration || typeof configuration !== 'object' || Array.isArray(configuration)) throw new Error('Invalid child debug configuration')
+        const config = configuration as Record<string, unknown>
+        if (typeof config.__pendingTargetId !== 'string' || !config.__pendingTargetId || !['launch', 'attach'].includes(String(args?.request))) throw new Error('Invalid child debug target')
+        // The adapter owns this target; never detect/spawn another server.
+        await this.startTarget({ ...options, signal: session.controller.signal, kind: args!.request as 'launch' | 'attach', name: asString(config.name), initialBreakpoints: undefined }, spec, config, session)
+        return {}
+      }
+      if (command !== 'runInTerminal' || !options.runInTerminal || options.kind === 'core') throw new Error('not supported')
       const argv = Array.isArray(args?.args) ? args.args.filter((item): item is string => typeof item === 'string') : []
-      if (argv.length === 0) throw new Error('runInTerminal without args')
+      if (!argv.length) throw new Error('runInTerminal without args')
       const env = args?.env && typeof args.env === 'object'
-        ? Object.fromEntries(Object.entries(args.env as Record<string, unknown>).map(([key, value]) => [key, value === null ? null : String(value)]))
-        : undefined
-      const answer = await options.runInTerminal({
-        title: asString(args?.title) ?? spec.label,
-        cwd: asString(args?.cwd) ?? options.cwd,
-        args: argv,
-        env
-      })
-      session.dto.terminalId = answer.terminalId
-      this.publish(session)
+        ? Object.fromEntries(Object.entries(args.env).map(([key, value]) => [key, value === null ? null : String(value)])) : undefined
+      const answer = await options.runInTerminal({ title: asString(args?.title) ?? spec.label, cwd: asString(args?.cwd) ?? options.cwd, args: argv, env, signal: session.controller.signal })
+      if (session.finishing) await answer.dispose?.()
+      else if (answer.dispose) session.terminals.add(answer.dispose)
+      this.admitted(session)
+      session.dto.terminalId = answer.terminalId; this.publish(session)
       return { shellProcessId: answer.shellProcessId }
     }
-
     try {
-      if (spec.listen) {
-        const args = resolved.args.map((arg) => arg.replaceAll('${port}', String(spec.listen!.port)))
-        await client.connectTcp({
-          host: spec.listen.host,
-          port: spec.listen.port,
-          ...(spec.listen.spawn ? { spawn: { command: resolved.command, args, cwd: options.cwd } } : {})
-        })
+      session.releaseCheckout = await this.acquireCheckouts(options, session.controller.signal)
+      this.admitted(session)
+      if (parent) {
+        session.endpoint = parent.endpoint
+        await client.connectTcp(session.endpoint!)
       } else {
-        await client.start({ command: resolved.command, args: resolved.args, cwd: options.cwd })
+        const resolved = await spec.detect(options.cwd, session.controller.signal)
+        this.admitted(session)
+        if (!resolved) throw new Error(`Debug adapter ${spec.label} is not available: ${spec.unavailableHint}`)
+        if (spec.listen) {
+          const port = spec.listen.port || await availablePort(spec.listen.host)
+          this.admitted(session)
+          session.endpoint = { host: spec.listen.host, port }
+          await client.connectTcp({ ...session.endpoint, ...(spec.listen.spawn ? { spawn: { command: resolved.command, args: resolved.args.map(a => a.replaceAll('${port}', String(port))), cwd: options.cwd } } : {}) })
+        } else await client.start({ command: resolved.command, args: resolved.args, cwd: options.cwd })
       }
-      const initialized = this.waitEvent(session, 'initialized', HANDSHAKE_TIMEOUT_MS)
-      const body = await client.request('initialize', {
-        clientID: 'pith',
-        clientName: 'Pith',
-        adapterID: spec.id,
-        locale: 'en',
-        linesStartAt1: true,
-        columnsStartAt1: true,
-        pathFormat: 'path',
-        supportsRunInTerminalRequest: options.runInTerminal !== undefined,
-        supportsVariableType: true,
-        supportsProgressReporting: false
-      })
-      client.capabilities = body ?? {}
-      if (options.kind === 'launch') {
-        await client.request('launch', {
-          ...spec.launchArguments({
-            program: options.program!,
-            args: options.args ?? [],
-            cwd: options.cwd,
-            ...(options.env ? { env: options.env } : {}),
-            ...(options.stopOnEntry ? { stopOnEntry: true } : {})
-          }),
-          ...(options.extraArguments ?? {})
-        })
-      } else {
-        await client.request('attach', { ...spec.attachArguments({ pid: options.pid }), ...(options.extraArguments ?? {}) })
-      }
+      this.admitted(session)
+      const initialized = client.waitForEvent('initialized', HANDSHAKE_TIMEOUT_MS)
+      // Both promises are observed immediately, including early handshake failure.
+      void initialized.catch(() => {})
+      client.capabilities = await client.request('initialize', {
+        clientID: 'pith', clientName: 'Pith', adapterID: spec.id, locale: 'en', linesStartAt1: true, columnsStartAt1: true, pathFormat: 'path',
+        supportsRunInTerminalRequest: !!options.runInTerminal && options.kind !== 'core', supportsVariableType: true,
+        supportsVariablePaging: true, supportsStartDebuggingRequest: spec.childSessions === true
+      }) ?? {}
+      this.admitted(session)
+      const launching = client.request(options.kind === 'launch' ? 'launch' : 'attach', requestArguments)
+      void launching.catch(() => { void client.dispose() })
       await initialized
-      session.configurationReady = true
-      // Buffered breakpoints land before configurationDone so the adapter
-      // binds them before the debuggee runs.
-      const pending = session.pendingBreakpoints.splice(0)
-      for (const entry of pending) {
+      this.admitted(session)
+      for (const [file, points] of session.requested) await this.sendDefinitions(session, file, points, false)
+      while (session.pendingBreakpoints.length) {
+        const entry = session.pendingBreakpoints.shift()!
         await this.sendBreakpoints(session, entry.file, entry.lines, entry.extras).then(entry.resolve, entry.reject)
       }
-      if (client.capabilities.supportsConfigurationDoneRequest !== false) {
-        await client.request('configurationDone').catch(() => undefined)
+      session.configurationReady = true
+      if (client.capabilities.supportsConfigurationDoneRequest === true) await client.request('configurationDone')
+      await launching
+      if (session.finishing && session.dto.status === 'terminated' && !session.stopping) {
+        await session.cleanup
+        return { ...session.dto }
       }
-      // A stopOnEntry launch stops during the handshake. Do not promote that
-      // to `running`. Wait for the top-frame fill so the returned snapshot
-      // already has location and remapped dyld "exception" → "entry".
-      if (options.stopOnEntry && session.dto.status !== 'stopped' && !session.finishing) {
-        await this.waitStopped(session, HANDSHAKE_TIMEOUT_MS)
-      }
-      if (session.dto.status === 'stopped') {
-        await (session.filling ?? this.fillTopFrame(session, session.stopEpoch))
-      } else if (session.dto.status === 'starting') {
-        session.dto.status = 'running'
-        this.publish(session)
-      }
+      this.admitted(session)
+      if (options.kind === 'core') {
+        if (session.dto.activeThreadId === undefined) session.dto.activeThreadId = (await this.threads(options.sessionPath, session.dto.id))[0]?.id
+        if (session.dto.status !== 'stopped') this.handleEvent(session, 'stopped', { reason: 'core', threadId: session.dto.activeThreadId })
+      } else if (options.stopOnEntry && !(spec.childSessions && !parent) && session.dto.status !== 'stopped') await this.waitStopped(session, HANDSHAKE_TIMEOUT_MS)
+      if (session.dto.status === 'stopped') await session.filling
+      else if (session.dto.status === 'starting') { session.dto.status = 'running'; this.publish(session) }
       return { ...session.dto }
     } catch (error) {
-      session.dto.error = error instanceof Error ? error.message : String(error)
-      const stderr = client.stderrText.trim()
-      if (stderr) session.dto.error += `\nadapter stderr: ${truncate(stderr, 500)}`
-      await this.finish(session, 'failed')
-      throw new Error(session.dto.error)
+      const message = error instanceof Error ? error.message : String(error)
+      if (!session.finishing) {
+        session.dto.error = message + (client.stderrText.trim() ? `\nadapter stderr: ${truncate(client.stderrText.trim(), 500)}` : '')
+        await this.finish(session, 'failed')
+      }
+      await session.cleanup
+      throw new Error(message)
+    } finally {
+      options.signal?.removeEventListener('abort', abort)
+      // A stop may win before an asynchronous lease acquisition returns.
+      if (session.finishing) { await session.cleanup; session.releaseCheckout?.(); session.releaseCheckout = undefined }
+    }
+  }
+
+  /** A launch cwd can be outside the chat's checkout. Fence both identities;
+   * cancellation or failure while acquiring the second releases the first. */
+  private async acquireCheckouts(options: DebugStartOptions, signal: AbortSignal): Promise<(() => void) | undefined> {
+    if (!this.coordinator) return undefined
+    const releases: (() => void)[] = []
+    const release = () => { for (const done of releases.splice(0)) done() }
+    try {
+      for (const root of new Set([checkoutRoot(options.workspaceCwd), checkoutRoot(options.cwd)])) {
+        releases.push(await this.coordinator.enter(root, 'process', options.sessionPath, signal))
+      }
+      return release
+    } catch (error) {
+      release()
+      throw error
     }
   }
 
@@ -305,35 +345,50 @@ export class DebugManager {
         session.pendingBreakpoints.push({ file, lines, ...(extras ? { extras } : {}), resolve, reject })
       })
     }
-    return this.sendBreakpoints(session, file, lines, extras)
+    return this.serializeBreakpoints(session, () => this.sendBreakpoints(session, file, lines, extras))
   }
 
-  private async sendBreakpoints(session: Session, file: string, lines: number[], extras?: DebugBreakpointExtras): Promise<DebugBreakpointDTO[]> {
-    const client = session.client
-    if (!client?.isOpen) throw new Error('Debug adapter is not connected')
-    const body = await client.request('setBreakpoints', {
-      source: { path: file },
-      breakpoints: lines.map((line, index) => ({
-        line,
-        ...(extras?.conditions?.[index] ? { condition: extras.conditions[index] } : {}),
-        ...(extras?.hitConditions?.[index] ? { hitCondition: extras.hitConditions[index] } : {}),
-        // A logMessage turns the line into a logpoint: printed, never stopped at.
-        ...(extras?.logMessages?.[index] ? { logMessage: extras.logMessages[index] } : {})
-      }))
+  private serializeBreakpoints<T>(session: Session, work: () => Promise<T>): Promise<T> {
+    const next = session.breakpointWork.then(work)
+    session.breakpointWork = next.catch(() => {})
+    return next
+  }
+
+  async toggleBreakpoint(sessionPath: string, file: string, line: number, id: string): Promise<DebugBreakpointDTO[]> {
+    const session = this.owned(sessionPath, id)
+    if (!session.configurationReady) throw new Error('Debug session is still starting')
+    return this.serializeBreakpoints(session, async () => {
+      const current = session.requested.get(file) ?? []
+      const requested = session.breakpoints.find(bp => bp.file === file && bp.line === line)?.requestedLine ?? line
+      const points = current.some(bp => bp.line === requested) ? current.filter(bp => bp.line !== requested) : [...current, { line }].sort((a, b) => a.line - b.line)
+      return this.sendDefinitions(session, file, points)
     })
+  }
+
+  private sendBreakpoints(session: Session, file: string, lines: number[], extras?: DebugBreakpointExtras): Promise<DebugBreakpointDTO[]> {
+    return this.sendDefinitions(session, file, lines.map((line, i) => ({ line,
+      ...(extras?.conditions?.[i] ? { condition: extras.conditions[i] } : {}),
+      ...(extras?.hitConditions?.[i] ? { hitCondition: extras.hitConditions[i] } : {}),
+      ...(extras?.logMessages?.[i] ? { logMessage: extras.logMessages[i] } : {})
+    })))
+  }
+
+  private async sendDefinitions(session: Session, file: string, points: SourceBreakpoint[], remember = true): Promise<DebugBreakpointDTO[]> {
+    if (session.dto.kind === 'core') throw new Error('Core files cannot have breakpoints')
+    const body = await this.requireLive(session).request('setBreakpoints', { source: { path: file }, breakpoints: points })
     const verified = Array.isArray(body?.breakpoints) ? body.breakpoints : []
-    const mapped: DebugBreakpointDTO[] = verified.map((item, index) => {
-      const record = item as Record<string, unknown>
-      const source = record.source as Record<string, unknown> | undefined
-      return {
-        ...(asNumber(record.id) !== undefined ? { id: asNumber(record.id) } : {}),
-        file: asString(source?.path) ?? file,
-        line: asNumber(record.line) ?? lines[index] ?? 0,
-        verified: asBoolean(record.verified) ?? false,
-        ...(asString(record.message) ? { message: asString(record.message) } : {})
-      }
+    const mapped = points.map((point, index): DebugBreakpointDTO => {
+      const record = (verified[index] ?? {}) as Record<string, unknown>
+      return { ...point, file, requestedLine: point.line, line: asNumber(record.line) ?? point.line,
+        ...(asNumber(record.id) !== undefined ? { id: asNumber(record.id) } : {}), verified: asBoolean(record.verified) ?? false,
+        ...(point.condition ? { conditionStatus: 'unvalidated' as const } : {}),
+        ...(asString(record.message) ? { message: asString(record.message) } : {}) }
     })
-    session.breakpoints = [...session.breakpoints.filter((bp) => bp.file !== file), ...mapped]
+    session.requested.set(file, points.map(point => ({ ...point })))
+    // Configuration replay and per-target adapter removal events must not
+    // erase a later edit or the launch tree's retained breakpoint intent.
+    if (remember) session.launchBreakpoints?.set(file, points.map(point => ({ ...point })))
+    session.breakpoints = [...session.breakpoints.filter(bp => bp.file !== file), ...mapped]
     this.publish(session)
     return mapped
   }
@@ -344,9 +399,13 @@ export class DebugManager {
 
   /** Blocking step: sends the control request and waits for the next stop
    * (or termination) within waitMs. The result always carries the live DTO. */
-  async control(sessionPath: string, action: 'continue' | 'pause' | 'next' | 'stepIn' | 'stepOut', threadId?: number, waitMs?: number, id?: string): Promise<DebugControlResultDTO> {
+  async control(sessionPath: string, action: 'continue' | 'pause' | 'next' | 'stepIn' | 'stepOut', threadId?: number, waitMs?: number, id?: string, stopId?: number): Promise<DebugControlResultDTO> {
     const session = this.owned(sessionPath, id)
     const dto = session.dto
+    if (stopId !== undefined && stopId !== session.stopEpoch) throw new Error('Debug stop changed; refresh before controlling the target')
+    if (dto.kind === 'core') throw new Error('Core files cannot execute')
+    if (session.controlling) throw new Error('A debug control request is already in flight')
+    const epoch = session.stopEpoch
     if (dto.status === 'terminated' || dto.status === 'failed') return { session: { ...dto }, settled: true }
     if (dto.status === 'starting') throw new Error('The debug session is still starting; try again shortly')
     const client = session.client
@@ -366,18 +425,19 @@ export class DebugManager {
       if (dto.status !== 'stopped') throw new Error(`Cannot ${action} while the debuggee is ${dto.status}; pause it first`)
       if (thread === undefined) throw noThread()
       const command = action === 'continue' ? 'continue' : action
-      await client.request(command, { threadId: thread })
-      if (dto.status === 'stopped') {
+      session.controlling = true
+      try { await client.request(command, { threadId: thread }) } finally { session.controlling = false }
+      if (session.stopEpoch === epoch && session.dto.status === 'stopped') {
         // Some adapters answer without a `continued` event.
-        dto.status = 'running'
-        dto.stopReason = undefined
-        dto.location = undefined
+        session.dto.status = 'running'
+        this.clearStop(session)
+        session.dto.location = undefined
         this.publish(session)
       }
     }
 
     const settled = await this.waitStopped(session, budget)
-    return { session: { ...session.dto }, settled }
+    return { session: { ...session.dto }, settled: settled && (session.dto.status === 'stopped' || !isLive(session)) }
   }
 
   async threads(sessionPath: string, id?: string): Promise<DebugThreadDTO[]> {
@@ -390,17 +450,21 @@ export class DebugManager {
     })
   }
 
-  async stack(sessionPath: string, threadId: number, levels?: number, id?: string): Promise<DebugStackFrameDTO[]> {
-    const session = this.requireStopped(id, sessionPath)
+  async stack(sessionPath: string, threadId: number, levels?: number, id?: string, stopId?: number): Promise<DebugStackFrameDTO[]> {
+    const session = this.requireStopped(id, sessionPath, stopId)
+    const epoch = session.stopEpoch
     const cap = Math.max(1, Math.min(STACK_LEVELS_MAX, Math.floor(levels ?? STACK_LEVELS_DEFAULT)))
     const body = await this.requireLive(session).request('stackTrace', { threadId, startFrame: 0, levels: cap })
+    this.assertStop(session, epoch)
     const frames = Array.isArray(body?.stackFrames) ? body.stackFrames : []
     return frames.map((item) => this.mapFrame(item as Record<string, unknown>))
   }
 
-  async scopes(sessionPath: string, frameId: number, id?: string): Promise<DebugScopeDTO[]> {
-    const session = this.requireStopped(id, sessionPath)
+  async scopes(sessionPath: string, frameId: number, id?: string, stopId?: number): Promise<DebugScopeDTO[]> {
+    const session = this.requireStopped(id, sessionPath, stopId)
+    const epoch = session.stopEpoch
     const body = await this.requireLive(session).request('scopes', { frameId })
+    this.assertStop(session, epoch)
     const scopes = Array.isArray(body?.scopes) ? body.scopes : []
     return scopes.map((item) => {
       const record = item as Record<string, unknown>
@@ -416,31 +480,33 @@ export class DebugManager {
    * (VARIABLES_MAX_ITEMS); paged calls map to DAP start/count. `truncated`
    * tells the caller another page exists — detected with a one-row overfetch,
    * since DAP answers carry no total. */
-  async variables(sessionPath: string, variablesReference: number, start?: number, count?: number, id?: string): Promise<DebugVariablesPageDTO> {
-    const session = this.requireStopped(id, sessionPath)
+  async variables(sessionPath: string, variablesReference: number, start?: number, count?: number, id?: string, stopId?: number): Promise<DebugVariablesPageDTO> {
+    const session = this.requireStopped(id, sessionPath, stopId)
+    const epoch = session.stopEpoch
     if (variablesReference === 0) return { variables: [], truncated: false }
-    const paged = start !== undefined || count !== undefined
     const startIndex = Math.max(0, Math.floor(start ?? 0))
     const wanted = Math.max(1, Math.min(500, Math.floor(count ?? VARIABLES_MAX_ITEMS)))
-    const body = await this.requireLive(session).request('variables', {
-      variablesReference,
-      ...(paged ? { start: startIndex, count: wanted + 1 } : {})
-    })
-    const list = (Array.isArray(body?.variables) ? body.variables : []).map((item) => this.mapVariable(item as Record<string, unknown>))
-    let page: DebugVariableDTO[]
-    let truncated: boolean
-    if (!paged) {
-      truncated = list.length > VARIABLES_MAX_ITEMS
-      page = list.slice(0, VARIABLES_MAX_ITEMS)
-    } else if (list.length > wanted + 1) {
-      // The adapter ignored start/count and returned everything: page locally.
-      page = list.slice(startIndex, startIndex + wanted)
-      truncated = startIndex + wanted < list.length
-    } else {
-      truncated = list.length > wanted
-      page = list.slice(0, wanted)
+    const request = async (paging?: { start: number; count: number }): Promise<unknown[]> => {
+      const body = await this.requireLive(session).request('variables', { variablesReference, ...paging })
+      this.assertStop(session, epoch)
+      return Array.isArray(body?.variables) ? body.variables : []
     }
-    return { variables: page, truncated }
+    let paged = session.variablePaging.get(variablesReference)
+    if (paged === undefined) {
+      // Testing with the requested page's size is ambiguous when the complete
+      // list has exactly count+1 entries (e.g. 51). Probe with count=1 instead.
+      const probe = await request({ start: 0, count: 1 })
+      paged = probe.length === 1
+      if (probe.length === 1) {
+        const second = await request({ start: 1, count: 1 })
+        if (second.length > 1 || JSON.stringify(second) === JSON.stringify(probe)) paged = false
+      }
+      if (session.variablePaging.size >= 256) session.variablePaging.delete(session.variablePaging.keys().next().value!)
+      session.variablePaging.set(variablesReference, paged)
+    }
+    const list = await request(paged ? { start: startIndex, count: wanted + 1 } : undefined)
+    const from = paged ? 0 : startIndex
+    return { variables: list.slice(from, from + wanted).map(item => this.mapVariable(item as Record<string, unknown>)), truncated: from + wanted < list.length }
   }
 
   private mapVariable(record: Record<string, unknown>): DebugVariableDTO {
@@ -454,18 +520,21 @@ export class DebugManager {
     }
   }
 
-  async evaluate(sessionPath: string, expression: string, frameId?: number, id?: string): Promise<{ result: string; type?: string; variablesReference: number }> {
-    const session = this.requireStopped(id, sessionPath)
+  async evaluate(sessionPath: string, expression: string, frameId?: number, id?: string, stopId?: number, context: 'repl' | 'watch' = 'repl'): Promise<{ result: string; type?: string; variablesReference: number }> {
+    const session = this.requireStopped(id, sessionPath, stopId)
+    const epoch = session.stopEpoch
+    if (session.dto.kind === 'core') throw new Error('Core inspection exposes stack/scopes/variables, not executable expressions')
     // Some adapters refuse a frame-less evaluate — lldb-dap answers "can't
     // evaluate expressions when the process is running" even at a stop — so
     // default to the top frame of the thread that stopped.
     const frame = frameId ?? await this.topFrameId(session)
+    this.assertStop(session, epoch)
     let body: Record<string, unknown> | undefined
     try {
       body = await this.requireLive(session).request('evaluate', {
         expression,
         ...(frame !== undefined ? { frameId: frame } : {}),
-        context: 'repl'
+        context
       })
     } catch (error) {
       if (frame !== undefined) throw error
@@ -473,6 +542,7 @@ export class DebugManager {
       const reason = error instanceof Error ? error.message : String(error)
       throw new Error(`${reason} (no frame to evaluate in — pass a frameId from action="stack")`)
     }
+    this.assertStop(session, epoch)
     return {
       result: truncate(asString(body?.result) ?? '', EVALUATE_MAX_CHARS),
       ...(asString(body?.type) ? { type: asString(body?.type) } : {}),
@@ -522,61 +592,73 @@ export class DebugManager {
 
   async stop(sessionPath: string, id?: string): Promise<DebugSessionDTO> {
     const session = this.owned(sessionPath, id)
-    if (session.finishing) return { ...session.dto }
-    const client = session.client
-    if (client?.isOpen) {
-      // Attach detaches; launch terminates the debuggee.
-      await client.request('disconnect', { terminateDebuggee: session.dto.kind === 'launch' }, 5000).catch(() => undefined)
-    }
-    await this.finish(session, 'terminated')
-    return { ...session.dto }
+    if (session.stopping) return session.stopping
+    session.stopping = Promise.resolve().then(async () => {
+      if (session.finishing) { await session.cleanup; return { ...session.dto } }
+      session.controller.abort()
+      const client = session.client
+      if (client?.isOpen) {
+        await client.request('disconnect', { terminateDebuggee: session.dto.kind === 'launch' }, 5000).catch(() => undefined)
+      }
+      await this.finish(session, 'terminated')
+      return { ...session.dto }
+    })
+    return session.stopping
   }
 
   /** Restart the debuggee. Adapters advertising supportsRestartRequest get
    * the native path; everyone else gets stop+start with the recorded
    * options, which ends one session and begins the next (the id changes). */
-  async restart(sessionPath: string, id?: string): Promise<DebugSessionDTO> {
+  async restart(sessionPath: string, id?: string, signal?: AbortSignal, canStart?: () => boolean): Promise<DebugSessionDTO> {
+    if (signal?.aborted || canStart?.() === false) throw new Error('Debug restart cancelled')
     const session = this.owned(sessionPath, id)
+    if (session.dto.kind === 'core' || session.dto.parentId) throw new Error('Restart the launch session, not a core or adapter-owned target')
+    if (session.dto.status === 'starting' || session.controlling) throw new Error('Debug session is busy')
     const options = session.startOptions
     if (!options) throw new Error('This session was not started by the app and cannot be restarted')
     const client = session.client
     if (!session.finishing && client?.isOpen && client.capabilities.supportsRestartRequest === true) {
-      session.dto.location = undefined
-      session.dto.stopReason = undefined
-      session.dto.status = 'running'
-      this.publish(session)
-      await client.request('restart', {})
+      const epoch = session.stopEpoch
+      session.controlling = true
+      try { await client.request('restart', {}) } finally { session.controlling = false }
+      if (!session.finishing && session.stopEpoch === epoch) {
+        session.dto.location = undefined
+        this.clearStop(session)
+        session.dto.status = 'running'
+        this.publish(session)
+      }
       return { ...session.dto }
     }
     await this.stop(sessionPath, session.dto.id)
-    return this.start(options)
+    return this.start({ ...options, signal, canStart: canStart ?? options.canStart, replacesId: session.dto.id, initialBreakpoints: new Map(session.launchBreakpoints ?? session.requested) })
   }
 
   async stopSession(sessionPath: string): Promise<void> {
-    for (const session of this.sessions.values()) {
-      if (session.dto.sessionPath === sessionPath && !session.finishing) await this.stop(sessionPath, session.dto.id)
-    }
+    await Promise.all([...this.sessions.values()].filter(s => s.dto.sessionPath === sessionPath).map(s => this.stop(sessionPath, s.dto.id)))
   }
 
   async dispose(): Promise<void> {
-    for (const session of [...this.sessions.values()]) {
-      if (!session.finishing) await this.stop(session.dto.sessionPath, session.dto.id)
-    }
+    this.closing = true
+    await Promise.all([...this.sessions.values()].map(s => this.stop(s.dto.sessionPath, s.dto.id)))
   }
 
   /* ------------------------------ internals ------------------------------ */
 
-  private requireStopped(id: string | undefined, sessionPath: string): Session {
+  private requireStopped(id: string | undefined, sessionPath: string, stopId?: number): Session {
     const session = this.owned(sessionPath, id)
-    if (session.dto.status !== 'stopped') {
+    if (session.dto.status !== 'stopped' || (stopId !== undefined && stopId !== session.stopEpoch)) {
       throw new Error(`The debuggee is not stopped (status: ${session.dto.status}); inspect works only at a stop`)
     }
     return session
   }
 
+  private assertStop(session: Session, epoch: number): void {
+    if (session.finishing || session.dto.status !== 'stopped' || session.stopEpoch !== epoch) throw new Error('Debug stop changed; refresh stack and variables')
+  }
+
   /** The adapter connection of a session that can still be driven. */
   private requireLive(session: Session): DapClient {
-    if (session.finishing || !session.client) throw new Error('The debug session has ended')
+    if (session.finishing || !isLive(session) || !session.client) throw new Error('The debug session has ended')
     return session.client
   }
 
@@ -593,28 +675,34 @@ export class DebugManager {
 
   private handleEvent(session: Session, event: string, body: Record<string, unknown> | undefined): void {
     if (session.finishing) return
+    if (session.dto.status === 'terminated' && !['output', 'terminated', 'exited'].includes(event)) return
     switch (event) {
       case 'initialized':
-        break // The handshake's waitEvent listener consumes this.
+        break // The transport's event waiter owns the handshake.
       case 'stopped':
+        this.clearStop(session)
         session.dto.status = 'stopped'
         session.dto.stopReason = asString(body?.reason) ?? 'stopped'
+        session.dto.stopDescription = asString(body?.description)
+        session.dto.stopText = asString(body?.text)
+        session.dto.hitBreakpointIds = Array.isArray(body?.hitBreakpointIds) ? body.hitBreakpointIds.filter((id): id is number => typeof id === 'number') : undefined
         if (asNumber(body?.threadId) !== undefined) session.dto.activeThreadId = asNumber(body?.threadId)
         session.dto.location = undefined
         session.stopEpoch += 1
+        session.dto.stopId = session.stopEpoch
         this.publish(session)
         // Settle only once the top frame is resolved, so the control snapshot
         // reports where THIS stop happened instead of nothing or a stale line.
         const epoch = session.stopEpoch
-        const filling = this.fillTopFrame(session, epoch).then(() => this.settleWaiters(session))
-        session.filling = filling
-        void filling.finally(() => {
+        const filling = this.fillTopFrame(session, epoch).then(() => {
           if (session.filling === filling) session.filling = undefined
+          if (!session.finishing && session.dto.status === 'stopped' && session.stopEpoch === epoch) this.settleWaiters(session)
         })
+        session.filling = filling
         break
       case 'continued':
         session.dto.status = 'running'
-        session.dto.stopReason = undefined
+        this.clearStop(session)
         session.dto.location = undefined
         if (asNumber(body?.threadId) !== undefined) session.dto.activeThreadId = asNumber(body?.threadId)
         this.publish(session)
@@ -624,15 +712,63 @@ export class DebugManager {
         if (text) {
           const category = asString(body?.category)
           this.append(session, category && category !== 'console' && category !== 'stdout' && category !== 'stderr' ? `[${category}] ${text}` : text)
+          if (category === 'important' && session.dto.status === 'stopped') {
+            session.dto.stopDiagnostics = ((session.dto.stopDiagnostics ?? '') + text).slice(-8192)
+            // LLDB reports an expression error as an ordinary breakpoint stop.
+            // Keep its reason verbatim, but never present this as a true condition.
+            const match = session.dto.adapterId === 'lldb-dap' && /error evaluating condition of breakpoint (\d+)(?:\.\d+)?/i.exec(session.dto.stopDiagnostics)
+            if (match) {
+              session.dto.conditionError = true
+              const breakpoint = session.breakpoints.find(bp => bp.id === Number(match[1]) && bp.condition)
+              if (breakpoint) { breakpoint.conditionStatus = 'error'; breakpoint.conditionError = session.dto.stopDiagnostics }
+            }
+            this.publish(session)
+          }
         }
         break
       }
-      case 'terminated':
+      case 'breakpoint': {
+        const record = body?.breakpoint as Record<string, unknown> | undefined
+        const id = asNumber(record?.id)
+        if (id === undefined) break
+        const current = session.breakpoints.find(bp => bp.id === id)
+        if (!current) {
+          const source = record?.source as Record<string, unknown> | undefined
+          const file = asString(source?.path), line = asNumber(record?.line)
+          if (body?.reason === 'new' && file && line) {
+            session.requested.set(file, [...(session.requested.get(file) ?? []).filter(bp => bp.line !== line), { line }])
+            session.breakpoints.push({ id, file, line, requestedLine: line, verified: asBoolean(record?.verified) ?? false, message: asString(record?.message) })
+            this.publish(session)
+          }
+          break
+        }
+        if (body?.reason === 'removed') {
+          session.breakpoints = session.breakpoints.filter(bp => bp.id !== id)
+          session.requested.set(current.file, (session.requested.get(current.file) ?? []).filter(bp => bp.line !== current.requestedLine))
+        } else {
+          current.line = asNumber(record?.line) ?? current.line
+          current.verified = asBoolean(record?.verified) ?? current.verified
+          current.message = asString(record?.message)
+        }
+        this.publish(session)
+        break
+      }
       case 'exited':
+        // DAP may send final output AFTER exited. Keep the transport until
+        // terminated/close, with a bounded grace period for incomplete peers.
+        session.dto.status = 'terminated'
+        session.dto.endedAt = Date.now()
+        session.dto.location = undefined
+        this.clearStop(session)
+        this.settleWaiters(session)
+        this.publish(session)
+        session.exitTimer ??= setTimeout(() => { void this.finish(session, 'terminated') }, 2000)
+        break
+      case 'terminated':
         void this.finish(session, 'terminated')
         break
       default:
-        break // thread/module/process events need no state change in P0.
+        break // Other adapter metadata is queried on demand.
     }
   }
 
@@ -679,26 +815,9 @@ export class DebugManager {
     }, 1000)
   }
 
-  private waitEvent(session: Session, name: string, timeoutMs: number): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const previous = session.client!.onEvent
-      const timer = setTimeout(() => {
-        session.client!.onEvent = previous
-        reject(new Error(`Timed out waiting for the adapter's "${name}" event`))
-      }, timeoutMs)
-      session.client!.onEvent = (event, body) => {
-        previous(event, body)
-        if (event === name) {
-          clearTimeout(timer)
-          session.client!.onEvent = previous
-          resolve()
-        }
-      }
-    })
-  }
-
   private waitStopped(session: Session, budgetMs: number): Promise<boolean> {
-    if (session.dto.status === 'stopped' || session.finishing) return Promise.resolve(true)
+    if (session.finishing || !isLive(session)) return Promise.resolve(true)
+    if (session.dto.status === 'stopped' && !session.filling) return Promise.resolve(true)
     return new Promise((resolve) => {
       const waiter: StoppedWaiter = {
         resolve: () => resolve(true),
@@ -708,7 +827,6 @@ export class DebugManager {
         }, budgetMs)
       }
       session.waiters.push(waiter)
-      void session.done.then(() => resolve(true)) // termination settles the wait too
     })
   }
 
@@ -720,35 +838,74 @@ export class DebugManager {
     }
   }
 
+  private clearStop(session: Session): void {
+    session.dto.stopReason = undefined
+    session.dto.stopDescription = undefined
+    session.dto.stopText = undefined
+    session.dto.hitBreakpointIds = undefined
+    session.dto.stopDiagnostics = undefined
+    session.dto.conditionError = undefined
+    session.variablePaging.clear()
+  }
+
   private publish(session: Session): void {
     session.dto = { ...session.dto, revision: session.dto.revision + 1 }
     this.changed({ ...session.dto })
   }
 
-  private async finish(session: Session, status: 'terminated' | 'failed'): Promise<void> {
-    if (session.finishing) return
+  private finish(session: Session, status: 'terminated' | 'failed'): Promise<void> {
+    if (session.cleanup) return session.cleanup
+    let complete!: () => void, failed!: (error: unknown) => void
+    session.cleanup = new Promise<void>((resolve, reject) => { complete = resolve; failed = reject })
+    void session.cleanup.catch(() => {})
     session.finishing = true
+    session.controller.abort()
     clearTimeout(session.progressTimer)
-    session.dto.status = status
-    session.dto.endedAt = Date.now()
-    session.dto.location = undefined
-    session.dto.stopReason = undefined
-    session.client?.dispose()
-    session.client = undefined
+    clearTimeout(session.exitTimer)
+    session.dto.status = status; session.dto.endedAt = Date.now()
+    session.dto.location = undefined; this.clearStop(session)
     this.settleWaiters(session)
-    for (const pending of session.pendingBreakpoints.splice(0)) {
-      pending.reject(new Error('The debug session ended before the adapter was ready'))
-    }
+    for (const pending of session.pendingBreakpoints.splice(0)) pending.reject(new Error('Debug session ended before configuration'))
     this.publish(session)
     session.resolveDone()
-    this.prune()
+    const client = session.client
+    session.client = undefined
+    void Promise.all([
+      client?.dispose(),
+      ...[...session.terminals].map(dispose => dispose()),
+      ...[...this.sessions.values()].filter(s => s.dto.parentId === session.dto.id).map(s => this.stop(s.dto.sessionPath, s.dto.id))
+    ]).then(() => {
+      session.releaseCheckout?.(); session.releaseCheckout = undefined
+      this.prune()
+      complete()
+    }, error => {
+      // Retain the process lease if cleanup cannot prove the tree exited.
+      session.dto.status = 'failed'; session.dto.error = error instanceof Error ? error.message : String(error)
+      this.publish(session)
+      failed(error)
+    })
+    return session.cleanup
   }
 
   /** Settled sessions stay queryable (output pages) but bounded: the newest
    * few per app lifetime, mirroring the bash history retention spirit. */
   private prune(): void {
-    const settled = [...this.sessions.values()].filter((session) => session.finishing)
+    const settled = [...this.sessions.values()].filter((session) => session.finishing && !session.releaseCheckout)
       .sort((a, b) => b.dto.startedAt - a.dto.startedAt)
     for (const session of settled.slice(10)) this.sessions.delete(session.dto.id)
   }
+}
+
+/** The short bind/release interval can race another local process; connection
+ * failures remain bounded and fail visibly rather than selecting a fixed port. */
+function availablePort(host: string): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = createServer()
+    server.once('error', reject)
+    server.listen(0, host, () => {
+      const address = server.address()
+      const port = typeof address === 'object' && address ? address.port : 0
+      server.close(error => error ? reject(error) : resolve(port))
+    })
+  })
 }

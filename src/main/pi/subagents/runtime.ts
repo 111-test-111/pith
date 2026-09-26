@@ -122,6 +122,7 @@ export interface SubagentHost {
   subagentReuseEnabled(): boolean
   /** Settings → Subagents: parent↔child steering is enabled. */
   subagentCommsEnabled(): boolean
+  profileDebugEnabled?(cwd: string, name: string): boolean
   planRestricted(parentSessionPath: string): boolean
   commandTasks(): BashTaskManager | null
   /**
@@ -303,7 +304,8 @@ export class SubagentRuntime {
       const ceiling = (request.profile.tools === 'all'
         ? [...parentActive]
         : request.profile.tools.filter((tool) => parentActive.has(tool)))
-        .filter((tool) => !(SUBAGENT_EXCLUDED_TOOLS as readonly string[]).includes(tool))
+        .filter((tool) => tool !== 'debug' && !(SUBAGENT_EXCLUDED_TOOLS as readonly string[]).includes(tool))
+      if (request.profile.debugEnabled && parentActive.has('debug')) ceiling.push('debug')
       if (!ceiling.length) throw new SubagentError(`Profile "${request.profile.name}" resolves to an empty tool set for this session`)
       // Communications are a primitive, not a workspace capability: while
       // subagent communications are enabled, every child can message its
@@ -423,6 +425,7 @@ export class SubagentRuntime {
       const parentActive = new Set(parentSession.getActiveToolNames())
       const planRestricted = current.start.resource.planRestricted === true || this.host.planRestricted(current.start.parentSessionPath)
       const tools = current.start.resource.tools.filter(name =>
+        (name !== 'debug' || this.host.profileDebugEnabled?.(cwd, current.start.profile) === true) &&
         (parentActive.has(name) || (name === MESSAGE_PARENT_TOOL_NAME && this.host.subagentCommsEnabled())) &&
         !(SUBAGENT_EXCLUDED_TOOLS as readonly string[]).includes(name))
       const { extensions: _extensions, ...previousResource } = current.start.resource

@@ -110,6 +110,11 @@ window.pi = {
   setSubagentMaxConcurrent: (v) => count('setSubagentMaxConcurrent', v),
   setSubagentReuseEnabled: (v) => count('setSubagentReuseEnabled', v),
   setSubagentCommsEnabled: (v) => count('setSubagentCommsEnabled', v),
+  setSubagentProfileDebug: (filePath, enabled) => {
+    if (window.failProfileDebug) return Promise.reject(new Error('disk failure'));
+    profiles = profiles.map(p => p.filePath === filePath ? {...p, debugEnabled: enabled} : p);
+    return count('setSubagentProfileDebug', {filePath, enabled}).then(listDTO);
+  },
   subagentProfiles: () => count('subagentProfiles', listDTO()),
   createSubagentProfile: (payload) => {
     if (window.failCreate) return Promise.reject(new Error('disk on fire'));
@@ -335,6 +340,18 @@ app.on('window-all-closed',()=>app.quit());`
   assert.equal(await evaluate(`window.radioOf('Choose tools')?.getAttribute('data-state')`), 'unchecked', 'not the explicit radio')
   assert.equal(await evaluate(`document.querySelector('[data-subagent-tools-save]').disabled`), true, 'a pristine editor offers no Save')
 
+  // All tools does not grant debug. The dedicated checkbox saves this role only.
+  assert.equal(await evaluate(`document.querySelector('[data-subagent-debug] [role=checkbox]').getAttribute('aria-checked')`), 'false')
+  await evaluate(`document.querySelector('[data-subagent-debug] [role=checkbox]').click()`)
+  await frame()
+  assert.equal(await evaluate(`document.querySelector('[data-subagent-debug] [role=checkbox]').getAttribute('aria-checked')`), 'true')
+  assert.deepEqual(await evaluate(`window.calls.filter(c=>c[0]==='setSubagentProfileDebug').at(-1)[1]`), {filePath:'/agents/general-purpose.md',enabled:true})
+  await evaluate(`window.failProfileDebug=true; document.querySelector('[data-subagent-debug] [role=checkbox]').click()`)
+  await frame()
+  assert.equal(await evaluate(`document.querySelector('[data-subagent-debug] [role=checkbox]').getAttribute('aria-checked')`), 'true', 'failed save retains the saved grant')
+  assert.ok(await evaluate(`document.querySelector('[data-subagent-debug]').textContent.includes('Could not save')`))
+  await evaluate(`window.failProfileDebug=false`)
+
   // Switching to explicit starts from everything; Reset returns to the saved state.
   await evaluate(`window.radioOf('Choose tools').click()`)
   await frame()
@@ -362,6 +379,8 @@ app.on('window-all-closed',()=>app.quit());`
 
   const groups = await evaluate(`[...document.querySelectorAll('[data-subagent-tool-group]')].map((g) => g.dataset.subagentToolGroup)`)
   assert.deepEqual(groups, ['mcp', 'builtin', 'extension', 'unknown'], 'the picker groups render mcp-first with an unknown group')
+
+  assert.equal(await evaluate(`document.querySelector('[data-subagent-debug] [role=checkbox]').getAttribute('aria-checked')`), 'false', 'a sibling role keeps its independent default')
 
   // Enable MCP and save: canonical order, unknown preserved.
   await evaluate(`window.toolBox('MCP').click()`)

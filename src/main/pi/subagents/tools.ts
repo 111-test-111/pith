@@ -48,8 +48,10 @@ export function subagentGuidelines(flags: SubagentCapabilityFlags = {}): string[
  * could not be from an explicit list (an unresolved preset or a profile that
  * never declared `tools:` falls back to read-only). */
 function describeProfileTools(profile: SubagentProfile): string {
-  if (profile.tools === 'all') return 'full set'
-  const list = profile.tools.join(',') || 'none'
+  if (profile.tools === 'all') return profile.debugEnabled ? 'full set; debug enabled (isolated sessions)' : 'full set except debug (disabled for this role)'
+  const tools = profile.tools.filter(name => name !== 'debug')
+  if (profile.debugEnabled) tools.push('debug')
+  const list = tools.join(',') || 'none'
   if (profile.toolsSource === 'unresolved-preset') return `${list} (read-only fallback: unresolved tool_preset "${profile.toolPreset}")`
   if (profile.toolsSource === 'default') return `${list} (read-only default: no tools: in the profile)`
   return list

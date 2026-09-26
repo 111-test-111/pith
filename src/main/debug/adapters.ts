@@ -34,7 +34,7 @@ import type { DebugAdapterDTO } from '../../shared/types'
  */
 
 export interface DebugLaunchParams {
-  program: string
+  program?: string
   args: string[]
   cwd: string
   env?: Record<string, string>
@@ -50,26 +50,34 @@ export interface DebugAdapterSpec {
   label: string
   languages: string[]
   /** Resolve the adapter invocation; null means unavailable on this host. */
-  detect: (cwd: string) => Promise<{ command: string; args: string[] } | null>
+  detect: (cwd: string, signal?: AbortSignal) => Promise<{ command: string; args: string[] } | null>
   /** Short machine-readable hint when detection fails ('missing-binary', …). */
   unavailableHint: string
   /** TCP listen mode: the client connects over a socket instead of stdio.
    * spawn=true starts the process (with ${port} substituted into its args)
    * and waits for the port; spawn=false expects an external listener. */
   listen?: { host: string; port: number; spawn: boolean }
+  /** Standalone js-debug asks the client to open target connections. */
+  childSessions?: boolean
+  /** Validate the final request, after imported adapter-specific arguments. */
+  validateLaunch: (args: Record<string, unknown>) => void
   launchArguments: (params: DebugLaunchParams) => Record<string, unknown>
   attachArguments: (params: DebugAttachParams) => Record<string, unknown>
 }
 
 const DETECT_TIMEOUT_MS = 5000
 
+function requireProgram(args: Record<string, unknown>): void {
+  if (typeof args.program !== 'string' || !args.program.trim()) throw new Error('program is required for launch')
+}
+
 /** Run a probe command; resolves trimmed stdout, or null on any failure. */
-function probe(command: string, args: string[]): Promise<string | null> {
+function probe(command: string, args: string[], signal?: AbortSignal): Promise<string | null> {
   return new Promise((resolve) => {
-    execFile(command, args, { timeout: DETECT_TIMEOUT_MS, windowsHide: true }, (error, stdout) => {
+    execFile(command, args, { timeout: DETECT_TIMEOUT_MS, windowsHide: true, signal }, (error, stdout) => {
       if (error) { resolve(null); return }
       const text = String(stdout).trim()
-      resolve(text || null)
+      resolve(text)
     })
   })
 }
@@ -92,9 +100,10 @@ const lldbDap: DebugAdapterSpec = {
   label: 'LLDB (lldb-dap)',
   languages: ['c', 'cpp', 'objective-c', 'rust', 'swift', 'assembly'],
   unavailableHint: 'missing-binary: install Xcode Command Line Tools or LLVM (lldb-dap)',
-  async detect() {
+  validateLaunch: requireProgram,
+  async detect(_cwd, signal) {
     if (process.platform === 'darwin') {
-      const resolved = await probe('xcrun', ['-f', 'lldb-dap'])
+      const resolved = await probe('xcrun', ['-f', 'lldb-dap'], signal)
       if (resolved && existsSync(resolved)) return { command: resolved, args: [] }
     }
     const onPath = await which('lldb-dap')
@@ -115,7 +124,12 @@ const debugpy: DebugAdapterSpec = {
   label: 'Python (debugpy)',
   languages: ['python'],
   unavailableHint: 'missing-module: pip install debugpy (workspace venv is preferred)',
-  async detect(cwd) {
+  validateLaunch(args) {
+    if (args.module === undefined) { requireProgram(args); return }
+    if (typeof args.module !== 'string' || !args.module.trim()) throw new Error('module must be a non-empty Python module name')
+    if (args.program !== undefined) throw new Error('Python launch requires either program or module, not both')
+  },
+  async detect(cwd, signal) {
     const candidates = [
       join(cwd, '.venv', 'bin', 'python'),
       join(cwd, 'venv', 'bin', 'python'),
@@ -126,12 +140,15 @@ const debugpy: DebugAdapterSpec = {
     python ??= await which('python3') ?? await which('python')
     if (!python) return null
     // The adapter module must be importable by THAT interpreter.
-    const ok = await probe(python, ['-c', 'import debugpy'])
+    const ok = await probe(python, ['-c', 'import debugpy'], signal)
     if (ok === null) return null
     return { command: python, args: ['-m', 'debugpy.adapter'] }
   },
   launchArguments: (params) => ({
-    program: params.program,
+    type: 'python',
+    request: 'launch',
+    name: 'Pith',
+    ...(params.program !== undefined ? { program: params.program } : {}),
     args: params.args,
     cwd: params.cwd,
     // integratedTerminal routes the debuggee through runInTerminal, which this
@@ -149,10 +166,12 @@ const delve: DebugAdapterSpec = {
   label: 'Go (delve)',
   languages: ['go'],
   unavailableHint: 'missing-binary: go install github.com/go-delve/delve/cmd/dlv@latest',
+  validateLaunch: requireProgram,
   async detect() {
     const onPath = await which('dlv')
-    return onPath ? { command: onPath, args: ['dap'] } : null
+    return onPath ? { command: onPath, args: ['dap', '--listen=127.0.0.1:${port}'] } : null
   },
+  listen: { host: '127.0.0.1', port: 0, spawn: true },
   launchArguments: (params) => ({
     // 'debug' builds the package at program; use 'exec' (custom template) for
     // a prebuilt binary.
@@ -168,6 +187,7 @@ const delve: DebugAdapterSpec = {
 
 /** Well-known js-debug install locations (VS Code's DAP server for JS/TS). */
 function jsDebugServers(): string[] {
+  const standalone = join(getAgentDir(), 'debug-adapters', 'js-debug', 'src', 'dapDebugServer.js')
   const roots = ['.vscode', '.vscode-insiders', '.cursor', '.windsurf', '.vscode-oss']
     .map((dir) => join(homedir(), dir, 'extensions'))
   const servers: string[] = []
@@ -181,21 +201,27 @@ function jsDebugServers(): string[] {
     }
   }
   // Version-sorted directory names put the newest install first when reversed.
-  return servers.sort().reverse()
+  return [...(existsSync(standalone) ? [standalone] : []), ...servers.sort().reverse()]
 }
 
 const jsDebug: DebugAdapterSpec = {
   id: 'js-debug',
   label: 'JavaScript (js-debug)',
+  listen: { host: '127.0.0.1', port: 0, spawn: true },
+  childSessions: true,
+  validateLaunch: requireProgram,
   languages: ['javascript', 'typescript', 'javascriptreact', 'typescriptreact'],
-  unavailableHint: "missing-adapter: install VS Code's ms-vscode.js-debug extension, or declare js-debug in ~/.pi/agent/debug-adapters.json",
+  unavailableHint: `missing-adapter: extract Microsoft's js-debug-dap release into ${join(getAgentDir(), 'debug-adapters')} (js-debug/src/dapDebugServer.js); VS Code extension bundles may omit the standalone server`,
   async detect() {
     const server = jsDebugServers()[0]
     if (!server) return null
     const node = await which('node')
-    return { command: node ?? process.execPath, args: [server] }
+    return node ? { command: node, args: [server, '${port}', '127.0.0.1'] } : null
   },
   launchArguments: (params) => ({
+    type: 'pwa-node',
+    request: 'launch',
+    name: 'Pith',
     program: params.program,
     args: params.args,
     cwd: params.cwd,
@@ -206,7 +232,7 @@ const jsDebug: DebugAdapterSpec = {
     sourceMaps: true,
     ...(params.env ? { env: params.env } : {})
   }),
-  attachArguments: (params) => ({ processId: params.pid, sourceMaps: true })
+  attachArguments: (params) => ({ type: 'pwa-node', request: 'attach', name: 'Pith', processId: params.pid, sourceMaps: true })
 }
 
 const BUILTIN_ADAPTERS: DebugAdapterSpec[] = [lldbDap, debugpy, delve, jsDebug]
@@ -245,6 +271,7 @@ function customAdapterFrom(entry: CustomAdapterEntry, source: string): DebugAdap
   const id = entry.id
   return {
     id,
+    validateLaunch: requireProgram,
     label: typeof entry.label === 'string' && entry.label ? entry.label : id,
     languages: Array.isArray(entry.languages) ? entry.languages.filter((item): item is string => typeof item === 'string') : [],
     unavailableHint: listen && !listen.spawn
@@ -297,11 +324,12 @@ export function debugAdapterSpec(cwd: string, id: string): DebugAdapterSpec | un
 }
 
 /** Probe every known adapter; reports availability without throwing. */
-export async function detectDebugAdapters(cwd: string): Promise<DebugAdapterDTO[]> {
+export async function detectDebugAdapters(cwd: string, signal?: AbortSignal): Promise<DebugAdapterDTO[]> {
+  signal?.throwIfAborted()
   const specs = debugAdapterSpecs(cwd)
   const results = await Promise.all(specs.map(async (spec) => {
     let available = false
-    try { available = (await spec.detect(cwd)) !== null } catch { available = false }
+    try { available = (await spec.detect(cwd, signal)) !== null } catch { available = false }
     return {
       id: spec.id,
       label: spec.label,
@@ -310,6 +338,7 @@ export async function detectDebugAdapters(cwd: string): Promise<DebugAdapterDTO[
       ...(available ? {} : { detail: spec.unavailableHint })
     } satisfies DebugAdapterDTO
   }))
+  signal?.throwIfAborted()
   return results
 }
 
@@ -321,7 +350,8 @@ export async function detectDebugAdapters(cwd: string): Promise<DebugAdapterDTO[
 export interface DebugLaunchConfiguration {
   name: string
   adapterId: string
-  kind: 'launch' | 'attach'
+  kind: 'launch' | 'attach' | 'core'
+  coreFile?: string
   program?: string
   args?: string[]
   cwd?: string
@@ -353,7 +383,7 @@ const LAUNCH_TYPE_ADAPTERS: Record<string, string> = {
 /** Generic keys consumed by the mapping; everything else passes through. */
 const LAUNCH_CONSUMED_KEYS = new Set([
   'name', 'type', 'request', 'adapter', 'program', 'args', 'cwd', 'env', 'environment',
-  'stopOnEntry', 'stopAtEntry', 'processId', 'pid', 'preLaunchTask', 'postDebugTask',
+  'stopOnEntry', 'stopAtEntry', 'coreFile', 'processId', 'pid', 'preLaunchTask', 'postDebugTask',
   // cppdbg keys that never translate to lldb-dap (GDB-flavored).
   'MIMode', 'miDebuggerPath', 'miDebuggerArgs', 'setupCommands', 'externalConsole',
   'customLaunchSetupCommands', 'targetArchitecture', 'visualizerFile', 'showDisplayString'
@@ -383,7 +413,18 @@ export function parseJsonc(text: string): JsonValue {
     out += c
   }
   try {
-    return JSON.parse(out.replace(/,\s*([}\]])/g, '$1')) as JsonValue
+    let cleaned = '', quoted = false, escape = false
+    for (let i = 0; i < out.length; i++) {
+      const c = out[i]
+      if (quoted) {
+        cleaned += c
+        if (escape) escape = false
+        else if (c === '\\') escape = true
+        else if (c === '"') quoted = false
+      } else if (c === '"') { quoted = true; cleaned += c }
+      else if (c !== ',' || !/^\s*[}\]]/.test(out.slice(i + 1))) cleaned += c
+    }
+    return JSON.parse(cleaned) as JsonValue
   } catch (error) {
     throw new SyntaxError(`malformed JSONC: ${error instanceof Error ? error.message : String(error)}`)
   }
@@ -431,7 +472,7 @@ export function readLaunchConfigurations(cwd: string): DebugLaunchConfiguration[
       ? config.adapter
       : LAUNCH_TYPE_ADAPTERS[type]
     if (!adapterId) return []
-    const kind = config.request === 'attach' ? 'attach' : 'launch'
+    const kind = typeof config.coreFile === 'string' ? 'core' : config.request === 'attach' ? 'attach' : 'launch'
     const pid = typeof config.processId === 'number' ? config.processId
       : typeof config.processId === 'string' && /^\d+$/.test(config.processId) ? Number(config.processId)
       : typeof config.pid === 'number' ? config.pid : undefined
@@ -439,11 +480,13 @@ export function readLaunchConfigurations(cwd: string): DebugLaunchConfiguration[
     for (const [key, value] of Object.entries(config)) {
       if (!LAUNCH_CONSUMED_KEYS.has(key)) extraArguments[key] = value
     }
+    if (adapterId === 'js-debug') extraArguments.type = type === 'node' ? 'pwa-node' : type === 'chrome' ? 'pwa-chrome' : type
     const env = launchEnv(config.env, config.environment)
     return [{
       name,
       adapterId,
       kind,
+      ...(typeof config.coreFile === 'string' ? { coreFile: substituteWorkspace(config.coreFile, cwd) } : {}),
       ...(typeof config.program === 'string' ? { program: substituteWorkspace(config.program, cwd) } : {}),
       ...(Array.isArray(config.args) ? { args: config.args.filter((a): a is string => typeof a === 'string').map((a) => substituteWorkspace(a, cwd)) } : {}),
       ...(typeof config.cwd === 'string' ? { cwd: substituteWorkspace(config.cwd, cwd) } : {}),

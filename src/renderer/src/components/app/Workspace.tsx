@@ -297,8 +297,8 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
   useEffect(() => () => debugStore.dispose(), [debugStore])
   // DAP runInTerminal: a debug adapter asks for a real terminal to host the
   // debuggee. Spawn the tab first (opening the terminal pane auto-births a tab
-  // only when none exists, and ours already does), type the pre-quoted command
-  // line into it, and answer the adapter with the shell's pid.
+  // only when none exists, and ours already does), and answer main with the
+  // shell's pid. Main owns cancellation and command delivery.
   useEffect(() => {
     return window.pi.onDebugTerminalRequest((request) => {
       void terminals.spawnForDebug(request.cwd, request.title).then((result) => {
@@ -306,7 +306,6 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
           window.pi.debugTerminalResponse({ requestId: request.requestId, error: result.error })
           return
         }
-        window.pi.terminalInput(result.id, `${request.command}\r`)
         window.pi.debugTerminalResponse({ requestId: request.requestId, shellProcessId: result.pid, terminalId: result.id })
         openSidePanelTabRef.current?.('terminal')
       })

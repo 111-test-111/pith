@@ -1,5 +1,6 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { AgentCodeLine, type AgentCodeToken } from '@/components/agents/agent-code'
+import { Button } from '@/components/motion/button'
 import { useFileTokens } from '@/lib/hooks/use-file-tokens'
 import { useDiffWindow } from '@/lib/hooks/use-diff-window'
 import { fileLanguage } from '@/lib/file-language'
@@ -187,15 +188,15 @@ export function FileSource({ text, tab, store, search, wrap, debugBreakpoints, o
           )} />
         ) : null}
         {onToggleBreakpoint && showNumber ? (
-          <button
+          <Button variant="ghost"
             type="button"
-            tabIndex={-1}
+            aria-pressed={!!breakpoint}
             aria-label={t('debug.toggleBreakpoint', { line: number })}
             onClick={() => onToggleBreakpoint(number)}
-            className={cn('hover:text-foreground', breakpoint && 'text-foreground/80')}
+            className={cn('h-5 min-w-0 rounded-control px-1 py-0 align-top font-mono text-xs leading-5 hover:text-foreground focus-visible:ring-inset', breakpoint && 'text-foreground/80')}
           >
             {number}
-          </button>
+          </Button>
         ) : showNumber ? number : null}
       </span>
     )

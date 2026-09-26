@@ -149,6 +149,7 @@ export { readLaunchConfigurations } from './src/main/debug/adapters';`,
     const launch = (options = {}) => manager.start({
       sessionId: SESSION_ID,
       sessionPath: SESSION_PATH,
+      workspaceCwd: FIXTURES,
       cwd: FIXTURES,
       adapterId: 'lldb-dap',
       kind: 'launch',
@@ -196,10 +197,12 @@ export { readLaunchConfigurations } from './src/main/debug/adapters';`,
     // 4. Once nothing is live, id-less calls fall back to the newest console.
     assert.equal(manager.get(SESSION_PATH).id, second.id, 'the newest settled session should stay addressable')
 
-    // 5. The one-live-session guard is unchanged, and a third session works.
-    const third = await launch()
-    await assert.rejects(launch(), /already active/, 'a second live session must be refused')
-    assert.equal(manager.get(SESSION_PATH).id, third.id, 'the third session was not addressable')
+    // Multiple live targets require explicit ids.
+    const third = await launch({ stopOnEntry: true })
+    const sibling = await launch({ stopOnEntry: true })
+    assert.throws(() => manager.get(SESSION_PATH), /Multiple debug sessions/)
+    await manager.stop(SESSION_PATH, sibling.id)
+    assert.equal(manager.get(SESSION_PATH).id, third.id)
     await manager.stop(SESSION_PATH)
     assert.equal(manager.get(SESSION_PATH, third.id).status, 'terminated', 'the third debuggee was not stopped')
 
@@ -406,26 +409,22 @@ export { readLaunchConfigurations } from './src/main/debug/adapters';`,
       assert.equal(Object.keys(customConfig.extraArguments).includes('MIMode'), false, 'MIMode should be dropped')
     }
 
-    // 17. js-debug roundtrip (SKIP without a VS Code js-debug install).
-    try {
-      const jsSession = await manager.start({
-        sessionId: SESSION_ID, sessionPath: SESSION_PATH, cwd: FIXTURES,
-        adapterId: 'js-debug', kind: 'launch', program: join(FIXTURES, 'demo.js'), args: []
-      })
-      await manager.setBreakpoints(SESSION_PATH, join(FIXTURES, 'demo.js'), [2])
-      await until(() => manager.get(SESSION_PATH, jsSession.id).status === 'stopped', 'the js-debug run to hit its breakpoint', 30_000)
-      const jsThread = manager.get(SESSION_PATH).activeThreadId
-      const jsFrames = await manager.stack(SESSION_PATH, jsThread)
-      const evaluated = await manager.evaluate(SESSION_PATH, 'a', jsFrames[0].id)
-      assert.match(evaluated.result, /2/, `js-debug evaluated a to ${evaluated.result}`)
-      await manager.stop(SESSION_PATH)
-    } catch (error) {
-      if (/not available|missing-adapter/.test(String(error instanceof Error ? error.message : error))) {
-        console.log('[SKIP] js-debug: not installed on this host')
-      } else {
-        throw error
-      }
-    }
+    // 17. Real core dump: save one with lldb, then inspect it through DAP's
+    // attach/coreFile path (the same target as lldb -c).
+    const coreFile = join(temporary, 'demo.core')
+    const lldbCommand = process.platform === 'darwin' ? 'xcrun' : 'lldb'
+    const lldbArgs = ['--batch', '-o', 'breakpoint set --name main', '-o', 'run',
+      '-o', `process save-core ${coreFile}`, '-o', 'process kill', binary]
+    execFileSync(lldbCommand, process.platform === 'darwin' ? ['lldb', ...lldbArgs] : lldbArgs, { timeout: 30_000, stdio: 'pipe' })
+    const core = await launch({ kind: 'core', coreFile, stopOnEntry: false })
+    assert.equal(core.status, 'stopped')
+    const coreFrames = await manager.stack(SESSION_PATH, core.activeThreadId, undefined, core.id, core.stopId)
+    assert.ok(coreFrames.some(frame => frame.name.includes('main')), 'core stack has no main frame')
+    const coreScopes = await manager.scopes(SESSION_PATH, coreFrames[0].id, core.id, core.stopId)
+    assert.ok(coreScopes.length > 0)
+    await manager.variables(SESSION_PATH, coreScopes[0].variablesReference, undefined, undefined, core.id, core.stopId)
+    await manager.stop(SESSION_PATH, core.id)
+    console.log('[PASS] real LLDB core dump: save → attach coreFile → stack/scopes/variables → close')
 
     assert.ok(revisions.length > 0, 'the manager published no DTO revisions')
     console.log(`[PASS] debug sessions: ${manager.list(SESSION_PATH).length} sessions, id-less actions followed the live one`)

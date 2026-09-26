@@ -62,6 +62,6 @@ export function useFileNavigation() {
     cwd: base ?? navigation?.cwd ?? '',
     open,
     // Attachment metadata contains literal filesystem paths, not URL anchors.
-    openPath: (path: string) => open(encodeURI(path).replaceAll('#', '%23').replaceAll('?', '%3F').replaceAll(':', '%3A'))
+    openPath: (path: string, line?: number) => open(encodeURI(path).replaceAll('#', '%23').replaceAll('?', '%3F').replaceAll(':', '%3A') + (line && line > 0 ? `#L${line}` : ''))
   }
 }

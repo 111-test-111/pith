@@ -316,6 +316,23 @@ const entriesOf = (...records) => records.map((record, index) => ({
   }
 }
 
+// Debug is an explicit per-role flag, separate from tools: all or presets.
+{
+  const dir = await mkdtemp(join(tmpdir(), 'pith-profile-debug-'))
+  const file = join(dir, 'role.md')
+  try {
+    await writeFile(file, '---\r\ndescription: Debug role\r\ntools: all\r\n"debug": false\r\n---\r\n\r\nKeep this prompt.\r\n')
+    profiles.writeSubagentProfileDebug(file, true)
+    const { readFileSync } = await import('node:fs')
+    let text = readFileSync(file, 'utf8')
+    assert.ok(text.includes('debug: true\r\n'))
+    assert.ok(text.endsWith('Keep this prompt.\r\n'))
+    profiles.writeSubagentProfileDebug(file, false)
+    assert.ok(readFileSync(file, 'utf8').includes('debug: false'))
+    assert.throws(() => profiles.writeSubagentProfileDebug(file, 'true'), /Invalid/)
+  } finally { await rm(dir, { recursive: true, force: true }) }
+}
+
 // --- profile creation (Settings → Subagents): a least-privilege starter file
 //     validated to the loader's own rules ---
 {
@@ -748,6 +765,27 @@ console.log('check-subagents: all assertions passed')
       assert.equal(runs[0].start.parentSessionPath, parent.getSessionFile())
       assert.equal(runs[0].result?.status, 'completed')
       assert.deepEqual(runs[0].start.resource.tools.sort(), ['grep', 'read'])
+    }
+
+    // Dedicated debug opt-in is frozen at dispatch and only narrows on resume.
+    {
+      const debugParent = fakeSession({ sessionId: 'parent-session', getActiveToolNames: () => ['read', 'debug'] })
+      const host = makeHost(fakeSession({ getLastAssistantText: () => 'done' }))
+      let allowed = true
+      host.profileDebugEnabled = () => allowed
+      const runtime = new SubagentRuntime(host), state = new SubagentParentState('parent-session')
+      const off = await (await runtime.start(state, baseRequest({ parentSession: debugParent, profile: { ...profile, tools: 'all', debugEnabled: false } }))).completion
+      assert.deepEqual(runtime.readChildRuns(off.sessionPath)[0].start.resource.tools, ['read'])
+      const on = await (await runtime.start(state, baseRequest({ parentSession: debugParent, profile: { ...profile, tools: ['read'], debugEnabled: true } }))).completion
+      assert.deepEqual(runtime.readChildRuns(on.sessionPath)[0].start.resource.tools, ['read', 'debug'])
+      allowed = false
+      await (await runtime.resume(state, debugParent, on.sessionId, 'continue')).completion
+      assert.deepEqual(runtime.readChildRuns(on.sessionPath)[0].start.resource.tools, ['read'])
+      allowed = true
+      await (await runtime.resume(state, debugParent, on.sessionId, 'continue again')).completion
+      assert.deepEqual(runtime.readChildRuns(on.sessionPath)[0].start.resource.tools, ['read'], 'resume cannot widen a frozen ceiling')
+      const missing = await (await runtime.start(state, baseRequest({ profile: { ...profile, debugEnabled: true } }))).completion
+      assert.ok(!runtime.readChildRuns(missing.sessionPath)[0].start.resource.tools.includes('debug'), 'parent active set is still the upper ceiling')
     }
 
     // --- 1b) message_parent injection follows the communications flag ---

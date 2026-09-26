@@ -235,6 +235,8 @@ const api = {
    * list/dirs (live sessions reload so the agent tool roster updates). */
   setSubagentProfileTools: (filePath: string, tools: 'all' | string[]): Promise<SubagentProfilesDTO> =>
     ipcRenderer.invoke('subagents:setProfileTools', filePath, tools),
+  setSubagentProfileDebug: (filePath: string, enabled: boolean): Promise<SubagentProfilesDTO> =>
+    ipcRenderer.invoke('subagents:setProfileDebug', filePath, enabled),
   appInfo: (): Promise<AppInfoDTO> => ipcRenderer.invoke('app:info'),
   setContextFiles: (enabled: boolean): Promise<boolean> =>
     ipcRenderer.invoke('app:setContextFiles', enabled),

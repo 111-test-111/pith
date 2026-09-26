@@ -97,34 +97,58 @@ export function registerIpc(pi: PiManager): () => boolean {
   // debuggee. Terminals are renderer-owned, so main relays the request to a
   // window and waits for its answer; the bridge is what makes the debug tool
   // advertise supportsRunInTerminalRequest at all.
+  const cancelledDebugTerminals = new Map<string, number>()
   const pendingDebugTerminal = new Map<string, {
-    resolve: (value: { shellProcessId: number; terminalId: string }) => void
+    owner: number
+    command: string
+    resolve: (value: { shellProcessId: number; terminalId: string; dispose: () => Promise<void> }) => void
     reject: (error: Error) => void
-    timer: ReturnType<typeof setTimeout>
+    cleanup: () => void
   }>()
-  ipcMain.on('debug:terminal-response', (_event, result: DebugTerminalResult) => {
+  ipcMain.on('debug:terminal-response', (event, result: DebugTerminalResult) => {
     const pending = pendingDebugTerminal.get(result.requestId)
-    if (!pending) return
-    pendingDebugTerminal.delete(result.requestId)
-    clearTimeout(pending.timer)
+    if (!pending) {
+      if (cancelledDebugTerminals.get(result.requestId) === event.sender.id) {
+        cancelledDebugTerminals.delete(result.requestId)
+        if ('terminalId' in result) terminals.command(event.sender, { type: 'close', id: result.terminalId })
+      }
+      return
+    }
+    if (pending.owner !== event.sender.id) return
+    pending.cleanup()
     if ('error' in result) pending.reject(new Error(result.error))
-    else pending.resolve({ shellProcessId: result.shellProcessId, terminalId: result.terminalId })
+    else {
+      // Main rechecks admission before any executable text reaches the shell.
+      terminals.command(event.sender, { type: 'input', id: result.terminalId, data: `${pending.command}\r` })
+      pending.resolve({ shellProcessId: result.shellProcessId, terminalId: result.terminalId, dispose: () => terminals.closeAndWait(event.sender, result.terminalId) })
+    }
   })
   pi.debugTerminalBridge = (input) => new Promise((resolve, reject) => {
+    if (input.signal?.aborted) { reject(new Error('Debug terminal cancelled')); return }
     const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
     if (!win || win.isDestroyed()) { reject(new Error('No window can host the debug terminal')); return }
+    const command = buildDebugCommandLine(input.args, input.env)
+    if (command.length > 65_535) { reject(new Error('Debug terminal command is too large')); return }
     const requestId = randomUUID()
-    const timer = setTimeout(() => {
+    const owner = win.webContents
+    const ownerId = owner.id
+    const cleanup = () => {
       pendingDebugTerminal.delete(requestId)
-      reject(new Error('Timed out waiting for the debug terminal'))
-    }, 15_000)
-    pendingDebugTerminal.set(requestId, { resolve, reject, timer })
-    win.webContents.send('debug:terminal-request', {
-      requestId,
-      title: input.title,
-      cwd: input.cwd,
-      command: buildDebugCommandLine(input.args, input.env)
-    } satisfies DebugTerminalRequest)
+      clearTimeout(timer)
+      input.signal?.removeEventListener('abort', cancel)
+      owner.removeListener('destroyed', cancel)
+    }
+    const cancel = () => {
+      cleanup()
+      cancelledDebugTerminals.set(requestId, ownerId)
+      if (cancelledDebugTerminals.size > 256) cancelledDebugTerminals.delete(cancelledDebugTerminals.keys().next().value!)
+      reject(new Error('Debug terminal cancelled or timed out'))
+    }
+    const timer = setTimeout(cancel, 15_000)
+    pendingDebugTerminal.set(requestId, { owner: ownerId, command, resolve, reject, cleanup })
+    input.signal?.addEventListener('abort', cancel, { once: true })
+    owner.once('destroyed', cancel)
+    owner.send('debug:terminal-request', { requestId, title: input.title, cwd: input.cwd } satisfies DebugTerminalRequest)
   })
   const isQuitting = registerQuitHandler(app, [async () => { pi.stopScheduledTasks() }, () => terminals.dispose(), () => pi.dispose(), async () => getBrowserService()?.dispose(), () => htmlPreviews.dispose()])
 
@@ -413,6 +437,7 @@ export function registerIpc(pi: PiManager): () => boolean {
   ipcMain.handle('subagents:setMaxConcurrent', (_event, value: number) => pi.setSubagentMaxConcurrent(value))
   ipcMain.handle('subagents:setReuseEnabled', (_event, enabled: boolean) => pi.setSubagentReuseEnabled(enabled))
   ipcMain.handle('subagents:setCommsEnabled', (_event, enabled: boolean) => pi.setSubagentCommsEnabled(enabled))
+  ipcMain.handle('subagents:setProfileDebug', (_event, filePath: string, enabled: boolean) => pi.setSubagentProfileDebug(filePath, enabled))
   ipcMain.handle('subagents:profiles', () => pi.subagentProfiles())
   ipcMain.handle(
     'subagents:createProfile',
