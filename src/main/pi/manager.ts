@@ -28,6 +28,8 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'no
 import { dirname, join } from 'node:path'
 import { BashTaskManager } from '../bash/manager'
 import { createManagedBashTools, APP_BASH_TOOL_NAMES } from './bash-tools'
+import { createDebugTools, APP_DEBUG_TOOL_NAMES, type DebugRunInTerminal } from '../debug/tools'
+import { DebugManager } from '../debug/manager'
 import { APP_BROWSER_TOOL_NAMES, createBrowserTools } from '../browser/tools'
 import { getBrowserService } from '../browser/service'
 import { agentOwner } from '../../shared/browser'
@@ -148,6 +150,8 @@ import type {
   ChatMessage,
   ContextDetailDTO,
   ContextUsageDTO,
+  DebugPanelRequest,
+  DebugSessionDTO,
   CustomModelDTO,
   DefaultModelDTO,
   DiscoveredModelDTO,
@@ -436,6 +440,8 @@ export class PiManager {
   /** Whether the 14 browser_* agent tools are in the ACTIVE set (the switch lives
    *  in Settings → Browser; registration itself is service-gated at build). */
   private browserToolsFlag = loadSettings().browserAgentToolsEnabled === true
+  /** Settings → General: the DAP `debug` tool is in the active set. */
+  private debugEnabledFlag = loadSettings().debugEnabled === true
   private jevPreferences = loadSettings().jev
   private jevUpdating = false
   private jevCredentials = new JevCredentials(join(getAgentDir(), 'jev-auth.json'))
@@ -519,7 +525,39 @@ export class PiManager {
       }, this.checkoutCoordinator)
   }
 
+  private debugManagerInstance?: DebugManager
+  /** DAP sessions are in-memory only: debuggees die with the app, so there is
+   * nothing durable to restore — unlike bash task records. */
+  private get debugManager(): DebugManager {
+    return this.debugManagerInstance ??= new DebugManager((dto) => this.emit('debug:event', dto))
+  }
+
+  /** Set by ipc.ts once the renderer terminal bridge exists; read live at
+   * debug start so sessions built earlier pick it up too. */
+  debugTerminalBridge?: DebugRunInTerminal
+
   listBashTasks(sessionPath: string): BashTaskDTO[] { return this.commandTasks.list(sessionPath) }
+
+  listDebugSessions(sessionPath: string): DebugSessionDTO[] {
+    return this.debugManagerInstance?.list(sessionPath) ?? []
+  }
+
+  /** Panel-driven debug actions against the same DebugManager the model's
+   * `debug` tool drives — the user and the agent share one live session. */
+  async debugPanelAction(request: DebugPanelRequest): Promise<unknown> {
+    const manager = this.debugManager
+    switch (request.action) {
+      case 'stop': return manager.stop(request.sessionPath)
+      case 'control': return manager.control(request.sessionPath, request.control, request.threadId)
+      case 'threads': return manager.threads(request.sessionPath)
+      case 'stack': return manager.stack(request.sessionPath, request.threadId, request.levels)
+      case 'scopes': return manager.scopes(request.sessionPath, request.frameId)
+      case 'variables': return manager.variables(request.sessionPath, request.variablesReference)
+      case 'evaluate': return manager.evaluate(request.sessionPath, request.expression, request.frameId)
+      case 'output': return manager.output(request.sessionPath, request.cursor, request.maxChars)
+      case 'breakpoints': return manager.breakpoints(request.sessionPath)
+    }
+  }
   bashTaskOutput(request: BashTaskRequest): BashTaskOutputDTO {
     return this.commandTasks.output(request.sessionPath, request.taskId, request.cursor)
   }
@@ -624,7 +662,7 @@ export class PiManager {
     managed: ManagedSession,
     input: {
       toolCallId: string
-      toolName: 'bash' | 'edit' | 'write'
+      toolName: 'bash' | 'edit' | 'write' | 'debug'
       sandboxPermissions: unknown
       justification: unknown
       signal?: AbortSignal
@@ -1364,6 +1402,7 @@ export class PiManager {
       const settled = await settleWithin([
         abort,
         Promise.resolve().then(() => this.commandTasksInstance?.stopSession(managed.path)),
+        Promise.resolve().then(() => this.debugManagerInstance?.stopSession(managed.path)),
         shutdown()
       ], SESSION_DISPOSE_TIMEOUT_MS)
       if (!settled) managed.session.dispose()
@@ -1803,7 +1842,7 @@ export class PiManager {
     const liveSandboxMode = (): SandboxMode => this.effectiveSandboxMode(managed)
     const escalateForTools = (input: {
       toolCallId: string
-      toolName: 'bash' | 'edit' | 'write'
+      toolName: 'bash' | 'edit' | 'write' | 'debug'
       sandboxPermissions: unknown
       justification: unknown
       signal?: AbortSignal
@@ -1921,7 +1960,23 @@ export class PiManager {
           // Relative upload paths resolve here (the model usually holds workspace-relative paths).
           cwd: sessionManager.getCwd()
         })
-        : [])
+        : []),
+      // The DAP debugger's agent tool. Same registration philosophy as the
+      // browser tools: always registered, never flag-gated here — exposure is
+      // the active set's job (applyActiveTools), so a live toggle works for
+      // sessions that already exist.
+      ...createDebugTools({
+        manager: this.debugManager,
+        services,
+        sessionId: sessionManager.getSessionId(),
+        sessionPath: sessionManager.getSessionFile()!,
+        enabled: () => this.debugEnabledFlag && !this.closing,
+        sandboxMode: liveSandboxMode,
+        isPlanRestricted: () => managed.plan.restricted,
+        ...(isChild || isScheduled ? {} : { escalate: escalateForTools }),
+        canStart: () => (notifications?.canStart ?? false) && this.planToolAdmitted(managed),
+        runInTerminal: () => this.debugTerminalBridge
+      })
     ]
     // Resolve the task's frozen model against the live registry; a model that
     // is no longer configured fails the run with a precise error.
@@ -2243,6 +2298,7 @@ export class PiManager {
         managed.notifications?.pause()
         managed.session.clearQueue()
         await this.commandTasksInstance?.stopSession(managed.path).catch(() => {})
+        await this.debugManagerInstance?.stopSession(managed.path).catch(() => {})
         await managed.session.abort().catch(() => {})
       },
       release: async () => {
@@ -2355,6 +2411,7 @@ export class PiManager {
       ...(managed.scheduledTask ? [] : [ASK_USER_TOOL_NAME]), 'submit_plan', SCHEDULED_TASK_TOOL_NAME,
       ...(managed.subagents ? [SUBAGENT_TOOL_NAME, ...(this.subagentCommsFlag ? [AGENT_STEER_TOOL_NAME] : [])] : []),
       ...(this.browserToolsFlag ? APP_BROWSER_TOOL_NAMES : []),
+      ...(this.debugEnabledFlag ? APP_DEBUG_TOOL_NAMES : []),
       ...(this.jevActive() ? [JEV_TOOL_NAME] : []),
       ...loader.getExtensions().extensions.flatMap((extension) => [...extension.tools.keys()])
     ])])
@@ -3521,6 +3578,7 @@ export class PiManager {
       managed.subagents?.notifications?.pause()
       if (managed.subagents) this.subagentRuntime.abortAll(managed.subagents)
       void this.commandTasksInstance?.stopSession(managed.path)
+      void this.debugManagerInstance?.stopSession(managed.path)
     }
     managed.session.clearQueue()
     managed.notifications.queuesCleared()
@@ -3696,6 +3754,7 @@ export class PiManager {
         managed.subagents?.notifications?.pause()
         await this.subagentRuntime.stopAll(managed.subagents)
         await this.commandTasksInstance?.stopSession(managed.path)
+        await this.debugManagerInstance?.stopSession(managed.path)
         session.clearQueue?.()
 
         let text = payload.text
@@ -3830,6 +3889,7 @@ export class PiManager {
     if (managed.subagents) this.subagentRuntime.abortAll(managed.subagents)
     managed.session.clearQueue()
     void this.commandTasksInstance?.stopSession(managed.path)
+    void this.debugManagerInstance?.stopSession(managed.path)
     void managed.session.abort().catch(() => {})
   }
 
@@ -3997,6 +4057,14 @@ export class PiManager {
    */
   async setBrowserAgentTools(enabled: boolean): Promise<void> {
     this.browserToolsFlag = enabled === true
+    await this.reloadLiveSessions()
+  }
+
+  /** Toggle the DAP debugger. Same shape as the browser-tools toggle: ipc.ts
+   * persists the preference, the flag is read when the active set is applied,
+   * and reloading live sessions is what exposes or hides the tool. */
+  async setDebugEnabled(enabled: boolean): Promise<void> {
+    this.debugEnabledFlag = enabled === true
     await this.reloadLiveSessions()
   }
 
@@ -4820,7 +4888,7 @@ export class PiManager {
     this.contextUsageTimer = null
     for (const controller of this.sideChats.values()) controller.abort()
     for (const controller of this.loginAborts.values()) controller.abort()
-    this.disposePromise = Promise.allSettled([this.disposeAllSessions(), this.commandTasksInstance?.dispose()]).then(async () => { await this.rewindClient.dispose() })
+    this.disposePromise = Promise.allSettled([this.disposeAllSessions(), this.commandTasksInstance?.dispose(), this.debugManagerInstance?.dispose()]).then(async () => { await this.rewindClient.dispose() })
     return this.disposePromise
   }
 }

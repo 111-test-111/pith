@@ -28,6 +28,10 @@ import type {
   RewindRequest,
   BashTaskDTO,
   BashTaskOutputDTO,
+  DebugPanelRequest,
+  DebugSessionDTO,
+  DebugTerminalRequest,
+  DebugTerminalResult,
   BashTaskRequest,
   AppendPromptDTO,
   AuthPromptDTO,
@@ -157,6 +161,21 @@ const api = {
   bashTaskOutput: (request: BashTaskRequest): Promise<BashTaskOutputDTO> => ipcRenderer.invoke('bash:output', request),
   stopBashTask: (request: BashTaskRequest): Promise<BashTaskDTO> => ipcRenderer.invoke('bash:stop', request),
   onBashTask: (listener: (task: BashTaskDTO) => void) => subscribe('pi:bash-task', listener),
+  /** Settings → General: enable/disable the DAP debugger tool. */
+  setDebugEnabled: (enabled: boolean): Promise<void> =>
+    ipcRenderer.invoke('app:setDebugEnabled', enabled),
+  debugList: (sessionPath: string): Promise<DebugSessionDTO[]> =>
+    ipcRenderer.invoke('debug:list', sessionPath),
+  /** Panel-driven debug actions (step buttons, variable expansion, console
+   * paging); shares the live session with the model's debug tool. */
+  debugAction: (request: DebugPanelRequest): Promise<unknown> =>
+    ipcRenderer.invoke('debug:action', request),
+  onDebugEvent: (listener: (session: DebugSessionDTO) => void) => subscribe('debug:event', listener),
+  /** DAP runInTerminal relay: main asks the renderer to host the debuggee in a
+   * sidebar terminal tab; answer with debugTerminalResponse. */
+  onDebugTerminalRequest: (listener: (request: DebugTerminalRequest) => void) => subscribe('debug:terminal-request', listener),
+  debugTerminalResponse: (result: DebugTerminalResult): void =>
+    ipcRenderer.send('debug:terminal-response', result),
   setBashMaxWaitMs: (value: number): Promise<number> => ipcRenderer.invoke('app:setBashMaxWaitMs', value),
   /** Auto-settle deadline for an unanswered ask_user_question panel, in seconds. */
   setAskUserTimeoutSeconds: (value: number): Promise<number> =>

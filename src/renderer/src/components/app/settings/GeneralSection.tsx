@@ -111,6 +111,10 @@ export function GeneralSection() {
   const [checkpoints, setCheckpoints] = useState(true)
   const [checkpointError, setCheckpointError] = useState(false)
   const [savingCheckpoints, setSavingCheckpoints] = useState(false)
+  // DAP debugger: one switch joins/leaves the active tool set in every session.
+  const [debugEnabled, setDebugEnabled] = useState(false)
+  const [savingDebug, setSavingDebug] = useState(false)
+  const [debugError, setDebugError] = useState(false)
   /** What the next launch opens (Settings → General → Startup). */
   const [startup, setStartup] = useState<StartupSessionMode>('resume')
   const [savingStartup, setSavingStartup] = useState(false)
@@ -148,7 +152,7 @@ export function GeneralSection() {
   useEffect(() => {
     void window.pi
       .appInfo()
-      .then((info) => { setVersion(info.version); setCheckpoints(info.checkpointsEnabled); setStartup(info.startup); setWaitSeconds(formatSeconds(info.bashMaxWaitMs)); setSavedWait(info.bashMaxWaitMs); setSandboxMode(info.sandboxMode); setSandbox(info.sandbox); setAskTimeout(String(info.askUserTimeoutSeconds ?? ASK_USER_DEFAULT_TIMEOUT_S)); setSavedAskTimeout(info.askUserTimeoutSeconds ?? ASK_USER_DEFAULT_TIMEOUT_S); setResponseTimeout(String(info.responseTimeoutSeconds ?? RESPONSE_TIMEOUT_DEFAULT_S)); setSavedResponseTimeout(info.responseTimeoutSeconds ?? RESPONSE_TIMEOUT_DEFAULT_S) })
+      .then((info) => { setVersion(info.version); setCheckpoints(info.checkpointsEnabled); setDebugEnabled(info.debugEnabled); setStartup(info.startup); setWaitSeconds(formatSeconds(info.bashMaxWaitMs)); setSavedWait(info.bashMaxWaitMs); setSandboxMode(info.sandboxMode); setSandbox(info.sandbox); setAskTimeout(String(info.askUserTimeoutSeconds ?? ASK_USER_DEFAULT_TIMEOUT_S)); setSavedAskTimeout(info.askUserTimeoutSeconds ?? ASK_USER_DEFAULT_TIMEOUT_S); setResponseTimeout(String(info.responseTimeoutSeconds ?? RESPONSE_TIMEOUT_DEFAULT_S)); setSavedResponseTimeout(info.responseTimeoutSeconds ?? RESPONSE_TIMEOUT_DEFAULT_S) })
       .catch(() => {})
   }, [])
 
@@ -313,6 +317,26 @@ export function GeneralSection() {
           </div>
         ) : null}
         {sandboxError ? <p className="px-4 text-xs text-destructive" role="alert">{t('sandbox.saveFailed')}</p> : null}
+      </SettingsGroup>
+
+      <SettingsGroup title={t('debug.settingsGroup')}>
+        <SettingsRow label={t('debug.settingsEnable')} description={t('debug.settingsEnableDesc')}>
+          <Checkbox
+            mark="square"
+            checked={debugEnabled}
+            disabled={savingDebug}
+            aria-label={t('debug.settingsEnable')}
+            onCheckedChange={(value) => {
+              setSavingDebug(true)
+              setDebugError(false)
+              void window.pi.setDebugEnabled(value === true)
+                .then(() => setDebugEnabled(value === true))
+                .catch(() => setDebugError(true))
+                .finally(() => setSavingDebug(false))
+            }}
+          />
+        </SettingsRow>
+        {debugError ? <p role="alert" className="px-4 text-xs text-destructive">{t('debug.settingsSaveFailed')}</p> : null}
       </SettingsGroup>
 
       <SettingsGroup title={t('settings.storage')}>

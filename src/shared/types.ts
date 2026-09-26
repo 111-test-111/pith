@@ -1084,6 +1084,8 @@ export interface AppInfoDTO {
   browserConsent: boolean
   /** Whether the model's browser_* tools are enabled for sessions. */
   browserAgentToolsEnabled: boolean
+  /** Whether the DAP debugger tool is enabled (Settings → General). */
+  debugEnabled: boolean
   version: string
 }
 
@@ -1671,3 +1673,130 @@ export interface McpUpsertServerPayload {
   name: string
   entry: Record<string, unknown>
 }
+
+/* ------------------------------------------------------------------ */
+/* Debug (DAP)                                                         */
+/* ------------------------------------------------------------------ */
+
+/** Debug traffic is independent of Pi events and never enters the chat store,
+ * mirroring the terminal's separation. The renderer learns state changes over
+ * the `debug:event` broadcast and pulls detail pages over `debug:*` IPC. */
+export type DebugSessionStatus = 'starting' | 'running' | 'stopped' | 'terminated' | 'failed'
+
+export interface DebugLocationDTO {
+  file: string
+  line: number
+  column?: number
+  name?: string
+}
+
+export interface DebugSessionDTO {
+  id: string
+  /** Owning chat session (tool sessions are per-chat, like bash tasks). */
+  sessionId: string
+  sessionPath: string
+  adapterId: string
+  adapterLabel: string
+  kind: 'launch' | 'attach'
+  /** Human-readable target summary (program path or attached pid). */
+  target: string
+  status: DebugSessionStatus
+  /** DAP stop reason while status is 'stopped' (breakpoint, step, pause, …). */
+  stopReason?: string
+  activeThreadId?: number
+  /** Top frame at the last stop; cleared when running resumes. */
+  location?: DebugLocationDTO
+  /** Sidebar terminal tab hosting the debuggee, when runInTerminal was used. */
+  terminalId?: string
+  startedAt: number
+  endedAt?: number
+  outputChars: number
+  lastOutputAt?: number
+  revision: number
+  error?: string
+}
+
+export interface DebugAdapterDTO {
+  id: string
+  label: string
+  languages: string[]
+  available: boolean
+  /** Why unavailable, as a machine code ('missing-binary', 'missing-module', …). */
+  detail?: string
+}
+
+export interface DebugThreadDTO { id: number; name: string }
+
+export interface DebugStackFrameDTO {
+  id: number
+  name: string
+  file?: string
+  line?: number
+  column?: number
+}
+
+export interface DebugScopeDTO {
+  name: string
+  variablesReference: number
+  expensive?: boolean
+}
+
+export interface DebugVariableDTO {
+  name: string
+  value: string
+  type?: string
+  variablesReference: number
+  namedVariables?: number
+  indexedVariables?: number
+}
+
+export interface DebugBreakpointDTO {
+  id?: number
+  file: string
+  line: number
+  verified: boolean
+  message?: string
+}
+
+/** Paged debug console output; mirrors BashTaskOutputDTO's cursor contract. */
+export interface DebugOutputPageDTO {
+  session: DebugSessionDTO
+  output: string
+  cursor: number
+  truncated: boolean
+}
+
+/** Stopped-state snapshot returned by blocking control actions. */
+export interface DebugControlResultDTO {
+  session: DebugSessionDTO
+  /** Waited for a stop within the budget: false means still running. */
+  settled: boolean
+}
+
+/** Main → renderer: a DAP runInTerminal reverse request needs a sidebar
+ * terminal tab. The command line arrives pre-quoted and ready to type. */
+export interface DebugTerminalRequest {
+  requestId: string
+  title: string
+  cwd: string
+  command: string
+}
+
+/** Renderer → main answer for a DebugTerminalRequest. */
+export type DebugTerminalResult =
+  | { requestId: string; shellProcessId: number; terminalId: string }
+  | { requestId: string; error: string }
+
+/** Renderer panel → main: user-driven debug actions (step buttons, variable
+ * expansion, console paging). Shares the DebugManager with the model's tool,
+ * so the user and the agent drive one and the same live session. */
+export type DebugPanelRequest =
+  | { sessionPath: string; action: 'stop' }
+  | { sessionPath: string; action: 'control'; control: 'continue' | 'pause' | 'next' | 'stepIn' | 'stepOut'; threadId?: number }
+  | { sessionPath: string; action: 'threads' }
+  | { sessionPath: string; action: 'stack'; threadId: number; levels?: number }
+  | { sessionPath: string; action: 'scopes'; frameId: number }
+  | { sessionPath: string; action: 'variables'; variablesReference: number }
+  | { sessionPath: string; action: 'evaluate'; expression: string; frameId?: number }
+  | { sessionPath: string; action: 'output'; cursor?: number; maxChars?: number }
+  | { sessionPath: string; action: 'breakpoints' }

@@ -16,6 +16,7 @@ import { firstAskUserQuestionText, isAskUserToolDetails, askUserRecordKind } fro
 import { AskUserKindChip } from './AskUserRecordList'
 import { PreviewThumb } from './ImagePreview'
 import type { ImageContent, ToolCallContent, ToolResultMsg } from '../../../../shared/types'
+import type { DebugSessionDTO } from '../../../../shared/types'
 import type { ToolRun } from '@/state/pi-store'
 import { useI18n } from '@/i18n'
 
@@ -210,12 +211,12 @@ function FileToolLabel({ tool, path, cwd }: { tool: string; path: string; cwd: s
  * questions still read `Jev noul`. The tool's schema constrains every type to
  * the three literals, so this label is bounded.
  */
-function jevToolLabel(args: Record<string, any>): string {
+function jevToolLabel(args: Record<string, unknown>): string {
   const questions = args.questions
   if (!questions || typeof questions !== 'object' || Array.isArray(questions)) return 'Jev'
   const types = new Set<string>()
-  for (const question of Object.values(questions as Record<string, any>)) {
-    const type = question?.type
+  for (const question of Object.values(questions as Record<string, unknown>)) {
+    const type = (question as { type?: unknown } | null)?.type
     if (typeof type === 'string' && type) types.add(type)
   }
   return types.size ? `Jev ${[...types].join(' · ')}` : 'Jev'
@@ -390,6 +391,24 @@ export const ToolCallView = memo(function ToolCallView({ call, result, run, cwd 
           {renderOutput(output || placeholder(t('tool.noOutput')))}
         </ToolResult>
       )
+    case 'debug': {
+      // The row tells the debugging loop's story: `debug · continue · LLDB ·
+      // stopped · demo.c:6`. The full session surface lives in the Debug pane.
+      const details = (result?.details ?? (run?.partial as { details?: unknown } | undefined)?.details) as
+        { debugSession?: DebugSessionDTO } | undefined
+      const session = details?.debugSession
+      const action = typeof args.action === 'string' ? args.action : ''
+      const location = session?.location ? `${session.location.file}:${session.location.line}` : undefined
+      const title = ['debug', action, session?.adapterLabel,
+        session ? t(`debug.status.${session.status}`) : undefined, location].filter(Boolean).join(' · ')
+      return (
+        <ToolResult animateChanges={false} lazyContent open={open} onOpenChange={setOpen}
+          title={title} status={status} icon={<ToolIcon name="debug" />} meta={meta}
+          collapseOnComplete={false} bare={imageOnly} contentClassName={WRAP_OUTPUT}>
+          {renderOutput(output || placeholder(t('tool.noOutput')))}
+        </ToolResult>
+      )
+    }
     case 'agent': {
       // A delegation row names the profile and the task instead of the bare
       // tool name: `agent · explore · summarize two modules` is what the user

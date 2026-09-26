@@ -10,6 +10,7 @@ import {
   Globe,
   Plus,
   SquareTerminal,
+  Bug,
   X,
   type IconComponent
 } from '@/lib/icons'
@@ -38,12 +39,14 @@ import { SideChatPane } from './SideChatPane'
 import { ReviewPane } from './ReviewPane'
 import { ContextDetailPane } from './ContextDetailPane'
 import { TerminalPane } from './TerminalPane'
+import { DebugPane } from './DebugPane'
 import { FilesPane } from './FilesPane'
 import { BrowserPane } from './BrowserPane'
 import { SubagentSessionPane } from './SubagentSessionPane'
 import { ScheduledSessionPane } from './ScheduledSessionPane'
 import type { FileBrowserStore } from '@/state/file-browser-store'
 import type { TerminalStore } from '@/state/terminal-store'
+import type { DebugStore } from '@/state/debug-store'
 import type { SideChatStore } from '@/state/side-chat-store'
 import type { PiStore } from '@/state/pi-store'
 import type { BrowserStore } from '@/lib/browser/store'
@@ -55,7 +58,7 @@ export const SIDEBAR_PANEL_WIDTH = 400
 
 /** The panes the right rail can host. Besides the fixed kinds, the rail hosts
  * one tab per open FILE and per open SUBAGENT SESSION (both keyed by path). */
-export type SidebarTabKind = 'review' | 'context' | 'terminal' | 'browser' | 'files' | 'chat'
+export type SidebarTabKind = 'review' | 'context' | 'terminal' | 'browser' | 'files' | 'chat' | 'debug'
 export type SidebarTabId = SidebarTabKind | `file:${string}` | `agent:${string}` | `scheduled:${string}`
 export const fileTabId = (path: string): SidebarTabId => `file:${path}`
 export const filePathForTab = (id: SidebarTabId | null): string | null => id?.startsWith('file:') ? id.slice(5) : null
@@ -95,6 +98,8 @@ export interface SidebarPaneProps {
   onBrowserEmpty: () => void
   /** The workspace store, for panes that read the session's transcript. */
   store: PiStore
+  /** The debug session mirror, owned by the workspace. */
+  debug: DebugStore
   /** Turn the review pane should open on (from the transcript's Review action). */
   reviewTurnId: number | null
   /** The side chat's store, or null while its pane is not open. */
@@ -137,6 +142,13 @@ export const SIDEBAR_TABS: SidebarTabSpec[] = [
     shortcutId: 'openTerminal',
     icon: SquareTerminal,
     render: (props) => <TerminalPane terminals={props.terminals} onNew={props.onNewTerminal} onEmpty={props.onTerminalsEmpty} />
+  },
+  {
+    id: 'debug',
+    labelKey: 'sidebar.debug',
+    shortcutId: 'openDebug',
+    icon: Bug,
+    render: (props) => <DebugPane store={props.store} debug={props.debug} />
   },
   {
     id: 'browser',

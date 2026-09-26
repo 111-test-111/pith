@@ -5,12 +5,14 @@ import {
   AlertTriangle as AlertTriangleGlyph,
   ArrowBigRightDash as ArrowBigRightDashGlyph,
   ArrowDown as ArrowDownGlyph,
+  ArrowDownToLine as ArrowDownToLineGlyph,
   ArrowDownUp as ArrowDownUpGlyph,
   ArrowDownWideNarrow as ArrowDownWideNarrowGlyph,
   ArrowLeft as ArrowLeftGlyph,
   ArrowLeftFromLine as ArrowLeftFromLineGlyph,
   ArrowRight as ArrowRightGlyph,
   ArrowUp as ArrowUpGlyph,
+  ArrowUpFromLine as ArrowUpFromLineGlyph,
   ArrowUpNarrowWide as ArrowUpNarrowWideGlyph,
   ArrowUpRight as ArrowUpRightGlyph,
   Ban as BanGlyph,
@@ -26,6 +28,7 @@ import {
   Braces as BracesGlyph,
   Brain as BrainGlyph,
   BriefcaseMedical as BriefcaseMedicalGlyph,
+  Bug as BugGlyph,
   CalendarCheck as CalendarCheckGlyph,
   Camera as CameraGlyph,
   Captions as CaptionsGlyph,
@@ -122,6 +125,8 @@ import {
   PanelLeft as PanelLeftGlyph,
   PanelRight as PanelRightGlyph,
   Paperclip as PaperclipGlyph,
+  Pause as PauseGlyph,
+  Play as PlayGlyph,
   Pen as PenGlyph,
   Pencil as PencilGlyph,
   PencilLine as PencilLineGlyph,
@@ -158,6 +163,7 @@ import {
   SquareTerminal as SquareTerminalGlyph,
   Stamp as StampGlyph,
   Stethoscope as StethoscopeGlyph,
+  StepForward as StepForwardGlyph,
   Sun as SunGlyph,
   Terminal as TerminalGlyph,
   TerminalSquare as TerminalSquareGlyph,
@@ -232,12 +238,14 @@ const GLYPHS = {
   AlertTriangle: AlertTriangleGlyph,
   ArrowBigRightDash: ArrowBigRightDashGlyph,
   ArrowDown: ArrowDownGlyph,
+  ArrowDownToLine: ArrowDownToLineGlyph,
   ArrowDownUp: ArrowDownUpGlyph,
   ArrowDownWideNarrow: ArrowDownWideNarrowGlyph,
   ArrowLeft: ArrowLeftGlyph,
   ArrowLeftFromLine: ArrowLeftFromLineGlyph,
   ArrowRight: ArrowRightGlyph,
   ArrowUp: ArrowUpGlyph,
+  ArrowUpFromLine: ArrowUpFromLineGlyph,
   ArrowUpNarrowWide: ArrowUpNarrowWideGlyph,
   ArrowUpRight: ArrowUpRightGlyph,
   ArrowsInLineHorizontal: FoldHorizontalGlyph,
@@ -249,6 +257,7 @@ const GLYPHS = {
   BookDownload: BookDownGlyph,
   BookOpen: BookOpenGlyph,
   BookOpenText: BookOpenTextGlyph,
+  Bug: BugGlyph,
   Bookmark: BookmarkGlyph,
   BookSearch: BookSearchGlyph,
   Bot: BotGlyph,
@@ -356,6 +365,8 @@ const GLYPHS = {
   PenNib: PenGlyph,
   Pencil: PencilGlyph,
   PencilLine: PencilLineGlyph,
+  Pause: PauseGlyph,
+  Play: PlayGlyph,
   Pin: PinGlyph,
   PinOff: PinOffGlyph,
   Plug: PlugGlyph,
@@ -387,6 +398,7 @@ const GLYPHS = {
   SquareFunction: SquareFunctionGlyph,
   SquareTerminal: SquareTerminalGlyph,
   Stamp: StampGlyph,
+  StepForward: StepForwardGlyph,
   Stethoscope: StethoscopeGlyph,
   Subtitle: CaptionsGlyph,
   Sun: SunGlyph,
@@ -437,12 +449,14 @@ export const AlertCircle = /* @__PURE__ */ createIcon('AlertCircle', GLYPHS.Aler
 export const AlertTriangle = /* @__PURE__ */ createIcon('AlertTriangle', GLYPHS.AlertTriangle)
 export const ArrowBigRightDash = /* @__PURE__ */ createIcon('ArrowBigRightDash', GLYPHS.ArrowBigRightDash)
 export const ArrowDown = /* @__PURE__ */ createIcon('ArrowDown', GLYPHS.ArrowDown)
+export const ArrowDownToLine = /* @__PURE__ */ createIcon('ArrowDownToLine', GLYPHS.ArrowDownToLine)
 export const ArrowDownUp = /* @__PURE__ */ createIcon('ArrowDownUp', GLYPHS.ArrowDownUp)
 export const ArrowDownWideNarrow = /* @__PURE__ */ createIcon('ArrowDownWideNarrow', GLYPHS.ArrowDownWideNarrow)
 export const ArrowLeft = /* @__PURE__ */ createIcon('ArrowLeft', GLYPHS.ArrowLeft)
 export const ArrowLeftFromLine = /* @__PURE__ */ createIcon('ArrowLeftFromLine', GLYPHS.ArrowLeftFromLine)
 export const ArrowRight = /* @__PURE__ */ createIcon('ArrowRight', GLYPHS.ArrowRight)
 export const ArrowUp = /* @__PURE__ */ createIcon('ArrowUp', GLYPHS.ArrowUp)
+export const ArrowUpFromLine = /* @__PURE__ */ createIcon('ArrowUpFromLine', GLYPHS.ArrowUpFromLine)
 export const ArrowUpNarrowWide = /* @__PURE__ */ createIcon('ArrowUpNarrowWide', GLYPHS.ArrowUpNarrowWide)
 export const ArrowUpRight = /* @__PURE__ */ createIcon('ArrowUpRight', GLYPHS.ArrowUpRight)
 export const ArrowsInLineHorizontal = /* @__PURE__ */ createIcon('ArrowsInLineHorizontal', GLYPHS.ArrowsInLineHorizontal)
@@ -459,6 +473,7 @@ export const BookSearch = /* @__PURE__ */ createIcon('BookSearch', GLYPHS.BookSe
 export const Bot = /* @__PURE__ */ createIcon('Bot', GLYPHS.Bot)
 export const Braces = /* @__PURE__ */ createIcon('Braces', GLYPHS.Braces)
 export const Brain = /* @__PURE__ */ createIcon('Brain', GLYPHS.Brain)
+export const Bug = /* @__PURE__ */ createIcon('Bug', GLYPHS.Bug)
 export const CalendarCheck = /* @__PURE__ */ createIcon('CalendarCheck', GLYPHS.CalendarCheck)
 export const Camera = /* @__PURE__ */ createIcon('Camera', GLYPHS.Camera)
 export const Chart = /* @__PURE__ */ createIcon('Chart', GLYPHS.Chart)
@@ -561,6 +576,8 @@ export const Paperclip = /* @__PURE__ */ createIcon('Paperclip', GLYPHS.Papercli
 export const PenNib = /* @__PURE__ */ createIcon('PenNib', GLYPHS.PenNib)
 export const Pencil = /* @__PURE__ */ createIcon('Pencil', GLYPHS.Pencil)
 export const PencilLine = /* @__PURE__ */ createIcon('PencilLine', GLYPHS.PencilLine)
+export const Pause = /* @__PURE__ */ createIcon('Pause', GLYPHS.Pause)
+export const Play = /* @__PURE__ */ createIcon('Play', GLYPHS.Play)
 export const Pin = /* @__PURE__ */ createIcon('Pin', GLYPHS.Pin)
 export const PinOff = /* @__PURE__ */ createIcon('PinOff', GLYPHS.PinOff)
 export const Plug = /* @__PURE__ */ createIcon('Plug', GLYPHS.Plug)
@@ -591,6 +608,7 @@ export const Square = /* @__PURE__ */ createIcon('Square', GLYPHS.Square)
 export const SquareArrowOutUpRight = /* @__PURE__ */ createIcon('SquareArrowOutUpRight', GLYPHS.SquareArrowOutUpRight)
 export const SquareFunction = /* @__PURE__ */ createIcon('SquareFunction', GLYPHS.SquareFunction)
 export const SquareTerminal = /* @__PURE__ */ createIcon('SquareTerminal', GLYPHS.SquareTerminal)
+export const StepForward = /* @__PURE__ */ createIcon('StepForward', GLYPHS.StepForward)
 export const Stamp = /* @__PURE__ */ createIcon('Stamp', GLYPHS.Stamp)
 export const Stethoscope = /* @__PURE__ */ createIcon('Stethoscope', GLYPHS.Stethoscope)
 export const Subtitle = /* @__PURE__ */ createIcon('Subtitle', GLYPHS.Subtitle)

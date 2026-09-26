@@ -73,6 +73,8 @@ export interface AppSettings {
   browserConsent: boolean
   /** The model's browser_* tools are registered into sessions at build time. */
   browserAgentToolsEnabled: boolean
+  /** Settings → General: the DAP `debug` tool joins the active tool set. */
+  debugEnabled: boolean
 }
 
 const defaults: AppSettings = {
@@ -94,7 +96,8 @@ const defaults: AppSettings = {
   responseTimeoutSeconds: RESPONSE_TIMEOUT_DEFAULT_S,
   sandboxMode: DEFAULT_SANDBOX_MODE,
   browserConsent: false,
-  browserAgentToolsEnabled: false
+  browserAgentToolsEnabled: false,
+  debugEnabled: false
 }
 
 function settingsPath(): string {

@@ -4,6 +4,7 @@ import {
   BookDownload,
   BookSearch,
   Braces,
+  Bug,
   CalendarCheck,
   Camera,
   Chart,
@@ -93,6 +94,8 @@ const TOOL_ICONS: Record<string, IconComponent> = {
   // text-filled speech bubble.
   agent_steer: Send,
   message_parent: MessageSquareText,
+  // The DAP debugger's row glyph (Settings → General enables the tool).
+  debug: Bug,
   powershell: Terminal,
   read: Article,
   edit: PenNib,

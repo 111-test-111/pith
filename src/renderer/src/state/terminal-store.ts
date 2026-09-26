@@ -41,6 +41,18 @@ export class TerminalStore {
   }
 
   create(cwd: string | null): void {
+    void this.spawn(cwd)
+  }
+
+  /** DAP runInTerminal: spawn a tab for the debuggee and resolve with its PTY
+   * pid once the shell is up. The command is typed by the caller afterwards. */
+  spawnForDebug(cwd: string | null, title: string): Promise<{ id: string; pid: number } | { error: TerminalErrorCode }> {
+    return this.spawn(cwd, title)
+  }
+
+  /** The shared spawn path: `create` fires and forgets, debug awaits the pid.
+   * Never rejects — the tab's own status already carries every failure. */
+  private spawn(cwd: string | null, title = ''): Promise<{ id: string; pid: number } | { error: TerminalErrorCode }> {
     const id = crypto.randomUUID()
     const session: Session = {}
     this.sessions.set(id, session)
@@ -63,11 +75,11 @@ export class TerminalStore {
           : { status: 'error', error: event.error })
       }
     })
-    this.state = { active: id, tabs: [...this.state.tabs, { id, number: ++this.serial, title: '', status: 'starting' }] }
+    this.state = { active: id, tabs: [...this.state.tabs, { id, number: ++this.serial, title, status: 'starting' }] }
     this.emit()
     // Subscribe before spawning so the login prompt cannot race the invoke reply.
-    void import('@/lib/terminal-runtime').then(async ({ TerminalRuntime }) => {
-      if (this.sessions.get(id) !== session) return
+    return import('@/lib/terminal-runtime').then(async ({ TerminalRuntime }) => {
+      if (this.sessions.get(id) !== session) return { error: 'closed' as const }
       const runtime = new TerminalRuntime(id, (title) => {
         clearTimeout(session.titleTimer)
         session.titleTimer = setTimeout(() => this.patch(id, { title: title.replace(/[\x00-\x1f\x7f]/g, '').slice(0, 120) }), 100)
@@ -75,20 +87,22 @@ export class TerminalStore {
       session.runtime = runtime
       if (session.host) { runtime.attach(session.host); runtime.focus() }
       const result = await window.pi.terminalCreate({ id, cwd, cols: runtime.terminal.cols, rows: runtime.terminal.rows })
-      if (this.sessions.get(id) !== session) { window.pi.terminalClose(id); return }
+      if (this.sessions.get(id) !== session) { window.pi.terminalClose(id); return { error: 'closed' as const } }
       if ('error' in result) {
         session.runtime?.stop()
         if (this.state.tabs.find((tab) => tab.id === id)?.status === 'starting') this.patch(id, { status: 'error', error: result.error })
-      } else {
-        const status = this.state.tabs.find((tab) => tab.id === id)?.status
-        this.patch(id, { info: result.terminal, ...(status === 'starting' ? { status: 'running' as const } : {}) })
-        if (session.runtime === runtime) window.pi.terminalResize(id, runtime.terminal.cols, runtime.terminal.rows)
+        return { error: result.error }
       }
+      const status = this.state.tabs.find((tab) => tab.id === id)?.status
+      this.patch(id, { info: result.terminal, ...(status === 'starting' ? { status: 'running' as const } : {}) })
+      if (session.runtime === runtime) window.pi.terminalResize(id, runtime.terminal.cols, runtime.terminal.rows)
+      return { id, pid: result.terminal.pid }
     }).catch(() => {
-      if (this.sessions.get(id) !== session) return
+      if (this.sessions.get(id) !== session) return { error: 'closed' as const }
       session.runtime?.stop()
       window.pi.terminalClose(id)
       this.patch(id, { status: 'error', error: 'host' })
+      return { error: 'host' as const }
     })
   }
 

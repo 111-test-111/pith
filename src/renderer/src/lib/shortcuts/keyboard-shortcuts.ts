@@ -24,6 +24,7 @@ export const SHORTCUTS = [
   { id: 'openReview', group: 'panes', defaults: ['Control+Shift+KeyG'] },
   { id: 'openContext', group: 'panes', defaults: ['Control+Shift+KeyC'] },
   { id: 'openTerminal', group: 'panes', defaults: ['Control+Backquote'] },
+  { id: 'openDebug', group: 'panes', defaults: ['Control+Shift+KeyD'] },
   { id: 'openBrowser', group: 'panes', defaults: ['Mod+KeyT'] },
   { id: 'openFiles', group: 'panes', defaults: ['Mod+KeyP'] },
   { id: 'openSideChat', group: 'panes', defaults: ['Alt+Mod+KeyS'] },

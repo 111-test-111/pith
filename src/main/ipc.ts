@@ -1,11 +1,13 @@
 import { app, ipcMain, dialog, session, shell, webContents, BrowserWindow } from 'electron'
 import { join } from 'node:path'
+import { randomUUID } from 'node:crypto'
 import { pathToFileURL } from 'node:url'
 import { registerPlanIpc } from './pi/plan-ipc'
 import { PiManager } from './pi/manager'
 import { ScheduledTaskError } from './pi/scheduled-tasks/service'
 import type { JevSettingsUpdate, ScheduledTaskResult } from '../shared/types'
 import { TerminalManager } from './terminal/manager'
+import { buildDebugCommandLine } from './debug/terminal'
 import { registerQuitHandler } from './shutdown'
 import { isDefaultWorkspace } from './pi/default-workspace'
 import { loadSettings, saveSettings } from './settings'
@@ -45,6 +47,9 @@ import type {
   SubagentActionPayload,
   SubagentProfileCreatePayload,
   CustomModelDTO,
+  DebugPanelRequest,
+  DebugTerminalRequest,
+  DebugTerminalResult,
   ModelsConfigDTO,
   McpUpsertServerPayload,
   PromptPayload,
@@ -87,6 +92,40 @@ export function registerIpc(pi: PiManager): () => boolean {
   const terminals = new TerminalManager(pi.checkoutCoordinator)
   ipcMain.handle('terminal:create', (event, payload) => terminals.create(event.sender, payload))
   ipcMain.on('terminal:command', (event, command) => terminals.command(event.sender, command))
+
+  // DAP runInTerminal: the adapter asks for a real terminal to host the
+  // debuggee. Terminals are renderer-owned, so main relays the request to a
+  // window and waits for its answer; the bridge is what makes the debug tool
+  // advertise supportsRunInTerminalRequest at all.
+  const pendingDebugTerminal = new Map<string, {
+    resolve: (value: { shellProcessId: number; terminalId: string }) => void
+    reject: (error: Error) => void
+    timer: ReturnType<typeof setTimeout>
+  }>()
+  ipcMain.on('debug:terminal-response', (_event, result: DebugTerminalResult) => {
+    const pending = pendingDebugTerminal.get(result.requestId)
+    if (!pending) return
+    pendingDebugTerminal.delete(result.requestId)
+    clearTimeout(pending.timer)
+    if ('error' in result) pending.reject(new Error(result.error))
+    else pending.resolve({ shellProcessId: result.shellProcessId, terminalId: result.terminalId })
+  })
+  pi.debugTerminalBridge = (input) => new Promise((resolve, reject) => {
+    const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+    if (!win || win.isDestroyed()) { reject(new Error('No window can host the debug terminal')); return }
+    const requestId = randomUUID()
+    const timer = setTimeout(() => {
+      pendingDebugTerminal.delete(requestId)
+      reject(new Error('Timed out waiting for the debug terminal'))
+    }, 15_000)
+    pendingDebugTerminal.set(requestId, { resolve, reject, timer })
+    win.webContents.send('debug:terminal-request', {
+      requestId,
+      title: input.title,
+      cwd: input.cwd,
+      command: buildDebugCommandLine(input.args, input.env)
+    } satisfies DebugTerminalRequest)
+  })
   const isQuitting = registerQuitHandler(app, [async () => { pi.stopScheduledTasks() }, () => terminals.dispose(), () => pi.dispose(), async () => getBrowserService()?.dispose(), () => htmlPreviews.dispose()])
 
   // Embedded browser singleton: one per app, owned here and by the quit
@@ -265,6 +304,7 @@ export function registerIpc(pi: PiManager): () => boolean {
       responseTimeoutSeconds: settings.responseTimeoutSeconds,
       browserConsent: settings.browserConsent === true,
       browserAgentToolsEnabled: settings.browserAgentToolsEnabled === true,
+      debugEnabled: settings.debugEnabled === true,
       version: app.getVersion()
     }
   })
@@ -320,6 +360,12 @@ export function registerIpc(pi: PiManager): () => boolean {
     saveSettings({ ...loadSettings(), browserAgentToolsEnabled: enabled })
     return pi.setBrowserAgentTools(enabled)
   })
+  ipcMain.handle('app:setDebugEnabled', (_event, enabled: boolean) => {
+    saveSettings({ ...loadSettings(), debugEnabled: enabled })
+    return pi.setDebugEnabled(enabled)
+  })
+  ipcMain.handle('debug:list', (_event, sessionPath: string) => pi.listDebugSessions(sessionPath))
+  ipcMain.handle('debug:action', (_event, request: DebugPanelRequest) => pi.debugPanelAction(request))
   ipcMain.handle('jev:settings', () => pi.jevSettings())
   ipcMain.handle('jev:updateSettings', (_event, update: JevSettingsUpdate) => pi.updateJevSettings(update))
   ipcMain.handle('jev:test', () => pi.testJev())
