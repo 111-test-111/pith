@@ -989,7 +989,7 @@ const zhCN: Messages = {
   'mcp.status.cached': '未连接——可使用缓存的工具',
   'mcp.status.failed': '连接失败',
   'mcp.status.needsAuth': '需要身份验证',
-  'mcp.status.notConnected': '未连接',
+  'mcp.status.notConnected': '未连接——首次调用其工具时会自动连接',
   'mcp.status.disabled': '已禁用',
   'mcp.globalConfigTitle': '全局配置',
   'mcp.globalConfigHint': '对所有工作区生效。JSON 合法后自动保存。',

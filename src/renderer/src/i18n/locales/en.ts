@@ -1018,7 +1018,7 @@ const en = {
   'mcp.status.cached': 'Not connected — cached tools available',
   'mcp.status.failed': 'Connection failed',
   'mcp.status.needsAuth': 'Authentication required',
-  'mcp.status.notConnected': 'Not connected',
+  'mcp.status.notConnected': 'Not connected — it connects automatically when one of its tools is first used',
   'mcp.status.disabled': 'Disabled',
   'mcp.globalConfigTitle': 'Global config',
   'mcp.globalConfigHint': 'Applies to every workspace. Saved automatically once the JSON is valid.',
