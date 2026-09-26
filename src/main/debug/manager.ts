@@ -5,9 +5,11 @@ import type {
   DebugOutputPageDTO,
   DebugScopeDTO,
   DebugSessionDTO,
+  DebugSessionStatus,
   DebugStackFrameDTO,
   DebugThreadDTO,
-  DebugVariableDTO
+  DebugVariableDTO,
+  DebugVariablesPageDTO
 } from '../../shared/types'
 import { DapClient } from './dap-client'
 import { debugAdapterSpec } from './adapters'
@@ -55,14 +57,25 @@ interface StoppedWaiter {
   timer: ReturnType<typeof setTimeout>
 }
 
+/** Per-line breakpoint extras, parallel to `lines`: a stop condition, a
+ * hit-count condition (e.g. ">=3"), or a logpoint message (logs, never stops).
+ * An empty string marks "no extra on this line". */
+export interface DebugBreakpointExtras {
+  conditions?: string[]
+  hitConditions?: string[]
+  logMessages?: string[]
+}
+
 interface Session {
   dto: DebugSessionDTO
   client?: DapClient
   outputTail: string
   /** Buffered setBreakpoints calls made before `initialized`. */
-  pendingBreakpoints: { file: string; lines: number[]; resolve: (breakpoints: DebugBreakpointDTO[]) => void; reject: (error: Error) => void }[]
+  pendingBreakpoints: { file: string; lines: number[]; extras?: DebugBreakpointExtras; resolve: (breakpoints: DebugBreakpointDTO[]) => void; reject: (error: Error) => void }[]
   breakpoints: DebugBreakpointDTO[]
   configurationReady: boolean
+  /** Bumped on every stop, so a late top-frame fill cannot overwrite a newer stop's location. */
+  stopEpoch: number
   waiters: StoppedWaiter[]
   progressTimer?: ReturnType<typeof setTimeout>
   finishing: boolean
@@ -77,6 +90,21 @@ const asString = (value: unknown): string | undefined => typeof value === 'strin
 const asNumber = (value: unknown): number | undefined => typeof value === 'number' && Number.isFinite(value) ? value : undefined
 const asBoolean = (value: unknown): boolean | undefined => typeof value === 'boolean' ? value : undefined
 
+const LIVE_STATUSES: ReadonlySet<DebugSessionStatus> = new Set(['starting', 'running', 'stopped'])
+/** Single definition of "the live session", shared by `live()` and `owned()` so
+ * the start guard and the action resolver can never disagree. */
+const isLive = (session: Session): boolean => LIVE_STATUSES.has(session.dto.status)
+
+/** DAP reserves 0 for "not expandable", and adapters hand back sentinels for a
+ * NULL parent (lldb-dap answers 2^32 and up). Passing one through would chain a
+ * caller through expansions that only ever say "<error: parent is NULL>". */
+const asVariablesReference = (value: unknown): number => {
+  const reference = asNumber(value)
+  return reference !== undefined && Number.isInteger(reference) && reference > 0 && reference <= 0xffff_ffff
+    ? reference
+    : 0
+}
+
 export class DebugManager {
   private sessions = new Map<string, Session>()
 
@@ -89,10 +117,24 @@ export class DebugManager {
       .sort((a, b) => a.startedAt - b.startedAt)
   }
 
+  /**
+   * Resolves the session an id-less action addresses: the live session the
+   * caller is driving, else the newest settled one so its console stays
+   * pageable. Newest-first matters — taking the oldest session here made a
+   * chat unusable as soon as its first session ended, because `start` still
+   * saw the new live session while every other action kept addressing the
+   * terminated one.
+   */
   private owned(sessionPath: string, id?: string): Session {
-    const candidates = [...this.sessions.values()].filter((session) =>
-      session.dto.sessionPath === sessionPath && (id === undefined || session.dto.id === id))
-    const session = candidates[0]
+    const ordered = [...this.sessions.values()]
+      .filter((session) => session.dto.sessionPath === sessionPath)
+      .sort((a, b) => b.dto.startedAt - a.dto.startedAt)
+    if (id !== undefined) {
+      const session = ordered.find((entry) => entry.dto.id === id)
+      if (!session) throw new Error(`No debug session with id "${id}" in this chat.`)
+      return session
+    }
+    const session = ordered.find(isLive) ?? ordered[0]
     if (!session) throw new Error('No debug session in this chat. Start one first.')
     return session
   }
@@ -103,8 +145,7 @@ export class DebugManager {
 
   private live(sessionPath: string): Session | undefined {
     return [...this.sessions.values()].find((session) =>
-      session.dto.sessionPath === sessionPath &&
-      (session.dto.status === 'starting' || session.dto.status === 'running' || session.dto.status === 'stopped'))
+      session.dto.sessionPath === sessionPath && isLive(session))
   }
 
   async start(options: DebugStartOptions): Promise<DebugSessionDTO> {
@@ -140,6 +181,7 @@ export class DebugManager {
       pendingBreakpoints: [],
       breakpoints: [],
       configurationReady: false,
+      stopEpoch: 0,
       waiters: [],
       finishing: false,
       done: new Promise<void>((resolve) => { resolveDone = resolve }),
@@ -207,12 +249,16 @@ export class DebugManager {
       // binds them before the debuggee runs.
       const pending = session.pendingBreakpoints.splice(0)
       for (const entry of pending) {
-        await this.sendBreakpoints(session, entry.file, entry.lines).then(entry.resolve, entry.reject)
+        await this.sendBreakpoints(session, entry.file, entry.lines, entry.extras).then(entry.resolve, entry.reject)
       }
       if (client.capabilities.supportsConfigurationDoneRequest !== false) {
         await client.request('configurationDone').catch(() => undefined)
       }
-      if (!session.finishing) {
+      // A stopOnEntry launch stops during the handshake, so handleEvent has
+      // already recorded `stopped`. Promoting that to `running` here would
+      // strand the session: control and inspection both key off the real
+      // state, leaving no way to step or inspect it — only to terminate.
+      if (session.dto.status === 'starting') {
         session.dto.status = 'running'
         this.publish(session)
       }
@@ -227,23 +273,29 @@ export class DebugManager {
   }
 
   /** Breakpoints replace the file's current set (DAP setBreakpoints semantics). */
-  async setBreakpoints(sessionPath: string, file: string, lines: number[], id?: string): Promise<DebugBreakpointDTO[]> {
+  async setBreakpoints(sessionPath: string, file: string, lines: number[], extras?: DebugBreakpointExtras, id?: string): Promise<DebugBreakpointDTO[]> {
     const session = this.owned(sessionPath, id)
     if (session.finishing) throw new Error('The debug session has ended')
     if (!session.configurationReady) {
       return new Promise((resolve, reject) => {
-        session.pendingBreakpoints.push({ file, lines, resolve, reject })
+        session.pendingBreakpoints.push({ file, lines, ...(extras ? { extras } : {}), resolve, reject })
       })
     }
-    return this.sendBreakpoints(session, file, lines)
+    return this.sendBreakpoints(session, file, lines, extras)
   }
 
-  private async sendBreakpoints(session: Session, file: string, lines: number[]): Promise<DebugBreakpointDTO[]> {
+  private async sendBreakpoints(session: Session, file: string, lines: number[], extras?: DebugBreakpointExtras): Promise<DebugBreakpointDTO[]> {
     const client = session.client
     if (!client?.isOpen) throw new Error('Debug adapter is not connected')
     const body = await client.request('setBreakpoints', {
       source: { path: file },
-      breakpoints: lines.map((line) => ({ line }))
+      breakpoints: lines.map((line, index) => ({
+        line,
+        ...(extras?.conditions?.[index] ? { condition: extras.conditions[index] } : {}),
+        ...(extras?.hitConditions?.[index] ? { hitCondition: extras.hitConditions[index] } : {}),
+        // A logMessage turns the line into a logpoint: printed, never stopped at.
+        ...(extras?.logMessages?.[index] ? { logMessage: extras.logMessages[index] } : {})
+      }))
     })
     const verified = Array.isArray(body?.breakpoints) ? body.breakpoints : []
     const mapped: DebugBreakpointDTO[] = verified.map((item, index) => {
@@ -275,14 +327,19 @@ export class DebugManager {
     const client = session.client
     if (!client?.isOpen) throw new Error('Debug adapter is not connected')
     const budget = Math.max(500, Math.min(MAX_CONTROL_WAIT_MS, Math.floor(waitMs ?? DEFAULT_CONTROL_WAIT_MS)))
-    const thread = threadId ?? dto.activeThreadId
-    if (thread === undefined) throw new Error('No thread to control; call action="threads" first')
+    let thread = threadId ?? dto.activeThreadId
+    const noThread = (): Error => new Error('No thread to control; pass a threadId from action="threads"')
 
     if (action === 'pause') {
       if (dto.status !== 'running') return { session: { ...dto }, settled: true }
+      // A freshly attached process has never stopped, so no stop event has
+      // recorded a current thread yet: interrupt the first one the adapter knows.
+      thread ??= (await this.threads(sessionPath, id))[0]?.id
+      if (thread === undefined) throw noThread()
       await client.request('pause', { threadId: thread })
     } else {
       if (dto.status !== 'stopped') throw new Error(`Cannot ${action} while the debuggee is ${dto.status}; pause it first`)
+      if (thread === undefined) throw noThread()
       const command = action === 'continue' ? 'continue' : action
       await client.request(command, { threadId: thread })
       if (dto.status === 'stopped') {
@@ -300,7 +357,7 @@ export class DebugManager {
 
   async threads(sessionPath: string, id?: string): Promise<DebugThreadDTO[]> {
     const session = this.owned(sessionPath, id)
-    const body = await session.client!.request('threads')
+    const body = await this.requireLive(session).request('threads')
     const list = Array.isArray(body?.threads) ? body.threads : []
     return list.map((item) => {
       const record = item as Record<string, unknown>
@@ -311,54 +368,104 @@ export class DebugManager {
   async stack(sessionPath: string, threadId: number, levels?: number, id?: string): Promise<DebugStackFrameDTO[]> {
     const session = this.requireStopped(id, sessionPath)
     const cap = Math.max(1, Math.min(STACK_LEVELS_MAX, Math.floor(levels ?? STACK_LEVELS_DEFAULT)))
-    const body = await session.client!.request('stackTrace', { threadId, startFrame: 0, levels: cap })
+    const body = await this.requireLive(session).request('stackTrace', { threadId, startFrame: 0, levels: cap })
     const frames = Array.isArray(body?.stackFrames) ? body.stackFrames : []
     return frames.map((item) => this.mapFrame(item as Record<string, unknown>))
   }
 
   async scopes(sessionPath: string, frameId: number, id?: string): Promise<DebugScopeDTO[]> {
     const session = this.requireStopped(id, sessionPath)
-    const body = await session.client!.request('scopes', { frameId })
+    const body = await this.requireLive(session).request('scopes', { frameId })
     const scopes = Array.isArray(body?.scopes) ? body.scopes : []
     return scopes.map((item) => {
       const record = item as Record<string, unknown>
       return {
         name: asString(record.name) ?? 'scope',
-        variablesReference: asNumber(record.variablesReference) ?? 0,
+        variablesReference: asVariablesReference(record.variablesReference),
         ...(asBoolean(record.expensive) ? { expensive: true } : {})
       }
     })
   }
 
-  async variables(sessionPath: string, variablesReference: number, id?: string): Promise<DebugVariableDTO[]> {
+  /** One level of a variable's children. Unpaged calls return the first page
+   * (VARIABLES_MAX_ITEMS); paged calls map to DAP start/count. `truncated`
+   * tells the caller another page exists — detected with a one-row overfetch,
+   * since DAP answers carry no total. */
+  async variables(sessionPath: string, variablesReference: number, start?: number, count?: number, id?: string): Promise<DebugVariablesPageDTO> {
     const session = this.requireStopped(id, sessionPath)
-    if (variablesReference === 0) return []
-    const body = await session.client!.request('variables', { variablesReference })
-    const list = Array.isArray(body?.variables) ? body.variables : []
-    return list.slice(0, VARIABLES_MAX_ITEMS).map((item) => {
-      const record = item as Record<string, unknown>
-      return {
-        name: asString(record.name) ?? '?',
-        value: truncate(asString(record.value) ?? '', VALUE_MAX_CHARS),
-        ...(asString(record.type) ? { type: asString(record.type) } : {}),
-        variablesReference: asNumber(record.variablesReference) ?? 0,
-        ...(asNumber(record.namedVariables) ? { namedVariables: asNumber(record.namedVariables) } : {}),
-        ...(asNumber(record.indexedVariables) ? { indexedVariables: asNumber(record.indexedVariables) } : {})
-      }
+    if (variablesReference === 0) return { variables: [], truncated: false }
+    const paged = start !== undefined || count !== undefined
+    const startIndex = Math.max(0, Math.floor(start ?? 0))
+    const wanted = Math.max(1, Math.min(500, Math.floor(count ?? VARIABLES_MAX_ITEMS)))
+    const body = await this.requireLive(session).request('variables', {
+      variablesReference,
+      ...(paged ? { start: startIndex, count: wanted + 1 } : {})
     })
+    const list = (Array.isArray(body?.variables) ? body.variables : []).map((item) => this.mapVariable(item as Record<string, unknown>))
+    let page: DebugVariableDTO[]
+    let truncated: boolean
+    if (!paged) {
+      truncated = list.length > VARIABLES_MAX_ITEMS
+      page = list.slice(0, VARIABLES_MAX_ITEMS)
+    } else if (list.length > wanted + 1) {
+      // The adapter ignored start/count and returned everything: page locally.
+      page = list.slice(startIndex, startIndex + wanted)
+      truncated = startIndex + wanted < list.length
+    } else {
+      truncated = list.length > wanted
+      page = list.slice(0, wanted)
+    }
+    return { variables: page, truncated }
+  }
+
+  private mapVariable(record: Record<string, unknown>): DebugVariableDTO {
+    return {
+      name: asString(record.name) ?? '?',
+      value: truncate(asString(record.value) ?? '', VALUE_MAX_CHARS),
+      ...(asString(record.type) ? { type: asString(record.type) } : {}),
+      variablesReference: asVariablesReference(record.variablesReference),
+      ...(asNumber(record.namedVariables) ? { namedVariables: asNumber(record.namedVariables) } : {}),
+      ...(asNumber(record.indexedVariables) ? { indexedVariables: asNumber(record.indexedVariables) } : {})
+    }
   }
 
   async evaluate(sessionPath: string, expression: string, frameId?: number, id?: string): Promise<{ result: string; type?: string; variablesReference: number }> {
     const session = this.requireStopped(id, sessionPath)
-    const body = await session.client!.request('evaluate', {
-      expression,
-      ...(frameId !== undefined ? { frameId } : {}),
-      context: 'repl'
-    })
+    // Some adapters refuse a frame-less evaluate — lldb-dap answers "can't
+    // evaluate expressions when the process is running" even at a stop — so
+    // default to the top frame of the thread that stopped.
+    const frame = frameId ?? await this.topFrameId(session)
+    let body: Record<string, unknown> | undefined
+    try {
+      body = await this.requireLive(session).request('evaluate', {
+        expression,
+        ...(frame !== undefined ? { frameId: frame } : {}),
+        context: 'repl'
+      })
+    } catch (error) {
+      if (frame !== undefined) throw error
+      // Frame-less failure reads as a contradiction at a stop; say what to do.
+      const reason = error instanceof Error ? error.message : String(error)
+      throw new Error(`${reason} (no frame to evaluate in — pass a frameId from action="stack")`)
+    }
     return {
       result: truncate(asString(body?.result) ?? '', EVALUATE_MAX_CHARS),
       ...(asString(body?.type) ? { type: asString(body?.type) } : {}),
-      variablesReference: asNumber(body?.variablesReference) ?? 0
+      variablesReference: asVariablesReference(body?.variablesReference)
+    }
+  }
+
+  /** Frame to evaluate in when the caller pinned none: the top frame of the
+   * thread that stopped. Undefined when the adapter reports no frame. */
+  private async topFrameId(session: Session): Promise<number | undefined> {
+    const threadId = session.dto.activeThreadId
+    if (threadId === undefined) return undefined
+    try {
+      const body = await this.requireLive(session).request('stackTrace', { threadId, startFrame: 0, levels: 1 })
+      const frames = Array.isArray(body?.stackFrames) ? body.stackFrames : []
+      return asNumber((frames[0] as Record<string, unknown> | undefined)?.id)
+    } catch {
+      return undefined
     }
   }
 
@@ -422,6 +529,12 @@ export class DebugManager {
     return session
   }
 
+  /** The adapter connection of a session that can still be driven. */
+  private requireLive(session: Session): DapClient {
+    if (session.finishing || !session.client) throw new Error('The debug session has ended')
+    return session.client
+  }
+
   private mapFrame(record: Record<string, unknown>): DebugStackFrameDTO {
     const source = record.source as Record<string, unknown> | undefined
     return {
@@ -443,9 +556,11 @@ export class DebugManager {
         session.dto.stopReason = asString(body?.reason) ?? 'stopped'
         if (asNumber(body?.threadId) !== undefined) session.dto.activeThreadId = asNumber(body?.threadId)
         session.dto.location = undefined
-        this.fillTopFrame(session)
+        session.stopEpoch += 1
         this.publish(session)
-        this.settleWaiters(session)
+        // Settle only once the top frame is resolved, so the control snapshot
+        // reports where THIS stop happened instead of nothing or a stale line.
+        void this.fillTopFrame(session, session.stopEpoch).then(() => this.settleWaiters(session))
         break
       case 'continued':
         session.dto.status = 'running'
@@ -471,24 +586,37 @@ export class DebugManager {
     }
   }
 
-  /** Best-effort top-frame location for the panel and the control snapshot. */
-  private fillTopFrame(session: Session): void {
+  /** Best-effort top-frame location for the panel and the control snapshot.
+   * `epoch` pins the fill to one stop: an answer that arrives after a newer
+   * stop must not overwrite that stop's location. */
+  private async fillTopFrame(session: Session, epoch: number): Promise<void> {
     const threadId = session.dto.activeThreadId
     const client = session.client
     if (threadId === undefined || !client?.isOpen) return
-    void client.request('stackTrace', { threadId, startFrame: 0, levels: 1 }).then((body) => {
-      const frames = Array.isArray(body?.stackFrames) ? body.stackFrames : []
-      const record = frames[0] as Record<string, unknown> | undefined
-      if (!record || session.finishing || session.dto.status !== 'stopped') return
-      const frame = this.mapFrame(record)
-      session.dto.location = {
-        file: frame.file ?? frame.name,
-        line: frame.line ?? 0,
-        ...(frame.column !== undefined ? { column: frame.column } : {}),
-        name: frame.name
-      }
-      this.publish(session)
-    }).catch(() => { /* location is best-effort */ })
+    let body: Record<string, unknown> | undefined
+    try {
+      body = await client.request('stackTrace', { threadId, startFrame: 0, levels: 1 })
+    } catch {
+      return // location is best-effort
+    }
+    if (epoch !== session.stopEpoch) return
+    const frames = Array.isArray(body?.stackFrames) ? body.stackFrames : []
+    const record = frames[0] as Record<string, unknown> | undefined
+    if (!record || session.finishing || session.dto.status !== 'stopped') return
+    const frame = this.mapFrame(record)
+    session.dto.location = {
+      file: frame.file ?? frame.name,
+      line: frame.line ?? 0,
+      ...(frame.column !== undefined ? { column: frame.column } : {}),
+      name: frame.name
+    }
+    // A stop at the process entry lands inside the dynamic linker on macOS,
+    // and lldb-dap reports it with reason "exception" — which reads like a
+    // crash. Report it for what it is.
+    if (session.dto.stopReason === 'exception' && (frame.name === '_dyld_start' || (frame.file ?? '').includes('/dyld'))) {
+      session.dto.stopReason = 'entry'
+    }
+    this.publish(session)
   }
 
   private append(session: Session, text: string): void {

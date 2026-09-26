@@ -79,10 +79,14 @@ export async function resolveEscalatedMode(runtime: EscalationRuntime): Promise<
   const parsed = validateEscalationArgs(runtime.sandboxPermissions, runtime.justification)
   if (parsed.requestedMode === undefined || parsed.justification === undefined) return runtime.currentMode
 
+  // Asking for what the call ALREADY has (the same mode or a narrower one) is
+  // not an escalation: the current mode satisfies the request by definition,
+  // so there is nothing to approve — and at the ceiling ('danger-full-access')
+  // nothing wider exists to approve anyway. Erroring here wedged every tool
+  // whose guidance says "retry once with sandbox_permissions" against a
+  // session that was already unrestricted.
   if (!WIDER_MODES[runtime.currentMode].includes(parsed.requestedMode)) {
-    throw new Error(
-      `sandbox escalation to "${parsed.requestedMode}" is not strictly wider than this call's current "${runtime.currentMode}" mode`
-    )
+    return runtime.currentMode
   }
 
   const outcome = await waitForEscalation(

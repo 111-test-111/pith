@@ -6,7 +6,8 @@ import type {
   DebugSessionDTO,
   DebugStackFrameDTO,
   DebugThreadDTO,
-  DebugVariableDTO
+  DebugVariableDTO,
+  DebugVariablesPageDTO
 } from '../../../../shared/types'
 import { ArrowDownToLine, ArrowUpFromLine, Bug, ChevronDown, ChevronRight, Pause, Play, Square, StepForward, X } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
@@ -57,6 +58,8 @@ export function DebugPane({ store, debug }: { store: PiStore; debug: DebugStore 
   const [scopes, setScopes] = useState<DebugScopeDTO[]>([])
   const [variables, setVariables] = useState<ReadonlyMap<number, DebugVariableDTO[]>>(new Map())
   const [expanded, setExpanded] = useState<ReadonlySet<number>>(new Set())
+  /** References whose children came back truncated (another page exists). */
+  const [truncatedRefs, setTruncatedRefs] = useState<ReadonlySet<number>>(new Set())
   const [breakpoints, setBreakpoints] = useState<DebugBreakpointDTO[]>([])
   const [output, setOutput] = useState('')
   const [outputTruncated, setOutputTruncated] = useState(false)
@@ -71,7 +74,7 @@ export function DebugPane({ store, debug }: { store: PiStore; debug: DebugStore 
   // A new session resets every detail pane.
   useEffect(() => {
     setThreads([]); setFrames([]); setScopes([])
-    setVariables(new Map()); setExpanded(new Set())
+    setVariables(new Map()); setExpanded(new Set()); setTruncatedRefs(new Set())
     setSelectedThread(undefined); setSelectedFrame(undefined)
     setOutput(''); setOutputTruncated(false); outputCursor.current = 0
     setActionError(false)
@@ -156,7 +159,15 @@ export function DebugPane({ store, debug }: { store: PiStore; debug: DebugStore 
     setExpanded((current) => new Set(current).add(reference))
     if (!variables.has(reference)) {
       void window.pi.debugAction({ sessionPath, action: 'variables', variablesReference: reference })
-        .then((list) => setVariables((current) => new Map(current).set(reference, list as DebugVariableDTO[])))
+        .then((page) => {
+          const result = page as DebugVariablesPageDTO
+          setVariables((current) => new Map(current).set(reference, result.variables))
+          setTruncatedRefs((current) => {
+            const next = new Set(current)
+            if (result.truncated) next.add(reference); else next.delete(reference)
+            return next
+          })
+        })
         .catch(() => {})
     }
   }
@@ -186,6 +197,11 @@ export function DebugPane({ store, debug }: { store: PiStore; debug: DebugStore 
           </span>
         </div>
         {isOpen && children ? children.map((child) => renderVariable(child, depth + 1)) : null}
+        {isOpen && truncatedRefs.has(variable.variablesReference) ? (
+          <p className="text-[11px] text-muted-foreground/70" style={{ paddingLeft: `${(depth + 1) * 12 + 4}px` }}>
+            {t('debug.variablesTruncated')}
+          </p>
+        ) : null}
       </div>
     )
   }

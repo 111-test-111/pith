@@ -300,8 +300,10 @@ const canonicalWorkspace = await realpath(workspace)
   assert.match(String((await cancelled)?.message ?? ''), /cancelled/, 'an aborted question is cancelled, not approved')
   assert.deepEqual(listPendingEscalations(sessionPath), [], 'a cancelled question leaves the queue')
 
-  // 4. The arguments are validated: a malformed or non-wider request is an
-  //    error, never a silently narrower call.
+  // 4. The arguments are validated: a malformed request is an error, never a
+  //    silently narrower call. A request the current mode already SATISFIES is
+  //    not an escalation at all — the call runs under the current (wider) mode
+  //    with no question asked; at the ceiling this used to hard-fail.
   assert.equal(
     await ask(inside, undefined, 'why not').then(() => 'ok', () => 'invalid'),
     'invalid',
@@ -310,9 +312,11 @@ const canonicalWorkspace = await realpath(workspace)
   mode = 'danger-full-access'
   assert.equal(
     await ask(inside, 'workspace-write').then(() => 'ok', () => 'not-wider'),
-    'not-wider',
-    'escalating from full access is not a wider move'
+    'ok',
+    'a request the current mode already satisfies runs without a question'
   )
+  assert.deepEqual(listPendingEscalations(sessionPath), [], 'a satisfied request asks nothing')
+  assert.equal(mode, 'danger-full-access', 'a satisfied request leaves the session mode untouched')
   assert.equal(
     await ask(inside, 'read-only').then(() => 'ok', () => 'invalid'),
     'invalid',

@@ -44,7 +44,7 @@ export interface ToolCallContent {
   type: 'toolCall'
   id: string
   name: string
-  arguments: Record<string, any>
+  arguments: Record<string, unknown>
 }
 
 export type UserContent = string | (TextContent | ImageContent)[]
@@ -581,7 +581,7 @@ export interface ToolInfoDTO {
   name: string
   description: string
   /** JSON Schema (TypeBox) for the tool's arguments. */
-  parameters: Record<string, any>
+  parameters: Record<string, unknown>
   promptGuidelines?: string[]
   source: ToolSourceDTO
   active: boolean
@@ -1642,7 +1642,7 @@ export interface McpStateDTO {
 /** Tool/resource/prompt metadata of one server, from the adapter's metadata cache. */
 export interface McpServerDetailDTO {
   name: string
-  tools: { name: string; description?: string; inputSchema?: Record<string, any> }[]
+  tools: { name: string; description?: string; inputSchema?: Record<string, unknown> }[]
   resources: { uri: string; name: string; description?: string }[]
   prompts: {
     name: string
@@ -1750,6 +1750,14 @@ export interface DebugVariableDTO {
   indexedVariables?: number
 }
 
+/** One page of a variable's children. DAP answers carry no total, so
+ * `truncated` (detected by a one-row overfetch) is the "more pages" signal —
+ * page further with start/count. */
+export interface DebugVariablesPageDTO {
+  variables: DebugVariableDTO[]
+  truncated: boolean
+}
+
 export interface DebugBreakpointDTO {
   id?: number
   file: string
@@ -1796,7 +1804,7 @@ export type DebugPanelRequest =
   | { sessionPath: string; action: 'threads' }
   | { sessionPath: string; action: 'stack'; threadId: number; levels?: number }
   | { sessionPath: string; action: 'scopes'; frameId: number }
-  | { sessionPath: string; action: 'variables'; variablesReference: number }
+  | { sessionPath: string; action: 'variables'; variablesReference: number; start?: number; count?: number }
   | { sessionPath: string; action: 'evaluate'; expression: string; frameId?: number }
   | { sessionPath: string; action: 'output'; cursor?: number; maxChars?: number }
   | { sessionPath: string; action: 'breakpoints' }

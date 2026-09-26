@@ -1108,6 +1108,7 @@ const zhCN: Messages = {
   'debug.output': '控制台输出',
   'debug.outputTruncated': '较早的输出已从缓冲区丢弃。',
   'debug.noOutput': '暂无输出',
+  'debug.variablesTruncated': '仅显示第一页——还有更多项',
   'settings.browserOpenLinks': '链接在内置浏览器打开',
   'settings.browserOpenLinksHint': '聊天与 Markdown 链接在应用内置浏览器中打开，而非系统浏览器',
   'settings.browserKeepAlive': '收起面板时保持页面活跃',

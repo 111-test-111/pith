@@ -1143,6 +1143,7 @@ const en = {
   'debug.output': 'Console output',
   'debug.outputTruncated': 'Earlier output was dropped from the buffer.',
   'debug.noOutput': 'No output yet',
+  'debug.variablesTruncated': 'Only the first page is shown — more items exist',
   'settings.browserOpenLinks': 'Open links in the embedded browser',
   'settings.browserOpenLinksHint':
     'Chat and markdown links open in the app’s browser instead of the system browser',

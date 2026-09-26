@@ -13,8 +13,11 @@ const DEBUG_GUIDELINES = [
   'Reach for the debugger when a program crashes, hangs, or corrupts state: attach or launch, set breakpoints, step, and read the real frames and variables instead of sprinkling print statements. Small deterministic reproducers are still faster with plain bash.',
   'One debug session per chat. Starting while one is active fails; stop the old session first.',
   'control actions (continue/next/stepIn/stepOut/pause) block until the debuggee stops again or waitMs expires. settled=true means a stop (or termination) was reached; settled=false means it is still running — use control again or inspect output instead of re-sending the same step.',
-  'threads/stack/scopes/variables/evaluate require a stopped debuggee. stack gives frame ids, scopes give variablesReferences, variables expand one level per call. Values are truncated server-side (50 items per level, 256 chars per value, 2048 chars per evaluate result).',
-  'breakpoints replaces the whole breakpoint set of one file: pass every line that should keep a breakpoint, not just the new ones. A breakpoint with verified=false did not bind — check the file path is absolute and matches the debuggee\'s sources.',
+  'Read stopReason after every control: "step" is a completed step, "breakpoint" a bound breakpoint, "entry" the process entry (on macOS the entry stop lands in the dynamic linker — continue to reach your own code). lldb-dap note: a continue issued after a breakpoint interrupted a step completes that step first (reason "step"), then runs free.',
+  'threads/stack/scopes/variables/evaluate require a stopped debuggee. stack gives frame ids, scopes give variablesReferences, variables expand one level per call (default page 50, truncated=true when more exist — page large arrays with start/count). Values are truncated server-side (256 chars per value, 2048 chars per evaluate result).',
+  'Frame ids and variablesReferences are recycled at every stop: after any control action, re-fetch stack/scopes/variables instead of reusing ids from an earlier stop.',
+  'lldb-dap answers evaluate in REPL form — "(int) $0 = 7". The $N handle is real: reuse it in later evaluate expressions of the same stop.',
+  'breakpoints replaces the whole breakpoint set of one file: pass every line that should keep a breakpoint, not just the new ones. A breakpoint with verified=false did not bind — check the file path is absolute and matches the debuggee\'s sources. Parallel conditions/hitConditions/logMessages arrays refine a line: a condition stops only when true, a hitCondition gates by hit count (">=3"), a logMessage makes a logpoint that prints without stopping.',
   'output pages the debug console with a cursor, like bash_task output.',
   'Launching or stopping a debuggee is process control: the session sandbox mode gates it, and read-only refuses it. The debuggee itself is never file-sandboxed — a debugger needs full process-inspection rights by design.',
   'When a debug session ends (stop, termination, crash), its status is terminal: start a fresh session instead of retrying control actions.'
@@ -44,15 +47,20 @@ const debugParameters = Type.Object({
   pid: Type.Optional(Type.Integer({ description: 'start (attach): process id to attach to.' })),
   file: Type.Optional(Type.String({ description: 'breakpoints: absolute file path.' })),
   lines: Type.Optional(Type.Array(Type.Integer({ minimum: 1 }), { description: 'breakpoints: complete line set for the file (replaces, not adds).' })),
+  conditions: Type.Optional(Type.Array(Type.String(), { description: 'breakpoints: stop condition per line (parallel to lines; "" skips a line). The breakpoint stops only when the condition evaluates true.' })),
+  hitConditions: Type.Optional(Type.Array(Type.String(), { description: 'breakpoints: hit-count condition per line (parallel to lines), e.g. ">=3".' })),
+  logMessages: Type.Optional(Type.Array(Type.String(), { description: 'breakpoints: log message per line (parallel to lines; "" skips a line) — turns the line into a logpoint: printed to the debug console, never stopped at.' })),
   control: Type.Optional(Type.Union([
     Type.Literal('continue'), Type.Literal('pause'), Type.Literal('next'), Type.Literal('stepIn'), Type.Literal('stepOut')
   ], { description: 'control: the stepping action.' })),
   threadId: Type.Optional(Type.Integer({ description: 'control/stack: thread; defaults to the thread that last stopped.' })),
   waitMs: Type.Optional(Type.Number({ minimum: 500, maximum: 120_000, description: 'control: stop-wait budget in ms, default 10000. Expiry is not failure: settled=false means still running.' })),
-  frameId: Type.Optional(Type.Integer({ description: 'scopes/evaluate: stack frame id from stack.' })),
+  frameId: Type.Optional(Type.Integer({ description: 'scopes/evaluate: stack frame id from stack. evaluate defaults to the top frame of the stopped thread.' })),
   levels: Type.Optional(Type.Integer({ minimum: 1, maximum: 100, description: 'stack: frame count cap, default 20.' })),
   variablesReference: Type.Optional(Type.Integer({ description: 'variables: reference from scopes or a parent variable.' })),
-  expression: Type.Optional(Type.String({ description: 'evaluate: expression in the debuggee\'s language, evaluated in the selected frame.' })),
+  start: Type.Optional(Type.Integer({ minimum: 0, description: 'variables: first child index (DAP indexed paging). Pair with count.' })),
+  count: Type.Optional(Type.Integer({ minimum: 1, maximum: 500, description: 'variables: page size, default 50. The result\'s truncated flag tells whether another page exists.' })),
+  expression: Type.Optional(Type.String({ description: 'evaluate: expression in the debuggee\'s language, evaluated in frameId or the stopped thread\'s top frame.' })),
   cursor: Type.Optional(Type.Integer({ minimum: 0, description: 'output: cursor from an earlier output call. Omit for recent output.' })),
   maxChars: Type.Optional(Type.Integer({ minimum: 1, maximum: 65_536, description: 'output: maximum returned characters, default 16384.' })),
   ...SANDBOX_ESCALATION_PROPERTIES
@@ -150,7 +158,18 @@ export function createDebugTools(options: DebugToolOptions): ToolDefinition[] {
         }
         case 'breakpoints': {
           if (!args.file || !args.lines) throw new Error('breakpoints requires file and lines (the file\'s complete breakpoint set)')
-          const breakpoints = await manager.setBreakpoints(sessionPath, args.file, args.lines)
+          const extraArrays = [args.conditions, args.hitConditions, args.logMessages].filter((list) => Array.isArray(list))
+          if (extraArrays.some((list) => list!.length !== args.lines!.length)) {
+            throw new Error('conditions/hitConditions/logMessages must be parallel to lines (same length; use "" to skip a line)')
+          }
+          const extras = args.conditions ?? args.hitConditions ?? args.logMessages
+            ? {
+              ...(args.conditions ? { conditions: args.conditions } : {}),
+              ...(args.hitConditions ? { hitConditions: args.hitConditions } : {}),
+              ...(args.logMessages ? { logMessages: args.logMessages } : {})
+            }
+            : undefined
+          const breakpoints = await manager.setBreakpoints(sessionPath, args.file, args.lines, extras)
           return { content: text({ breakpoints, session: manager.get(sessionPath) }), details: details(manager.get(sessionPath)) }
         }
         case 'control': {
@@ -172,7 +191,7 @@ export function createDebugTools(options: DebugToolOptions): ToolDefinition[] {
         }
         case 'variables': {
           if (args.variablesReference === undefined) throw new Error('variables requires a variablesReference')
-          return { content: text(await manager.variables(sessionPath, args.variablesReference)), details: undefined }
+          return { content: text(await manager.variables(sessionPath, args.variablesReference, args.start, args.count)), details: undefined }
         }
         case 'evaluate': {
           if (!args.expression) throw new Error('evaluate requires an expression')

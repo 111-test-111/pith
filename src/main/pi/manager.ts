@@ -552,7 +552,7 @@ export class PiManager {
       case 'threads': return manager.threads(request.sessionPath)
       case 'stack': return manager.stack(request.sessionPath, request.threadId, request.levels)
       case 'scopes': return manager.scopes(request.sessionPath, request.frameId)
-      case 'variables': return manager.variables(request.sessionPath, request.variablesReference)
+      case 'variables': return manager.variables(request.sessionPath, request.variablesReference, request.start, request.count)
       case 'evaluate': return manager.evaluate(request.sessionPath, request.expression, request.frameId)
       case 'output': return manager.output(request.sessionPath, request.cursor, request.maxChars)
       case 'breakpoints': return manager.breakpoints(request.sessionPath)
