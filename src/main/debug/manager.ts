@@ -76,6 +76,8 @@ interface Session {
   configurationReady: boolean
   /** Bumped on every stop, so a late top-frame fill cannot overwrite a newer stop's location. */
   stopEpoch: number
+  /** In-flight top-frame fill for the current stop. `start()` awaits this so the first snapshot already has location and remapped stopReason. */
+  filling?: Promise<void>
   waiters: StoppedWaiter[]
   progressTimer?: ReturnType<typeof setTimeout>
   finishing: boolean
@@ -254,11 +256,15 @@ export class DebugManager {
       if (client.capabilities.supportsConfigurationDoneRequest !== false) {
         await client.request('configurationDone').catch(() => undefined)
       }
-      // A stopOnEntry launch stops during the handshake, so handleEvent has
-      // already recorded `stopped`. Promoting that to `running` here would
-      // strand the session: control and inspection both key off the real
-      // state, leaving no way to step or inspect it — only to terminate.
-      if (session.dto.status === 'starting') {
+      // A stopOnEntry launch stops during the handshake. Do not promote that
+      // to `running`. Wait for the top-frame fill so the returned snapshot
+      // already has location and remapped dyld "exception" → "entry".
+      if (options.stopOnEntry && session.dto.status !== 'stopped' && !session.finishing) {
+        await this.waitStopped(session, HANDSHAKE_TIMEOUT_MS)
+      }
+      if (session.dto.status === 'stopped') {
+        await (session.filling ?? this.fillTopFrame(session, session.stopEpoch))
+      } else if (session.dto.status === 'starting') {
         session.dto.status = 'running'
         this.publish(session)
       }
@@ -560,7 +566,12 @@ export class DebugManager {
         this.publish(session)
         // Settle only once the top frame is resolved, so the control snapshot
         // reports where THIS stop happened instead of nothing or a stale line.
-        void this.fillTopFrame(session, session.stopEpoch).then(() => this.settleWaiters(session))
+        const epoch = session.stopEpoch
+        const filling = this.fillTopFrame(session, epoch).then(() => this.settleWaiters(session))
+        session.filling = filling
+        void filling.finally(() => {
+          if (session.filling === filling) session.filling = undefined
+        })
         break
       case 'continued':
         session.dto.status = 'running'

@@ -177,20 +177,21 @@ try {
 
     // 6. A stopOnEntry launch must keep its entry stop instead of being
     //    promoted to `running` while the debuggee sits at the entry point.
+    //    start() itself must wait for the top-frame fill, so the returned
+    //    snapshot already reads "entry" (not a later remap of "exception").
     const entry = await launch({ stopOnEntry: true })
-    await until(
-      () => manager.get(SESSION_PATH, entry.id).status === 'stopped',
-      'the stopOnEntry launch to report a stop',
-      6000
-    )
+    assert.equal(entry.status, 'stopped', `stopOnEntry start() returned ${entry.status}, expected stopped`)
     assert.equal(manager.get(SESSION_PATH).id, entry.id, 'the entry session was not addressable')
     assert.notEqual(entry.activeThreadId, undefined, 'the entry stop carried no thread to inspect')
+    assert.notEqual(entry.location, undefined, 'stopOnEntry start() snapshot carried no location')
     const entryFrames = await manager.stack(SESSION_PATH, entry.activeThreadId)
     assert.ok(entryFrames.length > 0, 'the entry stop exposed no stack frames')
     if (process.platform === 'darwin') {
-      // macOS entry stops land in dyld and lldb-dap mislabels them
-      // "exception"; the manager must remap that to "entry".
-      await until(() => manager.get(SESSION_PATH, entry.id).stopReason === 'entry', 'the entry stop reason to read "entry"', 6000)
+      assert.equal(
+        entry.stopReason,
+        'entry',
+        `stopOnEntry start() returned stopReason ${entry.stopReason}, expected entry on the first snapshot`
+      )
     }
     // Continue from that stop must be accepted; demo.c then runs to completion.
     await manager.control(SESSION_PATH, 'continue', entry.activeThreadId, 10_000)
