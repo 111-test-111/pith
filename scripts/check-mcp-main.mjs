@@ -96,11 +96,19 @@ const idleRoster = mcp.buildMcpRoster({
 const idleBeui = idleRoster.find((server) => server.name === 'beui')
 assert.equal(idleBeui.status, 'cached', 'a live not-connected report keeps the cached status while the cache is valid')
 assert.equal(idleBeui.toolCount, beui.toolCount, 'the cached tool count survives a zero-tool live report')
-// context7's real cache is expired right now: it must stay not-connected but
-// still report its cached tool count.
-const idleContext7 = idleRoster.find((server) => server.name === 'context7')
-assert.equal(idleContext7.status, 'not-connected', 'an expired cache is honestly not-connected')
-assert.equal(idleContext7.toolCount, 2, 'the stale cache still reports its tool count')
+// A server with NO cache and a live not-connected report is honestly
+// not-connected and reports the live (zero) count — deterministic in its own
+// temp agent dir, unlike the real cache's changing freshness.
+const coldAgent = join(temporary, 'cold-agent')
+await mkdir(coldAgent, { recursive: true })
+mcp.writeMcpConfigFile('global', '{"mcpServers":{"one":{"command":"a"}}}', null, coldAgent)
+const coldRoster = mcp.buildMcpRoster({
+  cwd: null, agentDir: coldAgent, adapter: null, modules: null,
+  live: new Map([['one', { status: 'not-connected', toolCount: 0, disabled: false }]])
+})
+const cold = coldRoster.find((server) => server.name === 'one')
+assert.equal(cold.status, 'not-connected', 'no cache + idle live report is not-connected')
+assert.equal(cold.toolCount, 0, 'no cache reports the live count')
 
 const detail = mcp.mcpServerDetail('beui', agentDir, modules)
 assert.ok(detail.tools.length > 0, 'server detail lists cached tools')

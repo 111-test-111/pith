@@ -1,7 +1,8 @@
 /**
- * Transcript tool-category regression check. Namespaced context-mode and
- * embedded-browser calls must each form their own maximal adjacent run, while
- * unknown names remain standalone. Pure: no Electron, model calls or network.
+ * Transcript tool-category regression check. Namespaced context-mode,
+ * embedded-browser and MCP calls must each form their own maximal adjacent
+ * run, while unknown names remain standalone. Pure: no Electron, model calls
+ * or network.
  */
 import assert from 'node:assert/strict'
 import { mkdir, rm } from 'node:fs/promises'
@@ -26,12 +27,17 @@ try {
     outfile: bundle
   })
 
-  const { splitByToolCategory, toolCategory } = await import(bundle)
+  const { splitByToolCategory, toolCategory, isMcpTool } = await import(bundle)
 
   assert.equal(toolCategory('ctx_execute')?.id, 'context')
   assert.equal(toolCategory('ctx_future_tool')?.id, 'context', 'new ctx_* tools join the context group')
   assert.equal(toolCategory('browser_navigate')?.id, 'browser')
   assert.equal(toolCategory('browser_future_tool')?.id, 'browser', 'new browser_* tools join the browser group')
+  assert.equal(toolCategory('mcp')?.id, 'mcp', 'the gateway is part of the MCP family')
+  assert.equal(toolCategory('mcpScript')?.id, 'mcp', 'so is the scripting wrapper')
+  assert.equal(toolCategory('mcp__beui')?.id, 'mcp', 'every per-server proxy joins the MCP family')
+  assert.equal(isMcpTool('mcp__future_server'), true, 'a server added later still joins the MCP family')
+  assert.equal(isMcpTool('mcpX'), false, 'a name that merely starts with mcp is not one')
   assert.equal(toolCategory('other_tool'), undefined)
 
   const calls = [
@@ -43,7 +49,11 @@ try {
     { id: 'r1', name: 'read' },
     { id: 'g1', name: 'grep' },
     { id: 'u1', name: 'other_tool' },
-    { id: 'u2', name: 'other_tool' }
+    { id: 'u2', name: 'other_tool' },
+    { id: 'm1', name: 'mcp' },
+    { id: 'm2', name: 'mcpScript' },
+    { id: 'm3', name: 'mcp__beui' },
+    { id: 'm4', name: 'mcp__context7' }
   ]
   const runs = splitByToolCategory(calls)
 
@@ -55,11 +65,12 @@ try {
       ['context', ['c3']],
       ['exploration', ['r1', 'g1']],
       [undefined, ['u1']],
-      [undefined, ['u2']]
+      [undefined, ['u2']],
+      ['mcp', ['m1', 'm2', 'm3', 'm4']]
     ]
   )
 
-  console.log('PASS: consecutive ctx_* and browser_* calls form separate transcript groups.')
+  console.log('PASS: consecutive ctx_*, browser_* and MCP calls each form their own transcript group.')
 } finally {
   await rm(scratch, { recursive: true, force: true })
 }

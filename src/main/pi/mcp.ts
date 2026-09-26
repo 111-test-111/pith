@@ -196,9 +196,13 @@ interface AdapterCacheModule {
       string,
       {
         configHash: string
-        tools: { name: string; description?: string }[]
+        tools: { name: string; description?: string; inputSchema?: unknown }[]
         resources: { uri: string; name: string; description?: string }[]
-        prompts?: { name: string; description?: string }[]
+        prompts?: {
+          name: string
+          description?: string
+          arguments?: { name: string; description?: string; required?: boolean }[]
+        }[]
         cachedAt: number
       }
     >
@@ -372,13 +376,31 @@ export function mcpServerDetail(name: string, agentDir: string, modules: Adapter
   const entry = cache?.servers?.[name]
   return {
     name,
-    tools: (entry?.tools ?? []).map((tool) => ({ name: tool.name, description: tool.description })),
+    tools: (entry?.tools ?? []).map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+      ...(isRecord(tool.inputSchema) ? { inputSchema: tool.inputSchema as Record<string, any> } : {})
+    })),
     resources: (entry?.resources ?? []).map((resource) => ({
       uri: resource.uri,
       name: resource.name,
       description: resource.description
     })),
-    prompts: (entry?.prompts ?? []).map((prompt) => ({ name: prompt.name, description: prompt.description })),
+    prompts: (entry?.prompts ?? []).map((prompt) => ({
+      name: prompt.name,
+      description: prompt.description,
+      ...(Array.isArray(prompt.arguments)
+        ? {
+            arguments: prompt.arguments
+              .filter(isRecord)
+              .map((argument) => ({
+                name: String(argument.name ?? ''),
+                description: typeof argument.description === 'string' ? argument.description : undefined,
+                required: argument.required === true
+              }))
+          }
+        : {})
+    })),
     cachedAt: entry?.cachedAt ?? null
   }
 }

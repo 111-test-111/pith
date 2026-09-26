@@ -1640,9 +1640,13 @@ export interface McpStateDTO {
 /** Tool/resource/prompt metadata of one server, from the adapter's metadata cache. */
 export interface McpServerDetailDTO {
   name: string
-  tools: { name: string; description?: string }[]
+  tools: { name: string; description?: string; inputSchema?: Record<string, any> }[]
   resources: { uri: string; name: string; description?: string }[]
-  prompts: { name: string; description?: string }[]
+  prompts: {
+    name: string
+    description?: string
+    arguments?: { name: string; description?: string; required?: boolean }[]
+  }[]
   cachedAt: number | null
 }
 

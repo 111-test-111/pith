@@ -98,7 +98,7 @@ import React from 'react';
 import {createRoot} from 'react-dom/client';
 import {ToolsSection} from '/src/components/app/settings/ToolsSection.tsx';
 import {I18nProvider} from '/src/i18n/index.tsx';
-import {buildToolList, toolPrefix, groupPrefixOf} from '/src/lib/tool-groups.ts';
+import {buildToolList, toolPrefix, toolGroupKey, groupPrefixOf} from '/src/lib/tool-groups.ts';
 import {refreshCatalog} from '/src/lib/extensions-catalog.ts';
 import en from '/src/i18n/locales/en.ts';
 import zhCN from '/src/i18n/locales/zh-CN.ts';
@@ -108,7 +108,7 @@ window.pi = { toolsCatalog: async () => catalog };
 window.refreshCatalog = refreshCatalog;
 // Pin the first run to English; the zh-CN pass stores its own locale first.
 if (!window.localStorage.getItem('pi-app:locale')) window.localStorage.setItem('pi-app:locale','en');
-window.toolGrouping = { buildToolList, toolPrefix, groupPrefixOf, entries: buildToolList(catalog.tools) };
+window.toolGrouping = { buildToolList, toolPrefix, toolGroupKey, groupPrefixOf, entries: buildToolList(catalog.tools) };
 window.locales = { en, 'zh-CN': zhCN };
 const h = React.createElement;
 createRoot(document.getElementById('root')).render(h(I18nProvider, null, h(ToolsSection)));
@@ -281,7 +281,7 @@ app.on('window-all-closed',()=>app.quit());`)
   await pause(300)
 
   // --- pure grouping: order-preserving, family-first, lone prefixes stay plain
-  const grouping = await evaluate('(() => { const g = window.toolGrouping; return { entries: g.entries, prefixes: g.entries.map(e => e.kind === "group" ? "group:" + e.prefix : "tool:" + e.tool.name), single: g.toolPrefix("read"), nested: g.toolPrefix("mcp__context7"), leading: g.toolPrefix("_x"), three: g.toolPrefix("a_b_c"), held: g.groupPrefixOf(g.entries, "ctx_stats"), notHeld: g.groupPrefixOf(g.entries, "read"), foreign: g.buildToolList([{name:"ctx_a"},{name:"read"},{name:"ctx_b"}]).map(e => e.kind === "group" ? "group:" + e.prefix + "(" + e.tools.length + ")" : "tool:" + e.tool.name) }; })()')
+  const grouping = await evaluate('(() => { const g = window.toolGrouping; return { entries: g.entries, prefixes: g.entries.map(e => e.kind === "group" ? "group:" + e.prefix : "tool:" + e.tool.name), single: g.toolPrefix("read"), nested: g.toolPrefix("mcp__context7"), leading: g.toolPrefix("_x"), three: g.toolPrefix("a_b_c"), registryKey: g.toolGroupKey("mcpScript"), proxyKey: g.toolGroupKey("mcp__beui"), prefixedKey: g.toolGroupKey("ctx_execute"), plainKey: g.toolGroupKey("read"), held: g.groupPrefixOf(g.entries, "ctx_stats"), notHeld: g.groupPrefixOf(g.entries, "read"), foreign: g.buildToolList([{name:"ctx_a"},{name:"read"},{name:"ctx_b"}]).map(e => e.kind === "group" ? "group:" + e.prefix + "(" + e.tools.length + ")" : "tool:" + e.tool.name) }; })()')
   assert.deepEqual(grouping.prefixes, [
     'group:web', 'group:ctx', 'tool:mcp__context7', 'tool:read', 'tool:write', 'tool:bash', 'tool:bash_task'
   ], 'families render as one entry each at the head, then the standalone tools; a lone prefix stays a row')
@@ -291,11 +291,21 @@ app.on('window-all-closed',()=>app.quit());`)
   assert.equal(grouping.nested, 'mcp', 'a double underscore still yields one prefix')
   assert.equal(grouping.leading, null, 'a leading underscore is not a prefix')
   assert.equal(grouping.three, 'a', 'only the first segment is the prefix')
+  assert.equal(grouping.registryKey, 'mcp', 'the registry folds mcpScript into the mcp family')
+  assert.equal(grouping.proxyKey, 'mcp', 'a server proxy lands in the same mcp family')
+  assert.equal(grouping.prefixedKey, 'ctx', 'a category without a group key still groups by its prefix')
+  assert.equal(grouping.plainKey, null, 'an unnamespaced built-in belongs to no family')
   assert.equal(grouping.held, 'ctx', 'groupPrefixOf resolves a member')
   assert.equal(grouping.notHeld, null, 'groupPrefixOf rejects a standalone tool')
   assert.deepEqual(grouping.foreign, ['group:ctx(2)', 'tool:read'], 'non-adjacent members still gather')
   const leading = await evaluate('window.toolGrouping.buildToolList([{name:"read"},{name:"ctx_a"},{name:"ctx_b"},{name:"write"}]).map(e => e.kind === "group" ? "group:" + e.prefix : "tool:" + e.tool.name)')
   assert.deepEqual(leading, ['group:ctx', 'tool:read', 'tool:write'], 'families lead even when the catalog does not')
+  const mcpFamily = await evaluate('window.toolGrouping.buildToolList([{name:"read"},{name:"mcp"},{name:"mcpScript"},{name:"mcp__context7"}]).map(e => e.kind === "group" ? "group:" + e.prefix + "(" + e.tools.length + ")" : "tool:" + e.tool.name)')
+  assert.deepEqual(mcpFamily, ['group:mcp(3)', 'tool:read'], 'gateway, script tool and server proxies fold into ONE mcp family')
+  const loneProxy = await evaluate('window.toolGrouping.buildToolList([{name:"mcp__context7"},{name:"read"}]).map(e => e.kind === "group" ? "group:" + e.prefix : "tool:" + e.tool.name)')
+  assert.deepEqual(loneProxy, ['tool:mcp__context7', 'tool:read'], 'a lone family member stays a plain row (no group for one click)')
+  const mcpGroupOf = await evaluate('window.toolGrouping.groupPrefixOf(window.toolGrouping.buildToolList([{name:"mcp"},{name:"mcpScript"},{name:"mcp__context7"}]), "mcp__context7")')
+  assert.equal(mcpGroupOf, 'mcp', 'the open-on-selection lookup resolves the mcp family')
 
   // --- default state: the selected tool's family is open, the rest collapsed
   assert.equal(await visibleRows(), 7, 'collapsed families hide their members (2 web + 5 standalone)')

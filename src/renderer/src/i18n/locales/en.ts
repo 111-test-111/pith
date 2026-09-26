@@ -1066,6 +1066,7 @@ const en = {
   'mcp.toolsSection': 'Tools ({count})',
   'mcp.resourcesSection': 'Resources ({count})',
   'mcp.promptsSection': 'Prompts ({count})',
+  'mcp.promptArguments': 'Arguments',
   'mcp.error.name': 'A server name is required.',
   'mcp.error.nameInvalid':
     'Names start with a letter or digit and may contain dots, dashes and underscores.',
@@ -1333,6 +1334,7 @@ const en = {
   'tool.categoryChanges': 'Changes',
   'tool.categoryContext': 'Context',
   'tool.categoryBrowser': 'Browser',
+  'tool.categoryMcp': 'MCP',
   'tool.groupCount': '{count} tools',
   'tool.groupStats': '{completed} completed, {failed} failed',
   'tool.groupCancelled': '{count} cancelled',

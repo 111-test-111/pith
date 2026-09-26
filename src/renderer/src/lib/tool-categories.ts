@@ -1,4 +1,4 @@
-import { Compass, Database, Diff, Globe, SquareTerminal, type IconComponent } from '@/lib/icons'
+import { Compass, Database, Diff, Globe, Plug, SquareTerminal, type IconComponent } from '@/lib/icons'
 import type { MessageKey } from '@/i18n/locales/en'
 
 /**
@@ -10,8 +10,12 @@ import type { MessageKey } from '@/i18n/locales/en'
  * A category can opt in exact tool names through `tools` and, for a namespaced
  * family, every matching name through `prefix`. Tools matching neither render
  * as standalone rows, exactly as before.
+ *
+ * A category that declares `groupKey` additionally owns one folded row in
+ * Settings → Tools, which groups by name prefix otherwise (see
+ * `lib/tool-groups.ts`).
  */
-export type ToolCategoryId = 'exploration' | 'terminal' | 'changes' | 'context' | 'browser'
+export type ToolCategoryId = 'exploration' | 'terminal' | 'changes' | 'context' | 'browser' | 'mcp'
 
 export interface ToolCategory {
   id: ToolCategoryId
@@ -22,6 +26,10 @@ export interface ToolCategory {
   tools: readonly string[]
   /** Optional namespace prefix, including its separator (for example `ctx_`). */
   prefix?: string
+  /** Settings → Tools folds this whole category into one group row under this
+   * key. The MCP family needs it: `mcp` and `mcpScript` carry no `prefix_`
+   * segment, so only the registry can say they belong with `mcp__<server>`. */
+  groupKey?: string
 }
 
 export const TOOL_CATEGORIES: readonly ToolCategory[] = [
@@ -68,6 +76,16 @@ export const TOOL_CATEGORIES: readonly ToolCategory[] = [
       'browser_wait_for', 'browser_screenshot', 'browser_close', 'browser_hover',
       'browser_select', 'browser_upload'
     ]
+  },
+  {
+    id: 'mcp',
+    labelKey: 'tool.categoryMcp',
+    icon: Plug,
+    // pi-mcp-adapter: every configured server gets one `<adapter>__<server>`
+    // namespace proxy, on top of the gateway itself and its scripting wrapper.
+    prefix: 'mcp__',
+    tools: ['mcp', 'mcpScript'],
+    groupKey: 'mcp'
   }
 ]
 
@@ -84,6 +102,13 @@ const PREFIXED_CATEGORIES = TOOL_CATEGORIES.filter(
 export function toolCategory(name: string): ToolCategory | undefined {
   return CATEGORY_BY_TOOL.get(name)
     ?? PREFIXED_CATEGORIES.find((category) => name.startsWith(category.prefix))
+}
+
+/** The MCP family — the gateway, its scripting wrapper and every per-server
+ * proxy — is one whole: one transcript group, one Settings → Tools group and
+ * one checkbox in Settings → Subagents. */
+export function isMcpTool(name: string): boolean {
+  return toolCategory(name)?.id === 'mcp'
 }
 
 /** One maximal run of adjacent calls sharing a category. */

@@ -108,9 +108,19 @@ export function deleteMcpServer(path: string, name: string): Promise<boolean> {
   return runAction(`delete:${name}`, () => window.pi.mcpDeleteServer(path, name))
 }
 
-/** One server's cached tool/resource/prompt metadata, on demand (not stored). */
-export function fetchMcpServerDetail(name: string): Promise<McpServerDetailDTO> {
-  return window.pi.mcpServerDetail(name)
+/** Per-server detail cache: reopening a tools viewer renders instantly. */
+const detailCache = new Map<string, McpServerDetailDTO>()
+
+/** The cached detail for one server, or null when never fetched. */
+export function peekMcpServerDetail(name: string): McpServerDetailDTO | null {
+  return detailCache.get(name) ?? null
+}
+
+/** One server's cached tool/resource/prompt metadata, cached per name. */
+export async function fetchMcpServerDetail(name: string): Promise<McpServerDetailDTO> {
+  const detail = await window.pi.mcpServerDetail(name)
+  detailCache.set(name, detail)
+  return detail
 }
 
 export function clearMcpActionError(): void {

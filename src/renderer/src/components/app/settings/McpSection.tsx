@@ -35,12 +35,14 @@ import {
   clearMcpActionError,
   deleteMcpServer,
   fetchMcpServerDetail,
+  peekMcpServerDetail,
   refreshMcpState,
   setMcpServerDisabled,
   upsertMcpServer,
   useMcpStore,
   writeMcpConfig
 } from '@/lib/mcp-store'
+import { getToolParameterFields } from '@/lib/tool-schema'
 import { installExtension, useToolCatalog } from '@/lib/extensions-catalog'
 import type {
   McpConfigFileDTO,
@@ -788,14 +790,18 @@ function ServerToolsDialog({
   useEffect(() => {
     if (!name) return
     let cancelled = false
-    setDetail(null)
+    // The store cache renders instantly — reopening or switching servers never
+    // blanks the panel; the fresh read then replaces the content silently.
+    const cached = peekMcpServerDetail(name)
+    setDetail(cached)
     setFailed(false)
     fetchMcpServerDetail(name)
       .then((result) => {
         if (!cancelled) setDetail(result)
       })
       .catch(() => {
-        if (!cancelled) setFailed(true)
+        // A failure with no cache to fall back on is the only error state.
+        if (!cancelled && !cached) setFailed(true)
       })
     return () => {
       cancelled = true
@@ -805,18 +811,16 @@ function ServerToolsDialog({
   const statusMeta = server?.status ? STATUS_META[server.status] : null
 
   return (
-    <MorphingModal viewId={name ? 'mcp-server-tools' : null} onClose={onClose} placement="center" className="max-w-lg">
+    <MorphingModal viewId={name ? 'mcp-server-tools' : null} onClose={onClose} placement="center" className="max-w-xl">
       {name ? (
-        <div role="dialog" aria-modal="true" aria-label={name} className="flex max-h-[70vh] flex-col">
+        <div role="dialog" aria-modal="true" aria-label={name} className="flex max-h-[74vh] flex-col">
           <div className="flex min-w-0 items-center gap-2">
             {statusMeta ? <span className={cn('size-1.5 shrink-0 rounded-full', statusMeta.dot)} /> : null}
             <h2 className="truncate text-base font-semibold text-foreground">{name}</h2>
           </div>
           <p className="mt-1 text-xs text-muted-foreground">
             {statusMeta ? t(statusMeta.labelKey) : null}
-            {detail?.cachedAt
-              ? ` · ${t('mcp.cachedAt', { time: new Date(detail.cachedAt).toLocaleString() })}`
-              : null}
+            {detail?.cachedAt ? ` · ${t('mcp.cachedAt', { time: new Date(detail.cachedAt).toLocaleString() })}` : null}
           </p>
           {server?.sourcePath ? (
             <button
@@ -845,16 +849,9 @@ function ServerToolsDialog({
                     <p className="mb-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
                       {t('mcp.toolsSection', { count: detail.tools.length })}
                     </p>
-                    <ul className="space-y-1.5">
+                    <ul className="space-y-2">
                       {detail.tools.map((tool) => (
-                        <li key={tool.name} className="min-w-0">
-                          <p className="truncate font-mono text-xs text-foreground">{tool.name}</p>
-                          {tool.description ? (
-                            <p className="mt-0.5 line-clamp-2 text-[11px] leading-4 text-muted-foreground">
-                              {tool.description}
-                            </p>
-                          ) : null}
-                        </li>
+                        <ToolDetailBlock key={tool.name} tool={tool} />
                       ))}
                     </ul>
                   </section>
@@ -868,7 +865,9 @@ function ServerToolsDialog({
                       {detail.resources.map((resource) => (
                         <li key={resource.uri} className="min-w-0">
                           <p className="truncate font-mono text-xs text-foreground">{resource.name}</p>
-                          <p className="mt-0.5 truncate text-[11px] leading-4 text-muted-foreground">{resource.uri}</p>
+                          <p className="mt-0.5 truncate text-[11px] leading-4 text-muted-foreground">
+                            {resource.uri}
+                          </p>
                         </li>
                       ))}
                     </ul>
@@ -879,14 +878,34 @@ function ServerToolsDialog({
                     <p className="mb-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
                       {t('mcp.promptsSection', { count: detail.prompts.length })}
                     </p>
-                    <ul className="space-y-1.5">
+                    <ul className="space-y-2">
                       {detail.prompts.map((prompt) => (
-                        <li key={prompt.name} className="min-w-0">
-                          <p className="truncate font-mono text-xs text-foreground">{prompt.name}</p>
+                        <li key={prompt.name} className="min-w-0 rounded-xl border border-border/60 bg-card px-3 py-2.5">
+                          <code className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-xs font-semibold text-foreground">
+                            {prompt.name}
+                          </code>
                           {prompt.description ? (
-                            <p className="mt-0.5 line-clamp-2 text-[11px] leading-4 text-muted-foreground">
-                              {prompt.description}
-                            </p>
+                            <p className="mt-1.5 text-xs leading-4 text-muted-foreground">{prompt.description}</p>
+                          ) : null}
+                          {prompt.arguments && prompt.arguments.length > 0 ? (
+                            <div className="mt-2 border-t border-border/60 pt-2">
+                              <p className="mb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
+                                {t('mcp.promptArguments')}
+                              </p>
+                              <ul className="space-y-1">
+                                {prompt.arguments.map((argument) => (
+                                  <li key={argument.name} className="flex flex-wrap items-baseline gap-x-2 text-xs">
+                                    <code className="font-mono text-foreground">{argument.name}</code>
+                                    <span className={argument.required ? 'text-primary' : 'text-muted-foreground/70'}>
+                                      {argument.required ? t('settings.toolRequired') : t('settings.toolOptional')}
+                                    </span>
+                                    {argument.description ? (
+                                      <span className="min-w-0 flex-1 text-muted-foreground">{argument.description}</span>
+                                    ) : null}
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
                           ) : null}
                         </li>
                       ))}
@@ -899,5 +918,51 @@ function ServerToolsDialog({
         </div>
       ) : null}
     </MorphingModal>
+  )
+}
+
+/** One cached tool with its JSON-Schema parameters, mirroring Settings → Tools. */
+function ToolDetailBlock({ tool }: { tool: McpServerDetailDTO['tools'][number] }) {
+  const { t } = useI18n()
+  const fields = getToolParameterFields(tool.inputSchema ?? {})
+  return (
+    <li className="min-w-0 rounded-xl border border-border/60 bg-card px-3 py-2.5">
+      <code className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-xs font-semibold text-foreground">
+        {tool.name}
+      </code>
+      {tool.description ? <p className="mt-1.5 text-xs leading-4 text-muted-foreground">{tool.description}</p> : null}
+      {fields.length > 0 ? (
+        <div className="mt-2 divide-y divide-border/60 border-t border-border/60">
+          {fields.map((field) => (
+            <div key={field.name} className="grid gap-2 py-2 sm:grid-cols-[minmax(0,7rem)_minmax(0,1fr)]">
+              <div className="min-w-0">
+                <code className="break-words font-mono text-xs text-foreground">{field.name}</code>
+                <p className={cn('mt-0.5 text-[10px]', field.required ? 'text-primary' : 'text-muted-foreground')}>
+                  {field.required ? t('settings.toolRequired') : t('settings.toolOptional')}
+                </p>
+              </div>
+              <div className="min-w-0 space-y-1">
+                <code className="block break-words font-mono text-[11px] text-foreground/80">{field.type}</code>
+                {field.description ? (
+                  <p className="text-xs leading-4 text-muted-foreground">{field.description}</p>
+                ) : null}
+                {field.allowedValues ? (
+                  <p className="text-[11px] text-muted-foreground/70">
+                    {t('settings.toolAllowedValues')}: <code className="font-mono">{field.allowedValues}</code>
+                  </p>
+                ) : null}
+                {field.defaultValue !== undefined ? (
+                  <p className="text-[11px] text-muted-foreground/70">
+                    {t('settings.toolDefaultValue')}: <code className="font-mono">{field.defaultValue}</code>
+                  </p>
+                ) : null}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="mt-1.5 text-[11px] text-muted-foreground/70">{t('settings.toolNoParameters')}</p>
+      )}
+    </li>
   )
 }

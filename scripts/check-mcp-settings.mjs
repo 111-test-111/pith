@@ -93,10 +93,11 @@ const detail = {
   name: 'beui',
   tools: [
     { name: 'list_components', description: 'List every beUI component.' },
-    { name: 'get_component', description: 'Fetch one component source.' }
+    { name: 'get_component', description: 'Fetch one component source.',
+      inputSchema: { type: 'object', properties: { slug: { type: 'string', description: 'Component slug.' } }, required: ['slug'] } }
   ],
   resources: [{ uri: 'beui://registry', name: 'registry', description: 'The registry.' }],
-  prompts: [{ name: 'build-page', description: 'Build a page.' }],
+  prompts: [{ name: 'build-page', description: 'Build a page.', arguments: [{ name: 'topic', description: 'Page topic.', required: true }] }],
   cachedAt: 1790330000000
 };
 
@@ -376,7 +377,19 @@ app.on('window-all-closed',()=>app.quit());`
   assert.ok(toolsDialog.includes('list_components'), 'tool names render')
   assert.ok(toolsDialog.includes('Resources (1)'), 'resources section renders')
   assert.ok(toolsDialog.includes('Prompts (1)'), 'prompts section renders')
-  await evaluate(`document.querySelector('[role=dialog]')?.closest('[data-morphing-modal]')`) // existence only
+  assert.ok(toolsDialog.includes('slug'), 'input schema parameters render')
+  assert.ok(toolsDialog.includes('Component slug.'), 'parameter descriptions render')
+  assert.ok(toolsDialog.includes('topic'), 'prompt arguments render')
+  // Reopening the SAME server hits the store cache: content renders on the
+  // first frame instead of flashing the loading line (the background refresh
+  // then replaces it silently).
+  await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+  await pause(300)
+  await evaluate(`document.querySelector(${JSON.stringify(rowSelector('beui'))} + ' button[aria-label="Browse tools"]').click()`)
+  const reopenFrame = await evaluate(`document.querySelector('[role=dialog]')?.textContent ?? ''`)
+  assert.ok(reopenFrame.includes('list_components'), 'the reopened panel renders from cache instantly')
+  assert.ok(!reopenFrame.includes('Loading MCP configuration'), 'no loading flash on a cache hit')
   await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
   await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
   await pause(300)

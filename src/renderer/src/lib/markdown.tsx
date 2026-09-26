@@ -243,7 +243,11 @@ const components: MarkdownComponents = {
   },
   table({ children }) {
     return (
-      <div className="w-full overflow-x-auto rounded-xl border border-border">
+      // Wide tables scroll horizontally inside the frame instead of squeezing
+      // every column into the message width: the cell min-widths below are what
+      // let the table outgrow the frame. Scrollbars stay hidden per the app's
+      // chrome-less policy — trackpad swipe / Shift+wheel scroll the frame.
+      <div className="w-full overflow-x-auto overscroll-x-contain rounded-xl border border-border">
         <table className="w-full border-collapse text-sm">{children}</table>
       </div>
     )
@@ -253,13 +257,18 @@ const components: MarkdownComponents = {
   },
   th({ children, style }) {
     return (
-      <th style={{ textAlign: style?.textAlign }} className="border-b border-border px-3 py-2 text-left font-semibold text-foreground">
+      // Headers stay on one line; the min-width floor keeps a many-column table
+      // from wrapping into unreadable slivers.
+      <th style={{ textAlign: style?.textAlign }} className="min-w-20 whitespace-nowrap border-b border-border px-3 py-2 text-left font-semibold text-foreground">
         {children}
       </th>
     )
   },
   td({ children, style }) {
-    return <td style={{ textAlign: style?.textAlign }} className="border-b border-border/60 px-3 py-2 align-top">{children}</td>
+    // `break-word` replaces the transcript's inherited `overflow-wrap:anywhere`
+    // so words break at natural points, and the max-width cap keeps one long
+    // text column from stretching the whole table.
+    return <td style={{ textAlign: style?.textAlign }} className="min-w-20 max-w-80 border-b border-border/60 px-3 py-2 align-top [overflow-wrap:break-word]">{children}</td>
   },
   tr({ children }) {
     return <tr className="last:[&>td]:border-b-0">{children}</tr>

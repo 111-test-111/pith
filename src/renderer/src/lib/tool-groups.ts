@@ -1,12 +1,16 @@
 /**
- * Tool-family grouping for Settings → Tools. A tool's "family" is the segment
- * before its first underscore (`ctx_execute` / `ctx_search` → `ctx`), which is
- * how extensions namespace large tool sets (`ctx_*`, `web_*`). Pure and
+ * Tool-family grouping for Settings → Tools. A tool's "family" is the registry's
+ * own group key when the category declares one (the MCP family: `mcp`,
+ * `mcpScript` and every `mcp__<server>` proxy share no prefix), otherwise the
+ * segment before its first underscore (`ctx_execute` / `ctx_search` → `ctx`),
+ * which is how extensions namespace large tool sets (`ctx_*`, `web_*`). Pure and
  * order-preserving: families always render at the head of the list in the
  * order their first member appeared, and the standalone tools follow in
  * catalog order, so grouping never reshuffles what the main process returned
  * beyond lifting the families up.
  */
+
+import { toolCategory } from './tool-categories'
 
 export interface ToolGroup<T> {
   kind: 'group'
@@ -32,7 +36,17 @@ export function toolPrefix(name: string): string | null {
   return name.slice(0, index)
 }
 
-/** Collapse same-prefix tools into one entry each; every family leads the
+/**
+ * The family Settings → Tools folds a tool under. A category that declares its
+ * own `groupKey` wins — that is the only way `mcp` and `mcpScript`, which carry
+ * no `prefix_` segment, join the `mcp__<server>` proxies — and everything else
+ * falls back to the name's leading segment.
+ */
+export function toolGroupKey(name: string): string | null {
+  return toolCategory(name)?.groupKey ?? toolPrefix(name)
+}
+
+/** Collapse same-family tools into one entry each; every family leads the
  * list, so a large extension cannot push the grouped families down the page. */
 export function buildToolList<T extends { name: string }>(
   tools: T[],
@@ -40,7 +54,7 @@ export function buildToolList<T extends { name: string }>(
 ): ToolListEntry<T>[] {
   const buckets = new Map<string, T[]>()
   for (const tool of tools) {
-    const prefix = toolPrefix(tool.name)
+    const prefix = toolGroupKey(tool.name)
     if (!prefix) continue
     const bucket = buckets.get(prefix)
     if (bucket) bucket.push(tool)
@@ -51,7 +65,7 @@ export function buildToolList<T extends { name: string }>(
   const standalone: ToolListEntry<T>[] = []
   const emitted = new Set<string>()
   for (const tool of tools) {
-    const prefix = toolPrefix(tool.name)
+    const prefix = toolGroupKey(tool.name)
     const bucket = prefix ? buckets.get(prefix) : undefined
     if (!prefix || !bucket || bucket.length < minSize) {
       standalone.push({ kind: 'tool', tool })

@@ -1,4 +1,5 @@
 import { SDK_BUILTIN_TOOL_NAMES, type ToolInfoDTO } from '../../../shared/types'
+import { isMcpTool } from './tool-categories'
 import { TOOL_GROUP_MIN_SIZE, toolPrefix } from './tool-groups'
 
 /**
@@ -20,10 +21,9 @@ import { TOOL_GROUP_MIN_SIZE, toolPrefix } from './tool-groups'
  */
 
 /** MCP counts as one whole: the gateway, its scripting wrapper and every
- * per-server proxy share a single picker entry. */
-export function isMcpToolName(name: string): boolean {
-  return name === 'mcp' || name === 'mcpScript' || name.startsWith('mcp__')
-}
+ * per-server proxy share a single picker entry. The family is defined once, in
+ * the tool-category registry (`tool-categories.ts`). */
+export const isMcpToolName = isMcpTool
 
 /** One picker row. `names` has more than one member only for the MCP family. */
 export interface SubagentToolOption {
