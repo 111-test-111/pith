@@ -1,6 +1,6 @@
 import { memo, useState } from 'react'
 import { Button } from '@/components/motion/button'
-import { Download, SquareArrowOutUpRight } from '@/lib/icons'
+import { Download, Eye, SquareArrowOutUpRight } from '@/lib/icons'
 import { basename, formatBytes } from '@/lib/format'
 import { useFileNavigation } from '@/lib/file-navigation'
 import { useI18n } from '@/i18n'
@@ -26,16 +26,14 @@ const PresentedFileCard = memo(function PresentedFileCard({ file }: { file: Pres
   return <div data-presented-file={file.path} className="min-w-0 rounded-card border border-border bg-background p-3">
     <div className="flex min-w-0 items-center gap-2">
       <FileTypeIcon path={file.path} className="size-5 shrink-0" />
-      <Button variant="ghost" size="sm" className="min-w-0 flex-1 justify-start px-1 text-sm" title={file.path}
-        aria-label={t('present.preview', { name: basename(file.path) })} onClick={() => navigation.openPath(file.path)}>
-        <span className="truncate">{basename(file.path)}</span>
-      </Button>
+      <span className="min-w-0 flex-1 truncate px-1 text-sm" title={file.path}>{basename(file.path)}</span>
       <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{formatBytes(file.size)}</span>
     </div>
     {file.description ? <p className="mt-1 break-words text-sm text-muted-foreground">{file.description}</p> : null}
     <div className="mt-2 flex items-center justify-end gap-1">
       <Button size="sm" variant="ghost" onClick={() => void open()} aria-label={t('present.open')}><SquareArrowOutUpRight className="size-3.5" />{t('present.open')}</Button>
       <Button size="sm" variant="ghost" onClick={() => void save()} disabled={busy} aria-label={t('present.save')}><Download className="size-3.5" />{t('present.save')}</Button>
+      <Button size="sm" variant="ghost" onClick={() => navigation.openPath(file.path)} aria-label={t('present.preview', { name: basename(file.path) })}><Eye className="size-3.5" />{t('present.previewAction')}</Button>
     </div>
     {error ? <p role="alert" className="mt-1 text-xs text-destructive">{t('present.error')}</p> : null}
   </div>

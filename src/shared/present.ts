@@ -16,7 +16,7 @@ export function parsePresentResult(value: unknown): PresentResult | null {
   const files: PresentedFile[] = []
   for (const file of value.files) {
     if (!file || typeof file !== 'object' || typeof file.path !== 'string' || !file.path || file.path.length > 4096
-      || !(/^(?:\/|[a-z]:[\\/])/i.test(file.path)) || file.path.includes('\0') || !Number.isSafeInteger(file.size) || file.size < 0
+      || !(/^(?:\/|[a-z]:[\\/]|\\\\[^\\]+\\[^\\]+)/i.test(file.path)) || file.path.includes('\0') || !Number.isSafeInteger(file.size) || file.size < 0
       || (file.description !== undefined && (typeof file.description !== 'string' || file.description.length > 1000))) return null
     files.push({ path: file.path, size: file.size, ...(file.description ? { description: file.description } : {}) })
   }

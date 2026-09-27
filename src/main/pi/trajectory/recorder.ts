@@ -20,6 +20,7 @@ export class TrajectoryRecorder {
   private replies = new Map<number, PendingRecord[]>()
   private exceptionalReply: PendingRecord[] | null = null
   private run: PendingRecord | null = null
+  private runSignal: AbortSignal | undefined
   private maintenance: PendingRecord | null = null
   private retry: PendingRecord | null = null
   private latestRequest: string | undefined
@@ -49,6 +50,7 @@ export class TrajectoryRecorder {
 
   private async stream(model: Parameters<StreamFn>[0], context: Parameters<StreamFn>[1], options: Parameters<StreamFn>[2]): Promise<Stream> {
     this.exceptionalReply = null
+    if (this.run && !this.maintenance) this.runSignal = options?.signal
     let record = this.create('request', this.maintenance ? 'compaction' : model.id)
     record.record.provider = model.provider
     record.record.model = model.id
@@ -131,7 +133,7 @@ export class TrajectoryRecorder {
           if (property === Symbol.asyncIterator) return async function* () {
             try {
               for await (const event of target) {
-                if (record.record.firstTokenAt === undefined && (event.type === 'text_delta' || event.type === 'thinking_delta' || event.type === 'toolcall_delta')) record.record.firstTokenAt = Date.now()
+                if (record.record.firstTokenAt === undefined && (event.type === 'text_delta' || event.type === 'thinking_delta' || event.type === 'toolcall_delta') && event.delta.length > 0) record.record.firstTokenAt = Date.now()
                 if (event.type === 'done') await finish(event.message)
                 else if (event.type === 'error') await finish(event.error)
                 yield event
@@ -165,17 +167,19 @@ export class TrajectoryRecorder {
   observe(event: AgentSessionEvent): void {
     if (this.disposed) return
     if (event.type === 'agent_start') {
+      this.runSignal = undefined
       this.run = this.create('run', 'run')
       void this.save(this.run)
     } else if (event.type === 'agent_settled') {
       if (this.run) {
         this.run.record.finishedAt = Date.now()
         const last = this.session.messages.at(-1)
-        this.run.record.status = last?.role === 'assistant' && last.stopReason === 'aborted' ? 'cancelled'
+        this.run.record.status = this.runSignal?.aborted || (last?.role === 'assistant' && last.stopReason === 'aborted') ? 'cancelled'
           : last?.role === 'assistant' && last.stopReason === 'error' ? 'failed' : 'completed'
         void this.save(this.run)
       }
       this.run = null
+      this.runSignal = undefined
     } else if (event.type === 'tool_execution_start') {
       const record = this.create('tool', event.toolName)
       record.record.parentId = this.latestRequest

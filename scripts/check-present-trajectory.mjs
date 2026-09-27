@@ -17,12 +17,13 @@ await build({ stdin: { contents: `export {createPresentTool} from './src/main/pi
 await build({ stdin: { contents: `export {TrajectoryStorage} from './src/main/pi/trajectory/storage';
 export {TrajectoryClient} from './src/main/pi/trajectory/client';
 export {trajectoryLines} from './src/main/pi/trajectory/jsonl';
+export {parsePresentResult} from './src/shared/present';
 export {presentedFiles} from './src/renderer/src/lib/presented-files';`, resolveDir: planRepoRoot },
   outfile, bundle: true, platform: 'node', format: 'esm' })
 await build({ entryPoints: [join(planRepoRoot, 'src/main/pi/trajectory-worker.ts')], outfile: join(temp, 'trajectory-worker.mjs'), bundle: true, platform: 'node', format: 'esm' })
-const { TrajectoryStorage, TrajectoryClient, trajectoryLines, presentedFiles } = await import(pathToFileURL(outfile).href)
+const { TrajectoryStorage, TrajectoryClient, trajectoryLines, parsePresentResult, presentedFiles } = await import(pathToFileURL(outfile).href)
 const { createPresentTool } = await import(pathToFileURL(join(temp, 'present.mjs')).href)
-let storage, fixture, client
+let storage, fixture, toolFixture, client
 try {
   const artifact = join(temp, 'report # 你好.txt')
   await writeFile(artifact, 'delivered')
@@ -44,6 +45,12 @@ try {
   results.get('p').isError = true
   assert.equal(presentedFiles(messages, results).length, 0)
   assert.equal(presentedFiles([{ role: 'assistant', content: [{ type: 'text', text: artifact }] }], results).length, 0)
+  for (const path of ['/tmp/report.txt', 'C:\\reports\\report.txt', '\\\\server\\share\\report.txt']) {
+    assert.equal(parsePresentResult({ kind: 'pith-present-v1', files: [{ path, size: 1 }] })?.files[0].path, path)
+  }
+  for (const path of ['report.txt', 'C:report.txt', '\\report.txt']) {
+    assert.equal(parsePresentResult({ kind: 'pith-present-v1', files: [{ path, size: 1 }] }), null)
+  }
   console.log('PASS present: regular files, exact paths, deduplication, failures, cancellation, successful call/result only')
 
   const partialPath = join(temp, 'partial.jsonl')
@@ -191,6 +198,24 @@ try {
   fixture.manager.branch(beforeAttempts)
   assert.equal((await fixture.app.trajectoryPage({ sessionPath: fixture.managed.path, kind: 'request' })).total, 2)
   fixture.manager.branch(afterAttempts)
+  const existingRequests = new Set(attemptedTrace.items.map(x => x.id))
+  fixture.managed.trajectory.previous = async (model, context, options) => {
+    const message = { role: 'assistant', content: [{ type: 'text', text: 'Final text without streamed output' }], api: model.api,
+      provider: model.provider, model: model.id, timestamp: Date.now(), stopReason: 'stop',
+      usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } }
+    return { async *[Symbol.asyncIterator]() {
+      await options.onPayload({ model: model.id, messages: context.messages }, model)
+      yield { type: 'text_delta', contentIndex: 0, delta: '', partial: message }
+      yield { type: 'thinking_delta', contentIndex: 0, delta: '', partial: message }
+      yield { type: 'done', message }
+    }, result: async () => message }
+  }
+  await fixture.session.prompt('empty deltas are not first output')
+  await fixture.managed.trajectory.flush()
+  const emptyTrace = await fixture.app.trajectoryPage({ sessionPath: fixture.managed.path, kind: 'request' })
+  const emptyRequests = emptyTrace.items.filter(x => !existingRequests.has(x.id))
+  assert.equal(emptyRequests.length, 1)
+  assert.equal(emptyRequests[0].firstTokenAt, undefined)
   let started
   const starting = new Promise(resolve => { started = resolve })
   fixture.managed.trajectory.previous = (model, context, options) => {
@@ -212,10 +237,34 @@ try {
   const stoppedTrace = await fixture.app.trajectoryPage({ sessionPath: fixture.managed.path, status: 'cancelled' })
   assert.equal(stoppedTrace.items.filter(x => x.kind === 'request').length, 1)
   assert.equal(stoppedTrace.items.filter(x => x.kind === 'run').length, 1)
-  console.log('PASS real SDK: present persistence, request callbacks, usage/timing, final payload, single committed records, rewind/fork isolation, real abort settlement')
+  let toolReady
+  const toolStarted = new Promise(resolve => { toolReady = resolve })
+  toolFixture = await createPlanFixture({ providerCallbacks: true,
+    respond: n => n === 1 ? [{ type: 'toolCall', id: 'cancel-tool', name: 'wait_for_cancel', arguments: {} }] : [{ type: 'text', text: 'unexpected continuation' }],
+    extensionFactories: [pi => pi.registerTool({ name: 'wait_for_cancel', label: 'Wait', description: 'Wait for cancellation',
+      parameters: { type: 'object', properties: {} }, execute: async (_id, _args, signal) => {
+        await new Promise(resolve => {
+          if (signal.aborted) resolve()
+          else signal.addEventListener('abort', resolve, { once: true })
+          toolReady()
+        })
+        return { content: [{ type: 'text', text: 'Stopped' }] }
+      } })] })
+  await toolFixture.managed.lifecyclePromise
+  const toolInterrupted = toolFixture.session.prompt('cancel during tool execution')
+  await toolStarted
+  await toolFixture.session.abort(); await toolInterrupted
+  // The offline provider deliberately completes normally after cancellation;
+  // the aborted run signal must still determine the overall outcome.
+  assert.equal(toolFixture.session.messages.at(-1).stopReason, 'stop')
+  await toolFixture.managed.trajectory.flush()
+  const toolTrace = await toolFixture.app.trajectoryPage({ sessionPath: toolFixture.managed.path })
+  assert.equal(toolTrace.items.find(x => x.kind === 'run').status, 'cancelled')
+  console.log('PASS real SDK: present persistence, callbacks, usage/timing, empty deltas, payload, committed records, branch isolation, request/tool abort settlement')
 } finally {
   storage?.close()
   await client?.dispose()
   await fixture?.close()
+  await toolFixture?.close()
   await rm(temp, { recursive: true, force: true })
 }

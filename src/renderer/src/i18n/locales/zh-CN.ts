@@ -14,6 +14,7 @@ const zhCN: Messages = {
   "trajectory.currentSession": "当前聊天",
   "present.title": "交付文件 · {count}",
   "present.preview": "预览 {name}",
+  "present.previewAction": "预览",
   "present.open": "打开",
   "present.save": "另存为…",
   "present.error": "无法打开或保存此文件，文件可能已移动或删除。",
