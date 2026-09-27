@@ -100,6 +100,7 @@ import { PlanStorage } from './plan-storage'
 import { parsePlanSubmission, reconstructPlan } from './plan-protocol'
 import { createPlanSubmissionTool } from './plan-submission'
 import { createPlanContextExtension, installPlanStreamOverlay } from './plan-context'
+import { installContextBudgetOverlay } from './context-budget'
 import {
   MAX_CONCURRENT_SUBAGENTS_DEFAULT,
   MAX_CONCURRENT_SUBAGENTS_LIMIT,
@@ -378,6 +379,7 @@ interface ManagedSession {
   /** The runtime tool ceiling (setter adapter + hook chain + execute recheck). */
   gate?: PlanGate
   disposePlanStream?: () => void
+  disposeContextBudget?: () => void
   planApproval?: PlanApprovalController
   /** Present on subagent child sessions: linkage + frozen tool ceiling. The
    * child's initialization activates only the ceiling, never the full set. */
@@ -1433,6 +1435,7 @@ export class PiManager {
     managed.gate?.dispose()
     managed.jevWorkflow?.dispose()
     managed.disposePlanStream?.()
+    managed.disposeContextBudget?.()
     managed.reloadPending = false
     // Disposal owns the whole subtree: a parent being deleted or the app
     // quitting aborts its subagent runs (suppressed — they must not wake) and
@@ -2223,6 +2226,7 @@ export class PiManager {
     })
     managed.unsubscribe = () => { unsubscribeSession(); unsubscribeCommitted() }
     managed.trajectory = new TrajectoryRecorder(session, this.trajectory)
+    managed.disposeContextBudget = installContextBudgetOverlay(session, () => services.settingsManager.getCompactionSettings())
     managed.disposePlanStream = installPlanStreamOverlay(session, () => plan.restricted)
     if (!isChild && !isScheduled) managed.jevWorkflow = new JevWorkflow({ session, service: this.jevService, owner: path,
       // Jev's action route asks the model to implement changes. Planning owns
