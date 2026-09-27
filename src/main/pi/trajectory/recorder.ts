@@ -65,7 +65,13 @@ export class TrajectoryRecorder {
       websocketConnectTimeoutMs: options?.websocketConnectTimeoutMs ?? this.session.settingsManager.getWebSocketConnectTimeoutMs(),
       samplingParams: options?.samplingParams
     }
-    await this.save(record, { context, options: requestOptions })
+    // AgentTool definitions carry execute/prepareArguments closures. Only the
+    // public model-facing Tool fields belong in a cloneable request document.
+    const capturedContext = { ...context, tools: context.tools?.map(tool => ({
+      name: tool.name, description: tool.description, parameters: tool.parameters,
+      ...(tool.constrainedSampling !== undefined ? { constrainedSampling: tool.constrainedSampling } : {})
+    })) }
+    await this.save(record, { context: capturedContext, options: requestOptions })
     const attempts = [record]
     let payloads = 0
     let finished = false
@@ -105,7 +111,7 @@ export class TrajectoryRecorder {
             record = next
             attempts.push(record)
             this.latestRequest = record.record.id
-            await this.save(record, { context, options: requestOptions })
+            await this.save(record, { context: capturedContext, options: requestOptions })
           }
           record.record.provider = requestModel.provider
           record.record.model = requestModel.id

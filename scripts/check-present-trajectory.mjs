@@ -155,7 +155,14 @@ try {
     await fixture.app.exportTrajectory(fixture.managed.path, request.id, out)
     const exported = await readFile(out, 'utf8')
     assert(!exported.includes('fixture-secret')); assert.equal(JSON.parse(exported).documents.payload.authorization, '[redacted]', JSON.stringify(Object.keys(JSON.parse(exported).documents.payload ?? {})))
+    const documents = JSON.parse(exported).documents
+    assert(documents.context?.messages.length > 0, 'SDK context survives worker structured cloning')
+    assert(documents.options?.api, 'options are captured alongside context')
+    assert(documents.context.tools.some(tool => tool.name === 'present'))
+    assert(documents.context.tools.every(tool => Object.keys(tool).every(key => ['name', 'description', 'parameters', 'constrainedSampling'].includes(key))))
+    assert(!request.captureError, 'tool execution closures do not cause incomplete capture')
   }
+  assert(fixture.session.agent.state.tools.every(tool => typeof tool.execute === 'function'), 'capture does not mutate live tools')
   const original = fixture.manager.getLeafId()
   const user = fixture.manager.getBranch().find(x => x.type === 'message' && x.message.role === 'user')
   fixture.manager.branch(user.id)
