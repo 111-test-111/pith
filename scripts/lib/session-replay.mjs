@@ -73,6 +73,13 @@ export function createReplayNormalizer({ workspace, profile, sessions, secretVal
         const after = source[offset + root.length]
         return after === undefined || /[\/\\\s"'<>),;:#?]/.test(after) ? `{{pith:${name}}}` : match
       })
+      // Separator spelling is non-semantic only in an explicitly rooted
+      // Windows path (or present's canonical-path text), never arbitrary code.
+      for (const [name, root] of roots) if (root.includes('\\')) {
+        const marker = `{{pith:${name}}}`
+        if (key === 'path' && result.startsWith(marker)) result = marker + result.slice(marker.length).replaceAll('\\', '/')
+        if (result.startsWith(`Presented ${marker}`)) result = result.split('\n').map(line => line.startsWith(`Presented ${marker}`) ? line.replaceAll('\\', '/') : line).join('\n')
+      }
       return result
     }
     if (typeof value === 'number') {

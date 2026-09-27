@@ -67,7 +67,9 @@ the model-visible messages produced by a budget transform remain fully checked.
 
 Only explicitly bound workspace/profile/session-directory roots, message
 timestamps and tool correlation IDs are normalized. Roots keep their relative
-suffix; a different filename remains different. Timestamps become numeric zero
+suffix; a different filename remains different. Rooted Windows `path` fields and
+`present` path text use portable
+separator spelling; arbitrary code escapes are preserved. Timestamps become zero
 in comparisons, preserving array/event order without relying on wall-clock
 millisecond coincidences. Replayed assistant responses receive distinct internal
 timestamps for SDK correlation. Tool-call IDs bind consistently across calls,
