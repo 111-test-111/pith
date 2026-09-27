@@ -237,6 +237,27 @@ try {
   const stoppedTrace = await fixture.app.trajectoryPage({ sessionPath: fixture.managed.path, status: 'cancelled' })
   assert.equal(stoppedTrace.items.filter(x => x.kind === 'request').length, 1)
   assert.equal(stoppedTrace.items.filter(x => x.kind === 'run').length, 1)
+  fixture.session.settingsManager.setRetryEnabled(true)
+  fixture.managed.trajectory.previous = (model, context, options) => {
+    const message = { role: 'assistant', content: [], api: model.api, provider: model.provider, model: model.id,
+      timestamp: Date.now(), stopReason: 'error', errorMessage: '503 service unavailable',
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } }
+    return { async *[Symbol.asyncIterator]() {
+      await options.onPayload({ model: model.id, messages: context.messages }, model)
+      yield { type: 'error', error: message }
+    }, result: async () => message }
+  }
+  const cancelRetry = fixture.session.subscribe(event => {
+    if (event.type === 'auto_retry_start') queueMicrotask(() => fixture.session.abortRetry())
+  })
+  try { await fixture.session.prompt('cancel while waiting for retry') }
+  finally { cancelRetry(); fixture.session.settingsManager.setRetryEnabled(false) }
+  await fixture.managed.trajectory.flush()
+  const retryCancelled = await fixture.app.trajectoryPage({ sessionPath: fixture.managed.path, kind: 'retry' })
+  assert.equal(retryCancelled.items.at(-1).status, 'cancelled')
+  const retryRun = await fixture.app.trajectoryPage({ sessionPath: fixture.managed.path, kind: 'run' })
+  assert.equal(retryRun.items.at(-1).status, 'cancelled')
+  assert(!(await fixture.app.trajectoryPage({ sessionPath: fixture.managed.path, status: 'running' })).total, 'settled retry leaves no running records')
   let toolReady
   const toolStarted = new Promise(resolve => { toolReady = resolve })
   toolFixture = await createPlanFixture({ providerCallbacks: true,
@@ -260,7 +281,7 @@ try {
   await toolFixture.managed.trajectory.flush()
   const toolTrace = await toolFixture.app.trajectoryPage({ sessionPath: toolFixture.managed.path })
   assert.equal(toolTrace.items.find(x => x.kind === 'run').status, 'cancelled')
-  console.log('PASS real SDK: present persistence, callbacks, usage/timing, empty deltas, payload, committed records, branch isolation, request/tool abort settlement')
+  console.log('PASS real SDK: present persistence, callbacks, usage/timing, empty deltas, payload, committed records, branch isolation, stream/tool/backoff abort settlement')
 } finally {
   storage?.close()
   await client?.dispose()
