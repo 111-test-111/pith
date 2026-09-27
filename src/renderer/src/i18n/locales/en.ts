@@ -16,6 +16,7 @@ const en = {
   "trajectory.currentSession": "Current chat",
   "present.title": "Delivered files · {count}",
   "present.preview": "Preview {name}",
+  "present.previewAction": "Preview",
   "present.open": "Open",
   "present.save": "Save as…",
   "present.error": "Unable to open or save this file. It may have moved or been removed.",
