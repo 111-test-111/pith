@@ -21,6 +21,7 @@ export class TrajectoryRecorder {
   private exceptionalReply: PendingRecord[] | null = null
   private run: PendingRecord | null = null
   private runSignal: AbortSignal | undefined
+  private runCancelled = false
   private maintenance: PendingRecord | null = null
   private retry: PendingRecord | null = null
   private latestRequest: string | undefined
@@ -171,6 +172,7 @@ export class TrajectoryRecorder {
       // agent_settled. They still belong to the same logical run.
       if (!this.run) {
         this.runSignal = undefined
+        this.runCancelled = false
         this.run = this.create('run', 'run')
         void this.save(this.run)
       }
@@ -178,12 +180,13 @@ export class TrajectoryRecorder {
       if (this.run) {
         this.run.record.finishedAt = Date.now()
         const last = this.session.messages.at(-1)
-        this.run.record.status = this.runSignal?.aborted || (last?.role === 'assistant' && last.stopReason === 'aborted') ? 'cancelled'
+        this.run.record.status = this.runCancelled || this.runSignal?.aborted || (last?.role === 'assistant' && last.stopReason === 'aborted') ? 'cancelled'
           : last?.role === 'assistant' && last.stopReason === 'error' ? 'failed' : 'completed'
         void this.save(this.run)
       }
       this.run = null
       this.runSignal = undefined
+      this.runCancelled = false
     } else if (event.type === 'tool_execution_start') {
       const record = this.create('tool', event.toolName)
       record.record.parentId = this.latestRequest
@@ -247,12 +250,23 @@ export class TrajectoryRecorder {
       }
       this.maintenance = null
     } else if (event.type === 'auto_retry_start') {
+      // Only the final attempt gets auto_retry_end. A subsequent start means
+      // the previous attempt failed, so settle it before replacing its owner.
+      if (this.retry) {
+        this.retry.record.finishedAt = Date.now()
+        this.retry.record.status = 'failed'
+        void this.save(this.retry)
+      }
       this.retry = this.create('retry', String(event.attempt))
       void this.save(this.retry, { event })
     } else if (event.type === 'auto_retry_end') {
+      // SDK 0.85 reports backoff cancellation through this public outcome;
+      // its backoff AbortController is separate from the agent stream signal.
+      const cancelled = !event.success && event.finalError === 'Retry cancelled'
+      if (cancelled) this.runCancelled = true
       if (this.retry) {
         this.retry.record.finishedAt = Date.now()
-        this.retry.record.status = event.success ? 'completed' : 'failed'
+        this.retry.record.status = cancelled ? 'cancelled' : event.success ? 'completed' : 'failed'
         void this.save(this.retry, { output: event })
       }
       this.retry = null
