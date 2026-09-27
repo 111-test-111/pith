@@ -31,7 +31,15 @@ async function stopAdapterTree(child: ChildProcess): Promise<void> {
   // must neither skip cleanup nor cancel the descendants' SIGKILL deadline.
   const signal = (value: NodeJS.Signals | 0): boolean => {
     try { process.kill(-child.pid!, value); return true }
-    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false; throw error }
+    catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      if (code === 'ESRCH') return false
+      // macOS can report EPERM while the last group member is a zombie
+      // awaiting reaping. Treat it as potentially present and keep polling:
+      // only ESRCH proves exit; persistent permission failures retain the lease.
+      if (code === 'EPERM') return true
+      throw error
+    }
   }
   if (!signal('SIGTERM')) return
   const deadline = Date.now() + 1500

@@ -264,13 +264,17 @@ const PLAN_FACT_EVENT_TYPES: ReadonlySet<string> = new Set([
 
 /** Drop functions/symbols and turn Dates into ISO strings before IPC. */
 function serialize(value: unknown): any {
-  return JSON.parse(
-    JSON.stringify(value, (_key, val) => {
-      if (typeof val === 'function' || typeof val === 'symbol') return undefined
-      if (val instanceof Date) return val.toISOString()
-      return val
-    })
-  )
+  try {
+    return JSON.parse(
+      JSON.stringify(value, (_key, val) => {
+        if (typeof val === 'function' || typeof val === 'symbol') return undefined
+        if (val instanceof Date) return val.toISOString()
+        return val
+      })
+    )
+  } catch (error) {
+    throw new Error('Failed to serialize IPC payload', { cause: error })
+  }
 }
 
 /**
@@ -551,9 +555,10 @@ export class PiManager {
   }
 
   async debugSource(request: DebugSourceRequest): Promise<DebugSourceContentDTO> {
-    const { sessionPath, debugId, stopId, sourceReference, sourceVersion } = request
+    const { sessionPath, debugId, stopId, sourceReference, sourceVersion, startLine, offset, limit } = request
     return await dispatchDebugAction({ manager: this.debugManager, sessionPath, debugId, stopId },
-      { action: 'source', sourceReference, sourceVersion }) as DebugSourceContentDTO
+      { action: 'source', sourceReference, sourceVersion, ...(startLine !== undefined ? { startLine } : {}),
+        ...(offset !== undefined ? { offset } : {}), ...(limit !== undefined ? { limit } : {}) }) as DebugSourceContentDTO
   }
 
   bashTaskOutput(request: BashTaskRequest): BashTaskOutputDTO {
@@ -874,6 +879,7 @@ export class PiManager {
       return this.diskContextDetail(sessionPath)
     }
     const session = managed.session
+    // SAFETY: the SDK statistics carry the cost fields required by ContextStatsLike.
     const stats = session.getSessionStats() as unknown as ContextStatsLike
     const usage = this.contextUsageOf(managed) ?? {
       tokens: null,
@@ -1355,7 +1361,7 @@ export class PiManager {
             return { ...result, extensions: result.extensions.filter((e) => !isDisabled(e)).map(desktopExtension) }
           }
         }
-        const value = Reflect.get(target, prop, target)
+        const value = target[prop as keyof ResourceLoader]
         return typeof value === 'function' ? value.bind(target) : value
       }
     }) as ResourceLoader
@@ -3238,6 +3244,7 @@ export class PiManager {
     const controller = new AbortController()
     this.sideChats.set(exchangeId, controller)
     const runtime = await this.runtime()
+    // SAFETY: the SDK chat messages match the structure consumed by buildSideChatContext.
     const sessionMessages = bound.session.messages as unknown as ChatMessage[]
     void runSideChatAnswer({
       runtime,

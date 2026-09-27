@@ -1,7 +1,7 @@
 // Deterministic wire fixture. Exercises the production client/manager without
 // claiming a real Python, Go or JavaScript runtime integration.
 import { createServer } from 'node:net'
-import { appendFileSync } from 'node:fs'
+import { appendFileSync, existsSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 const mode = process.argv[2]
 const nativeMode = mode?.startsWith('native')
@@ -23,7 +23,10 @@ function serve(input, output) {
       const end = buffer.indexOf('\r\n\r\n'); if (end < 0) return
       const length = Number(/Content-Length: (\d+)/.exec(buffer.subarray(0, end).toString())[1])
       if (buffer.length < end + 4 + length) return
-      const r = JSON.parse(buffer.subarray(end + 4, end + 4 + length)); buffer = buffer.subarray(end + 4 + length)
+      const body = buffer.subarray(end + 4, end + 4 + length)
+      buffer = buffer.subarray(end + 4 + length)
+      let r
+      try { r = JSON.parse(body) } catch { continue }
       if (log) appendFileSync(log, JSON.stringify(r) + '\n')
       if (r.type === 'response' && r.command === 'runInTerminal') { reply(launch, {}, r.success); if (r.success) stopped(); continue }
       if (r.type !== 'request') continue
@@ -36,12 +39,24 @@ function serve(input, output) {
           launch = r
           if (childMode && a.__pendingTargetId) targets.set(a.__pendingTargetId, () => event('terminated'))
           if (mode === 'no-initialized') break
+          if (mode === 'launch-rejected') {
+            process.stderr.write('fixture: OS denied debug launch\n')
+            event('initialized')
+            setTimeout(() => reply(r, { error: { format: 'launch rejected: {reason}', variables: { reason: 'operation not permitted' } } }, false), 25)
+            break
+          }
+          if (mode === 'launch-crash') {
+            process.stderr.write('fixture: adapter crashed during launch\n')
+            event('initialized')
+            setTimeout(() => process.exit(42), 25)
+            break
+          }
           event('initialized')
           if (mode === 'terminal') send({ type: 'request', command: 'runInTerminal', arguments: { cwd: process.cwd(), args: ['echo', 'fixture'], env: { SET: 'yes', DELETE: null } } })
           break
         case 'configurationDone':
           reply(r)
-          if (mode === 'terminal') break
+          if (mode === 'terminal' || mode === 'launch-rejected' || mode === 'launch-crash') break
           if (childMode && !launch.arguments.__pendingTargetId) {
             startChild()
           } else stopped()
@@ -61,7 +76,10 @@ function serve(input, output) {
           break
         }
         case 'source':
-          reply(r, { content: 'virtual ' + a.source.adapterData.token + ':' + epoch, mimeType: 'text/x-asm' }); break
+          reply(r, { content: mode === 'native-large-source'
+            ? Array.from({ length: 12000 }, (_, i) => `0x${i.toString(16).padStart(8, '0')}: nop ; instruction ${i + 1}`).join('\n') + '\nTARGET_AFTER_262144\n'
+            : mode === 'native-source-boundaries' ? 'first\n' + 'X'.repeat(120) + '\nlast\n'
+              : 'virtual ' + a.source.adapterData.token + ':' + epoch, mimeType: 'text/x-asm' }); break
         case 'scopes': reply(r, { scopes: [{ name: 'Locals', variablesReference: 100, presentationHint: 'registers', namedVariables: 1 }] }); break
         case 'variables': {
           if (mode?.startsWith('variables-')) {
@@ -91,9 +109,14 @@ function serve(input, output) {
           const all = Array.from({ length: 51 }, (_, i) => ({ id: i, name: 'module-' + i, symbolStatus: 'Symbols loaded', addressRange: '0x2000000000000001' }))
           reply(r, { modules: mode === 'native-unpaged' ? all : all.slice(mode === 'native-ignore-start' ? 0 : a.startModule ?? 0, a.moduleCount ? (mode === 'native-ignore-start' ? 0 : a.startModule ?? 0) + a.moduleCount : undefined), totalModules: all.length }); break
         }
-        case 'setInstructionBreakpoints':
+        case 'setInstructionBreakpoints': {
           instructionPoints = a.breakpoints.map((point, i) => ({ ...point, id: 201 + i, verified: true }))
-          setTimeout(() => reply(r, { breakpoints: instructionPoints }), 20); break
+          const answer = () => {
+            if (mode === 'native-gated-breakpoints' && !existsSync(process.env.PI_DAP_BREAKPOINT_GATE)) setTimeout(answer, 10)
+            else reply(r, { breakpoints: instructionPoints })
+          }
+          setTimeout(answer, 20); break
+        }
         case 'setFunctionBreakpoints':
           functionPoints = a.breakpoints.map((point, i) => ({ ...point, id: 301 + i, verified: true }))
           reply(r, { breakpoints: functionPoints }); break

@@ -1193,7 +1193,6 @@ const en = {
   'debug.watchPlaceholder': 'Expression to evaluate on each stop',
   'debug.watchAdd': 'Add watch expression',
   'debug.watchRemove': 'Remove watch {expression}',
-  'debug.watchEmpty': 'No watch expressions',
   'debug.toggleBreakpoint': 'Toggle breakpoint at line {line}',
   'settings.browserOpenLinks': 'Open links in the embedded browser',
   'settings.browserOpenLinksHint':

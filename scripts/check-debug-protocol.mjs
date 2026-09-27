@@ -45,7 +45,7 @@ try {
   const useFixture = (spec, mode) => { spec.detect = async () => ({ command: process.execPath, args: [fixture, mode, '${port}'] }) }
   useFixture(lldb, 'normal'); useFixture(python, 'normal'); useFixture(go, 'tcp'); useFixture(js, 'child')
   const start = (over = {}) => manager.start({ sessionId: 'parent', sessionPath: '/parent', workspaceCwd: temp, cwd: temp, adapterId: 'lldb-dap', kind: 'launch', program: '/fixture/demo', ...over })
-  const a = await start(), b = await start(), child = await start({ sessionPath: '/child' })
+  const a = await start(); await start(); const child = await start({ sessionPath: '/child' })
   assert.equal(a.status, 'stopped'); assert.ok(a.stopId > 0)
   assert.throws(() => manager.get('/parent'), /Multiple/)
   assert.throws(() => manager.get('/child', a.id), /No debug session/)
@@ -117,7 +117,7 @@ try {
       do {
         page = await manager.variables('/parent', size, offset, 50, vars.id, vars.stopId)
         names.push(...page.variables.map(v => Number(v.name))); offset += page.variables.length
-        assert.ok(names.length <= size, mode + ' must advance without duplicates')
+        assert.ok(names.length <= size, `${mode} must advance without duplicates`)
       } while (page.truncated)
       assert.deepEqual(names, Array.from({ length: size }, (_, i) => i))
       assert.deepEqual((await manager.variables('/parent', size, size, 50, vars.id)).variables, [])
@@ -174,8 +174,125 @@ try {
   const finalTail = await start()
   await until(() => manager.get('/parent', finalTail.id).outputChars === 'FINAL TAIL'.length)
   assert.equal(manager.output('/parent', undefined, undefined, finalTail.id).output, 'FINAL TAIL')
+  useFixture(lldb, 'native-paged')
+  const beforeInitial = requests().length
+  const launchTool = createDebugTools({ manager, services: { cwd: temp }, sessionId: 'parent', sessionPath: '/parent',
+    enabled: () => true, sandboxMode: () => 'workspace-write', canStart: () => true, runInTerminal: () => undefined })[0]
+  const launchResult = await launchTool.execute('initial', { request: { action: 'start', adapter: 'lldb-dap', program: '/fixture/demo',
+    breakpoints: [{ file: '/fixture/initial.c', items: [{ line: 7, condition: 'value > 0' }] }],
+    functionBreakpoints: [{ name: 'entry' }] } }, undefined, undefined, { cwd: temp })
+  const initial = JSON.parse(launchResult.content[0].text)
+  const initialCommands = requests().slice(beforeInitial).map(row => row.command)
+  assert.ok(initialCommands.indexOf('launch') < initialCommands.indexOf('setBreakpoints'))
+  assert.ok(initialCommands.indexOf('setBreakpoints') < initialCommands.indexOf('setFunctionBreakpoints'))
+  assert.ok(initialCommands.indexOf('setFunctionBreakpoints') < initialCommands.indexOf('configurationDone'))
+  assert.equal((await manager.breakpoints('/parent', initial.id))[0].requestedLine, 7)
+  assert.equal(manager.nativeBreakpoints('/parent', initial.id).function[0].name, 'entry')
+  await assert.rejects(launchTool.execute('duplicate', { request: { action: 'start', adapter: 'lldb-dap', program: '/fixture/demo',
+    breakpoints: [{ file: '/same.c', items: [] }, { file: '/same.c', items: [] }] } }, undefined, undefined, { cwd: temp }), /Duplicate initial breakpoint file/)
+  await assert.rejects(launchTool.execute('core', { request: { action: 'start', adapter: 'lldb-dap', kind: 'core', coreFile: '/fixture/core',
+    functionBreakpoints: [{ name: 'entry' }] } }, undefined, undefined, { cwd: temp }), /Core files cannot have breakpoints/)
+  await manager.stop('/parent', initial.id)
+  // The restart reservation spans stop AND the replacement's async startup.
+  useFixture(lldb, 'normal')
+  const fallback = await start({ sessionPath: '/restart-race' })
+  let replacementDetect
+  lldb.detect = () => new Promise(resolve => { replacementDetect = resolve })
+  const replacing = manager.restart('/restart-race', fallback.id)
+  await assert.rejects(manager.restart('/restart-race', fallback.id), /busy/)
+  await until(() => !!replacementDetect)
+  await assert.rejects(manager.restart('/restart-race', fallback.id), /busy/)
+  replacementDetect({ command: process.execPath, args: [fixture, 'normal'] })
+  const replacementOnce = await replacing
+  assert.equal(manager.list('/restart-race').filter(s => ['starting', 'running', 'stopped'].includes(s.status)).length, 1)
+  assert.equal(replacementOnce.replacesId, fallback.id)
+  await manager.stopSession('/restart-race')
+  // Gate real wire replies so cancellation is deterministic at both awaits.
+  useFixture(lldb, 'native-gated-breakpoints')
+  const gate = join(temp, 'breakpoint-release')
+  process.env.PI_DAP_BREAKPOINT_GATE = gate
+  try {
+    const native = await start({ sessionPath: '/restart-admission' })
+    let enabled = true
+    const restartTool = createDebugTools({ manager, services: { cwd: temp }, sessionId: 'parent', sessionPath: '/restart-admission',
+      enabled: () => enabled, sandboxMode: () => 'workspace-write', canStart: () => enabled, runInTerminal: () => undefined })[0]
+    let before = requests().length
+    const writing = manager.setInstructionBreakpoints('/restart-admission', [{ instructionReference: '0x10' }], native.id, native.stopId)
+    await until(() => requests().slice(before).some(r => r.command === 'setInstructionBreakpoints'))
+    const restarting = restartTool.execute('disabled', { debugId: native.id, request: { action: 'restart' } }, undefined, undefined, { cwd: temp })
+    const disabled = assert.rejects(restarting, /restart cancelled/)
+    await delay(0); enabled = false
+    writeFileSync(gate, 'ready'); await writing; await disabled
+    assert.ok(!requests().slice(before).some(r => r.command === 'restart'))
+    assert.equal(manager.nativeBreakpoints('/restart-admission', native.id).instruction.length, 1)
+    enabled = true; rmSync(gate)
+    before = requests().length
+    const cancellation = new AbortController()
+    const cancelled = assert.rejects(restartTool.execute('cancelled', { debugId: native.id, request: { action: 'restart' } }, cancellation.signal, undefined, { cwd: temp }), /restart cancelled/)
+    await until(() => requests().slice(before).some(r => r.command === 'setInstructionBreakpoints' && r.arguments.breakpoints.length === 0))
+    cancellation.abort(); writeFileSync(gate, 'ready'); await cancelled
+    assert.ok(!requests().slice(before).some(r => r.command === 'restart'))
+    assert.equal(manager.nativeBreakpoints('/restart-admission', native.id).instruction.length, 0)
+    // A cancelled restart releases its reservation for the next valid action.
+    assert.equal((await manager.restart('/restart-admission', native.id)).stopId, native.stopId + 1)
+    await manager.stopSession('/restart-admission')
+  } finally { delete process.env.PI_DAP_BREAKPOINT_GATE }
+  console.log('[PASS] restart races: one fallback replacement through startup; live enablement and abort rechecked after queued writes/address clearing')
+  if (process.platform !== 'win32') {
+    useFixture(lldb, 'normal')
+    const reaping = await start({ sessionPath: '/reaping' })
+    const group = -manager.sessions.get(reaping.id).client.child.pid
+    const kill = process.kill
+    let deniedProbes = 0
+    process.kill = (pid, value) => {
+      if (pid === group && value === 0 && deniedProbes < 2) {
+        deniedProbes++; throw Object.assign(new Error('zombie group awaiting reaping'), { code: 'EPERM' })
+      }
+      return kill(pid, value)
+    }
+    try { await manager.stop('/reaping', reaping.id) } finally { process.kill = kill }
+    assert.equal(deniedProbes, 2)
+    assert.equal(manager.get('/reaping', reaping.id).status, 'terminated')
+    assert.equal(coordinator.restoreBlockers(temp).writers, 0)
+    // Persistent EPERM is never proof of exit and must keep the checkout fenced.
+    const fencedCoordinator = new CheckoutCoordinator(), fencedManager = new DebugManager(() => {}, fencedCoordinator)
+    const fenced = await fencedManager.start({ sessionId: 'fenced', sessionPath: '/fenced', workspaceCwd: temp, cwd: temp,
+      adapterId: 'lldb-dap', kind: 'launch', program: '/fixture/demo' })
+    const inaccessibleGroup = -fencedManager.sessions.get(fenced.id).client.child.pid
+    let killAttempted = false
+    process.kill = (pid, value) => {
+      if (pid === inaccessibleGroup) {
+        if (value === 'SIGKILL') killAttempted = true
+        throw Object.assign(new Error('inaccessible process group'), { code: 'EPERM' })
+      }
+      return kill(pid, value)
+    }
+    try {
+      await assert.rejects(fencedManager.stop('/fenced', fenced.id), /process group did not exit/)
+      assert.ok(killAttempted)
+      assert.equal(fencedManager.get('/fenced', fenced.id).status, 'failed')
+      assert.equal(fencedCoordinator.restoreBlockers(temp).writers, 1)
+    } finally {
+      process.kill = kill
+      try { kill(inaccessibleGroup, 'SIGKILL') } catch (error) { if (error.code !== 'ESRCH') throw error }
+      await fencedManager.dispose().catch(() => {})
+    }
+    console.log('[PASS] process cleanup: transient EPERM waits for reaping; persistent EPERM reaches SIGKILL deadline and retains the checkout fence')
+  }
   useFixture(lldb, 'fail')
   await assert.rejects(start(), /initialize failed/)
+  useFixture(lldb, 'launch-rejected')
+  const beforeRejected = new Set(manager.list('/parent').map(session => session.id))
+  await assert.rejects(start(), /launch rejected: operation not permitted[\s\S]*fixture: OS denied debug launch/)
+  const rejectedLaunch = manager.list('/parent').find(session => !beforeRejected.has(session.id))
+  assert.equal(rejectedLaunch.status, 'failed')
+  assert.match(rejectedLaunch.error, /launch rejected: operation not permitted[\s\S]*fixture: OS denied debug launch/)
+  useFixture(lldb, 'launch-crash')
+  const beforeCrash = new Set(manager.list('/parent').map(session => session.id))
+  await assert.rejects(start(), /adapter connection closed[\s\S]*fixture: adapter crashed during launch/)
+  const crashedLaunch = manager.list('/parent').find(session => !beforeCrash.has(session.id))
+  assert.equal(crashedLaunch.status, 'failed')
+  assert.match(crashedLaunch.error, /fixture: adapter crashed during launch/)
   useFixture(lldb, 'no-initialized')
   const controller = new AbortController(), handshake = start({ signal: controller.signal })
   const closed = assert.rejects(handshake, /closed|disposed|cancelled/)

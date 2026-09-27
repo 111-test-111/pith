@@ -17,11 +17,11 @@ import React from 'react';import {createRoot} from 'react-dom/client';
 import {DebugPane} from '/src/components/app/DebugPane.tsx';import {DebugStore} from '/src/state/debug-store.ts';import {I18nProvider,useI18n} from '/src/i18n/index.tsx';import {FileNavigationProvider} from '/src/lib/file-navigation.tsx';import '/src/styles.css';
 import {FileSource} from '/src/components/app/FileSource.tsx';import {FilesPane} from '/src/components/app/FilesPane.tsx';import {FileBrowserStore} from '/src/state/file-browser-store.ts';
 localStorage.setItem('pi-app:locale','en');
-window.fileReads=[];window.sourceCalls=[];window.nativePoints={instruction:[],function:[]};window.nativeSource={kind:'adapter',sourceReference:1,name:'virtual.asm',path:'/not-a-file'};window.calls=[];window.values={a:'1',b:'other'};window.consoleText='';window.listeners=[];window.listCalls=[];
+window.fileReads=[];window.sourceCalls=[];window.nativeLongSource=false;window.nativePoints={instruction:[],function:[]};window.nativeSource={kind:'adapter',sourceReference:1,name:'virtual.asm',path:'/not-a-file'};window.calls=[];window.values={a:'1',b:'other'};window.consoleText='';window.listeners=[];window.listCalls=[];
 const base={sessionPath:'/review',sessionId:'chat',adapterId:'fake',adapterLabel:'Fake',kind:'launch',status:'stopped',activeThreadId:1,outputChars:0,revision:1,stopId:1,location:{file:'/tmp/demo.c',line:7,name:'main'}};
 window.sessions=[{...base,id:'a',target:'Alpha',startedAt:1},{...base,id:'b',target:'Beta',startedAt:2}];
-window.pi={onDebugEvent:fn=>{listeners.push(fn);return()=>{}},debugList:async path=>{listCalls.push(path);return sessions.filter(s=>s.sessionPath===path)},openExternal:()=>{},openPath:()=>{},readFileDocument:async r=>(fileReads.push(r.path),r.path==='/missing.c'?{error:'missing'}:{path:r.path,relativePath:'demo.c',gitRoot:null,size:100,truncated:false,text:Array.from({length:20},(_,i)=>'int value'+i+' = '+i+';').join('\\n')}),debugSource:async r=>{sourceCalls.push(r);return{debugId:r.debugId,sourceReference:r.sourceReference,sourceVersion:r.sourceVersion,content:Array.from({length:12},(_,i)=>'VIRTUAL SOURCE '+(i+1)).join('\\n'),truncated:false}},debugAction:async r=>{calls.push(r);const dto=sessions.find(s=>s.id===r.debugId);if(!dto||dto.sessionPath!==r.sessionPath)throw Error('Missing target or wrong owner');if(dto.native){switch(r.action){
-case 'stack':return [{id:r.threadId,name:'native_frame',source:window.nativeSource,file:window.nativeSource.kind==='file'?window.nativeSource.path:undefined,line:3,instructionPointerReference:'0x2000000000000001',moduleId:'native-module'}];
+window.pi={onDebugEvent:fn=>{listeners.push(fn);return()=>{}},debugList:async path=>{listCalls.push(path);return sessions.filter(s=>s.sessionPath===path)},openExternal:()=>{},openPath:()=>{},readFileDocument:async r=>(fileReads.push(r.path),r.path==='/missing.c'?{error:'missing'}:{path:r.path,relativePath:'demo.c',gitRoot:null,size:100,truncated:false,text:Array.from({length:20},(_,i)=>'int value'+i+' = '+i+';').join('\\n')}),debugSource:async r=>{sourceCalls.push(r);if(window.nativeNearSource){const start=r.offset===0?1:40;return{debugId:r.debugId,sourceReference:r.sourceReference,sourceVersion:r.sourceVersion,content:Array.from({length:12},(_,i)=>'VIRTUAL SOURCE '+(start+i)).join('\\n'),offset:start===1?0:390,nextOffset:start===1?120:510,totalChars:1500,startLine:start,previousOffset:0,truncated:true}}if(nativeLongSource){const later=r.offset!==undefined;const content=Array.from({length:20},(_,i)=>'VIRTUAL SOURCE '+((later?12021:11991)+i)).join('\\n');return{debugId:r.debugId,sourceReference:r.sourceReference,sourceVersion:r.sourceVersion,content,offset:later?r.offset:300000,nextOffset:later?r.offset+512:300512,totalChars:400000,startLine:later?12021:11991,truncated:true}}return{debugId:r.debugId,sourceReference:r.sourceReference,sourceVersion:r.sourceVersion,content:Array.from({length:12},(_,i)=>'VIRTUAL SOURCE '+(i+1)).join('\\n'),truncated:false}},debugAction:async r=>{calls.push(r);const dto=sessions.find(s=>s.id===r.debugId);if(!dto||dto.sessionPath!==r.sessionPath)throw Error('Missing target or wrong owner');if(dto.native){switch(r.action){
+case 'stack':return [{id:r.threadId,name:'native_frame',source:window.nativeSource,file:window.nativeSource.kind==='file'?window.nativeSource.path:undefined,line:dto.location?.line??3,instructionPointerReference:'0x2000000000000001',moduleId:'native-module'}];
 case 'scopes':return [{name:'General registers',presentationHint:'registers',variablesReference:500}];
 case 'variables':{const value=window.nativeValue??'0x2000000000000001';if(window.nativeDelay)await new Promise(done=>setTimeout(done,window.nativeDelay));return {variables:Array.from({length:r.start?1:50},(_,i)=>({name:r.start?'r50':i?'r'+i:'pc',value,memoryReference:i?undefined:'opaque:memory',variablesReference:0})),truncated:!r.start};}
 case 'disassemble':return {memoryReference:r.memoryReference,instructionOffset:r.instructionOffset,instructions:Array.from({length:8},(_,i)=>({address:'0x'+(0x2000000000000001n+BigInt((r.instructionOffset??0)+i)*4n).toString(16),instruction:'mov x0, x1',instructionBytes:'00000000'}))};
@@ -196,11 +196,33 @@ try {
   await page.waitForSelector('[data-debug-source-line="3"]')
   assert.match(await page.locator('[data-debug-source-line="3"]').innerText(),/VIRTUAL SOURCE 3/)
   assert.equal(await page.evaluate(()=>fileReads.length),virtualReads,'virtual source must never reach disk file IPC')
-  assert.deepEqual(await page.evaluate(()=>sourceCalls.at(-1)),{sessionPath:'/native-child',debugId:'native-child',stopId:1,sourceReference:1,sourceVersion:1})
+  assert.deepEqual(await page.evaluate(()=>sourceCalls.at(-1)),{sessionPath:'/native-child',debugId:'native-child',stopId:1,sourceReference:1,sourceVersion:1,startLine:1,limit:8192})
+  // An initial window near the stop can have an earlier page at offset zero.
+  await page.evaluate(()=>{window.nativeNearSource=true;publish('native-child',{sourceVersion:2,location:{...sessions.find(s=>s.id==='native-child').location,line:50}})})
+  await page.getByRole('tab',{name:'Source',exact:true}).click()
+  await page.waitForSelector('[data-debug-source-line="50"]')
+  assert.equal(await native.getByRole('button',{name:'Previous page',exact:true}).isDisabled(),false)
+  await native.getByRole('button',{name:'Previous page',exact:true}).click()
+  await page.waitForSelector('[data-debug-source-line="1"]')
+  assert.equal(await native.getByRole('button',{name:'Previous page',exact:true}).isDisabled(),true)
+  await page.evaluate(()=>{window.nativeNearSource=false;nativeLongSource=true;publish('native-child',{stopId:2,sourceVersion:2,location:{...sessions.find(s=>s.id==='native-child').location,line:12001}})})
+  await page.getByRole('tab',{name:'Source',exact:true}).click()
+  await page.waitForSelector('[data-debug-source-line="12001"]')
+  assert.ok((await page.evaluate(()=>sourceCalls.at(-1).startLine))===11991)
+  await native.getByRole('button',{name:'Next page',exact:true}).click()
+  await page.waitForFunction(()=>sourceCalls.at(-1)?.offset===300512)
+  await page.waitForSelector('[data-debug-source-line="12021"]')
+  await native.getByRole('button',{name:'Next page',exact:true}).click()
+  await page.waitForFunction(()=>sourceCalls.at(-1)?.offset===301024)
+  await native.getByRole('button',{name:'Previous page',exact:true}).click()
+  await page.waitForFunction(()=>sourceCalls.at(-1)?.offset===300512)
+  await native.getByRole('button',{name:'Previous page',exact:true}).click()
+  await page.waitForFunction(()=>sourceCalls.at(-1)?.offset===300000)
+  await page.evaluate(()=>{nativeLongSource=false;publish('native-child',{stopId:3,sourceVersion:3,location:{...sessions.find(s=>s.id==='native-child').location,line:3}})})
   await page.getByRole('tab',{name:'Assembly',exact:true}).click()
   await native.getByRole('button',{name:'Set instruction breakpoint at 0x2000000000000001',exact:true}).click()
   await page.waitForFunction(()=>nativePoints.instruction.length===1)
-  assert.deepEqual(await page.evaluate(()=>{const r=calls.filter(c=>c.action==='breakpoints.instruction.toggle').at(-1);return [r.sessionPath,r.debugId,r.stopId,r.instructionReference]}),['/native-child','native-child',1,'0x2000000000000001'])
+  assert.deepEqual(await page.evaluate(()=>{const r=calls.filter(c=>c.action==='breakpoints.instruction.toggle').at(-1);return [r.sessionPath,r.debugId,r.stopId,r.instructionReference]}),['/native-child','native-child',3,'0x2000000000000001'])
   await page.getByRole('textbox',{name:'Function name',exact:true}).fill('checkpoint')
   await page.getByRole('button',{name:'Add function breakpoint',exact:true}).click()
   await page.waitForFunction(()=>nativePoints.function.length===1)
@@ -225,7 +247,7 @@ try {
   assert.ok(await native.evaluate(e=>e.scrollWidth<=e.clientWidth),'native inspection stays inside the 320px rail')
   await page.getByRole('button',{name:'Step over',exact:true}).click()
   assert.equal(await page.evaluate(()=>calls.filter(c=>c.action==='control').at(-1).granularity),'instruction')
-  await page.evaluate(()=>publish('native-child',{stopId:2,sourceVersion:2}))
+  await page.evaluate(()=>publish('native-child',{stopId:4,sourceVersion:4}))
   await page.waitForSelector('[data-debug-pc="true"]')
   assert.match(await page.getByRole('button',{name:'Stepping mode',exact:true}).innerText(),/Instruction/)
   if(screenshots)await page.locator('#root').screenshot({path:join(screenshots,'native-light-en.png')})

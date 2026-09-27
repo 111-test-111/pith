@@ -27,7 +27,9 @@ setting. The right-rail pane and file gutter use the same main-process manager.
   or cancelled second acquisition releases the first reservation. Restarts and
   adapter-owned children preserve the same owner. POSIX adapter groups are
   terminated even when the group leader has already crashed; a surviving child
-  cannot cancel the SIGKILL deadline. Failed cleanup retains the lease and reports
+  cannot cancel the SIGKILL deadline. A transient macOS `EPERM` while reaping
+  remains a potentially live group and is retried within that deadline; only
+  `ESRCH` confirms group exit. Failed cleanup retains the lease and reports
   a failed session. Windows uses `taskkill /T /F` while the owned adapter is live;
   if its root already exited, cleanup cannot prove its descendants are gone and
   retains the checkout fence instead of guessing from a dead/reused PID.
@@ -139,6 +141,10 @@ instruction toggles resolve bound offsets without discarding another breakpoint.
 Panel add/remove actions merge inside the main write queue (`breakpoints.*.update`),
 so a stale renderer list cannot overwrite another writer's breakpoint or its
 conditions. A control waits for previously admitted breakpoint writes before resuming.
+Restart reserves the target through native execution or the fallback replacement's
+complete startup, so concurrent model/panel restarts cannot launch duplicates.
+Native restart rechecks live admission and cancellation after queued writes and
+after clearing instruction addresses, before sending the execution request.
 
 Core reads still depend on the dump's captured pages and matching binaries.
 Missing pages produce adapter errors or explicit short reads. A symbols-bearing

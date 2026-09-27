@@ -1158,7 +1158,6 @@ const zhCN: Messages = {
   'debug.watchPlaceholder': '每次停止时求值的表达式',
   'debug.watchAdd': '添加监视表达式',
   'debug.watchRemove': '移除监视 {expression}',
-  'debug.watchEmpty': '暂无监视表达式',
   'debug.toggleBreakpoint': '切换第 {line} 行的断点',
   'settings.browserOpenLinks': '链接在内置浏览器打开',
   'settings.browserOpenLinksHint': '聊天与 Markdown 链接在应用内置浏览器中打开，而非系统浏览器',

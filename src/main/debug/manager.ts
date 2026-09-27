@@ -113,7 +113,7 @@ interface Session {
   /** A one-item probe distinguishes adapters that ignore DAP paging. */
   variablePaging: Map<number, boolean>
   sources: Map<number, Record<string, unknown>>
-  sourceCache: Map<number, DebugSourceContentDTO>
+  sourceCache: Map<number, { content: string; mimeType?: string }>
   nativeBreakpoints: DebugNativeBreakpointsDTO
   functionRequests: DebugFunctionBreakpointInput[]
   modulePaging?: boolean
@@ -188,6 +188,7 @@ export class DebugManager {
     if (options.kind === 'attach' && options.pid === undefined) throw new Error('pid is required for attach')
     if (options.kind === 'core' && (spec.id !== 'lldb-dap' || !options.coreFile)) throw new Error('Core inspection requires lldb-dap and coreFile')
     if (options.kind === 'core' && options.extraArguments && Object.keys(options.extraArguments).length) throw new Error('Core inspection does not accept executable adapter commands')
+    if (options.kind === 'core' && (options.initialBreakpoints?.size || options.initialFunctionBreakpoints?.length)) throw new Error('Core files cannot have breakpoints')
     const requestArguments = options.kind === 'core'
       ? { coreFile: options.coreFile, ...(options.program ? { program: options.program } : {}) }
       : options.kind === 'launch' ? {
@@ -261,6 +262,7 @@ export class DebugManager {
       session.dto.terminalId = answer.terminalId; this.publish(session)
       return { shellProcessId: answer.shellProcessId }
     }
+    let launchError: unknown
     try {
       session.releaseCheckout = await this.acquireCheckouts(options, session.controller.signal)
       this.admitted(session)
@@ -291,7 +293,9 @@ export class DebugManager {
       session.dto.capabilities = debugCapabilities(client.capabilities)
       this.admitted(session)
       const launching = client.request(options.kind === 'launch' ? 'launch' : 'attach', requestArguments)
-      void launching.catch(() => { void client.dispose() })
+      // A launch failure can arrive before initialized. Remember its DAP detail
+      // before disposal rejects the event waiter with a generic close error.
+      void launching.catch(error => { launchError = error; void client.dispose() })
       await initialized
       this.admitted(session)
       for (const [file, points] of session.requested) await this.sendDefinitions(session, file, points, false)
@@ -316,13 +320,17 @@ export class DebugManager {
       else if (session.dto.status === 'starting') { session.dto.status = 'running'; this.publish(session) }
       return { ...session.dto }
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      if (!session.finishing) {
-        session.dto.error = message + (client.stderrText.trim() ? `\nadapter stderr: ${truncate(client.stderrText.trim(), 500)}` : '')
-        await this.finish(session, 'failed')
+      const cause = launchError ?? error
+      const message = cause instanceof Error ? cause.message : String(cause)
+      const stderr = client.stderrText.trim()
+      const detail = message + (stderr ? `\nadapter stderr: ${truncate(stderr, 500)}` : '')
+      if (!session.stopping && (!session.finishing || session.dto.status === 'failed')) {
+        session.dto.error = detail
+        this.publish(session)
       }
+      if (!session.finishing) await this.finish(session, 'failed')
       await session.cleanup
-      throw new Error(message)
+      throw new Error(detail)
     } finally {
       options.signal?.removeEventListener('abort', abort)
       // A stop may win before an asynchronous lease acquisition returns.
@@ -819,28 +827,43 @@ export class DebugManager {
     const options = session.startOptions
     if (!options) throw new Error('This session was not started by the app and cannot be restarted')
     const client = session.client
-    if (!session.finishing && client?.isOpen && client.capabilities.supportsRestartRequest === true) {
-      const epoch = session.stopEpoch
-      session.controlling = true
-      try {
+    const checkAdmission = (): void => {
+      if (this.closing || signal?.aborted || canStart?.() === false) throw new Error('Debug restart cancelled')
+    }
+    // Reserve both restart paths before any await. Model and panel calls share
+    // this guard through cleanup and the replacement target's entire startup.
+    session.controlling = true
+    try {
+      if (!session.finishing && client?.isOpen && client.capabilities.supportsRestartRequest === true) {
+        const epoch = session.stopEpoch
+        const checkNativeAdmission = (): void => {
+          checkAdmission()
+          if (session.stopping || session.finishing || session.controller.signal.aborted || session.client !== client || !client.isOpen) {
+            throw new Error('Debug restart cancelled')
+          }
+        }
         await session.breakpointWork
+        checkNativeAdmission()
         // Absolute instruction references cannot survive relocation/ASLR.
         if (session.nativeBreakpoints.instruction.length) {
           await client.request('setInstructionBreakpoints', { breakpoints: [] })
           session.nativeBreakpoints.instruction = []
+          this.publish(session)
         }
+        checkNativeAdmission()
         await client.request('restart', {})
-      } finally { session.controlling = false }
-      if (!session.finishing && session.stopEpoch === epoch) {
-        session.dto.location = undefined
-        this.clearStop(session)
-        session.dto.status = 'running'
-        this.publish(session)
+        if (!session.finishing && session.stopEpoch === epoch) {
+          session.dto.location = undefined
+          this.clearStop(session)
+          session.dto.status = 'running'
+          this.publish(session)
+        }
+        return { ...session.dto }
       }
-      return { ...session.dto }
-    }
-    await this.stop(sessionPath, session.dto.id)
-    return this.start({ ...options, signal, canStart: canStart ?? options.canStart, replacesId: session.dto.id, initialBreakpoints: new Map(session.launchBreakpoints ?? session.requested), initialFunctionBreakpoints: session.functionRequests.map(point => ({ ...point })) })
+      await this.stop(sessionPath, session.dto.id)
+      checkAdmission()
+      return await this.start({ ...options, signal, canStart: canStart ?? options.canStart, replacesId: session.dto.id, initialBreakpoints: new Map(session.launchBreakpoints ?? session.requested), initialFunctionBreakpoints: session.functionRequests.map(point => ({ ...point })) })
+    } finally { session.controlling = false }
   }
 
   async stopSession(sessionPath: string): Promise<void> {
@@ -881,25 +904,63 @@ export class DebugManager {
     return source
   }
 
-  async source(sessionPath: string, sourceReference: number, sourceVersion: number, id: string, stopId: number): Promise<DebugSourceContentDTO> {
+  async source(sessionPath: string, sourceReference: number, sourceVersion: number, id: string, stopId: number,
+    startLine = 1, offset?: number, limit = 16_384): Promise<DebugSourceContentDTO> {
     const session = this.requireStopped(id, sessionPath, stopId)
     const epoch = session.stopEpoch
     if (sourceVersion !== session.dto.sourceVersion) throw new Error('Debug source changed; refresh stack')
+    if (!Number.isSafeInteger(startLine) || startLine < 1 || offset !== undefined && (!Number.isSafeInteger(offset) || offset < 0)) throw new Error('Invalid source position')
     const source = session.sources.get(sourceReference)
     if (!source) throw new Error('Unknown adapter source; refresh stack or disassembly for this target')
-    const cached = session.sourceCache.get(sourceReference)
-    if (cached) return { ...cached }
-    const body = await this.requireLive(session).request('source', { sourceReference, source })
-    this.assertStop(session, epoch)
-    if (sourceVersion !== session.dto.sourceVersion) throw new Error('Debug source changed; refresh stack')
-    const content = asString(body?.content) ?? ''
-    const result: DebugSourceContentDTO = { debugId: id, sourceReference, sourceVersion,
-      content: content.slice(0, 262_144), truncated: content.length > 262_144,
-      ...(asString(body?.mimeType) ? { mimeType: asString(body?.mimeType) } : {}) }
-    // At most eight 256 Ki-character documents; separate from file previews.
-    session.sourceCache.set(sourceReference, result)
-    if (session.sourceCache.size > 8) session.sourceCache.delete(session.sourceCache.keys().next().value!)
-    return { ...result }
+    let document = session.sourceCache.get(sourceReference)
+    if (!document) {
+      const body = await this.requireLive(session).request('source', { sourceReference, source })
+      this.assertStop(session, epoch)
+      if (sourceVersion !== session.dto.sourceVersion) throw new Error('Debug source changed; refresh stack')
+      document = { content: asString(body?.content) ?? '', ...(asString(body?.mimeType) ? { mimeType: asString(body?.mimeType) } : {}) }
+      // Large adapter documents are refetched rather than retained without bound.
+      if (document.content.length <= 1_048_576) {
+        session.sourceCache.set(sourceReference, document)
+        if (session.sourceCache.size > 8) session.sourceCache.delete(session.sourceCache.keys().next().value!)
+      }
+    }
+    const text = document.content
+    let from = 0, line = 1
+    if (offset !== undefined) {
+      from = Math.min(offset, text.length)
+      if (from < text.length && /[\uDC00-\uDFFF]/.test(text[from])) from++
+      for (let index = 0; index < from; index++) if (text[index] === '\n') line++
+    } else {
+      while (line < startLine && from < text.length) {
+        const newline = text.indexOf('\n', from)
+        if (newline < 0) { from = text.length; break }
+        from = newline + 1; line++
+      }
+    }
+    const budget = Math.max(2, Math.min(32_768, Math.floor(limit)))
+    let to = from, lines = 0
+    while (to < text.length && to - from < budget && lines < 100) {
+      const newline = text.indexOf('\n', to)
+      const lineEnd = newline < 0 ? text.length : newline + 1
+      if (lineEnd - from > budget) {
+        // Keep complete lines together; only a line longer than the budget
+        // needs to continue in the next window.
+        if (to === from) to = Math.min(text.length, from + budget)
+        break
+      }
+      to = lineEnd; lines++
+    }
+    if (to < text.length && /[\uD800-\uDBFF]/.test(text[to - 1])) to--
+    let previousOffset = Math.max(0, from - budget)
+    if (previousOffset > 0) {
+      const newline = text.indexOf('\n', previousOffset)
+      if (newline >= 0 && newline + 1 < from) previousOffset = newline + 1
+    }
+    return { debugId: id, sourceReference, sourceVersion, content: text.slice(from, to),
+      ...(document.mimeType ? { mimeType: document.mimeType } : {}),
+      offset: from, nextOffset: to, totalChars: text.length, startLine: line, previousOffset,
+      continuedLine: from > 0 && text[from - 1] !== '\n',
+      truncated: from > 0 || to < text.length }
   }
 
   private invalidateSources(session: Session, identities = true): void {

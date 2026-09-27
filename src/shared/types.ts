@@ -1804,6 +1804,14 @@ export interface DebugSourceContentDTO {
   content: string
   mimeType?: string
   truncated: boolean
+  /** Character offsets and line number for this bounded adapter-source window. */
+  offset?: number
+  nextOffset?: number
+  totalChars?: number
+  startLine?: number
+  previousOffset?: number
+  /** The first characters continue a line from the preceding window. */
+  continuedLine?: boolean
 }
 
 export interface DebugSourceRequest {
@@ -1812,6 +1820,9 @@ export interface DebugSourceRequest {
   stopId: number
   sourceReference: number
   sourceVersion: number
+  startLine?: number
+  offset?: number
+  limit?: number
 }
 
 export type DebugSteppingGranularity = 'statement' | 'line' | 'instruction'

@@ -26,7 +26,8 @@ export function DebugNativeView({ session, frame, cwd, memorySelection }: {
   const [tab, setTab] = useState(source?.kind === 'file' ? 'source' : canDisassemble ? 'assembly' : source ? 'source' : capabilities?.supportsReadMemoryRequest ? 'memory' : 'modules')
   const [document, setDocument] = useState<DebugSourceContentDTO | null>(null)
   const [sourceMissing, setSourceMissing] = useState(false)
-  const [sourceOffset, setSourceOffset] = useState(Math.max(0, (frame?.line ?? 1) - 11))
+  const [sourceOffset, setSourceOffset] = useState<number | null>(source?.kind === 'adapter' ? null : Math.max(0, (frame?.line ?? 1) - 11))
+  const [sourceHistory, setSourceHistory] = useState<number[]>([])
   const [assembly, setAssembly] = useState<DebugDisassemblyDTO | null>(null)
   const [instructionOffset, setInstructionOffset] = useState(0)
   const [memory, setMemory] = useState<DebugMemoryDTO | null>(null)
@@ -50,6 +51,10 @@ export function DebugNativeView({ session, frame, cwd, memorySelection }: {
   }, [tab, canDisassemble, capabilities?.supportsReadMemoryRequest, capabilities?.supportsModulesRequest, source])
   const sourceIdentity = source?.kind === 'adapter' ? `adapter:${source.sourceReference}` : source?.path
   useEffect(() => {
+    setSourceOffset(source?.kind === 'adapter' ? null : Math.max(0, (frame?.line ?? 1) - 11))
+    setSourceHistory([])
+  }, [session.id, session.stopId, sourceIdentity, frame?.line])
+  useEffect(() => {
     if (!memorySelection) return
     setReference(memorySelection.reference); setReferenceDraft(memorySelection.reference); setMemoryOffset(0); setTab('memory')
   }, [memorySelection])
@@ -66,7 +71,8 @@ export function DebugNativeView({ session, frame, cwd, memorySelection }: {
     let current = true
     setDocument(null); setLoading(true); setError(false)
     const request = source.kind === 'adapter'
-      ? window.pi.debugSource({ ...target, sourceReference: source.sourceReference, sourceVersion: session.sourceVersion ?? 0 })
+      ? window.pi.debugSource({ ...target, sourceReference: source.sourceReference, sourceVersion: session.sourceVersion ?? 0,
+        ...(sourceOffset === null ? { startLine: Math.max(1, (frame?.line ?? 1) - 10) } : { offset: sourceOffset }), limit: 8192 })
       : window.pi.readFileDocument({ cwd, path: source.path }).then(result => {
         if (result.error || result.text === undefined) throw new Error('source unavailable')
         return { content: result.text, truncated: result.truncated, debugId: session.id, sourceReference: 0, sourceVersion: session.sourceVersion ?? 0 }
@@ -75,7 +81,7 @@ export function DebugNativeView({ session, frame, cwd, memorySelection }: {
       if (current) { setSourceMissing(true); if (canDisassemble) setTab('assembly'); else setError(true) }
     }).finally(() => { if (current) setLoading(false) })
     return () => { current = false }
-  }, [tab, session.id, session.stopId, session.sourceVersion, sourceIdentity, cwd])
+  }, [tab, session.id, session.stopId, session.sourceVersion, sourceIdentity, sourceOffset, frame?.line, cwd])
 
   useEffect(() => {
     if (tab !== 'assembly' || !canDisassemble || !pc) return
@@ -116,7 +122,10 @@ export function DebugNativeView({ session, frame, cwd, memorySelection }: {
   const selectMemory = (address: string) => { setReference(address); setReferenceDraft(address); setMemoryOffset(0); setTab('memory') }
   if (!source && !canDisassemble && !capabilities?.supportsReadMemoryRequest && !capabilities?.supportsModulesRequest) return null
   const core = session.kind === 'core'
-  const lines = document?.content.split('\n') ?? []
+  const lines = document?.content ? document.content.split('\n') : []
+  const visibleLines = source?.kind === 'adapter'
+    ? document?.content.endsWith('\n') ? lines.slice(0, -1) : lines
+    : lines.slice(sourceOffset ?? 0, (sourceOffset ?? 0) + 100)
   const pager = (previous: () => void, next: () => void, previousDisabled: boolean, nextDisabled: boolean) => (
     <div className="mt-1 flex justify-between gap-2">
       <Button variant="ghost" className="h-7 px-2 text-xs" onClick={previous} disabled={loading || previousDisabled}>{t('debug.previousPage')}</Button>
@@ -140,12 +149,24 @@ export function DebugNativeView({ session, frame, cwd, memorySelection }: {
     {tab === 'source' && document ? <div data-debug-source>
       <p className="mb-1 break-all text-xs text-muted-foreground">{source?.name ?? source?.path}</p>
       <FadeScroll className="max-h-64 overflow-x-auto p-1">
-        {lines.slice(sourceOffset, sourceOffset + 100).map((line, index) => <div key={sourceOffset + index} className={cn('flex min-w-max gap-3 font-mono text-[11px] leading-5', sourceOffset + index + 1 === frame?.line && 'bg-accent')} data-debug-source-line={sourceOffset + index + 1}>
-          <span className="w-8 shrink-0 text-right text-muted-foreground">{sourceOffset + index + 1}</span><AgentCodeLine code={line} />
-        </div>)}
+        {visibleLines.map((line, index) => {
+          const lineNumber = source?.kind === 'adapter' ? (document.startLine ?? 1) + index : (sourceOffset ?? 0) + index + 1
+          return <div key={lineNumber} className={cn('flex min-w-max gap-3 font-mono text-[11px] leading-5', lineNumber === frame?.line && 'bg-accent')} data-debug-source-line={lineNumber}>
+          <span className="w-8 shrink-0 text-right text-muted-foreground">{lineNumber}{source?.kind === 'adapter' && index === 0 && document.continuedLine ? '↪' : ''}</span><AgentCodeLine code={line} />
+        </div>})}
       </FadeScroll>
-      {document.truncated ? <p className="text-xs text-muted-foreground">{t('debug.sourceTruncated')}</p> : null}
-      {pager(() => setSourceOffset(Math.max(0, sourceOffset - 100)), () => setSourceOffset(sourceOffset + 100), sourceOffset === 0, sourceOffset + 100 >= lines.length)}
+      {document.truncated && source?.kind !== 'adapter' ? <p className="text-xs text-muted-foreground">{t('debug.sourceTruncated')}</p> : null}
+      {source?.kind === 'adapter'
+        ? pager(() => {
+          setSourceOffset(sourceHistory.at(-1) ?? document.previousOffset ?? 0)
+          setSourceHistory(sourceHistory.slice(0, -1))
+        }, () => {
+          setSourceHistory([...sourceHistory, document.offset ?? 0])
+          setSourceOffset(document.nextOffset ?? 0)
+        }, sourceHistory.length === 0 && (document.offset ?? 0) === 0,
+        (document.nextOffset ?? document.content.length) >= (document.totalChars ?? document.content.length))
+        : pager(() => setSourceOffset(Math.max(0, (sourceOffset ?? 0) - 100)), () => setSourceOffset((sourceOffset ?? 0) + 100),
+          (sourceOffset ?? 0) === 0, (sourceOffset ?? 0) + 100 >= lines.length)}
     </div> : null}
     {tab === 'assembly' && canDisassemble && assembly ? <div data-debug-assembly>
       <FadeScroll className="max-h-64 overflow-x-auto p-1">

@@ -11,14 +11,14 @@ export const APP_DEBUG_TOOL_NAMES = [DEBUG_TOOL_NAME] as const
 
 const DEBUG_GUIDELINES = [
   'Use {debugId?, stopId?, request: {action, ...}}. Parameters belong to their action; help lists actions, permissions and capabilities. Old flat calls remain compatible.',
-  'Source-less workflow: stack retains instructionPointerReference/moduleId/source. source.kind=adapter MUST use source with sourceReference + sourceVersion from the session, never read its path as a file. disassemble takes the opaque PC as memoryReference; memory.read reads bounded bytes/gaps; registers returns register scopes to expand with variables. modules pages loaded modules and symbol status.',
+  'Source-less workflow: stack retains instructionPointerReference/moduleId/source. source.kind=adapter MUST use source with sourceReference + sourceVersion from the session, never read its path as a file. source returns a bounded window; use startLine for a distant stop and offset for subsequent pages. disassemble takes the opaque PC as memoryReference; memory.read reads bounded bytes/gaps; registers returns register scopes to expand with variables. modules pages loaded modules and symbol status.',
   'Native breakpoint sets: breakpoints.instruction items [{instructionReference,offset?,condition?,hitCondition?}] and breakpoints.function items [{name,condition?,hitCondition?}] replace their entire sets. Pass debugId + current stopId. Instruction addresses are cleared on restart (ASLR); re-fetch PC/disassembly. Function names persist. breakpoints.native lists their bindings; verified is not condition validation.',
   'Use control granularity=instruction for real instruction next/stepIn/stepOut only when supportsSteppingGranularity is true; no silent fallback to source stepping. Capability flags in each session gate disassembly, memory, native breakpoints and modules. New reference operations require debugId and stopId; opaque references are strings, never convert them to numbers.',
-  'Reach for the debugger when a program crashes, hangs, or corrupts state: attach or launch, set breakpoints, step, and read the real frames and variables instead of sprinkling print statements. Small deterministic reproducers are still faster with plain bash.',
+  'Reach for the debugger when a program crashes, hangs, or corrupts state: attach or launch, set breakpoints, step, and read the real frames and variables instead of sprinkling print statements. For a short-lived target, pass initial source breakpoints [{file,items:[{line,condition?,hitCondition?,logMessage?}]}] or functionBreakpoints [{name,condition?,hitCondition?}] to start so they bind before configurationDone. Small deterministic reproducers are still faster with plain bash.',
   'Multiple debug sessions may run in this chat. sessions lists them. Pass debugId on every targeted action when more than one is live. Child agents own separate sessions: parent and siblings cannot inspect or control them.',
   'control actions (continue/next/stepIn/stepOut/pause) block until the debuggee stops again or waitMs expires. settled=true means a stop (or termination) was reached; settled=false means it is still running — use control again or inspect output instead of re-sending the same step.',
   'Read stopReason, stopDescription, stopText, hitBreakpointIds, conditionError and stopDiagnostics after every control. "breakpoint" can also mean a condition failed to evaluate, especially in LLDB; inspect output before concluding a condition matched. "step" is a completed step; "entry" is process entry (macOS may stop in the dynamic linker). A continue after a breakpoint interrupted an LLDB step may first complete that step.',
-  'threads/stack/scopes/variables/evaluate require a stopped debuggee. stack gives frame ids, scopes give variablesReferences, variables expand one level per call (default page 50, truncated=true when more exist — page large arrays with start/count). Values are truncated server-side (256 chars per value, 2048 chars per evaluate result).',
+  'threads/stack/scopes/variables/evaluate require a stopped debuggee. Pass debugId + current stopId for scopes, variables and evaluate with frameId. stack gives frame ids, scopes give variablesReferences, variables expand one level per call (default page 50, truncated=true when more exist — page large arrays with start/count). Values are truncated server-side (256 chars per value, 2048 chars per evaluate result).',
   'Frame ids and variablesReferences are recycled at every stop: after any control action, re-fetch stack/scopes/variables instead of reusing ids from an earlier stop.',
   'lldb-dap answers evaluate in REPL form — "(int) $0 = 7". The $N handle is real: reuse it in later evaluate expressions of the same stop.',
   'breakpoints replaces the whole breakpoint set of one file: pass every item to keep. verified only reports binding, NOT expression validity or a true condition. conditionStatus=unvalidated remains until an adapter reports an error; never claim validation from verified=true. verified=false may be pending until a module loads. Use items:[{line,condition?,hitCondition?,logMessage?}] so each breakpoint owns its options. A condition normally stops when true but adapters may also stop on evaluation errors; hitCondition gates hit count and logMessage creates a logpoint.',
@@ -125,6 +125,8 @@ export function createDebugTools(options: DebugToolOptions): ToolDefinition[] {
           const adapterId = request.adapter ?? config?.adapterId ?? ''
           const extraArguments = { ...config?.extraArguments }
           if (adapterId === 'debugpy' && request.program !== undefined) delete extraArguments.module
+          const files = request.breakpoints?.map(group => group.file) ?? []
+          if (new Set(files).size !== files.length) throw new Error('Duplicate initial breakpoint file')
           return manager.start({
             sessionId, sessionPath, workspaceCwd: services.cwd, signal,
             canStart: () => options.canStart() && options.enabled() && !options.isPlanRestricted?.(),
@@ -134,6 +136,8 @@ export function createDebugTools(options: DebugToolOptions): ToolDefinition[] {
             program: request.program ?? config?.program, args: request.args ?? config?.args,
             env: request.env ?? config?.env, pid: request.pid ?? config?.pid,
             stopOnEntry: request.stopOnEntry ?? config?.stopOnEntry,
+            initialBreakpoints: request.breakpoints ? new Map(request.breakpoints.map(group => [group.file, group.items])) : undefined,
+            initialFunctionBreakpoints: request.functionBreakpoints,
             ...(Object.keys(extraArguments).length ? { extraArguments } : {}),
             runInTerminal: options.runInTerminal()
           })

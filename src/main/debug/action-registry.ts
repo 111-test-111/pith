@@ -16,7 +16,13 @@ const startSchema = actionSchema('start', {
   kind: optional(Type.Union([Type.Literal('launch'), Type.Literal('attach'), Type.Literal('core')])),
   coreFile: optional(string()), program: optional(string()), args: optional(Type.Array(Type.String())),
   cwd: optional(string()), env: optional(Type.Record(Type.String(), Type.String())),
-  stopOnEntry: optional(Type.Boolean()), pid: optional(Type.Integer({ minimum: 1 }))
+  stopOnEntry: optional(Type.Boolean()), pid: optional(Type.Integer({ minimum: 1 })),
+  breakpoints: optional(Type.Array(Type.Object({ file: string(), items: Type.Array(Type.Object({
+    line: Type.Integer({ minimum: 1 }), condition: optional(Type.String()), hitCondition: optional(Type.String()),
+    logMessage: optional(Type.String())
+  }, { additionalProperties: false }), { maxItems: 500 }) }, { additionalProperties: false }), { maxItems: 100 })),
+  functionBreakpoints: optional(Type.Array(Type.Object({ name: string(), condition: optional(Type.String()),
+    hitCondition: optional(Type.String()) }, { additionalProperties: false }), { maxItems: 256 }))
 })
 export type DebugStartRequest = Static<typeof startSchema>
 
@@ -46,8 +52,8 @@ const none: ActionPolicy = { ...read, target: 'none' }
 
 /** The schema, admission rules and handler travel together. Both the model and
  * IPC dispatcher enter here; adding an action never grows an unrelated bag. */
-function define<S extends TObject>(schema: S, policy: ActionPolicy, run: (context: DebugActionContext, request: Static<S>) => unknown) {
-  return { schema, policy, invoke(context: DebugActionContext, request: unknown): unknown {
+function define<S extends TObject, Result>(schema: S, policy: ActionPolicy, run: (context: DebugActionContext, request: Static<S>) => Result) {
+  return { schema, policy, invoke(context: DebugActionContext, request: unknown): Result {
     if (!Check(schema, request)) throw new Error('Invalid debug action request')
     return run(context, request)
   } }
@@ -93,13 +99,14 @@ export const debugActions = {
     if (thread === undefined) throw new Error('No stopped thread; pass threadId from threads')
     return c.manager.stack(c.sessionPath, thread, r.levels, c.debugId, c.stopId)
   }),
-  scopes: define(actionSchema('scopes', { frameId: int() }), stopped, (c, r) => c.manager.scopes(c.sessionPath, r.frameId, c.debugId, c.stopId)),
-  variables: define(actionSchema('variables', { variablesReference: int(), start: optional(int()), count: optional(Type.Integer({ minimum: 1, maximum: 500 })) }), stopped,
+  scopes: define(actionSchema('scopes', { frameId: int() }), { ...stopped, pinned: true }, (c, r) => c.manager.scopes(c.sessionPath, r.frameId, c.debugId, c.stopId)),
+  variables: define(actionSchema('variables', { variablesReference: int(), start: optional(int()), count: optional(Type.Integer({ minimum: 1, maximum: 500 })) }), { ...stopped, pinned: true },
     (c, r) => c.manager.variables(c.sessionPath, r.variablesReference, r.start, r.count, c.debugId, c.stopId)),
   evaluate: define(actionSchema('evaluate', { expression: string(), frameId: optional(int()), context: optional(Type.Union([Type.Literal('repl'), Type.Literal('watch')])) }),
     { ...execute, target: 'stopped' }, (c, r) => c.manager.evaluate(c.sessionPath, r.expression, r.frameId, c.debugId, c.stopId, r.context)),
-  source: define(actionSchema('source', { sourceReference: Type.Integer({ minimum: 1 }), sourceVersion: int() }), { ...stopped, pinned: true },
-    (c, r) => c.manager.source(c.sessionPath, r.sourceReference, r.sourceVersion, c.debugId!, c.stopId!)),
+  source: define(actionSchema('source', { sourceReference: Type.Integer({ minimum: 1 }), sourceVersion: int(),
+    startLine: optional(Type.Integer({ minimum: 1 })), offset: optional(int()), limit: optional(Type.Integer({ minimum: 2, maximum: 32_768 })) }), { ...stopped, pinned: true },
+    (c, r) => c.manager.source(c.sessionPath, r.sourceReference, r.sourceVersion, c.debugId!, c.stopId!, r.startLine, r.offset, r.limit)),
   disassemble: define(actionSchema('disassemble', { memoryReference: string(), offset: optional(offset()), instructionOffset: optional(offset()), count: optional(Type.Integer({ minimum: 1, maximum: 200 })) }),
     { ...stopped, pinned: true, capability: 'supportsDisassembleRequest' }, (c, r) => c.manager.disassemble(c.sessionPath, r.memoryReference, r.instructionOffset, r.count, c.debugId, c.stopId, r.offset)),
   'memory.read': define(actionSchema('memory.read', { memoryReference: string(), offset: optional(offset()), count: optional(Type.Integer({ minimum: 1, maximum: 4096 })) }),
@@ -172,7 +179,8 @@ export async function dispatchDebugAction(context: DebugActionContext, request: 
   const entry = debugActions[name as DebugActionName]
   if (!Check(entry.schema, request)) throw new Error(`Invalid debug ${name} request`)
   const { target, core, capability, pinned } = entry.policy
-  if (pinned && (!context.debugId || context.stopId === undefined)) throw new Error('debugId and stopId are required for this action')
+  if ((pinned || name === 'evaluate' && (request as { frameId?: number }).frameId !== undefined) &&
+      (!context.debugId || context.stopId === undefined)) throw new Error('debugId and stopId are required for this action')
   if (target !== 'none') {
     const session = context.manager.get(context.sessionPath, context.debugId)
     if (!core && session.kind === 'core') throw new Error('Core inspection cannot execute or change breakpoints')

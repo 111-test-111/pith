@@ -489,9 +489,7 @@ function DebugDetails({ session, debug, cwd }: { session: DebugSessionDTO; debug
               <Plus aria-hidden="true" className="size-4" />
             </Button>
           </form>
-          {watchExpressions.length === 0 ? (
-            <p className="text-xs text-muted-foreground/70">{t('debug.watchEmpty')}</p>
-          ) : (
+          {watchExpressions.length > 0 ? (
             <ul className="space-y-0.5">
               {watchExpressions.map((expression) => {
                 const result = watchResults.get(expression)
@@ -513,7 +511,7 @@ function DebugDetails({ session, debug, cwd }: { session: DebugSessionDTO; debug
                 )
               })}
             </ul>
-          )}
+          ) : null}
         </section> : null}
 
         {/* Debug console */}
