@@ -22,7 +22,11 @@
     "pack": "npm run build && electron-builder --dir",
     "dist:mac": "npm run build && electron-builder --mac",
     "dist:win": "npm run build && electron-builder --win",
-    "dist:linux": "npm run build && electron-builder --linux"
+    "dist:linux": "npm run build && electron-builder --linux",
+    "check:context-budget": "node scripts/check-context-budget.mjs",
+    "check:session-replay": "node scripts/check-session-replay.mjs",
+    "check:long-session-benchmark": "node scripts/check-long-session-benchmark.mjs",
+    "benchmark:long-session": "node scripts/benchmark-long-session.mjs"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "^0.85.1",
