@@ -167,9 +167,13 @@ export class TrajectoryRecorder {
   observe(event: AgentSessionEvent): void {
     if (this.disposed) return
     if (event.type === 'agent_start') {
-      this.runSignal = undefined
-      this.run = this.create('run', 'run')
-      void this.save(this.run)
+      // SDK retry/compaction continuations can start another agent loop before
+      // agent_settled. They still belong to the same logical run.
+      if (!this.run) {
+        this.runSignal = undefined
+        this.run = this.create('run', 'run')
+        void this.save(this.run)
+      }
     } else if (event.type === 'agent_settled') {
       if (this.run) {
         this.run.record.finishedAt = Date.now()
