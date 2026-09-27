@@ -23,7 +23,7 @@ import type {
   ToolInfoDTO
 } from '../../shared/types'
 
-const APP_TOOL_NAMES: readonly string[] = [...APP_BASH_TOOL_NAMES, 'debug', TODO_TOOL_NAME, JEV_TOOL_NAME, ...APP_BROWSER_TOOL_NAMES]
+const APP_TOOL_NAMES: readonly string[] = [...APP_BASH_TOOL_NAMES, 'debug', 'present', TODO_TOOL_NAME, JEV_TOOL_NAME, ...APP_BROWSER_TOOL_NAMES]
 
 /**
  * Settings → Tools / Extensions reads the *unfiltered* resource loader, so a

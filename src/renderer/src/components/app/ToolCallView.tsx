@@ -383,6 +383,10 @@ export const ToolCallView = memo(function ToolCallView({ call, result, run, cwd 
         </div>
       )
     }
+    case 'present':
+      return <ToolResult animateChanges={false} lazyContent title={t('present.tool')} status={status} icon={<ToolIcon name="present" />} meta={meta} open={open} onOpenChange={setOpen} collapseOnComplete={false} contentClassName={WRAP_OUTPUT}>
+        {renderOutput(output || placeholder(t('tool.noOutput')))}
+      </ToolResult>
     case 'todo_write':
       return (
         <ToolResult animateChanges={false} lazyContent open={open} onOpenChange={setOpen}

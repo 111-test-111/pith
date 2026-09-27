@@ -1362,6 +1362,7 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
       toggleSidebar: () => setSidebarOpen((open) => !open),
       toggleRail: () => setSidePanelOpen((open) => !open),
       openReview: () => toggleRailPane('review'),
+      openTrajectory: () => toggleRailPane('trajectory'),
       openContext: () => toggleRailPane('context'),
       openTerminal: () => toggleRailPane('terminal'),
       openDebug: () => toggleRailPane('debug'),

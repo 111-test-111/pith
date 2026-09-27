@@ -1,3 +1,4 @@
+import type { TrajectoryQuery, TrajectoryPage, TrajectoryDetail, TrajectoryNodeRequest, TrajectoryNodePage } from '../shared/types'
 import type { AskUserAnswer } from '../shared/ask-user'
 import type { JevSettingsDTO, JevSettingsUpdate, JevActionResult, JevEvaluationDTO, JevTraceDTO, JevTracePageDTO } from '../shared/types'
 import type {
@@ -143,6 +144,11 @@ const api = {
   jevSettings: (): Promise<JevSettingsDTO> => ipcRenderer.invoke('jev:settings'),
   updateJevSettings: (update: JevSettingsUpdate): Promise<JevActionResult<JevSettingsDTO>> => ipcRenderer.invoke('jev:updateSettings', update),
   testJev: (): Promise<JevActionResult<JevEvaluationDTO>> => ipcRenderer.invoke('jev:test'),
+  trajectoryPage: (query: TrajectoryQuery): Promise<TrajectoryPage> => ipcRenderer.invoke('trajectory:page', query),
+  trajectoryDetail: (path: string, id: string): Promise<TrajectoryDetail> => ipcRenderer.invoke('trajectory:detail', path, id),
+  trajectoryNode: (request: TrajectoryNodeRequest): Promise<TrajectoryNodePage> => ipcRenderer.invoke('trajectory:node', request),
+  exportTrajectory: (path: string, id: string): Promise<FileActionResultDTO> => ipcRenderer.invoke('trajectory:export', path, id),
+  onTrajectoryChanged: (listener: (value: { sessionPath: string }) => void) => subscribe('pi:trajectory', listener),
   jevTraces: (path: string, cursor?: string): Promise<JevTracePageDTO> => ipcRenderer.invoke('jev:traces', path, cursor),
   jevTrace: (path: string, id: string): Promise<JevTraceDTO | null> => ipcRenderer.invoke('jev:trace', path, id),
   setStartup: (mode: StartupSessionMode): Promise<StartupSessionMode> =>

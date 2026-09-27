@@ -1,3 +1,4 @@
+import { TrajectoryPane } from './TrajectoryPane'
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import {
@@ -58,7 +59,7 @@ export const SIDEBAR_PANEL_WIDTH = 400
 
 /** The panes the right rail can host. Besides the fixed kinds, the rail hosts
  * one tab per open FILE and per open SUBAGENT SESSION (both keyed by path). */
-export type SidebarTabKind = 'review' | 'context' | 'terminal' | 'browser' | 'files' | 'chat' | 'debug'
+export type SidebarTabKind = 'review' | 'context' | 'terminal' | 'browser' | 'files' | 'chat' | 'debug' | 'trajectory'
 export type SidebarTabId = SidebarTabKind | `file:${string}` | `agent:${string}` | `scheduled:${string}`
 export const fileTabId = (path: string): SidebarTabId => `file:${path}`
 export const filePathForTab = (id: SidebarTabId | null): string | null => id?.startsWith('file:') ? id.slice(5) : null
@@ -122,6 +123,7 @@ export interface SidebarPaneProps {
  * pane is one entry here plus its content component, never a shell change.
  */
 export const SIDEBAR_TABS: SidebarTabSpec[] = [
+  { id: 'trajectory', labelKey: 'sidebar.trajectory', shortcutId: 'openTrajectory', icon: Chart, render: props => <TrajectoryPane store={props.store} agentRuns={props.agentRuns} /> },
   {
     id: 'review',
     labelKey: 'sidebar.review',
@@ -546,7 +548,7 @@ export function SidebarPanel({
               {!hasTabs || pickerOpen ? (
                 <SidebarPicker onOpen={openTab} />
               ) : (
-                activeTab && activeTab !== 'browser' && (() => {
+                activeTab && (activeTab !== 'trajectory' || open) && activeTab !== 'browser' && (() => {
                   const agentPath = agentPathForTab(activeTab)
                   if (agentPath) {
                     return (

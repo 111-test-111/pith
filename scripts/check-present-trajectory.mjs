@@ -1,0 +1,214 @@
+/** Offline real-SDK integration plus bounded storage/resource checks. */
+import assert from 'node:assert/strict'
+import { mkdtemp, writeFile, readFile, symlink, stat, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
+import { build } from 'esbuild'
+import { createPlanFixture, planRepoRoot } from './lib/plan-fixture.mjs'
+
+const temp = await mkdtemp(join(tmpdir(), 'pith-trajectory-check-'))
+const outfile = join(temp, 'checks.mjs')
+// Bundled TypeBox/SDK resolution is relative to the repo, not the temp folder.
+await build({ stdin: { contents: `export {createPresentTool} from './src/main/pi/present';`, resolveDir: planRepoRoot },
+  outfile: join(temp, 'present.mjs'), bundle: true, platform: 'node', format: 'esm',
+  plugins: [{ name: 'sdk', setup(b) { b.onResolve({ filter: /^@earendil-works\// }, args => ({ path: import.meta.resolve(args.path), external: true })) } }] })
+// Storage/extraction have no external package imports.
+await build({ stdin: { contents: `export {TrajectoryStorage} from './src/main/pi/trajectory/storage';
+export {TrajectoryClient} from './src/main/pi/trajectory/client';
+export {trajectoryLines} from './src/main/pi/trajectory/jsonl';
+export {presentedFiles} from './src/renderer/src/lib/presented-files';`, resolveDir: planRepoRoot },
+  outfile, bundle: true, platform: 'node', format: 'esm' })
+await build({ entryPoints: [join(planRepoRoot, 'src/main/pi/trajectory-worker.ts')], outfile: join(temp, 'trajectory-worker.mjs'), bundle: true, platform: 'node', format: 'esm' })
+const { TrajectoryStorage, TrajectoryClient, trajectoryLines, presentedFiles } = await import(pathToFileURL(outfile).href)
+const { createPresentTool } = await import(pathToFileURL(join(temp, 'present.mjs')).href)
+let storage, fixture, client
+try {
+  const artifact = join(temp, 'report # 你好.txt')
+  await writeFile(artifact, 'delivered')
+  const tool = createPresentTool({ cwd: temp, canStart: () => true })
+  const result = await tool.execute('p', { files: [{ path: 'report # 你好.txt', description: 'Report' }, { path: artifact }] })
+  assert.equal(result.details.files.length, 1)
+  assert.equal(result.details.files[0].size, 9)
+  await assert.rejects(tool.execute('p', { files: [{ path: 'missing' }] }))
+  await assert.rejects(tool.execute('p', { files: [{ path: temp }] }))
+  await symlink(artifact, join(temp, 'link'))
+  await assert.rejects(tool.execute('p', { files: [{ path: 'link' }] }))
+  const abort = new AbortController(); abort.abort()
+  await assert.rejects(tool.execute('p', { files: [{ path: artifact }] }, abort.signal))
+  const closed = createPresentTool({ cwd: temp, canStart: () => false })
+  await assert.rejects(closed.execute('p', { files: [{ path: artifact }] }))
+  const messages = [{ role: 'assistant', content: [{ type: 'toolCall', id: 'p', name: 'present', arguments: {} }] }]
+  const results = new Map([['p', { role: 'toolResult', toolName: 'present', isError: false, details: result.details }]])
+  assert.equal(presentedFiles(messages, results).length, 1)
+  results.get('p').isError = true
+  assert.equal(presentedFiles(messages, results).length, 0)
+  assert.equal(presentedFiles([{ role: 'assistant', content: [{ type: 'text', text: artifact }] }], results).length, 0)
+  console.log('PASS present: regular files, exact paths, deduplication, failures, cancellation, successful call/result only')
+
+  const partialPath = join(temp, 'partial.jsonl')
+  const partial = JSON.stringify({ type: 'message', id: 'partial', parentId: null, timestamp: '2026-09-27T00:00:00Z', message: { role: 'user', content: '你好😀' } })
+  await writeFile(partialPath, partial + '\r\n' + partial.slice(0, 10))
+  const parsed = []
+  for await (const item of trajectoryLines(partialPath, 0, (await stat(partialPath)).size)) parsed.push(item)
+  assert.equal(parsed.length, 1); assert.equal(parsed[0].offset, Buffer.byteLength(partial + '\r\n'))
+  await writeFile(partialPath, partial + '\r\n' + partial + '\n')
+  const suffix = []
+  for await (const item of trajectoryLines(partialPath, parsed[0].offset, (await stat(partialPath)).size)) suffix.push(item)
+  assert.equal(suffix.length, 1); assert.equal(suffix[0].entry.message.content, '你好😀')
+  const oversized = { type: 'message', id: 'large', parentId: 'partial', timestamp: '2026-09-27T00:00:00Z', message: { role: 'assistant', content: 'x'.repeat(17 * 1024 * 1024) } }
+  await writeFile(partialPath, JSON.stringify(oversized) + '\n')
+  const largeRows = []
+  for await (const item of trajectoryLines(partialPath, 0, (await stat(partialPath)).size)) largeRows.push(item.entry)
+  assert.equal(largeRows[0].id, 'large'); assert.equal(largeRows[0].parentId, 'partial'); assert.equal(largeRows[0].trajectoryOmitted, true)
+  assert.equal(largeRows[0].message, undefined)
+  console.log('PASS JSONL: exact Unicode/CRLF offsets, partial-append retry, bounded oversized envelope/ancestry')
+  const database = join(temp, 'trace.sqlite'), sessionPath = join(temp, 'session.jsonl')
+  const lines = [
+    { type: 'session', id: 's', version: 3 },
+    { type: 'message', id: 'u', parentId: null, message: { role: 'user', content: 'first', timestamp: 1 } },
+    { type: 'message', id: 'old', parentId: 'u', message: { role: 'assistant', content: [], timestamp: 2 } },
+    { type: 'custom', id: 'rewind', parentId: 'u', customType: 'pith_rewind_selection' },
+    { type: 'message', id: 'new', parentId: 'rewind', message: { role: 'assistant', content: [], timestamp: 3 } }
+  ]
+  await writeFile(sessionPath, lines.map(x => JSON.stringify(x)).join('\n') + '\n')
+  storage = await TrajectoryStorage.open(database)
+  const access = { sessionPath, sessionId: 's' }
+  await storage.history(access)
+  assert.deepEqual(storage.page(access, {}).items.map(x => x.name), ['user', 'assistant'])
+  assert(!storage.page(access, {}).items.some(x => x.id.endsWith(':old')))
+  assert.equal(storage.page({ ...access, leafId: 'old' }, {}).total, 2)
+  const large = '你好😀'.repeat(300000)
+  const body = { system: 'prompt'.repeat(8000), image: large, apiKey: 'secret', messages: Array.from({ length: 100 }, (_, n) => ({ role: 'user', text: `message ${n}` })) }
+  const start = performance.now(), rss = process.memoryUsage().rss
+  for (let n = 0; n < 500; n++) storage.write({ sessionId: 's', anchor: 'new',
+    record: { id: `request-${n}`, kind: 'request', name: 'model', provider: 'fixture', model: 'fixture', startedAt: 100 + n, finishedAt: 101 + n, status: 'completed', captured: true },
+    documents: { payload: body } })
+  const elapsed = performance.now() - start
+  const page = storage.page(access, { kind: 'request' })
+  assert.equal(page.total, 500); assert.equal(page.items.length, 80)
+  assert(page.older); assert.equal(page.newer, null)
+  const older = storage.page(access, { kind: 'request', before: page.older })
+  assert.equal(older.items.length, 80)
+  assert.equal(new Set([...older.items, ...page.items].map(x => x.id)).size, 160)
+  assert.deepEqual(storage.page(access, { kind: 'request', after: older.newer }).items.map(x => x.id), page.items.map(x => x.id))
+  const detail = storage.detail(access, page.items[0].id), root = detail.documents[0].node
+  const fields = storage.readNode(access, { recordId: detail.record.id, trail: [root.id] })
+  const image = fields.children.find(x => x.key === 'image').node
+  let offset = 0, text = ''
+  do {
+    const value = storage.readNode(access, { recordId: detail.record.id, trail: [root.id, image.id], offset })
+    assert([...value.text].length <= 16384)
+    text += value.text; offset = value.nextOffset
+  } while (offset !== null)
+  assert.equal(JSON.parse(text), large)
+  assert.throws(() => storage.readNode({ ...access, leafId: 'old' }, { recordId: detail.record.id, trail: [root.id] }))
+  assert.throws(() => storage.readNode(access, { recordId: detail.record.id, trail: [root.id, '0'.repeat(64)] }))
+  const out = join(temp, 'export.json')
+  await storage.export(access, detail.record.id, out)
+  const exported = JSON.parse(await readFile(out, 'utf8'))
+  assert.equal(exported.documents.payload.image, large)
+  assert.equal(exported.documents.payload.apiKey, '[redacted]')
+  const disk = (await stat(database)).size + (await stat(database + '-wal')).size
+  const growth = process.memoryUsage().rss - rss
+  assert(disk < 25 * 1024 * 1024, `dedup disk ${disk}`)
+  assert(growth < 160 * 1024 * 1024, `unbounded resident growth ${growth}`)
+  console.log(`PASS storage: 500 repeated 3 MB requests, ${(disk / 1048576).toFixed(1)} MiB disk, ${elapsed.toFixed(0)} ms writes, ${(growth / 1048576).toFixed(1)} MiB RSS growth; pagination, branch isolation, Unicode fragments, redaction, export`)
+  storage.write({ sessionId: 's', anchor: 'new', record: { id: 'crash', kind: 'tool', name: 'bash', startedAt: 999, status: 'running', captured: true } })
+  storage.close(); storage = await TrajectoryStorage.open(database)
+  assert.equal(storage.detail(access, 'crash').record.status, 'interrupted')
+  storage.close(); storage = null
+  client = new TrajectoryClient(join(temp, 'worker.sqlite'))
+  for (let n = 0; n < 120; n++) await client.write({ sessionId: 's', anchor: 'new',
+    record: { id: `worker-${n}`, kind: 'request', name: 'model', startedAt: n, status: 'completed', captured: true }, documents: { payload: body } })
+  assert.equal((await client.page(access, {})).items.length, 80)
+  let exportDone = false
+  const exporting = client.export(access, 'worker-0', out).then(() => { exportDone = true })
+  await client.write({ sessionId: 's', anchor: 'new', record: { id: 'during-export', kind: 'tool', name: 'write', startedAt: 999, status: 'completed', captured: true } })
+  assert(!exportDone, 'capture is admitted before a long export finishes')
+  await exporting
+  assert.deepEqual(JSON.parse(await readFile(out, 'utf8')).documents.payload, { ...body, apiKey: '[redacted]' })
+  const writes = []
+  for (let n = 0; n < 40; n++) writes.push(client.write({ sessionId: 's', anchor: 'new', record: { id: 'ordered', kind: 'tool', name: 'bash', startedAt: 1000, status: n === 39 ? 'completed' : 'running', captured: true } }))
+  await Promise.all(writes)
+  assert.equal((await client.detail(access, 'ordered')).record.status, 'completed')
+  await client.dispose(); client = null
+  console.log('PASS worker: 120 large structured clones, bounded heap/queue, FIFO settlements, capture during export, complete nested export')
+
+  fixture = await createPlanFixture({ providerCallbacks: true, respond: n => n === 1
+    ? [{ type: 'toolCall', id: 'present-sdk', name: 'present', arguments: { files: [{ path: 'final.txt' }] } }]
+    : [{ type: 'text', text: 'Delivered' }] })
+  await fixture.managed.lifecyclePromise
+  await writeFile(join(fixture.project, 'final.txt'), 'report')
+  await fixture.session.prompt('Create a report')
+  await fixture.managed.trajectory.flush()
+  const trace = await fixture.app.trajectoryPage({ sessionPath: fixture.managed.path })
+  assert.equal(trace.items.filter(x => x.kind === 'request').length, 2)
+  assert.equal(trace.items.filter(x => x.kind === 'assistant').length, 0, 'no duplicate history fallback')
+  assert.equal(trace.items.filter(x => x.kind === 'user').length, 1)
+  assert.equal(trace.items.filter(x => x.kind === 'tool' && x.name === 'present').length, 1)
+  assert(trace.items.every(x => x.status === 'completed'))
+  for (const request of trace.items.filter(x => x.kind === 'request')) {
+    assert.equal(request.httpStatus, 200); assert(request.firstTokenAt); assert.equal(request.usage.output, 1)
+    const detail = await fixture.app.trajectoryDetail(fixture.managed.path, request.id)
+    assert(detail.documents.some(x => x.kind === 'payload'))
+    await fixture.app.exportTrajectory(fixture.managed.path, request.id, out)
+    const exported = await readFile(out, 'utf8')
+    assert(!exported.includes('fixture-secret')); assert.equal(JSON.parse(exported).documents.payload.authorization, '[redacted]', JSON.stringify(Object.keys(JSON.parse(exported).documents.payload ?? {})))
+  }
+  const original = fixture.manager.getLeafId()
+  const user = fixture.manager.getBranch().find(x => x.type === 'message' && x.message.role === 'user')
+  fixture.manager.branch(user.id)
+  const rewound = await fixture.app.trajectoryPage({ sessionPath: fixture.managed.path })
+  assert.equal(rewound.items.filter(x => x.kind === 'request').length, 0)
+  fixture.manager.branch(original)
+  assert.equal((await fixture.app.trajectoryPage({ sessionPath: fixture.managed.path })).items.filter(x => x.kind === 'request').length, 2)
+  const fork = fixture.manager.constructor.forkFrom(fixture.managed.path, fixture.project, join(fixture.temporary, 'sessions'))
+  const forkTrace = await fixture.app.trajectoryPage({ sessionPath: fork.getSessionFile() })
+  assert.equal(forkTrace.items.filter(x => x.kind === 'request').length, 2)
+  assert.equal(forkTrace.items.filter(x => x.kind === 'assistant').length, 0)
+  const previous = fixture.managed.trajectory.previous
+  fixture.managed.trajectory.previous = (model, context, options) => previous(model, context, { ...options,
+    onPayload: async (payload, requestModel) => {
+      await options.onPayload(payload, requestModel)
+      return options.onPayload({ ...payload, attempt: 2 }, requestModel)
+    }
+  })
+  const beforeAttempts = fixture.manager.getLeafId()
+  await fixture.session.prompt('provider retry')
+  await fixture.managed.trajectory.flush()
+  const attemptedTrace = await fixture.app.trajectoryPage({ sessionPath: fixture.managed.path, kind: 'request' })
+  assert.equal(attemptedTrace.total, 4)
+  assert.equal(attemptedTrace.items.filter(x => x.status === 'failed').length, 1)
+  const afterAttempts = fixture.manager.getLeafId()
+  fixture.manager.branch(beforeAttempts)
+  assert.equal((await fixture.app.trajectoryPage({ sessionPath: fixture.managed.path, kind: 'request' })).total, 2)
+  fixture.manager.branch(afterAttempts)
+  let started
+  const starting = new Promise(resolve => { started = resolve })
+  fixture.managed.trajectory.previous = (model, context, options) => {
+    const message = { role: 'assistant', content: [{ type: 'text', text: 'partial' }], api: model.api,
+      provider: model.provider, model: model.id, timestamp: Date.now(), stopReason: 'aborted', errorMessage: 'Aborted',
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } }
+    const done = new Promise(resolve => { options.signal.addEventListener('abort', () => resolve(message), { once: true }) })
+    return { async *[Symbol.asyncIterator]() {
+      await options.onPayload({ model: model.id, messages: context.messages }, model)
+      yield { type: 'text_delta', contentIndex: 0, delta: 'partial', partial: message }
+      started()
+      yield { type: 'error', error: await done }
+    }, result: () => done }
+  }
+  const interrupted = fixture.session.prompt('cancel this request')
+  await starting
+  await fixture.session.abort(); await interrupted
+  await fixture.managed.trajectory.flush()
+  const stoppedTrace = await fixture.app.trajectoryPage({ sessionPath: fixture.managed.path, status: 'cancelled' })
+  assert.equal(stoppedTrace.items.filter(x => x.kind === 'request').length, 1)
+  assert.equal(stoppedTrace.items.filter(x => x.kind === 'run').length, 1)
+  console.log('PASS real SDK: present persistence, request callbacks, usage/timing, final payload, single committed records, rewind/fork isolation, real abort settlement')
+} finally {
+  storage?.close()
+  await client?.dispose()
+  await fixture?.close()
+  await rm(temp, { recursive: true, force: true })
+}

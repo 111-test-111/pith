@@ -1,3 +1,4 @@
+import { registerTrajectoryIpc } from './pi/trajectory/ipc'
 import { app, ipcMain, dialog, session, shell, webContents, BrowserWindow } from 'electron'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -394,6 +395,7 @@ export function registerIpc(pi: PiManager): () => boolean {
   ipcMain.handle('jev:settings', () => pi.jevSettings())
   ipcMain.handle('jev:updateSettings', (_event, update: JevSettingsUpdate) => pi.updateJevSettings(update))
   ipcMain.handle('jev:test', () => pi.testJev())
+  registerTrajectoryIpc(pi)
   ipcMain.handle('jev:traces', (_event, path: string, cursor?: string) => pi.jevTraces(path, cursor))
   ipcMain.handle('jev:trace', (_event, path: string, id: string) => pi.jevTrace(path, id))
   // The live mode belongs to a session, not to the app: the composer switches

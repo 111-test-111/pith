@@ -1,3 +1,5 @@
+import { presentedFiles } from '@/lib/presented-files'
+import { PresentedFiles } from './PresentedFiles'
 import { SubmissionCard } from './PlanCard'
 import { submittedPlanRef } from '@/lib/plan-submissions'
 import { BashTaskRow } from './BashTaskView'
@@ -986,6 +988,7 @@ export const AssistantGroup = memo(function AssistantGroup({
    * that changed pays for the extraction (and the per-result patch cache in
    * `turn-written-files` keeps repeat work off the streaming path).
    */
+  const deliveredFiles = useMemo(() => !live && showWrittenFiles ? presentedFiles(writtenMessages, toolResults) : [], [live, showWrittenFiles, writtenMessages, toolResults])
   const writtenFiles = useMemo(
     () => {
       if (live || !showWrittenFiles) return []
@@ -1011,12 +1014,15 @@ export const AssistantGroup = memo(function AssistantGroup({
    * an intermediate list before the final settled event.
    */
   const writtenFilesNode =
-    !live && writtenFiles.length > 0 ? (
-      <TurnWrittenFiles
-        files={writtenFiles}
-        onReview={onReview ? () => onReview(writtenReviewId ?? turnTimestamp) : undefined}
-        onUndo={onUndoFiles}
-      />
+    !live && (writtenFiles.length > 0 || deliveredFiles.length > 0) ? (
+      <div className="w-full space-y-3">
+        {deliveredFiles.length > 0 ? <PresentedFiles files={deliveredFiles} /> : null}
+        {writtenFiles.length > 0 ? <TurnWrittenFiles
+          files={writtenFiles}
+          onReview={onReview ? () => onReview(writtenReviewId ?? turnTimestamp) : undefined}
+          onUndo={onUndoFiles}
+        /> : null}
+      </div>
     ) : null
   const writtenFilesInFooter = showTurnActions && Boolean(writtenFilesNode)
   const showStandaloneActions = !live && showActions && !showTurnActions && Boolean(retryFrom || forkAt || continueFrom)

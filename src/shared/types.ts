@@ -1950,3 +1950,6 @@ export type DebugPanelRequest = { sessionPath: string; debugId: string; stopId?:
   | { action: 'breakpoints.function'; items: DebugFunctionBreakpointInput[] }
   | { action: 'breakpoints.function.update'; name: string; enabled: boolean }
 )
+export type { TrajectoryKind, TrajectoryStatus, TrajectoryRecord, TrajectoryQuery, TrajectoryPage, TrajectoryDetail, TrajectoryNodeRequest, TrajectoryNodePage, TrajectoryNode, TrajectoryDocumentKind, TrajectoryUsage } from './trajectory'
+
+export type { PresentedFile, PresentResult } from './present'

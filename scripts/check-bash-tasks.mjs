@@ -149,6 +149,7 @@ export { CheckoutCoordinator } from './src/main/rewind/coordinator';`, resolveDi
     const app = Object.create(PiManager.prototype)
     // This constructor-free fixture keeps Jev explicitly off and network-free.
     app.jevPreferences = { mode: 'off', choice: true, score: true, noul: true }
+    app.trajectory = { write: async () => {}, settle: async () => {}, dispose: async () => {} }
     app.jevService = { enabledQuestionTypes: () => [], cancel() {}, dispose() {} }
     app.checkoutCoordinator = new CheckoutCoordinator()
     app.rewindClient = { call: async () => { throw new Error('Checkpoint storage is outside this fixture') } }
@@ -206,8 +207,8 @@ export { CheckoutCoordinator } from './src/main/rewind/coordinator';`, resolveDi
     // putting guidelines on a tool object alone does not prove they reach it.
     assert.match(context.systemPrompt, /END the current response/)
     assert.match(context.systemPrompt, /a single sleep N, sleep N; tail/)
-    assert.match(context.tools.find((tool) => tool.name === 'bash').description, /end this response with a pending status/)
-    assert.match(context.tools.find((tool) => tool.name === 'bash_task').description, /no sleep or polling command is needed/)
+    assert.match(context.tools.find((tool) => tool.name === 'bash').description, /same command keeps running/)
+    assert.match(context.tools.find((tool) => tool.name === 'bash_task').description, /bounded tail/)
     assert.equal(context.tools.find((tool) => tool.name === 'read').description, 'fixture read')
     assert(context.tools.some((tool) => tool.name === 'extension_probe'), 'session_start tools remain enabled')
     return stream(message(n === 1 ? [call('registered-bash', 'printf managed-bash'),

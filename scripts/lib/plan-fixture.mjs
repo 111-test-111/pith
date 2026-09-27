@@ -18,7 +18,7 @@ const sdk = fileURLToPath(import.meta.resolve('@earendil-works/pi-coding-agent')
  * The fake stream is installed inside the mocked createAgentSessionFromServices
  * so it exists before PiManager takes ownership of the session.
  */
-export async function createPlanFixture({ respond: initialRespond, extensionFactories = [], withRewind = false, keepRecentTokens = 20000 } = {}) {
+export async function createPlanFixture({ respond: initialRespond, extensionFactories = [], withRewind = false, keepRecentTokens = 20000, providerCallbacks = false } = {}) {
   const temporary = await mkdtemp(join(tmpdir(), 'pith-plan-mode-'))
   const agentDir = join(temporary, 'agent')
   const project = join(temporary, 'project')
@@ -97,6 +97,7 @@ export async function createAgentSessionFromServices(options){
     }]
   })
 
+  await build({ entryPoints: [join(planRepoRoot, 'src/main/pi/trajectory-worker.ts')], outfile: join(temporary, 'trajectory-worker.mjs'), bundle: true, platform: 'node', format: 'esm' })
   if (withRewind) await build({ entryPoints: [join(planRepoRoot, 'src/main/rewind/worker.ts')], outfile: join(temporary, 'rewind-worker.mjs'), bundle: true, platform: 'node', format: 'esm' })
 
   const {
@@ -114,7 +115,7 @@ export async function createAgentSessionFromServices(options){
   let time = Date.now()
   let respond = initialRespond ?? (() => [{ type: 'text', text: 'ok' }])
 
-  setPlanFixtureStream((model, context) => {
+  setPlanFixtureStream((model, context, options) => {
     requests.push(JSON.parse(JSON.stringify(context)))
     const content = respond(requests.length, context)
     const message = {
@@ -136,6 +137,11 @@ export async function createAgentSessionFromServices(options){
     }
     return {
       async *[Symbol.asyncIterator]() {
+        if (providerCallbacks) {
+          await options?.onPayload?.({ model: model.id, messages: context.messages, system: context.systemPrompt, authorization: 'fixture-secret' }, model)
+          await options?.onResponse?.({ status: 200, headers: { authorization: 'fixture-secret', 'x-request-id': 'fixture-request' } }, model)
+          yield { type: 'text_delta', contentIndex: 0, delta: '', partial: message }
+        }
         yield { type: 'done', message }
       },
       result: async () => message

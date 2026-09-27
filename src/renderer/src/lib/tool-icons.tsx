@@ -85,6 +85,7 @@ const TOOL_ICONS: Record<string, IconComponent> = {
   // matches the composer button that switched the session into plan mode.
   submit_plan: Siren,
   todo_write: ListTodo,
+  present: Upload,
   scheduled_task: CalendarCheck,
   jev_decide: Flask,
   ask_user_question: CircleHelp,

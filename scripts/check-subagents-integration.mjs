@@ -249,6 +249,7 @@ export { extractTurnWrittenFiles, extractReviewTurns } from './src/renderer/src/
   child.appendCustomEntry(SUBAGENT_RESULT_TYPE, { version: 1, runId: 'initial', status: 'completed', completedAt: new Date().toISOString() })
   const app = Object.create(PiManager.prototype)
   app.jevPreferences = { mode: 'workflow', choice: true, score: true, noul: true }
+  app.trajectory = { write: async () => {}, settle: async () => {}, dispose: async () => {} }
   app.jevService = { enabledQuestionTypes: () => [], cancel() {}, dispose() {} }
   const refusals = []
   Object.assign(app, { checkoutCoordinator: new CheckoutCoordinator(), emit: () => {}, sessions: new Map(), planSequences: new Map(), sessionBuilds: new Map(),

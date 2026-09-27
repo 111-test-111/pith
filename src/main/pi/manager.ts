@@ -1,3 +1,9 @@
+import { createPresentTool } from './present'
+import { PRESENT_TOOL_NAME } from '../../shared/present'
+import { TrajectoryClient } from './trajectory/client'
+import { TrajectoryRecorder } from './trajectory/recorder'
+import type { TraceAccess } from './trajectory/protocol'
+import type { TrajectoryQuery, TrajectoryNodeRequest } from '../../shared/types'
 import type { ContinuePayload, RewindPatchDTO, RewindStatsDTO, RewindStatsTargetDTO } from '../../shared/types'
 import { continuationTarget } from '../../shared/continuation'
 import { continuationContent, CONTINUATION_MESSAGE_TYPE } from './continuation'
@@ -354,6 +360,7 @@ function scheduledDelay(signal: AbortSignal, ms: number): Promise<void> {
 }
 
 interface ManagedSession {
+  trajectory?: TrajectoryRecorder
   jevWorkflow?: JevWorkflow
   recoveryOnly?: boolean
   /** This session's DSH mode, folded from its branch; read live by the tools. */
@@ -488,6 +495,33 @@ export class PiManager {
     if (this.jevUpdating) return { ok: false, code: 'busy' }
     try { return { ok: true, data: await this.jevService.probe() } }
     catch (error) { return { ok: false, code: error instanceof JevError ? error.code : 'network' } }
+  }
+  private trajectoryAccess(sessionPath: string): TraceAccess {
+    if (typeof sessionPath !== 'string' || sessionPath.length > 8192 || !sessionPath) throw new Error('trajectory-invalid-session')
+    const managed = this.sessions.get(sessionPath)
+    return { sessionPath, sessionId: managed?.session.sessionId ?? '',
+      ...(managed ? { leafId: managed.session.sessionManager.getLeafId() } : {}) }
+  }
+  trajectoryPage(query: TrajectoryQuery) {
+    if (!query || (query.before !== undefined && !Number.isSafeInteger(query.before)) || (query.after !== undefined && !Number.isSafeInteger(query.after))
+      || (query.kind && !['run','user','assistant','request','tool','compaction','retry','notification'].includes(query.kind))
+      || (query.status && !['running','completed','failed','cancelled','interrupted','unavailable'].includes(query.status))
+      || (query.query !== undefined && typeof query.query !== 'string')) throw new Error('trajectory-invalid-query')
+    return this.trajectory.page(this.trajectoryAccess(query.sessionPath), query)
+  }
+  trajectoryDetail(sessionPath: string, recordId: string) {
+    if (typeof recordId !== 'string' || recordId.length > 200) throw new Error('trajectory-invalid-record')
+    return this.trajectory.detail(this.trajectoryAccess(sessionPath), recordId)
+  }
+  trajectoryNode(request: TrajectoryNodeRequest) {
+    if (!request || typeof request.recordId !== 'string' || request.recordId.length > 200 || !Array.isArray(request.trail)
+      || !request.trail.length || request.trail.length > 96 || request.trail.some(id => typeof id !== 'string' || !/^[a-f0-9]{64}$/.test(id))
+      || (request.offset !== undefined && (!Number.isSafeInteger(request.offset) || request.offset < 0))) throw new Error('trajectory-invalid-node')
+    return this.trajectory.node(this.trajectoryAccess(request.sessionPath), request)
+  }
+  async exportTrajectory(sessionPath: string, recordId: string, destination: string): Promise<void> {
+    await this.trajectoryDetail(sessionPath, recordId)
+    await this.trajectory.export(this.trajectoryAccess(sessionPath), recordId, destination)
   }
   jevTraces(sessionPath: string, cursor?: string): JevTracePageDTO {
     if (typeof sessionPath !== 'string' || (cursor !== undefined && typeof cursor !== 'string')) throw new JevError('invalid_input')
@@ -1108,6 +1142,17 @@ export class PiManager {
     this.startup = mode
     return mode
   }
+  private trajectoryTimer: ReturnType<typeof setTimeout> | null = null
+  private trajectoryChanged = new Set<string>()
+  private trajectory = new TrajectoryClient(join(app.getPath('userData'), 'trajectory.sqlite'), id => {
+    this.trajectoryChanged.add(id)
+    if (this.closing || this.trajectoryTimer) return
+    this.trajectoryTimer = setTimeout(() => {
+      this.trajectoryTimer = null
+      for (const [sessionPath, managed] of this.sessions) if (this.trajectoryChanged.has(managed.session.sessionId)) this.emit('pi:trajectory', { sessionPath })
+      this.trajectoryChanged.clear()
+    }, 250)
+  })
   private sessionSearch = new SessionSearch()
   /** Sidebar listing index — stat-keyed row cache so refreshes skip unchanged files (see session-list.ts). */
   private sessionIndex = new SessionListIndex(join(app.getPath('userData'), 'session-list-cache.json'))
@@ -1418,6 +1463,7 @@ export class PiManager {
       ], SESSION_DISPOSE_TIMEOUT_MS)
       if (!settled) managed.session.dispose()
       managed.unsubscribe()
+      await managed.trajectory?.dispose()
       this.mcpBusCleanup.get(managed.resourceLoader)?.()
       this.mcpBusCleanup.delete(managed.resourceLoader)
       if (managed.streamFlushTimer) clearTimeout(managed.streamFlushTimer)
@@ -1880,6 +1926,7 @@ export class PiManager {
         isPlanRestricted: () => managed.plan.restricted,
         ...(isChild || isScheduled ? {} : { escalate: escalateForTools })
       }),
+      createPresentTool({ cwd: services.cwd, canStart: () => (notifications?.canStart ?? false) && this.planToolAdmitted(managed) }),
       createPlanSubmissionTool(plan),
       createTodoTool(todos, () => (notifications?.canStart ?? false) && this.planToolAdmitted(managed)),
       // The scheduler's own tool: registered for every session (children
@@ -2135,6 +2182,7 @@ export class PiManager {
       subagentNotifications.onWake = () => managed.changeScopes.continue()
     }
     const observeEvent = (event: AgentSessionEvent): void => {
+      if (event.type !== 'message_end') managed.trajectory?.observe(event)
       managed.rewind?.observe(event)
       const previousTodos = managed.todos.snapshot
       managed.todos.observe(event)
@@ -2164,6 +2212,7 @@ export class PiManager {
       observeEvent(event)
     })
     const unsubscribeCommitted = session.agent.subscribe(event => {
+      if (event.type === 'message_end') managed.trajectory?.observe(event)
       if (event.type === 'message_start' && event.message.role === 'user') plan.releaseSubmissionForUser()
       if (event.type !== 'message_end' || (event.message.role !== 'user' && event.message.role !== 'toolResult')) return
       const leaf = session.sessionManager.getLeafEntry()
@@ -2173,6 +2222,7 @@ export class PiManager {
       observeEvent(event)
     })
     managed.unsubscribe = () => { unsubscribeSession(); unsubscribeCommitted() }
+    managed.trajectory = new TrajectoryRecorder(session, this.trajectory)
     managed.disposePlanStream = installPlanStreamOverlay(session, () => plan.restricted)
     if (!isChild && !isScheduled) managed.jevWorkflow = new JevWorkflow({ session, service: this.jevService, owner: path,
       // Jev's action route asks the model to implement changes. Planning owns
@@ -2418,7 +2468,7 @@ export class PiManager {
     // The delegation tool is gated by its setting here (its customTool is
     // registered at build; the runtime re-checks dispatch live).
     this.setActiveTools(managed, [...new Set([
-      ...BUILTIN_TOOL_NAMES, ...APP_BASH_TOOL_NAMES, ...APP_FILE_TOOL_NAMES, TODO_TOOL_NAME,
+      ...BUILTIN_TOOL_NAMES, ...APP_BASH_TOOL_NAMES, ...APP_FILE_TOOL_NAMES, TODO_TOOL_NAME, PRESENT_TOOL_NAME,
       // A scheduled-run session has no human surface: ask_user is disabled at
       // registration AND left out of the active set.
       ...(managed.scheduledTask ? [] : [ASK_USER_TOOL_NAME]), 'submit_plan', SCHEDULED_TASK_TOOL_NAME,
@@ -4897,12 +4947,15 @@ export class PiManager {
     this.checkoutCoordinator.close()
     this.navigationEpoch += 1
     this.sessionSearch.dispose()
+    if (this.trajectoryTimer) clearTimeout(this.trajectoryTimer)
+    this.trajectoryTimer = null
+    this.trajectoryChanged.clear()
     this.usageAggregator.dispose()
     if (this.contextUsageTimer) clearInterval(this.contextUsageTimer)
     this.contextUsageTimer = null
     for (const controller of this.sideChats.values()) controller.abort()
     for (const controller of this.loginAborts.values()) controller.abort()
-    this.disposePromise = Promise.allSettled([this.disposeAllSessions(), this.commandTasksInstance?.dispose(), this.debugManagerInstance?.dispose()]).then(async () => { await this.rewindClient.dispose() })
+    this.disposePromise = Promise.allSettled([this.disposeAllSessions(), this.commandTasksInstance?.dispose(), this.debugManagerInstance?.dispose()]).then(async () => { await this.rewindClient.dispose(); await this.trajectory.dispose() })
     return this.disposePromise
   }
 }
