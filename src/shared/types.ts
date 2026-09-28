@@ -23,6 +23,43 @@ import { PLAN_MAX_BYTES } from './plan.ts'
 
 export type WindowTheme = 'light' | 'dark' | 'system'
 
+export const PICTURE_IN_PICTURE_FRAME_RATES = [1, 2, 5, 10, 15] as const
+export const PICTURE_IN_PICTURE_POSITIONS = [
+  'last', 'center', 'top-left', 'top-right', 'bottom-left', 'bottom-right'
+] as const
+export const PICTURE_IN_PICTURE_SCALES = ['last', '35', '50', '65'] as const
+
+export interface PictureInPicturePreferencesDTO {
+  frameRate: (typeof PICTURE_IN_PICTURE_FRAME_RATES)[number]
+  position: (typeof PICTURE_IN_PICTURE_POSITIONS)[number]
+  initialScale: (typeof PICTURE_IN_PICTURE_SCALES)[number]
+  startPinned: boolean
+}
+
+export const DEFAULT_PICTURE_IN_PICTURE_PREFERENCES: PictureInPicturePreferencesDTO = {
+  frameRate: 5,
+  position: 'last',
+  initialScale: 'last',
+  startPinned: true
+}
+
+/** The same validation is used for disk migration and renderer IPC updates. */
+export function normalizePictureInPicturePreferences(
+  input: unknown,
+  fallback: PictureInPicturePreferencesDTO = DEFAULT_PICTURE_IN_PICTURE_PREFERENCES
+): PictureInPicturePreferencesDTO {
+  const value = input && typeof input === 'object' ? input as Record<string, unknown> : {}
+  return {
+    frameRate: PICTURE_IN_PICTURE_FRAME_RATES.includes(value.frameRate as PictureInPicturePreferencesDTO['frameRate'])
+      ? value.frameRate as PictureInPicturePreferencesDTO['frameRate'] : fallback.frameRate,
+    position: PICTURE_IN_PICTURE_POSITIONS.includes(value.position as PictureInPicturePreferencesDTO['position'])
+      ? value.position as PictureInPicturePreferencesDTO['position'] : fallback.position,
+    initialScale: PICTURE_IN_PICTURE_SCALES.includes(value.initialScale as PictureInPicturePreferencesDTO['initialScale'])
+      ? value.initialScale as PictureInPicturePreferencesDTO['initialScale'] : fallback.initialScale,
+    startPinned: typeof value.startPinned === 'boolean' ? value.startPinned : fallback.startPinned
+  }
+}
+
 /** The portion of the full renderer projected into the compact window. */
 export interface PictureInPictureSourceDTO {
   kind: 'conversation' | 'sidebar'
@@ -38,6 +75,7 @@ export interface PictureInPictureOpenRequest {
 export interface PictureInPictureStateDTO {
   sessionPath: string
   pinned: boolean
+  frameRate: PictureInPicturePreferencesDTO['frameRate']
   source: PictureInPictureSourceDTO['kind']
   canZoomIn: boolean
   canZoomOut: boolean

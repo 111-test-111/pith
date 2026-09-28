@@ -4,10 +4,12 @@ import { pathToFileURL } from 'node:url'
 import type {
   PictureInPictureFrameDTO,
   PictureInPictureOpenRequest,
+  PictureInPicturePreferencesDTO,
   PictureInPictureSourceDTO,
   PictureInPictureStateDTO
 } from '../shared/types'
 import { guardExternalNavigation } from './navigation'
+import { loadSettings, saveSettings, type AppSettings } from './settings'
 import { registerQuitShortcut } from './shutdown'
 
 const MIN_WIDTH = 260
@@ -16,8 +18,8 @@ const MAX_WIDTH = 560
 const MAX_HEIGHT = 520
 const DISPLAY_MARGIN = 24
 const MIN_VISIBLE_EDGE = 48
-const FRAME_INTERVAL_MS = 200
 const FRAME_MAX_EDGE = 1100
+const LAST_SAVE_DELAY_MS = 350
 
 type SizeLimits = { minWidth: number; maxWidth: number; ratio: number }
 
@@ -60,7 +62,8 @@ class PictureInPictureController {
   private limits: SizeLimits | null = null
   private pinned = true
   private quitting = false
-  private lastBounds: Rectangle | null = null
+  private preferences = loadSettings().pictureInPicture
+  private lastSaveTimer: ReturnType<typeof setTimeout> | null = null
   private backgroundThrottling: boolean | null = null
   private captureTimer: ReturnType<typeof setTimeout> | null = null
   private latestFrame: PictureInPictureFrameDTO | null = null
@@ -73,6 +76,7 @@ class PictureInPictureController {
     return {
       sessionPath: this.sessionPath,
       pinned: this.pinned,
+      frameRate: this.preferences.frameRate,
       source: this.source.kind,
       canZoomIn: width < this.limits.maxWidth - 1,
       canZoomOut: width > this.limits.minWidth + 1
@@ -86,25 +90,55 @@ class PictureInPictureController {
     }
   }
 
-  private position(source: BrowserWindow, width: number, height: number): { x: number; y: number } {
-    if (this.lastBounds) {
-      const { x, y } = this.lastBounds
-      const visible = screen.getAllDisplays().some(({ workArea }) =>
-        x + width > workArea.x + MIN_VISIBLE_EDGE &&
-        x < workArea.x + workArea.width - MIN_VISIBLE_EDGE &&
-        y + height > workArea.y + MIN_VISIBLE_EDGE &&
-        y < workArea.y + workArea.height - MIN_VISIBLE_EDGE
+  private position(source: BrowserWindow, width: number, height: number, settings: AppSettings): { x: number; y: number } {
+    const placement = settings.pictureInPicture.position
+    const last = settings.pictureInPictureLast
+    if (placement === 'last' && last) {
+      const display = screen.getAllDisplays().find(({ workArea }) =>
+        last.x + width > workArea.x + MIN_VISIBLE_EDGE &&
+        last.x < workArea.x + workArea.width - MIN_VISIBLE_EDGE &&
+        last.y + height > workArea.y + MIN_VISIBLE_EDGE &&
+        last.y < workArea.y + workArea.height - MIN_VISIBLE_EDGE
       )
-      if (visible) return { x, y }
+      if (display) {
+        const { workArea } = display
+        return {
+          x: Math.max(workArea.x, Math.min(Math.round(last.x), workArea.x + workArea.width - width)),
+          y: Math.max(workArea.y, Math.min(Math.round(last.y), workArea.y + workArea.height - height))
+        }
+      }
     }
     const { workArea } = screen.getDisplayMatching(source.getBounds())
+    if (placement === 'center') return {
+      x: Math.round(workArea.x + (workArea.width - width) / 2),
+      y: Math.round(workArea.y + (workArea.height - height) / 2)
+    }
+    const left = placement === 'top-left' || placement === 'bottom-left'
+    const top = placement === 'top-left' || placement === 'top-right'
     return {
-      x: workArea.x + Math.max(0, workArea.width - width - DISPLAY_MARGIN),
-      y: workArea.y + Math.max(0, workArea.height - height - DISPLAY_MARGIN)
+      x: left ? workArea.x + DISPLAY_MARGIN : workArea.x + Math.max(0, workArea.width - width - DISPLAY_MARGIN),
+      y: top ? workArea.y + DISPLAY_MARGIN : workArea.y + Math.max(0, workArea.height - height - DISPLAY_MARGIN)
     }
   }
 
-  private scheduleCapture(win: BrowserWindow, source: BrowserWindow, delay = FRAME_INTERVAL_MS): void {
+  private persistLast(win: BrowserWindow): void {
+    if (this.window !== win || !this.source || win.isDestroyed()) return
+    const bounds = win.getBounds()
+    saveSettings({
+      ...loadSettings(),
+      pictureInPictureLast: { x: bounds.x, y: bounds.y, scale: bounds.width / this.source.rect.width }
+    })
+  }
+
+  private scheduleLastSave(win: BrowserWindow): void {
+    if (this.lastSaveTimer) clearTimeout(this.lastSaveTimer)
+    this.lastSaveTimer = setTimeout(() => {
+      this.lastSaveTimer = null
+      this.persistLast(win)
+    }, LAST_SAVE_DELAY_MS)
+  }
+
+  private scheduleCapture(win: BrowserWindow, source: BrowserWindow, delay = Math.round(1000 / this.preferences.frameRate)): void {
     if (this.window !== win || win.isDestroyed() || source.isDestroyed() || this.quitting) return
     this.captureTimer = setTimeout(() => { void this.capture(win, source) }, delay)
   }
@@ -154,11 +188,16 @@ class PictureInPictureController {
     }
     const selected = validSource(source, request.source)
     if (!selected) return false
+    const settings = loadSettings()
+    this.preferences = settings.pictureInPicture
     const limits = sizeLimits(selected.rect, source)
-    const width = Math.max(limits.minWidth, Math.min(limits.maxWidth, Math.round(selected.rect.width * 0.5)))
+    const desiredScale = this.preferences.initialScale === 'last'
+      ? settings.pictureInPictureLast?.scale ?? 0.5
+      : Number(this.preferences.initialScale) / 100
+    const width = Math.max(limits.minWidth, Math.min(limits.maxWidth, Math.round(selected.rect.width * desiredScale)))
     const height = Math.round(width / limits.ratio)
     const win = new BrowserWindow({
-      ...this.position(source, width, height),
+      ...this.position(source, width, height, settings),
       width,
       height,
       minWidth: limits.minWidth,
@@ -172,7 +211,7 @@ class PictureInPictureController {
       maximizable: false,
       fullscreenable: false,
       show: false,
-      alwaysOnTop: true,
+      alwaysOnTop: this.preferences.startPinned,
       title: 'Pith',
       backgroundColor: '#00000000',
       webPreferences: {
@@ -190,18 +229,23 @@ class PictureInPictureController {
     this.sessionPath = request.sessionPath
     this.source = selected
     this.limits = limits
-    this.pinned = true
+    this.pinned = this.preferences.startPinned
     this.latestFrame = null
     this.lastJpeg = null
     this.frameSequence = 0
-    win.setAlwaysOnTop(true, 'floating')
+    win.setAlwaysOnTop(this.pinned, 'floating')
     registerQuitShortcut(win.webContents, () => app.quit())
     const closeWithOwner = () => {
       if (this.window === win && !win.isDestroyed()) win.close()
     }
     source.once('closed', closeWithOwner)
-    win.on('resize', () => this.publishState())
-    win.on('close', () => { this.lastBounds = win.getBounds() })
+    win.on('resize', () => { this.publishState(); this.scheduleLastSave(win) })
+    win.on('move', () => this.scheduleLastSave(win))
+    win.on('close', () => {
+      if (this.lastSaveTimer) clearTimeout(this.lastSaveTimer)
+      this.lastSaveTimer = null
+      this.persistLast(win)
+    })
     win.on('closed', () => {
       source.removeListener('closed', closeWithOwner)
       if (this.window !== win) return
@@ -254,6 +298,18 @@ class PictureInPictureController {
 
   frameFor(sender: Electron.WebContents): PictureInPictureFrameDTO | null {
     return this.window?.webContents === sender ? this.latestFrame : null
+  }
+
+  setPreferences(preferences: PictureInPicturePreferencesDTO): void {
+    this.preferences = preferences
+    this.publishState()
+    if (this.captureTimer) {
+      clearTimeout(this.captureTimer)
+      this.captureTimer = null
+      if (this.window && this.owner && !this.window.isDestroyed() && !this.owner.isDestroyed()) {
+        this.scheduleCapture(this.window, this.owner)
+      }
+    }
   }
 
   setPinned(sender: Electron.WebContents, pinned: boolean): PictureInPictureStateDTO | null {

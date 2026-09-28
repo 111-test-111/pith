@@ -70,6 +70,7 @@ import type {
   PiEvent,
   PictureInPictureFrameDTO,
   PictureInPictureOpenRequest,
+  PictureInPicturePreferencesDTO,
   PictureInPictureStateDTO,
   PromptPayload,
   ProviderDTO,
@@ -159,6 +160,9 @@ const api = {
     ipcRenderer.invoke('app:setStartup', mode),
   setWindowTheme: (theme: WindowTheme): void => ipcRenderer.send('window:setTheme', theme),
   openPictureInPicture: (request: PictureInPictureOpenRequest): Promise<boolean> => ipcRenderer.invoke('window:pipOpen', request),
+  pictureInPicturePreferences: (): Promise<PictureInPicturePreferencesDTO> => ipcRenderer.invoke('window:pipPreferences'),
+  setPictureInPicturePreferences: (update: Partial<PictureInPicturePreferencesDTO>): Promise<PictureInPicturePreferencesDTO> =>
+    ipcRenderer.invoke('window:pipSetPreferences', update),
   pictureInPictureState: (): Promise<PictureInPictureStateDTO | null> => ipcRenderer.invoke('window:pipState'),
   pictureInPictureFrame: (): Promise<PictureInPictureFrameDTO | null> => ipcRenderer.invoke('window:pipFrameSnapshot'),
   onPictureInPictureFrame: (listener: (frame: PictureInPictureFrameDTO) => void) => subscribe('window:pipFrame', listener),

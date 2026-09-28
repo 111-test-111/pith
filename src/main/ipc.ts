@@ -6,12 +6,12 @@ import { pathToFileURL } from 'node:url'
 import { registerPlanIpc } from './pi/plan-ipc'
 import { PiManager } from './pi/manager'
 import { ScheduledTaskError } from './pi/scheduled-tasks/service'
-import type { JevSettingsUpdate, ScheduledTaskResult } from '../shared/types'
+import type { JevSettingsUpdate, PictureInPicturePreferencesDTO, ScheduledTaskResult } from '../shared/types'
 import { TerminalManager } from './terminal/manager'
 import { buildDebugCommandLine } from './debug/terminal'
 import { registerQuitHandler } from './shutdown'
 import { isDefaultWorkspace } from './pi/default-workspace'
-import { loadSettings, saveSettings } from './settings'
+import { loadSettings, saveSettings, updatePictureInPicturePreferences } from './settings'
 import { getBrowserService, initBrowserService } from './browser/service'
 import { setAppShortcutIdentities } from './browser/wiring.ts'
 import { getCdpPort } from './browser/cdp-port'
@@ -82,7 +82,11 @@ export function createPiManager(): PiManager {
   return new PiManager(broadcast, notifyError)
 }
 
-export function registerIpc(pi: PiManager, mainWindow: () => BrowserWindow | null): () => boolean {
+export function registerIpc(
+  pi: PiManager,
+  mainWindow: () => BrowserWindow | null,
+  onPictureInPicturePreferencesChanged: (preferences: PictureInPicturePreferencesDTO) => void
+): () => boolean {
   ipcMain.handle('files:saveCopy', (event, path: string) => {
     const win = BrowserWindow.fromWebContents(event.sender)
     return win ? saveFileCopy(win, path) : { status: 'error' }
@@ -90,6 +94,12 @@ export function registerIpc(pi: PiManager, mainWindow: () => BrowserWindow | nul
   ipcMain.on('window:setTheme', (event, theme: WindowTheme) => {
     const win = BrowserWindow.fromWebContents(event.sender)
     if (win && !win.isDestroyed()) setWindowTheme(win, theme)
+  })
+  ipcMain.handle('window:pipPreferences', () => loadSettings().pictureInPicture)
+  ipcMain.handle('window:pipSetPreferences', (_event, update: Partial<PictureInPicturePreferencesDTO>) => {
+    const next = updatePictureInPicturePreferences(update)
+    onPictureInPicturePreferencesChanged(next)
+    return next
   })
   const terminals = new TerminalManager(pi.checkoutCoordinator)
   ipcMain.handle('terminal:create', (event, payload) => terminals.create(event.sender, payload))

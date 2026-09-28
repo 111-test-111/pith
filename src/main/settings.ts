@@ -1,7 +1,7 @@
 import { app } from 'electron'
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { BASH_DEFAULT_MAX_WAIT_MS, BASH_MIN_WAIT_MS, BASH_MAX_WAIT_MS, SUBAGENT_MAX_TURNS_LIMIT, type StartupSessionMode, type JevPreferences } from '../shared/types'
+import { BASH_DEFAULT_MAX_WAIT_MS, BASH_MIN_WAIT_MS, BASH_MAX_WAIT_MS, SUBAGENT_MAX_TURNS_LIMIT, DEFAULT_PICTURE_IN_PICTURE_PREFERENCES, normalizePictureInPicturePreferences, type StartupSessionMode, type JevPreferences, type PictureInPicturePreferencesDTO } from '../shared/types'
 import { ASK_USER_DEFAULT_TIMEOUT_S, clampAskUserTimeoutSeconds } from '../shared/ask-user'
 import { RESPONSE_TIMEOUT_DEFAULT_S, clampResponseTimeoutSeconds } from '../shared/response-timeout'
 import { DEFAULT_SANDBOX_MODE, isSandboxMode } from './sandbox/mode'
@@ -20,6 +20,9 @@ export interface WindowBounds {
 }
 
 export interface AppSettings {
+  pictureInPicture: PictureInPicturePreferencesDTO
+  /** Last native small-window location and scale relative to its source. */
+  pictureInPictureLast: { x: number; y: number; scale: number } | null
   jev: JevPreferences
   checkpointsEnabled: boolean
   /** Initial blocking ceiling; commands keep running after this wait expires. */
@@ -82,6 +85,8 @@ export interface AppSettings {
 }
 
 const defaults: AppSettings = {
+  pictureInPicture: DEFAULT_PICTURE_IN_PICTURE_PREFERENCES,
+  pictureInPictureLast: null,
   jev: { mode: 'off', choice: true, score: true, noul: true },
   checkpointsEnabled: true,
   bashMaxWaitMs: BASH_DEFAULT_MAX_WAIT_MS,
@@ -136,9 +141,15 @@ export function loadSettings(): AppSettings {
       score: raw.jev?.score !== false,
       noul: raw.jev?.noul !== false
     }
+    const pictureInPictureLast = raw.pictureInPictureLast
+    const validLast = pictureInPictureLast &&
+      Number.isFinite(pictureInPictureLast.x) && Number.isFinite(pictureInPictureLast.y) &&
+      Number.isFinite(pictureInPictureLast.scale) && pictureInPictureLast.scale > 0 && pictureInPictureLast.scale <= 6
+      ? { x: pictureInPictureLast.x, y: pictureInPictureLast.y, scale: pictureInPictureLast.scale } : null
     return { ...defaults, ...raw, jev, bashMaxWaitMs, startup, startupSession, subagentMaxConcurrent, askUserTimeoutSeconds,
       subagentTurnLimitOverrideEnabled: raw.subagentTurnLimitOverrideEnabled === true, subagentMaxTurns,
       responseTimeoutSeconds,
+      pictureInPicture: normalizePictureInPicturePreferences(raw.pictureInPicture), pictureInPictureLast: validLast,
       sandboxMode: isSandboxMode(raw.sandboxMode) ? raw.sandboxMode : DEFAULT_SANDBOX_MODE }
   } catch {
     return { ...defaults }
@@ -148,4 +159,11 @@ export function loadSettings(): AppSettings {
 export function saveSettings(settings: AppSettings): void {
   mkdirSync(app.getPath('userData'), { recursive: true })
   writeFileSync(settingsPath(), JSON.stringify(settings, null, 2), 'utf8')
+}
+
+export function updatePictureInPicturePreferences(update: unknown): PictureInPicturePreferencesDTO {
+  const settings = loadSettings()
+  const next = normalizePictureInPicturePreferences(update, settings.pictureInPicture)
+  saveSettings({ ...settings, pictureInPicture: next })
+  return next
 }

@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
-import { ArrowLeft, Bell, Chart, Flask, Globe, Keyboard, KeyRound, Palette, Plug, Puzzle, Settings2, Skills, Subagent, TextAlignCenter, Wrench } from '@/lib/icons'
+import { ArrowLeft, Bell, Chart, Flask, Globe, Keyboard, KeyRound, Palette, PictureInPicture2, Plug, Puzzle, Settings2, Skills, Subagent, TextAlignCenter, Wrench } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/motion/tabs'
 import { EASE_OUT } from '@/lib/ease'
@@ -11,6 +11,7 @@ import { GeneralSection } from './GeneralSection'
 import { NotificationsSection } from './NotificationsSection'
 import { PromptSection } from './PromptSection'
 import { AppearanceSection } from './AppearanceSection'
+import { PictureInPictureSection } from './PictureInPictureSection'
 import { ShortcutsSection } from './ShortcutsSection'
 import { ProvidersSection } from './ProvidersSection'
 import { ToolsSection } from './ToolsSection'
@@ -79,6 +80,13 @@ const SECTIONS: {
         onUiStyleChange={props.onUiStyleChange}
       />
     )
+  },
+  {
+    id: 'picture-in-picture',
+    labelKey: 'settings.pictureInPicture',
+    descriptionKey: 'settings.pictureInPictureDesc',
+    icon: <PictureInPicture2 className="size-4" />,
+    render: () => <PictureInPictureSection />
   },
   {
     id: 'shortcuts',

@@ -20,18 +20,21 @@ try {
   const fixturePreload = join(temporary, 'preload.mjs')
   await writeFile(fixturePreload, `import ${JSON.stringify(preload)};
 import {contextBridge,ipcRenderer} from 'electron';
-contextBridge.exposeInMainWorld('fixture',{windows:()=>ipcRenderer.invoke('fixture:windows'),blurCompact:()=>ipcRenderer.invoke('fixture:blurCompact'),focusCompact:()=>ipcRenderer.invoke('fixture:focusCompact')});`)
+contextBridge.exposeInMainWorld('fixture',{windows:()=>ipcRenderer.invoke('fixture:windows'),blurCompact:()=>ipcRenderer.invoke('fixture:blurCompact'),focusCompact:()=>ipcRenderer.invoke('fixture:focusCompact'),display:()=>ipcRenderer.invoke('fixture:display'),settings:()=>ipcRenderer.invoke('fixture:settings'),moveCompact:(x,y)=>ipcRenderer.invoke('fixture:moveCompact',x,y)});`)
   const fixtureMain = join(temporary, 'main.cjs')
   await build({
     stdin: {
       contents: `
-import {app,BrowserWindow,ipcMain} from 'electron';
+import {app,BrowserWindow,ipcMain,screen} from 'electron';
 import {registerPictureInPictureIpc} from ${JSON.stringify(join(repo, 'src/main/picture-in-picture.ts'))};
+import {loadSettings,updatePictureInPicturePreferences} from ${JSON.stringify(join(repo, 'src/main/settings.ts'))};
 import {windowChromeOptions,setWindowTheme} from ${JSON.stringify(join(repo, 'src/main/window-chrome.ts'))};
 app.setPath('userData',${JSON.stringify(join(temporary, 'profile'))});
 app.commandLine.appendSwitch('remote-debugging-port','0');
 app.whenReady().then(()=>{
  const pip=registerPictureInPictureIpc({preload:${JSON.stringify(preload)},documentUrl:${JSON.stringify(pathToFileURL(renderer).toString())}});
+ ipcMain.handle('window:pipPreferences',()=>loadSettings().pictureInPicture);
+ ipcMain.handle('window:pipSetPreferences',(_event,update)=>{const next=updatePictureInPicturePreferences(update);pip.setPreferences(next);return next});
  const sessionPath='/fixture/chat';
  const snapshot=()=>({sessionId:'fixture',sessionPath,cwd:'/fixture',projectless:false,messages:[{role:'user',content:'Check this task.',timestamp:1}],model:null,thinkingLevel:'off',isStreaming:false,eventSequence:0});
  const w=new BrowserWindow({...windowChromeOptions(),width:1000,height:700,webPreferences:{preload:${JSON.stringify(fixturePreload)},contextIsolation:true,nodeIntegration:false,sandbox:false}});
@@ -44,6 +47,9 @@ app.whenReady().then(()=>{
  ipcMain.handle('fixture:windows',()=>{const compact=BrowserWindow.getAllWindows().find(win=>win!==w);return{mainVisible:w.isVisible(),compact:compact?{visible:compact.isVisible(),focused:compact.isFocused(),alwaysOnTop:compact.isAlwaysOnTop(),movable:compact.isMovable(),resizable:compact.isResizable(),bounds:compact.getBounds(),minimum:compact.getMinimumSize(),maximum:compact.getMaximumSize()}:null,mainBridgeOwner:pip.mainWindow()===w}});
  ipcMain.handle('fixture:blurCompact',()=>{BrowserWindow.getAllWindows().find(win=>win!==w)?.blur()});
  ipcMain.handle('fixture:focusCompact',()=>{BrowserWindow.getAllWindows().find(win=>win!==w)?.focus()});
+ ipcMain.handle('fixture:display',()=>screen.getDisplayMatching(w.getBounds()).workArea);
+ ipcMain.handle('fixture:settings',()=>({preferences:loadSettings().pictureInPicture,last:loadSettings().pictureInPictureLast}));
+ ipcMain.handle('fixture:moveCompact',(_event,x,y)=>{BrowserWindow.getAllWindows().find(win=>win!==w)?.setPosition(x,y)});
  w.loadFile(${JSON.stringify(renderer)});
 });app.on('window-all-closed',()=>app.quit());`,
       resolveDir: repo,
@@ -131,15 +137,19 @@ app.whenReady().then(()=>{
     return true
   })()`
   const pixel = `(()=>{const img=document.querySelector('[data-pip-frame]');if(!img?.complete||!img.naturalWidth)return null;const c=document.createElement('canvas');c.width=c.height=1;const ctx=c.getContext('2d');ctx.drawImage(img,Math.floor(img.naturalWidth/2),Math.floor(img.naturalHeight/2),1,1,0,0,1,1);return Array.from(ctx.getImageData(0,0,1,1).data)})()`
-  const openCompact = async (previousTargetId) => {
+  const pipTargetIds = new Set()
+  const compactTargets = []
+  const openCompact = async () => {
     await main.evaluate(`document.querySelector('[data-titlebar-more]').click()`)
     await waitFor(main.evaluate, `document.querySelector('[data-titlebar-action="picture-in-picture"]')`)
     await main.evaluate(`document.querySelector('[data-titlebar-action="picture-in-picture"]').click()`)
     await waitFor(main.evaluate, `fixture.windows().then(value=>!value.mainVisible&&value.compact?.visible)`)
-    const page = await target((entry) => entry.url.includes('view=pip') && entry.id !== previousTargetId)
+    const page = await target((entry) => entry.url.includes('view=pip') && !pipTargetIds.has(entry.id))
+    pipTargetIds.add(page.id)
     const compact = await connect(page)
     await waitFor(compact.evaluate, `document.querySelector('[data-pip-frame]')?.naturalWidth>0`)
-    return { ...compact, targetId: page.id }
+    compactTargets.push(compact)
+    return compact
   }
 
   const conversationBounds = await main.evaluate(`document.querySelector('[data-pip-source="conversation"]').getBoundingClientRect().toJSON()`)
@@ -149,6 +159,7 @@ app.whenReady().then(()=>{
   assert.equal(state.sessionPath, '/fixture/chat')
   assert.equal(state.source, 'conversation')
   assert.equal(state.pinned, true)
+  assert.equal(state.frameRate, 5)
   const conversationFrame = await compact.evaluate(`window.pi.pictureInPictureFrame().then(frame=>({width:frame.width,height:frame.height}))`)
   assert.ok(Math.abs(conversationFrame.width / conversationFrame.height - conversationBounds.width / conversationBounds.height) < 0.02, 'only the conversation bounds are captured')
   assert.equal(await compact.evaluate(`getComputedStyle(document.querySelector('[data-pip-drag]')).webkitAppRegion`), 'drag')
@@ -196,6 +207,12 @@ app.whenReady().then(()=>{
   await compact.evaluate(`document.querySelector('button[aria-label="Return to app"]').click()`)
   await waitFor(main.evaluate, `fixture.windows().then(value=>value.mainVisible&&!value.compact)`)
 
+  const rejected = await main.evaluate(`window.pi.setPictureInPicturePreferences({frameRate:999,position:'off-screen',initialScale:'12',startPinned:'yes'})`)
+  assert.deepEqual(rejected, { frameRate: 5, position: 'last', initialScale: 'last', startPinned: true }, 'unsupported values cannot enter persisted preferences')
+  const configured = await main.evaluate(`window.pi.setPictureInPicturePreferences({frameRate:1,position:'center',initialScale:'35',startPinned:false})`)
+  assert.deepEqual(configured, { frameRate: 1, position: 'center', initialScale: '35', startPinned: false })
+  assert.deepEqual((await main.evaluate(`fixture.settings()`)).preferences, configured, 'preferences persist to app-settings.json')
+
   // A full-screen side panel is the sole projected source in this mode.
   await main.evaluate(`document.querySelector('button[aria-label="Toggle sidebar"][aria-pressed],button[aria-label="切换侧边栏"][aria-pressed]').click()`)
   await waitFor(main.evaluate, `document.querySelector('[data-panel="right"]')`)
@@ -204,8 +221,19 @@ app.whenReady().then(()=>{
   await pause(400)
   const sidebarBounds = await main.evaluate(`document.querySelector('[data-panel="right"][data-panel-fullscreen]').getBoundingClientRect().toJSON()`)
   assert.equal(await main.evaluate(probe('[data-panel="right"][data-panel-fullscreen]', '#20d020')), true)
-  const panelCompact = await openCompact(compact.targetId)
-  assert.equal(await panelCompact.evaluate(`window.pi.pictureInPictureState().then(value=>value.source)`), 'sidebar')
+  const panelCompact = await openCompact()
+  const panelState = await panelCompact.evaluate(`window.pi.pictureInPictureState()`)
+  assert.equal(panelState.source, 'sidebar')
+  assert.equal(panelState.frameRate, 1)
+  assert.equal(panelState.pinned, false)
+  const workArea = await main.evaluate(`fixture.display()`)
+  const centered = await main.evaluate(`fixture.windows().then(value=>value.compact)`)
+  assert.equal(centered.alwaysOnTop, false)
+  assert.ok(Math.abs(centered.bounds.x - Math.round(workArea.x + (workArea.width - centered.bounds.width) / 2)) <= 1)
+  assert.ok(Math.abs(centered.bounds.y - Math.round(workArea.y + (workArea.height - centered.bounds.height) / 2)) <= 1)
+  assert.equal(centered.bounds.width, Math.max(centered.minimum[0], Math.min(centered.maximum[0], Math.round(sidebarBounds.width * 0.35))))
+  await main.evaluate(`window.pi.setPictureInPicturePreferences({frameRate:2})`)
+  await waitFor(panelCompact.evaluate, `window.pi.pictureInPictureState().then(value=>value.frameRate===2)`)
   const sidebarFrame = await panelCompact.evaluate(`window.pi.pictureInPictureFrame().then(frame=>({width:frame.width,height:frame.height}))`)
   assert.ok(Math.abs(sidebarFrame.width / sidebarFrame.height - sidebarBounds.width / sidebarBounds.height) < 0.02, 'only the fullscreen sidebar bounds are captured')
   await waitFor(panelCompact.evaluate, `${pixel}?.[1]>140 && ${pixel}?.[0]<80 && ${pixel}?.[2]<80`)
@@ -214,12 +242,49 @@ app.whenReady().then(()=>{
     await pause(400)
     await writeFile(join(process.env.PI_PIP_SCREENSHOT_DIR, 'picture-in-picture-sidebar.png'), Buffer.from((await panelCompact.send('Page.captureScreenshot')).data, 'base64'))
   }
+  await panelCompact.evaluate(`window.pi.zoomPictureInPicture('in')`)
+  await panelCompact.evaluate(`window.pi.zoomPictureInPicture('in')`)
+  const lastX = workArea.x + 64
+  const lastY = workArea.y + 72
+  await main.evaluate(`fixture.moveCompact(${lastX},${lastY})`)
+  await waitFor(main.evaluate, `fixture.windows().then(value=>value.compact?.bounds.x===${lastX}&&value.compact?.bounds.y===${lastY})`)
+  const lastSize = await main.evaluate(`fixture.windows().then(value=>value.compact.bounds.width)`)
   await panelCompact.evaluate(`document.querySelector('button[aria-label="Return to app"]').click()`)
   await waitFor(main.evaluate, `fixture.windows().then(value=>value.mainVisible&&!value.compact)`)
+  const remembered = await main.evaluate(`fixture.settings().then(value=>value.last)`)
+  assert.equal(remembered.x, lastX)
+  assert.equal(remembered.y, lastY)
+  assert.ok(Math.abs(remembered.scale - lastSize / sidebarBounds.width) < 0.001)
+
+  await main.evaluate(`window.pi.setPictureInPicturePreferences({frameRate:10,position:'last',initialScale:'last',startPinned:true})`)
+  const recalledCompact = await openCompact()
+  const recalled = await main.evaluate(`fixture.windows().then(value=>value.compact)`)
+  assert.equal(recalled.bounds.x, lastX)
+  assert.equal(recalled.bounds.y, lastY)
+  assert.equal(recalled.bounds.width, lastSize)
+  assert.equal(recalled.alwaysOnTop, true)
+  assert.equal(await recalledCompact.evaluate(`window.pi.pictureInPictureState().then(value=>value.frameRate)`), 10)
+  await recalledCompact.evaluate(`document.querySelector('button[aria-label="Return to app"]').click()`)
+  await waitFor(main.evaluate, `fixture.windows().then(value=>value.mainVisible&&!value.compact)`)
+
+  for (const [position, xSide, ySide] of [
+    ['top-left', 'left', 'top'],
+    ['top-right', 'right', 'top'],
+    ['bottom-left', 'left', 'bottom'],
+    ['bottom-right', 'right', 'bottom']
+  ]) {
+    await main.evaluate(`window.pi.setPictureInPicturePreferences({position:${JSON.stringify(position)},initialScale:'50'})`)
+    const cornerCompact = await openCompact()
+    const corner = await main.evaluate(`fixture.windows().then(value=>value.compact.bounds)`)
+    const expectedX = xSide === 'left' ? workArea.x + 24 : workArea.x + workArea.width - corner.width - 24
+    const expectedY = ySide === 'top' ? workArea.y + 24 : workArea.y + workArea.height - corner.height - 24
+    assert.ok(Math.abs(corner.x - expectedX) <= 1 && Math.abs(corner.y - expectedY) <= 1, `${position} placement`)
+    await cornerCompact.evaluate(`document.querySelector('button[aria-label="Return to app"]').click()`)
+    await waitFor(main.evaluate, `fixture.windows().then(value=>value.mainVisible&&!value.compact)`)
+  }
   assert.deepEqual(main.exceptions, [])
-  assert.deepEqual(compact.exceptions, [])
-  assert.deepEqual(panelCompact.exceptions, [])
-  console.log('PASS: hidden-window live image, conversation and fullscreen sidebar crops, focus controls, bounded zoom, pin and restore')
+  for (const target of compactTargets) assert.deepEqual(target.exceptions, [])
+  console.log('PASS: live crops, focus controls, bounded zoom, frame rate, persisted position/scale, all corners, pin and restore')
 } finally {
   for (const socket of sockets) socket.close()
   if (child && child.exitCode === null) {

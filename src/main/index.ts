@@ -160,7 +160,7 @@ app.whenReady().then(() => {
   if (process.platform === 'darwin') app.dock?.setIcon(join(iconDirectory, '512x512.png'))
   const pi = createPiManager()
   const pictureInPicture = registerPictureInPictureIpc()
-  const isQuitting = registerIpc(pi, () => pictureInPicture.mainWindow())
+  const isQuitting = registerIpc(pi, () => pictureInPicture.mainWindow(), (preferences) => pictureInPicture.setPreferences(preferences))
   app.on('before-quit', () => pictureInPicture.dispose())
   // The scheduler boots with the app: cheap when no tasks are saved (the
   // first tick short-circuits before touching storage or the agent engine).

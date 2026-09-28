@@ -311,7 +311,7 @@ app.on('window-all-closed',()=>app.quit());`
   const order = await evaluate(`[...document.querySelectorAll('[role=tab]')].map((t) => t.textContent.trim())`)
   assert.deepEqual(
     order,
-    ['General', 'Notifications', 'Prompt', 'Appearance', 'Shortcuts', 'Providers', 'Tools', 'Subagents', 'Extensions', 'MCP', 'Skills', 'Browser', 'Usage', 'JevBeta'],
+    ['General', 'Notifications', 'Prompt', 'Appearance', 'Picture in picture', 'Shortcuts', 'Providers', 'Tools', 'Subagents', 'Extensions', 'MCP', 'Skills', 'Browser', 'Usage', 'JevBeta'],
     'the Subagents entry follows Tools in the registry order'
   )
   assert.equal(await evaluate(`!!document.querySelector('button[role=checkbox][aria-label="${ENABLE_LABEL}"]')`), false, 'General no longer renders the subagents enable checkbox')

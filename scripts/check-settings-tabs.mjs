@@ -13,7 +13,7 @@
  *   change the element type at the same position, tearing the subtree down
  *   on every switch — a hidden Tools refetched the catalog on each leave).
  *
- * Real `SettingsPage` (titlebar, vertical tabs, all thirteen registered
+ * Real `SettingsPage` (titlebar, vertical tabs, all fifteen registered
  * sections) in isolated Electron against a mocked `window.pi`; no SDK, no
  * model calls, no network. Run after building is NOT required (vite serves
  * the source): `node scripts/check-settings-tabs.mjs`.
@@ -82,7 +82,16 @@ const usage = {
   recordsTruncated: false
 };
 let jev = { mode: 'off', choice: true, score: true, noul: true, keySource: 'missing' };
+let pip = { frameRate: 5, position: 'last', initialScale: 'last', startPinned: true };
+window.pipUpdates = [];
 window.pi = {
+  pictureInPicturePreferences: () => count('pictureInPicturePreferences', pip),
+  setPictureInPicturePreferences: (update) => {
+    window.calls.push('setPictureInPicturePreferences');
+    window.pipUpdates.push(update);
+    pip = { ...pip, ...update };
+    return Promise.resolve(pip);
+  },
   jevSettings: () => count('jevSettings', jev),
   updateJevSettings: (update) => {
     if (window.jevUpdateFailure) return count('updateJevSettings', { ok: false, code: 'authentication' });
@@ -284,10 +293,10 @@ app.on('window-all-closed',()=>app.quit());`
   assert.ok(await evaluate(`!!document.querySelector('[role=tablist]')`), 'fixture mounted')
 
   // 1. Opening Settings mounts only the active section and fires no section
-  //    data reads: thirteen panels, General populated, the rest empty.
+  //    data reads: fifteen panels, General populated, the rest empty.
   await pause(500)
   let panels = await evaluate('window.panels()')
-  assert.equal(panels.length, 13, 'all thirteen section panels exist in the DOM')
+  assert.equal(panels.length, 15, 'all fifteen section panels exist in the DOM')
   assert.equal(panels.filter((p) => !p.hidden).length, 1, 'exactly one panel is active')
   assert.ok(panels[0].inputs >= 2, 'General (first section) is the mounted one')
   assert.ok(panels.slice(1).every((p) => p.content === 0), 'unvisited panels render no section content (header scaffold only)')
@@ -308,45 +317,72 @@ app.on('window-all-closed',()=>app.quit());`
   assert.ok(panels[0].hidden && panels[0].inputs >= 2, 'General stays mounted while hidden')
   assert.equal(await evaluate('window.waitValue()'), '12.5', 'opening Notifications preserves the General draft')
 
-  // 4. Visiting Tools mounts it once and fetches the catalog once.
+  // 4. Picture in picture reads its preferences only on first visit.
+  assert.equal(await evaluate('window.callsOf("pictureInPicturePreferences")'), 0)
+  await evaluate(`window.openTab('Picture in picture')`)
+  panels = await evaluate('window.panels()')
+  assert.ok(!panels[4].hidden && panels[4].content > 0, 'Picture in picture is a lazily mounted section')
+  assert.equal(await evaluate('window.callsOf("pictureInPicturePreferences")'), 1)
+  assert.equal(await evaluate('window.waitValue()'), '12.5', 'the General draft survives Picture in picture')
+  if (process.env.PI_PIP_SETTINGS_SCREENSHOT_DIR) {
+    await mkdir(process.env.PI_PIP_SETTINGS_SCREENSHOT_DIR, { recursive: true })
+    const shot = await send('Page.captureScreenshot', { format: 'png' })
+    await writeFile(join(process.env.PI_PIP_SETTINGS_SCREENSHOT_DIR, 'picture-in-picture-settings.png'), Buffer.from(shot.data, 'base64'))
+  }
+  const choosePip = async (label, option) => {
+    await evaluate(`document.querySelector('button[aria-label=${JSON.stringify(label)}]').click()`)
+    await pause(120)
+    await evaluate(`[...document.querySelectorAll('[role="listbox"][aria-hidden="false"] [role="option"]')].find(option=>option.textContent.trim()===${JSON.stringify(option)}).click()`)
+    await pause(120)
+  }
+  await choosePip('Maximum frame rate', '10 fps')
+  await choosePip('Opening position', 'Top left')
+  await choosePip('Opening scale', '65%')
+  await evaluate(`document.querySelector('button[role="checkbox"][aria-label="Keep on top when opened"]').click()`)
+  await pause(120)
+  assert.deepEqual(await evaluate('window.pipUpdates'), [
+    { frameRate: 10 }, { position: 'top-left' }, { initialScale: '65' }, { startPinned: false }
+  ], 'every Picture in picture control persists through its bridge setter')
+
+  // 5. Visiting Tools mounts it once and fetches the catalog once.
   await evaluate(`window.openTab('Tools')`)
   panels = await evaluate('window.panels()')
   assert.equal(panels.filter((p) => !p.hidden).length, 1)
-  assert.ok(panels[6].tools >= 2, 'Tools renders its list once visited')
+  assert.ok(panels[7].tools >= 2, 'Tools renders its list once visited')
   assert.ok(panels[0].hidden && panels[0].inputs >= 2, 'General stays mounted while hidden')
   assert.equal(await evaluate('window.callsOf("toolsCatalog")'), 1, 'catalog fetched on first visit')
   assert.equal(await evaluate('window.waitValue()'), '12.5', 'the hidden General draft is intact')
 
-  // 5. Visiting Subagents mounts it once and fetches the profile list once;
+  // 6. Visiting Subagents mounts it once and fetches the profile list once;
   //    its catalog refresh rides the SAME catalog read Tools started.
   await evaluate(`window.openTab('Subagents')`)
   panels = await evaluate('window.panels()')
-  assert.ok(!panels[7].hidden, 'Subagents is the active panel')
-  assert.ok(panels[7].inputs >= 1, 'Subagents renders its concurrency field (the toggle is a checkbox button)')
-  assert.ok(panels[7].content > 0, 'Subagents renders its profile list once visited')
+  assert.ok(!panels[8].hidden, 'Subagents is the active panel')
+  assert.ok(panels[8].inputs >= 1, 'Subagents renders its concurrency field (the toggle is a checkbox button)')
+  assert.ok(panels[8].content > 0, 'Subagents renders its profile list once visited')
   assert.equal(await evaluate('window.callsOf("subagentProfiles")'), 1, 'profiles fetched on first visit')
   assert.equal(await evaluate('window.callsOf("toolsCatalog")'), 2, 'Subagents shares the catalog: its first visit refreshes it once, like Skills')
   assert.ok(panels[0].hidden && panels[0].inputs >= 2, 'General stays mounted while hidden')
   assert.equal(await evaluate('window.waitValue()'), '12.5', 'the hidden General draft is intact')
 
-  // 6. Visiting Usage must not refire Tools' or Subagents' mount effects —
+  // 7. Visiting Usage must not refire Tools' or Subagents' mount effects —
   //    the deactivated panels' subtrees are kept, not torn down.
   await evaluate(`window.openTab('Usage')`)
   panels = await evaluate('window.panels()')
-  assert.ok(!panels[11].hidden, 'Usage is the active panel')
+  assert.ok(!panels[13].hidden, 'Usage is the active panel')
   assert.ok((await evaluate('window.callsOf("usageStats")')) >= 1, 'usage fetched on first visit')
   assert.equal(await evaluate('window.callsOf("toolsCatalog")'), 2, 'a hidden Tools/Subagents panel does not refetch the catalog')
   assert.equal(await evaluate('window.callsOf("subagentProfiles")'), 1, 'a hidden Subagents panel does not refetch profiles')
-  assert.ok(panels[6].tools >= 2, 'the hidden Tools list is still mounted')
+  assert.ok(panels[7].tools >= 2, 'the hidden Tools list is still mounted')
 
-  // 7. Returning to Tools reuses the mounted panel; the General draft still
+  // 8. Returning to Tools reuses the mounted panel; the General draft still
   //    survives the second round trip.
   await evaluate(`window.openTab('Tools')`)
   assert.equal(await evaluate('window.callsOf("toolsCatalog")'), 2, 'returning to Tools refetches nothing')
   await evaluate(`window.openTab('General')`)
   assert.equal(await evaluate('window.waitValue()'), '12.5', 'the General draft survives the full round trip')
 
-  // 8. Never-visited sections stay empty and silent through all of it.
+  // 9. Never-visited sections stay empty and silent through all of it.
   assert.equal(await evaluate('window.callsOf("providers")'), 0, 'Providers never mounted, never read')
   assert.equal(await evaluate('window.callsOf("appendPrompt")'), 0, 'Prompt never mounted, never read')
   assert.equal(await evaluate('window.callsOf("setBrowserAgentTools")'), 0, 'Browser never mounted, never toggled')
