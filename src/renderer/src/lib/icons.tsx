@@ -134,6 +134,7 @@ import {
   PencilSparkles as PencilSparklesGlyph,
   Pin as PinGlyph,
   PinOff as PinOffGlyph,
+  PictureInPicture2 as PictureInPicture2Glyph,
   Plug as PlugGlyph,
   PlugZap as PlugZapGlyph,
   Plus as PlusGlyph,
@@ -376,6 +377,7 @@ const GLYPHS = {
   Play: PlayGlyph,
   Pin: PinGlyph,
   PinOff: PinOffGlyph,
+  PictureInPicture2: PictureInPicture2Glyph,
   Plug: PlugGlyph,
   PlugZap: PlugZapGlyph,
   Plus: PlusGlyph,
@@ -593,6 +595,7 @@ export const Pause = /* @__PURE__ */ createIcon('Pause', GLYPHS.Pause)
 export const Play = /* @__PURE__ */ createIcon('Play', GLYPHS.Play)
 export const Pin = /* @__PURE__ */ createIcon('Pin', GLYPHS.Pin)
 export const PinOff = /* @__PURE__ */ createIcon('PinOff', GLYPHS.PinOff)
+export const PictureInPicture2 = /* @__PURE__ */ createIcon('PictureInPicture2', GLYPHS.PictureInPicture2)
 export const Plug = /* @__PURE__ */ createIcon('Plug', GLYPHS.Plug)
 export const PlugZap = /* @__PURE__ */ createIcon('PlugZap', GLYPHS.PlugZap)
 export const Plus = /* @__PURE__ */ createIcon('Plus', GLYPHS.Plus)

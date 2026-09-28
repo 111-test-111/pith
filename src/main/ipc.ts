@@ -82,7 +82,7 @@ export function createPiManager(): PiManager {
   return new PiManager(broadcast, notifyError)
 }
 
-export function registerIpc(pi: PiManager): () => boolean {
+export function registerIpc(pi: PiManager, mainWindow: () => BrowserWindow | null): () => boolean {
   ipcMain.handle('files:saveCopy', (event, path: string) => {
     const win = BrowserWindow.fromWebContents(event.sender)
     return win ? saveFileCopy(win, path) : { status: 'error' }
@@ -127,7 +127,7 @@ export function registerIpc(pi: PiManager): () => boolean {
   })
   pi.debugTerminalBridge = (input) => new Promise((resolve, reject) => {
     if (input.signal?.aborted) { reject(new Error('Debug terminal cancelled')); return }
-    const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+    const win = mainWindow()
     if (!win || win.isDestroyed()) { reject(new Error('No window can host the debug terminal')); return }
     const command = buildDebugCommandLine(input.args, input.env)
     if (command.length > 65_535) { reject(new Error('Debug terminal command is too large')); return }
@@ -196,7 +196,7 @@ export function registerIpc(pi: PiManager): () => boolean {
     // `Page.bringToFront` 都**不动壳窗口的 DOM 焦点**（实测 activeElement 始终是 BUTTON），
     // 所以这里发请求 + 等 ack（带超时兜底：页被关掉/面板未挂载时不会卡住键盘动作）。
     focusGuest: async (webContentsId: number) => {
-      const target = BrowserWindow.getAllWindows().find((win) => !win.isDestroyed())
+      const target = mainWindow()
       if (!target) return
       webContents.fromId(webContentsId)?.focus()
       const requestId = ++focusGuestSeq
@@ -371,7 +371,8 @@ export function registerIpc(pi: PiManager): () => boolean {
   // is the dialog alone: unlike app:pickDirectory it must not move the app's
   // current folder (that handler persists the pick as the session folder).
   ipcMain.handle('scheduled:pickDirectory', async (): Promise<{ path: string } | { cancelled: true }> => {
-    const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+    const win = mainWindow()
+    if (!win) return { cancelled: true }
     const result = await dialog.showOpenDialog(win, { properties: ['openDirectory', 'createDirectory'] })
     if (result.canceled || !result.filePaths[0]) return { cancelled: true }
     return { path: result.filePaths[0] }
@@ -462,7 +463,8 @@ export function registerIpc(pi: PiManager): () => boolean {
   )
 
   ipcMain.handle('app:pickDirectory', async (): Promise<{ cwd: string } | { cancelled: true }> => {
-    const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+    const win = mainWindow()
+    if (!win) return { cancelled: true }
     const result = await dialog.showOpenDialog(win, {
       properties: ['openDirectory', 'createDirectory']
     })

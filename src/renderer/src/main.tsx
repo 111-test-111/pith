@@ -8,6 +8,9 @@ import { initCompactTools } from './lib/compact-tools'
 import './styles.css'
 
 document.documentElement.dataset.platform = window.pi.platform
+if (new URLSearchParams(window.location.search).get('view') === 'pip') {
+  document.documentElement.dataset.pip = 'true'
+}
 
 // Apply the persisted accent before first paint to avoid a flash.
 const accent = window.localStorage.getItem('pi-app:accent')

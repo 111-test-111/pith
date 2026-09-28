@@ -68,6 +68,7 @@ import type {
   McpStatusPushDTO,
   McpUpsertServerPayload,
   PiEvent,
+  PictureInPictureStateDTO,
   PromptPayload,
   ProviderDTO,
   ProviderModelDTO,
@@ -155,6 +156,11 @@ const api = {
   setStartup: (mode: StartupSessionMode): Promise<StartupSessionMode> =>
     ipcRenderer.invoke('app:setStartup', mode),
   setWindowTheme: (theme: WindowTheme): void => ipcRenderer.send('window:setTheme', theme),
+  openPictureInPicture: (sessionPath: string): Promise<boolean> => ipcRenderer.invoke('window:pipOpen', sessionPath),
+  pictureInPictureState: (): Promise<PictureInPictureStateDTO | null> => ipcRenderer.invoke('window:pipState'),
+  setPictureInPicturePinned: (pinned: boolean): Promise<PictureInPictureStateDTO | null> =>
+    ipcRenderer.invoke('window:pipPinned', pinned),
+  restoreFromPictureInPicture: (): Promise<boolean> => ipcRenderer.invoke('window:pipRestore'),
   terminalCreate: (payload: TerminalCreatePayload): Promise<TerminalCreateResult> =>
     ipcRenderer.invoke('terminal:create', payload),
   terminalInput: (id: string, data: string, binary = false): void =>

@@ -5,6 +5,7 @@ import { ImagePreviewProvider } from './components/app/ImagePreview'
 import { ToastProvider } from './components/app/ToastProvider'
 import { Welcome } from './components/app/Welcome'
 import { Workspace } from './components/app/Workspace'
+import { PictureInPicture } from './components/app/PictureInPicture'
 import { PiStore } from './state/pi-store'
 import { useNotificationSoundEvents, useScheduledTaskCompletionCue } from './lib/notification-sounds'
 import { I18nProvider, useI18n } from './i18n'
@@ -129,10 +130,11 @@ function AppInner() {
  * splash — resolves through the same dictionary and any pane can raise
  * transient feedback through the one toast stack. */
 export default function App() {
+  const compact = new URLSearchParams(window.location.search).get('view') === 'pip'
   return (
     <I18nProvider>
       <ToastProvider>
-        <AppInner />
+        {compact ? <PictureInPicture /> : <AppInner />}
       </ToastProvider>
     </I18nProvider>
   )

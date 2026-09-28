@@ -28,6 +28,7 @@ import {
   PanelLeft,
   PanelRight,
   Pencil,
+  PictureInPicture2,
   Pin,
   PinOff,
   Minimize2,
@@ -1455,6 +1456,18 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
                 // Always available: the manager falls back to the active
                 // session, so an unpersisted chat has a prompt to show too.
                 onSelect: () => void showSystemPrompt()
+              },
+              {
+                id: 'picture-in-picture',
+                label: t('pip.open'),
+                icon: <PictureInPicture2 className="size-4" />,
+                disabled: !shell.sessionPath,
+                onSelect: () => {
+                  if (!shell.sessionPath) return
+                  void window.pi.openPictureInPicture(shell.sessionPath)
+                    .then((opened) => { if (!opened) toast.error({ title: t('pip.openError') }) })
+                    .catch(() => toast.error({ title: t('pip.openError') }))
+                }
               },
               // A scheduled run owns its own conversation: it has no checkpoint
               // entry, exactly as it has no rewind affordances anywhere else.

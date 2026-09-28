@@ -8,6 +8,7 @@ import { installMediaProtocol, registerMediaScheme } from './media-protocol'
 import { installHtmlPreviewWiring } from './html-preview-wiring'
 import { guardExternalNavigation } from './navigation'
 import { loadSettings, saveSettings, type WindowBounds } from './settings'
+import { registerPictureInPictureIpc } from './picture-in-picture'
 import { registerQuitShortcut } from './shutdown'
 import { windowChromeOptions } from './window-chrome'
 
@@ -158,7 +159,9 @@ app.whenReady().then(() => {
   // BrowserWindow.icon does not set the macOS Dock icon during development.
   if (process.platform === 'darwin') app.dock?.setIcon(join(iconDirectory, '512x512.png'))
   const pi = createPiManager()
-  const isQuitting = registerIpc(pi)
+  const pictureInPicture = registerPictureInPictureIpc()
+  const isQuitting = registerIpc(pi, () => pictureInPicture.mainWindow())
+  app.on('before-quit', () => pictureInPicture.dispose())
   // The scheduler boots with the app: cheap when no tasks are saved (the
   // first tick short-circuits before touching storage or the agent engine).
   pi.startScheduledTasks()
@@ -166,7 +169,9 @@ app.whenReady().then(() => {
   createWindow()
 
   app.on('activate', () => {
-    if (!isQuitting() && BrowserWindow.getAllWindows().length === 0) createWindow()
+    if (isQuitting()) return
+    if (pictureInPicture.focus()) return
+    if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
 })
 

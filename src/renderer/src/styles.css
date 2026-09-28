@@ -421,6 +421,18 @@ body {
   overflow: hidden;
 }
 
+:root[data-pip='true'] body {
+  background: transparent;
+}
+
+[data-pip-drag] {
+  -webkit-app-region: drag;
+  user-select: none;
+}
+[data-pip-drag] button {
+  -webkit-app-region: no-drag;
+}
+
 /* A single title row shared by the workspace, Settings and startup. Keep the
  * macOS traffic lights clear even in fullscreen; the native controls return
  * there when the pointer reaches the top edge. Windows/Linux expose their

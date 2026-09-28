@@ -23,6 +23,12 @@ import { PLAN_MAX_BYTES } from './plan.ts'
 
 export type WindowTheme = 'light' | 'dark' | 'system'
 
+/** State of the compact, movable conversation window. */
+export interface PictureInPictureStateDTO {
+  sessionPath: string
+  pinned: boolean
+}
+
 export interface TextContent {
   type: 'text'
   text: string
