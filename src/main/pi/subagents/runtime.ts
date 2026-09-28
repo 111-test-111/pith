@@ -5,6 +5,7 @@ import type { AgentSession, AgentSessionEvent, SessionManager as SessionManagerT
 import type { BashTaskManager } from '../../bash/manager'
 import { taskIsLive } from '../../bash/task-status.ts'
 import type { ChatMessage, SubagentRunDTO, SubagentRunStatus, SubagentWrittenFileDTO, ThinkingLevel } from '../../../shared/types'
+import { SUBAGENT_MAX_TURNS_LIMIT } from '../../../shared/types.ts'
 import type { SubagentProfile } from './profiles.ts'
 import { extractSubagentWrittenFiles, loadSubagentInputFiles, parentContextText } from './derive.ts'
 import { SubagentError } from './errors.ts'
@@ -69,7 +70,7 @@ export interface StartSubagentRequest {
   profile: SubagentProfile
   description: string
   task: string
-  runInBackground: boolean
+  runInBackground?: boolean
   modelSpec?: string
   thinkingLevel?: ThinkingLevel
   maxTurns?: number
@@ -85,6 +86,8 @@ export interface ResumeSubagentOptions {
   parentToolCallId?: string
   description?: string
   runInBackground?: boolean
+  /** Model request only; runtime rechecks the user's override grant. */
+  maxTurns?: number
   /** Panel-only optimistic concurrency token. Model-driven reuse omits it. */
   expectedRunId?: string
   /** The continuing tool call's abort signal (a foreground dispatch): wired
@@ -122,6 +125,8 @@ export interface SubagentHost {
   subagentReuseEnabled(): boolean
   /** Settings → Subagents: parent↔child steering is enabled. */
   subagentCommsEnabled(): boolean
+  subagentTurnLimitOverrideEnabled(): boolean
+  subagentMaxTurns(): number | null
   profileDebugEnabled?(cwd: string, name: string): boolean
   planRestricted(parentSessionPath: string): boolean
   commandTasks(): BashTaskManager | null
@@ -322,9 +327,9 @@ export class SubagentRuntime {
       const planRestricted = this.host.planRestricted(request.parentSessionPath)
       const needsExtensions = !planRestricted && ceilingNeedsExtensions(ceiling, request.parentSession.getAllTools())
       const task = `${request.task}${loadSubagentInputFiles(request.inputFiles, cwd)}`
+      const runInBackground = request.runInBackground ?? request.profile.runInBackground
       const inherit = request.inheritContext ?? request.profile.inheritContext
       const { spec } = await this.host.resolveModelSpec(request.modelSpec ?? request.profile.model, request.parentSession)
-      const maxTurns = request.maxTurns ?? request.profile.maxTurns
       const thinking = request.thinkingLevel ?? request.profile.thinking
       const context = inherit ? parentContextText(request.parentSession.messages as ChatMessage[]) : undefined
       const appendSystemPrompt = [
@@ -339,7 +344,6 @@ export class SubagentRuntime {
         ...(needsExtensions ? { extensions: true as const } : {}),
         ...(spec ? { model: spec } : {}),
         ...(thinking ? { thinkingLevel: thinking } : {}),
-        ...(maxTurns !== undefined && Number.isInteger(maxTurns) && maxTurns > 0 ? { maxTurns } : {}),
         inheritContext: inherit,
         appendSystemPrompt
       }
@@ -363,9 +367,9 @@ export class SubagentRuntime {
         profile: request.profile.name,
         description: request.description,
         task,
-        runInBackground: request.runInBackground || request.profile.runInBackground,
-        maxTurns
-      }, releaseRunLease, controller.signal, request.runInBackground || request.profile.runInBackground ? undefined : signal, undefined, request.parentSession.sessionManager)
+        runInBackground,
+        maxTurns: request.maxTurns
+      }, releaseRunLease, controller.signal, runInBackground ? undefined : signal, undefined, request.parentSession.sessionManager)
     } finally {
       state.starting.delete(controller)
       state.launching.delete(launchDone)
@@ -379,7 +383,7 @@ export class SubagentRuntime {
   /**
    * Continue a finished child session under a fresh runId. Shares the start
    * path's admission (slot + lease + enabled checks + cancellation) and
-   * re-applies the dispatched turn limit from the persisted resource snapshot.
+   * resolves the turn limit from the current user setting and override grant.
    *
    * Returns the same `{ run, completion }` shape as `start` so the model's
    * `continue_session_id` path can emit its receipt from the initial DTO;
@@ -428,7 +432,7 @@ export class SubagentRuntime {
         (name !== 'debug' || this.host.profileDebugEnabled?.(cwd, current.start.profile) === true) &&
         (parentActive.has(name) || (name === MESSAGE_PARENT_TOOL_NAME && this.host.subagentCommsEnabled())) &&
         !(SUBAGENT_EXCLUDED_TOOLS as readonly string[]).includes(name))
-      const { extensions: _extensions, ...previousResource } = current.start.resource
+      const { extensions: _extensions, maxTurns: _previousMaxTurns, ...previousResource } = current.start.resource
       const resource: SubagentRunStartData['resource'] = { ...previousResource, tools,
         ...(planRestricted ? { planRestricted: true as const } : {}),
         ...(!planRestricted && ceilingNeedsExtensions(tools, parentSession.getAllTools()) ? { extensions: true as const } : {}) }
@@ -451,7 +455,7 @@ export class SubagentRuntime {
         description: options.description ?? current.start.description,
         task: current.start.task,
         runInBackground: options.runInBackground ?? current.start.runInBackground,
-        maxTurns: current.start.resource.maxTurns,
+        maxTurns: options.maxTurns,
         createdAt: current.start.createdAt
       }, releaseRunLease, controller.signal, options.foregroundSignal, text, parentSession.sessionManager)
       return { run, completion }
@@ -743,7 +747,19 @@ export class SubagentRuntime {
     // below takes ownership, THIS scope owns the lease and the child — a
     // throw here must release both or every later restore stays blocked.
     let startEntryId: string
+    let maxTurns: number | undefined
     try {
+      // Resolve after all launch awaits: revoking the grant during session
+      // creation also revokes a held override. Neither a profile nor an old
+      // run snapshot can supply a limit when the user's setting is blank.
+      maxTurns = this.host.subagentTurnLimitOverrideEnabled()
+        ? identity.maxTurns ?? this.host.subagentMaxTurns() ?? undefined
+        : this.host.subagentMaxTurns() ?? undefined
+      if (maxTurns !== undefined && (!Number.isInteger(maxTurns) || maxTurns < 1 || maxTurns > SUBAGENT_MAX_TURNS_LIMIT)) {
+        throw new SubagentError('Invalid subagent turn limit')
+      }
+      if (maxTurns === undefined) delete child.resource.maxTurns
+      else child.resource.maxTurns = maxTurns
       startEntryId = child.sessionManager.appendCustomEntry(SUBAGENT_RUN_TYPE, startData)
       parentManager?.appendCustomEntry(SUBAGENT_DISPATCH_TYPE, { version: 1, runId,
         sessionId: child.session.sessionId, sessionPath: child.path, parentToolCallId: identity.parentToolCallId })
@@ -804,10 +820,10 @@ export class SubagentRuntime {
         const usage = (message as any).usage
         if (usage && typeof usage.totalTokens === 'number') tokens += usage.totalTokens
         else if (usage && typeof usage.tokens === 'number') tokens += usage.tokens
-        if (identity.maxTurns !== undefined && identity.maxTurns > 0) {
-          if (assistantRounds === identity.maxTurns && !child.session.isIdle) {
+        if (maxTurns !== undefined) {
+          if (assistantRounds === maxTurns && !child.session.isIdle) {
             void child.session.steer('You have reached your turn limit. Wrap up immediately with your best current answer; do not start new work.')
-          } else if (assistantRounds > identity.maxTurns) {
+          } else if (assistantRounds > maxTurns) {
             turnLimitReached = true
             void child.session.abort().catch(() => {})
           }

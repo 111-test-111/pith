@@ -35,6 +35,7 @@ import { FileFindBar } from './FileFindBar'
 import { useFileSearch } from '@/lib/hooks/use-file-search'
 import type { FileSearchOptions, FileSearchResult } from '@/lib/file-search'
 import { useDebugTargets } from '@/lib/hooks/use-debug-targets'
+import { useWheelScroll } from '@/lib/hooks/use-wheel-scroll'
 
 function ToolButton({ label, icon: Icon, onClick, active, disabled }: { label: string; icon: IconComponent; onClick: () => void; active?: boolean; disabled?: boolean }) {
   return <Tooltip content={label}><Button variant="ghost" size="icon" className={cn('size-7 shrink-0', active && 'bg-primary/10 text-primary')} aria-label={label} aria-pressed={active} disabled={disabled} onClick={onClick}><Icon aria-hidden className="size-3.5" /></Button></Tooltip>
@@ -85,7 +86,7 @@ function FileContent({ tab, kind, document, store, search, refresh, wrap, debugB
     if (kind === 'subtitle') return <FileSubtitle text={document.text ?? ''} format={subtitleFormatOf(tab.path) ?? 'srt'} />
     return <div ref={scroll} data-file-markdown onScroll={onScroll} className="min-h-0 flex-1 overflow-auto p-5">
       <FileNavigationProvider cwd={tab.cwd} openFile={target => store.open(tab.cwd, target)}>
-        <FileBaseDirectory.Provider value={fileDirname(tab.path)}><FileMarkdown text={document.text ?? ''} /></FileBaseDirectory.Provider>
+        <div className="pane-readable"><FileBaseDirectory.Provider value={fileDirname(tab.path)}><FileMarkdown text={document.text ?? ''} /></FileBaseDirectory.Provider></div>
       </FileNavigationProvider>
     </div>
   }
@@ -168,6 +169,7 @@ export function FilesPane({ files, store, filePath, debug }: { files: FileBrowse
   const findRef = useRef<HTMLInputElement>(null)
   const findButton = useRef<HTMLDivElement>(null)
   const body = useRef<HTMLDivElement>(null), tree = useRef<HTMLDivElement>(null)
+  useWheelScroll(body, tab?.path)
   const treeDrag = useRef({ start: 0, width: 0, maximum: 480 })
   const startTreeResize = () => {
     const width = tree.current?.getBoundingClientRect().width ?? 0

@@ -61,7 +61,7 @@ export function DebugPane({ store, debug }: { store: PiStore; debug: DebugStore 
       <p className="text-sm">{t('debug.empty')}</p><p className="text-xs text-muted-foreground">{t('debug.emptyHint')}</p>
     </div>
   )
-  return <div className="flex h-full min-h-0 flex-col">
+  return <div className="sidebar-pane-container flex h-full min-h-0 min-w-0 flex-col">
     <div className="shrink-0 border-b border-border/60 p-2" data-debug-selector>
       <Select value={session.id} onValueChange={select}>
         <SelectTrigger aria-label={t('debug.sessions')} className="h-8 min-w-0 text-xs"><SelectValue className="min-w-0 flex-1 truncate text-left" /></SelectTrigger>
@@ -351,6 +351,8 @@ function DebugDetails({ session, debug, cwd }: { session: DebugSessionDTO; debug
       {session.error ? <p role="alert" className="shrink-0 whitespace-pre-wrap px-3 py-1 text-xs text-destructive">{session.error}</p> : null}
 
       <FadeScroll className="min-h-0 flex-1 p-1">
+        <div data-debug-columns className="pane-columns">
+        <div data-debug-navigation className="pane-master">
         {core ? <p className="px-3 py-2 text-xs text-muted-foreground">{t('debug.coreHint')}</p> : null}
         {stopped && (session.stopDescription || session.stopText || session.stopDiagnostics) ? (
           <div className="space-y-1 px-3 py-2 text-xs" role={session.conditionError ? 'alert' : undefined}>
@@ -444,6 +446,9 @@ function DebugDetails({ session, debug, cwd }: { session: DebugSessionDTO; debug
           </section>
         ) : null}
 
+        </div>
+        <div data-debug-inspection className="pane-detail">
+        <div className="pane-data">
         {stopped && selectedFrame !== undefined ? <DebugNativeView key={`${selectedFrame}:${session.sourceVersion ?? 0}:${frameVisit}`} session={session} frame={frames.find(frame => frame.id === selectedFrame)} cwd={cwd} memorySelection={memorySelection} /> : null}
 
         {/* Variables of the selected frame (stopped only) */}
@@ -483,6 +488,7 @@ function DebugDetails({ session, debug, cwd }: { session: DebugSessionDTO; debug
               onChange={(value) => setWatchDraft(value)}
               placeholder={t('debug.watchPlaceholder')}
               aria-label={t('debug.watchPlaceholder')}
+              className="min-w-0 flex-1"
               classNames={{ field: 'h-7', input: 'px-2 font-mono text-xs' }}
             />
             <Button type="submit" variant="ghost" size="icon" className="size-7 shrink-0" aria-label={t('debug.watchAdd')} disabled={!watchDraft.trim()}>
@@ -526,6 +532,9 @@ function DebugDetails({ session, debug, cwd }: { session: DebugSessionDTO; debug
             <p className="text-xs text-muted-foreground/70">{t('debug.noOutput')}</p>
           )}
         </section>
+        </div>
+        </div>
+        </div>
       </FadeScroll>
     </div>
   )

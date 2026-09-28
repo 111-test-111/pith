@@ -43,6 +43,8 @@ const ENABLE_LABEL = 'Subagents'
 const CONCURRENCY_LABEL = 'Concurrent delegations'
 const REUSE_LABEL = 'Reuse finished subagents'
 const COMMS_LABEL = 'Parent–subagent communication'
+const TURN_OVERRIDE_LABEL = 'Let the parent set turn limits'
+const MAX_TURNS_LABEL = 'Default turn limit'
 
 const fixture = `<!doctype html><html><head><style>
 body { margin: 0; background: var(--background); }
@@ -61,6 +63,7 @@ const count = (name, value) => { window.calls.push([name, value]); return Promis
 const appInfo = {
   version: '9.9.9', checkpointsEnabled: true, startup: 'resume',
   subagentsEnabled: true, subagentMaxConcurrent: 4, subagentReuseEnabled: false, subagentCommsEnabled: false, bashMaxWaitMs: 10000,
+  subagentTurnLimitOverrideEnabled: false, subagentMaxTurns: null,
   sandboxMode: 'workspace-write', sandbox: { support: 'ready', backend: 'seatbelt' }
 };
 const catalog = {
@@ -110,10 +113,23 @@ window.pi = {
   setSubagentMaxConcurrent: (v) => count('setSubagentMaxConcurrent', v),
   setSubagentReuseEnabled: (v) => count('setSubagentReuseEnabled', v),
   setSubagentCommsEnabled: (v) => count('setSubagentCommsEnabled', v),
+  setSubagentTurnLimitOverrideEnabled: (v) => window.failTurnOverride ? Promise.reject(new Error('disk failure')) : count('setSubagentTurnLimitOverrideEnabled', v),
+  setSubagentMaxTurns: (v) => window.failMaxTurns ? Promise.reject(new Error('disk failure')) : count('setSubagentMaxTurns', v),
   setSubagentProfileDebug: (filePath, enabled) => {
     if (window.failProfileDebug) return Promise.reject(new Error('disk failure'));
     profiles = profiles.map(p => p.filePath === filePath ? {...p, debugEnabled: enabled} : p);
     return count('setSubagentProfileDebug', {filePath, enabled}).then(listDTO);
+  },
+  models: () => Promise.resolve([
+    { providerId: 'fixture', id: 'standard', name: 'Fixture Standard', providerName: 'Fixture', reasoning: false,
+      thinkingLevels: ['off'], input: ['text'], contextWindow: 32000, maxTokens: 4096, available: true, costInputPerM: 0, costOutputPerM: 0 },
+    { providerId: 'deepseek', id: 'chat', name: 'Fixture Reasoning', providerName: 'DeepSeek', reasoning: true,
+      thinkingLevels: ['off', 'low', 'high'], input: ['text'], contextWindow: 32000, maxTokens: 4096, available: true, costInputPerM: 0, costOutputPerM: 0 }
+  ]),
+  setSubagentProfileDefaults: (filePath, defaults) => {
+    if (window.failDefaults) return Promise.reject(new Error('disk failure'));
+    profiles = profiles.map(p => p.filePath === filePath ? {...p, ...defaults, model: defaults.model ?? undefined, thinking: defaults.thinking ?? undefined} : p);
+    return count('setSubagentProfileDefaults', {filePath, defaults}).then(listDTO);
   },
   subagentProfiles: () => count('subagentProfiles', listDTO()),
   createSubagentProfile: (payload) => {
@@ -309,12 +325,17 @@ app.on('window-all-closed',()=>app.quit());`
   assert.equal(await evaluate(`document.querySelector('button[role=checkbox][aria-label="${ENABLE_LABEL}"]').getAttribute('aria-checked')`), 'true', 'the switch is on')
   assert.equal(await evaluate(`document.querySelector('button[role=checkbox][aria-label="${REUSE_LABEL}"]')?.getAttribute('aria-checked')`), 'false', 'the reuse switch defaults off')
   assert.equal(await evaluate(`document.querySelector('button[role=checkbox][aria-label="${COMMS_LABEL}"]')?.getAttribute('aria-checked')`), 'false', 'the communications switch defaults off')
+  assert.equal(await evaluate(`document.querySelector('button[role=checkbox][aria-label="${TURN_OVERRIDE_LABEL}"]')?.getAttribute('aria-checked')`), 'false', 'the model turn-limit grant defaults off')
+  assert.equal(await evaluate(`document.querySelector('input[aria-label="${MAX_TURNS_LABEL}"]').value`), '', 'the unlimited limit is rendered as a blank field')
+  assert.equal(await evaluate(`document.querySelector('input[aria-label="${MAX_TURNS_LABEL}"]').placeholder`), 'Unlimited')
   await evaluate(`document.querySelector('button[role=checkbox][aria-label="${ENABLE_LABEL}"]').click()`)
   await frame()
   assert.deepEqual((await evaluate('window.calls')).find((c) => c[0] === 'setSubagentsEnabled')?.[1], false, 'turning it off reaches the setter')
   assert.equal(await evaluate(`document.querySelector('input[aria-label="${CONCURRENCY_LABEL}"]').disabled`), true, 'the limit disables while subagents are off')
   assert.equal(await evaluate(`document.querySelector('button[role=checkbox][aria-label="${REUSE_LABEL}"]').disabled`), true, 'reuse disables while subagents are off')
   assert.equal(await evaluate(`document.querySelector('button[role=checkbox][aria-label="${COMMS_LABEL}"]').disabled`), true, 'communications disables while subagents are off')
+  assert.equal(await evaluate(`document.querySelector('button[role=checkbox][aria-label="${TURN_OVERRIDE_LABEL}"]').disabled`), true, 'turn-limit permission disables with delegation')
+  assert.equal(await evaluate(`document.querySelector('input[aria-label="${MAX_TURNS_LABEL}"]').disabled`), true, 'the user turn limit disables with delegation')
   await evaluate(`document.querySelector('button[role=checkbox][aria-label="${ENABLE_LABEL}"]').click()`)
   await frame()
   assert.equal(await evaluate(`document.querySelector('input[aria-label="${CONCURRENCY_LABEL}"]').disabled`), false, 'and re-enables with it')
@@ -329,6 +350,39 @@ app.on('window-all-closed',()=>app.quit());`
   await evaluate(`window.typeConcurrent('99')`)
   await frame()
   assert.equal(await evaluate(`document.querySelector('input[aria-label="${CONCURRENCY_LABEL}"]').value`), '16', 'the limit still clamps on blur')
+
+  const typeTurns = async value => {
+    await evaluate(`window.type(${JSON.stringify(MAX_TURNS_LABEL)}, ${JSON.stringify(value)})`)
+    await frame()
+    await evaluate(`(()=>{const el=document.querySelector('input[aria-label="${MAX_TURNS_LABEL}"]'); el.focus(); el.blur()})()`)
+    await frame()
+  }
+  await typeTurns('12')
+  assert.equal(await evaluate(`document.querySelector('input[aria-label="${MAX_TURNS_LABEL}"]').value`), '12', 'the user can save a limit while the override permission is off')
+  assert.equal(await evaluate(`window.calls.filter(c=>c[0]==='setSubagentMaxTurns').at(-1)[1]`), 12)
+  await typeTurns('999')
+  assert.equal(await evaluate(`document.querySelector('input[aria-label="${MAX_TURNS_LABEL}"]').value`), '200', 'the limit clamps at 200')
+  await typeTurns('0')
+  assert.equal(await evaluate(`document.querySelector('input[aria-label="${MAX_TURNS_LABEL}"]').value`), '1', 'zero clamps to one; only blank means unlimited')
+  await typeTurns('')
+  assert.equal(await evaluate(`window.calls.filter(c=>c[0]==='setSubagentMaxTurns').at(-1)[1]`), null, 'clearing saves unlimited')
+  await evaluate(`document.querySelector('button[role=checkbox][aria-label="${TURN_OVERRIDE_LABEL}"]').click()`)
+  await frame()
+  assert.deepEqual(await evaluate(`window.calls.filter(c=>c[0]==='setSubagentTurnLimitOverrideEnabled').at(-1)`), ['setSubagentTurnLimitOverrideEnabled', true])
+  await evaluate(`window.failTurnOverride=true; document.querySelector('button[role=checkbox][aria-label="${TURN_OVERRIDE_LABEL}"]').click()`)
+  await frame()
+  assert.equal(await evaluate(`document.querySelector('button[role=checkbox][aria-label="${TURN_OVERRIDE_LABEL}"]').getAttribute('aria-checked')`), 'true', 'a failed permission save retains the saved state')
+  assert.match(await evaluate(`document.querySelector('[data-subagent-turn-limit-override-row] [role=alert]').textContent`), /Could not save/)
+  await evaluate(`window.failTurnOverride=false; document.querySelector('button[role=checkbox][aria-label="${TURN_OVERRIDE_LABEL}"]').click()`)
+  await frame()
+  assert.equal(await evaluate(`document.querySelector('button[role=checkbox][aria-label="${TURN_OVERRIDE_LABEL}"]').getAttribute('aria-checked')`), 'false', 'the grant can be revoked')
+  await evaluate(`window.failMaxTurns=true`)
+  await typeTurns('5')
+  assert.equal(await evaluate(`document.querySelector('input[aria-label="${MAX_TURNS_LABEL}"]').value`), '', 'a failed limit save restores the saved unlimited value')
+  assert.match(await evaluate(`document.querySelector('[data-subagent-max-turns-row] [role=alert]').textContent`), /Could not save/)
+  await evaluate(`window.failMaxTurns=false`)
+  await typeTurns('8')
+  assert.equal(await evaluate(`!!document.querySelector('[data-subagent-max-turns-row] [role=alert]')`), false, 'successful retry clears the error')
   await screenshot('subagents-en')
 
   // 3. The profile list and the first detail (a tools: all profile).
@@ -337,6 +391,7 @@ app.on('window-all-closed',()=>app.quit());`
   assert.ok(await evaluate(`document.querySelector('[data-subagents-section]').textContent.includes('/agents/general-purpose.md')`), 'the detail shows the file path')
   assert.ok(await evaluate(`document.querySelector('[data-subagents-section]').textContent.includes('Global')`), 'the scope badge reads')
   assert.equal(await evaluate(`window.radioOf('All tools')?.getAttribute('data-state')`), 'checked', 'an all-tools profile selects the all radio')
+  assert.ok(!await evaluate(`document.querySelector('[data-subagents-section] dl').textContent.includes('Turn limit')`), 'per-role turn limits are removed from the detail')
   assert.equal(await evaluate(`window.radioOf('Choose tools')?.getAttribute('data-state')`), 'unchecked', 'not the explicit radio')
   assert.equal(await evaluate(`document.querySelector('[data-subagent-tools-save]').disabled`), true, 'a pristine editor offers no Save')
 
@@ -351,6 +406,58 @@ app.on('window-all-closed',()=>app.quit());`
   assert.equal(await evaluate(`document.querySelector('[data-subagent-debug] [role=checkbox]').getAttribute('aria-checked')`), 'true', 'failed save retains the saved grant')
   assert.ok(await evaluate(`document.querySelector('[data-subagent-debug]').textContent.includes('Could not save')`))
   await evaluate(`window.failProfileDebug=false`)
+
+  // The four role defaults have an editor; empty optional fields retain the
+  // current behavior, and Cancel/failure never changes the saved defaults.
+  await evaluate(`document.querySelector('[data-subagent-edit-defaults]').click()`)
+  await pause(250)
+  await frame()
+  assert.ok(await evaluate(`!!document.querySelector('[data-subagent-defaults-form]')`))
+  assert.equal(await evaluate(`document.querySelector('[data-subagent-defaults-save]').disabled`), true, 'an unchanged form does not save')
+  const defaultsFacts = await evaluate(`(()=>{const root=document.querySelector('[data-subagent-defaults-form]'), titles=[...root.querySelectorAll('[data-subagent-default-title]')],style=getComputedStyle(root),gap=e=>Math.round(e.nextElementSibling.getBoundingClientRect().top-e.getBoundingClientRect().bottom),inset=e=>Math.round(e.getBoundingClientRect().left-e.parentElement.getBoundingClientRect().left);return{columns:style.gridTemplateColumns.split(' ').length,gutter:style.gap,count:titles.length,sizes:[...new Set(titles.map(e=>getComputedStyle(e).fontSize))],colors:[...new Set(titles.map(e=>getComputedStyle(e).color))],gaps:[...new Set(titles.map(gap))],insets:[...new Set(titles.map(inset))],pickerSize:getComputedStyle(root.querySelector('[role=group] button')).fontSize,scrolls:[...root.closest('[role=dialog]').querySelectorAll('div')].filter(e=>['auto','scroll'].includes(getComputedStyle(e).overflowY)&&e.scrollHeight>e.clientHeight+1).length}})()`)
+  assert.deepEqual({columns:defaultsFacts.columns,gutter:defaultsFacts.gutter,count:defaultsFacts.count}, {columns:2,gutter:'20px',count:4}, 'the editor uses the two-column form rhythm')
+  assert.deepEqual(defaultsFacts.sizes, ['14px'])
+  assert.equal(defaultsFacts.colors.length, 1)
+  assert.deepEqual(defaultsFacts.gaps, [10], 'field titles sit 10px above their controls')
+  assert.deepEqual(defaultsFacts.insets, [0], 'field titles are flush')
+  assert.equal(defaultsFacts.pickerSize, '14px')
+  assert.equal(defaultsFacts.scrolls, 0, 'the complete editor fits on a normal window')
+  await evaluate(`document.querySelector('[data-subagent-defaults-form] [role=group] button').click()`)
+  await pause(200)
+  await evaluate(`document.querySelector('[data-model-option="fixture/standard"]').click()`)
+  await frame()
+  await evaluate(`document.querySelector('[data-subagent-defaults-form] [aria-label="Thinking"]').click()`)
+  await pause(200)
+  await evaluate(`[...document.querySelectorAll('[role=option]')].find(e=>e.textContent.trim()==='High').click()`)
+  await frame()
+  await evaluate(`document.querySelector('[data-subagent-defaults-form] button[aria-label="Inherit parent context"]').click(); document.querySelector('[data-subagent-defaults-form] button[aria-label="Run in background"]').click()`)
+  await frame()
+  await screenshot('subagent-defaults-en')
+  await evaluate(`window.failDefaults=true; document.querySelector('[data-subagent-defaults-save]').click()`)
+  await frame()
+  assert.ok(await evaluate(`!!document.querySelector('[data-subagent-defaults-form]')`), 'a failed save keeps the editor and draft')
+  assert.ok(await evaluate(`document.querySelector('[role=dialog] [role=alert]').textContent.includes('Could not save')`))
+  await evaluate(`window.failDefaults=false; document.querySelector('[data-subagent-defaults-save]').click()`)
+  await pause(200)
+  await frame()
+  assert.deepEqual(await evaluate(`window.calls.filter(c=>c[0]==='setSubagentProfileDefaults').at(-1)[1]`), {
+    filePath:'/agents/general-purpose.md', defaults:{model:'fixture/standard',thinking:'high',inheritContext:false,runInBackground:true}
+  }, 'all four defaults reach the profile setter')
+  assert.ok(!await evaluate(`!!document.querySelector('[data-subagent-defaults-form]')`))
+  assert.ok(await evaluate(`document.querySelector('[data-subagents-section] dl').textContent.includes('fixture/standard')`), 'the detail reflects the saved defaults')
+  await evaluate(`document.querySelector('[data-subagent-edit-defaults]').click()`)
+  await pause(250)
+  await evaluate(`document.querySelector('[data-subagent-defaults-form] [role=group] button').click()`)
+  await pause(200)
+  await evaluate(`[...document.querySelectorAll('[role=option]')].find(e=>e.textContent.trim()==='Use parent model').click()`)
+  await frame()
+  await evaluate(`document.querySelector('[data-subagent-defaults-form] [aria-label="Thinking"]').click()`)
+  await pause(200)
+  await evaluate(`[...document.querySelectorAll('[role=option]')].find(e=>e.textContent.trim()==='Not set').click()`)
+  await frame()
+  await evaluate(`document.querySelector('[data-subagent-defaults-save]').click()`)
+  await pause(200)
+  assert.deepEqual(await evaluate(`window.calls.filter(c=>c[0]==='setSubagentProfileDefaults').at(-1)[1].defaults`), {model:null,thinking:null,inheritContext:false,runInBackground:true}, 'optional defaults can be cleared independently of boolean choices')
 
   // Switching to explicit starts from everything; Reset returns to the saved state.
   await evaluate(`window.radioOf('Choose tools').click()`)
@@ -367,7 +474,7 @@ app.on('window-all-closed',()=>app.quit());`
   assert.ok(await evaluate(`document.querySelector('[data-subagents-section]').textContent.includes('/proj/.pi/agents/explore.md')`), 'the project file path reads')
   assert.ok(await evaluate(`document.querySelector('[data-subagents-section]').textContent.includes('Project')`), 'the project scope badge reads')
   assert.ok(await evaluate(`document.querySelector('[data-subagents-section]').textContent.includes('deepseek/chat')`), 'the model field reads')
-  assert.ok(await evaluate(`document.querySelector('[data-subagents-section]').textContent.includes('12')`), 'the turn limit reads')
+  assert.ok(!await evaluate(`document.querySelector('[data-subagents-section] dl').textContent.includes('Turn limit')`), 'a legacy profile limit is no longer presented as a setting')
   const mcpRow = await evaluate(`(()=>{const rows=[...document.querySelectorAll('[data-subagent-tool]')].map((r)=>r.dataset.subagentTool);return {mcp:rows.filter((n)=>n==='MCP'||n.startsWith('mcp')).join(','),ctx:rows.includes('ctx_one'),fff:rows.includes('ffgrep'),legacy:rows.includes('legacy-tool'),todo:rows.includes('todo_write')}})()`)
   assert.equal(mcpRow.mcp, 'MCP', 'the three MCP tools answer one row')
   assert.equal(mcpRow.ctx, true, 'extension tools list under their group')
@@ -618,6 +725,16 @@ app.on('window-all-closed',()=>app.quit());`
   assert.ok(await evaluate(`!!document.querySelector('[data-subagents-section]')`), 'the section opens under its Chinese label')
   assert.ok(await evaluate(`document.querySelector('[data-subagents-section]').textContent.includes('复用已完成的子代理')`), 'the reuse switch label is localized')
   assert.ok(await evaluate(`document.querySelector('[data-subagents-section]').textContent.includes('主-子代理通信')`), 'the communications switch label is localized')
+  assert.ok(await evaluate(`document.querySelector('[data-subagent-turn-limit-override-row]').textContent.includes('允许父代理设置轮数上限')`), 'the turn-limit grant is localized')
+  assert.equal(await evaluate(`document.querySelector('input[aria-label="默认轮数上限"]').placeholder`), '不限制', 'unlimited is localized')
+  await evaluate(`document.querySelector('[data-subagent-edit-defaults]').click()`)
+  await pause(250)
+  assert.ok(await evaluate(`document.querySelector('[role=dialog]').textContent.includes('子代理默认值')`))
+  assert.ok(await evaluate(`document.querySelector('[data-subagent-defaults-form]').textContent.includes('使用父代理模型')`))
+  assert.ok(!await evaluate(`document.querySelector('[data-subagent-defaults-form]').textContent.includes('轮次上限')`), 'the editor has no per-role turn setting in either locale')
+  await screenshot('subagent-defaults-zh')
+  await evaluate(`document.querySelector('[role=dialog] button[aria-label="取消"]').click()`)
+  await pause(200)
   await evaluate(`window.profileRow('explore').click()`)
   await frame()
   assert.ok(await evaluate(`document.querySelector('[data-subagents-section]').textContent.includes('内置工具')`), 'the built-in group title is localized')

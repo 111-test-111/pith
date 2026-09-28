@@ -58,6 +58,37 @@ try {
   await page.evaluate(()=>{debug.addWatch('a','value')})
   await page.waitForFunction(()=>calls.some(c=>c.action==='evaluate'))
   assert.ok(await page.evaluate(()=>calls.filter(c=>c.action==='evaluate').every(c=>c.context==='watch'&&c.frameId===1)))
+  // The same stopped target, expanded variable and watch draft survive
+  // container breakpoints without issuing debugger requests.
+  await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].setSize(1400,900))
+  await page.getByRole('textbox',{name:'Expression to evaluate on each stop'}).fill('draft.member')
+  await page.evaluate(()=>{window.resizePane=document.querySelector('[data-debug-pane]');window.resizeCalls=calls.length})
+  for(const locale of ['en','zh-CN']) {
+    await page.evaluate(locale=>setLocale(locale),locale)
+    for(const corners of ['square','squircle']) {
+      for(const dark of [false,true]) {
+        await page.evaluate(({corners,dark})=>{document.documentElement.dataset.corners=corners;document.documentElement.classList.toggle('dark',dark)},{corners,dark})
+        for(const width of [260,400,767,768,1200]) {
+          await page.evaluate(width=>document.getElementById('root').style.width=width+'px',width)
+          await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))))
+          const layout=await page.evaluate(()=>{
+            const nav=document.querySelector('[data-debug-navigation]').getBoundingClientRect(),detail=document.querySelector('[data-debug-inspection]').getBoundingClientRect(),pane=document.querySelector('[data-debug-pane]')
+            return {nav:{x:nav.x,y:nav.y,right:nav.right,width:nav.width},detail:{x:detail.x,y:detail.y},overflow:pane.scrollWidth>pane.clientWidth+1,
+              same:pane===window.resizePane,calls:calls.length,draft:document.querySelector('[data-debug-inspection] input').value,expanded:document.querySelector('[aria-expanded=true]')!==null}
+          })
+          assert(!layout.overflow,`debug fits ${width}px: ${JSON.stringify(layout)}`)
+          assert(layout.same&&layout.expanded,'resize preserves the target DOM and expanded variables')
+          assert.equal(layout.draft,'draft.member','watch input survives resize')
+          assert.equal(layout.calls,await page.evaluate(()=>window.resizeCalls),'resize does not query the adapter')
+          if(width>=768) {assert(Math.abs(layout.nav.y-layout.detail.y)<1);assert(layout.detail.x>=layout.nav.right-1);assert(layout.nav.width<=384)}
+          else {assert(Math.abs(layout.nav.x-layout.detail.x)<1);assert(layout.detail.y>layout.nav.y)}
+        }
+      }
+    }
+  }
+  if(screenshots)await page.locator('#root').screenshot({path:join(screenshots,'responsive-wide.png')})
+  await page.evaluate(()=>{document.getElementById('root').style.width='';setLocale('en');document.documentElement.classList.remove('dark')})
+  await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].setSize(700,900))
   const before=await page.evaluate(()=>calls.filter(c=>c.action==='evaluate').length)
   await page.evaluate(()=>publish('a',{outputChars:10}));await page.waitForTimeout(100)
   assert.equal(await page.evaluate(()=>calls.filter(c=>c.action==='evaluate').length),before)

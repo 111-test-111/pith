@@ -116,10 +116,10 @@ import { SUBAGENT_TOOL_NAME, AGENT_STEER_TOOL_NAME, MESSAGE_PARENT_TOOL_NAME, SU
 import type { SubagentMessageDetails, SubagentRunStartData } from './subagents/protocol'
 import { createSubagentTool, createAgentSteerTool, createMessageParentTool, installSubagentResultHook } from './subagents/tools'
 import { subagentModelSpecError } from './subagents/model-spec'
-import { ensureDefaultProfiles, createSubagentProfileFile, listSubagentProfiles, toSubagentProfileDTO, writeSubagentProfileDebug, writeSubagentProfileTools } from './subagents/profiles'
+import { ensureDefaultProfiles, createSubagentProfileFile, listSubagentProfiles, toSubagentProfileDTO, writeSubagentProfileDebug, writeSubagentProfileDefaults, writeSubagentProfileTools } from './subagents/profiles'
 import { isSubagentSessionFile } from './subagents/session-filter'
 import { SessionListIndex, rowFromSessionManager } from './session-list'
-import { BASH_MIN_WAIT_MS, BASH_MAX_WAIT_MS, SDK_BUILTIN_TOOL_NAMES, type StartupSessionMode, type SubagentProfileCreatePayload, type SubagentProfileDTO, type SubagentProfilesDTO } from '../../shared/types'
+import { BASH_MIN_WAIT_MS, BASH_MAX_WAIT_MS, SDK_BUILTIN_TOOL_NAMES, SUBAGENT_MAX_TURNS_LIMIT, type StartupSessionMode, type SubagentProfileCreatePayload, type SubagentProfileDefaultsPayload, type SubagentProfileDTO, type SubagentProfilesDTO } from '../../shared/types'
 import { FileIndex, readAttachment } from './files'
 import { compactedContextTokens } from './context-estimate'
 import { buildContextDetail, statsFromEntries, type ContextStatsLike } from './context-detail'
@@ -452,6 +452,8 @@ export class PiManager {
   private subagentReuseFlag = loadSettings().subagentReuseEnabled === true
   /** Settings → Subagents: parent↔child steering. */
   private subagentCommsFlag = loadSettings().subagentCommsEnabled === true
+  private subagentTurnLimitOverrideFlag = loadSettings().subagentTurnLimitOverrideEnabled === true
+  private subagentMaxTurnsSetting = loadSettings().subagentMaxTurns
   /** Whether the 14 browser_* agent tools are in the ACTIVE set (the switch lives
    *  in Settings → Browser; registration itself is service-gated at build). */
   private browserToolsFlag = loadSettings().browserAgentToolsEnabled === true
@@ -1090,6 +1092,24 @@ export class PiManager {
     return this.subagentCommsFlag
   }
 
+  /** Refresh schemas for live sessions; held calls also recheck the grant. */
+  async setSubagentTurnLimitOverrideEnabled(enabled: boolean): Promise<boolean> {
+    const next = enabled === true
+    saveSettings({ ...loadSettings(), subagentTurnLimitOverrideEnabled: next })
+    this.subagentTurnLimitOverrideFlag = next
+    await this.reloadLiveSessions()
+    return next
+  }
+
+  setSubagentMaxTurns(value: number | null): number | null {
+    if (value !== null && (!Number.isInteger(value) || value < 1 || value > SUBAGENT_MAX_TURNS_LIMIT)) {
+      throw new Error('Invalid subagent turn limit')
+    }
+    saveSettings({ ...loadSettings(), subagentMaxTurns: value })
+    this.subagentMaxTurnsSetting = value
+    return value
+  }
+
   /** Every profile visible in the active workspace, for Settings → Subagents,
  * plus the directories a new file can land in. Each profile is an ordinary
  * Markdown file; a project-scope file shadows a same-name global one exactly
@@ -1134,6 +1154,13 @@ export class PiManager {
   async setSubagentProfileDebug(filePath: string, enabled: boolean): Promise<SubagentProfilesDTO> {
     if (!listSubagentProfiles(this.cwd ?? null).some(profile => profile.filePath === filePath)) throw new Error('Unknown subagent profile')
     writeSubagentProfileDebug(filePath, enabled)
+    return this.subagentProfiles()
+  }
+
+  async setSubagentProfileDefaults(filePath: string, defaults: SubagentProfileDefaultsPayload): Promise<SubagentProfilesDTO> {
+    if (!listSubagentProfiles(this.cwd ?? null).some(profile => profile.filePath === filePath)) throw new Error('Unknown subagent profile')
+    writeSubagentProfileDefaults(filePath, defaults)
+    await this.reloadLiveSessions()
     return this.subagentProfiles()
   }
 
@@ -1233,6 +1260,8 @@ export class PiManager {
       subagentsEnabled: () => this.subagentsEnabledFlag && !this.closing,
       subagentReuseEnabled: () => this.subagentReuseFlag && !this.closing,
       subagentCommsEnabled: () => this.subagentCommsFlag && !this.closing,
+      subagentTurnLimitOverrideEnabled: () => this.subagentTurnLimitOverrideFlag === true && !this.closing,
+      subagentMaxTurns: () => this.subagentMaxTurnsSetting ?? null,
       profileDebugEnabled: (cwd, name) => listSubagentProfiles(cwd).some(p => p.name === name && p.enabled && p.debugEnabled),
       planRestricted: path => this.sessions.get(path)?.plan.restricted ?? false,
       commandTasks: () => this.commandTasks,
@@ -1986,6 +2015,7 @@ export class PiManager {
           profiles: () => listSubagentProfiles(sessionManager.getCwd()),
           canStart: () => (notifications?.canStart ?? false) && subagentState.notifications!.canStart && this.planToolAdmitted(managed),
           canReuse: () => this.subagentReuseFlag && !this.closing,
+          canSetMaxTurns: () => this.subagentTurnLimitOverrideFlag === true && !this.closing,
           canSteer: () => this.subagentCommsFlag && !this.closing
         }),
         // Parent-side steering, registered beside the delegation tool and

@@ -172,6 +172,24 @@ The runtime and typed `subagents:action` IPC already supported Steer, Stop and R
 
 Regression coverage lives in `check-bash-task-ui.mjs` (action availability, focus/keyboard, real pointer/Escape ownership across the portalled dialog, exact payloads, pending dedupe, localized failure, stale-state fencing, both locales and no optimistic status) and `check-subagents-integration.mjs` (typed manager routing, atomic `expectedRunId` rejection against live and resumed runs, serial Resume and branch/ceiling ownership).
 
+## User-owned turn limits
+
+Settings → Subagents owns `subagentMaxTurns` (1–200, blank/null means unlimited) and `subagentTurnLimitOverrideEnabled` (default off). Each new dispatch or continuation uses the user setting. Profile `max_turns` remains parseable as legacy file metadata but no longer supplies a runtime default.
+
+Only an explicit override grant exposes `max_turns` in the parent model's `agent` schema. With the grant on, a supplied argument replaces the user default for that run; omitting it uses the user setting. With the grant off, stale or fabricated arguments are ignored in both the tool adapter and runtime. The runtime resolves the policy after asynchronous child creation and lease acquisition, before persisting its run record, so revocation during launch also reaches held calls. Continuations recompute this policy instead of inheriting an old run's override. Existing active runs keep their resolved limit.
+
+Permission changes reload live sessions to refresh their tool schemas. User settings persist in app settings, and every run persists its effective limit in the existing resource snapshot. The established round-counting behavior remains: reaching the limit requests a wrap-up; another assistant round triggers the runtime's limit completion path.
+
+Checks: `check-subagents.mjs` covers schema visibility, discarded overrides, user defaults and persisted continuation limits; `check-subagents-integration.mjs` covers settings persistence/validation and revocation during asynchronous launch; `check-subagent-settings.mjs` covers the beUI controls, clearing/clamping, save failures and both locales.
+
+## Editable role defaults
+
+Each role's detail offers **Edit defaults** for model, thinking level, inherited parent context and background execution. The two-column beUI editor saves only those four frontmatter keys, preserving the prompt, tools, custom metadata and line endings. Clearing model/thinking removes their keys; saving unchanged parser defaults does not introduce boolean choices. Missing values retain the previous behavior. Main accepts only currently listed profile paths and re-parses the edit before writing.
+
+Explicit parent arguments override these role defaults, including `run_in_background: false` overriding a background role. Model-driven continuation uses the current role's background default when the argument is omitted; human continuation keeps its stored mode. Model, thinking and context otherwise keep the existing continuation contract. Role-specific turn-limit controls are absent: the app-wide user limit and its explicit parent override grant are the sole runtime turn policy, and any legacy profile `max_turns` remains untouched but ignored.
+
+Checks cover surgical persistence and invalid-input rejection, current-profile admission, the four dispatch overrides, clearing defaults, save failure/retry, two-column form geometry and both locales.
+
 ## Not implemented (honest gaps)
 
 1. **Result polling**: there is no standalone `get_subagent_result`. The parent model can wait in the foreground, receive the background completion notification, or use `agent_steer` while a child is running; the user can Guide/Continue from the roster.

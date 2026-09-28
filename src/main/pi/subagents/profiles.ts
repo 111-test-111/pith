@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { getAgentDir } from '@earendil-works/pi-coding-agent'
 import { join } from 'node:path'
-import { SUBAGENT_PROFILE_NAME_PATTERN, SUBAGENT_READ_ONLY_TOOLS, type SubagentProfileCreatePayload, type SubagentProfileDTO, type ThinkingLevel } from '../../../shared/types.ts'
+import { SUBAGENT_PROFILE_NAME_PATTERN, SUBAGENT_READ_ONLY_TOOLS, type SubagentProfileCreatePayload, type SubagentProfileDefaultsPayload, type SubagentProfileDTO, type ThinkingLevel } from '../../../shared/types.ts'
 
 /**
  * Subagent profiles: Markdown files with a flat YAML-ish frontmatter, body is
@@ -297,6 +297,56 @@ export function writeSubagentProfileDebug(filePath: string, enabled: boolean): v
   const parsed = parseProfileSource(filePath, updated, before.scope)
   if (!parsed || parsed.debugEnabled !== enabled || parsed.description !== before.description || parsed.systemPrompt !== before.systemPrompt) throw new Error('The debug edit did not round-trip')
   writeFileSync(filePath, updated, 'utf8')
+}
+
+/** Edit only these four default keys; preserve tools, prompt, annotations and
+ * line endings, and refuse ambiguous duplicate keys before touching disk. */
+export function writeSubagentProfileDefaults(filePath: string, payload: SubagentProfileDefaultsPayload): SubagentProfile {
+  if (!payload || (payload.model !== null && typeof payload.model !== 'string') ||
+    typeof payload.inheritContext !== 'boolean' || typeof payload.runInBackground !== 'boolean') {
+    throw new Error('Invalid subagent defaults')
+  }
+  const model = payload.model?.trim() || null
+  if (model && !/^[^/\s]+\/[^\s]+$/.test(model)) throw new Error('Invalid subagent model spec')
+  const thinking = payload.thinking
+  if (thinking !== null && !['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].includes(thinking)) {
+    throw new Error('Invalid subagent thinking level')
+  }
+  const raw = readFileSync(filePath, 'utf8')
+  const before = parseProfileSource(filePath, raw, 'global')
+  const block = findFrontmatterBlock(raw)
+  if (!before || !block) throw new Error('Not a subagent profile')
+  let head = raw.slice(block.openingEnd, block.closingStart)
+  const edits: Array<[string, string | null]> = [
+    ['model', model], ['thinking', thinking],
+    ['inherit_context', String(payload.inheritContext)], ['run_in_background', String(payload.runInBackground)]
+  ]
+  for (const [key, value] of edits) {
+    const pattern = new RegExp(`^[ \\t]*(?:${key}|"${key}"|'${key}')[ \\t]*:[^\\r\\n]*`, 'gm')
+    const matches = [...head.matchAll(pattern)]
+    if (matches.length > 1) throw new Error(`Duplicate ${key} keys in profile`)
+    const match = matches[0]
+    if (match) {
+      let end = match.index! + match[0].length
+      if (value === null) end += head.slice(end).startsWith('\r\n') ? 2 : /^[\r\n]/.test(head.slice(end)) ? 1 : 0
+      const indent = /^[ \t]*/.exec(match[0])![0]
+      head = head.slice(0, match.index) + (value === null ? '' : `${indent}${key}: ${value}`) + head.slice(end)
+    } else if (value !== null) {
+      // Saving unrelated fields must not turn omitted boolean defaults into
+      // new choices; their parser defaults already describe the saved value.
+      if ((key === 'inherit_context' && payload.inheritContext === before.inheritContext) ||
+        (key === 'run_in_background' && payload.runInBackground === before.runInBackground)) continue
+      head += `${key}: ${value}${block.newline}`
+    }
+  }
+  const updated = raw.slice(0, block.openingEnd) + head + raw.slice(block.closingStart)
+  const parsed = parseProfileSource(filePath, updated, before.scope)
+  if (!parsed || parsed.description !== before.description || parsed.systemPrompt !== before.systemPrompt ||
+    parsed.model !== (model ?? undefined) || parsed.thinking !== (thinking ?? undefined) ||
+    parsed.inheritContext !== payload.inheritContext ||
+    parsed.runInBackground !== payload.runInBackground) throw new Error('The defaults edit did not round-trip')
+  writeFileSync(filePath, updated, 'utf8')
+  return parsed
 }
 
 /** Create one new profile file in `dir`. Validation mirrors the loader's own

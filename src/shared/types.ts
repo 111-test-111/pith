@@ -776,6 +776,14 @@ export interface SubagentProfileCreatePayload {
   scope: 'global' | 'project'
 }
 
+/** User-owned defaults for one role. Null clears an optional frontmatter key. */
+export interface SubagentProfileDefaultsPayload {
+  model: string | null
+  thinking: ThinkingLevel | null
+  inheritContext: boolean
+  runInBackground: boolean
+}
+
 /** The subagents tab's read model: every visible profile plus the two
  * directories a new file can land in. `projectDir` is null when no project is
  * active (projectless chats use a hidden internal workspace), in which case
@@ -785,6 +793,8 @@ export interface SubagentProfilesDTO {
   globalDir: string
   projectDir: string | null
 }
+
+export const SUBAGENT_MAX_TURNS_LIMIT = 200
 
 /** One subagent profile as Settings → Subagents renders it: an ordinary
  * Markdown file (flat frontmatter + system-prompt body) in the global
@@ -1067,6 +1077,10 @@ export interface AppInfoDTO {
   /** Whether parent↔child subagent steering is enabled (`agent_steer` /
    * `message_parent`). */
   subagentCommsEnabled: boolean
+  /** Whether parent models may override the user's subagent turn limit. */
+  subagentTurnLimitOverrideEnabled: boolean
+  /** Default limit for each dispatch/continuation; null means unlimited. */
+  subagentMaxTurns: number | null
   /** Per-parent limit on concurrently running subagent delegations. */
   subagentMaxConcurrent: number
   /**

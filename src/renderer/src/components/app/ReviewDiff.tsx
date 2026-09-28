@@ -7,6 +7,7 @@ import { parseUnifiedDiff } from '@/lib/diff'
 import { cn } from '@/lib/utils'
 import { useI18n } from '@/i18n'
 import { LabelTooltip } from './LabelTooltip'
+import { useWheelScroll } from '@/lib/hooks/use-wheel-scroll'
 
 export function ReviewCollapseButton({ allCollapsed, onClick }: { allCollapsed: boolean; onClick: () => void }) {
   const { t } = useI18n()
@@ -50,6 +51,7 @@ export const ReviewDiffBody = memo(function ReviewDiffBody({ patch, displayPath,
   const lines = useMemo(() => parseUnifiedDiff(patch), [patch])
   const virtual = lines.length > 400
   const ref = useRef<HTMLDivElement>(null)
+  useWheelScroll(ref)
   const [range, setRange] = useState({ start: 0, end: 100 })
   const labelId = useId()
   const { t } = useI18n()

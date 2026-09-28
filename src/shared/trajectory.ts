@@ -1,6 +1,9 @@
 /** Diagnostic data stays outside model history. Bodies are addressed by opaque
  * content hashes and read only through a record's verified ancestry. */
 export type TrajectoryKind = 'run' | 'user' | 'assistant' | 'request' | 'tool' | 'compaction' | 'retry' | 'notification'
+/** Recovered assistant entries are the older capture format of a model turn. */
+export type TrajectoryPresentationKind = Exclude<TrajectoryKind, 'assistant'>
+export const trajectoryPresentationKind = (kind: TrajectoryKind): TrajectoryPresentationKind => kind === 'assistant' ? 'request' : kind
 export type TrajectoryStatus = 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted' | 'unavailable'
 export interface TrajectoryUsage {
   input: number
@@ -14,6 +17,11 @@ export interface TrajectoryRecord {
   seq: number
   kind: TrajectoryKind
   name: string
+  /** Bounded plain-text excerpt; full documents remain lazy. */
+  preview?: string
+  /** Output call identities only; arguments stay in the actual tool record. */
+  toolCalls?: Array<{ id: string; name: string }>
+  toolCallId?: string
   startedAt: number
   finishedAt?: number
   firstTokenAt?: number
@@ -33,6 +41,8 @@ export interface TrajectoryQuery {
   sessionPath: string
   before?: number
   after?: number
+  /** Reveal the exact execution of a call on the verified selected branch. */
+  toolCall?: { recordId: string; callId: string }
   kind?: TrajectoryKind
   status?: TrajectoryStatus
   query?: string
@@ -42,6 +52,8 @@ export interface TrajectoryPage {
   older: number | null
   newer: number | null
   total: number
+  /** Exact execution revealed by a tool-call navigation query. */
+  targetId?: string
 }
 export type TrajectoryDocumentKind = 'context' | 'payload' | 'options' | 'response' | 'output' | 'event'
 export interface TrajectoryNode {
@@ -71,3 +83,4 @@ export interface TrajectoryNodePage {
 export const TRAJECTORY_PAGE_SIZE = 80
 export const TRAJECTORY_CHILDREN_SIZE = 40
 export const TRAJECTORY_TEXT_SIZE = 16_384
+export const TRAJECTORY_PREVIEW_SIZE = 512

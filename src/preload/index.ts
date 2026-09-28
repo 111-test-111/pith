@@ -85,6 +85,7 @@ import type {
   StartupSessionMode,
   SubagentActionPayload,
   SubagentProfileCreatePayload,
+  SubagentProfileDefaultsPayload,
   SubagentProfilesDTO,
   SubagentRunDTO,
   TestModelResultDTO,
@@ -230,6 +231,8 @@ const api = {
   setSubagentsEnabled: (enabled: boolean): Promise<boolean> => ipcRenderer.invoke('subagents:setEnabled', enabled),
   setSubagentReuseEnabled: (enabled: boolean): Promise<boolean> => ipcRenderer.invoke('subagents:setReuseEnabled', enabled),
   setSubagentCommsEnabled: (enabled: boolean): Promise<boolean> => ipcRenderer.invoke('subagents:setCommsEnabled', enabled),
+  setSubagentTurnLimitOverrideEnabled: (enabled: boolean): Promise<boolean> => ipcRenderer.invoke('subagents:setTurnLimitOverrideEnabled', enabled),
+  setSubagentMaxTurns: (value: number | null): Promise<number | null> => ipcRenderer.invoke('subagents:setMaxTurns', value),
   setSubagentMaxConcurrent: (value: number): Promise<number> =>
     ipcRenderer.invoke('subagents:setMaxConcurrent', value),
   /** Every subagent profile visible in the active workspace (Settings →
@@ -246,6 +249,8 @@ const api = {
     ipcRenderer.invoke('subagents:setProfileTools', filePath, tools),
   setSubagentProfileDebug: (filePath: string, enabled: boolean): Promise<SubagentProfilesDTO> =>
     ipcRenderer.invoke('subagents:setProfileDebug', filePath, enabled),
+  setSubagentProfileDefaults: (filePath: string, defaults: SubagentProfileDefaultsPayload): Promise<SubagentProfilesDTO> =>
+    ipcRenderer.invoke('subagents:setProfileDefaults', filePath, defaults),
   appInfo: (): Promise<AppInfoDTO> => ipcRenderer.invoke('app:info'),
   setContextFiles: (enabled: boolean): Promise<boolean> =>
     ipcRenderer.invoke('app:setContextFiles', enabled),

@@ -1001,6 +1001,11 @@ try {
   await eventually(() => guest.url().startsWith(fixtureUrl) && !guest.url().endsWith('/next'), 'guest back on fixture root', 15_000)
   await click('[data-browser-toolbar] [aria-label="Annotate page"]')
   await eventually(() => evaluate('Boolean(document.querySelector("[data-browser-annotate-capture]"))'), 'annotate capture layer')
+  await evaluate(`(()=>{const wv=document.querySelector('webview'),capture=document.querySelector('[data-browser-annotate-capture]'),rect=wv.getBoundingClientRect();window.__annotateWheels=[];const original=wv.sendInputEvent.bind(wv);wv.sendInputEvent=event=>{window.__annotateWheels.push(event);return original(event)};window.__restoreAnnotateWheel=()=>{wv.sendInputEvent=original};for(const [deltaX,deltaY] of [[18,12],[12,20],[8,90]])capture.dispatchEvent(new WheelEvent('wheel',{deltaX,deltaY,clientX:rect.x+40,clientY:rect.y+40,bubbles:true,cancelable:true}))})()`)
+  const annotationWheels=await evaluate('window.__annotateWheels.map(event=>({x:event.deltaX,y:event.deltaY}))')
+  assert.deepEqual(annotationWheels,[{x:-18,y:0},{x:-12,y:0},{x:-8,y:0}],'annotation forwarding locks the gesture direction and preserves inverted pixel deltas')
+  await evaluate('window.__restoreAnnotateWheel()')
+  pass('ui','annotate diagonal swipe keeps one axis through noise and momentum')
   await evaluate('window.__pithAnnotations = []; window.addEventListener("pith:browser-annotation", (e) => window.__pithAnnotations.push(e.detail))')
   // Click the h1: zoom is 1.0 here, so guest (40,40) maps to the webview
   // element's origin + (40,40) (the device pin moved the origin — measured

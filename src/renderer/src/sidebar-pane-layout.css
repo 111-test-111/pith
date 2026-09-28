@@ -1,0 +1,196 @@
+/* Shared right-rail layout. Query the pane, never the window or fullscreen
+ * flag: docked resizing and fullscreen use the same content and breakpoints.
+ * 36rem: compact controls can share a row; 48rem: navigation + inspector.
+ * Reading surfaces keep the transcript's 48rem measure; data uses 72rem.
+ * Canvas panes (source, diff, terminal, browser, media) keep their full width. */
+.sidebar-pane-container {
+  container-type: inline-size;
+  container-name: sidebar-pane;
+}
+
+.pane-readable {
+  width: 100%;
+  max-width: 48rem;
+  margin-inline: auto;
+}
+
+.pane-data {
+  width: 100%;
+  max-width: 72rem;
+}
+
+.pane-stat-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1rem 1.5rem;
+}
+
+.pane-columns,
+.pane-workspace {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.pane-workspace {
+  flex: 1;
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.pane-workspace[data-has-detail='true'] {
+  grid-template-rows: clamp(8rem, var(--trajectory-master-height, 40%), calc(100% - 10rem - 6px)) 6px minmax(0, 1fr);
+}
+
+.pane-workspace[data-has-detail='false'] {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.pane-master,
+.pane-detail {
+  min-width: 0;
+  min-height: 0;
+}
+
+.pane-workspace > .pane-master {
+  display: flex;
+  flex-direction: column;
+}
+
+.trajectory-split-handle::before {
+  content: '';
+  position: absolute;
+  background: var(--border);
+  pointer-events: none;
+}
+
+.trajectory-split-handle[aria-orientation='horizontal']::before {
+  inset-inline: 0;
+  top: calc(50% - 0.5px);
+  height: 1px;
+}
+
+.trajectory-split-handle[aria-orientation='vertical']::before {
+  inset-block: 0;
+  left: calc(50% - 0.5px);
+  width: 1px;
+}
+
+.trajectory-split-handle:hover::before,
+.trajectory-split-handle:focus-visible::before,
+.trajectory-split-handle[data-panel-handle-dragging='true']::before {
+  background: var(--primary);
+}
+
+/* Keep empty pane pickers useful without stretching a row across fullscreen. */
+.pane-picker {
+  width: 100%;
+  max-width: 28rem;
+  margin-inline: auto;
+}
+
+.trajectory-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.trajectory-source,
+.trajectory-search,
+.trajectory-filters {
+  min-width: 0;
+  width: 100%;
+}
+
+.trajectory-pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.trajectory-pagination-count {
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+}
+
+.trajectory-facts {
+  display: grid;
+  max-width: 36rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+/* Fixed category hues, independent of the user's accent. Labels and separate
+ * lanes accompany color; deeper request segments retain the first-output wait. */
+.trajectory-tone[data-trajectory-kind='user'] { --trajectory-color: var(--color-cyan-500); }
+.trajectory-tone[data-trajectory-kind='request'] { --trajectory-color: var(--color-blue-500); }
+.trajectory-tone[data-trajectory-kind='tool'] { --trajectory-color: var(--color-emerald-500); }
+.trajectory-tone[data-trajectory-kind='compaction'] { --trajectory-color: var(--color-amber-500); }
+.trajectory-tone[data-trajectory-kind='retry'] { --trajectory-color: var(--color-orange-500); }
+.trajectory-tone[data-trajectory-kind='notification'] { --trajectory-color: var(--color-rose-500); }
+
+.trajectory-legend-dot { background-color: var(--trajectory-color); }
+.trajectory-span {
+  --trajectory-fill: 45%;
+  --trajectory-wait-fill: 75%;
+  background-color: color-mix(in oklch, var(--trajectory-color) var(--trajectory-fill), var(--background));
+}
+.trajectory-span:hover {
+  --trajectory-fill: 65%;
+  --trajectory-wait-fill: 85%;
+}
+.trajectory-wait {
+  background-color: color-mix(in oklch, var(--trajectory-color) var(--trajectory-wait-fill), var(--background));
+}
+.trajectory-span[aria-pressed='true'] {
+  --trajectory-fill: 80%;
+  --trajectory-wait-fill: 95%;
+  z-index: 1;
+}
+.trajectory-span[aria-pressed='true']:hover {
+  --trajectory-fill: 90%;
+  --trajectory-wait-fill: 100%;
+}
+
+/* beUI action variants have transparent resting fills in this app. Persist
+ * selection on both record rows and document buttons, independent of hover. */
+.trajectory-choice[aria-pressed='true'] {
+  background-color: color-mix(in oklch, var(--primary) 12%, var(--background));
+  color: var(--foreground);
+}
+
+@container sidebar-pane (min-width: 20rem) {
+  .pane-stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .trajectory-facts { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+@container sidebar-pane (min-width: 36rem) {
+  .pane-stat-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .trajectory-source { width: 12rem; }
+  .trajectory-search { flex: 1; width: auto; }
+  .trajectory-filters { width: 100%; }
+}
+
+@container sidebar-pane (min-width: 48rem) {
+  .pane-stat-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .pane-columns {
+    grid-template-columns: clamp(18rem, 30%, 24rem) minmax(0, 1fr);
+  }
+  .pane-workspace[data-has-detail='true'] {
+    grid-template-columns: clamp(14rem, var(--trajectory-master-width, clamp(18rem, 30%, 24rem)), calc(100% - 20rem - 6px)) 6px minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
+  .pane-columns > .pane-detail {
+    border-top: 0;
+    border-left: 1px solid var(--border);
+  }
+  .trajectory-filters { width: auto; }
+  .trajectory-search { max-width: 32rem; }
+}
+
+@container sidebar-pane (min-width: 72rem) {
+  .pane-stat-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+}

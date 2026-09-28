@@ -140,6 +140,32 @@ try {
   assert.equal(stats.Messages, '32')
   assert.notEqual(stats.Created, '—', 'the creation time is shown')
   assert.notEqual(stats['Last activity'], '—', 'and so is the last activity')
+  // The rail's own width controls column count, even inside a wide window.
+  // CSS-only resizing must preserve the readout and never re-fetch it.
+  await evaluate(`window.contextResizeNode=document.querySelector('[data-context-stats]');void 0`)
+  for (const locale of ['en', 'zh-CN']) {
+    await evaluate(`window.setLocale(${JSON.stringify(locale)})`)
+    for (const corners of ['square', 'squircle']) {
+      for (const dark of [false, true]) {
+        await evaluate(`document.documentElement.dataset.corners=${JSON.stringify(corners)};document.documentElement.classList.toggle('dark',${dark})`)
+        for (const width of [260, 400, 576, 577, 768, 769, 1200]) {
+          await evaluate(`document.querySelector('#rail-wrap [data-panel=right]').style.width='${width}px';document.querySelector('#rail-wrap [data-panel=right] > div').style.width='${width}px'`)
+          await evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`)
+          const geometry = await evaluate(`(()=>{const pane=document.querySelector('[data-context-pane]'),grid=document.querySelector('[data-context-stats]');return {
+            width:pane.clientWidth,columns:getComputedStyle(grid).gridTemplateColumns.split(' ').length,
+            overflow:pane.scrollWidth>pane.clientWidth+1,
+            same:grid===window.contextResizeNode,
+            cells:grid.querySelectorAll('[data-context-stat]').length}})()`)
+          const expected = geometry.width < 320 ? 1 : geometry.width < 576 ? 2 : geometry.width < 768 ? 3 : geometry.width < 1152 ? 4 : 6
+          assert.equal(geometry.columns, expected, `context columns at ${width}px`)
+          assert(!geometry.overflow && geometry.same, `context fits and keeps its DOM at ${width}px`)
+          assert.equal(geometry.cells, 20, 'every statistic survives all widths')
+        }
+      }
+    }
+  }
+  assert.equal(await evaluate('window.calls.length'), 0, 'resize/style/locale changes do not fetch context')
+  await evaluate(`window.setLocale('en');document.documentElement.classList.remove('dark');document.querySelector('#rail-wrap [data-panel=right]').style.width='420px';document.querySelector('#rail-wrap [data-panel=right] > div').style.width='420px'`)
 
   // 3. Both honesty notes are on screen: what "cumulative" covers, and that the
   //    breakdown is an estimate whose residue is the system prompt.

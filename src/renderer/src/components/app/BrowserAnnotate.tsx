@@ -4,6 +4,7 @@ import { Button } from '@/components/motion/button'
 import { Input } from '@/components/motion/input'
 import { useI18n } from '@/i18n'
 import { guestBoxToHost, hostPointToGuest } from '@/lib/browser/zoom'
+import { createWheelGesture, wheelPixels } from '@/lib/wheel-gesture'
 import { isEditableTarget, type BrowserWebviewElement } from './BrowserPageView'
 
 /**
@@ -20,7 +21,8 @@ import { isEditableTarget, type BrowserWebviewElement } from './BrowserPageView'
  *     INVERTED sign — payloads carrying wheelTicks or precise-scrolling flags
  *     are silently swallowed by guests;
  *  3. the secondary axis is zeroed before forwarding (macOS trackpads carry
- *     cross-axis noise; without zeroing the guest consumes both axes or the
+ *     cross-axis noise; the direction is held for the gesture, not re-picked
+ *     for every event; without zeroing the guest consumes both axes or the
  *     dominant-axis routing swallows the event);
  *  4. hover highlight is suppressed while scrolling and re-resolved once,
  *     250ms after the LAST wheel event (inertia keeps extending it);
@@ -283,6 +285,7 @@ export function BrowserAnnotate({ wv, wrapEl, pageZoom, active, onExit, page }: 
     const guest = wvRef.current
     const wrap = wrapRef.current
     if (!capture || !guest || !wrap) return
+    const gesture = createWheelGesture(() => 'scroll')
     const onWheel = (e: WheelEvent) => {
       e.preventDefault() // the host has no scroll container; also stops ctrl+wheel shell zoom
       // Wheel coordinates stay in webview-element space (host pixels) — the
@@ -290,25 +293,13 @@ export function BrowserAnnotate({ wv, wrapEl, pageZoom, active, onExit, page }: 
       const rect = guest.getBoundingClientRect()
       const x = e.clientX - rect.left
       const y = e.clientY - rect.top
-      let dx = e.deltaX
-      let dy = e.deltaY
-      // Line/page delta modes to pixels (macOS is always pixel mode).
-      if (e.deltaMode === WheelEvent.DOM_DELTA_LINE) {
-        dx *= 40
-        dy *= 40
-      } else if (e.deltaMode === WheelEvent.DOM_DELTA_PAGE) {
-        dx *= wrap.clientWidth
-        dy *= wrap.clientHeight
-      }
-      // Strict axis separation: zero the secondary axis by dominant axis
-      // (|dy| >= |dx| means vertical) before forwarding.
-      if (Math.abs(dy) >= Math.abs(dx)) dx = 0
-      else dy = 0
+      const input = gesture.read(wheelPixels(e, wrap, 40))
+      if (!input || (!input.deltaX && !input.deltaY)) return
       try {
         // The real webview API returns a promise — a wheel on a not-ready or
         // destroyed guest rejects asynchronously, which a bare try/catch
         // cannot see (pi-web caught it; so do we).
-        void guest.sendInputEvent({ type: 'mouseWheel', x, y, deltaX: -dx, deltaY: -dy }).catch(() => {
+        void guest.sendInputEvent({ type: 'mouseWheel', x, y, deltaX: -input.deltaX, deltaY: -input.deltaY }).catch(() => {
           /* guest not ready / destroyed — drop the event (async rejection) */
         })
       } catch {

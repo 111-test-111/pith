@@ -1,7 +1,7 @@
 import { app } from 'electron'
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { BASH_DEFAULT_MAX_WAIT_MS, BASH_MIN_WAIT_MS, BASH_MAX_WAIT_MS, type StartupSessionMode, type JevPreferences } from '../shared/types'
+import { BASH_DEFAULT_MAX_WAIT_MS, BASH_MIN_WAIT_MS, BASH_MAX_WAIT_MS, SUBAGENT_MAX_TURNS_LIMIT, type StartupSessionMode, type JevPreferences } from '../shared/types'
 import { ASK_USER_DEFAULT_TIMEOUT_S, clampAskUserTimeoutSeconds } from '../shared/ask-user'
 import { RESPONSE_TIMEOUT_DEFAULT_S, clampResponseTimeoutSeconds } from '../shared/response-timeout'
 import { DEFAULT_SANDBOX_MODE, isSandboxMode } from './sandbox/mode'
@@ -55,6 +55,10 @@ export interface AppSettings {
   /** Parent↔child steering: the `agent_steer` tool on parents, the
    * `message_parent` tool injected into child ceilings. */
   subagentCommsEnabled: boolean
+  /** Parent models may supply max_turns only with this explicit grant. */
+  subagentTurnLimitOverrideEnabled: boolean
+  /** User-owned default for every new run; null means unlimited. */
+  subagentMaxTurns: number | null
   /** Max simultaneous subagent runs per parent session (starting + active). */
   subagentMaxConcurrent: number
   /** Seconds an unanswered ask_user_question panel waits before it closes
@@ -91,6 +95,8 @@ const defaults: AppSettings = {
   subagentsEnabled: true,
   subagentReuseEnabled: false,
   subagentCommsEnabled: false,
+  subagentTurnLimitOverrideEnabled: false,
+  subagentMaxTurns: null,
   subagentMaxConcurrent: 4,
   askUserTimeoutSeconds: ASK_USER_DEFAULT_TIMEOUT_S,
   responseTimeoutSeconds: RESPONSE_TIMEOUT_DEFAULT_S,
@@ -116,6 +122,8 @@ export function loadSettings(): AppSettings {
     const startupSession = typeof raw.startupSession === 'string' ? raw.startupSession : null
     const concurrent = raw.subagentMaxConcurrent
     const subagentMaxConcurrent = Number.isInteger(concurrent) && concurrent >= 1 && concurrent <= 16 ? concurrent : 4
+    const turns = raw.subagentMaxTurns
+    const subagentMaxTurns = Number.isInteger(turns) && turns >= 1 && turns <= SUBAGENT_MAX_TURNS_LIMIT ? turns : null
     const askUserTimeoutSeconds = clampAskUserTimeoutSeconds(
       typeof raw.askUserTimeoutSeconds === 'number' ? raw.askUserTimeoutSeconds : ASK_USER_DEFAULT_TIMEOUT_S
     )
@@ -129,6 +137,7 @@ export function loadSettings(): AppSettings {
       noul: raw.jev?.noul !== false
     }
     return { ...defaults, ...raw, jev, bashMaxWaitMs, startup, startupSession, subagentMaxConcurrent, askUserTimeoutSeconds,
+      subagentTurnLimitOverrideEnabled: raw.subagentTurnLimitOverrideEnabled === true, subagentMaxTurns,
       responseTimeoutSeconds,
       sandboxMode: isSandboxMode(raw.sandboxMode) ? raw.sandboxMode : DEFAULT_SANDBOX_MODE }
   } catch {

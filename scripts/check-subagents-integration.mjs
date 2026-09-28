@@ -31,6 +31,7 @@ try {
   const bundle = join(temporary, 'modules.mjs')
   await build({ stdin: { contents: `export { PiManager } from './src/main/pi/manager';
 export { CheckoutCoordinator } from './src/main/rewind/coordinator';
+export { loadSettings, saveSettings } from './src/main/settings';
 export { SubagentRuntime, SubagentParentState } from './src/main/pi/subagents/runtime';
 export * from './src/main/pi/subagents/protocol';
 export { installSubagentResultHook } from './src/main/pi/subagents/tools';
@@ -54,7 +55,7 @@ export { extractTurnWrittenFiles, extractReviewTurns } from './src/renderer/src/
       builder.onResolve({ filter: /^proper-lockfile$/ }, args => ({ path: fileURLToPath(import.meta.resolve(args.path)), external: true }))
       builder.onLoad({ filter: /.*/, namespace: 'fixture' }, () => ({ contents: `export const app={getPath(){return ${JSON.stringify(temporary)}}}; export const shell={};` }))
     } }] })
-  const { PiManager, CheckoutCoordinator, SubagentRuntime, SubagentParentState, PiStore, buildTurns, collectChangeScopes, BashTaskManager, TaskNotifications, createManagedBashTools,
+  const { PiManager, CheckoutCoordinator, loadSettings, saveSettings, SubagentRuntime, SubagentParentState, PiStore, buildTurns, collectChangeScopes, BashTaskManager, TaskNotifications, createManagedBashTools,
     extractTurnWrittenFiles, extractReviewTurns, installSubagentResultHook, currentDiskRun, SUBAGENT_RUN_TYPE, SUBAGENT_RESULT_TYPE } = await import(pathToFileURL(bundle))
 
   // Both independent clocks, both IPC arrival orders, and unrelated sessions.
@@ -144,6 +145,7 @@ export { extractTurnWrittenFiles, extractReviewTurns } from './src/renderer/src/
     let settled = over.settled ?? true
     const host = { isClosing: () => false, subagentsEnabled: () => true, subagentReuseEnabled: () => true,
       subagentCommsEnabled: () => false, planRestricted: () => false,
+      subagentTurnLimitOverrideEnabled: () => false, subagentMaxTurns: () => null,
       maxConcurrentSubagents: () => over.limit ?? 4, commandTasks: () => null,
       acquireRunLease: (_cwd, path) => { const lease = { path }; leases.add(lease); return () => leases.delete(lease) },
       resolveModelSpec: async () => ({}), emitSubagents: () => {}, notifySubagentChildWrite: () => {},
@@ -162,6 +164,68 @@ export { extractTurnWrittenFiles, extractReviewTurns } from './src/renderer/src/
           release: async () => { counters.releases++; over.releaseEntered?.resolve(); await over.releaseGate?.promise } }
       } }
     return { runtime: new SubagentRuntime(host), host, state: new SubagentParentState(parent.getSessionId()), counters, leases, settle: () => { settled = true } }
+  }
+  {
+    const settings = loadSettings()
+    assert.equal(settings.subagentTurnLimitOverrideEnabled, false, 'missing settings revoke the model grant')
+    assert.equal(settings.subagentMaxTurns, null, 'missing user limit means unlimited')
+    const app = Object.create(PiManager.prototype)
+    let reloads = 0
+    app.reloadLiveSessions = async () => { reloads++ }
+    await app.setSubagentTurnLimitOverrideEnabled(true)
+    app.setSubagentMaxTurns(12)
+    assert.equal(loadSettings().subagentTurnLimitOverrideEnabled, true)
+    assert.equal(loadSettings().subagentMaxTurns, 12, 'the user limit persists across reloads')
+    for (const invalid of [0, -1, 201, 1.5, NaN, undefined, '12']) {
+      assert.throws(() => app.setSubagentMaxTurns(invalid), /Invalid subagent turn limit/)
+    }
+    assert.equal(loadSettings().subagentMaxTurns, 12, 'invalid values cannot replace the user setting')
+    await app.setSubagentTurnLimitOverrideEnabled(false)
+    app.setSubagentMaxTurns(null)
+    assert.equal(loadSettings().subagentTurnLimitOverrideEnabled, false)
+    assert.equal(loadSettings().subagentMaxTurns, null, 'clearing persists unlimited')
+    assert.equal(reloads, 2, 'permission changes refresh the live model schemas')
+    saveSettings({ ...settings, subagentTurnLimitOverrideEnabled: 'true', subagentMaxTurns: 0 })
+    assert.equal(loadSettings().subagentTurnLimitOverrideEnabled, false)
+    assert.equal(loadSettings().subagentMaxTurns, null, 'invalid persisted values fail back to user-owned unlimited')
+    saveSettings(settings)
+    app.cwd = temporary
+    const rolesDir = join(temporary, '.pi', 'agents')
+    await mkdir(rolesDir, { recursive: true })
+    const rolePath = join(rolesDir, 'fixture-defaults-role.md')
+    const original = '---\ndescription: Editable defaults\ntools: write\nmax_turns: 99\n---\n\nOriginal prompt.\n'
+    await writeFile(rolePath, original)
+    const defaults = { model: 'fixture/fixture', thinking: 'high', inheritContext: false, runInBackground: true }
+    const list = await app.setSubagentProfileDefaults(rolePath, defaults)
+    const role = list.profiles.find(p => p.filePath === rolePath)
+    assert.equal(role.model, defaults.model)
+    assert.equal(role.thinking, defaults.thinking)
+    assert.equal(role.inheritContext, false)
+    assert.equal(role.runInBackground, true)
+    assert.equal(role.systemPrompt, 'Original prompt.')
+    assert.equal(role.maxTurns, 99, 'legacy role limits are preserved as ignored file metadata')
+    const outside = join(temporary, 'not-a-listed-role.md')
+    await writeFile(outside, original)
+    await assert.rejects(app.setSubagentProfileDefaults(outside, defaults), /Unknown subagent profile/)
+    assert.equal(await readFile(outside, 'utf8'), original, 'the defaults IPC route cannot write an arbitrary file')
+    await app.setSubagentProfileDefaults(rolePath, { model: null, thinking: null, inheritContext: true, runInBackground: false })
+    assert.equal(app.subagentProfiles().profiles.find(p => p.filePath === rolePath).model, undefined)
+    assert.equal(reloads, 4, 'saving role defaults refreshes the existing agent roster')
+  }
+  {
+    const creation = deferred()
+    const e = makeRuntime({ creation })
+    let allowed = true
+    e.host.subagentTurnLimitOverrideEnabled = () => allowed
+    e.host.subagentMaxTurns = () => 7
+    const launching = e.runtime.start(e.state, { ...request, maxTurns: 200 })
+    await tick()
+    allowed = false
+    creation.resolve()
+    const finished = await (await launching).completion
+    assert.equal(e.runtime.readChildRuns(finished.sessionPath)[0].start.resource.maxTurns, 7,
+      'revocation during asynchronous session creation reaches the actual dispatch')
+    assert.equal(e.leases.size, 0)
   }
   {
     const e = makeRuntime({ limit: 0 })
@@ -337,6 +401,7 @@ export { extractTurnWrittenFiles, extractReviewTurns } from './src/renderer/src/
     const unsubscribeDrain = drainSession.subscribe(event => notifications.observe(event))
     const host = { isClosing: () => false, subagentsEnabled: () => true, subagentReuseEnabled: () => true,
       subagentCommsEnabled: () => false, planRestricted: () => false, maxConcurrentSubagents: () => 4,
+      subagentTurnLimitOverrideEnabled: () => false, subagentMaxTurns: () => null,
       commandTasks: () => tasks,
       acquireRunLease: () => () => {}, resolveModelSpec: async () => ({}), emitSubagents: () => {}, notifySubagentChildWrite: () => {},
       createChildSession: async () => ({ session: drainSession, sessionManager: drainChild, path: drainChild.getSessionFile(), cwd: temporary,

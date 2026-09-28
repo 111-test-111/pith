@@ -143,7 +143,7 @@ try {
     assert(position.control.top >= position.viewport.bottom, 'the plan control sits below the editable area')
     assert(position.control.bottom <= position.frame.bottom, 'the plan control stays inside the composer frame')
     assert(position.model && position.control.left >= position.model.right, 'the active Plan control follows the model picker')
-    assert.deepEqual(position.icons, ['Siren', 'X'], 'the active Plan control carries the plan and close glyphs')
+    assert.deepEqual(position.icons, ['NotebookPen', 'X'], 'the active Plan control carries the plan and close glyphs')
     await planAction.hover()
     await page.waitForFunction(() => {
       const icons = document.querySelectorAll('[data-plan-mode-control] svg')

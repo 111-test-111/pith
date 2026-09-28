@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { build } from 'esbuild'
+import { DatabaseSync } from 'node:sqlite'
 import { createPlanFixture, planRepoRoot } from './lib/plan-fixture.mjs'
 
 const temp = await mkdtemp(join(tmpdir(), 'pith-trajectory-check-'))
@@ -83,8 +84,74 @@ try {
   const access = { sessionPath, sessionId: 's' }
   await storage.history(access)
   assert.deepEqual(storage.page(access, {}).items.map(x => x.name), ['user', 'assistant'])
+  assert.deepEqual(storage.page(access, { kind: 'request' }).items.map(x => x.kind), ['assistant'], 'model-request filter includes assistant output restored from older sessions')
   assert(!storage.page(access, {}).items.some(x => x.id.endsWith(':old')))
   assert.equal(storage.page({ ...access, leafId: 'old' }, {}).total, 2)
+  assert.equal(storage.page(access, {}).items[0].preview, 'first', 'older SDK messages expose text excerpts')
+  const previewRecord = (id, kind, documents, metadata = {}) => storage.write({ sessionId: 's', anchor: 'new',
+    record: { id, kind, name: kind === 'tool' ? 'bash' : kind, startedAt: 4, status: 'completed', captured: true, ...metadata }, documents })
+  previewRecord('preview-command', 'tool', { context: { command: 'git status\n--short', apiKey: 'do-not-show' } })
+  previewRecord('preview-command', 'tool', { output: { content: [{ type: 'text', text: 'result' }] } })
+  assert.equal(storage.detail(access, 'preview-command').record.preview, 'git status --short', 'settling a tool retains its useful invocation')
+  previewRecord('preview-path', 'tool', { context: { path: 'src/main.ts', offset: 10, limit: 20 } })
+  assert.equal(storage.detail(access, 'preview-path').record.preview, 'src/main.ts · offset: 10 · limit: 20')
+  previewRecord('preview-output', 'request', { output: { content: [{ type: 'thinking', thinking: 'reasoning' }, { type: 'text', text: '模型输出\n已经完成。' }] } })
+  assert.equal(storage.detail(access, 'preview-output').record.preview, '模型输出 已经完成。', 'visible output precedes reasoning')
+  const calls = Array.from({ length: 20 }, (_, index) => ({ type: 'toolCall', id: 'call-' + index, name: 'read', arguments: { path: `file-${index}.txt` } }))
+  previewRecord('preview-call', 'request', { output: { content: [{ type: 'text', text: 'Let me read these files' }, ...Array.from({ length: 13 }, () => ({ type: 'thinking', thinking: 'reasoning' })), ...calls] } })
+  const callSummary = storage.detail(access, 'preview-call').record
+  assert.equal(callSummary.preview, '', 'tool-bearing model responses do not duplicate the invocation details or text')
+  assert.deepEqual(callSummary.toolCalls, calls.map(({ id, name }) => ({ id, name })), 'every call has a compact identity, including blocks beyond the text preview limit')
+  previewRecord('preview-wrong-parent', 'tool', {}, { parentId: 'another-request', toolCallId: 'call-1' })
+  for (let index = 0; index < calls.length; index++) previewRecord('preview-tool-' + index, 'tool', { output: { toolCallId: calls[index].id, content: [{ type: 'text', text: `result-${index}` }] } }, { name: 'read', parentId: 'preview-call', toolCallId: calls[index].id })
+  for (let index = 0; index < 100; index++) previewRecord('preview-padding-' + index, 'notification', {})
+  assert(!storage.page(access, {}).items.some(record => record.id === 'preview-tool-1'), 'destination is outside the loaded page')
+  const reveal = storage.page(access, { toolCall: { recordId: 'preview-call', callId: 'call-1' }, kind: 'request', query: 'hidden-by-filter' })
+  assert.equal(reveal.targetId, 'preview-tool-1', 'jump reveals the exact call despite repeated tool names, another request using the same ID, filters and pagination')
+  assert(reveal.items.some(record => record.id === reveal.targetId) && reveal.items.some(record => record.id === 'preview-call'), 'target and surrounding model context stay in the revealed page')
+  assert(reveal.items.length === 80 && reveal.newer, 'jump fills the bounded page and remains normally pageable')
+  assert.throws(() => storage.page(access, { toolCall: { recordId: 'preview-call', callId: 'not-an-output-call' } }), /unavailable/)
+  assert.throws(() => storage.page({ ...access, leafId: 'old' }, { toolCall: { recordId: 'preview-call', callId: 'call-1' } }), /unavailable/, 'off-branch sources cannot be used to reveal records')
+  previewRecord('preview-debug', 'tool', { context: { request: { action: 'stack', file: '/workspace/main.ts' }, debugId: 'opaque' } })
+  assert.equal(storage.detail(access, 'preview-debug').record.preview, 'stack · /workspace/main.ts')
+  previewRecord('preview-reconstructed-tool', 'tool', { event: { content: [{ type: 'text', text: 'historical tool output' }] } })
+  assert.equal(storage.detail(access, 'preview-reconstructed-tool').record.preview, 'historical tool output')
+  previewRecord('preview-compaction', 'compaction', { output: { compaction: { summary: 'Work so far' } } })
+  assert.equal(storage.detail(access, 'preview-compaction').record.preview, 'Work so far')
+  previewRecord('preview-bounded', 'assistant', { output: { content: [{ type: 'image', data: 'secret-image'.repeat(10000) }, { type: 'text', text: ('文字😀\\\"\n').repeat(3000) }] } })
+  const boundedPreview = storage.detail(access, 'preview-bounded').record.preview
+  assert(boundedPreview.length <= 512 && boundedPreview.startsWith('文字😀'), 'large Unicode/escaped text stays bounded and decoded')
+  assert(!boundedPreview.includes('secret-image') && !/[\ud800-\udbff]$/.test(boundedPreview), 'images and incomplete surrogate pairs never enter the excerpt')
+  const legacy = new DatabaseSync(database)
+  legacy.prepare("UPDATE records SET data=json_set(json_remove(data,'$.previewVersion','$.toolCalls'),'$.preview','read · duplicated arguments') WHERE id=?").run('preview-call')
+  legacy.prepare("UPDATE records SET data=json_remove(data,'$.previewVersion','$.toolCallId') WHERE id=?").run('preview-tool-1')
+  assert.equal(storage.page(access, { toolCall: { recordId: 'preview-call', callId: 'call-1' } }).targetId, 'preview-tool-1', 'old captures resolve exact calls from lazy graph metadata')
+  assert.equal(storage.detail(access, 'preview-call').record.preview, '', 'old duplicate previews are replaced on demand')
+  legacy.prepare("UPDATE records SET data=json_remove(data,'$.preview') WHERE id=?").run('preview-bounded')
+  assert.equal(storage.page(access, { kind: 'assistant' }).items.find(record => record.id === 'preview-bounded').preview, boundedPreview, 'existing capture databases backfill excerpts on a bounded page read')
+  assert.equal(JSON.parse(legacy.prepare('SELECT data FROM records WHERE id=?').get('preview-bounded').data).preview, boundedPreview, 'backfilled previews are reused')
+  legacy.prepare("DELETE FROM records WHERE id LIKE 'preview-%'").run()
+  legacy.close()
+  const historicalPath = join(temp, 'historical-calls.jsonl')
+  const historicalEntries = [
+    { type: 'session', id: 'historical' },
+    { type: 'message', id: 'hu', parentId: null, message: { role: 'user', content: [], timestamp: 1 } },
+    { type: 'message', id: 'hm', parentId: 'hu', message: { role: 'assistant', content: [...calls.slice(0, 2), { type: 'toolCall', id: 'not-executed', name: 'read', arguments: {} }], timestamp: 2 } },
+    { type: 'message', id: 'ht0', parentId: 'hm', message: { role: 'toolResult', toolCallId: 'call-0', toolName: 'read', content: [], timestamp: 3 } },
+    { type: 'message', id: 'ht1', parentId: 'ht0', message: { role: 'toolResult', toolCallId: 'call-1', toolName: 'read', content: [], timestamp: 4 } },
+    { type: 'message', id: 'hm2', parentId: 'ht1', message: { role: 'assistant', content: [{ type: 'toolCall', id: 'not-executed', name: 'read', arguments: {} }], timestamp: 5 } },
+    { type: 'message', id: 'ht2', parentId: 'hm2', message: { role: 'toolResult', toolCallId: 'not-executed', toolName: 'read', content: [], timestamp: 6 } }
+  ]
+  await writeFile(historicalPath, historicalEntries.map(entry => JSON.stringify(entry)).join('\n') + '\n')
+  const historicalAccess = { sessionPath: historicalPath, sessionId: 'historical' }
+  await storage.history(historicalAccess)
+  assert(storage.page(historicalAccess, { kind: 'request' }).items.some(record => record.id === 'entry:historical:hm'), 'historical assistant tool-use appears under the same model-request filter')
+  assert.equal(storage.page(historicalAccess, { toolCall: { recordId: 'entry:historical:hm', callId: 'call-1' } }).targetId, 'entry:historical:ht1', 'historical assistant calls reveal their corresponding SDK results')
+  assert.throws(() => storage.page(historicalAccess, { toolCall: { recordId: 'entry:historical:hm', callId: 'not-executed' } }), /unavailable/, 'a reused ID in a later model response cannot substitute for an unexecuted historical call')
+  storage.write({ sessionId: 'historical', anchor: 'hm', entryId: 'hm', record: { id: 'hybrid-request', kind: 'request', name: 'model', startedAt: 2, status: 'completed', captured: true }, documents: { output: historicalEntries[2].message } })
+  assert.equal(storage.page(historicalAccess, { toolCall: { recordId: 'hybrid-request', callId: 'call-1' } }).targetId, 'entry:historical:ht1', 'a captured request can still reveal SDK-recovered tool records after a missing tool capture')
+  assert.throws(() => storage.page(historicalAccess, { toolCall: { recordId: 'hybrid-request', callId: 'not-executed' } }), /unavailable/, 'hybrid recovery stops at the next model response too')
+  console.log('PASS excerpts/call links: all output identities, exact same-name navigation across pages/filters, branch/request ownership, historical messages, bounded Unicode and lazy old-database backfill')
   const large = '你好😀'.repeat(300000)
   const body = { system: 'prompt'.repeat(8000), image: large, apiKey: 'secret', messages: Array.from({ length: 100 }, (_, n) => ({ role: 'user', text: `message ${n}` })) }
   const start = performance.now(), rss = process.memoryUsage().rss
@@ -93,7 +160,7 @@ try {
     documents: { payload: body } })
   const elapsed = performance.now() - start
   const page = storage.page(access, { kind: 'request' })
-  assert.equal(page.total, 500); assert.equal(page.items.length, 80)
+  assert.equal(page.total, 501); assert.equal(page.items.length, 80)
   assert(page.older); assert.equal(page.newer, null)
   const older = storage.page(access, { kind: 'request', before: page.older })
   assert.equal(older.items.length, 80)
@@ -154,6 +221,11 @@ try {
   assert.equal(trace.items.filter(x => x.kind === 'assistant').length, 0, 'no duplicate history fallback')
   assert.equal(trace.items.filter(x => x.kind === 'user').length, 1)
   assert.equal(trace.items.filter(x => x.kind === 'tool' && x.name === 'present').length, 1)
+  const sdkCallRequest = trace.items.find(record => record.toolCalls?.length)
+  assert.deepEqual(sdkCallRequest.toolCalls, [{ id: 'present-sdk', name: 'present' }])
+  const sdkTool = trace.items.find(record => record.kind === 'tool')
+  assert.equal(sdkTool.toolCallId, 'present-sdk')
+  assert.equal((await fixture.app.trajectoryPage({ sessionPath: fixture.managed.path, toolCall: { recordId: sdkCallRequest.id, callId: 'present-sdk' } })).targetId, sdkTool.id, 'real SDK provider/tool identity survives worker IPC and navigation')
   assert(trace.items.every(x => x.status === 'completed'))
   for (const request of trace.items.filter(x => x.kind === 'request')) {
     assert.equal(request.httpStatus, 200); assert(request.firstTokenAt); assert.equal(request.usage.output, 1)

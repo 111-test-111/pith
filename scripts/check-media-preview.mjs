@@ -101,15 +101,15 @@ try {
 import React from 'react';import {createRoot} from 'react-dom/client';
 import {FilesPane} from '/src/components/app/FilesPane.tsx';
 import {I18nProvider} from '/src/i18n/index.tsx';
-import {PiStore} from '/src/state/pi-store.ts';import {FileBrowserStore} from '/src/state/file-browser-store.ts';
+import {PiStore} from '/src/state/pi-store.ts';import {FileBrowserStore} from '/src/state/file-browser-store.ts';import {DebugStore} from '/src/state/debug-store.ts';
 import en from '/src/i18n/locales/en.ts';import zh from '/src/i18n/locales/zh-CN.ts';
 import {mediaUrl as buildMediaUrl} from '/@fs${join(repo, 'src/shared/media.ts')}';
 import '/src/styles.css';
 localStorage.setItem('pi-app:locale','en');
 const cwd=${JSON.stringify(project)};
-const files=new FileBrowserStore(),pi=new PiStore();
+const files=new FileBrowserStore(),pi=new PiStore(),debug=new DebugStore();
 pi.applySnapshot({cwd,sessionId:crypto.randomUUID(),messages:[],model:null,thinkingLevel:'off',availableThinkingLevels:['off'],isStreaming:false});
-const App=()=>{const state=React.useSyncExternalStore(files.subscribe,files.getSnapshot);return React.createElement(FilesPane,{files,store:pi,filePath:state.active})};
+const App=()=>{const state=React.useSyncExternalStore(files.subscribe,files.getSnapshot);return React.createElement(FilesPane,{files,store:pi,filePath:state.active,debug})};
 createRoot(document.getElementById('root')).render(React.createElement(React.StrictMode,null,React.createElement(I18nProvider,null,React.createElement(App))));
 window.cwd=cwd;window.files=files;window.en=en;window.zh=zh;
 window.openFile=name=>files.open(cwd,{path:cwd+'/'+name});
@@ -196,6 +196,7 @@ app.on('window-all-closed',()=>app.quit());`, resolveDir: repo, loader: 'ts' }, 
   ws.addEventListener('message', (event) => { const m = JSON.parse(event.data); if (m.id) { pendingMessages.get(m.id)?.(m); pendingMessages.delete(m.id) } else if (m.method === 'Runtime.exceptionThrown') exceptions.push(m.params.exceptionDetails) })
   const send = (method, params = {}) => new Promise((resolve, reject) => { const id = ++seq; pendingMessages.set(id, (m) => m.error ? reject(m.error) : resolve(m.result)); ws.send(JSON.stringify({ id, method, params })) })
   const evaluate = async (expression) => { const r = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true }); if (r.exceptionDetails) throw new Error(JSON.stringify(r.exceptionDetails)); return r.result?.value }
+  await send('Runtime.enable')
   const waitFor = async (expression, label) => { const end = Date.now() + 20000; while (Date.now() < end) { if (await evaluate(`Boolean(${expression})`)) return; await pause(50) } throw new Error('Timeout: ' + label + ' :: ' + await evaluate('document.body.innerText') + ' ' + JSON.stringify(exceptions)) }
   const open = async (name) => { await evaluate(`window.openFile(${JSON.stringify(name)})`); await pause(150) }
   const click = async (selector) => { await evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`); await pause(120) }
@@ -286,6 +287,37 @@ app.on('window-all-closed',()=>app.quit());`, resolveDir: repo, loader: 'ts' }, 
   await shot('image-squircle')
   await evaluate(originalCorners ? `document.documentElement.dataset.corners=${JSON.stringify(originalCorners)}` : `delete document.documentElement.dataset.corners`)
   console.log('PASS: image decodes over the scheme, mounts no view tabs, zoom in/reset/shrink-to-50% drive the transform, corners follow the interface style')
+
+  // A fitted large image can pan on both axes. A diagonal swipe keeps its
+  // initial axis and remains a pan even when momentum becomes notch-sized.
+  await open('large.png')
+  await waitFor(`document.querySelector('[data-file-media=image] img')?.naturalWidth===1200`, 'large image decoded for gesture checks')
+  await click('[data-file-media=image] [aria-label="Zoom in"]')
+  await click('[data-file-media=image] [aria-label="Zoom in"]')
+  await pause(600)
+  const imageView=()=>evaluate(`(()=>{const box=document.querySelector('[data-file-media=image]'),m=new DOMMatrixReadOnly(getComputedStyle(box.querySelector('img')).transform);return {scale:m.a,x:m.e,y:m.f,percent:box.querySelector('[aria-label="Reset zoom"]').textContent}})()`)
+  const imageWheel=events=>evaluate(`(()=>{const box=document.querySelector('[data-file-media=image]'),r=box.getBoundingClientRect();for(const event of ${JSON.stringify(events)})box.dispatchEvent(new WheelEvent('wheel',{...event,clientX:r.x+r.width/2,clientY:r.y+r.height/2,bubbles:true,cancelable:true}))})()`)
+  const beforeSwipe=await imageView()
+  await imageWheel([{deltaX:8,deltaY:6},{deltaX:6,deltaY:9},{deltaX:90,deltaY:100}])
+  await pause(600)
+  const horizontalSwipe=await imageView()
+  assert.equal(horizontalSwipe.percent,beforeSwipe.percent,'horizontal image swipe never turns into zoom during momentum')
+  assert(horizontalSwipe.x<beforeSwipe.x-90,'horizontal image swipe pans')
+  assert(Math.abs(horizontalSwipe.y-beforeSwipe.y)<0.1,'image swipe ignores its vertical noise')
+  await imageWheel([{deltaX:6,deltaY:8},{deltaX:9,deltaY:6},{deltaX:100,deltaY:90}])
+  await pause(600)
+  const verticalSwipe=await imageView()
+  assert.equal(verticalSwipe.percent,horizontalSwipe.percent,'vertical swipe retains pan mode while accelerating')
+  assert(verticalSwipe.y<horizontalSwipe.y-90,'vertical image swipe pans')
+  assert(Math.abs(verticalSwipe.x-horizontalSwipe.x)<0.1,'image swipe ignores its horizontal noise')
+  await imageWheel([{deltaX:100,deltaY:-10,ctrlKey:true}])
+  await pause(600)
+  const pinched=await imageView()
+  assert(pinched.scale>verticalSwipe.scale,'pinch overrides scrolling and zooms the image')
+  await imageWheel([{deltaX:2,deltaY:-120}])
+  await pause(600)
+  assert((await imageView()).scale>pinched.scale,'a vertical notched mouse wheel still zooms')
+  console.log('PASS: image diagonal direction lock, momentum pan-mode lock, pinch and notched wheel zoom')
 
   // 3. Another decodable image format, and a recognized format with no decoder.
   await open('vector.svg')

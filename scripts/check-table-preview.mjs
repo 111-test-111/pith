@@ -146,14 +146,14 @@ try {
 import React from 'react';import {createRoot} from 'react-dom/client';
 import {FilesPane} from '/src/components/app/FilesPane.tsx';
 import {I18nProvider} from '/src/i18n/index.tsx';
-import {PiStore} from '/src/state/pi-store.ts';import {FileBrowserStore} from '/src/state/file-browser-store.ts';
+import {PiStore} from '/src/state/pi-store.ts';import {FileBrowserStore} from '/src/state/file-browser-store.ts';import {DebugStore} from '/src/state/debug-store.ts';
 import en from '/src/i18n/locales/en.ts';import zh from '/src/i18n/locales/zh-CN.ts';
 import '/src/styles.css';
 localStorage.setItem('pi-app:locale','en');
 const cwd=${JSON.stringify(project)};
-const files=new FileBrowserStore(),pi=new PiStore();
+const files=new FileBrowserStore(),pi=new PiStore(),debug=new DebugStore();
 pi.applySnapshot({cwd,sessionId:crypto.randomUUID(),messages:[],model:null,thinkingLevel:'off',availableThinkingLevels:['off'],isStreaming:false});
-const App=()=>{const state=React.useSyncExternalStore(files.subscribe,files.getSnapshot);return React.createElement(FilesPane,{files,store:pi,filePath:state.active})};
+const App=()=>{const state=React.useSyncExternalStore(files.subscribe,files.getSnapshot);return React.createElement(FilesPane,{files,store:pi,filePath:state.active,debug})};
 createRoot(document.getElementById('root')).render(React.createElement(React.StrictMode,null,React.createElement(I18nProvider,null,React.createElement(App))));
 window.en=en;window.zh=zh;window.cwd=cwd;
 window.openFile=name=>files.open(cwd,{path:cwd+'/'+name});
@@ -326,6 +326,26 @@ app.on('window-all-closed',()=>app.quit());`, resolveDir: repo, loader: 'ts' }, 
   assert.ok(bigSlices.count - beforeBig.slices.count > painted.slices, 'the rest of the file arrived over later slices, not the first one')
   console.log(`PASS: ${CSV_ROWS} streamed rows over ${bigSlices.count - beforeBig.slices.count} slices (max ${bigSlices.max} bytes), scroll max frame ${Math.round(worst)}ms, DOM rows < 80`)
   await shot('table-big')
+  // Exercise FilesPane's shared DOM-scroll adapter with both axes available.
+  await evaluate(`(()=>{const v=window.__viewport();v.style.width='140px';v.style.height='150px';v.style.flex='none';v.scrollLeft=40;v.scrollTop=200})()`)
+  await pause(250)
+  const tablePosition=()=>evaluate(`(()=>{const v=window.__viewport();return {left:v.scrollLeft,top:v.scrollTop,scale:window.__zoom().label}})()`)
+  const tableWheel=events=>evaluate(`(()=>{const v=window.__viewport();for(const event of ${JSON.stringify(events)})v.dispatchEvent(new WheelEvent('wheel',{...event,bubbles:true,cancelable:true}))})()`)
+  const beforeWheel=await tablePosition()
+  await tableWheel([{deltaX:8,deltaY:6},{deltaX:6,deltaY:9},{deltaX:5,deltaY:80}])
+  const horizontal=await tablePosition()
+  assert.equal(horizontal.left,beforeWheel.left+19,'table scroll follows the horizontal gesture')
+  assert.equal(horizontal.top,beforeWheel.top,'table ignores cross-axis vertical momentum')
+  await pause(250)
+  await tableWheel([{deltaX:6,deltaY:8},{deltaX:9,deltaY:6},{deltaX:90,deltaY:5}])
+  const vertical=await tablePosition()
+  assert.equal(vertical.top,horizontal.top+19,'a new table gesture can scroll vertically')
+  assert.equal(vertical.left,horizontal.left,'table ignores cross-axis horizontal noise')
+  assert.equal(vertical.scale,beforeWheel.scale,'scrolling never changes table zoom')
+  await tableWheel([{deltaX:1,deltaY:16,shiftKey:true}])
+  assert.equal((await tablePosition()).left,vertical.left+16,'Shift still maps table wheel to horizontal scrolling')
+  await evaluate(`(()=>{const v=window.__viewport();for(const property of ['width','height','flex'])v.style.removeProperty(property)})()`)
+  console.log('PASS: table diagonal axis lock, new gesture direction and Shift horizontal scrolling')
 
   // 5. A workbook: sheet list, shared strings, numbers, dates, booleans,
   //    inline strings, sparse rows and a row cap that stops the inflate early.

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ChevronRight, FileText, FolderOpen, Plus, RefreshCw } from '@/lib/icons'
+import { ChevronRight, FileText, FolderOpen, Pencil, Plus, RefreshCw } from '@/lib/icons'
 import { AgentDisclosure } from '@/components/agents/agent-disclosure'
 import { Button } from '@/components/motion/button'
 import { Input } from '@/components/motion/input'
@@ -21,12 +21,14 @@ import {
   type SubagentToolOption
 } from '@/lib/subagent-tools'
 import {
+  SUBAGENT_MAX_TURNS_LIMIT,
   SUBAGENT_PROFILE_NAME_PATTERN,
   type SubagentProfileCreatePayload,
   type SubagentProfileDTO,
   type SubagentProfilesDTO
 } from '../../../../../shared/types'
 import { SettingsGroup, SettingsRow } from './SettingsRow'
+import { SubagentDefaultsEditor } from './SubagentDefaultsEditor'
 
 /** Mirrors the main-process guard for `subagents:setMaxConcurrent`. */
 const SUBAGENT_MIN_CONCURRENT = 1
@@ -71,6 +73,13 @@ export function SubagentsSection() {
   const [savingReuse, setSavingReuse] = useState(false)
   const [commsEnabled, setCommsEnabled] = useState(false)
   const [savingComms, setSavingComms] = useState(false)
+  const [turnLimitOverrideEnabled, setTurnLimitOverrideEnabled] = useState(false)
+  const [savingTurnLimitOverride, setSavingTurnLimitOverride] = useState(false)
+  const [turnLimitOverrideError, setTurnLimitOverrideError] = useState(false)
+  const [maxTurns, setMaxTurns] = useState<number | null>(null)
+  const [maxTurnsDraft, setMaxTurnsDraft] = useState<string | null>(null)
+  const [savingMaxTurns, setSavingMaxTurns] = useState(false)
+  const [maxTurnsError, setMaxTurnsError] = useState(false)
   const saveConcurrent = (value: number) => {
     setSubagentConcurrent(value)
     setSavingConcurrent(true)
@@ -90,6 +99,21 @@ export function SubagentsSection() {
     setConcurrentDraft(null)
     if (next !== subagentConcurrent) saveConcurrent(next)
   }
+  const commitMaxTurns = () => {
+    const text = maxTurnsDraft ?? (maxTurns === null ? '' : String(maxTurns))
+    const parsed = Number.parseInt(text, 10)
+    const next = text === '' ? null : Number.isFinite(parsed)
+      ? Math.min(SUBAGENT_MAX_TURNS_LIMIT, Math.max(1, parsed))
+      : maxTurns
+    setMaxTurnsDraft(null)
+    if (next === maxTurns) return
+    setSavingMaxTurns(true)
+    setMaxTurnsError(false)
+    void window.pi
+      .setSubagentMaxTurns(next)
+      .then(setMaxTurns, () => setMaxTurnsError(true))
+      .finally(() => setSavingMaxTurns(false))
+  }
 
   // --- profiles: one ordinary file each ---
   const [profiles, setProfiles] = useState<SubagentProfileDTO[] | null>(null)
@@ -98,6 +122,7 @@ export function SubagentsSection() {
   const [profilesError, setProfilesError] = useState(false)
   const [selected, setSelected] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
+  const [defaultsTarget, setDefaultsTarget] = useState<SubagentProfileDTO | null>(null)
   const applyList = (next: SubagentProfilesDTO) => {
     setProfiles(next.profiles)
     setGlobalDir(next.globalDir)
@@ -128,6 +153,8 @@ export function SubagentsSection() {
           setSubagentConcurrent(info.subagentMaxConcurrent ?? 4)
           setReuseEnabled(info.subagentReuseEnabled === true)
           setCommsEnabled(info.subagentCommsEnabled === true)
+          setTurnLimitOverrideEnabled(info.subagentTurnLimitOverrideEnabled === true)
+          setMaxTurns(info.subagentMaxTurns ?? null)
         },
         () => {}
       )
@@ -262,6 +289,46 @@ export function SubagentsSection() {
         {concurrentError ? (
           <p role="alert" className="px-4 text-xs text-destructive">{t('subagent.concurrencyFailed')}</p>
         ) : null}
+        <div data-subagent-max-turns-row>
+          <SettingsRow label={t('subagent.maxTurns')} description={t('subagent.maxTurnsDesc')}>
+            <Input
+              value={maxTurnsDraft ?? (maxTurns === null ? '' : String(maxTurns))}
+              onChange={(value) => setMaxTurnsDraft(value.replace(/\D/g, '').slice(0, 3))}
+              onBlur={commitMaxTurns}
+              onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur() }}
+              inputMode="numeric"
+              placeholder={t('subagent.maxTurnsUnlimited')}
+              disabled={!subagentsEnabled || savingSubagents || savingMaxTurns}
+              aria-label={t('subagent.maxTurns')}
+              className="w-28"
+              classNames={{ field: 'h-8', input: 'px-2 text-center text-sm' }}
+            />
+          </SettingsRow>
+          {maxTurnsError ? (
+            <p role="alert" className="px-4 text-xs text-destructive">{t('subagent.maxTurnsFailed')}</p>
+          ) : null}
+        </div>
+        <div data-subagent-turn-limit-override-row>
+          <SettingsRow label={t('subagent.turnLimitOverrideTitle')} description={t('subagent.turnLimitOverrideDesc')}>
+            <Checkbox
+              mark="square"
+              checked={turnLimitOverrideEnabled}
+              disabled={!subagentsEnabled || savingSubagents || savingTurnLimitOverride}
+              onCheckedChange={(value) => {
+                setSavingTurnLimitOverride(true)
+                setTurnLimitOverrideError(false)
+                void window.pi
+                  .setSubagentTurnLimitOverrideEnabled(value)
+                  .then(setTurnLimitOverrideEnabled, () => setTurnLimitOverrideError(true))
+                  .finally(() => setSavingTurnLimitOverride(false))
+              }}
+              aria-label={t('subagent.turnLimitOverrideTitle')}
+            />
+          </SettingsRow>
+          {turnLimitOverrideError ? (
+            <p role="alert" className="px-4 text-xs text-destructive">{t('subagent.turnLimitOverrideFailed')}</p>
+          ) : null}
+        </div>
         <div data-subagent-reuse-row>
           <SettingsRow label={t('subagent.reuseTitle')} description={t('subagent.reuseDesc')}>
             <Checkbox
@@ -403,6 +470,7 @@ export function SubagentsSection() {
               {createForm ?? (
                 <ProfileDetail
                   profile={current}
+                  onEditDefaults={() => setDefaultsTarget(current)}
                   savingDebug={savingDebug}
                   debugError={debugError === current.filePath}
                   onDebug={(enabled) => {
@@ -432,12 +500,23 @@ export function SubagentsSection() {
           )
         })()}
       </section>
+      {defaultsTarget ? (
+        <SubagentDefaultsEditor
+          key={defaultsTarget.filePath}
+          profile={defaultsTarget}
+          onClose={() => setDefaultsTarget(null)}
+          onSave={async defaults => {
+            applyList(await window.pi.setSubagentProfileDefaults(defaultsTarget.filePath, defaults))
+          }}
+        />
+      ) : null}
     </div>
   )
 }
 
 function ProfileDetail({
   profile, savingDebug, debugError, onDebug,
+  onEditDefaults,
   groups,
   universeEmpty,
   active,
@@ -453,6 +532,7 @@ function ProfileDetail({
   onReset
 }: {
   profile: SubagentProfileDTO
+  onEditDefaults: () => void
   savingDebug: boolean
   debugError: boolean
   onDebug: (enabled: boolean) => void
@@ -518,10 +598,6 @@ function ProfileDetail({
         <dd className="min-w-0 text-foreground/90">{profile.model ?? t('subagent.notSet')}</dd>
         <dt className="text-muted-foreground/70">{t('subagent.fieldThinking')}</dt>
         <dd className="min-w-0 text-foreground/90">{profile.thinking ?? t('subagent.notSet')}</dd>
-        <dt className="text-muted-foreground/70">{t('subagent.fieldMaxTurns')}</dt>
-        <dd className="min-w-0 text-foreground/90">
-          {profile.maxTurns !== undefined ? String(profile.maxTurns) : t('subagent.notSet')}
-        </dd>
         <dt className="text-muted-foreground/70">{t('subagent.fieldInheritContext')}</dt>
         <dd className="min-w-0 text-foreground/90">
           {profile.inheritContext ? t('subagent.yes') : t('subagent.no')}
@@ -533,6 +609,10 @@ function ProfileDetail({
       </dl>
 
       <div className="flex flex-wrap items-center gap-2">
+        <Button variant="outline" size="sm" data-subagent-edit-defaults onClick={onEditDefaults}>
+          <Pencil className="size-3.5" />
+          {t('subagent.defaultsEdit')}
+        </Button>
         <Button variant="outline" size="sm" onClick={() => void window.pi.openPath(profile.filePath)}>
           <FileText className="size-3.5" />
           {t('subagent.openFile')}

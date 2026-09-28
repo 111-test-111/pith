@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "./sidebar-pane-layout.css";
 
 /* Native highlights track beUI token text through scrolling and panel resizing. */
 ::highlight(file-search-matches) {

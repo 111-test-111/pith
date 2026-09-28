@@ -6,6 +6,7 @@ import { useI18n } from '@/i18n'
 import type { MessageKey } from '@/i18n/locales/en'
 import type { ContextBreakdownDTO, ContextDetailDTO } from '../../../../shared/types'
 import type { PiStore } from '@/state/pi-store'
+import { FadeScroll } from './FadeScroll'
 
 /** The breakdown's four buckets, in bar order. Fixed tones (not theme tokens)
  * for the three sizes: an all-primary bar reads as one category, and the accent
@@ -16,7 +17,7 @@ const BUCKETS: Array<{ key: keyof Omit<ContextBreakdownDTO, 'total'>; labelKey: 
   { key: 'toolResults', labelKey: 'contextDetail.breakdownTools', dot: 'bg-amber-500', bar: 'bg-amber-500' }
 ]
 
-/** One label-over-value cell of the two-column grid. */
+/** One label-over-value cell of the responsive statistics grid. */
 function Stat({ label, value, className }: { label: string; value: ReactNode; className?: string }) {
   return (
     <div data-context-stat={label} className={cn('min-w-0', className)}>
@@ -145,7 +146,9 @@ export function ContextDetailPane({ store }: { store: PiStore }) {
   const reasoning = detail.tokens.reasoning
 
   return (
-    <div className="h-full overflow-y-auto p-4">
+    <div data-context-pane className="sidebar-pane-container h-full min-h-0 min-w-0">
+    <FadeScroll className="h-full p-4">
+    <div className="pane-data mx-auto">
       <div className="flex items-center justify-between gap-2">
         <span className="flex min-w-0 items-center gap-2">
           <Chart aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
@@ -172,9 +175,7 @@ export function ContextDetailPane({ store }: { store: PiStore }) {
         </div>
       ) : null}
 
-      {/* Two columns of label-over-value cells, the recipe the rest of the app's
-          readouts use. */}
-      <div className="mt-4 grid grid-cols-2 gap-x-6 gap-y-4">
+      <div data-context-stats className="pane-stat-grid mt-4">
         <Stat label={t('contextDetail.messages')} value={formatCount(detail.totalMessages, locale)} />
         <Stat label={t('contextDetail.thinking')} value={detail.thinkingLevel ?? NONE} />
         <Stat label={t('contextDetail.provider')} value={detail.provider ?? NONE} />
@@ -251,6 +252,8 @@ export function ContextDetailPane({ store }: { store: PiStore }) {
         </ul>
         <p className="mt-2 text-xs leading-5 text-muted-foreground">{t('contextDetail.breakdownNote')}</p>
       </section>
+    </div>
+    </FadeScroll>
     </div>
   )
 }

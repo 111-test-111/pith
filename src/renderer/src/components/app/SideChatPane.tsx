@@ -52,13 +52,13 @@ export const SideChatPane = memo(function SideChatPane({
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div data-side-chat-pane className="flex h-full min-h-0 min-w-0 flex-col">
       <MessageScroller
         busy={busy}
         label={t('sidebar.chatTranscript')}
         className="min-h-0 flex-1"
         viewportClassName="px-3 py-4"
-        contentClassName="mx-auto min-h-full w-full overflow-x-clip"
+        contentClassName="pane-readable min-h-full overflow-x-clip"
       >
         <MessageGroup spacing="default">
           {state.exchanges.length === 0 ? <SideChatEmpty /> : null}
@@ -76,6 +76,7 @@ export const SideChatPane = memo(function SideChatPane({
           the input's own frame is the separation, and the transcript's bottom
           padding supplies the gap. */}
       <div className="shrink-0 bg-background px-3 pb-3">
+        <div className="pane-readable">
         <PromptInput
           value={draft}
           onValueChange={onDraftChange}
@@ -112,6 +113,7 @@ export const SideChatPane = memo(function SideChatPane({
             </Tooltip>
           }
         />
+        </div>
       </div>
     </div>
   )

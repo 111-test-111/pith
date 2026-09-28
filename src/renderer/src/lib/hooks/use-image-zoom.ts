@@ -7,6 +7,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type RefObject
 } from 'react'
+import { createWheelGesture, wheelPixels, WHEEL_NOTCH_PX } from '@/lib/wheel-gesture'
 
 /**
  * Zoom/pan interaction for an image that is laid out to fit its viewport.
@@ -31,13 +32,6 @@ const WHEEL_GAIN = 0.0022
 const PINCH_GAIN = 0.01
 /** Arrow-key pan step, in px. */
 const PAN_STEP = 48
-/** A notched mouse wheel is quantised — macOS Chromium reports ~120px per notch
- * — while a trackpad (or a freely spinning wheel) sends small pixel deltas,
- * measured under ~20px even on a fast flick. Anything smaller is a swipe, and
- * swipes pan. `deltaMode` line/page deltas only come from a wheel. */
-const WHEEL_NOTCH_PX = 40
-/** Idle time that ends a wheel gesture, in ms. */
-const WHEEL_GESTURE_IDLE = 150
 /** Double-click zoom target. */
 const ZOOM_DOUBLE = 2.5
 /** Animation for every view change that is not dragging or reduced motion. */
@@ -76,11 +70,6 @@ export function useImageZoom({ viewportRef, imageRef, keyboard = 'window' }: Ima
     originX: number
     originY: number
   } | null>(null)
-  /** Mode lock for the current wheel gesture (see `WHEEL_NOTCH_PX`). */
-  const wheelRef = useRef<{ mode: 'zoom' | 'pan' | null; timer: number | null }>({
-    mode: null,
-    timer: null
-  })
   const [view, setView] = useState<ImageZoomView>(REST)
   const [dragging, setDragging] = useState(false)
   /** Off the fit view: shrunk, enlarged, or panned away from the centre. */
@@ -141,51 +130,30 @@ export function useImageZoom({ viewportRef, imageRef, keyboard = 'window' }: Ima
   useEffect(() => {
     const box = viewportRef.current
     if (!box) return
-    const zoomAtPointer = (event: WheelEvent, gain: number) => {
+    const gesture = createWheelGesture((input, axis) => input.ctrlKey ? 'pinch'
+      : axis === 'y' && (input.deltaMode !== 0 || Math.abs(input.deltaY) >= WHEEL_NOTCH_PX) ? 'zoom' : 'pan')
+    const zoomAtPointer = (event: WheelEvent, delta: number, gain: number) => {
       const rect = box.getBoundingClientRect()
-      zoomAt(Math.exp(-event.deltaY * gain), {
+      zoomAt(Math.exp(-delta * gain), {
         x: event.clientX - (rect.left + rect.width / 2),
         y: event.clientY - (rect.top + rect.height / 2)
       })
     }
     const onWheel = (event: WheelEvent) => {
       event.preventDefault()
-
-      // A fresh gesture ends the previous classification after a short idle.
-      const gesture = wheelRef.current
-      if (gesture.timer !== null) window.clearTimeout(gesture.timer)
-      gesture.timer = window.setTimeout(() => {
-        gesture.mode = null
-        gesture.timer = null
-      }, WHEEL_GESTURE_IDLE)
-
-      // Pinch-to-zoom arrives as ctrl+wheel: always a zoom, never a pan.
-      if (event.ctrlKey) {
-        zoomAtPointer(event, PINCH_GAIN)
+      const input = gesture.read(wheelPixels(event, box))
+      if (!input) return
+      if (input.mode === 'pinch' || input.mode === 'zoom') {
+        zoomAtPointer(event, input.deltaY, input.mode === 'pinch' ? PINCH_GAIN : WHEEL_GAIN)
         return
       }
-
-      // The mode is decided by the gesture's first event and then held: a swipe
-      // that accelerates into momentum must not flip over to zoom halfway.
-      if (gesture.mode === null) {
-        const notchedWheel = event.deltaMode !== 0 || Math.abs(event.deltaY) >= WHEEL_NOTCH_PX
-        gesture.mode = notchedWheel ? 'zoom' : 'pan'
-      }
-
-      if (gesture.mode === 'zoom') {
-        zoomAtPointer(event, WHEEL_GAIN)
-        return
-      }
-
-      // A swipe moves the image with the fingers, on both axes, and stays put
-      // where the image already fills the viewport (clamped by `clampView`).
-      panBy(-event.deltaX, -event.deltaY)
+      // Keep the gesture's direction through cross-axis noise and momentum.
+      // Pointer dragging remains free to move the image in both dimensions.
+      panBy(-input.deltaX, -input.deltaY)
     }
     box.addEventListener('wheel', onWheel, { passive: false })
     return () => {
       box.removeEventListener('wheel', onWheel)
-      const gesture = wheelRef.current
-      if (gesture.timer !== null) window.clearTimeout(gesture.timer)
     }
   }, [panBy, viewportRef, zoomAt])
 

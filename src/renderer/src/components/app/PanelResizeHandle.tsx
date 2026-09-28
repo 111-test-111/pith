@@ -3,9 +3,8 @@ import { useDragResize } from '@/lib/hooks/use-drag-resize'
 import { cn } from '@/lib/utils'
 
 interface PanelResizeHandleProps {
-  /** Which way the panel grows: with the pointer (left panel) or against it
-   * (right panel). */
-  grow: 'right' | 'left'
+  /** Which direction grows the first panel as the pointer travels. */
+  grow: 'right' | 'left' | 'down' | 'up'
   /** Accessible name — this strip is the panel's resize affordance. */
   label: string
   /** Total pointer travel since the press, in the panel's growth direction. */
@@ -19,15 +18,17 @@ interface PanelResizeHandleProps {
    * border line it already has instead of drawing a second one. */
   onActiveChange?: (active: boolean) => void
   className?: string
+  /** Edge handles straddle their panel border; an in-grid divider does not. */
+  inset?: boolean
   /** Optional keyboard support for a nested split. */
   value?: number
   onStep?: (delta: number) => void
 }
 
 /**
- * The drag strip between a side panel and the transcript: six pixels of hit area
- * that shows nothing of its own — hovering or dragging recolours the panel
- * border it sits on (`onActiveChange`), which is the line the user already sees.
+ * A six-pixel drag strip for a panel edge or an in-grid divider. Edge handles
+ * show nothing of their own and can recolour the adjacent panel border through
+ * `onActiveChange`; nested dividers may draw their rule through a CSS class.
  *
  * It lives *outside* the panel (as a flex sibling) rather than inside it,
  * because the panel clips its own content to slide open — anything hanging off
@@ -44,9 +45,11 @@ export function PanelResizeHandle({
   onToggle,
   onActiveChange,
   className,
+  inset = true,
   value,
   onStep
 }: PanelResizeHandleProps) {
+  const vertical = grow === 'right' || grow === 'left'
   const drag = useDragResize<HTMLDivElement>({
     grow,
     onResize,
@@ -80,19 +83,20 @@ export function PanelResizeHandle({
           (~25k elements in a long session), which is a 100ms freeze at each end
           of the drag. */}
       {drag.dragging ? (
-        <div aria-hidden="true" className="fixed inset-0 z-50 cursor-col-resize" />
+        <div aria-hidden="true" className={cn('fixed inset-0 z-50', vertical ? 'cursor-col-resize' : 'cursor-row-resize')} />
       ) : null}
       <div
       role="separator"
-      aria-orientation="vertical"
+      aria-orientation={vertical ? 'vertical' : 'horizontal'}
       aria-label={label}
       data-panel-handle={grow}
+      data-panel-handle-dragging={drag.dragging}
       tabIndex={onStep ? 0 : -1}
       aria-valuenow={value === undefined ? undefined : Math.round(value)}
       onKeyDown={event => {
-        if (!onStep || !['ArrowLeft', 'ArrowRight'].includes(event.key)) return
+        if (!onStep || !(vertical ? ['ArrowLeft', 'ArrowRight'] : ['ArrowUp', 'ArrowDown']).includes(event.key)) return
         event.preventDefault()
-        onStep((event.key === 'ArrowRight' ? 1 : -1) * (event.shiftKey ? 40 : 10))
+        onStep((event.key === 'ArrowRight' || event.key === 'ArrowDown' ? 1 : -1) * (event.shiftKey ? 40 : 10))
       }}
       onPointerDown={drag.onPointerDown}
       onPointerEnter={handleEnter}
@@ -103,7 +107,8 @@ export function PanelResizeHandle({
         onToggle?.()
       }}
       className={cn(
-        'relative z-10 hidden w-1.5 shrink-0 cursor-col-resize touch-none select-none outline-none md:block',
+        'relative z-10 hidden shrink-0 touch-none select-none outline-none md:block',
+        vertical ? 'w-1.5 cursor-col-resize' : 'h-1.5 w-full cursor-row-resize',
         // Straddle the line the panel itself draws: the strip's six pixels
         // otherwise begin where that border ends, so a pointer sitting exactly
         // ON the line lands on the panel and the drag never starts. On the left
@@ -114,7 +119,7 @@ export function PanelResizeHandle({
         // decides where the boundary sits, so the transcript's own rules (the
         // task strip's bottom border) end exactly on the rail's left border
         // instead of stopping three pixels short of it.
-        grow === 'right' ? '-ml-[3px]' : '-mx-[3px]',
+        inset && (grow === 'right' ? '-ml-[3px]' : grow === 'left' ? '-mx-[3px]' : grow === 'down' ? '-mt-[3px]' : '-my-[3px]'),
         className
       )}
       />

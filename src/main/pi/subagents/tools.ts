@@ -1,6 +1,7 @@
 import { Type } from 'typebox'
 import type { AgentSession, ToolDefinition } from '@earendil-works/pi-coding-agent'
 import type { SubagentRunDTO, ThinkingLevel } from '../../../shared/types'
+import { SUBAGENT_MAX_TURNS_LIMIT } from '../../../shared/types.ts'
 import type { SubagentProfile } from './profiles.ts'
 import { AGENT_STEER_TOOL_NAME, MESSAGE_PARENT_TOOL_NAME, SUBAGENT_TOOL_NAME } from './protocol.ts'
 import type { StartSubagentRequest, SubagentParentState, SubagentRuntime } from './runtime.ts'
@@ -11,14 +12,17 @@ const parameters = Type.Object({
   subagent_type: Type.String({ description: 'Profile name of the subagent to use. Available profiles and their tool sets are listed in this tool\'s description.' }),
   prompt: Type.String({ description: 'The complete, self-contained task for the subagent. Include every goal, constraint and file path it needs; it cannot ask you clarifying questions. When continuing an existing subagent (continue_session_id), this is the continuation instruction.' }),
   description: Type.String({ maxLength: 200, description: 'Short (5-10 word) description of what this subtask does, shown to the user in the tasks panel.' }),
-  run_in_background: Type.Optional(Type.Boolean({ description: 'True: return immediately and receive the result later as a subagent_completion message (use for parallel work). Default false: block until the subagent finishes.' })),
+  run_in_background: Type.Optional(Type.Boolean({ description: 'True: return immediately and receive the result later as a subagent_completion message (use for parallel work). False: block until it finishes. Omit to use the profile default (false when unconfigured).' })),
   model: Type.Optional(Type.String({ description: 'Optional "provider/modelId" override for this run; defaults to the profile or the parent model.' })),
   thinking: Type.Optional(Type.Union(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].map((level) => Type.Literal(level)), { description: 'Optional thinking level override, clamped to what the model supports.' })),
-  max_turns: Type.Optional(Type.Integer({ minimum: 1, maximum: 200, description: 'Optional turn limit for the subagent; it is told to wrap up at the limit.' })),
+  max_turns: Type.Optional(Type.Integer({ minimum: 1, maximum: SUBAGENT_MAX_TURNS_LIMIT, description: 'Optional override of the user-configured turn limit for this run or continuation; it is told to wrap up at the limit.' })),
   inherit_context: Type.Optional(Type.Boolean({ description: 'Whether to give the subagent the parent conversation as background context (default from the profile).' })),
   input_files: Type.Optional(Type.Array(Type.String(), { maxItems: 8, description: 'Optional workspace-relative file paths whose contents are appended to the task (8 files / 512 KiB max).' })),
   continue_session_id: Type.Optional(Type.String({ description: 'Session id of an existing FINISHED subagent to continue instead of starting a new one: the subagent keeps its conversation context, tool set and model, and `prompt` is the continuation instruction. Only valid when that subagent has finished; a running one is steered with agent_steer instead (when available). Requires subagent reuse to be enabled.' }))
 })
+// Only an optional argument differs; execute keeps the full argument type so
+// stale calls can be accepted safely after the user revokes the grant.
+const parametersWithoutTurnLimit = Type.Omit(parameters, ['max_turns']) as typeof parameters
 
 /** Capability flags the guidance and roster text reflect live (Settings →
  * Subagents). Read through getters so a toggle reaches the next system-prompt
@@ -26,6 +30,7 @@ const parameters = Type.Object({
 export interface SubagentCapabilityFlags {
   reuse?: boolean
   steer?: boolean
+  turnLimitOverride?: boolean
 }
 
 export function subagentGuidelines(flags: SubagentCapabilityFlags = {}): string[] {
@@ -34,6 +39,9 @@ export function subagentGuidelines(flags: SubagentCapabilityFlags = {}): string[
     'Write a complete, self-contained prompt: the subagent sees only your task (plus optional inherited context and input files), not this conversation. Include goals, constraints, exact paths and the expected report format.',
     'Use run_in_background=true to parallelize independent subtasks, then continue other work or end your response; each completion arrives as a subagent_completion steering message. A background subagent that has not reported completion is NOT finished — never claim its work is done.',
     'Choose the narrowest profile that fits (explore for read-only research, implementer for scoped edits, reviewer for review). Do not delegate work whose tool set the profile lacks.',
+    flags.turnLimitOverride
+      ? 'You may override the user-configured subagent turn limit with max_turns for this dispatch or continuation. Omitting it uses the user setting.'
+      : 'Subagent turn limits are controlled by the user in Settings. Do not supply max_turns; profile values and model arguments cannot override the user setting.',
     // No steer bullet here: agent_steer carries that rule in its own
     // guidelines, so it follows the tool's availability instead of showing
     // up twice.
@@ -70,7 +78,10 @@ export function subagentToolDescription(profiles: readonly SubagentProfile[], fl
   const capabilityLine = capabilities.length
     ? `\nThis session can also ${capabilities.join(', and ')}.`
     : ''
-  return `Launch a subagent: an independent agent session with its own context that works on one delegated task and reports a final result. Choose a profile:\n${roster}\nThe subagent shares this workspace but not this conversation; give it everything it needs in the prompt. Foreground (default) blocks until it finishes and returns its final report; run_in_background returns immediately with a run id and the report arrives later as subagent_completion.${capabilityLine}`
+  const turnLimitLine = flags.turnLimitOverride
+    ? '\nYou may override the user-configured turn limit with max_turns; omitting it uses the user setting.'
+    : '\nThe user controls the turn limit in Settings. Do not supply max_turns; model arguments and profile limits cannot override it.'
+  return `Launch a subagent: an independent agent session with its own context that works on one delegated task and reports a final result. Choose a profile:\n${roster}\nThe subagent shares this workspace but not this conversation; give it everything it needs in the prompt. Foreground blocks until it finishes and returns its final report; run_in_background returns immediately with a run id and the report arrives later as subagent_completion. Omitting model, thinking, inherit_context or run_in_background uses the profile's defaults; explicit arguments override them.${capabilityLine}${turnLimitLine}`
 }
 
 export interface SubagentToolDeps {
@@ -90,15 +101,18 @@ export interface SubagentToolDeps {
   canReuse: () => boolean
   /** Settings → Subagents: parent↔child steering is enabled. */
   canSteer: () => boolean
+  canSetMaxTurns: () => boolean
 }
 
 export function createSubagentTool(deps: SubagentToolDeps): ToolDefinition<typeof parameters> {
   const { runtime, state, parentSessionRef } = deps
-  const flags = (): SubagentCapabilityFlags => ({ reuse: deps.canReuse(), steer: deps.canSteer() })
+  const flags = (): SubagentCapabilityFlags => ({ reuse: deps.canReuse(), steer: deps.canSteer(), turnLimitOverride: deps.canSetMaxTurns() })
   return {
     name: SUBAGENT_TOOL_NAME,
     label: 'agent',
-    parameters,
+    get parameters() {
+      return deps.canSetMaxTurns() ? parameters : parametersWithoutTurnLimit
+    },
     // A getter, not a frozen value: the SDK re-reads tool descriptions each
     // time it builds the system prompt (and `session.reload()` rebuilds it),
     // so the roster follows the profile files without rebuilding the session.
@@ -115,6 +129,7 @@ export function createSubagentTool(deps: SubagentToolDeps): ToolDefinition<typeo
       const parentSession = parentSessionRef.session
       if (!parentSession) throw new Error('Subagent launched before its session finished initializing')
       const continueId = args.continue_session_id?.trim()
+      const maxTurns = deps.canSetMaxTurns() ? args.max_turns : undefined
       let started: { run: SubagentRunDTO; completion: Promise<SubagentRunDTO> }
       if (continueId) {
         // Model-driven continuation of a finished child: the same resume path
@@ -125,16 +140,15 @@ export function createSubagentTool(deps: SubagentToolDeps): ToolDefinition<typeo
         if (rosterEntry && rosterEntry.profile !== args.subagent_type) {
           throw new Error(`Subagent ${continueId} was created with profile "${rosterEntry.profile}", not "${args.subagent_type}"; pass the matching subagent_type to continue it.`)
         }
+        const runInBackground = args.run_in_background ?? deps.profiles().find(profile => profile.name === args.subagent_type)?.runInBackground ?? false
         started = await runtime.resume(state, parentSession, continueId, args.prompt, {
           parentToolCallId: toolCallId,
           description: args.description.trim().slice(0, 200),
-          // The tool's documented contract is "Default false: block until the
-          // subagent finishes" — a continuation follows the SAME default
-          // instead of inheriting the stored run's mode, so the model gets
-          // the blocking call it did not opt out of (only the panel's resume
-          // keeps the stored mode). Mirrors start()'s signal wiring too.
-          runInBackground: args.run_in_background === true,
-          foregroundSignal: args.run_in_background === true ? undefined : signal
+          maxTurns,
+          // Use the current profile default, preserving an explicit false.
+          // Human resume keeps the stored mode through its separate IPC path.
+          runInBackground,
+          foregroundSignal: runInBackground ? undefined : signal
         })
       } else {
         const profile = deps.profiles().find((item) => item.name === args.subagent_type && item.enabled)
@@ -146,10 +160,10 @@ export function createSubagentTool(deps: SubagentToolDeps): ToolDefinition<typeo
           profile,
           description: args.description.trim().slice(0, 200),
           task: args.prompt,
-          runInBackground: args.run_in_background === true,
+          runInBackground: args.run_in_background,
           modelSpec: args.model,
           thinkingLevel: args.thinking as ThinkingLevel | undefined,
-          maxTurns: args.max_turns,
+          maxTurns,
           inheritContext: args.inherit_context,
           inputFiles: args.input_files
         }

@@ -76,14 +76,14 @@ try {
 import React from 'react';import {createRoot} from 'react-dom/client';
 import {FilesPane} from '/src/components/app/FilesPane.tsx';
 import {I18nProvider} from '/src/i18n/index.tsx';
-import {PiStore} from '/src/state/pi-store.ts';import {FileBrowserStore} from '/src/state/file-browser-store.ts';
+import {PiStore} from '/src/state/pi-store.ts';import {FileBrowserStore} from '/src/state/file-browser-store.ts';import {DebugStore} from '/src/state/debug-store.ts';
 import en from '/src/i18n/locales/en.ts';import zh from '/src/i18n/locales/zh-CN.ts';
 import '/src/styles.css';
 localStorage.setItem('pi-app:locale','en');
 const cwd=${JSON.stringify(project)};
-const files=new FileBrowserStore(),pi=new PiStore();
+const files=new FileBrowserStore(),pi=new PiStore(),debug=new DebugStore();
 pi.applySnapshot({cwd,sessionId:crypto.randomUUID(),messages:[],model:null,thinkingLevel:'off',availableThinkingLevels:['off'],isStreaming:false});
-const App=()=>{const state=React.useSyncExternalStore(files.subscribe,files.getSnapshot);return React.createElement(FilesPane,{files,store:pi,filePath:state.active})};
+const App=()=>{const state=React.useSyncExternalStore(files.subscribe,files.getSnapshot);return React.createElement(FilesPane,{files,store:pi,filePath:state.active,debug})};
 createRoot(document.getElementById('root')).render(React.createElement(React.StrictMode,null,React.createElement(I18nProvider,null,React.createElement(App))));
 window.en=en;window.zh=zh;window.cwd=cwd;
 window.openFile=name=>files.open(cwd,{path:cwd+'/'+name});
@@ -154,6 +154,7 @@ app.on('window-all-closed',()=>app.quit());`, resolveDir: repo, loader: 'ts' }, 
   })
   const send = (method, params = {}) => new Promise((resolve, reject) => { const id = ++seq; pending.set(id, (m) => m.error ? reject(new Error(JSON.stringify(m.error))) : resolve(m.result)); ws.send(JSON.stringify({ id, method, params })) })
   const evaluate = async (expression) => { const r = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true }); if (r.exceptionDetails) throw new Error(JSON.stringify(r.exceptionDetails).slice(0, 600)); return r.result?.value }
+  await send('Runtime.enable')
   const waitFor = async (expression, label) => { const end = Date.now() + 25000; while (Date.now() < end) { if (await evaluate(`Boolean(${expression})`).catch(() => false)) return true; await pause(100) } throw new Error('Timeout: ' + label + ' :: viewer=' + await evaluate(`document.querySelector('[data-file-pdf]')?.dataset.pdfError ?? 'none'`).catch(() => '?') + ' body=' + await evaluate('document.body.innerText').catch(() => '?') + ' ' + JSON.stringify(exceptions.slice(0, 4))) }
   const click = async (selector) => { await evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`); await pause(120) }
   const shot = async (name) => { const dir = process.env.PI_PDF_SCREENSHOT_DIR; if (!dir) return; await mkdir(dir, { recursive: true }); const image = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }); await writeFile(join(dir, name + '.png'), Buffer.from(image.data, 'base64')) }
@@ -244,6 +245,23 @@ app.on('window-all-closed',()=>app.quit());`, resolveDir: repo, loader: 'ts' }, 
   const fitted = await evaluate(`(()=>{const page=document.querySelector('[data-pdf-scroller] .page[data-page-number="${currentPage}"]');const scroller=document.querySelector('[data-pdf-scroller]');return {content:page.clientHeight,outer:Math.round(page.getBoundingClientRect().height),viewHeight:Math.round(scroller.clientHeight)}})()`)
   assert.ok(fitted.content <= fitted.viewHeight + 2, `fit page makes the page fit the viewport: ${JSON.stringify(fitted)}`)
   console.log(`PASS: zoom (${before} → ${zoomed.label}) and fit page (${fitted.content}px content in ${fitted.viewHeight}px viewport, ${fitted.outer}px with its border)`)
+  // The same FilesPane scroll policy applies to the pdf.js-owned pages.
+  await evaluate(`(()=>{const v=document.querySelector('[data-pdf-scroller]');v.style.width='180px';v.scrollTop=100;v.scrollLeft=20})()`)
+  await pause(250)
+  const pdfPosition=()=>evaluate(`(()=>{const v=document.querySelector('[data-pdf-scroller]');return {left:v.scrollLeft,top:v.scrollTop}})()`)
+  const pdfWheel=events=>evaluate(`(()=>{const v=document.querySelector('[data-pdf-scroller]');for(const event of ${JSON.stringify(events)})v.dispatchEvent(new WheelEvent('wheel',{...event,bubbles:true,cancelable:true}))})()`)
+  const pdfBefore=await pdfPosition()
+  await pdfWheel([{deltaX:8,deltaY:6},{deltaX:6,deltaY:9},{deltaX:5,deltaY:80}])
+  const pdfHorizontal=await pdfPosition()
+  assert.equal(pdfHorizontal.left,pdfBefore.left+19,'PDF uses the horizontal gesture delta')
+  assert.equal(pdfHorizontal.top,pdfBefore.top,'PDF suppresses vertical noise')
+  await pause(250)
+  await pdfWheel([{deltaX:6,deltaY:8},{deltaX:9,deltaY:6},{deltaX:90,deltaY:5}])
+  const pdfVertical=await pdfPosition()
+  assert.equal(pdfVertical.top,pdfHorizontal.top+19,'PDF allows a fresh vertical gesture')
+  assert.equal(pdfVertical.left,pdfHorizontal.left,'PDF suppresses horizontal noise')
+  await evaluate(`document.querySelector('[data-pdf-scroller]').style.removeProperty('width')`)
+  console.log('PASS: PDF diagonal axis lock and idle gesture reset')
 
   // 5. A file that is not a PDF at all fails with the localized notice.
   await evaluate(`window.openFile('broken.pdf')`)

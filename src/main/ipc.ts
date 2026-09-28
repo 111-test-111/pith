@@ -47,6 +47,7 @@ import type {
   BashTaskRequest,
   SubagentActionPayload,
   SubagentProfileCreatePayload,
+  SubagentProfileDefaultsPayload,
   CustomModelDTO,
   DebugPanelRequest,
   DebugTerminalRequest,
@@ -325,6 +326,8 @@ export function registerIpc(pi: PiManager): () => boolean {
       subagentMaxConcurrent: settings.subagentMaxConcurrent ?? MAX_CONCURRENT_SUBAGENTS_DEFAULT,
       subagentReuseEnabled: settings.subagentReuseEnabled === true,
       subagentCommsEnabled: settings.subagentCommsEnabled === true,
+      subagentTurnLimitOverrideEnabled: settings.subagentTurnLimitOverrideEnabled === true,
+      subagentMaxTurns: settings.subagentMaxTurns,
       askUserTimeoutSeconds: settings.askUserTimeoutSeconds,
       responseTimeoutSeconds: settings.responseTimeoutSeconds,
       browserConsent: settings.browserConsent === true,
@@ -440,7 +443,10 @@ export function registerIpc(pi: PiManager): () => boolean {
   ipcMain.handle('subagents:setMaxConcurrent', (_event, value: number) => pi.setSubagentMaxConcurrent(value))
   ipcMain.handle('subagents:setReuseEnabled', (_event, enabled: boolean) => pi.setSubagentReuseEnabled(enabled))
   ipcMain.handle('subagents:setCommsEnabled', (_event, enabled: boolean) => pi.setSubagentCommsEnabled(enabled))
+  ipcMain.handle('subagents:setTurnLimitOverrideEnabled', (_event, enabled: boolean) => pi.setSubagentTurnLimitOverrideEnabled(enabled))
+  ipcMain.handle('subagents:setMaxTurns', (_event, value: number | null) => pi.setSubagentMaxTurns(value))
   ipcMain.handle('subagents:setProfileDebug', (_event, filePath: string, enabled: boolean) => pi.setSubagentProfileDebug(filePath, enabled))
+  ipcMain.handle('subagents:setProfileDefaults', (_event, filePath: string, defaults: SubagentProfileDefaultsPayload) => pi.setSubagentProfileDefaults(filePath, defaults))
   ipcMain.handle('subagents:profiles', () => pi.subagentProfiles())
   ipcMain.handle(
     'subagents:createProfile',

@@ -8,7 +8,7 @@ import {
   type ClipboardEvent as ReactClipboardEvent,
   type DragEvent as ReactDragEvent
 } from 'react'
-import { CalendarCheck, Check, Subagent, ImagePlus, LinkSimple, Loader2, Siren, X } from '@/lib/icons'
+import { CalendarCheck, Check, Subagent, ImagePlus, LinkSimple, Loader2, NotebookPen, X } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
 import { PromptInput } from '@/components/agents/prompt-input'
 import type { PromptEditorHandle } from '@/lib/hooks/use-prompt-editor'
@@ -661,7 +661,7 @@ export function Composer({
                       className="group h-8 gap-1.5 px-2 text-xs text-primary hover:bg-muted hover:text-primary"
                     >
                       <span aria-hidden="true" className="relative size-4 shrink-0">
-                        <Siren className="absolute inset-0 size-4 transition-opacity group-hover:opacity-0" />
+                        <NotebookPen className="absolute inset-0 size-4 transition-opacity group-hover:opacity-0" />
                         <X className="absolute inset-0 size-4 opacity-0 transition-opacity group-hover:opacity-100" />
                       </span>
                       <span>{t('plan.plan')}</span>
@@ -703,7 +703,7 @@ export function Composer({
                       {effectiveMode === 'plan' ? <Check aria-hidden="true" className="size-3.5 shrink-0 text-primary" /> : null}
                     </span>
                   ),
-                  icon: <Siren />,
+                  icon: <NotebookPen />,
                   disabled: readOnly || busy || modePending || !sessionPath || (plan?.blockers.switch.some((blocker) => blocker !== 'initializing') ?? false)
                 },
                 {

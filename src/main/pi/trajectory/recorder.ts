@@ -190,6 +190,7 @@ export class TrajectoryRecorder {
     } else if (event.type === 'tool_execution_start') {
       const record = this.create('tool', event.toolName)
       record.record.parentId = this.latestRequest
+      record.record.toolCallId = event.toolCallId
       this.tools.set(event.toolCallId, record)
       void this.save(record, { context: event.args })
     } else if (event.type === 'tool_execution_end') {

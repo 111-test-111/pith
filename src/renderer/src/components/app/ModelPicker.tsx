@@ -40,6 +40,10 @@ interface ModelPickerProps {
   onInheritModel?: () => void
   onInheritThinking?: () => void
   inheritLabel?: string
+  /** Forms may inherit a model while leaving thinking independently unset. */
+  inheritThinkingLabel?: string
+  /** Keep a saved model visible when it is absent from the current catalog. */
+  unknownModelLabel?: string
   /** Trigger type scale. The composer keeps its 12px control type; the
    * scheduled-task form passes the form's own scale (14px). */
   textClassName?: string
@@ -83,6 +87,8 @@ export function ModelPicker({
   onInheritModel,
   onInheritThinking,
   inheritLabel,
+  inheritThinkingLabel,
+  unknownModelLabel,
   textClassName = 'text-xs',
   portal = false,
   panelId,
@@ -402,7 +408,7 @@ export function ModelPicker({
                 onClick={() => { onInheritThinking(); setSubmenu(null); setOpen(false) }}
                 className={cn(ROW, thinkingLevel === null ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-muted')}
               >
-                <span>{inheritLabel ?? t('model.choose')}</span>
+                <span>{inheritThinkingLabel ?? inheritLabel ?? t('model.choose')}</span>
                 {thinkingLevel === null ? <Check className="h-3.5 w-3.5 shrink-0" /> : null}
               </button>
             ) : null}
@@ -452,12 +458,12 @@ export function ModelPicker({
             <ProviderIcon providerId={current.providerId} name={current.providerName} size={14} />
           ) : null}
           <span className="max-w-36 truncate">
-            {current ? current.name : inheritLabel ?? t('model.choose')}
+            {current ? current.name : (value ? unknownModelLabel : undefined) ?? inheritLabel ?? t('model.choose')}
           </span>
           {showLevel ? (
             <span className="flex min-w-0 items-center gap-1 text-muted-foreground">
               <span aria-hidden="true">·</span>
-              <span className="max-w-16 truncate">{thinkingLevel === null ? inheritLabel ?? t('model.choose') : levelLabel(t, thinkingLevel)}</span>
+              <span className="max-w-16 truncate">{thinkingLevel === null ? inheritThinkingLabel ?? inheritLabel ?? t('model.choose') : levelLabel(t, thinkingLevel)}</span>
             </span>
           ) : null}
         </span>

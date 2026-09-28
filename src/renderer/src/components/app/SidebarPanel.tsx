@@ -12,6 +12,7 @@ import {
   Plus,
   SquareTerminal,
   Bug,
+  Waypoints,
   X,
   type IconComponent
 } from '@/lib/icons'
@@ -123,7 +124,7 @@ export interface SidebarPaneProps {
  * pane is one entry here plus its content component, never a shell change.
  */
 export const SIDEBAR_TABS: SidebarTabSpec[] = [
-  { id: 'trajectory', labelKey: 'sidebar.trajectory', shortcutId: 'openTrajectory', icon: Chart, render: props => <TrajectoryPane store={props.store} agentRuns={props.agentRuns} /> },
+  { id: 'trajectory', labelKey: 'sidebar.trajectory', shortcutId: 'openTrajectory', icon: Waypoints, render: props => <TrajectoryPane store={props.store} agentRuns={props.agentRuns} /> },
   {
     id: 'review',
     labelKey: 'sidebar.review',
@@ -206,7 +207,7 @@ function SidebarPicker({ onOpen }: { onOpen: (kind: SidebarTabKind) => void }) {
   return (
     <div className="flex h-full items-center px-2">
       {/* Extend the hover fill through the wrapper's 8px side padding. */}
-      <SharedLayoutBg inset={8}>
+      <SharedLayoutBg inset={8} className="pane-picker">
         {SIDEBAR_TABS.map((spec) => (
           <button
             key={spec.id}
@@ -519,7 +520,7 @@ export function SidebarPanel({
               />
             ) : null}
 
-            <div className="relative min-h-0 flex-1">
+            <div className="sidebar-pane-container relative min-h-0 min-w-0 flex-1">
               {/* The browser pane mounts at this one stable tree position for as
                   long as its rail tab EXISTS. While another tab is active it
                   lives in a hidden-but-painted layer — opacity, never

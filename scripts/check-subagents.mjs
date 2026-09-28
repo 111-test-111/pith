@@ -316,6 +316,44 @@ const entriesOf = (...records) => records.map((record, index) => ({
   }
 }
 
+// User defaults are surgical file edits, independent of tool and turn policies.
+{
+  const { readFileSync } = await import('node:fs')
+  const dir = await mkdtemp(join(tmpdir(), 'pith-subagent-defaults-edit-'))
+  const path = join(dir, 'role.md')
+  const original = '---\r\ndescription: Keeps defaults\r\ntools: read,grep\r\nmax_turns: 12\r\ndebug: true\r\ncustom_key: untouched\r\n---\r\n\r\nPrompt stays exactly as written.\r\n'
+  const defaults = { model: null, thinking: null, inheritContext: true, runInBackground: false }
+  try {
+    await writeFile(path, original)
+    profiles.writeSubagentProfileDefaults(path, defaults)
+    assert.equal(readFileSync(path, 'utf8'), original, 'saving unset values must not change current behavior or file bytes')
+    const edited = profiles.writeSubagentProfileDefaults(path, { model: 'provider/model/id', thinking: 'high', inheritContext: false, runInBackground: true })
+    assert.equal(edited.model, 'provider/model/id')
+    assert.equal(edited.thinking, 'high')
+    assert.equal(edited.inheritContext, false)
+    assert.equal(edited.runInBackground, true)
+    const stored = readFileSync(path, 'utf8')
+    assert.ok(stored.includes('model: provider/model/id\r\n') && stored.includes('inherit_context: false\r\n'), 'the new keys keep CRLF')
+    assert.ok(stored.includes('max_turns: 12\r\ndebug: true\r\ncustom_key: untouched\r\n'), 'legacy limits and other metadata are untouched')
+    assert.ok(stored.endsWith('\r\n\r\nPrompt stays exactly as written.\r\n'), 'the prompt is byte-identical')
+    profiles.writeSubagentProfileDefaults(path, defaults)
+    const cleared = readFileSync(path, 'utf8')
+    assert.ok(!/^model:|^thinking:/m.test(cleared), 'clearing removes optional defaults')
+    assert.ok(cleared.includes('inherit_context: true\r\n') && cleared.includes('run_in_background: false\r\n'))
+    for (const invalid of [
+      { model: 'bad-format' }, { model: 'p/id\ninjected: true' }, { thinking: 'invalid' },
+      { inheritContext: 'false' }, { runInBackground: null }
+    ]) {
+      assert.throws(() => profiles.writeSubagentProfileDefaults(path, { ...defaults, ...invalid }), /Invalid/)
+      assert.equal(readFileSync(path, 'utf8'), cleared, 'invalid values cannot partially edit the file')
+    }
+    await writeFile(path, original.replace('custom_key: untouched', 'model: p/one\r\nmodel: p/two'))
+    const duplicate = readFileSync(path, 'utf8')
+    assert.throws(() => profiles.writeSubagentProfileDefaults(path, defaults), /Duplicate model/)
+    assert.equal(readFileSync(path, 'utf8'), duplicate, 'ambiguous defaults are rejected without writing')
+  } finally { await rm(dir, { recursive: true, force: true }) }
+}
+
 // Debug is an explicit per-role flag, separate from tools: all or presets.
 {
   const dir = await mkdtemp(join(tmpdir(), 'pith-profile-debug-'))
@@ -405,10 +443,12 @@ const entriesOf = (...records) => records.map((record, index) => ({
       description: 'd', task: 't', runInBackground: true, status: 'running', createdAt: new Date().toISOString(), seq: 1 },
     completion: Promise.resolve({ status: 'completed', runId: 'r1', sessionId: 'c1', description: 'd', profile: 'scout' }) }
   let reuseAllowed = false
+  let turnLimitOverrideAllowed = false
+  const requestedLimits = []
   const resumed = []
   const tool = createSubagentTool({
     runtime: {
-      start: async (_state, request) => { dispatched.push(request.profile); return started },
+      start: async (_state, request) => { dispatched.push(request.profile); requestedLimits.push(request.maxTurns); return started },
       resume: async (_state, _session, sessionId, message, options) => { resumed.push({ sessionId, message, options }); return started }
     },
     state: { roster: new Map([['c1', { sessionId: 'c1', profile: 'scout', status: 'completed' }]]) },
@@ -417,6 +457,7 @@ const entriesOf = (...records) => records.map((record, index) => ({
     profiles: () => roster,
     canStart: () => true,
     canReuse: () => reuseAllowed,
+    canSetMaxTurns: () => turnLimitOverrideAllowed,
     canSteer: () => false
   })
   assert.match(tool.description, /scout profile/, 'the roster renders')
@@ -453,6 +494,27 @@ const entriesOf = (...records) => records.map((record, index) => ({
     mismatched = /profile "scout"/.test(String(error?.message))
   }
   assert.ok(mismatched, 'a continuation names the profile the child was actually created with')
+
+  roster = [profileOf('scout', ['read'])]
+  assert.ok(!('max_turns' in tool.parameters.properties), 'the model cannot see a turn override while the grant is off')
+  assert.match(tool.description, /The user controls the turn limit/)
+  await tool.execute('tc7', { subagent_type: 'scout', prompt: 'p', description: 'd', max_turns: 200 }, undefined, undefined)
+  assert.equal(requestedLimits.at(-1), undefined, 'a stale or fabricated override is discarded when the grant is off')
+  turnLimitOverrideAllowed = true
+  assert.ok('max_turns' in tool.parameters.properties, 'the SAME tool exposes max_turns when the grant turns on')
+  await tool.execute('tc8', { subagent_type: 'scout', prompt: 'p', description: 'd', max_turns: 3 }, undefined, undefined)
+  assert.equal(requestedLimits.at(-1), 3)
+  await tool.execute('tc9', { subagent_type: 'scout', prompt: 'p', description: 'd', max_turns: 4, continue_session_id: 'c1' }, undefined, undefined)
+  assert.equal(resumed.at(-1).options.maxTurns, 4, 'permitted continuations also carry the override')
+  turnLimitOverrideAllowed = false
+  assert.ok(!('max_turns' in tool.parameters.properties), 'revocation removes max_turns without rebuilding the tool')
+  await tool.execute('tc10', { subagent_type: 'scout', prompt: 'p', description: 'd', max_turns: 200, continue_session_id: 'c1' }, undefined, undefined)
+  assert.equal(resumed.at(-1).options.maxTurns, undefined, 'held continuation calls also lose the override')
+  roster = [{ ...profileOf('scout', ['read']), runInBackground: true }]
+  await tool.execute('tc11', { subagent_type: 'scout', prompt: 'p', description: 'd', continue_session_id: 'c1' }, undefined, undefined)
+  assert.equal(resumed.at(-1).options.runInBackground, true, 'model continuation reads the current role background default')
+  await tool.execute('tc12', { subagent_type: 'scout', prompt: 'p', description: 'd', run_in_background: false, continue_session_id: 'c1' }, undefined, undefined)
+  assert.equal(resumed.at(-1).options.runInBackground, false, 'an explicit foreground continuation overrides the role default')
 }
 
 // --- agent_steer / message_parent: the communications tools ---
@@ -704,6 +766,8 @@ console.log('check-subagents: all assertions passed')
     // Subagent communications default OFF here (the shipped default);
     // flipping it is a per-test, restorable action read live by the host.
     let commsEnabled = false
+    let turnLimitOverrideEnabled = false
+    let userMaxTurns = null
     let planRestricted = false
     const makeHost = (childSession) => ({
       isClosing: () => false,
@@ -711,6 +775,8 @@ console.log('check-subagents: all assertions passed')
       subagentsEnabled: () => true,
       subagentReuseEnabled: () => true,
       subagentCommsEnabled: () => commsEnabled,
+      subagentTurnLimitOverrideEnabled: () => turnLimitOverrideEnabled,
+      subagentMaxTurns: () => userMaxTurns,
       planRestricted: () => planRestricted,
       commandTasks: () => null,
       acquireRunLease: (_cwd, sessionPath) => { leases.add(sessionPath); return () => leases.delete(sessionPath) },
@@ -807,6 +873,67 @@ console.log('check-subagents: all assertions passed')
         assert.ok(runtimeOn.readChildRuns(on.sessionPath)[0].start.resource.tools.includes('message_parent'),
           'communications on: every dispatched ceiling gains message_parent (frozen into the run record)')
       } finally { commsEnabled = false }
+    }
+
+    // Four role defaults apply only when the parent omits the argument.
+    {
+      const role = { ...profile, model: 'role/default', thinking: 'high', inheritContext: false, runInBackground: true }
+      const execute = async overrides => {
+        const host = makeHost(fakeSession({ getLastAssistantText: () => 'done' }))
+        let modelSpec
+        host.resolveModelSpec = async spec => { modelSpec = spec; return { spec: spec ?? 'parent/live' } }
+        const runtime = new SubagentRuntime(host)
+        const state = new SubagentParentState('parent-session')
+        const finished = await (await runtime.start(state, baseRequest({ profile: role, runInBackground: undefined, ...overrides }))).completion
+        childPaths.push(finished.sessionPath)
+        return { finished, modelSpec, resource: runtime.readChildRuns(finished.sessionPath)[0].start.resource }
+      }
+      const inherited = await execute({})
+      assert.equal(inherited.modelSpec, 'role/default')
+      assert.equal(inherited.resource.thinkingLevel, 'high')
+      assert.equal(inherited.resource.inheritContext, false)
+      assert.equal(inherited.finished.runInBackground, true, 'an omitted background choice uses the role default')
+      const overridden = await execute({ modelSpec: 'parent/override', thinkingLevel: 'off', inheritContext: true, runInBackground: false })
+      assert.equal(overridden.modelSpec, 'parent/override')
+      assert.equal(overridden.resource.thinkingLevel, 'off')
+      assert.equal(overridden.resource.inheritContext, true)
+      assert.equal(overridden.finished.runInBackground, false, 'an explicit false overrides a background role')
+      const unchanged = await execute({ profile })
+      assert.equal(unchanged.modelSpec, undefined)
+      assert.equal(unchanged.resource.model, 'parent/live')
+      assert.equal(unchanged.resource.thinkingLevel, undefined)
+      assert.equal(unchanged.resource.inheritContext, profile.inheritContext)
+      assert.equal(unchanged.finished.runInBackground, false, 'unconfigured background behavior stays foreground')
+    }
+
+    // User turn-limit authority survives profile values, forged args and reuse.
+    {
+      const runtime = new SubagentRuntime(makeHost(fakeSession({ getLastAssistantText: () => 'done' })))
+      const state = new SubagentParentState('parent-session')
+      const limitOf = (finished) => runtime.readChildRuns(finished.sessionPath)[0].start.resource.maxTurns
+      const start = async (over = {}) => {
+        const finished = await (await runtime.start(state, baseRequest({ profile: { ...profile, maxTurns: 1 }, ...over }))).completion
+        childPaths.push(finished.sessionPath)
+        return finished
+      }
+      try {
+        userMaxTurns = 6
+        assert.equal(limitOf(await start({ maxTurns: 200 })), 6, 'a locked user limit overrides both the parent and the profile')
+        userMaxTurns = null
+        assert.equal(limitOf(await start({ maxTurns: 0 })), undefined, 'blank means unlimited even with a profile limit and a fabricated argument')
+        userMaxTurns = 6
+        turnLimitOverrideEnabled = true
+        const permitted = await start({ maxTurns: 2 })
+        assert.equal(limitOf(permitted), 2, 'an explicit grant lets the parent override the user default')
+        assert.equal(limitOf(await start()), 6, 'omitting the override uses the user default')
+        const resume = async (maxTurns) => (await runtime.resume(state, parentSession, permitted.sessionId, 'continue', { maxTurns })).completion
+        assert.equal(limitOf(await resume(3)), 3, 'a permitted continuation can choose a fresh limit')
+        turnLimitOverrideEnabled = false
+        userMaxTurns = 9
+        assert.equal(limitOf(await resume(200)), 9, 'revoking the grant replaces the persisted override on resume')
+        userMaxTurns = null
+        assert.equal(limitOf(await resume(1)), undefined, 'clearing the user setting removes any persisted limit on resume')
+      } finally { turnLimitOverrideEnabled = false; userMaxTurns = null }
     }
 
     // --- 1c) resume() shares start's { run, completion } shape and honors
@@ -1097,8 +1224,10 @@ console.log('check-subagents: all assertions passed')
       const state = new SubagentParentState('parent-session')
       const delivered = []
       state.notifications = { complete: (finished) => delivered.push(finished), drop: () => {}, canStart: true }
-      const { completion } = await runtime.start(state, baseRequest({ maxTurns: 1, runInBackground: true }))
+      userMaxTurns = 1
+      const { completion } = await runtime.start(state, baseRequest({ maxTurns: 200, runInBackground: true }))
       const finished = await completion
+      userMaxTurns = null
       childPaths.push(finished.sessionPath)
       assert.equal(steers, 1, 'the child is told to wrap up at the limit')
       assert.equal(aborts, 1, 'the runtime ends the run one round later')

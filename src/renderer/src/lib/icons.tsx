@@ -21,6 +21,7 @@ import {
   BookDown as BookDownGlyph,
   Bookmark as BookmarkGlyph,
   BookOpen as BookOpenGlyph,
+  BookOpenCheck as BookOpenCheckGlyph,
   BookOpenText as BookOpenTextGlyph,
   BookSearch as BookSearchGlyph,
   Bot as BotGlyph,
@@ -55,7 +56,6 @@ import {
   Copy as CopyGlyph,
   Database as DatabaseGlyph,
   Delete as DeleteGlyph,
-  Diff as DiffGlyph,
   Download as DownloadGlyph,
   Earth as EarthGlyph,
   ExternalLink as ExternalLinkGlyph,
@@ -75,6 +75,7 @@ import {
   FolderKanban as FolderKanbanGlyph,
   FolderOpen as FolderOpenGlyph,
   FolderPlus as FolderPlusGlyph,
+  FolderSearch as FolderSearchGlyph,
   FolderTree as FolderTreeGlyph,
   FoldHorizontal as FoldHorizontalGlyph,
   GitFork as GitForkGlyph,
@@ -100,10 +101,10 @@ import {
   LoaderCircle as LoaderCircleGlyph,
   LogOut as LogOutGlyph,
   Maximize2 as Maximize2Glyph,
-  MessageCircleMore as MessageCircleMoreGlyph,
   MessageCirclePlus as MessageCirclePlusGlyph,
   MessageSquare as MessageSquareGlyph,
   MessageSquareDashed as MessageSquareDashedGlyph,
+  MessageSquareDot as MessageSquareDotGlyph,
   MessageSquarePlus as MessageSquarePlusGlyph,
   MessageSquareText as MessageSquareTextGlyph,
   MessagesSquare as MessagesSquareGlyph,
@@ -130,6 +131,7 @@ import {
   Pen as PenGlyph,
   Pencil as PencilGlyph,
   PencilLine as PencilLineGlyph,
+  PencilSparkles as PencilSparklesGlyph,
   Pin as PinGlyph,
   PinOff as PinOffGlyph,
   Plug as PlugGlyph,
@@ -152,7 +154,7 @@ import {
   Settings2 as Settings2Glyph,
   Shapes as ShapesGlyph,
   ShieldCheck as ShieldCheckGlyph,
-  Siren as SirenGlyph,
+  NotebookPen as NotebookPenGlyph,
   Smartphone as SmartphoneGlyph,
   Sparkles as SparklesGlyph,
   Square as SquareGlyph,
@@ -164,6 +166,7 @@ import {
   Stamp as StampGlyph,
   Stethoscope as StethoscopeGlyph,
   StepForward as StepForwardGlyph,
+  StickyNotePlus as StickyNotePlusGlyph,
   Sun as SunGlyph,
   Terminal as TerminalGlyph,
   TerminalSquare as TerminalSquareGlyph,
@@ -179,7 +182,9 @@ import {
   UnfoldHorizontal as UnfoldHorizontalGlyph,
   Upload as UploadGlyph,
   User as UserGlyph,
+  UserRoundArrowLeft as UserRoundArrowLeftGlyph,
   WandSparkles as WandSparklesGlyph,
+  Waypoints as WaypointsGlyph,
   WrapText as WrapTextGlyph,
   Wrench as WrenchGlyph,
   X as XGlyph,
@@ -209,8 +214,7 @@ import {
  * out here rather than left to be rediscovered — `Earth` for the app's web and
  * browser marks (Lucide ships no brand drawings, so the browser tab, the browser
  * tool category and the in-pane page placeholders all draw it), `HatGlasses`
- * for the subagent mark (an undercover helper), `MessageCircleMore` for the
- * chat-text mark, `BoxSelect` for a marquee selection, `ChevronUp` for the ⌃
+ * for the subagent mark (an undercover helper), `BoxSelect` for a marquee selection, `ChevronUp` for the ⌃
  * key cap (so `ChevronUp` and `Control` share one drawing), `Newspaper` for
  * an article, `Delete` for the backspace key, `SquareCheckBig` for the offset
  * checkbox, `FoldHorizontal` / `UnfoldHorizontal` for the side-panel
@@ -256,6 +260,7 @@ const GLYPHS = {
   Bell: BellGlyph,
   BookDownload: BookDownGlyph,
   BookOpen: BookOpenGlyph,
+  BookOpenCheck: BookOpenCheckGlyph,
   BookOpenText: BookOpenTextGlyph,
   Bug: BugGlyph,
   Bookmark: BookmarkGlyph,
@@ -267,7 +272,7 @@ const GLYPHS = {
   Camera: CameraGlyph,
   Chart: ChartColumnGlyph,
   Chat01: MessagesSquareGlyph,
-  ChatText: MessageCircleMoreGlyph,
+  ChatText: MessageSquareDotGlyph,
   Check: CheckGlyph,
   CheckCircle2: CheckCircle2Glyph,
   CheckSquareOffset: SquareCheckBigGlyph,
@@ -293,7 +298,7 @@ const GLYPHS = {
   Copy: CopyGlyph,
   Dashboard: LayoutDashboardGlyph,
   Database: DatabaseGlyph,
-  Diff: DiffGlyph,
+  Diff: FileDiffGlyph,
   Download: DownloadGlyph,
   ExternalLink: ExternalLinkGlyph,
   Eye: EyeGlyph,
@@ -313,6 +318,7 @@ const GLYPHS = {
   FolderKanban: FolderKanbanGlyph,
   FolderOpen: FolderOpenGlyph,
   FolderPlus: FolderPlusGlyph,
+  FolderSearch: FolderSearchGlyph,
   FolderTree: FolderTreeGlyph,
   Subagent: HatGlassesGlyph,
   GitFork: GitForkGlyph,
@@ -365,6 +371,7 @@ const GLYPHS = {
   PenNib: PenGlyph,
   Pencil: PencilGlyph,
   PencilLine: PencilLineGlyph,
+  PencilSparkles: PencilSparklesGlyph,
   Pause: PauseGlyph,
   Play: PlayGlyph,
   Pin: PinGlyph,
@@ -390,7 +397,7 @@ const GLYPHS = {
   Settings2: Settings2Glyph,
   Shapes: ShapesGlyph,
   ShieldCheck: ShieldCheckGlyph,
-  Siren: SirenGlyph,
+  NotebookPen: NotebookPenGlyph,
   Sparkles: SparklesGlyph,
   SourceCode: SquareCodeGlyph,
   Square: SquareGlyph,
@@ -400,6 +407,7 @@ const GLYPHS = {
   Stamp: StampGlyph,
   StepForward: StepForwardGlyph,
   Stethoscope: StethoscopeGlyph,
+  StickyNotePlus: StickyNotePlusGlyph,
   Subtitle: CaptionsGlyph,
   Sun: SunGlyph,
   Terminal: TerminalGlyph,
@@ -415,7 +423,9 @@ const GLYPHS = {
   Undo2: Undo2Glyph,
   Upload: UploadGlyph,
   User: UserGlyph,
+  UserRoundArrowLeft: UserRoundArrowLeftGlyph,
   WandSparkles: WandSparklesGlyph,
+  Waypoints: WaypointsGlyph,
   Wrench: WrenchGlyph,
   X: XGlyph,
   XCircle: XCircleGlyph,
@@ -467,6 +477,7 @@ export const Ban = /* @__PURE__ */ createIcon('Ban', GLYPHS.Ban)
 export const Bell = /* @__PURE__ */ createIcon('Bell', GLYPHS.Bell)
 export const BookDownload = /* @__PURE__ */ createIcon('BookDownload', GLYPHS.BookDownload)
 export const BookOpen = /* @__PURE__ */ createIcon('BookOpen', GLYPHS.BookOpen)
+export const BookOpenCheck = /* @__PURE__ */ createIcon('BookOpenCheck', GLYPHS.BookOpenCheck)
 export const BookOpenText = /* @__PURE__ */ createIcon('BookOpenText', GLYPHS.BookOpenText)
 export const Bookmark = /* @__PURE__ */ createIcon('Bookmark', GLYPHS.Bookmark)
 export const BookSearch = /* @__PURE__ */ createIcon('BookSearch', GLYPHS.BookSearch)
@@ -524,6 +535,7 @@ export const FolderInput = /* @__PURE__ */ createIcon('FolderInput', GLYPHS.Fold
 export const FolderKanban = /* @__PURE__ */ createIcon('FolderKanban', GLYPHS.FolderKanban)
 export const FolderOpen = /* @__PURE__ */ createIcon('FolderOpen', GLYPHS.FolderOpen)
 export const FolderPlus = /* @__PURE__ */ createIcon('FolderPlus', GLYPHS.FolderPlus)
+export const FolderSearch = /* @__PURE__ */ createIcon('FolderSearch', GLYPHS.FolderSearch)
 export const FolderTree = /* @__PURE__ */ createIcon('FolderTree', GLYPHS.FolderTree)
 export const Subagent = /* @__PURE__ */ createIcon('Subagent', GLYPHS.Subagent)
 export const GitFork = /* @__PURE__ */ createIcon('GitFork', GLYPHS.GitFork)
@@ -576,6 +588,7 @@ export const Paperclip = /* @__PURE__ */ createIcon('Paperclip', GLYPHS.Papercli
 export const PenNib = /* @__PURE__ */ createIcon('PenNib', GLYPHS.PenNib)
 export const Pencil = /* @__PURE__ */ createIcon('Pencil', GLYPHS.Pencil)
 export const PencilLine = /* @__PURE__ */ createIcon('PencilLine', GLYPHS.PencilLine)
+export const PencilSparkles = /* @__PURE__ */ createIcon('PencilSparkles', GLYPHS.PencilSparkles)
 export const Pause = /* @__PURE__ */ createIcon('Pause', GLYPHS.Pause)
 export const Play = /* @__PURE__ */ createIcon('Play', GLYPHS.Play)
 export const Pin = /* @__PURE__ */ createIcon('Pin', GLYPHS.Pin)
@@ -601,7 +614,7 @@ export const Smartphone = /* @__PURE__ */ createIcon('Smartphone', GLYPHS.Smartp
 export const Settings2 = /* @__PURE__ */ createIcon('Settings2', GLYPHS.Settings2)
 export const Shapes = /* @__PURE__ */ createIcon('Shapes', GLYPHS.Shapes)
 export const ShieldCheck = /* @__PURE__ */ createIcon('ShieldCheck', GLYPHS.ShieldCheck)
-export const Siren = /* @__PURE__ */ createIcon('Siren', GLYPHS.Siren)
+export const NotebookPen = /* @__PURE__ */ createIcon('NotebookPen', GLYPHS.NotebookPen)
 export const Sparkles = /* @__PURE__ */ createIcon('Sparkles', GLYPHS.Sparkles)
 export const SourceCode = /* @__PURE__ */ createIcon('SourceCode', GLYPHS.SourceCode)
 export const Square = /* @__PURE__ */ createIcon('Square', GLYPHS.Square)
@@ -611,6 +624,7 @@ export const SquareTerminal = /* @__PURE__ */ createIcon('SquareTerminal', GLYPH
 export const StepForward = /* @__PURE__ */ createIcon('StepForward', GLYPHS.StepForward)
 export const Stamp = /* @__PURE__ */ createIcon('Stamp', GLYPHS.Stamp)
 export const Stethoscope = /* @__PURE__ */ createIcon('Stethoscope', GLYPHS.Stethoscope)
+export const StickyNotePlus = /* @__PURE__ */ createIcon('StickyNotePlus', GLYPHS.StickyNotePlus)
 export const Subtitle = /* @__PURE__ */ createIcon('Subtitle', GLYPHS.Subtitle)
 export const Sun = /* @__PURE__ */ createIcon('Sun', GLYPHS.Sun)
 export const Terminal = /* @__PURE__ */ createIcon('Terminal', GLYPHS.Terminal)
@@ -626,7 +640,9 @@ export const Trash2 = /* @__PURE__ */ createIcon('Trash2', GLYPHS.Trash2)
 export const Undo2 = /* @__PURE__ */ createIcon('Undo2', GLYPHS.Undo2)
 export const Upload = /* @__PURE__ */ createIcon('Upload', GLYPHS.Upload)
 export const User = /* @__PURE__ */ createIcon('User', GLYPHS.User)
+export const UserRoundArrowLeft = /* @__PURE__ */ createIcon('UserRoundArrowLeft', GLYPHS.UserRoundArrowLeft)
 export const WandSparkles = /* @__PURE__ */ createIcon('WandSparkles', GLYPHS.WandSparkles)
+export const Waypoints = /* @__PURE__ */ createIcon('Waypoints', GLYPHS.Waypoints)
 export const Wrench = /* @__PURE__ */ createIcon('Wrench', GLYPHS.Wrench)
 export const X = /* @__PURE__ */ createIcon('X', GLYPHS.X)
 export const XCircle = /* @__PURE__ */ createIcon('XCircle', GLYPHS.XCircle)
