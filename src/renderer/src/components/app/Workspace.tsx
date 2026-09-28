@@ -1464,7 +1464,22 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
                 disabled: !shell.sessionPath,
                 onSelect: () => {
                   if (!shell.sessionPath) return
-                  void window.pi.openPictureInPicture(shell.sessionPath)
+                  const target = sidePanelFullscreen
+                    ? document.querySelector<HTMLElement>('[data-panel="right"][data-panel-fullscreen]')
+                    : document.querySelector<HTMLElement>('[data-pip-source="conversation"]')
+                  if (!target) { toast.error({ title: t('pip.openError') }); return }
+                  const bounds = target.getBoundingClientRect()
+                  void window.pi.openPictureInPicture({
+                    sessionPath: shell.sessionPath,
+                    source: {
+                      kind: sidePanelFullscreen ? 'sidebar' : 'conversation',
+                      rect: {
+                        x: Math.floor(bounds.left), y: Math.floor(bounds.top),
+                        width: Math.ceil(bounds.right) - Math.floor(bounds.left),
+                        height: Math.ceil(bounds.bottom) - Math.floor(bounds.top)
+                      }
+                    }
+                  })
                     .then((opened) => { if (!opened) toast.error({ title: t('pip.openError') }) })
                     .catch(() => toast.error({ title: t('pip.openError') }))
                 }
@@ -1790,7 +1805,7 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
           sidebar's right border, so the strip's 3px overlap costs it nothing. */}
       <AnimatedSidebarInset className="isolate min-h-0 overflow-hidden bg-background md:-ml-[3px]">
         <div className="flex min-h-0 flex-1">
-          <div className="flex min-h-0 min-w-0 flex-1 flex-col" inert={sidePanelFullscreen} aria-hidden={sidePanelFullscreen || undefined}>
+          <div data-pip-source="conversation" className="flex min-h-0 min-w-0 flex-1 flex-col" inert={sidePanelFullscreen} aria-hidden={sidePanelFullscreen || undefined}>
             {!isNewSession ? (
               <ChatView
                 onRefinePlan={shell.scheduledTaskSession ? undefined : () => window.dispatchEvent(new CustomEvent('pith:refine-plan', { detail: { sessionPath: shell.sessionPath } }))}

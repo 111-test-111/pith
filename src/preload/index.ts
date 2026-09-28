@@ -68,6 +68,8 @@ import type {
   McpStatusPushDTO,
   McpUpsertServerPayload,
   PiEvent,
+  PictureInPictureFrameDTO,
+  PictureInPictureOpenRequest,
   PictureInPictureStateDTO,
   PromptPayload,
   ProviderDTO,
@@ -156,10 +158,15 @@ const api = {
   setStartup: (mode: StartupSessionMode): Promise<StartupSessionMode> =>
     ipcRenderer.invoke('app:setStartup', mode),
   setWindowTheme: (theme: WindowTheme): void => ipcRenderer.send('window:setTheme', theme),
-  openPictureInPicture: (sessionPath: string): Promise<boolean> => ipcRenderer.invoke('window:pipOpen', sessionPath),
+  openPictureInPicture: (request: PictureInPictureOpenRequest): Promise<boolean> => ipcRenderer.invoke('window:pipOpen', request),
   pictureInPictureState: (): Promise<PictureInPictureStateDTO | null> => ipcRenderer.invoke('window:pipState'),
+  pictureInPictureFrame: (): Promise<PictureInPictureFrameDTO | null> => ipcRenderer.invoke('window:pipFrameSnapshot'),
+  onPictureInPictureFrame: (listener: (frame: PictureInPictureFrameDTO) => void) => subscribe('window:pipFrame', listener),
+  onPictureInPictureState: (listener: (state: PictureInPictureStateDTO) => void) => subscribe('window:pipStateChanged', listener),
   setPictureInPicturePinned: (pinned: boolean): Promise<PictureInPictureStateDTO | null> =>
     ipcRenderer.invoke('window:pipPinned', pinned),
+  zoomPictureInPicture: (direction: 'in' | 'out'): Promise<PictureInPictureStateDTO | null> =>
+    ipcRenderer.invoke('window:pipZoom', direction),
   restoreFromPictureInPicture: (): Promise<boolean> => ipcRenderer.invoke('window:pipRestore'),
   terminalCreate: (payload: TerminalCreatePayload): Promise<TerminalCreateResult> =>
     ipcRenderer.invoke('terminal:create', payload),

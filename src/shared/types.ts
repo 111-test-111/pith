@@ -23,10 +23,31 @@ import { PLAN_MAX_BYTES } from './plan.ts'
 
 export type WindowTheme = 'light' | 'dark' | 'system'
 
-/** State of the compact, movable conversation window. */
+/** The portion of the full renderer projected into the compact window. */
+export interface PictureInPictureSourceDTO {
+  kind: 'conversation' | 'sidebar'
+  rect: { x: number; y: number; width: number; height: number }
+}
+
+export interface PictureInPictureOpenRequest {
+  sessionPath: string
+  source: PictureInPictureSourceDTO
+}
+
+/** State of the movable picture-in-picture window. */
 export interface PictureInPictureStateDTO {
   sessionPath: string
   pinned: boolean
+  source: PictureInPictureSourceDTO['kind']
+  canZoomIn: boolean
+  canZoomOut: boolean
+}
+
+export interface PictureInPictureFrameDTO {
+  sequence: number
+  width: number
+  height: number
+  dataUrl: string
 }
 
 export interface TextContent {

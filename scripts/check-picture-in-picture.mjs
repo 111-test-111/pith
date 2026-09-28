@@ -20,7 +20,7 @@ try {
   const fixturePreload = join(temporary, 'preload.mjs')
   await writeFile(fixturePreload, `import ${JSON.stringify(preload)};
 import {contextBridge,ipcRenderer} from 'electron';
-contextBridge.exposeInMainWorld('fixture',{windows:()=>ipcRenderer.invoke('fixture:windows'),emit:event=>ipcRenderer.invoke('fixture:emit',event)});`)
+contextBridge.exposeInMainWorld('fixture',{windows:()=>ipcRenderer.invoke('fixture:windows'),blurCompact:()=>ipcRenderer.invoke('fixture:blurCompact'),focusCompact:()=>ipcRenderer.invoke('fixture:focusCompact')});`)
   const fixtureMain = join(temporary, 'main.cjs')
   await build({
     stdin: {
@@ -41,8 +41,9 @@ app.whenReady().then(()=>{
  ipcMain.handle('pi:listSessions',()=>[{id:'fixture',path:sessionPath,cwd:'/fixture',projectless:false,label:'Picture-in-picture check',modified:new Date().toISOString(),messageCount:1,running:false}]);
  ipcMain.handle('pi:models',()=>[]);ipcMain.handle('pi:providers',()=>[]);ipcMain.handle('bash:list',()=>[]);
  ipcMain.on('window:setTheme',(event,theme)=>setWindowTheme(BrowserWindow.fromWebContents(event.sender),theme));
- ipcMain.handle('fixture:windows',()=>{const compact=BrowserWindow.getAllWindows().find(win=>win!==w);return{mainVisible:w.isVisible(),compact:compact?{visible:compact.isVisible(),alwaysOnTop:compact.isAlwaysOnTop(),movable:compact.isMovable(),bounds:compact.getBounds()}:null,mainBridgeOwner:pip.mainWindow()===w}});
- ipcMain.handle('fixture:emit',(_event,value)=>{for(const win of BrowserWindow.getAllWindows())win.webContents.send('pi:event',value)});
+ ipcMain.handle('fixture:windows',()=>{const compact=BrowserWindow.getAllWindows().find(win=>win!==w);return{mainVisible:w.isVisible(),compact:compact?{visible:compact.isVisible(),focused:compact.isFocused(),alwaysOnTop:compact.isAlwaysOnTop(),movable:compact.isMovable(),resizable:compact.isResizable(),bounds:compact.getBounds(),minimum:compact.getMinimumSize(),maximum:compact.getMaximumSize()}:null,mainBridgeOwner:pip.mainWindow()===w}});
+ ipcMain.handle('fixture:blurCompact',()=>{BrowserWindow.getAllWindows().find(win=>win!==w)?.blur()});
+ ipcMain.handle('fixture:focusCompact',()=>{BrowserWindow.getAllWindows().find(win=>win!==w)?.focus()});
  w.loadFile(${JSON.stringify(renderer)});
 });app.on('window-all-closed',()=>app.quit());`,
       resolveDir: repo,
@@ -95,9 +96,15 @@ app.whenReady().then(()=>{
     })
     await send('Runtime.enable')
     const evaluate = async (expression) => {
-      const result = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true })
-      if (result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails))
-      return result.result.value
+      let timer
+      try {
+        const result = await Promise.race([
+          send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }),
+          new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`CDP evaluation timed out: ${expression}`)), 5000) })
+        ])
+        if (result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails))
+        return result.result.value
+      } finally { clearTimeout(timer) }
     }
     return { send, evaluate, exceptions }
   }
@@ -114,46 +121,105 @@ app.whenReady().then(()=>{
   await waitFor(main.evaluate, `document.querySelector('[data-prompt-editor]')`)
   await main.evaluate(`localStorage.setItem('pi-app:locale','en')`)
   await main.evaluate(`localStorage.setItem('theme',${JSON.stringify(process.env.PI_PIP_THEME === 'dark' ? 'dark' : 'light')})`)
-  await main.evaluate(`document.querySelector('[data-titlebar-more]').click()`)
-  await waitFor(main.evaluate, `document.querySelector('[data-titlebar-action="picture-in-picture"]')`)
-  await main.evaluate(`document.querySelector('[data-titlebar-action="picture-in-picture"]').click()`)
-  await waitFor(main.evaluate, `fixture.windows().then(value=>!value.mainVisible&&value.compact?.visible)`)
-  const compact = await connect(await target((page) => page.url.includes('view=pip')))
-  await waitFor(compact.evaluate, `document.querySelector('[data-pip-window]') && document.querySelector('[data-pip-response]')`)
-  assert.deepEqual(await compact.evaluate(`window.pi.pictureInPictureState()`), { sessionPath: '/fixture/chat', pinned: true })
-  assert.equal(await compact.evaluate(`document.querySelector('[data-pip-window]').getBoundingClientRect().width`), 380)
+  const probe = (selector, color) => `(()=>{
+    const host=document.querySelector(${JSON.stringify(selector)});
+    if(!host)return false;
+    host.style.position='relative';
+    let mark=host.querySelector('[data-pip-probe]');
+    if(!mark){mark=document.createElement('div');mark.dataset.pipProbe='true';mark.style.cssText='position:absolute;inset:0;z-index:1000;pointer-events:none';host.append(mark)}
+    mark.style.backgroundColor=${JSON.stringify(color)};
+    return true
+  })()`
+  const pixel = `(()=>{const img=document.querySelector('[data-pip-frame]');if(!img?.complete||!img.naturalWidth)return null;const c=document.createElement('canvas');c.width=c.height=1;const ctx=c.getContext('2d');ctx.drawImage(img,Math.floor(img.naturalWidth/2),Math.floor(img.naturalHeight/2),1,1,0,0,1,1);return Array.from(ctx.getImageData(0,0,1,1).data)})()`
+  const openCompact = async (previousTargetId) => {
+    await main.evaluate(`document.querySelector('[data-titlebar-more]').click()`)
+    await waitFor(main.evaluate, `document.querySelector('[data-titlebar-action="picture-in-picture"]')`)
+    await main.evaluate(`document.querySelector('[data-titlebar-action="picture-in-picture"]').click()`)
+    await waitFor(main.evaluate, `fixture.windows().then(value=>!value.mainVisible&&value.compact?.visible)`)
+    const page = await target((entry) => entry.url.includes('view=pip') && entry.id !== previousTargetId)
+    const compact = await connect(page)
+    await waitFor(compact.evaluate, `document.querySelector('[data-pip-frame]')?.naturalWidth>0`)
+    return { ...compact, targetId: page.id }
+  }
+
+  const conversationBounds = await main.evaluate(`document.querySelector('[data-pip-source="conversation"]').getBoundingClientRect().toJSON()`)
+  assert.equal(await main.evaluate(probe('[data-pip-source="conversation"]', '#e02020')), true)
+  const compact = await openCompact()
+  const state = await compact.evaluate(`window.pi.pictureInPictureState()`)
+  assert.equal(state.sessionPath, '/fixture/chat')
+  assert.equal(state.source, 'conversation')
+  assert.equal(state.pinned, true)
+  const conversationFrame = await compact.evaluate(`window.pi.pictureInPictureFrame().then(frame=>({width:frame.width,height:frame.height}))`)
+  assert.ok(Math.abs(conversationFrame.width / conversationFrame.height - conversationBounds.width / conversationBounds.height) < 0.02, 'only the conversation bounds are captured')
   assert.equal(await compact.evaluate(`getComputedStyle(document.querySelector('[data-pip-drag]')).webkitAppRegion`), 'drag')
-  assert.equal(await compact.evaluate(`getComputedStyle(document.querySelector('[data-pip-drag] button')).webkitAppRegion`), 'no-drag')
-  assert.deepEqual(await main.evaluate(`fixture.windows()`), {
-    mainVisible: false,
-    compact: { visible: true, alwaysOnTop: true, movable: true, bounds: await main.evaluate(`fixture.windows().then(value=>value.compact.bounds)`) },
-    mainBridgeOwner: true
-  })
+  assert.equal(await compact.evaluate(`getComputedStyle(document.querySelector('[data-pip-controls] button')).webkitAppRegion`), 'no-drag')
+  const native = await main.evaluate(`fixture.windows()`)
+  assert.equal(native.mainVisible, false)
+  assert.equal(native.mainBridgeOwner, true)
+  assert.equal(native.compact.alwaysOnTop, true)
+  assert.equal(native.compact.movable, true)
+  assert.equal(native.compact.resizable, true)
+  assert.ok(native.compact.minimum[0] >= 260 && native.compact.minimum[1] >= 180)
+  assert.ok(native.compact.maximum[0] <= 560 && native.compact.maximum[1] <= 520)
+  await waitFor(compact.evaluate, `${pixel}?.[0]>180 && ${pixel}?.[1]<80 && ${pixel}?.[2]<80`)
 
+  // Change the actual source DOM after its native window has been hidden.
+  assert.equal(await main.evaluate(probe('[data-pip-source="conversation"]', '#2020e0')), true)
+  await waitFor(compact.evaluate, `${pixel}?.[2]>180 && ${pixel}?.[0]<80 && ${pixel}?.[1]<80`)
+  assert.ok(await compact.evaluate(`window.pi.pictureInPictureFrame().then(frame=>frame?.sequence>1)`))
   if (process.env.PI_PIP_SCREENSHOT_DIR) {
+    await main.evaluate(probe('[data-pip-source="conversation"]', 'transparent'))
+    await pause(400)
     await mkdir(process.env.PI_PIP_SCREENSHOT_DIR, { recursive: true })
-    await writeFile(join(process.env.PI_PIP_SCREENSHOT_DIR, 'picture-in-picture.png'), Buffer.from((await compact.send('Page.captureScreenshot')).data, 'base64'))
+    await writeFile(join(process.env.PI_PIP_SCREENSHOT_DIR, 'picture-in-picture-conversation.png'), Buffer.from((await compact.send('Page.captureScreenshot')).data, 'base64'))
   }
 
-  await main.evaluate(`fixture.emit({type:'agent_start',sessionPath:'/fixture/chat',sessionId:'fixture',eventSequence:1,todos:{toolCallId:'todo',items:[{id:'a',content:'Inspect',status:'completed'},{id:'b',content:'Implement',activeForm:'Implementing',status:'in_progress'}]}})`)
-  await main.evaluate(`fixture.emit({type:'message_update',sessionPath:'/fixture/chat',sessionId:'fixture',eventSequence:2,message:{role:'assistant',content:[{type:'text',text:'Live reply from the active run'}],provider:'fixture',model:'fixture',stopReason:'',timestamp:3}})`)
-  await waitFor(compact.evaluate, `document.querySelector('[data-pip-response]')?.textContent.includes('Live reply from the active run')`)
-  assert.ok((await compact.evaluate(`document.querySelector('[data-pip-window]').innerText`)).includes('1 of 2 tasks done'))
-  if (process.env.PI_PIP_SCREENSHOT_DIR) {
-    await writeFile(join(process.env.PI_PIP_SCREENSHOT_DIR, 'picture-in-picture-live.png'), Buffer.from((await compact.send('Page.captureScreenshot')).data, 'base64'))
-  }
-  await main.evaluate(`fixture.emit({type:'message_end',sessionPath:'/fixture/chat',sessionId:'fixture',eventSequence:3,message:{role:'assistant',content:[{type:'text',text:'Live reply from the active run'}],provider:'fixture',model:'fixture',stopReason:'stop',timestamp:3}})`)
-  await main.evaluate(`fixture.emit({type:'agent_settled',sessionPath:'/fixture/chat',sessionId:'fixture',eventSequence:4,continuing:false})`)
-  await waitFor(compact.evaluate, `document.querySelector('[data-pip-window]')?.innerText.includes('Finished')`)
+  await main.evaluate(`fixture.blurCompact()`)
+  await waitFor(compact.evaluate, `document.querySelector('[data-pip-controls]')?.dataset.focused==='false'`)
+  await waitFor(compact.evaluate, `Number(getComputedStyle(document.querySelector('[data-pip-controls]')).opacity)<0.01`)
+  await main.evaluate(`fixture.focusCompact()`)
+  await waitFor(compact.evaluate, `document.querySelector('[data-pip-controls]')?.dataset.focused==='true'`)
+  assert.equal(await compact.evaluate(`document.querySelector('[data-pip-controls]').classList.contains('opacity-100')`), true)
 
-  await compact.evaluate(`document.querySelector('[data-pip-drag] button').click()`)
+  await compact.evaluate(`document.querySelector('button[aria-label="Stop keeping on top"]').click()`)
   await waitFor(main.evaluate, `fixture.windows().then(value=>value.compact?.alwaysOnTop===false)`)
-  assert.equal(await compact.evaluate(`window.pi.pictureInPictureState().then(value=>value.pinned)`), false)
-  await compact.evaluate(`document.querySelector('[data-pip-window] footer button').click()`)
+  for (let index = 0; index < 20; index++) await compact.evaluate(`window.pi.zoomPictureInPicture('in')`)
+  const largest = await main.evaluate(`fixture.windows().then(value=>value.compact)`)
+  assert.ok(largest.bounds.width <= largest.maximum[0] && largest.bounds.height <= largest.maximum[1])
+  assert.equal(await compact.evaluate(`window.pi.pictureInPictureState().then(value=>value.canZoomIn)`), false)
+  await waitFor(compact.evaluate, `document.querySelector('button[aria-label="Enlarge window"]').disabled`)
+  for (let index = 0; index < 20; index++) await compact.evaluate(`window.pi.zoomPictureInPicture('out')`)
+  const smallest = await main.evaluate(`fixture.windows().then(value=>value.compact)`)
+  assert.ok(smallest.bounds.width >= smallest.minimum[0] && smallest.bounds.height >= smallest.minimum[1])
+  assert.equal(await compact.evaluate(`window.pi.pictureInPictureState().then(value=>value.canZoomOut)`), false)
+  await waitFor(compact.evaluate, `document.querySelector('button[aria-label="Shrink window"]').disabled`)
+  await compact.evaluate(`document.querySelector('button[aria-label="Return to app"]').click()`)
+  await waitFor(main.evaluate, `fixture.windows().then(value=>value.mainVisible&&!value.compact)`)
+
+  // A full-screen side panel is the sole projected source in this mode.
+  await main.evaluate(`document.querySelector('button[aria-label="Toggle sidebar"][aria-pressed],button[aria-label="切换侧边栏"][aria-pressed]').click()`)
+  await waitFor(main.evaluate, `document.querySelector('[data-panel="right"]')`)
+  await main.evaluate(`document.querySelector('[data-titlebar-action="sidebar-fullscreen"]').click()`)
+  await waitFor(main.evaluate, `document.querySelector('[data-panel="right"][data-panel-fullscreen]')`)
+  await pause(400)
+  const sidebarBounds = await main.evaluate(`document.querySelector('[data-panel="right"][data-panel-fullscreen]').getBoundingClientRect().toJSON()`)
+  assert.equal(await main.evaluate(probe('[data-panel="right"][data-panel-fullscreen]', '#20d020')), true)
+  const panelCompact = await openCompact(compact.targetId)
+  assert.equal(await panelCompact.evaluate(`window.pi.pictureInPictureState().then(value=>value.source)`), 'sidebar')
+  const sidebarFrame = await panelCompact.evaluate(`window.pi.pictureInPictureFrame().then(frame=>({width:frame.width,height:frame.height}))`)
+  assert.ok(Math.abs(sidebarFrame.width / sidebarFrame.height - sidebarBounds.width / sidebarBounds.height) < 0.02, 'only the fullscreen sidebar bounds are captured')
+  await waitFor(panelCompact.evaluate, `${pixel}?.[1]>140 && ${pixel}?.[0]<80 && ${pixel}?.[2]<80`)
+  if (process.env.PI_PIP_SCREENSHOT_DIR) {
+    await main.evaluate(probe('[data-panel="right"][data-panel-fullscreen]', 'transparent'))
+    await pause(400)
+    await writeFile(join(process.env.PI_PIP_SCREENSHOT_DIR, 'picture-in-picture-sidebar.png'), Buffer.from((await panelCompact.send('Page.captureScreenshot')).data, 'base64'))
+  }
+  await panelCompact.evaluate(`document.querySelector('button[aria-label="Return to app"]').click()`)
   await waitFor(main.evaluate, `fixture.windows().then(value=>value.mainVisible&&!value.compact)`)
   assert.deepEqual(main.exceptions, [])
   assert.deepEqual(compact.exceptions, [])
-  console.log('PASS: compact native window, drag region, live session events, pin toggle and full-window restore')
+  assert.deepEqual(panelCompact.exceptions, [])
+  console.log('PASS: hidden-window live image, conversation and fullscreen sidebar crops, focus controls, bounded zoom, pin and restore')
 } finally {
   for (const socket of sockets) socket.close()
   if (child && child.exitCode === null) {
