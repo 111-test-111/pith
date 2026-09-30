@@ -81,6 +81,8 @@ node scripts/check-session-persistence.mjs # session header + fork/delete/contin
 node scripts/check-sdk-upgrade-providers.mjs # ChatGPT OAuth bridge and GPT-6.1 Sol catalog
 node scripts/check-sdk-tool-boundary.mjs # nested SDK calls respect Plan, Rewind and receipt lifecycle
 node scripts/check-native-mcp-codemode.mjs # real SDK native MCP tool via codemode against an offline stdio server
+node scripts/check-image-safety.mjs # corrupt tool images and cold-session Continue recovery
+node scripts/check-tool-duration.mjs # batched tool results preserve each call's completion time
 node scripts/check-usage-stats.mjs # SDK and legacy billing records, turn/model attribution
 node scripts/check-continue.mjs # interrupted turns: preserved context/branch, Stop races, scopes and Plan admission
 node scripts/check-bash-tasks.mjs # real processes + SDK steering/queue/cleanup regressions

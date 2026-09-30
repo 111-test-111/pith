@@ -76,7 +76,19 @@ for await (const line of lines) {
   const next = fixture.requests.length + 1
   fixture.setRespond((index) => index === next
     ? [{ type: 'toolCall', id: 'native-codemode-1', name: 'codemode', arguments: {
-      code: "const result = await tools.mcp__fixture__echo({ text: 'hello' }); text(result.content[0].text)"
+      code: `const names = ALL_TOOLS.map(tool => tool.name);
+const matches = await searchTools('Echo fixture text', { limit: 4 });
+const description = await describeTool('mcp__fixture__echo');
+text('discovery:' + JSON.stringify({
+  callableCount: names.length,
+  matchCount: matches.length,
+  hasFixture: names.includes('mcp__fixture__echo'),
+  matchedFixture: matches.some(tool => tool.name === 'mcp__fixture__echo'),
+  matchesAreCallable: matches.every(tool => names.includes(tool.name)),
+  descriptionFound: typeof description === 'string' && description.includes('mcp__fixture__echo')
+}));
+const result = await tools.mcp__fixture__echo({ text: 'hello' });
+text(result.content[0].text)`
     } }]
     : [{ type: 'text', text: 'Finished' }])
   await fixture.session.prompt('Call the fixture MCP tool in codemode')
@@ -97,6 +109,11 @@ for await (const line of lines) {
     'the MCP definition remains callable through the SDK tool context')
   assert.equal(fixture.session.getActiveToolNames().includes('codemode'), true,
     'the MCP extension activates codemode for its default exposure')
+  const codemodeDescription = fixture.session.agent.state.tools.find(tool => tool.name === 'codemode')?.description
+  assert.match(codemodeDescription ?? '', /await searchTools\(/,
+    'the model-facing codemode description explicitly awaits ranked search')
+  assert.match(codemodeDescription ?? '', /await describeTool\(/,
+    'the model-facing codemode description explicitly awaits declaration lookup')
   const catalog = await fixture.app.catalog()
   const sourceOf = name => catalog.tools.find(tool => tool.name === name)?.source
   assert.equal(sourceOf(mcpTool.name)?.label, 'Pi MCP', 'Settings names the built-in MCP source')
@@ -118,6 +135,17 @@ for await (const line of lines) {
   assert.equal(result.isError, false, JSON.stringify(result.content))
   assert.match(result.content.filter(part => part.type === 'text').map(part => part.text).join('\n'), /fixture:hello/,
     'codemode executes the native MCP tool against the real stdio server')
+  const discoveryLine = result.content.filter(part => part.type === 'text')
+    .flatMap(part => part.text.split('\n')).find(line => line.startsWith('discovery:'))
+  assert(discoveryLine, 'codemode reports its nested discovery checks')
+  const discovery = JSON.parse(discoveryLine.slice('discovery:'.length))
+  assert.equal(discovery.callableCount, fixture.session.getCallableToolNames().filter(name => name !== 'codemode').length,
+    'ALL_TOOLS covers the session callable set except the enclosing codemode tool')
+  assert(discovery.matchCount <= 4, 'searchTools applies its requested result limit')
+  assert.equal(discovery.hasFixture, true, 'ALL_TOOLS lists the callable native MCP tool')
+  assert.equal(discovery.matchedFixture, true, 'await searchTools finds the same native MCP tool')
+  assert.equal(discovery.matchesAreCallable, true, 'searchTools results are a ranked subset of ALL_TOOLS')
+  assert.equal(discovery.descriptionFound, true, 'describeTool resolves the same nested tool')
 
   const callable = new Set(fixture.session.getCallableToolNames())
   const modelOnlyApp = tools.filter(tool =>

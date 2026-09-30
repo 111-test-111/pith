@@ -634,8 +634,15 @@ export class PiStore {
           const toolRuns = { ...this.state.toolRuns }
           const run = toolRuns[incoming.toolCallId]
           if (run) {
-            run.status = incoming.isError ? 'error' : 'success'
-            run.endedAt = Date.now()
+            // Pi may publish the results of several tool calls only after the
+            // whole batch finishes. Keep the end time from this call's own
+            // tool_execution_end; stamping every result on arrival made the
+            // earlier calls appear to take as long as the last one.
+            toolRuns[incoming.toolCallId] = {
+              ...run,
+              status: incoming.isError ? 'error' : 'success',
+              endedAt: run.endedAt ?? Date.now()
+            }
           }
           const messages = [...this.state.messages]
           insertByTimestamp(messages, incoming)

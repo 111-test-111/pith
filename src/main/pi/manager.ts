@@ -11,7 +11,6 @@ import {
   buildSessionContext,
   createAgentSessionFromServices,
   createAgentSessionServices,
-  createCodemodeExtension,
   createMcpExtension,
   createToolSearchExtension,
   DefaultPackageManager,
@@ -36,6 +35,7 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'no
 import { dirname, join } from 'node:path'
 import { BashTaskManager } from '../bash/manager'
 import { createManagedBashTools, APP_BASH_TOOL_NAMES } from './bash-tools'
+import { createAppCodemodeExtension } from './codemode-guidance'
 import { createDebugTools, APP_DEBUG_TOOL_NAMES, type DebugRunInTerminal } from '../debug/tools'
 import { DebugManager } from '../debug/manager'
 import { dispatchDebugPanel, dispatchDebugAction } from '../debug/action-registry'
@@ -102,6 +102,7 @@ import { parsePlanSubmission, reconstructPlan } from './plan-protocol'
 import { createPlanSubmissionTool } from './plan-submission'
 import { createPlanContextExtension, installPlanStreamOverlay } from './plan-context'
 import { installContextBudgetOverlay } from './context-budget'
+import { ImageSafety, installTextOnlyImageOverlay } from './image-safety'
 import {
   MAX_CONCURRENT_SUBAGENTS_DEFAULT,
   MAX_CONCURRENT_SUBAGENTS_LIMIT,
@@ -395,6 +396,8 @@ interface ManagedSession {
   disposeToolCallBoundary?: () => void
   disposePlanStream?: () => void
   disposeContextBudget?: () => void
+  disposeImageSafety?: () => void
+  disposeTextOnlyImages?: () => void
   planApproval?: PlanApprovalController
   /** Present on subagent child sessions: linkage + frozen tool ceiling. The
    * child's initialization activates only the ceiling, never the full set. */
@@ -1411,7 +1414,7 @@ export class PiManager {
         extensionFactories: [
           createToolCallBoundaryExtension(), todos.extension(), ...(planContext ? [planContext] : []),
           ...(loadNativeTools ? [
-            { name: 'native-codemode', factory: createCodemodeExtension(), hidden: true },
+            { name: 'native-codemode', factory: createAppCodemodeExtension(), hidden: true },
             { name: 'native-tool-search', factory: createToolSearchExtension(), hidden: true },
             { name: 'native-mcp', factory: createMcpExtension(), hidden: true }
           ] : [])
@@ -1478,7 +1481,9 @@ export class PiManager {
     managed.gate?.dispose()
     managed.jevWorkflow?.dispose()
     managed.disposePlanStream?.()
+    managed.disposeTextOnlyImages?.()
     managed.disposeContextBudget?.()
+    managed.disposeImageSafety?.()
     managed.reloadPending = false
     // Disposal owns the whole subtree: a parent being deleted or the app
     // quitting aborts its subagent runs (suppressed — they must not wake) and
@@ -2170,6 +2175,7 @@ export class PiManager {
       contextUsageKey: null,
       reloadPending: false
     }
+    managed.disposeImageSafety = new ImageSafety().install(session)
     // Publish ownership before awaiting extension startup, so quitting also
     // finds sessions with a slow session_start handler.
     this.sessions.set(path, managed)
@@ -2282,6 +2288,7 @@ export class PiManager {
     managed.unsubscribe = () => { unsubscribeSession(); unsubscribeCommitted() }
     managed.trajectory = new TrajectoryRecorder(session, this.trajectory)
     managed.disposeContextBudget = installContextBudgetOverlay(session, model => services.settingsManager.getCompactionSettings(model))
+    managed.disposeTextOnlyImages = installTextOnlyImageOverlay(session)
     managed.disposePlanStream = installPlanStreamOverlay(session, () => plan.restricted)
     if (!isChild && !isScheduled) managed.jevWorkflow = new JevWorkflow({ session, service: this.jevService, owner: path,
       // Jev's action route asks the model to implement changes. Planning owns
