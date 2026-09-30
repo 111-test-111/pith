@@ -10,6 +10,13 @@ setting. The right-rail pane and file gutter use the same main-process manager.
   `debug({request: {action: "sessions"}})` lists only the calling chat's targets. An explicit
   id is always checked against the owning `sessionPath`; it cannot address a
   parent or sibling agent's debugger. Calls without an id reject ambiguity.
+- `sessions` includes ended targets so their console and termination diagnostics
+  remain readable. Cleanup releases their processes and checkout leases; the
+  manager retains the ten newest fully cleaned-up targets across chats until
+  later cleanup prunes them or the app exits. This is bounded history, not ten
+  live processes. Select live targets with
+  `data.sessions.filter(s => ['starting', 'running', 'stopped'].includes(s.status))`;
+  then choose an explicit `debugId`, rather than assuming the last row is live.
 - Renderer requests always include `debugId`. The selector and gutter use the
   same selection. Inspection and controls carry `stopId`; each stopped event
   increments it, including running/stopped events batched into one render.
@@ -77,6 +84,64 @@ and renderer dispatcher use these same handlers; only context-dependent start,
 adapters and launch-configuration discovery are supplied by the tool wrapper.
 The outer schema stays at five fields: `debugId`, `stopId`, `request`,
 `sandbox_permissions`, and `justification`. No generic DAP escape hatch is exposed.
+
+Script results use the app result envelope, with action-specific schemas in
+`result-schema.ts`. `data.session` always holds start/restart/stop results;
+`data.frames` holds stack rows and `data.scopes` holds register scopes. Expand a
+scope's positive `variablesReference` with `variables`; an adapter may return
+groups (for example LLDB's General Purpose Registers) whose own positive
+references need another expansion. The hierarchy depth is adapter-defined.
+Page each level using `start`/`count`, inspect `truncated`, and stop expanding at
+reference 0; bound traversal and track visited references to avoid cycles.
+Keep `debugId` and `stopId` pinned throughout. The legacy
+text presentation and IPC result shapes remain unchanged. Known state failures
+carry `DEBUG_SESSION_NOT_FOUND`, `DEBUG_NOT_STOPPED`, `DEBUG_SESSION_ENDED`, or
+`DEBUG_STALE_STOP`, rather than one combined stale/running error.
+
+`wait` requires `debugId`, accepts `afterRevision`, `waitMs` (0–60,000; default
+10,000) and `until` (`stopped` by default or `changed`). It subscribes to that
+target's state changes without sending DAP requests; a stop is ready after its
+top-frame fill. Registration cannot miss a stop that just arrived. It returns
+the current session/revision, `changed`, `settled` and `timedOut`. Cancellation,
+timeout and completion release listeners. Terminal targets return immediately.
+Use it after a control returns `settled:false`, without re-sending the step.
+
+The flags answer different questions:
+
+- `changed` compares the returned revision with `afterRevision`, or with the
+  revision at call admission when omitted. A revision can change while running.
+- `settled` means the target is stopped with top-frame loading complete, or is
+  terminal (`terminated`/`failed`). It does not mean the wait condition occurred.
+- `timedOut` means the wait deadline expired before its condition was observed.
+  It can be true together with `settled:true`: an already stopped target can
+  remain unchanged throughout `until:"changed"`.
+
+| Observation | `changed` | `settled` | `timedOut` |
+| --- | --- | --- | --- |
+| Already stopped; `until:"stopped"`, no `afterRevision` | false | true | false |
+| Already stopped, no newer revision; `until:"changed"` reaches its deadline | false | true | true |
+| Still running, no newer revision when the deadline expires | false | false | true |
+| New running revision satisfies `until:"changed"` | true | false | false |
+| New stop finishes loading before the deadline | true | true | false |
+
+Passing `afterRevision` also requires a newer revision for `until:"stopped"`;
+omit it when the current stop is sufficient. Terminal targets always return
+immediately, even at the same revision, so inspect `session.status` before
+requesting stack/variables. `waitMs:0` is valid for `wait` and makes one immediate
+observation. `control` instead accepts 500–120,000 ms and sends a control request;
+its schema rejects `waitMs:0` before resuming the target. Pause is
+`request:{action:"control",control:"pause"}`, not `action:"pause"`.
+Cancelling a passive wait releases only its waiter; it does not stop the target.
+
+Known state failures and rejected validation/adapter calls intentionally have
+different representations; scripts must handle both. See the
+[failure boundary table](native-mcp-codemode.md#script-results-and-completeness).
+
+Local file launches for LLDB, debugpy and js-debug validate the program against
+the launch cwd before spawning. Python modules, Go packages and explicit remote
+or adapter-command configurations retain their adapter semantics; Go `exec`
+does validate its local binary. These checks never treat adapter source
+references as disk paths.
 
 ```json
 {"debugId":"target-id","stopId":3,"request":{"action":"disassemble","memoryReference":"0x100003cc","count":32}}

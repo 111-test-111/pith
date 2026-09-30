@@ -7,11 +7,11 @@
   "author": "pi-app",
   "license": "MIT",
   "scripts": {
-    "postinstall": "node scripts/prepare-terminal.mjs && node scripts/prepare-file-icons.mjs",
+    "postinstall": "node scripts/prepare-pi-sdk.mjs && node scripts/prepare-terminal.mjs && node scripts/prepare-file-icons.mjs",
     "dev": "electron-vite dev",
-    "predev": "node scripts/prepare-file-icons.mjs",
+    "predev": "node scripts/prepare-pi-sdk.mjs && node scripts/prepare-file-icons.mjs",
     "build": "electron-vite build",
-    "prebuild": "node scripts/prepare-file-icons.mjs",
+    "prebuild": "node scripts/prepare-pi-sdk.mjs && node scripts/prepare-file-icons.mjs",
     "preview": "electron-vite preview",
     "start": "electron-vite preview",
     "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit",
@@ -29,7 +29,7 @@
     "benchmark:long-session": "node scripts/benchmark-long-session.mjs"
   },
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "^0.99.1",
+    "@earendil-works/pi-coding-agent": "0.99.1",
     "@floating-ui/react": "^0.27.20",
     "@lobehub/icons-static-svg": "^1.95.0",
     "@paper-design/shaders-react": "^0.0.80",

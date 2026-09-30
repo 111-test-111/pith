@@ -4,10 +4,11 @@
  * 与语义，描述改英文；service 同进程直连（零 IPC）。owner 由会话构建时冻结
  * （sessionManager.getSessionId()，fork 后不变），所有 agent 动作都归属该 owner。
  */
-import type { ToolDefinition } from '@earendil-works/pi-coding-agent'
+import type { AgentToolResult, ToolDefinition } from '@earendil-works/pi-coding-agent'
 import { stat } from 'node:fs/promises'
 import { isAbsolute, resolve } from 'node:path'
 import { Type } from 'typebox'
+import { appToolOutputSchema, appToolResult } from '../pi/tool-result.ts'
 import {
   agentOwner,
   isAllowedNavigationUrl,
@@ -36,6 +37,7 @@ import {
   NoFilePickerError,
   PageGoneError,
   PageNotFoundError,
+  RefNotInSnapshotError,
   SelectorTargetError,
   SnapshotScopeError,
   StaleSnapshotError,
@@ -53,12 +55,19 @@ export interface BrowserToolsDeps {
   cwd?: string
 }
 
-type BrowserToolContent = Array<{ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }>
-interface BrowserToolResult {
-  content: BrowserToolContent
-  /** pi-app-todo 先例：kind 标记归因，pageId 是动作落点。 */
-  details: { kind: 'pi-app-browser'; pageId?: string }
-}
+type BrowserToolResult = AgentToolResult<{ kind: 'pi-app-browser'; pageId?: string }>
+
+const browserDataSchema = Type.Object({
+  pageId: Type.Optional(Type.String()), text: Type.Optional(Type.String()),
+  snapshot: Type.Optional(Type.String()), url: Type.Optional(Type.String()), title: Type.Optional(Type.String()),
+  snapshotNote: Type.Optional(Type.String()), unmet: Type.Optional(Type.Array(Type.String())),
+  windowPopups: Type.Optional(Type.Array(Type.String())),
+  pages: Type.Optional(Type.Array(Type.Object({ id: Type.String(), url: Type.String(), title: Type.String() }))),
+  activePageId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+  annotated: Type.Optional(Type.Boolean()), labels: Type.Optional(Type.Number()),
+  window: Type.Optional(Type.Object({ offset: Type.Number(), nextOffset: Type.Union([Type.Number(), Type.Null()]),
+    totalChars: Type.Number(), cap: Type.Number(), truncated: Type.Boolean(), eof: Type.Boolean(), diff: Type.Boolean() }))
+})
 
 /** 工具描述里的不可信数据声明（与 wrapUntrustedContent 的边界标记呼应）。 */
 const UNTRUSTED_NOTE =
@@ -69,10 +78,10 @@ const UNTRUSTED_NOTE =
  * `actionResult` 从 service 结果取），不知道时宁可不写——半个字段比没有更难用。
  */
 function textResult(text: string, pageId?: string): BrowserToolResult {
-  return {
+  return appToolResult({
     content: [{ type: 'text', text }],
     details: pageId ? { kind: 'pi-app-browser', pageId } : { kind: 'pi-app-browser' }
-  }
+  }, { text, ...(pageId ? { pageId } : {}) })
 }
 
 /**
@@ -118,7 +127,22 @@ export function browserToolErrorText(error: unknown): string {
 }
 
 function errorResult(error: unknown): BrowserToolResult {
-  return textResult(browserToolErrorText(error))
+  const message = browserToolErrorText(error)
+  const codes = [
+    [NavigationBlockedError, 'NAVIGATION_BLOCKED'], [InvalidRefError, 'INVALID_REF'], [RefNotInSnapshotError, 'REF_NOT_IN_SNAPSHOT'],
+    [StaleSnapshotError, 'STALE_SNAPSHOT'], [PageNotFoundError, 'PAGE_NOT_FOUND'],
+    [PageGoneError, 'PAGE_GONE'], [ConsentRequiredError, 'CONSENT_REQUIRED'],
+    [BrowserHostUnavailableError, 'BROWSER_HOST_UNAVAILABLE'], [TypeTextTooLongError, 'TEXT_TOO_LONG'],
+    [SnapshotScopeError, 'INVALID_SCOPE'], [SelectorTargetError, 'INVALID_SELECTOR_TARGET'],
+    [AxTargetError, 'INVALID_AX_TARGET'], [NoFilePickerError, 'NO_FILE_PICKER'],
+    [FilePickerInsteadOfClickError, 'FILE_PICKER_REQUIRES_UPLOAD']
+  ] as const
+  const code = codes.find(([ErrorType]) => error instanceof ErrorType)?.[1] ?? 'BROWSER_FAILED'
+  return appToolResult(textResult(message), undefined, { code, message })
+}
+
+function validationError(message: string, code = 'INVALID_ARGUMENTS'): BrowserToolResult {
+  return appToolResult(textResult(message), undefined, { code, message })
 }
 
 /**
@@ -158,7 +182,7 @@ function actionResult(action: AgentActionResult): BrowserToolResult {
     const lines = action.windowPopups.map((url: string) => `- ${url}`).join('\n')
     text += `\n\n### Opened in a separate window\n${wrapUntrustedContent(lines)}\nThese are real popup windows, not pane pages: browser_pages does not list them and browser_* tools cannot drive them. The user handles them (a sign-in popup may already be open on their screen); to control the same URL yourself, navigate a pane page to it instead.`
   }
-  return { content: [{ type: 'text', text }], details: { kind: 'pi-app-browser', pageId: action.pageId } }
+  return appToolResult({ content: [{ type: 'text', text }], details: { kind: 'pi-app-browser', pageId: action.pageId } }, { ...action, text })
 }
 
 /**
@@ -381,7 +405,7 @@ export function createBrowserTools(deps: BrowserToolsDeps): ToolDefinition[] {
     }
   }
 
-  return [{
+  const definitions: ToolDefinition[] = [{
     name: 'browser_navigate',
     label: 'Browser Navigate',
     description: `Open a URL in the embedded browser (reusing this session's active page by default; newPage=true forces a new page), or perform history navigation (back/forward/reload); returns the page's aria snapshot (elements carry ref=eN, inside iframes ref=fNeM). Provide either url or action, not both.${UNTRUSTED_NOTE}`,
@@ -389,10 +413,10 @@ export function createBrowserTools(deps: BrowserToolsDeps): ToolDefinition[] {
     executionMode: 'sequential',
     async execute(_id, params) {
       const invalid = validateNavigateParams(params)
-      if (invalid) return textResult(invalid)
+      if (invalid) return validationError(invalid)
       if (params.action) return run(service.agentHistory(owner, params.action, { maxChars: params.maxChars, offset: params.offset }))
       const url = normalizeNavigationUrl(params.url!)
-      if (!url) return textResult('error: cannot parse the URL')
+      if (!url) return validationError('error: cannot parse the URL')
       // 工具侧先按策略拦截：service 抛错依赖已启动的运行时，拦截文本必须无条件可达。
       if (!isAllowedNavigationUrl(url)) return errorResult(new NavigationBlockedError(url))
       return run(service.agentNavigate(owner, url, { newPage: params.newPage, maxChars: params.maxChars, offset: params.offset }))
@@ -410,7 +434,7 @@ export function createBrowserTools(deps: BrowserToolsDeps): ToolDefinition[] {
       const lines = pages.map((p) => `- ${p.id}: ${p.url} ${p.title}${p.id === activePageId ? ' (active)' : ''}`.trim())
       const listing = lines.length > 0 ? wrapUntrustedContent(lines.join('\n')) : '(no pages)'
       // 列表本身没有单一落点，但活动页是——带上它，与其它工具的形状一致。
-      return textResult(`activePageId: ${activePageId ?? 'none'}\n${listing}`, activePageId ?? undefined)
+      return appToolResult(textResult(`activePageId: ${activePageId ?? 'none'}\n${listing}`, activePageId ?? undefined), { pages, activePageId })
     }
   } satisfies ToolDefinition<typeof pagesParameters>, {
     name: 'browser_focus',
@@ -424,11 +448,11 @@ export function createBrowserTools(deps: BrowserToolsDeps): ToolDefinition[] {
   } satisfies ToolDefinition<typeof focusParameters>, {
     name: 'browser_snapshot',
     label: 'Browser Snapshot',
-    description: `Get the active page's aria snapshot (YAML; interactive elements carry ref=eN, inside iframes ref=fNeM; the ref for click/type must come from the most recent snapshot). selector scopes the snapshot to a subtree with Playwright selector syntax — "dialog", ":visible" and "dialog >> nth=0" all work, and a selector matching several elements prefers the single visible one, so a page whose hidden dialogs stay in the DOM is still addressable. diff=true returns only the difference from the previous snapshot (saves tokens; measured against what you were actually shown, so it only reports no change when nothing you can see changed); maxChars caps the returned length (default ${SNAPSHOT_DEFAULT_MAX_CHARS}); offset starts the window further in, and when the result is truncated its note tells you the exact offset that continues from where it stopped.${UNTRUSTED_NOTE}`,
+    description: `Get the active page's aria snapshot (YAML; interactive elements carry ref=eN, inside iframes ref=fNeM; the ref for click/type must come from the most recent snapshot). Refs name elements, not positions or snapshot generations: a surviving element can keep its ref across captures. Do not carry refs across pages/navigation. selector scopes the snapshot to a subtree with Playwright selector syntax — "dialog", ":visible" and "dialog >> nth=0" all work, and a selector matching several elements prefers the single visible one, so a page whose hidden dialogs stay in the DOM is still addressable. diff=true returns only the difference from the previous snapshot (saves tokens; measured against what you were actually shown, so it only reports no change when nothing you can see changed); maxChars caps the returned length (default ${SNAPSHOT_DEFAULT_MAX_CHARS}); offset starts the window further in, and when the result is truncated its note tells you the exact offset that continues from where it stopped.${UNTRUSTED_NOTE}`,
     parameters: snapshotParameters,
     executionMode: 'sequential',
     async execute(_id, params) {
-      if (params.selector && params.diff) return textResult('error: selector and diff cannot be combined')
+      if (params.selector && params.diff) return validationError('error: selector and diff cannot be combined')
       return run(
         service.agentSnapshot(owner, {
           selector: params.selector,
@@ -446,7 +470,7 @@ export function createBrowserTools(deps: BrowserToolsDeps): ToolDefinition[] {
     executionMode: 'sequential',
     async execute(_id, params) {
       const invalid = validateTargetParams(params)
-      if (invalid) return textResult(invalid)
+      if (invalid) return validationError(invalid)
       const window = { maxChars: params.maxChars, offset: params.offset }
       if (params.ax) return run(service.agentClickAx(owner, params.ax, window))
       return params.selector
@@ -461,9 +485,9 @@ export function createBrowserTools(deps: BrowserToolsDeps): ToolDefinition[] {
     executionMode: 'sequential',
     async execute(_id, params) {
       // 预检放在工具层：service 的拦截先要 resolve ref，而超长文本的提示必须无条件可达。
-      if (params.text.length > TYPE_TEXT_MAX_CHARS) return textResult(typeTextTooLongText(params.text.length))
+      if (params.text.length > TYPE_TEXT_MAX_CHARS) return errorResult(new TypeTextTooLongError(params.text.length))
       const invalid = validateTargetParams(params)
-      if (invalid) return textResult(invalid)
+      if (invalid) return validationError(invalid)
       const window = { maxChars: params.maxChars, offset: params.offset }
       return params.selector
         ? run(service.agentTypeSelector(owner, params.selector, params.text, params.submit ?? false, window))
@@ -486,7 +510,7 @@ export function createBrowserTools(deps: BrowserToolsDeps): ToolDefinition[] {
     executionMode: 'sequential',
     async execute(_id, params) {
       if (params.ref === undefined && params.deltaX === undefined && params.deltaY === undefined) {
-        return textResult('error: provide deltaX/deltaY or ref')
+        return validationError('error: provide deltaX/deltaY or ref')
       }
       return run(service.agentScroll(owner, { deltaX: params.deltaX, deltaY: params.deltaY, ref: params.ref, maxChars: params.maxChars, offset: params.offset }))
     }
@@ -514,13 +538,13 @@ export function createBrowserTools(deps: BrowserToolsDeps): ToolDefinition[] {
         } else if (params.annotate && !shot.annotated) {
           notes.push({ type: 'text', text: 'Could not draw labels (no locatable elements or compositing failed); returning the raw screenshot.' })
         }
-        return {
+        return appToolResult({
           content: [
             { type: 'image' as const, data: shot.jpegBase64, mimeType: 'image/jpeg' },
             ...notes
           ],
           details: { kind: 'pi-app-browser' as const, pageId: shot.pageId }
-        }
+        }, { pageId: shot.pageId, annotated: shot.annotated, labels: shot.labels })
       } catch (error) {
         return errorResult(error)
       }
@@ -536,7 +560,7 @@ export function createBrowserTools(deps: BrowserToolsDeps): ToolDefinition[] {
       if (pages.length === 0) return textResult('closed: no open pages')
       const target = params.pageId ?? activePageId
       if (!target) return textResult('closed: no open pages')
-      if (!pages.some((p) => p.id === target)) return textResult(`error: unknown page: ${target}`)
+      if (!pages.some((p) => p.id === target)) return validationError(`error: unknown page: ${target}`)
       const wasActive = target === activePageId
       await service.agentClose(owner, params.pageId)
       const remaining = pages.filter((p) => p.id !== target)
@@ -557,7 +581,7 @@ export function createBrowserTools(deps: BrowserToolsDeps): ToolDefinition[] {
     executionMode: 'sequential',
     async execute(_id, params) {
       const invalid = validateTargetParams(params)
-      if (invalid) return textResult(invalid)
+      if (invalid) return validationError(invalid)
       const window = { maxChars: params.maxChars, offset: params.offset }
       if (params.ax) return run(service.agentHoverAx(owner, params.ax, window))
       return params.selector
@@ -572,7 +596,7 @@ export function createBrowserTools(deps: BrowserToolsDeps): ToolDefinition[] {
     executionMode: 'sequential',
     async execute(_id, params) {
       const invalid = validateTargetParams(params)
-      if (invalid) return textResult(invalid)
+      if (invalid) return validationError(invalid)
       const window = { maxChars: params.maxChars, offset: params.offset }
       return params.selector
         ? run(service.agentSelectSelector(owner, params.selector, params.values, window))
@@ -588,13 +612,21 @@ export function createBrowserTools(deps: BrowserToolsDeps): ToolDefinition[] {
       // 预检放在工具层：路径不存在/是目录/超数量的提示必须无条件可达（service 侧要
       // 先 resolve ref，而这些都是模型一改就能好的参数错）。
       const resolved = await resolveUploadPaths(params.files, deps.cwd)
-      if (!resolved.ok) return textResult(resolved.error)
+      if (!resolved.ok) return validationError(resolved.error, 'INVALID_UPLOAD_PATH')
       const invalid = validateTargetParams(params)
-      if (invalid) return textResult(invalid)
+      if (invalid) return validationError(invalid)
       const window = { maxChars: params.maxChars, offset: params.offset }
       return params.selector
         ? run(service.agentUploadSelector(owner, params.selector, resolved.paths, window))
         : run(service.agentUpload(owner, params.ref!, resolved.paths, window))
     }
   } satisfies ToolDefinition<typeof uploadParameters>]
+  for (const definition of definitions) {
+    definition.outputSchema = appToolOutputSchema(browserDataSchema)
+    const execute = definition.execute
+    definition.execute = async (...args) => {
+      try { return await execute(...args) } catch (error) { return errorResult(error) }
+    }
+  }
+  return definitions
 }

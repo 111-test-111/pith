@@ -2,8 +2,11 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { createWriteStream, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, type WriteStream } from 'node:fs'
 import { join } from 'node:path'
+import { open } from 'node:fs/promises'
+import { once } from 'node:events'
 import { StringDecoder } from 'node:string_decoder'
-import type { BashTaskDTO, BashTaskOutputDTO, BashTaskStatus } from '../../shared/types'
+import type { BashTaskDTO, BashTaskOutputDTO, BashTaskLogOutputDTO, BashTaskStatus } from '../../shared/types'
+import { utf8Page } from '../pi/utf8-page'
 import type { CheckoutCoordinator } from '../rewind/coordinator'
 import { confineShellArgv, runnerFailureMessage, sandboxDenied, sandboxPolicyFor, scrubbedParentEnv } from '../sandbox/broker'
 import type { SandboxMode } from '../sandbox/types'
@@ -118,7 +121,10 @@ export class BashTaskManager {
     if (to < end && low(to)) to--
     if (to <= from && from < end) to = Math.min(end, from + 2)
     return { task: { ...task.dto }, output: task.tail.slice(from - start, to - start), cursor: to,
-      truncated: cursor === undefined ? from > 0 : cursor < from }
+      truncated: cursor === undefined ? from > 0 : cursor < from,
+      source: 'tail', cursorUnit: 'utf16', startCursor: from,
+      hasMore: to < end, eof: to === end && !taskIsLive(task.dto),
+      complete: from === 0 && to === end && !taskIsLive(task.dto) }
   }
 
   async start(options: BashLaunch): Promise<BashTaskDTO> {
@@ -239,6 +245,36 @@ export class BashTaskManager {
     return { ...task.dto }
   }
 
+  /** Durable prefix, separate from the lossy UTF-16 tail cursor. The owner/id
+   * resolves the path; callers cannot use this API to read arbitrary files. */
+  async logOutput(sessionPath: string, id: string, byteOffset = 0, maxBytes = 16_384): Promise<BashTaskLogOutputDTO> {
+    const task = this.owned(sessionPath, id)
+    if (!Number.isSafeInteger(byteOffset) || byteOffset < 0) throw new Error('Invalid log byteOffset')
+    if (!Number.isSafeInteger(maxBytes) || maxBytes < 4 || maxBytes > TAIL_CHARS) throw new Error('Invalid log maxBytes (4–65536)')
+    // A background spawn can resolve before the log's asynchronous open.
+    // Await that file creation only; never await the command or future output.
+    if (task.log?.pending && !task.log.destroyed) await once(task.log, 'open')
+    const file = await open(task.dto.logPath, 'r')
+    try {
+      const endedBeforeRead = !taskIsLive(task.dto)
+      let { size } = await file.stat()
+      if (byteOffset > size) throw new Error('Log byteOffset is beyond availableBytes')
+      const buffer = Buffer.alloc(Math.min(maxBytes + 4, size - byteOffset))
+      const { bytesRead } = await file.read(buffer, 0, buffer.length, byteOffset)
+      const page = utf8Page(buffer.subarray(0, bytesRead), maxBytes)
+      const nextByteOffset = byteOffset + page.length
+      const ended = !taskIsLive(task.dto)
+      // finish() flushes the log before publishing a terminal status. If that
+      // happened during the awaits above, the original size may omit the final
+      // burst: refresh the now-stable size before promising EOF/completeness.
+      if (ended && !endedBeforeRead) size = (await file.stat()).size
+      const eof = nextByteOffset === size && ended
+      return { task: { ...task.dto }, source: 'log', cursorUnit: 'utf8', output: page.toString('utf8'),
+        byteOffset, nextByteOffset, availableBytes: size, hasMore: nextByteOffset < size, eof,
+        truncated: task.dto.logTruncated, complete: eof && byteOffset === 0 && !task.dto.logTruncated }
+    } finally { await file.close() }
+  }
+
   private append(task: Task, text: string, bytes?: Buffer): void {
     // Decoder end() commonly returns an empty string. Process exit is not an
     // output event, especially for a silent command stopped by the model.
@@ -246,16 +282,20 @@ export class BashTaskManager {
     task.tail = (task.tail + text).slice(-TAIL_CHARS)
     task.dto.outputChars += text.length
     task.dto.lastOutputAt = Date.now()
-    if (bytes && task.log && !task.log.destroyed) {
-      const count = Math.min(bytes.length, LOG_BYTES - task.logBytes)
+    if (text && task.log && !task.log.destroyed && !task.dto.logTruncated) {
+      // Each pipe has its own decoder. Persist decoded text in merge order so
+      // a stdout/stderr interleave cannot split a multibyte character in the log.
+      const encoded = Buffer.from(text, 'utf8')
+      const page = utf8Page(encoded, LOG_BYTES - task.logBytes)
+      const count = page.length
       if (count > 0) {
         task.logBytes += count
-        if (!task.log.write(bytes.subarray(0, count))) {
+        if (!task.log.write(page)) {
           task.child?.stdout?.pause()
           task.child?.stderr?.pause()
         }
       }
-      if (count < bytes.length) task.dto.logTruncated = true
+      if (count < encoded.length) task.dto.logTruncated = true
     }
     // Only metadata crosses IPC; logs are fetched when a disclosure is open.
     task.progressTimer ??= setTimeout(() => { task.progressTimer = undefined; this.publish(task) }, 1000)

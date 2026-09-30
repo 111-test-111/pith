@@ -5,6 +5,8 @@ import { escalationHintMarker, planFileDenialMarker, sandboxDenialMarker } from 
 import type { SandboxMode } from '../sandbox/types'
 import type { DebugSessionDTO } from '../../shared/types'
 import { debugActions, debugParameters, dispatchDebugAction, prepareDebugArguments } from './action-registry'
+import { appToolError, appToolResult, ToolFailure } from '../pi/tool-result'
+import { debugOutputSchema, debugResultData } from './result-schema'
 
 export const DEBUG_TOOL_NAME = 'debug'
 export const APP_DEBUG_TOOL_NAMES = [DEBUG_TOOL_NAME] as const
@@ -15,10 +17,10 @@ const DEBUG_GUIDELINES = [
   'Native breakpoint sets: breakpoints.instruction items [{instructionReference,offset?,condition?,hitCondition?}] and breakpoints.function items [{name,condition?,hitCondition?}] replace their entire sets. Pass debugId + current stopId. Instruction addresses are cleared on restart (ASLR); re-fetch PC/disassembly. Function names persist. breakpoints.native lists their bindings; verified is not condition validation.',
   'Use control granularity=instruction for real instruction next/stepIn/stepOut only when supportsSteppingGranularity is true; no silent fallback to source stepping. Capability flags in each session gate disassembly, memory, native breakpoints and modules. New reference operations require debugId and stopId; opaque references are strings, never convert them to numbers.',
   'Reach for the debugger when a program crashes, hangs, or corrupts state: attach or launch, set breakpoints, step, and read the real frames and variables instead of sprinkling print statements. For a short-lived target, pass initial source breakpoints [{file,items:[{line,condition?,hitCondition?,logMessage?}]}] or functionBreakpoints [{name,condition?,hitCondition?}] to start so they bind before configurationDone. Small deterministic reproducers are still faster with plain bash.',
-  'Multiple debug sessions may run in this chat. sessions lists them. Pass debugId on every targeted action when more than one is live. Child agents own separate sessions: parent and siblings cannot inspect or control them.',
-  'control actions (continue/next/stepIn/stepOut/pause) block until the debuggee stops again or waitMs expires. settled=true means a stop (or termination) was reached; settled=false means it is still running — use control again or inspect output instead of re-sending the same step.',
+  'Multiple debug sessions may run in this chat. sessions includes retained ended targets for console inspection; starting/running/stopped are live, terminated/failed are ended. Pass debugId on every targeted action when more than one is live. Child agents own separate sessions: parent and siblings cannot inspect or control them.',
+  'control actions (continue/next/stepIn/stepOut/pause) block until the debuggee stops again or waitMs expires (500–120000 ms). Pause is request:{action:"control",control:"pause"}. settled=false means it is running or still loading a stop. Use {debugId,request:{action:"wait",afterRevision:session.revision,waitMs:10000}} to passively await a newer stop or termination; never send another step just to wait. wait accepts 0–60000 ms, can observe any change with until="changed", is cancellable, and sends no DAP control request. Omit afterRevision to accept the current stop. settled describes target state, timedOut describes the wait: an unchanged stopped target can return both true. A terminal target returns immediately; check session.status before inspection.',
   'Read stopReason, stopDescription, stopText, hitBreakpointIds, conditionError and stopDiagnostics after every control. "breakpoint" can also mean a condition failed to evaluate, especially in LLDB; inspect output before concluding a condition matched. "step" is a completed step; "entry" is process entry (macOS may stop in the dynamic linker). A continue after a breakpoint interrupted an LLDB step may first complete that step.',
-  'threads/stack/scopes/variables/evaluate require a stopped debuggee. Pass debugId + current stopId for scopes, variables and evaluate with frameId. stack gives frame ids, scopes give variablesReferences, variables expand one level per call (default page 50, truncated=true when more exist — page large arrays with start/count). Values are truncated server-side (256 chars per value, 2048 chars per evaluate result).',
+  'threads/stack/scopes/variables/evaluate require a stopped debuggee. Pass debugId + current stopId for scopes, variables and evaluate with frameId. stack gives frame ids, scopes give variablesReferences, variables expand one level per call (default page 50, truncated=true when more exist — page large arrays with start/count). registers returns scopes; their children may be register groups requiring further variables calls. Expand only positive references with bounded depth and a visited set; 0 is a leaf. Values are truncated server-side (256 chars per value, 2048 chars per evaluate result).',
   'Frame ids and variablesReferences are recycled at every stop: after any control action, re-fetch stack/scopes/variables instead of reusing ids from an earlier stop.',
   'lldb-dap answers evaluate in REPL form — "(int) $0 = 7". The $N handle is real: reuse it in later evaluate expressions of the same stop.',
   'breakpoints replaces the whole breakpoint set of one file: pass every item to keep. verified only reports binding, NOT expression validity or a true condition. conditionStatus=unvalidated remains until an adapter reports an error; never claim validation from verified=true. verified=false may be pending until a module loads. Use items:[{line,condition?,hitCondition?,logMessage?}] so each breakpoint owns its options. A condition normally stops when true but adapters may also stop on evaluation errors; hitCondition gates hit count and logMessage creates a logpoint.',
@@ -98,8 +100,9 @@ export function createDebugTools(options: DebugToolOptions): ToolDefinition[] {
     name: DEBUG_TOOL_NAME,
     label: 'debug',
     parameters: debugParameters,
+    outputSchema: debugOutputSchema,
     prepareArguments: prepareDebugArguments,
-    description: 'Drive isolated DAP targets with source or machine-level inspection: launch/attach/core, breakpoints, instruction/source stepping, stack/registers, memory and modules. Use action-specific requests; supports LLDB, debugpy, Delve and js-debug.',
+    description: 'Drive isolated DAP targets with source or machine-level inspection: launch/attach/core, breakpoints, instruction/source stepping, stack/registers, memory and modules. Use action-specific requests; supports LLDB, debugpy, Delve and js-debug. Scripts receive {ok,isError,data,content}: data.action identifies the result, start/restart/stop return data.session, stack returns data.frames, registers returns data.scopes. Inspect error.code/message on failure; use help for action input and result schemas.',
     promptSnippet: 'Debug crashes with live state, source/assembly, registers, memory and breakpoints.',
     promptGuidelines: DEBUG_GUIDELINES,
     executionMode: 'sequential',
@@ -110,42 +113,47 @@ export function createDebugTools(options: DebugToolOptions): ToolDefinition[] {
       const { request, debugId, stopId } = prepared
       if (debugActions[request.action].policy.access === 'execute') await requireExecMode(toolCallId, prepared, signal)
       if (signal?.aborted || !options.enabled() || options.isPlanRestricted?.()) throw new Error('Debug action cancelled; debugger disabled or Plan mode changed')
-      const value = await dispatchDebugAction({
-        manager, sessionPath, debugId, stopId, signal,
-        canStart: () => options.canStart() && options.enabled() && !options.isPlanRestricted?.(),
-        adapters: async (cwd) => {
-          if (signal?.aborted || !options.canStart() || !options.enabled() || options.isPlanRestricted?.()) throw new Error('Debug adapter discovery cancelled')
-          return detectDebugAdapters(cwd || ctx.cwd || services.cwd, signal)
-        },
-        configurations: cwd => readLaunchConfigurations(cwd || ctx.cwd || services.cwd)
-          .map(({ extraArguments, ...summary }) => ({ ...summary, extraKeys: Object.keys(extraArguments) })),
-        start: async request => {
-          if (signal?.aborted || !options.canStart()) throw new Error('Debug session cancelled before launch')
-          const config = request.configuration !== undefined ? resolveConfiguration(ctx.cwd || services.cwd, request.configuration) : undefined
-          const adapterId = request.adapter ?? config?.adapterId ?? ''
-          const extraArguments = { ...config?.extraArguments }
-          if (adapterId === 'debugpy' && request.program !== undefined) delete extraArguments.module
-          const files = request.breakpoints?.map(group => group.file) ?? []
-          if (new Set(files).size !== files.length) throw new Error('Duplicate initial breakpoint file')
-          return manager.start({
-            sessionId, sessionPath, workspaceCwd: services.cwd, signal,
-            canStart: () => options.canStart() && options.enabled() && !options.isPlanRestricted?.(),
-            coreFile: request.coreFile ?? config?.coreFile, name: config?.name,
-            cwd: request.cwd ?? config?.cwd ?? ctx.cwd ?? services.cwd,
-            adapterId, kind: request.kind ?? config?.kind ?? 'launch',
-            program: request.program ?? config?.program, args: request.args ?? config?.args,
-            env: request.env ?? config?.env, pid: request.pid ?? config?.pid,
-            stopOnEntry: request.stopOnEntry ?? config?.stopOnEntry,
-            initialBreakpoints: request.breakpoints ? new Map(request.breakpoints.map(group => [group.file, group.items])) : undefined,
-            initialFunctionBreakpoints: request.functionBreakpoints,
-            ...(Object.keys(extraArguments).length ? { extraArguments } : {}),
-            runInTerminal: options.runInTerminal()
-          })
-        }
-      }, request)
-      const session = ['start', 'restart', 'stop'].includes(request.action) ? value as DebugSessionDTO
-        : value && typeof value === 'object' && 'session' in value ? (value as { session: DebugSessionDTO }).session : undefined
-      return { content: text(value), details: session ? details(session) : undefined }
+      try {
+        const value = await dispatchDebugAction({
+          manager, sessionPath, debugId, stopId, signal,
+          canStart: () => options.canStart() && options.enabled() && !options.isPlanRestricted?.(),
+          adapters: async (cwd) => {
+            if (signal?.aborted || !options.canStart() || !options.enabled() || options.isPlanRestricted?.()) throw new Error('Debug adapter discovery cancelled')
+            return detectDebugAdapters(cwd || ctx.cwd || services.cwd, signal)
+          },
+          configurations: cwd => readLaunchConfigurations(cwd || ctx.cwd || services.cwd)
+            .map(({ extraArguments, ...summary }) => ({ ...summary, extraKeys: Object.keys(extraArguments) })),
+          start: async request => {
+            if (signal?.aborted || !options.canStart()) throw new Error('Debug session cancelled before launch')
+            const config = request.configuration !== undefined ? resolveConfiguration(ctx.cwd || services.cwd, request.configuration) : undefined
+            const adapterId = request.adapter ?? config?.adapterId ?? ''
+            const extraArguments = { ...config?.extraArguments }
+            if (adapterId === 'debugpy' && request.program !== undefined) delete extraArguments.module
+            const files = request.breakpoints?.map(group => group.file) ?? []
+            if (new Set(files).size !== files.length) throw new Error('Duplicate initial breakpoint file')
+            return manager.start({
+              sessionId, sessionPath, workspaceCwd: services.cwd, signal,
+              canStart: () => options.canStart() && options.enabled() && !options.isPlanRestricted?.(),
+              coreFile: request.coreFile ?? config?.coreFile, name: config?.name,
+              cwd: request.cwd ?? config?.cwd ?? ctx.cwd ?? services.cwd,
+              adapterId, kind: request.kind ?? config?.kind ?? 'launch',
+              program: request.program ?? config?.program, args: request.args ?? config?.args,
+              env: request.env ?? config?.env, pid: request.pid ?? config?.pid,
+              stopOnEntry: request.stopOnEntry ?? config?.stopOnEntry,
+              initialBreakpoints: request.breakpoints ? new Map(request.breakpoints.map(group => [group.file, group.items])) : undefined,
+              initialFunctionBreakpoints: request.functionBreakpoints,
+              ...(Object.keys(extraArguments).length ? { extraArguments } : {}),
+              runInTerminal: options.runInTerminal()
+            })
+          }
+        }, request)
+        const session = ['start', 'restart', 'stop'].includes(request.action) ? value as DebugSessionDTO
+          : value && typeof value === 'object' && 'session' in value ? (value as { session: DebugSessionDTO }).session : undefined
+        return appToolResult({ content: text(value), details: session ? details(session) : undefined }, debugResultData(request.action, value))
+      } catch (error) {
+        if (error instanceof ToolFailure) return appToolError(error)
+        throw error
+      }
     }
   }]
 }

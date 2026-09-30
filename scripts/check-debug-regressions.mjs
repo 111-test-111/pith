@@ -37,7 +37,13 @@ try {
   const coordinator = new CheckoutCoordinator()
   manager = new DebugManager(() => {}, coordinator)
   const lldb = debugAdapterSpec(workspace, 'lldb-dap'), python = debugAdapterSpec(workspace, 'debugpy'), js = debugAdapterSpec(workspace, 'js-debug')
-  for (const spec of [lldb, python, js]) { const detect = spec.detect; restoreAdapters.push(() => { spec.detect = detect }) }
+  for (const spec of [lldb, python, js]) { const detect = spec.detect, validateLaunch = spec.validateLaunch; restoreAdapters.push(() => { spec.detect = detect; spec.validateLaunch = validateLaunch }) }
+  // Protocol fixtures use virtual target paths. Keep argument validation but
+  // substitute a real file only for the host-file preflight.
+  for (const spec of [lldb, python, js]) {
+    const validate = spec.validateLaunch
+    spec.validateLaunch = args => validate({ ...args, ...(typeof args.program === 'string' ? { program: process.execPath } : {}) })
+  }
   const useFixture = (spec, mode) => { spec.detect = async () => ({ command: process.execPath, args: [fixture, mode, '${port}'] }) }
   useFixture(lldb, 'normal'); useFixture(python, 'normal'); useFixture(js, 'child-native')
   const toolFor = (sessionPath, runInTerminal) => createDebugTools({ manager, services: { cwd: workspace }, sessionId: sessionPath, sessionPath,

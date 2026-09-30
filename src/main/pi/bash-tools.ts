@@ -5,6 +5,7 @@ import { BashTaskManager, taskIsLive } from '../bash/manager'
 import { escalationHintMarker, PLAN_ESCALATION_REFUSED, PLAN_SHELL_UNAVAILABLE, planFileDenialMarker, SANDBOX_ESCALATION_PROPERTIES, sandboxDenialMarker } from '../sandbox/escalation'
 import type { SandboxMode } from '../sandbox/types'
 import type { BashTaskDTO } from '../../shared/types'
+import { appToolOutputSchema, appToolResult } from './tool-result'
 
 export const APP_BASH_TOOL_NAMES = ['bash', 'bash_task'] as const
 
@@ -19,11 +20,26 @@ const bashParameters = Type.Object({
 })
 
 const taskParameters = Type.Object({
-  action: Type.Union([Type.Literal('list'), Type.Literal('status'), Type.Literal('output'), Type.Literal('stop')]),
+  action: Type.Union([Type.Literal('list'), Type.Literal('status'), Type.Literal('output'), Type.Literal('log'), Type.Literal('stop')]),
   taskId: Type.Optional(Type.String({ description: 'Required except for list. Only tasks belonging to this session are accessible.' })),
   cursor: Type.Optional(Type.Integer({ minimum: 0, description: 'Output cursor returned by an earlier output call. Omit for recent output.' })),
-  maxChars: Type.Optional(Type.Integer({ minimum: 1, maximum: 65_536, description: 'Maximum returned output characters, default 16384. Older output may have left the bounded tail; truncated reports that gap.' }))
+  maxChars: Type.Optional(Type.Integer({ minimum: 1, maximum: 65_536, description: 'Maximum returned output characters, default 16384. Older output may have left the bounded tail; truncated reports that gap.' })),
+  byteOffset: Type.Optional(Type.Integer({ minimum: 0, description: 'log only: UTF-8 byte cursor, default 0. Use nextByteOffset, never the tail cursor.' })),
+  maxBytes: Type.Optional(Type.Integer({ minimum: 4, maximum: 65_536, description: 'log only: maximum bytes per page, default 16384.' }))
 })
+
+const taskSchema = Type.Object({
+  id: Type.String(), status: Type.Union(['running', 'stopping', 'succeeded', 'failed', 'cancelled', 'timed_out', 'interrupted'].map(v => Type.Literal(v))),
+  command: Type.String(), background: Type.Boolean(), outputChars: Type.Number(), logTruncated: Type.Boolean(),
+  exitCode: Type.Optional(Type.Union([Type.Number(), Type.Null()])), error: Type.Optional(Type.String()),
+  startedAt: Type.Number(), endedAt: Type.Optional(Type.Number()), revision: Type.Number()
+})
+const outputSchema = Type.Object({ task: taskSchema, output: Type.String(), cursor: Type.Number(), truncated: Type.Boolean(),
+  source: Type.Literal('tail'), cursorUnit: Type.Literal('utf16'), startCursor: Type.Number(),
+  hasMore: Type.Boolean(), eof: Type.Boolean(), complete: Type.Boolean(), guidance: Type.Optional(Type.String()), sandbox: Type.Optional(Type.String()) })
+const logSchema = Type.Object({ task: taskSchema, output: Type.String(), source: Type.Literal('log'), cursorUnit: Type.Literal('utf8'),
+  byteOffset: Type.Number(), nextByteOffset: Type.Number(), availableBytes: Type.Number(), hasMore: Type.Boolean(),
+  eof: Type.Boolean(), truncated: Type.Boolean(), complete: Type.Boolean() })
 
 export const BASH_GUIDELINES = [
   'Use bash mode="blocking" for short commands and mode="background" for long commands or servers. Blocking commands automatically continue in the background when the app wait threshold expires; the same process keeps running. waitMs cannot bypass that threshold. timeout is a separate total runtime limit that terminates the command. For a long-lived server, check readiness separately; its completion notification reports process exit, not readiness.',
@@ -68,6 +84,7 @@ export function createManagedBashTools(options: {
   const details = (task: BashTaskDTO) => ({ bashTask: task })
   return [{
     name: 'bash', label: 'bash', parameters: bashParameters,
+    outputSchema: appToolOutputSchema(outputSchema),
     description: 'Execute a managed bash command directly. mode=blocking (default) waits up to the app threshold and returns recent stdout/stderr, status and exit code; mode=background returns a task ID immediately while the same command keeps running — track or stop it with bash_task.',
     promptSnippet: 'Run shell commands with bounded waiting, automatic background execution and completion steering.',
     promptGuidelines: BASH_GUIDELINES,
@@ -134,15 +151,19 @@ export function createManagedBashTools(options: {
         let current = tasks.get(sessionPath, task.id)
         if (taskIsLive(current)) current = tasks.detach(sessionPath, task.id, args.mode === 'background' ? 'requested' : 'wait_threshold')
         const output = tasks.output(sessionPath, task.id)
+        const sandbox = current.denied ? `${sandboxDenialMarker(mode)}\n${restricted ? planFileDenialMarker('command') : escalationHintMarker('command')}` : undefined
         const content = [{ type: 'text' as const, text: JSON.stringify({ ...current, output: output.output, cursor: output.cursor, truncated: output.truncated,
           ...(current.background && taskIsLive(current) ? { guidance: PENDING_GUIDANCE } : {}),
           // A denial is a policy outcome with a way forward; say so, or the model
           // just retries the same command. In Plan the way forward is never a
           // wider mode, so the escalation hint is replaced.
-          ...(current.denied ? { sandbox: `${sandboxDenialMarker(mode)}\n${restricted ? planFileDenialMarker('command') : escalationHintMarker('command')}` } : {}) }) }]
+          ...(sandbox ? { sandbox } : {}) }) }]
         update()
-        if (!taskIsLive(current) && current.status !== 'succeeded') throw new Error(content[0].text)
-        return { content, details: details(current) }
+        const failed = !taskIsLive(current) && current.status !== 'succeeded'
+        return appToolResult({ content, details: details(current) }, { ...output,
+          ...(current.background && taskIsLive(current) ? { guidance: PENDING_GUIDANCE } : {}), ...(sandbox ? { sandbox } : {}) },
+          failed ? { code: current.denied ? 'SANDBOX_DENIED' : `COMMAND_${current.status.toUpperCase()}`,
+            message: sandbox ?? current.error ?? `Command ${current.status} (exit code ${current.exitCode ?? 'unavailable'})` } : undefined)
       } finally {
         clearTimeout(timer)
         clearInterval(updates)
@@ -152,24 +173,33 @@ export function createManagedBashTools(options: {
     }
   } satisfies ToolDefinition<typeof bashParameters>, {
     name: 'bash_task', label: 'bash_task', parameters: taskParameters,
-    description: 'Manage this session\'s bash tasks: list, status, output, or stop. status reports elapsed timestamps, last output time and exit status (no estimated percentage). output reads a bounded tail and returns a cursor for incremental reads. stop terminates the process tree (graceful, then forced).',
+    outputSchema: appToolOutputSchema(Type.Union([Type.Object({ tasks: Type.Array(taskSchema) }), outputSchema, logSchema])),
+    description: 'Manage this session\'s bash tasks: list, status, output, log, or stop. output reads a bounded tail using a UTF-16 cursor; truncated means a gap before startCursor. log pages the persisted prefix (up to 8 MiB) with byteOffset/nextByteOffset in UTF-8 bytes; truncated means some output was not retained. eof means the task ended and this page reaches the retained end, not necessarily the complete command output. Neither read waits for completion. stop terminates the process tree.',
     promptSnippet: 'List, inspect output/progress, or terminate this session\'s background shell tasks.',
     executionMode: 'sequential',
     async execute(_id, args) {
       const restricted = options.isPlanRestricted?.() === true
-      if (args.action === 'list') return {
-        content: [{ type: 'text', text: JSON.stringify(tasks.list(sessionPath)) }], details: undefined
+      if (args.action === 'list') {
+        const list = tasks.list(sessionPath)
+        return appToolResult({ content: [{ type: 'text', text: JSON.stringify(list) }], details: undefined }, { tasks: list })
       }
       if (!args.taskId) throw new Error('taskId is required for this action')
+      if (args.action === 'log') {
+        if (args.cursor !== undefined || args.maxChars !== undefined) throw new Error('log uses byteOffset/maxBytes, not cursor/maxChars')
+        const value = await tasks.logOutput(sessionPath, args.taskId, args.byteOffset, args.maxBytes)
+        return appToolResult({ content: [{ type: 'text', text: JSON.stringify(value) }], details: details(value.task) }, value)
+      }
+      if (args.byteOffset !== undefined || args.maxBytes !== undefined) throw new Error('byteOffset/maxBytes require action=log')
       if (args.action === 'stop') await tasks.stop(sessionPath, args.taskId)
       const output = tasks.output(sessionPath, args.taskId, args.action === 'output' ? args.cursor : undefined, args.maxChars)
-      return { content: [{ type: 'text', text: JSON.stringify({ ...output,
+      const value = { ...output,
         ...(output.task.background && taskIsLive(output.task) ? { guidance: PENDING_GUIDANCE } : {}),
         // Same contract as the inline result: a denial explains itself and
         // names the escalation lever, in the mode the command ran under.
         ...(output.task.denied && output.task.sandboxMode
           ? { sandbox: `${sandboxDenialMarker(output.task.sandboxMode)}\n${restricted ? planFileDenialMarker('command') : escalationHintMarker('command')}` }
-          : {}) }) }], details: details(output.task) }
+          : {}) }
+      return appToolResult({ content: [{ type: 'text', text: JSON.stringify(value) }], details: details(output.task) }, value)
     }
   } satisfies ToolDefinition<typeof taskParameters>]
 }

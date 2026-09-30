@@ -1,6 +1,7 @@
 /** Managed processes + real SDK steering. No credentials, network or real sessions. */
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, rm, writeFile, stat } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile, stat, open } from 'node:fs/promises'
+import { statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -94,15 +95,56 @@ export { CheckoutCoordinator } from './src/main/rewind/coordinator';`, resolveDi
 
   const explicit = await run('background', { command: nodeCommand('setTimeout(()=>{},400)'), mode: 'background' })
   assert.equal(explicit.details.bashTask.reason, 'requested')
+  const liveLog = await tasks.logOutput(owner.sessionPath, explicit.details.bashTask.id)
+  assert.equal(liveLog.eof, false); assert.equal(liveLog.complete, false)
+  assert.equal(liveLog.output, '', 'an immediate log read handles a newly opened, silent task')
   await tasks.wait(owner.sessionPath, explicit.details.bashTask.id)
   assert.equal(tasks.get(owner.sessionPath, explicit.details.bashTask.id).lastOutputAt, undefined, 'silent completion is not an output event')
+
+  // Hold an in-flight file read after its initial size observation. The real
+  // process then writes a final chunk and exits before that read returns.
+  const releaseLog = join(temporary, 'release-log')
+  const prefix = 'before 中文😀\n', suffix = 'after 中文😀\n'
+  const racing = await run('log-eof-race', { command: nodeCommand(`process.stdout.write(${JSON.stringify(prefix)});const timer=setInterval(()=>{if(require('fs').existsSync(${JSON.stringify(releaseLog)})){clearInterval(timer);process.stdout.write(${JSON.stringify(suffix)});}},10)`), mode: 'background' })
+  const raceTask = racing.details.bashTask
+  await until(() => statSync(raceTask.logPath, { throwIfNoEntry: false })?.size === Buffer.byteLength(prefix), 'initial log prefix persisted')
+  const handle = await open(raceTask.logPath, 'r')
+  const prototype = Object.getPrototypeOf(handle), originalRead = prototype.read
+  let held = false
+  prototype.read = async function (...args) {
+    const result = await originalRead.apply(this, args)
+    if (!held) {
+      held = true
+      await writeFile(releaseLog, '')
+      await tasks.wait(owner.sessionPath, raceTask.id)
+    }
+    return result
+  }
+  let racePage
+  try { racePage = await tasks.logOutput(owner.sessionPath, raceTask.id) }
+  finally { prototype.read = originalRead; await handle.close() }
+  assert.equal(held, true)
+  assert.equal(racePage.task.status, 'succeeded')
+  assert.equal(racePage.output, prefix)
+  assert.equal(racePage.eof, false, 'a command finishing during a log read cannot turn the old file size into EOF')
+  assert.equal(racePage.complete, false)
+  assert.equal(racePage.hasMore, true)
+  assert.equal(racePage.availableBytes, Buffer.byteLength(prefix + suffix))
+  const finalPage = await tasks.logOutput(owner.sessionPath, raceTask.id, racePage.nextByteOffset)
+  assert.equal(racePage.output + finalPage.output, prefix + suffix)
+  assert.equal(finalPage.eof, true)
+  assert.equal(finalPage.hasMore, false)
+
   const control = new AbortController()
   const independent = await run('signal-ownership', { command: nodeCommand('setTimeout(()=>console.log("survived"),250)'), mode: 'background' }, control.signal)
   control.abort()
   await tasks.wait(owner.sessionPath, independent.details.bashTask.id)
   assert.equal(tasks.get(owner.sessionPath, independent.details.bashTask.id).status, 'succeeded', 'a returned call does not own the process abort signal')
 
-  await assert.rejects(run('failure', { command: 'printf broken >&2; exit 7' }), /"exitCode":7/)
+  const failure = await run('failure', { command: 'printf broken >&2; exit 7' })
+  assert.equal(failure.isError, true)
+  assert.equal(failure.structuredContent.error.code, 'COMMAND_FAILED')
+  assert.equal(failure.structuredContent.data.task.exitCode, 7)
   const timeout = await run('timeout', { command: nodeCommand('setInterval(()=>{},1000)'), timeout: 0.25 })
   await tasks.wait(owner.sessionPath, timeout.details.bashTask.id)
   assert.equal(tasks.get(owner.sessionPath, timeout.details.bashTask.id).status, 'timed_out')
@@ -122,12 +164,22 @@ export { CheckoutCoordinator } from './src/main/rewind/coordinator';`, resolveDi
   assert(bounded.truncated && bounded.task.logTruncated)
   assert.match(bounded.output, /END中文😀/)
   assert((await stat(bounded.task.logPath)).size <= 8 * 1024 * 1024)
+  const logPage = await tasks.logOutput(owner.sessionPath, huge.details.bashTask.id, 8 * 1024 * 1024 - 100, 100)
+  assert.equal(logPage.source, 'log'); assert.equal(logPage.cursorUnit, 'utf8')
+  assert.equal(logPage.eof, true); assert.equal(logPage.truncated, true); assert.equal(logPage.complete, false)
+  await assert.rejects(tasks.logOutput('/another-session', huge.details.bashTask.id), /Unknown task/)
+  const unicodeLog = await run('unicode-log-cap', { command: nodeCommand('process.stdout.write("x".repeat(8*1024*1024-1)+"😀");setTimeout(()=>console.log("END"),10)'), mode: 'background' })
+  await tasks.wait(owner.sessionPath, unicodeLog.details.bashTask.id)
+  const unicodePage = await tasks.logOutput(owner.sessionPath, unicodeLog.details.bashTask.id, 8 * 1024 * 1024 - 20, 100)
+  assert.equal(unicodePage.availableBytes, 8 * 1024 * 1024 - 1, 'the log cap must not cut a Unicode character or resume after a gap')
+  assert.equal(unicodePage.truncated, true); assert.equal(unicodePage.eof, true)
+  assert.equal(unicodePage.output, 'x'.repeat(19))
   const stopped = new AbortController()
   stopped.abort()
   await assert.rejects(run('pre-abort', { command: 'exit 0' }, stopped.signal), /cancelled/)
   const failedSpawn = await tasks.start({ ...owner, toolCallId: 'spawn-error', command: 'x', cwd: temporary, shell: '/not-a-shell', args: ['-c'], env: {} })
   assert.equal(failedSpawn.status, 'failed')
-  console.log('PASS: foreground, forced/explicit background, one process, output cursors/Unicode, failure/timeout, cancellation, process tree and bounded logs.')
+  console.log('PASS: foreground, forced/explicit background, one process, output cursors/Unicode, failure/timeout, cancellation, process tree, bounded logs and completion-during-read EOF.')
 
   // Use the real SDK event loop and replace only its model stream. Every
   // request is deterministic, and no API call or credential lookup is made.

@@ -42,6 +42,12 @@ try {
   assert.ok(windowsScript.includes("$p.EnvironmentVariables.Remove('DELETE')"))
   assert.ok(windowsScript.includes("$p.EnvironmentVariables['SET'] = 'a'' b'"))
   assert.ok(windowsScript.includes('"a\\"b" "tail\\\\" "" "%PATH% & echo nope"'))
+  // Protocol fixtures use virtual target paths. Keep argument validation but
+  // substitute a real file only for the host-file preflight.
+  for (const spec of [lldb, python, go, js]) {
+    const validate = spec.validateLaunch
+    spec.validateLaunch = args => validate({ ...args, ...(typeof args.program === 'string' ? { program: process.execPath } : {}) })
+  }
   const useFixture = (spec, mode) => { spec.detect = async () => ({ command: process.execPath, args: [fixture, mode, '${port}'] }) }
   useFixture(lldb, 'normal'); useFixture(python, 'normal'); useFixture(go, 'tcp'); useFixture(js, 'child')
   const start = (over = {}) => manager.start({ sessionId: 'parent', sessionPath: '/parent', workspaceCwd: temp, cwd: temp, adapterId: 'lldb-dap', kind: 'launch', program: '/fixture/demo', ...over })
@@ -70,7 +76,7 @@ try {
   assert.equal((await manager.breakpoints('/parent', replacement.id))[0].line, 9)
   const output = manager.output('/parent', undefined, 65536, replacement.id)
   assert.equal(output.output.length, 65536); assert.ok(output.output.endsWith('TAIL')); assert.equal(output.truncated, true)
-  await assert.rejects(manager.scopes('/parent', 1, replacement.id, replacement.stopId), /not stopped/)
+  await assert.rejects(manager.scopes('/parent', 1, replacement.id, replacement.stopId), error => error.code === 'DEBUG_STALE_STOP')
   await manager.control('/parent', 'stepIn', undefined, 500, replacement.id)
   await until(() => updates.some(s => s.id === replacement.id && s.stopId === 3))
   await delay(20)

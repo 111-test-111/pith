@@ -38,6 +38,7 @@ export async function createPlanFixture({ respond: initialRespond, extensionFact
   await build({
     stdin: {
       contents: `export { PiManager } from './src/main/pi/manager';
+export { debugAdapterSpec } from './src/main/debug/adapters';
 export { PlanStorage } from './src/main/pi/plan-storage';
 export * from './src/main/pi/plan-protocol';
 export { PiStore } from './src/renderer/src/state/pi-store';
@@ -110,7 +111,8 @@ export async function createAgentSessionFromServices(options){
     SessionManager,
     ModelRuntime,
     setPlanFixtureStream,
-    registerPlanFixtureExtensionFactories
+    registerPlanFixtureExtensionFactories,
+    debugAdapterSpec
   } = await import(pathToFileURL(outfile).href)
 
   registerPlanFixtureExtensionFactories(extensionFactories)
@@ -207,6 +209,7 @@ export async function createAgentSessionFromServices(options){
     session,
     manager,
     store,
+    debugAdapterSpec,
     project,
     temporary,
     requests,

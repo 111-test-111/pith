@@ -90,6 +90,9 @@ export class ConsentRequiredError extends Error { constructor() { super('browser
 export class PageNotFoundError extends Error { constructor(id: string) { super(`unknown page: ${id}`); this.name = 'PageNotFoundError' } }
 export class PageGoneError extends Error { constructor(id: string) { super(`page is gone: ${id}`); this.name = 'PageGoneError' } }
 export class StaleSnapshotError extends Error { constructor(msg?: string) { super(msg); this.name = 'StaleSnapshotError' } }
+export class RefNotInSnapshotError extends StaleSnapshotError {
+  constructor(ref: string) { super(`ref ${ref} is not in the current snapshot; it may be stale or mistyped. Read browser_snapshot and use one of its refs`); this.name = 'RefNotInSnapshotError' }
+}
 export class InvalidRefError extends Error { constructor(ref: unknown) { super(`invalid ref: ${String(ref)}`); this.name = 'InvalidRefError' } }
 export class NavigationBlockedError extends Error { constructor(url: string) { super(`navigation blocked: ${url}`); this.name = 'NavigationBlockedError' } }
 /** browser_snapshot 的 selector 无匹配/多匹配/语法错误。 */
@@ -298,6 +301,7 @@ export interface AgentActionResult {
   unmet?: string[]
   /** app 自产说明（截断/窗口外改动），工具层放在不可信边界之外。 */
   snapshotNote?: string
+  window?: { offset: number; nextOffset: number | null; totalChars: number; cap: number; truncated: boolean; eof: boolean; diff: boolean }
 }
 
 const MAX_RETIRED_IDS = 100
@@ -1471,6 +1475,8 @@ export class BrowserService {
     return {
       pageId,
       snapshot: ingested.visible,
+      window: { offset: ingested.offset, nextOffset: ingested.truncated && ingested.visible.length ? ingested.offset + ingested.visible.length : null,
+        totalChars: ingested.totalChars, cap: ingested.cap, truncated: ingested.truncated, eof: !ingested.truncated, diff: false },
       windowPopups,
       url,
       title,
@@ -1541,7 +1547,7 @@ export class BrowserService {
       throw new StaleSnapshotError('the page was driven by the user; call browser_snapshot again')
     }
     if (!rec.snapshot.refs.includes(ref)) {
-      throw new StaleSnapshotError(`ref ${ref} is stale; call browser_snapshot again`)
+      throw new RefNotInSnapshotError(ref)
     }
     return { pageId, locator: this.requireRuntime(pageId).page.locator(`aria-ref=${ref}`) }
   }
@@ -1919,6 +1925,7 @@ export class BrowserService {
         const notes = [...captured.extraNotes, ...this.truncationNotes(captured.ingested, true)]
         return {
           ...base,
+          window: { ...base.window!, diff: true },
           snapshot: `Diff from the previous snapshot (- removed / + added):\n${diffSnapshotLines(prev, captured.ingested.visible)}`,
           // 语气换掉 base 的整页截断说明：diff 只比较可见窗口，窗口外的改动不会出现在
           // 这里，必须显式说出来。（无说明时显式清掉 base 的那条。）

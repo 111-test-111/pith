@@ -3,6 +3,8 @@ import { Check } from 'typebox/value'
 import type { DebugCapabilitiesDTO, DebugPanelRequest, DebugSessionDTO } from '../../shared/types'
 import { SANDBOX_ESCALATION_PROPERTIES } from '../sandbox/escalation'
 import type { DebugManager } from './manager'
+import { ToolFailure } from '../pi/tool-result'
+import { debugResults } from './result-schema'
 
 const string = () => Type.String({ minLength: 1, maxLength: 8192 })
 const int = () => Type.Integer({ minimum: 0 })
@@ -76,6 +78,14 @@ export const debugActions = {
   }),
   restart: define(actionSchema('restart', {}), execute, c => c.manager.restart(c.sessionPath, c.debugId, c.signal, c.canStart)),
   stop: define(actionSchema('stop', {}), { ...execute, core: true }, c => c.manager.stop(c.sessionPath, c.debugId)),
+  wait: define(actionSchema('wait', {
+    afterRevision: optional(Type.Integer({ minimum: 0, description: 'Previously observed revision of this debugId. Require a newer revision; omit to accept an already stopped target. Terminal targets always return immediately.' })),
+    waitMs: optional(Type.Integer({ minimum: 0, maximum: 60_000, description: 'Passive observation deadline, default 10000 ms. 0 checks immediately; never resumes or stops the target.' })),
+    until: optional(Type.Union([Type.Literal('stopped'), Type.Literal('changed')], { description: 'Default stopped: wait for a fully loaded stop or termination. changed: wait for any newer revision, even while running.' }))
+  }), read, (c, r) => {
+    if (!c.debugId) throw new ToolFailure('DEBUG_TARGET_REQUIRED', 'debugId is required for wait')
+    return c.manager.wait(c.sessionPath, c.debugId, { ...r, signal: c.signal })
+  }),
   breakpoints: define(actionSchema('breakpoints', {
     file: string(), items: Type.Array(Type.Object({ line: Type.Integer({ minimum: 1 }),
       condition: optional(Type.String()), hitCondition: optional(Type.String()), logMessage: optional(Type.String())
@@ -90,7 +100,7 @@ export const debugActions = {
     (c, r) => c.manager.toggleBreakpoint(c.sessionPath, r.file, r.line, c.manager.get(c.sessionPath, c.debugId).id)),
   control: define(actionSchema('control', {
     control: Type.Union(['continue', 'pause', 'next', 'stepIn', 'stepOut'].map(value => Type.Literal(value))),
-    threadId: optional(int()), waitMs: optional(Type.Number({ minimum: 500, maximum: 120_000 })),
+    threadId: optional(int()), waitMs: optional(Type.Number({ minimum: 500, maximum: 120_000, description: 'Initial wait after sending control. Minimum 500 ms; use action=wait for a passive observation with waitMs=0.' })),
     granularity: optional(Type.Union([Type.Literal('statement'), Type.Literal('line'), Type.Literal('instruction')]))
   }), execute, (c, r) => c.manager.control(c.sessionPath, r.control as 'continue' | 'pause' | 'next' | 'stepIn' | 'stepOut', r.threadId, r.waitMs, c.debugId, c.stopId, r.granularity)),
   threads: define(actionSchema('threads', {}), read, c => c.manager.threads(c.sessionPath, c.debugId)),
@@ -134,7 +144,8 @@ export const debugActions = {
     (c, r) => c.manager.output(c.sessionPath, r.cursor, r.maxChars, c.debugId))
 }
 function debugHelp(): unknown[] {
-  return Object.entries(debugActions).map(([action, entry]) => ({ action, ...entry.policy }))
+  return Object.entries(debugActions).map(([action, entry]) => ({ action, ...entry.policy,
+    inputSchema: entry.schema, resultSchema: debugResults[action as DebugActionName].schema }))
 }
 export type DebugActionName = keyof typeof debugActions
 export const debugParameters = Type.Object({
@@ -184,7 +195,11 @@ export async function dispatchDebugAction(context: DebugActionContext, request: 
   if (target !== 'none') {
     const session = context.manager.get(context.sessionPath, context.debugId)
     if (!core && session.kind === 'core') throw new Error('Core inspection cannot execute or change breakpoints')
-    if (target === 'stopped' && (session.status !== 'stopped' || context.stopId !== undefined && context.stopId !== session.stopId)) throw new Error('Debug stop changed or target is not stopped; refresh references')
+    if (target === 'stopped') {
+      if (session.status === 'terminated' || session.status === 'failed') throw new ToolFailure('DEBUG_SESSION_ENDED', 'The debug session has ended; start or restart it before inspection')
+      if (session.status !== 'stopped') throw new ToolFailure('DEBUG_NOT_STOPPED', `Debug target is not stopped (status: ${session.status}); use wait before inspection`)
+      if (context.stopId !== undefined && context.stopId !== session.stopId) throw new ToolFailure('DEBUG_STALE_STOP', 'Debug stop changed; refresh references')
+    }
     if (capability && !session.capabilities?.[capability]) throw new Error(`Debug adapter does not support ${capability}`)
   }
   return entry.invoke(context, request)

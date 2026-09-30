@@ -27,6 +27,7 @@
  */
 import type { AgentSession, ToolDefinition } from '@earendil-works/pi-coding-agent'
 import { createReadOnlyTools } from '@earendil-works/pi-coding-agent'
+import { createAppReadTool } from './read-tool'
 import { APP_BASH_TOOL_NAMES } from './bash-tools'
 import { TODO_TOOL_NAME } from './todo-protocol'
 import { JEV_TOOL_NAME } from './jev/protocol'
@@ -171,6 +172,11 @@ function createGate(options: PlanGateOptions): PlanGate {
       .filter((tool) => (SAFE_READ_NAMES as readonly string[]).includes(tool.name as string))
       .map((tool) => [tool.name as string, tool])
   )
+  // Use the same structured/paged read contract in both modes. This is a new
+  // app-owned definition, never a same-name extension supplied by the model.
+  const read = createAppReadTool(options.cwd)
+  safeReads.set('read', { ...read, execute: (id, args, signal, update) =>
+    read.execute(id, args as never, signal, update, undefined as never) })
   const appDefinitions = new Map<string, ToolDefinition>()
   for (const definition of options.appDefinitions) {
     if (definition && typeof definition.name === 'string') appDefinitions.set(definition.name, definition)

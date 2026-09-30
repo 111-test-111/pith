@@ -44,6 +44,7 @@ import { APP_BROWSER_TOOL_NAMES, createBrowserTools } from '../browser/tools'
 import { getBrowserService } from '../browser/service'
 import { agentOwner } from '../../shared/browser'
 import { createSandboxFileTools, APP_FILE_TOOL_NAMES } from './file-tools'
+import { createAppReadTool } from './read-tool'
 import { isSandboxMode, sandboxModeFromBranch, SANDBOX_MODE_ENTRY_TYPE } from '../sandbox/mode'
 import { createScheduledTaskTool, SCHEDULED_TASK_TOOL_NAME } from './scheduled-tasks/tool'
 import { ScheduledTaskService, type ScheduledTaskExecutionContext } from './scheduled-tasks/service'
@@ -1413,6 +1414,9 @@ export class PiManager {
         noExtensions: recoveryOnly || (subagent !== undefined && subagent.extensions !== true),
         extensionFactories: [
           createToolCallBoundaryExtension(), todos.extension(), ...(planContext ? [planContext] : []),
+          // Ordered last below: enhance the default without masking a read
+          // override, including one registered lazily by another inline factory.
+          { name: 'native-read', factory: api => api.registerTool(createAppReadTool(cwd)), hidden: true },
           ...(loadNativeTools ? [
             { name: 'native-codemode', factory: createAppCodemodeExtension(), hidden: true },
             { name: 'native-tool-search', factory: createToolSearchExtension(), hidden: true },
@@ -1424,6 +1428,7 @@ export class PiManager {
         extensionsOverride: result => ({
           ...result,
           extensions: result.extensions.filter(extension => !isLegacyMcpAdapter(extension))
+            .sort((a, b) => Number(a.path === '<inline:native-read>') - Number(b.path === '<inline:native-read>'))
         }),
         ...(subagent?.appendSystemPrompt ? { appendSystemPrompt: [subagent.appendSystemPrompt] } : {}),
         // Children inherit AGENTS.md per the same live app setting — a

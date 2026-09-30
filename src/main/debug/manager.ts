@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { ToolFailure } from '../pi/tool-result'
 import { createServer } from 'node:net'
 import { checkoutRoot, type CheckoutCoordinator } from '../rewind/coordinator'
 import type {
@@ -147,6 +148,7 @@ const asVariablesReference = (value: unknown): number => {
 
 export class DebugManager {
   private sessions = new Map<string, Session>()
+  private changeWaiters = new Map<string, Set<() => void>>()
   private closing = false
 
   constructor(private changed: (dto: DebugSessionDTO) => void, private coordinator?: CheckoutCoordinator) {}
@@ -166,18 +168,50 @@ export class DebugManager {
       .sort((a, b) => b.dto.startedAt - a.dto.startedAt)
     if (id !== undefined) {
       const session = ordered.find((entry) => entry.dto.id === id)
-      if (!session) throw new Error(`No debug session with id "${id}" in this chat.`)
+      if (!session) throw new ToolFailure('DEBUG_SESSION_NOT_FOUND', `No debug session with id "${id}" in this chat.`)
       return session
     }
     const live = ordered.filter(isLive)
-    if (live.length > 1) throw new Error('Multiple debug sessions are active; pass debugId from action="sessions".')
+    if (live.length > 1) throw new ToolFailure('DEBUG_TARGET_REQUIRED', 'Multiple debug sessions are active; pass debugId from action="sessions".')
     const session = live[0] ?? ordered[0]
-    if (!session) throw new Error('No debug session in this chat. Start one first.')
+    if (!session) throw new ToolFailure('DEBUG_SESSION_NOT_FOUND', 'No debug session in this chat. Start one first.')
     return session
   }
 
   get(sessionPath: string, id?: string): DebugSessionDTO {
     return { ...this.owned(sessionPath, id).dto }
+  }
+
+  /** Observe a target without sending a DAP control request. Registration and
+   * the readiness check are synchronous, so fast stops cannot be missed. */
+  async wait(sessionPath: string, id: string, options: { afterRevision?: number; waitMs?: number; until?: 'stopped' | 'changed'; signal?: AbortSignal } = {}) {
+    const session = this.owned(sessionPath, id)
+    const { afterRevision, signal } = options
+    if (afterRevision !== undefined && (!Number.isSafeInteger(afterRevision) || afterRevision < 0 || afterRevision > session.dto.revision)) throw new ToolFailure('INVALID_DEBUG_CURSOR', 'afterRevision must be a revision already observed on this debugId')
+    const waitMs = options.waitMs ?? 10_000
+    if (!Number.isFinite(waitMs) || waitMs < 0 || waitMs > 60_000) throw new ToolFailure('INVALID_ARGUMENTS', 'waitMs must be between 0 and 60000')
+    const baseline = afterRevision ?? session.dto.revision
+    const settled = () => !isLive(session) || session.dto.status === 'stopped' && !session.filling
+    const ready = () => !isLive(session) || (options.until === 'changed'
+      ? session.dto.revision > baseline
+      : settled() && (afterRevision === undefined || session.dto.revision > afterRevision))
+    let timedOut = false
+    await new Promise<void>((resolve, reject) => {
+      const listeners = this.changeWaiters.get(id) ?? new Set<() => void>()
+      this.changeWaiters.set(id, listeners)
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const cleanup = () => {
+        clearTimeout(timer); signal?.removeEventListener('abort', abort); listeners.delete(check)
+        if (!listeners.size) this.changeWaiters.delete(id)
+      }
+      const check = () => { if (ready()) { cleanup(); resolve() } }
+      const abort = () => { cleanup(); reject(new ToolFailure('CANCELLED', 'Debug wait cancelled')) }
+      if (signal?.aborted) { abort(); return }
+      listeners.add(check); signal?.addEventListener('abort', abort, { once: true })
+      timer = setTimeout(() => { timedOut = true; cleanup(); resolve() }, waitMs)
+      check()
+    })
+    return { session: { ...session.dto }, revision: session.dto.revision, changed: session.dto.revision > baseline, settled: settled(), timedOut }
   }
 
   /** Synchronous registration is the launch reservation. Stop can cancel it
@@ -426,7 +460,7 @@ export class DebugManager {
       if (!['statement', 'line', 'instruction'].includes(granularity)) throw new Error('Invalid stepping granularity')
       this.requireCapability(session, 'supportsSteppingGranularity')
     }
-    if (stopId !== undefined && stopId !== session.stopEpoch) throw new Error('Debug stop changed; refresh before controlling the target')
+    if (stopId !== undefined && stopId !== session.stopEpoch) throw new ToolFailure('DEBUG_STALE_STOP', 'Debug stop changed; refresh before controlling the target')
     if (dto.kind === 'core') throw new Error('Core files cannot execute')
     if (session.controlling) throw new Error('A debug control request is already in flight')
     const epoch = session.stopEpoch
@@ -879,19 +913,19 @@ export class DebugManager {
 
   private requireStopped(id: string | undefined, sessionPath: string, stopId?: number): Session {
     const session = this.owned(sessionPath, id)
-    if (session.dto.status !== 'stopped' || (stopId !== undefined && stopId !== session.stopEpoch)) {
-      throw new Error(`The debuggee is not stopped (status: ${session.dto.status}); inspect works only at a stop`)
-    }
+    if (!isLive(session)) throw new ToolFailure('DEBUG_SESSION_ENDED', 'The debug session has ended; start or restart it before inspection')
+    if (session.dto.status !== 'stopped') throw new ToolFailure('DEBUG_NOT_STOPPED', `The debuggee is not stopped (status: ${session.dto.status}); use wait before inspection`)
+    if (stopId !== undefined && stopId !== session.stopEpoch) throw new ToolFailure('DEBUG_STALE_STOP', 'Debug stop changed; refresh stack and variables')
     return session
   }
 
   private assertStop(session: Session, epoch: number): void {
-    if (session.finishing || session.dto.status !== 'stopped' || session.stopEpoch !== epoch) throw new Error('Debug stop changed; refresh stack and variables')
+    if (session.finishing || session.dto.status !== 'stopped' || session.stopEpoch !== epoch) throw new ToolFailure('DEBUG_STALE_STOP', 'Debug stop changed; refresh stack and variables')
   }
 
   /** The adapter connection of a session that can still be driven. */
   private requireLive(session: Session): DapClient {
-    if (session.finishing || !isLive(session) || !session.client) throw new Error('The debug session has ended')
+    if (session.finishing || !isLive(session) || !session.client) throw new ToolFailure('DEBUG_SESSION_ENDED', 'The debug session has ended')
     return session.client
   }
 
@@ -1035,7 +1069,6 @@ export class DebugManager {
         session.dto.location = undefined
         session.stopEpoch += 1
         session.dto.stopId = session.stopEpoch
-        this.publish(session)
         // Settle only once the top frame is resolved, so the control snapshot
         // reports where THIS stop happened instead of nothing or a stale line.
         const epoch = session.stopEpoch
@@ -1044,6 +1077,7 @@ export class DebugManager {
           if (!session.finishing && session.dto.status === 'stopped' && session.stopEpoch === epoch) this.settleWaiters(session)
         })
         session.filling = filling
+        this.publish(session)
         break
       case 'continued':
         session.dto.status = 'running'
@@ -1196,6 +1230,7 @@ export class DebugManager {
   }
 
   private settleWaiters(session: Session): void {
+    for (const check of this.changeWaiters.get(session.dto.id) ?? []) check()
     const waiters = session.waiters.splice(0)
     for (const waiter of waiters) {
       clearTimeout(waiter.timer)
@@ -1218,6 +1253,7 @@ export class DebugManager {
   private publish(session: Session): void {
     session.dto = { ...session.dto, revision: session.dto.revision + 1 }
     this.changed({ ...session.dto })
+    for (const check of this.changeWaiters.get(session.dto.id) ?? []) check()
   }
 
   private finish(session: Session, status: 'terminated' | 'failed'): Promise<void> {

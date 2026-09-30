@@ -1,9 +1,11 @@
 import { execFile } from 'node:child_process'
-import { existsSync, readFileSync, readdirSync } from 'node:fs'
-import { delimiter, isAbsolute, join } from 'node:path'
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
+import { delimiter, isAbsolute, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { homedir } from 'node:os'
 import { getAgentDir } from '@earendil-works/pi-coding-agent'
 import type { DebugAdapterDTO } from '../../shared/types'
+import { ToolFailure } from '../pi/tool-result'
 
 /**
  * Debug adapter registry.
@@ -71,6 +73,24 @@ function requireProgram(args: Record<string, unknown>): void {
   if (typeof args.program !== 'string' || !args.program.trim()) throw new Error('program is required for launch')
 }
 
+/** Only file-based local launches can be checked by this host. Python modules,
+ * Go packages, remote mappings and adapter-defined launch commands keep their
+ * adapter semantics; an arbitrary program string is not always a local file. */
+export function validateLocalDebugProgram(args: Record<string, unknown>): void {
+  requireProgram(args)
+  if (args.remoteRoot || args.host || args.connect || args.platform || args.targetCreateCommands || args.initCommands) return
+  const program = args.program as string
+  if (/^[a-z][a-z\d+.-]*:\/\//i.test(program) && !program.startsWith('file://')) return
+  const path = program.startsWith('file://') ? fileURLToPath(program) : resolve(typeof args.cwd === 'string' ? args.cwd : process.cwd(), program)
+  try {
+    if (!statSync(path).isFile()) throw new ToolFailure('DEBUG_PROGRAM_NOT_FILE', `Debug program is not a regular file: ${path}`)
+  } catch (error) {
+    if (error instanceof ToolFailure) throw error
+    const code = (error as NodeJS.ErrnoException).code
+    throw new ToolFailure(code === 'ENOENT' ? 'DEBUG_PROGRAM_NOT_FOUND' : 'DEBUG_PROGRAM_UNREADABLE', `Cannot read local debug program ${path} (${code ?? 'unknown error'})`)
+  }
+}
+
 /** Run a probe command; resolves trimmed stdout, or null on any failure. */
 function probe(command: string, args: string[], signal?: AbortSignal): Promise<string | null> {
   return new Promise((resolve) => {
@@ -100,7 +120,7 @@ const lldbDap: DebugAdapterSpec = {
   label: 'LLDB (lldb-dap)',
   languages: ['c', 'cpp', 'objective-c', 'rust', 'swift', 'assembly'],
   unavailableHint: 'missing-binary: install Xcode Command Line Tools or LLVM (lldb-dap)',
-  validateLaunch: requireProgram,
+  validateLaunch: validateLocalDebugProgram,
   async detect(_cwd, signal) {
     if (process.platform === 'darwin') {
       const resolved = await probe('xcrun', ['-f', 'lldb-dap'], signal)
@@ -125,7 +145,7 @@ const debugpy: DebugAdapterSpec = {
   languages: ['python'],
   unavailableHint: 'missing-module: pip install debugpy (workspace venv is preferred)',
   validateLaunch(args) {
-    if (args.module === undefined) { requireProgram(args); return }
+    if (args.module === undefined) { validateLocalDebugProgram(args); return }
     if (typeof args.module !== 'string' || !args.module.trim()) throw new Error('module must be a non-empty Python module name')
     if (args.program !== undefined) throw new Error('Python launch requires either program or module, not both')
   },
@@ -166,7 +186,7 @@ const delve: DebugAdapterSpec = {
   label: 'Go (delve)',
   languages: ['go'],
   unavailableHint: 'missing-binary: go install github.com/go-delve/delve/cmd/dlv@latest',
-  validateLaunch: requireProgram,
+  validateLaunch: args => { requireProgram(args); if (args.mode === 'exec') validateLocalDebugProgram(args) },
   async detect() {
     const onPath = await which('dlv')
     return onPath ? { command: onPath, args: ['dap', '--listen=127.0.0.1:${port}'] } : null
@@ -209,7 +229,7 @@ const jsDebug: DebugAdapterSpec = {
   label: 'JavaScript (js-debug)',
   listen: { host: '127.0.0.1', port: 0, spawn: true },
   childSessions: true,
-  validateLaunch: requireProgram,
+  validateLaunch: validateLocalDebugProgram,
   languages: ['javascript', 'typescript', 'javascriptreact', 'typescriptreact'],
   unavailableHint: `missing-adapter: extract Microsoft's js-debug-dap release into ${join(getAgentDir(), 'debug-adapters')} (js-debug/src/dapDebugServer.js); VS Code extension bundles may omit the standalone server`,
   async detect() {

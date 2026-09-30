@@ -5,12 +5,22 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL, fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
+import { Check } from 'typebox/value'
 const temp = mkdtempSync(join(tmpdir(), 'pith-debug-actions-'))
 const log=join(temp,'requests.jsonl');process.env.PI_DAP_PROTOCOL_LOG=log
 let manager
 try {
   await build({ stdin: { contents: `export * from './src/main/debug/action-registry'; export * from './src/main/debug/identity'; export * from './src/main/debug/manager'; export * from './src/main/debug/adapters'; export * from './src/main/debug/tools'`, resolveDir: process.cwd() }, bundle: true, platform: 'node', format: 'esm', outfile: join(temp, 'module.mjs'), plugins: [{ name: 'sdk', setup(b) { b.onResolve({ filter: /^(@earendil-works\/pi-coding-agent|typebox)$/ }, a => ({ path: fileURLToPath(import.meta.resolve(a.path)), external: true })) } }] })
   const { DebugManager, debugAdapterSpec, prepareDebugArguments, debugActions, debugParameters, dispatchDebugAction, dispatchDebugPanel, debugSource, createDebugTools } = await import(pathToFileURL(join(temp, 'module.mjs')))
+  // Real preflight, before substituting protocol-only virtual programs.
+  for (const adapter of ['lldb-dap', 'debugpy', 'js-debug']) {
+    const spec = debugAdapterSpec(temp, adapter)
+    assert.throws(() => spec.validateLaunch({ program: 'missing-program', cwd: temp }), error => error.code === 'DEBUG_PROGRAM_NOT_FOUND')
+    spec.validateLaunch({ program: process.execPath, cwd: temp })
+  }
+  debugAdapterSpec(temp, 'debugpy').validateLaunch({ module: 'package.module', cwd: temp })
+  debugAdapterSpec(temp, 'dlv').validateLaunch({ program: 'example.org/package/cmd/demo', mode: 'debug', cwd: temp })
+  debugAdapterSpec(temp, 'js-debug').validateLaunch({ program: '/remote/demo.js', remoteRoot: '/remote', cwd: temp })
   assert.deepEqual(Object.keys(debugParameters.properties).sort(), ['debugId','stopId','request','sandbox_permissions','justification'].sort())
   assert.equal(debugParameters.properties.request.anyOf.length, Object.keys(debugActions).length)
   assert.deepEqual(prepareDebugArguments({ action: 'breakpoints', debugId:'a', file:'/demo.c', lines:[4,7], conditions:['v > 0',''] }), { debugId:'a', request:{action:'breakpoints', file:'/demo.c', items:[{line:4,condition:'v > 0'},{line:7,condition:''}]}})
@@ -19,6 +29,12 @@ try {
   assert.deepEqual(debugSource({path:'/fake',sourceReference:9}),{kind:'adapter',path:'/fake',sourceReference:9})
   assert.equal(debugSource({name:'anonymous'}),undefined)
   manager = new DebugManager(()=>{})
+  // Protocol fixtures use virtual target paths. Keep argument validation but
+  // substitute a real file only for the host-file preflight.
+  for (const spec of [debugAdapterSpec(temp, 'lldb-dap')]) {
+    const validate = spec.validateLaunch
+    spec.validateLaunch = args => validate({ ...args, ...(typeof args.program === 'string' ? { program: process.execPath } : {}) })
+  }
   debugAdapterSpec(temp, 'lldb-dap').detect = async()=>({ command:process.execPath, args:[resolve('scripts/debug-fixtures/protocol-adapter.mjs'),'identity'] })
   const start = (program, sessionPath='/parent')=>manager.start({sessionId:sessionPath,sessionPath,workspaceCwd:temp,cwd:temp,adapterId:'lldb-dap',kind:'launch',program})
   const a=await start('/one'), b=await start('/two'), child=await start('/child','/child')
@@ -47,6 +63,14 @@ try {
     await assert.rejects(dispatchDebugAction(context,reference),/stop changed/i)
   const options={manager,services:{cwd:temp},sessionId:'p',sessionPath:'/parent',enabled:()=>true,sandboxMode:()=> 'read-only',canStart:()=>true,runInTerminal:()=>undefined}
   const tool=createDebugTools(options)[0]
+  for (const request of [{ action:'help' }, { action:'sessions' }, { action:'threads' }, { action:'stack' }, { action:'registers',frameId:1 }, { action:'variables',variablesReference:100 }, { action:'output' }]) {
+    const result = await tool.execute('schema', {debugId:b.id,stopId:b.stopId,request}, undefined, undefined, {cwd:temp})
+    assert(Check(tool.outputSchema, result.structuredContent), `advertised result schema: ${request.action}`)
+  }
+  const missing=await tool.execute('missing',{debugId:'missing',request:{action:'stack'}},undefined,undefined,{cwd:temp})
+  assert.equal(missing.structuredContent.error.code,'DEBUG_SESSION_NOT_FOUND')
+  const stale=await tool.execute('stale',{debugId:b.id,stopId:b.stopId+1,request:{action:'stack'}},undefined,undefined,{cwd:temp})
+  assert.equal(stale.structuredContent.error.code,'DEBUG_STALE_STOP')
   const { validateToolArguments }=await import(new URL('../node_modules/@earendil-works/pi-ai/dist/index.js',import.meta.resolve('@earendil-works/pi-coding-agent')))
   for (const raw of [{action:'sessions'}, {debugId:b.id,request:{action:'breakpoints',file:'/file.c',items:[{line:2,condition:'x>0'}]}}, {debugId:b.id,stopId:1,request:{action:'disassemble',memoryReference:'0x2000000000000001',count:20}}]) {
     const prepared=tool.prepareArguments(raw)
@@ -145,6 +169,41 @@ try {
   assert.equal(continuation.content, 'X'.repeat(40))
   assert.ok(continuation.previousOffset < continuation.offset)
   await manager.stop('/parent', boundary.id)
+  useNative('slow-stack')
+  const waiting = await start('/waiting')
+  const running = await manager.control('/parent','continue',1,500,waiting.id,waiting.stopId)
+  assert.equal(running.settled,false)
+  const beforeWait = readFileSync(log,'utf8')
+  const timeout = await manager.wait('/parent',waiting.id,{afterRevision:running.session.revision,waitMs:5})
+  assert.equal(timeout.timedOut,true);assert.equal(timeout.settled,false)
+  assert.equal(readFileSync(log,'utf8'),beforeWait,'passive wait sends no DAP request')
+  const runningError=await tool.execute('running',{debugId:waiting.id,request:{action:'stack'}},undefined,undefined,{cwd:temp})
+  assert.equal(runningError.structuredContent.error.code,'DEBUG_NOT_STOPPED')
+  const controller=new AbortController()
+  const cancelled=manager.wait('/parent',waiting.id,{waitMs:1000,signal:controller.signal})
+  controller.abort();await assert.rejects(cancelled,error=>error.code==='CANCELLED')
+  assert.equal(manager.changeWaiters.size,0,'cancel and timeout release all event listeners')
+  await assert.rejects(manager.wait('/child',waiting.id),error=>error.code==='DEBUG_SESSION_NOT_FOUND')
+  await assert.rejects(manager.wait('/parent',waiting.id,{afterRevision:999999}),error=>error.code==='INVALID_DEBUG_CURSOR')
+  const wake=manager.wait('/parent',waiting.id,{afterRevision:running.session.revision,waitMs:1000})
+  await manager.control('/parent','pause',1,500,waiting.id)
+  const observed=await wake
+  assert(observed.settled && observed.changed && !observed.timedOut)
+  const immediate=await manager.wait('/parent',waiting.id,{afterRevision:running.session.revision,waitMs:0})
+  assert.equal(immediate.timedOut,false,'an event arriving before wait registration is not lost')
+  for (const until of ['stopped','changed']) {
+    const idle=await manager.wait('/parent',waiting.id,{afterRevision:immediate.revision,until,waitMs:0})
+    assert.equal(idle.timedOut,true,'afterRevision requires a newer observation even for an already stopped target')
+    assert.equal(idle.settled,true,'settled describes target state, independently of the wait timeout')
+    assert.equal(idle.changed,false)
+  }
+  const ended=manager.wait('/parent',waiting.id,{afterRevision:observed.revision,until:'changed',waitMs:1000})
+  await manager.stop('/parent',waiting.id)
+  assert.equal((await ended).session.status,'terminated')
+  const endedError=await tool.execute('ended',{debugId:waiting.id,request:{action:'stack'}},undefined,undefined,{cwd:temp})
+  assert.equal(endedError.structuredContent.error.code,'DEBUG_SESSION_ENDED')
+  assert.equal(manager.changeWaiters.size,0)
+  console.log('PASS debug contracts: typed schemas/errors, local path validation, passive wait/cursor/timeout/cancellation/ownership')
   console.log('PASS native protocol: capabilities, large/opaque addresses, gaps, bounded paging, stale replies, invalidated refs, breakpoint serialization/events and ASLR restart clearing')
   console.log('PASS adapter source windows: bounded first page and line/offset access beyond 262144 characters')
   console.log('PASS action registry: nested schema, legacy normalization, shared panel routing, permissions; source identity, ownership, cache invalidation and stale stops')

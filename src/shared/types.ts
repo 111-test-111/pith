@@ -1209,6 +1209,28 @@ export interface BashTaskOutputDTO {
   /** UTF-16 character offset, scoped to this task. */
   cursor: number
   truncated: boolean
+  source: 'tail'
+  cursorUnit: 'utf16'
+  startCursor: number
+  hasMore: boolean
+  eof: boolean
+  /** True only when this page includes all output of a settled task. */
+  complete: boolean
+}
+
+export interface BashTaskLogOutputDTO {
+  task: BashTaskDTO
+  source: 'log'
+  cursorUnit: 'utf8'
+  output: string
+  byteOffset: number
+  nextByteOffset: number
+  availableBytes: number
+  hasMore: boolean
+  /** End of the retained log, which can itself be truncated. */
+  eof: boolean
+  truncated: boolean
+  complete: boolean
 }
 
 export interface BashTaskRequest {
