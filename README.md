@@ -79,7 +79,8 @@ node scripts/check-select-panel-padding.mjs # dropdown panels: symmetric inner p
 node scripts/check-session-search.mjs # search correctness + 1,000-session benchmark (after build)
 node scripts/check-session-persistence.mjs # session header + fork/delete/continue regression checks
 node scripts/check-sdk-upgrade-providers.mjs # ChatGPT OAuth bridge and GPT-6.1 Sol catalog
-node scripts/check-sdk-tool-boundary.mjs # nested SDK calls cannot bypass app tool lifecycle
+node scripts/check-sdk-tool-boundary.mjs # nested SDK calls respect Plan, Rewind and receipt lifecycle
+node scripts/check-native-mcp-codemode.mjs # real SDK native MCP tool via codemode against an offline stdio server
 node scripts/check-usage-stats.mjs # SDK and legacy billing records, turn/model attribution
 node scripts/check-continue.mjs # interrupted turns: preserved context/branch, Stop races, scopes and Plan admission
 node scripts/check-bash-tasks.mjs # real processes + SDK steering/queue/cleanup regressions

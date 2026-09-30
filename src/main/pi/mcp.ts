@@ -1,56 +1,51 @@
-import { DefaultPackageManager, SettingsManager, getAgentDir } from '@earendil-works/pi-coding-agent'
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { pathToFileURL } from 'node:url'
 import type {
   McpConfigFileDTO,
+  McpConfigIssueDTO,
   McpRuntimeStatus,
   McpServerDTO,
   McpServerDetailDTO,
-  McpStateDTO,
-  McpStatusPushDTO
+  McpToolDTO
 } from '../../shared/types'
 
-/**
- * Settings → MCP backend. The pi-mcp-adapter extension owns MCP at runtime;
- * this module reads/writes its config files and, when the adapter package is
- * installed, reuses the adapter's OWN compiled config/metadata-cache modules
- * (dynamic import from the package's install path) so discovery, provenance
- * and cache-validity semantics never drift from what sessions actually run.
- *
- * Editable files: the pi-global `<agentDir>/mcp.json` and the project-shared
- * `<cwd>/.mcp.json`. Servers defined anywhere else (shared global files,
- * ancestors, host-config imports) appear in the merged roster as external;
- * their enable/disable goes through the adapter's project override layer.
- */
-
-/** Cap so the settings editor cannot write unbounded MCP config text. */
+/** Configuration files consumed by Pi's built-in MCP extension. */
 export const MAX_MCP_CONFIG_LENGTH = 200_000
-
-const PROJECT_CONFIG_NAME = '.mcp.json'
-const PROJECT_PI_CONFIG_NAME = join('.pi', 'mcp.json')
-
-// ---- config document model (plain JSON; the renderer validates before save) ----
+const PROJECT_CONFIG_NAME = join('.pi', 'mcp.json')
+const SERVER_NAME = /^[A-Za-z0-9_-]+$/
+const EXPOSURES = new Set(['codemode', 'codemode-deferred', 'deferred', 'direct', 'hidden'])
+const SERVER_FIELDS = new Set([
+  'type', 'command', 'args', 'env', 'cwd', 'url', 'headers', 'oauth',
+  'enabled', 'exposure', 'toolExposure', 'timeout'
+])
+const OAUTH_FIELDS = new Set(['clientId', 'clientSecret', 'callbackPort', 'callbackUrl', 'scope'])
 
 export interface McpServerEntry {
+  type?: 'stdio' | 'http' | 'streamable-http'
   command?: string
   args?: string[]
   env?: Record<string, string>
   cwd?: string
-  socket?: string
   url?: string
   headers?: Record<string, string>
-  auth?: 'oauth' | 'bearer' | false
-  bearerToken?: string
-  bearerTokenEnv?: string
-  disabled?: boolean
+  oauth?: {
+    clientId?: string
+    clientSecret?: string
+    callbackPort?: number
+    callbackUrl?: string
+    scope?: string
+  }
+  enabled?: boolean
+  exposure?: string
+  toolExposure?: Record<string, string>
+  timeout?: number
   [key: string]: unknown
 }
 
 export interface McpConfigDocument {
   mcpServers: Record<string, McpServerEntry>
-  imports?: unknown
-  settings?: unknown
+  autoEnableCodemode?: boolean
   [key: string]: unknown
 }
 
@@ -58,6 +53,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+function isStringRecord(value: unknown): value is Record<string, string> {
+  return isRecord(value) && Object.values(value).every((item) => typeof item === 'string')
+}
+
+/** Parse without rewriting legacy documents: a user must explicitly migrate unsupported fields. */
 export function parseMcpConfigJson(text: string): { ok: true; config: McpConfigDocument } | { ok: false; error: string } {
   if (!text.trim()) return { ok: true, config: { mcpServers: {} } }
   let raw: unknown
@@ -67,29 +67,19 @@ export function parseMcpConfigJson(text: string): { ok: true; config: McpConfigD
     return { ok: false, error: error instanceof Error ? error.message : String(error) }
   }
   if (!isRecord(raw)) return { ok: false, error: 'root value must be an object' }
-  const servers = raw.mcpServers ?? raw['mcp-servers']
-  const mcpServers: Record<string, McpServerEntry> = {}
-  if (isRecord(servers)) {
-    for (const [name, entry] of Object.entries(servers)) {
-      if (isRecord(entry)) mcpServers[name] = entry as McpServerEntry
-    }
+  if (raw.mcpServers !== undefined && !isRecord(raw.mcpServers)) {
+    return { ok: false, error: 'mcpServers must be an object' }
   }
-  return { ok: true, config: { ...raw, mcpServers } }
+  return { ok: true, config: { ...raw, mcpServers: (raw.mcpServers ?? {}) as Record<string, McpServerEntry> } }
 }
 
 export function serializeMcpConfig(config: McpConfigDocument): string {
-  const { mcpServers, ...rest } = config
-  const raw: Record<string, unknown> = { ...rest, mcpServers }
-  delete raw['mcp-servers']
-  return `${JSON.stringify(raw, null, 2)}\n`
+  return `${JSON.stringify(config, null, 2)}\n`
 }
-
-// ---- file I/O ----
 
 function configPath(scope: 'global' | 'project', cwd: string | null, agentDir: string): string | null {
   if (scope === 'global') return join(agentDir, 'mcp.json')
-  if (!cwd) return null
-  return join(cwd, PROJECT_CONFIG_NAME)
+  return cwd ? join(cwd, PROJECT_CONFIG_NAME) : null
 }
 
 export function readMcpConfigFile(
@@ -111,7 +101,143 @@ export function readMcpConfigFile(
   }
 }
 
-/** Atomic enough for a user-edited config: tmp file + rename in the same dir. */
+/** Translate config problems into data so the renderer can localize them. */
+function documentIssues(config: McpConfigDocument, scope: 'global' | 'project'): McpConfigIssueDTO[] {
+  const issues: McpConfigIssueDTO[] = []
+  if (config['mcp-servers'] !== undefined) issues.push({ scope, code: 'legacyAlias', field: 'mcp-servers' })
+  if (config.autoEnableCodemode !== undefined && typeof config.autoEnableCodemode !== 'boolean') {
+    issues.push({ scope, code: 'invalidField', field: 'autoEnableCodemode' })
+  }
+  for (const field of Object.keys(config)) {
+    if (field !== 'mcpServers' && field !== 'autoEnableCodemode' && field !== 'mcp-servers') {
+      issues.push({ scope, code: 'legacyField', field })
+    }
+  }
+  for (const [name, value] of Object.entries(config.mcpServers)) {
+    if (!SERVER_NAME.test(name) || !isRecord(value)) {
+      issues.push({ scope, code: 'invalidServer', name })
+      continue
+    }
+    for (const field of Object.keys(value)) {
+      if (!SERVER_FIELDS.has(field)) issues.push({ scope, code: 'legacyField', name, field })
+    }
+    if (value.type !== undefined && !['stdio', 'http', 'streamable-http'].includes(String(value.type))) {
+      issues.push({ scope, code: 'invalidField', name, field: 'type' })
+    }
+    if (value.enabled !== undefined && typeof value.enabled !== 'boolean') {
+      issues.push({ scope, code: 'invalidField', name, field: 'enabled' })
+    }
+    if (value.exposure !== undefined && !EXPOSURES.has(String(value.exposure))) {
+      issues.push({ scope, code: 'invalidField', name, field: 'exposure' })
+    }
+    if (value.toolExposure !== undefined) {
+      if (!isRecord(value.toolExposure) || Object.values(value.toolExposure).some((item) => !EXPOSURES.has(String(item)))) {
+        issues.push({ scope, code: 'invalidField', name, field: 'toolExposure' })
+      }
+    }
+    if (value.timeout !== undefined && (typeof value.timeout !== 'number' || !(value.timeout > 0))) {
+      issues.push({ scope, code: 'invalidField', name, field: 'timeout' })
+    }
+    const http = typeof value.url === 'string' && (value.type === undefined || value.type === 'http' || value.type === 'streamable-http')
+    const stdio = typeof value.command === 'string' && (value.type === undefined || value.type === 'stdio')
+    if (!http && !stdio) {
+      issues.push({ scope, code: 'invalidServer', name })
+      continue
+    }
+    if (http) {
+      if (!URL.canParse(value.url!) || !/^https?:$/.test(new URL(value.url!).protocol)) {
+        issues.push({ scope, code: 'invalidField', name, field: 'url' })
+      }
+      if (value.headers !== undefined && !isStringRecord(value.headers)) {
+        issues.push({ scope, code: 'invalidField', name, field: 'headers' })
+      }
+      if (value.oauth !== undefined) {
+        if (!isRecord(value.oauth)) {
+          issues.push({ scope, code: 'invalidField', name, field: 'oauth' })
+        } else {
+          for (const [field, item] of Object.entries(value.oauth)) {
+            if (!OAUTH_FIELDS.has(field) || (field !== 'callbackPort' && typeof item !== 'string')) {
+              issues.push({ scope, code: 'invalidField', name, field: `oauth.${field}` })
+            }
+          }
+          const port = value.oauth.callbackPort
+          if (port !== undefined && (typeof port !== 'number' || !Number.isInteger(port) || port < 1 || port > 65535)) {
+            issues.push({ scope, code: 'invalidField', name, field: 'oauth.callbackPort' })
+          }
+          const callback = value.oauth.callbackUrl
+          if (typeof callback === 'string') {
+            const url = URL.canParse(callback) ? new URL(callback) : null
+            if (!url || url.protocol !== 'http:' || !['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) || url.search || url.hash || (url.port && port !== undefined && Number(url.port) !== port)) {
+              issues.push({ scope, code: 'invalidField', name, field: 'oauth.callbackUrl' })
+            }
+          }
+        }
+      }
+    } else {
+      if (value.args !== undefined && (!Array.isArray(value.args) || value.args.some((arg) => typeof arg !== 'string'))) {
+        issues.push({ scope, code: 'invalidField', name, field: 'args' })
+      }
+      if (value.env !== undefined && !isStringRecord(value.env)) {
+        issues.push({ scope, code: 'invalidField', name, field: 'env' })
+      }
+      if (value.cwd !== undefined && typeof value.cwd !== 'string') {
+        issues.push({ scope, code: 'invalidField', name, field: 'cwd' })
+      }
+    }
+  }
+  return issues
+}
+
+export function readMcpConfigIssues(cwd: string | null, agentDir: string, projectTrusted: boolean): McpConfigIssueDTO[] {
+  const issues: McpConfigIssueDTO[] = []
+  if (cwd && existsSync(join(cwd, '.mcp.json'))) issues.push({ scope: 'project', code: 'legacyProjectPath' })
+  if (existsSync(join(agentDir, 'mcp-adapter.json'))) issues.push({ scope: 'global', code: 'adapterConfigPath' })
+  if (cwd && existsSync(join(cwd, '.pi', 'mcp-adapter.json'))) issues.push({ scope: 'project', code: 'adapterConfigPath' })
+  for (const scope of ['global', 'project'] as const) {
+    const file = readMcpConfigFile(scope, cwd, agentDir)
+    if (!file || !file.exists) continue
+    if (scope === 'project' && !projectTrusted) {
+      issues.push({ scope, code: 'untrustedProject' })
+      continue
+    }
+    const parsed = parseMcpConfigJson(file.content)
+    if (!parsed.ok) {
+      issues.push({ scope, code: 'invalidJson', detail: parsed.error })
+      continue
+    }
+    issues.push(...documentIssues(parsed.config, scope))
+  }
+  return issues
+}
+
+function validateForWrite(config: McpConfigDocument): void {
+  const issue = documentIssues(config, 'global')[0]
+  if (issue) {
+    const target = issue.name ? `server "${issue.name}"` : 'config'
+    throw new Error(`Invalid native MCP ${target}: ${issue.field ?? issue.code}`)
+  }
+}
+
+function writeConfigDocument(path: string, config: McpConfigDocument): void {
+  validateForWrite(config)
+  const text = serializeMcpConfig(config)
+  if (text.length > MAX_MCP_CONFIG_LENGTH) throw new Error(`MCP config must be at most ${MAX_MCP_CONFIG_LENGTH} characters`)
+  atomicWriteConfigText(path, text)
+}
+
+/** One-use temp path prevents concurrent settings writes from colliding. */
+function atomicWriteConfigText(path: string, text: string): void {
+  mkdirSync(dirname(path), { recursive: true })
+  const tmp = `${path}.tmp-${process.pid}-${randomUUID()}`
+  try {
+    writeFileSync(tmp, text, { encoding: 'utf8', flag: 'wx', mode: 0o600 })
+    renameSync(tmp, path)
+  } catch (error) {
+    try { unlinkSync(tmp) } catch { /* temp may not have been created */ }
+    throw error
+  }
+}
+
 export function writeMcpConfigFile(
   scope: 'global' | 'project',
   content: string,
@@ -120,365 +246,13 @@ export function writeMcpConfigFile(
 ): McpConfigFileDTO | null {
   const path = configPath(scope, cwd, agentDir)
   if (!path) return null
+  if (content.length > MAX_MCP_CONFIG_LENGTH) throw new Error(`MCP config must be at most ${MAX_MCP_CONFIG_LENGTH} characters`)
   const parsed = parseMcpConfigJson(content)
   if (!parsed.ok) throw new Error(`Invalid MCP config: ${parsed.error}`)
-  if (content.length > MAX_MCP_CONFIG_LENGTH) {
-    throw new Error(`MCP config must be at most ${MAX_MCP_CONFIG_LENGTH} characters`)
-  }
+  validateForWrite(parsed.config)
   const text = content.trim() ? (content.endsWith('\n') ? content : `${content}\n`) : serializeMcpConfig({ mcpServers: {} })
-  mkdirSync(dirname(path), { recursive: true })
-  const tmp = `${path}.tmp-${process.pid}`
-  writeFileSync(tmp, text, 'utf8')
-  renameSync(tmp, path)
+  atomicWriteConfigText(path, text)
   return { path, exists: true, content: text, parseError: null }
-}
-
-// ---- adapter discovery + dynamic bridge ----
-
-/** `npm:pi-mcp-adapter`, a pinned spec or a local checkout path all count. */
-export function isPiMcpAdapterPackage(source: string): boolean {
-  const trimmed = source.trim()
-  const withoutNpm = trimmed.startsWith('npm:') ? trimmed.slice(4) : trimmed
-  const name = withoutNpm.split('/')[withoutNpm.startsWith('@') ? 1 : 0] ?? withoutNpm
-  const bare = name.split('@')[0] ?? name
-  return bare === 'pi-mcp-adapter' || trimmed.endsWith('/pi-mcp-adapter')
-}
-
-export interface AdapterInstall {
-  source: string
-  installedPath: string
-  version?: string
-}
-
-/** Find the installed pi-mcp-adapter package among the configured pi packages. */
-export function findAdapterInstall(cwd: string | null, agentDir: string): AdapterInstall | null {
-  try {
-    const probe = cwd ?? agentDir
-    const settingsManager = SettingsManager.create(probe, agentDir)
-    const packageManager = new DefaultPackageManager({ cwd: probe, agentDir, settingsManager })
-    for (const pkg of packageManager.listConfiguredPackages()) {
-      if (!isPiMcpAdapterPackage(pkg.source) || !pkg.installedPath) continue
-      let version: string | undefined
-      try {
-        const meta = JSON.parse(readFileSync(join(pkg.installedPath, 'package.json'), 'utf8')) as { version?: unknown }
-        if (typeof meta.version === 'string') version = meta.version
-      } catch {
-        // version is cosmetic
-      }
-      return { source: pkg.source, installedPath: pkg.installedPath, version }
-    }
-  } catch {
-    // no settings/packages readable — treated as not installed
-  }
-  return null
-}
-
-/** Minimal shape of the adapter's compiled `dist/config.js` we consume. */
-interface AdapterConfigModule {
-  loadMcpConfig: (overridePath?: string, cwd?: string) => { mcpServers: Record<string, McpServerEntry> }
-  getServerProvenance: (
-    overridePath?: string,
-    cwd?: string
-  ) => Map<string, { path: string; kind: 'user' | 'project' | 'import'; importKind?: string }>
-  writeProjectServerDisabledOverride: (
-    overridePath: string | undefined,
-    cwd: string,
-    serverName: string,
-    disabled: boolean
-  ) => { path: string; changed: boolean }
-}
-
-/** Minimal shape of the adapter's compiled `dist/metadata-cache.js`. */
-interface AdapterCacheModule {
-  loadMetadataCache: () => {
-    version: number
-    servers: Record<
-      string,
-      {
-        configHash: string
-        tools: { name: string; description?: string; inputSchema?: unknown }[]
-        resources: { uri: string; name: string; description?: string }[]
-        prompts?: {
-          name: string
-          description?: string
-          arguments?: { name: string; description?: string; required?: boolean }[]
-        }[]
-        cachedAt: number
-      }
-    >
-  } | null
-  isServerCacheValid: (entry: { configHash: string; cachedAt: number }, definition: McpServerEntry) => boolean
-}
-
-interface AdapterModules {
-  config: AdapterConfigModule
-  cache: AdapterCacheModule
-}
-
-const adapterModulesCache = new Map<string, Promise<AdapterModules | null>>()
-
-/**
- * Import the adapter's compiled modules from its install path. Both are plain
- * ESM listed in the package's exports map; a failure (older version, partial
- * install) degrades the state read to the app's own file parsing.
- */
-export function loadAdapterModules(installedPath: string): Promise<AdapterModules | null> {
-  let pending = adapterModulesCache.get(installedPath)
-  if (!pending) {
-    pending = (async () => {
-      try {
-        const [config, cache] = await Promise.all([
-          import(pathToFileURL(join(installedPath, 'dist', 'config.js')).href),
-          import(pathToFileURL(join(installedPath, 'dist', 'metadata-cache.js')).href)
-        ])
-        return { config: config as AdapterConfigModule, cache: cache as AdapterCacheModule }
-      } catch {
-        return null
-      }
-    })()
-    adapterModulesCache.set(installedPath, pending)
-  }
-  return pending
-}
-
-// ---- merged server roster ----
-
-function inferTransport(entry: McpServerEntry): McpServerDTO['transport'] {
-  if (typeof entry.url === 'string' && entry.url.trim()) return 'http'
-  if (typeof entry.socket === 'string' && entry.socket.trim()) return 'socket'
-  return 'stdio'
-}
-
-function serverSummary(entry: McpServerEntry): string {
-  if (typeof entry.url === 'string' && entry.url.trim()) return entry.url.trim()
-  if (typeof entry.socket === 'string' && entry.socket.trim()) return entry.socket.trim()
-  const command = typeof entry.command === 'string' ? entry.command.trim() : ''
-  const args = Array.isArray(entry.args) ? entry.args.filter((arg): arg is string => typeof arg === 'string' && arg.length > 0) : []
-  return [command, ...args].filter(Boolean).join(' ') || '—'
-}
-
-type MetadataCacheShape = ReturnType<AdapterCacheModule['loadMetadataCache']>
-
-/** Raw cache read for when the adapter package is absent — the file is plain JSON. */
-function readMetadataCacheFile(agentDir: string): MetadataCacheShape {
-  try {
-    const raw = JSON.parse(readFileSync(join(agentDir, 'mcp-cache.json'), 'utf8')) as NonNullable<MetadataCacheShape>
-    return isRecord(raw) && isRecord(raw.servers) ? raw : null
-  } catch {
-    return null
-  }
-}
-
-export interface McpRosterOptions {
-  cwd: string | null
-  agentDir: string
-  adapter: AdapterInstall | null
-  modules: AdapterModules | null
-  /** Latest live snapshots by server name (from the adapter's event bus). */
-  live: Map<string, { status: McpRuntimeStatus; toolCount: number; disabled: boolean }> | null
-}
-
-/**
- * Build the merged server roster. With the adapter bridged, the merge follows
- * its own source order (shared globals → pi global → ancestors → project files
- * → imports); without it, the two editable files merge with project winning.
- */
-export function buildMcpRoster(options: McpRosterOptions): McpServerDTO[] {
-  const { cwd, agentDir, modules, live } = options
-  const globalPath = join(agentDir, 'mcp.json')
-  const projectPath = cwd ? join(cwd, PROJECT_CONFIG_NAME) : null
-  const projectPiPath = cwd ? join(cwd, PROJECT_PI_CONFIG_NAME) : null
-
-  let merged: Record<string, McpServerEntry> = {}
-  const provenance = new Map<string, { path: string; kind: string }>()
-  if (modules) {
-    try {
-      merged = modules.config.loadMcpConfig(undefined, cwd ?? undefined).mcpServers ?? {}
-      const prov = modules.config.getServerProvenance(undefined, cwd ?? undefined)
-      for (const [name, entry] of prov) provenance.set(name, entry)
-    } catch {
-      merged = {}
-    }
-  } else {
-    // Fallback: the two editable layers, project last so it wins.
-    for (const file of [readMcpConfigFile('global', null, agentDir), cwd ? readMcpConfigFile('project', cwd, agentDir) : null]) {
-      if (!file || file.parseError) continue
-      const parsed = parseMcpConfigJson(file.content)
-      if (!parsed.ok) continue
-      for (const [name, entry] of Object.entries(parsed.config.mcpServers)) {
-        merged[name] = entry
-        provenance.set(name, { path: file.path, kind: file.path === globalPath ? 'user' : 'project' })
-      }
-    }
-  }
-
-  const cache = modules ? modules.cache.loadMetadataCache() : readMetadataCacheFile(agentDir)
-  const cacheServers = cache?.servers ?? {}
-
-  return Object.entries(merged)
-    .map(([name, entry]): McpServerDTO => {
-      const prov = provenance.get(name)
-      const editable = prov?.path === globalPath || prov?.path === projectPath || prov?.path === projectPiPath
-      const scope: McpServerDTO['scope'] =
-        prov?.path === globalPath ? 'global' : editable ? 'project' : 'external'
-      const disabled = entry.disabled === true
-      const cacheEntry = cacheServers[name]
-      let cacheValid = false
-      if (cacheEntry && modules) {
-        try {
-          cacheValid = modules.cache.isServerCacheValid(cacheEntry, entry)
-        } catch {
-          cacheValid = false
-        }
-      } else if (cacheEntry) {
-        cacheValid = true
-      }
-      const liveEntry = live?.get(name)
-      // The adapter lazy-connects on first tool call, so an idle server with a
-      // usable cache reads as `cached` (its metadata stays browseable) — a live
-      // 'not-connected' report must not turn that into a zero-tool void. A
-      // stale cache (expired or config-changed) is genuinely not-connected.
-      const usableCache = modules ? cacheValid : cacheEntry !== undefined
-      const status: McpRuntimeStatus | null = disabled
-        ? 'disabled'
-        : liveEntry && liveEntry.status !== 'not-connected'
-          ? liveEntry.status
-          : usableCache
-            ? 'cached'
-            : (liveEntry?.status ?? 'not-connected')
-      // The live count only wins while connected; otherwise the cache's tool
-      // metadata is what the tools viewer shows, so the count must match it.
-      const toolCount =
-        liveEntry && liveEntry.status === 'connected'
-          ? liveEntry.toolCount
-          : (cacheEntry?.tools.length ?? liveEntry?.toolCount ?? null)
-      return {
-        name,
-        transport: inferTransport(entry),
-        summary: serverSummary(entry),
-        disabled,
-        scope,
-        sourcePath: prov?.path,
-        editable,
-        status,
-        toolCount,
-        cachedAt: cacheEntry?.cachedAt ?? null,
-        entry: entry as Record<string, unknown>
-      }
-    })
-    .sort((a, b) => a.name.localeCompare(b.name))
-}
-
-// ---- per-server detail (metadata cache) ----
-
-export function mcpServerDetail(name: string, agentDir: string, modules: AdapterModules | null): McpServerDetailDTO {
-  const cache = modules ? modules.cache.loadMetadataCache() : readMetadataCacheFile(agentDir)
-  const entry = cache?.servers?.[name]
-  return {
-    name,
-    tools: (entry?.tools ?? []).map((tool) => ({
-      name: tool.name,
-      description: tool.description,
-      ...(isRecord(tool.inputSchema) ? { inputSchema: tool.inputSchema as Record<string, any> } : {})
-    })),
-    resources: (entry?.resources ?? []).map((resource) => ({
-      uri: resource.uri,
-      name: resource.name,
-      description: resource.description
-    })),
-    prompts: (entry?.prompts ?? []).map((prompt) => ({
-      name: prompt.name,
-      description: prompt.description,
-      ...(Array.isArray(prompt.arguments)
-        ? {
-            arguments: prompt.arguments
-              .filter(isRecord)
-              .map((argument) => ({
-                name: String(argument.name ?? ''),
-                description: typeof argument.description === 'string' ? argument.description : undefined,
-                required: argument.required === true
-              }))
-          }
-        : {})
-    })),
-    cachedAt: entry?.cachedAt ?? null
-  }
-}
-
-// ---- enable / disable ----
-
-/**
- * Flip one server's `disabled` flag. A server defined in an app-editable file
- * is edited there (the key is removed when enabling); an external server goes
- * through the adapter's override writer, which persists ONLY the flag in the
- * project's `.pi/mcp.json` and never copies credentials. Without the adapter
- * bridge, external servers cannot be toggled (the caller surfaces the error).
- */
-export function setMcpServerDisabled(
-  name: string,
-  disabled: boolean,
-  options: { cwd: string | null; agentDir: string; modules: AdapterModules | null }
-): void {
-  const { cwd, agentDir, modules } = options
-  const editablePaths = [join(agentDir, 'mcp.json'), ...(cwd ? [join(cwd, PROJECT_CONFIG_NAME), join(cwd, PROJECT_PI_CONFIG_NAME)] : [])]
-  for (const path of editablePaths) {
-    if (!existsSync(path)) continue
-    let text: string
-    try {
-      text = readFileSync(path, 'utf8')
-    } catch {
-      continue
-    }
-    const parsed = parseMcpConfigJson(text)
-    if (!parsed.ok || !(name in parsed.config.mcpServers)) continue
-    const servers = { ...parsed.config.mcpServers }
-    const entry = { ...servers[name] }
-    if (disabled) entry.disabled = true
-    else delete entry.disabled
-    servers[name] = entry
-    const next = serializeMcpConfig({ ...parsed.config, mcpServers: servers })
-    const tmp = `${path}.tmp-${process.pid}`
-    writeFileSync(tmp, next, 'utf8')
-    renameSync(tmp, path)
-    return
-  }
-  if (modules && cwd) {
-    modules.config.writeProjectServerDisabledOverride(undefined, cwd, name, disabled)
-    return
-  }
-  throw new Error(`Server "${name}" is not defined in an editable config file`)
-}
-
-// ---- visual editor writes (upsert / delete one server in one file) ----
-
-/** Every file the settings page may write, for path validation. */
-function editableConfigPaths(cwd: string | null, agentDir: string): string[] {
-  return [
-    join(agentDir, 'mcp.json'),
-    ...(cwd ? [join(cwd, PROJECT_CONFIG_NAME), join(cwd, PROJECT_PI_CONFIG_NAME)] : [])
-  ]
-}
-
-export interface McpUpsertPayload {
-  /** Existing server's defining file (from `McpServerDTO.sourcePath`). */
-  targetPath?: string
-  /** New server's target layer; resolves to that scope's default file. */
-  scope?: 'global' | 'project'
-  /** Set when a rename should drop the old key. */
-  originalName?: string | null
-  name: string
-  entry: McpServerEntry
-}
-
-function resolveWritablePath(payload: { targetPath?: string; scope?: 'global' | 'project' }, cwd: string | null, agentDir: string): string {
-  const paths = editableConfigPaths(cwd, agentDir)
-  if (payload.targetPath) {
-    if (!paths.includes(payload.targetPath)) throw new Error('Refusing to write outside the MCP config files')
-    return payload.targetPath
-  }
-  const path = configPath(payload.scope ?? 'global', cwd, agentDir)
-  if (!path) throw new Error('No workspace is open for the project scope')
-  return path
 }
 
 function readConfigDocument(path: string): McpConfigDocument {
@@ -492,34 +266,150 @@ function readConfigDocument(path: string): McpConfigDocument {
   }
 }
 
-function writeConfigDocument(path: string, config: McpConfigDocument): void {
-  mkdirSync(dirname(path), { recursive: true })
-  const tmp = `${path}.tmp-${process.pid}`
-  writeFileSync(tmp, serializeMcpConfig(config), 'utf8')
-  renameSync(tmp, path)
+function inferTransport(entry: McpServerEntry): McpServerDTO['transport'] {
+  return typeof entry.url === 'string' ? 'http' : 'stdio'
 }
 
-/** Insert/replace one server entry in its config file (visual editor save). */
+function serverSummary(entry: McpServerEntry): string {
+  if (typeof entry.url === 'string') {
+    try {
+      const url = new URL(entry.url)
+      return `${url.origin}${url.pathname}`
+    } catch {
+      return '—'
+    }
+  }
+  return [entry.command ?? '', ...(Array.isArray(entry.args) ? entry.args : [])].join(' ').trim() || '—'
+}
+
+export interface McpLiveServer {
+  status?: McpRuntimeStatus
+  tools: McpToolDTO[]
+}
+
+export interface McpRosterOptions {
+  cwd: string | null
+  agentDir: string
+  projectTrusted: boolean
+  live?: Map<string, McpLiveServer> | null
+}
+
+/** Mirror the built-in extension's precedence: trusted project replaces global by name. */
+export function buildMcpRoster(options: McpRosterOptions): McpServerDTO[] {
+  const { cwd, agentDir, projectTrusted, live } = options
+  const merged = new Map<string, { entry: McpServerEntry; scope: 'global' | 'project'; path: string }>()
+  for (const scope of ['global', 'project'] as const) {
+    if (scope === 'project' && !projectTrusted) continue
+    const file = readMcpConfigFile(scope, cwd, agentDir)
+    if (!file || file.parseError) continue
+    const parsed = parseMcpConfigJson(file.content)
+    if (!parsed.ok) continue
+    for (const [name, entry] of Object.entries(parsed.config.mcpServers)) {
+      if (!SERVER_NAME.test(name) || !isRecord(entry)) continue
+      merged.set(name, { entry, scope, path: file.path })
+    }
+  }
+  const rows: McpServerDTO[] = [...merged].map(([name, { entry, scope, path }]) => {
+    const available = live?.get(name)
+    const disabled = entry.enabled === false
+    return {
+      name,
+      transport: inferTransport(entry),
+      summary: serverSummary(entry),
+      disabled,
+      scope,
+      sourcePath: path,
+      editable: true,
+      status: disabled ? 'disabled' : (available?.status ?? 'configured'),
+      toolCount: available ? available.tools.length : null,
+      exposure: typeof entry.exposure === 'string' && EXPOSURES.has(entry.exposure) ? entry.exposure as McpServerDTO['exposure'] : 'codemode',
+      entry
+    }
+  })
+  // Pi extensions can register servers with no config file. Keep those read-only.
+  for (const [name, available] of live ?? []) {
+    if (merged.has(name)) continue
+    rows.push({
+      name,
+      transport: 'registered',
+      summary: '—',
+      disabled: false,
+      scope: 'external',
+      editable: false,
+      status: available.status ?? 'configured',
+      toolCount: available.tools.length,
+      exposure: 'codemode',
+      entry: {}
+    })
+  }
+  return rows.sort((a, b) => a.name.localeCompare(b.name))
+}
+
+export function mcpServerDetail(name: string, tools: McpToolDTO[] = []): McpServerDetailDTO {
+  return { name, tools, resources: [], prompts: [], cachedAt: null }
+}
+
+function writablePaths(cwd: string | null, agentDir: string): string[] {
+  return [join(agentDir, 'mcp.json'), ...(cwd ? [join(cwd, PROJECT_CONFIG_NAME)] : [])]
+}
+
+/** Native MCP uses enabled:false. The winning trusted project definition is edited first. */
+export function setMcpServerDisabled(
+  name: string,
+  disabled: boolean,
+  options: { cwd: string | null; agentDir: string; projectTrusted: boolean }
+): void {
+  const paths = options.projectTrusted && options.cwd
+    ? [join(options.cwd, PROJECT_CONFIG_NAME), join(options.agentDir, 'mcp.json')]
+    : [join(options.agentDir, 'mcp.json')]
+  for (const path of paths) {
+    if (!existsSync(path)) continue
+    const config = readConfigDocument(path)
+    const current = config.mcpServers[name]
+    if (!isRecord(current)) continue
+    const entry = { ...current }
+    if (disabled) entry.enabled = false
+    else delete entry.enabled
+    config.mcpServers[name] = entry
+    writeConfigDocument(path, config)
+    return
+  }
+  throw new Error(`Server "${name}" is not defined in an editable native MCP config file`)
+}
+
+export interface McpUpsertPayload {
+  targetPath?: string
+  scope?: 'global' | 'project'
+  originalName?: string | null
+  name: string
+  entry: McpServerEntry
+}
+
+function resolveWritablePath(payload: { targetPath?: string; scope?: 'global' | 'project' }, cwd: string | null, agentDir: string): string {
+  const paths = writablePaths(cwd, agentDir)
+  if (payload.targetPath) {
+    if (!paths.includes(payload.targetPath)) throw new Error('Refusing to write outside the MCP config files')
+    return payload.targetPath
+  }
+  const path = configPath(payload.scope ?? 'global', cwd, agentDir)
+  if (!path) throw new Error('No workspace is open for the project scope')
+  return path
+}
+
 export function upsertMcpServerEntry(payload: McpUpsertPayload, options: { cwd: string | null; agentDir: string }): void {
   const path = resolveWritablePath(payload, options.cwd, options.agentDir)
   const name = payload.name.trim()
-  if (!name) throw new Error('Server name is required')
-  if (!isRecord(payload.entry)) throw new Error('Server entry must be an object')
+  if (!SERVER_NAME.test(name)) throw new Error('Invalid MCP server name')
   const config = readConfigDocument(path)
-  const servers = { ...config.mcpServers }
-  if (payload.originalName && payload.originalName !== name) delete servers[payload.originalName]
-  servers[name] = payload.entry
-  writeConfigDocument(path, { ...config, mcpServers: servers })
+  if (payload.originalName && payload.originalName !== name) delete config.mcpServers[payload.originalName]
+  config.mcpServers[name] = payload.entry
+  writeConfigDocument(path, config)
 }
 
-/** Remove one server entry from its defining file (validated as editable). */
 export function deleteMcpServerEntry(path: string, name: string, options: { cwd: string | null; agentDir: string }): void {
-  if (!editableConfigPaths(options.cwd, options.agentDir).includes(path)) {
-    throw new Error('Refusing to write outside the MCP config files')
-  }
+  if (!writablePaths(options.cwd, options.agentDir).includes(path)) throw new Error('Refusing to write outside the MCP config files')
   const config = readConfigDocument(path)
   if (!(name in config.mcpServers)) return
-  const servers = { ...config.mcpServers }
-  delete servers[name]
-  writeConfigDocument(path, { ...config, mcpServers: servers })
+  delete config.mcpServers[name]
+  writeConfigDocument(path, config)
 }

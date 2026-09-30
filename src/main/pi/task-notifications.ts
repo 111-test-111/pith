@@ -82,8 +82,18 @@ export class TaskNotifications {
         this.onPendingChanged?.()
       }
     }
-    if (event.type === 'message_end' && message?.role === 'toolResult' && message.toolName === 'bash') {
-      this.releasedCalls.add(message.toolCallId)
+    if (event.type === 'message_end' && message?.role === 'toolResult') {
+      if (message.toolName === 'bash') this.releasedCalls.add(message.toolCallId)
+      // Nested bash calls have no independent toolResult. The boundary stamps
+      // their IDs onto the enclosing result before persistence. Only this
+      // committed message_end releases completion delivery, even when the
+      // enclosing codemode/script tool itself failed after launching bash.
+      const nested = (message.details as { piAppNestedBashCalls?: { version?: unknown; ids?: unknown } } | undefined)?.piAppNestedBashCalls
+      if (nested?.version === 1 && Array.isArray(nested.ids)) {
+        for (const id of nested.ids) {
+          if (typeof id === 'string' && id.startsWith(`${message.toolCallId}/`)) this.releasedCalls.add(id)
+        }
+      }
     }
     if (event.type === 'agent_settled') {
       this.phase = 'idle'

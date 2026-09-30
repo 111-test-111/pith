@@ -137,14 +137,14 @@ export { extractTurnWrittenFiles, extractReviewTurns } from './src/renderer/src/
 
   const parent = SessionManager.create(temporary, sessionsDir); await materialize(parent)
   const profile = { name: 'worker', displayName: 'Worker', description: 'test', systemPrompt: 'test', tools: ['write'], enabled: true, inheritContext: false, runInBackground: false }
-  const parentSession = { sessionId: parent.getSessionId(), sessionManager: parent, getActiveToolNames: () => ['write'], getAllTools: () => [], messages: [] }
+  const parentSession = { sessionId: parent.getSessionId(), sessionManager: parent, getActiveToolNames: () => ['write'], getCallableToolNames: () => [], getAllTools: () => [], messages: [] }
   const request = { parentSession, parentSessionPath: parent.getSessionFile(), parentToolCallId: 'call', profile, description: 'test', task: 'test', runInBackground: false }
   const makeRuntime = (over = {}) => {
     const counters = { prompts: 0, halts: 0, releases: 0, listeners: 0, resources: [], steers: [] }
     const leases = new Set()
     let settled = over.settled ?? true
     const host = { isClosing: () => false, subagentsEnabled: () => true, subagentReuseEnabled: () => true,
-      subagentCommsEnabled: () => false, planRestricted: () => false,
+      subagentCommsEnabled: () => false, planRestricted: () => false, frozenToolCeiling: () => null,
       subagentTurnLimitOverrideEnabled: () => false, subagentMaxTurns: () => null,
       maxConcurrentSubagents: () => over.limit ?? 4, commandTasks: () => null,
       acquireRunLease: (_cwd, path) => { const lease = { path }; leases.add(lease); return () => leases.delete(lease) },
@@ -400,7 +400,7 @@ export { extractTurnWrittenFiles, extractReviewTurns } from './src/renderer/src/
     notifications.onWake = () => {}
     const unsubscribeDrain = drainSession.subscribe(event => notifications.observe(event))
     const host = { isClosing: () => false, subagentsEnabled: () => true, subagentReuseEnabled: () => true,
-      subagentCommsEnabled: () => false, planRestricted: () => false, maxConcurrentSubagents: () => 4,
+      subagentCommsEnabled: () => false, planRestricted: () => false, frozenToolCeiling: () => null, maxConcurrentSubagents: () => 4,
       subagentTurnLimitOverrideEnabled: () => false, subagentMaxTurns: () => null,
       commandTasks: () => tasks,
       acquireRunLease: () => () => {}, resolveModelSpec: async () => ({}), emitSubagents: () => {}, notifySubagentChildWrite: () => {},
@@ -412,7 +412,7 @@ export { extractTurnWrittenFiles, extractReviewTurns } from './src/renderer/src/
     const drainState = new SubagentParentState(drainParent.getSessionId())
     drainState.notifications = { complete: () => {}, drop: () => {}, canStart: true }
     const bashProfile = { ...profile, name: 'bashworker', tools: ['bash'] }
-    const drainRequest = { parentSession: { sessionId: drainParent.getSessionId(), sessionManager: drainParent, getActiveToolNames: () => ['bash'], getAllTools: () => [], messages: [] },
+    const drainRequest = { parentSession: { sessionId: drainParent.getSessionId(), sessionManager: drainParent, getActiveToolNames: () => ['bash'], getCallableToolNames: () => [], getAllTools: () => [], messages: [] },
       parentSessionPath: drainParent.getSessionFile(), parentToolCallId: 'drain-call', profile: bashProfile, description: 'drain', task: 'run bg', runInBackground: false }
     let rounds = 0, woke = 0
     drainSession.agent.streamFunction = () => stream(assistant((++rounds % 3) === 1

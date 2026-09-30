@@ -62,6 +62,32 @@ export function ceilingNeedsExtensions(
   })
 }
 
+/** Native MCP definitions remain callable from codemode while absent from
+ * `getActiveToolNames()` (the model-facing declaration set). A role may name
+ * those definitions explicitly, and `tools: all` includes them. Historical
+ * adapter proxies have only one separator and remain governed by the active
+ * set. Resource tools are callable MCP definitions without an `mcp__` prefix. */
+function isNativeMcpCallable(name: string): boolean {
+  if (name === 'list_mcp_resources' || name === 'list_mcp_resource_templates' || name === 'read_mcp_resource') return true
+  return /^mcp__.+__.+$/.test(name)
+}
+
+/** The tool names a parent may pass to a new or resumed child. A nested
+ * parent's frozen ceiling remains the upper bound, even though the SDK's
+ * callable set includes every registered codemode/deferred definition. */
+export function parentDelegableToolNames(
+  active: readonly string[],
+  callable: readonly string[],
+  frozenCeiling: readonly string[] | null
+): string[] {
+  const frozen = frozenCeiling ? new Set(frozenCeiling) : null
+  const names = new Set(active.filter(name => !frozen || frozen.has(name)))
+  for (const name of callable) {
+    if (isNativeMcpCallable(name) && (!frozen || frozen.has(name))) names.add(name)
+  }
+  return [...names]
+}
+
 /** Everything a start needs, resolved by the tool layer. */
 export interface StartSubagentRequest {
   parentSession: AgentSession
@@ -129,6 +155,9 @@ export interface SubagentHost {
   subagentMaxTurns(): number | null
   profileDebugEnabled?(cwd: string, name: string): boolean
   planRestricted(parentSessionPath: string): boolean
+  /** Null for a root session; child sessions return their persisted, narrowed
+   * role ceiling. The SDK's callable registry alone does not carry this fact. */
+  frozenToolCeiling(sessionPath: string): readonly string[] | null
   commandTasks(): BashTaskManager | null
   /**
    * Register a run lease so rewind restores and foreign snapshots cannot
@@ -305,12 +334,16 @@ export class SubagentRuntime {
       if (signal?.aborted || controller.signal.aborted) throw new SubagentError('Subagent cancelled before launch')
       const cwd = request.parentSession.sessionManager.getCwd()
       releaseCreationLease = this.host.acquireRunLease(cwd, request.parentSessionPath)
-      const parentActive = new Set(request.parentSession.getActiveToolNames())
+      const parentAvailable = new Set(parentDelegableToolNames(
+        request.parentSession.getActiveToolNames(),
+        request.parentSession.getCallableToolNames(),
+        this.host.frozenToolCeiling(request.parentSessionPath)
+      ))
       const ceiling = (request.profile.tools === 'all'
-        ? [...parentActive]
-        : request.profile.tools.filter((tool) => parentActive.has(tool)))
+        ? [...parentAvailable]
+        : request.profile.tools.filter((tool) => parentAvailable.has(tool)))
         .filter((tool) => tool !== 'debug' && !(SUBAGENT_EXCLUDED_TOOLS as readonly string[]).includes(tool))
-      if (request.profile.debugEnabled && parentActive.has('debug')) ceiling.push('debug')
+      if (request.profile.debugEnabled && parentAvailable.has('debug')) ceiling.push('debug')
       if (!ceiling.length) throw new SubagentError(`Profile "${request.profile.name}" resolves to an empty tool set for this session`)
       // Communications are a primitive, not a workspace capability: while
       // subagent communications are enabled, every child can message its
@@ -426,11 +459,15 @@ export class SubagentRuntime {
       releaseCreationLease = this.host.acquireRunLease(cwd, current.start.parentSessionPath)
       if (controller.signal.aborted) throw new SubagentError('Subagent cancelled before launch')
       const runId = randomUUID()
-      const parentActive = new Set(parentSession.getActiveToolNames())
+      const parentAvailable = new Set(parentDelegableToolNames(
+        parentSession.getActiveToolNames(),
+        parentSession.getCallableToolNames(),
+        this.host.frozenToolCeiling(current.start.parentSessionPath)
+      ))
       const planRestricted = current.start.resource.planRestricted === true || this.host.planRestricted(current.start.parentSessionPath)
       const tools = current.start.resource.tools.filter(name =>
         (name !== 'debug' || this.host.profileDebugEnabled?.(cwd, current.start.profile) === true) &&
-        (parentActive.has(name) || (name === MESSAGE_PARENT_TOOL_NAME && this.host.subagentCommsEnabled())) &&
+        (parentAvailable.has(name) || (name === MESSAGE_PARENT_TOOL_NAME && this.host.subagentCommsEnabled())) &&
         !(SUBAGENT_EXCLUDED_TOOLS as readonly string[]).includes(name))
       const { extensions: _extensions, maxTurns: _previousMaxTurns, ...previousResource } = current.start.resource
       const resource: SubagentRunStartData['resource'] = { ...previousResource, tools,

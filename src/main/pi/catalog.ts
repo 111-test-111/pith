@@ -24,6 +24,14 @@ import type {
 } from '../../shared/types'
 
 const APP_TOOL_NAMES: readonly string[] = [...APP_BASH_TOOL_NAMES, 'debug', 'present', TODO_TOOL_NAME, JEV_TOOL_NAME, ...APP_BROWSER_TOOL_NAMES]
+/** Hidden SDK factories are not listed as user-managed extensions, but their
+ * tools still need a useful source name in Settings → Tools. Match their exact
+ * factory identity so third-party inline extensions keep their own source. */
+const NATIVE_INLINE_TOOL_SOURCES = new Map([
+  ['<inline:native-mcp>', 'Pi MCP'],
+  ['<inline:native-codemode>', 'codemode'],
+  ['<inline:native-tool-search>', 'tool_search']
+])
 
 /**
  * Settings → Tools / Extensions reads the *unfiltered* resource loader, so a
@@ -190,6 +198,7 @@ interface ToolLike {
   description?: string
   parameters?: unknown
   promptGuidelines?: string[]
+  exposure?: ToolInfoDTO['exposure']
 }
 
 function toolDTO(
@@ -205,6 +214,7 @@ function toolDTO(
     parameters: plain(definition.parameters),
     promptGuidelines: definition.promptGuidelines ? [...definition.promptGuidelines] : undefined,
     source,
+    exposure: definition.exposure ?? 'direct',
     active,
     disabledByExtension
   }
@@ -323,8 +333,9 @@ export function buildToolCatalog(
   for (const tool of sessionTools) {
     if (tool.sourceInfo.source === 'builtin' || (tool.sourceInfo.source === 'sdk' && APP_TOOL_NAMES.some((name) => name === tool.name))) continue
     const extension = extensionByPath.get(tool.sourceInfo.path)
-    const id = extension ? extensionId(extension) : tool.sourceInfo.source
-    const label = labels.get(id) ?? tool.sourceInfo.source
+    const nativeLabel = NATIVE_INLINE_TOOL_SOURCES.get(tool.sourceInfo.path)
+    const id = extension ? extensionId(extension) : nativeLabel ? tool.sourceInfo.path : tool.sourceInfo.source
+    const label = labels.get(id) ?? nativeLabel ?? tool.sourceInfo.source
     const enabled = !disabledExtensions.has(id)
     const dto = toolDTO(
       tool.name,

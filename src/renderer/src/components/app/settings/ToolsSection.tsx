@@ -19,6 +19,16 @@ const BASH_PARAMETERS: Record<string, MessageKey> = {
   cursor: 'bashTask.parameterCursor', maxChars: 'bashTask.parameterMaxChars'
 }
 
+/** `active` is the model-facing declaration set, not the SDK's callable set.
+ * Native MCP defaults to codemode exposure and is callable while inactive. */
+function toolAccess(tool: ToolInfoDTO): { key: MessageKey; available: boolean; state: string } {
+  if (tool.disabledByExtension) return { key: 'settings.toolInactive', available: false, state: 'inactive' }
+  if (tool.active) return { key: 'settings.toolActive', available: true, state: 'active' }
+  if (tool.exposure === 'codemode') return { key: 'settings.toolCodemode', available: true, state: 'codemode' }
+  if (tool.exposure === 'deferred') return { key: 'settings.toolDeferred', available: true, state: 'deferred' }
+  return { key: 'settings.toolInactive', available: false, state: 'inactive' }
+}
+
 /**
  * Settings → Tools: every tool the agent can call — the SDK's built-ins plus
  * whatever the installed extensions register. Selecting one shows its full
@@ -27,8 +37,8 @@ const BASH_PARAMETERS: Record<string, MessageKey> = {
  *
  * Namespaced families collapse into one group row so a large extension cannot
  * bury the built-ins. A tool folds under the family the registry declares —
- * the MCP whole (`mcp`, `mcpScript`, every `mcp__<server>` proxy), `ctx_*`,
- * `browser_*` — and otherwise under the extension that registers it, so a
+ * native MCP tools and historical adapter names, `ctx_*`, `browser_*` — and
+ * otherwise under the extension that registers it, so a
  * package whose tools share no name prefix (pi-lens: `lens_*`, `ast_grep_*`,
  * `read_symbol`, `lsp_navigation`) is still one row instead of several. The
  * group holding the selected tool is the one left open, and an explicit toggle
@@ -159,6 +169,7 @@ export function ToolsSection() {
 
 /** One tool row: standalone, or indented by its group's disclosure wrapper. */
 function ToolTab({ tool }: { tool: ToolInfoDTO }) {
+  const access = toolAccess(tool)
   return (
     <div data-tool={tool.name}>
       <TabsTrigger
@@ -183,7 +194,7 @@ function ToolTab({ tool }: { tool: ToolInfoDTO }) {
           aria-hidden
           className={cn(
             'size-1.5 shrink-0 rounded-full',
-            tool.active ? 'bg-primary' : 'bg-muted-foreground/40'
+            access.available ? 'bg-primary' : 'bg-muted-foreground/40'
           )}
         />
       </TabsTrigger>
@@ -193,6 +204,7 @@ function ToolTab({ tool }: { tool: ToolInfoDTO }) {
 
 function ToolDetail({ tool }: { tool: ToolInfoDTO }) {
   const { t } = useI18n()
+  const access = toolAccess(tool)
   const managedBash = tool.source.kind === 'builtin' && (tool.name === 'bash' || tool.name === 'bash_task')
   const description = tool.source.kind === 'builtin' && tool.name === 'todo_write' ? t('todo.toolDescription') : managedBash ? t(tool.name === 'bash' ? 'bashTask.toolDescription' : 'bashTask.controlDescription') : tool.description
   const fields = getToolParameterFields(tool.parameters).map((field) =>
@@ -212,20 +224,15 @@ function ToolDetail({ tool }: { tool: ToolInfoDTO }) {
         <span className="rounded-control bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
           {sourceLabel}
         </span>
-        {tool.disabledByExtension ? (
-          <span className="rounded-control bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
-            {t('settings.toolInactive')}
-          </span>
-        ) : (
-          <span
-            className={cn(
-              'rounded-control px-2 py-0.5 text-[11px] font-medium',
-              tool.active ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'
-            )}
-          >
-            {tool.active ? t('settings.toolActive') : t('settings.toolInactive')}
-          </span>
-        )}
+        <span
+          data-tool-access={access.state}
+          className={cn(
+            'rounded-control px-2 py-0.5 text-[11px] font-medium',
+            access.available ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'
+          )}
+        >
+          {t(access.key)}
+        </span>
       </div>
 
       {description ? (

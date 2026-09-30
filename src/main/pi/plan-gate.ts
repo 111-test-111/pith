@@ -32,6 +32,8 @@ import { TODO_TOOL_NAME } from './todo-protocol'
 import { JEV_TOOL_NAME } from './jev/protocol'
 import { AGENT_STEER_TOOL_NAME, MESSAGE_PARENT_TOOL_NAME, SUBAGENT_TOOL_NAME } from './subagents/protocol'
 import { ASK_USER_TOOL_NAME } from '../../shared/ask-user'
+import { PRESENT_TOOL_NAME } from '../../shared/present'
+import { SCHEDULED_TASK_TOOL_NAME } from './scheduled-tasks/tool'
 import { hasPlanOpening, cancelledPlanOpening } from './plan-approval-access'
 import type { PlanController } from './plan-mode'
 import { PLAN_ESCALATION_REFUSED, PLAN_SHELL_UNAVAILABLE } from '../sandbox/escalation'
@@ -76,6 +78,8 @@ export interface PlanGate {
   setAppActiveTools(names: readonly string[]): void
   /** The last materialized effective view (catalog / capability readout). */
   tools(): readonly EffectivePlanTool[]
+  /** Admit an SDK `ctx.executeTool()` call against the live definition and role ceiling. */
+  admitNested(name: string, params: unknown, definition: ToolDefinition | undefined): string | null
   /** Restore the session's own setter and hook chain. */
   dispose(): void
 }
@@ -120,6 +124,21 @@ const CHILD_FORBIDDEN_TOOLS: ReadonlySet<string> = new Set([
   SUBAGENT_TOOL_NAME,
   AGENT_STEER_TOOL_NAME,
   'submit_plan'
+])
+
+/** These app tools depend on a committed top-level result or orchestration
+ * receipt. The SDK persists only a summary of nested calls, so running one
+ * through ctx.executeTool would lose that state transition. */
+const MODEL_ONLY_APP_TOOLS: ReadonlySet<string> = new Set([
+  PRESENT_TOOL_NAME,
+  TODO_TOOL_NAME,
+  ASK_USER_TOOL_NAME,
+  'submit_plan',
+  SCHEDULED_TASK_TOOL_NAME,
+  JEV_TOOL_NAME,
+  SUBAGENT_TOOL_NAME,
+  AGENT_STEER_TOOL_NAME,
+  MESSAGE_PARENT_TOOL_NAME
 ])
 
 /** Escalation inputs must be refused in Plan, whether or not they are valid. */
@@ -386,6 +405,23 @@ function createGate(options: PlanGateOptions): PlanGate {
       apply()
     },
     tools: () => effective,
+    admitNested: (name, params, definition) => {
+      // The SDK resolves nested calls from its raw registry, bypassing both
+      // agent.beforeToolCall and the materialized Plan replacement tools.
+      // Requiring the exact current definition also rejects a call prepared
+      // across an extension reload or a same-name implementation swap.
+      if (!definition || session.getToolDefinition(name) !== definition) return `The "${name}" tool changed before execution.`
+      if (appDefinitions.get(name) === definition && MODEL_ONLY_APP_TOOLS.has(name)) return `The "${name}" tool requires a direct model call.`
+      if (!session.getCallableToolNames().includes(name)) return `The "${name}" tool is not callable in this session.`
+      const ceiling = options.roleCeiling()
+      if (ceiling && !ceiling.includes(name)) return `The "${name}" tool is outside this subagent's tool permissions.`
+      if (appDefinitions.get(name) === definition && !appNames.includes(name)) return `The "${name}" tool is disabled in this session.`
+      // Only the substituted createReadOnlyTools implementations may run in
+      // Plan. Nested calls resolve a raw registry object instead, so even a
+      // same-name read must use the ordinary model path in that mode.
+      if (controller.restricted && safeReads.has(name)) return `[plan: the "${name}" tool is not available through nested execution]`
+      return checkCall(name, params, classify(name))
+    },
     dispose: () => {
       if (disposed) return
       disposed = true

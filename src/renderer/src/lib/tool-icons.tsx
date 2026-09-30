@@ -71,7 +71,7 @@ import { cn } from '@/lib/utils'
  *
  * The mapping is exhaustive for the tools that exist today: the SDK's built-ins
  * plus what the bundled extensions register (`@tavily/pi-extension`,
- * `pi-mcp-adapter`, `@ff-labs/pi-fff`, `context-mode`, `pi-lens`). Everything
+ * native MCP/codemode, `@ff-labs/pi-fff`, `context-mode`, `pi-lens`). Everything
  * else — a tool a new extension registers after this list was written — falls
  * back to the wrench, until it gets an explicit entry here. MCP namespaces are
  * the one exception, handled by prefix below.
@@ -150,11 +150,16 @@ const TOOL_ICONS: Record<string, IconComponent> = {
   ast_grep_search: SearchCode,
   ast_grep_replace: Replace,
   ast_grep_outline: ListIndentIncrease,
-  // MCP adapter — `mcp`, the batch script tool `mcpScript` and every per-server
-  // namespace proxy (`mcp__context7`, …) share one MCP glyph; the proxies are
-  // matched by prefix in `toolIconComponent` rather than listed here.
+  // Native MCP resource tools and historical adapter entry points. Native
+  // `mcp__<server>__<tool>` and old `mcp__<server>` proxies use the prefix
+  // branch below. Codemode and tool search are separate capabilities.
+  list_mcp_resources: Plug,
+  list_mcp_resource_templates: Plug,
+  read_mcp_resource: Plug,
   mcp: Plug,
   mcpScript: Plug,
+  codemode: SourceCode,
+  tool_search: Search,
   // Embedded browser agent tools. `browser_navigate` takes the `Compass` so it
   // stays distinct from web_search's `Globe`; one mapping per name even where
   // the artwork is shared (type/press_key are both the keyboard, by design).
@@ -174,7 +179,7 @@ const TOOL_ICONS: Record<string, IconComponent> = {
   browser_upload: Upload
 }
 
-/** Namespace-proxy tools are named `<adapter>__<server>`. */
+/** Native MCP tools and legacy adapter proxies share this namespace. */
 const MCP_NAMESPACE_PREFIX = 'mcp__'
 
 /**

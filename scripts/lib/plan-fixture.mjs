@@ -18,7 +18,7 @@ const sdk = fileURLToPath(import.meta.resolve('@earendil-works/pi-coding-agent')
  * The fake stream is installed inside the mocked createAgentSessionFromServices
  * so it exists before PiManager takes ownership of the session.
  */
-export async function createPlanFixture({ respond: initialRespond, extensionFactories = [], withRewind = false, keepRecentTokens = 20000, providerCallbacks = false } = {}) {
+export async function createPlanFixture({ respond: initialRespond, extensionFactories = [], withRewind = false, keepRecentTokens = 20000, providerCallbacks = false, prepareAgentDir, loadDiscoveredExtensions = false } = {}) {
   const temporary = await mkdtemp(join(tmpdir(), 'pith-plan-mode-'))
   const agentDir = join(temporary, 'agent')
   const project = join(temporary, 'project')
@@ -29,6 +29,10 @@ export async function createPlanFixture({ respond: initialRespond, extensionFact
   await mkdir(project)
   await mkdir(sessions)
   await mkdir(userData)
+  if (prepareAgentDir) {
+    try { await prepareAgentDir(agentDir) }
+    catch (error) { await rm(temporary, { recursive: true, force: true }); throw error }
+  }
 
   const outfile = join(temporary, 'modules.mjs')
   await build({
@@ -78,7 +82,7 @@ export function createAgentSessionServices(options){
     settingsManager:SettingsManager.inMemory({compaction:{enabled:false,keepRecentTokens:${keepRecentTokens}},retry:{enabled:false}}),
     resourceLoaderOptions:{
       ...options.resourceLoaderOptions,
-      noExtensions:true,
+      noExtensions:${!loadDiscoveredExtensions},
       noSkills:true,
       noPromptTemplates:true,
       noThemes:true,

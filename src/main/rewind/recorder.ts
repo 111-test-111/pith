@@ -25,6 +25,27 @@ export class RewindRecorder {
     changed: () => void
   }) { this.install() }
 
+  /**
+   * `ctx.executeTool()` uses the SDK's private nested pipeline rather than
+   * agent.beforeToolCall. Its extension hook calls this before a nested tool
+   * can run; the matching tool_execution_end (or disposal) releases the lease.
+   */
+  async beginNestedToolCall(toolCallId: string, signal?: AbortSignal): Promise<void> {
+    if (this.disposed) throw new Error('The session is closing')
+    const { coordinator, cwd, sessionPath } = this.options
+    const release = await coordinator.enter(cwd, 'tool', sessionPath, signal)
+    if (this.disposed || signal?.aborted) {
+      release()
+      throw new Error(this.disposed ? 'The session is closing' : 'Operation aborted')
+    }
+    this.releases.set(toolCallId, release)
+  }
+
+  endNestedToolCall(toolCallId: string): void {
+    this.releases.get(toolCallId)?.()
+    this.releases.delete(toolCallId)
+  }
+
   private install(): void {
     const { session, coordinator, cwd, sessionPath } = this.options
     const agent = session.agent
@@ -121,7 +142,7 @@ export class RewindRecorder {
     return await task
   }
   observe(event: AgentSessionEvent): void {
-    if (event.type === 'tool_execution_end') { this.releases.get(event.toolCallId)?.(); this.releases.delete(event.toolCallId) }
+    if (event.type === 'tool_execution_end') this.endNestedToolCall(event.toolCallId)
   }
   async idle(): Promise<void> { await this.pending }
   dispose(): void { this.disposed = true; this.unsubscribeAgent?.(); for (const release of this.releases.values()) release(); this.releases.clear() }

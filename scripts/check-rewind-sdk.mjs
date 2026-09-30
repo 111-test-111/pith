@@ -74,11 +74,25 @@ pi.on('tool_result',e=>{if(e.toolName==='todo_write'&&e.input.todos[0]?.content=
   record('failed', 'write', join(sibling, 'failed.txt'), true)
   record('read-only', 'read', join(sibling, 'read.txt'))
   record('pending', 'write', join(sibling, 'pending.txt'), false, false)
+  coverageBranch.push({ id: 'nested-parent', type: 'message', message: { role: 'assistant', content: [
+    { type: 'toolCall', id: 'nested-parent-call', name: 'codemode', arguments: { code: 'write files' } }
+  ] } })
+  coverageBranch.push({ id: 'nested-parent-result', type: 'message', message: {
+    role: 'toolResult', toolCallId: 'nested-parent-call', toolName: 'codemode', isError: true,
+    details: { piAppNestedWrites: { version: 1, paths: [join(sibling, 'nested-omitted.txt')] } },
+    nestedCalls: { complete: false, calls: [
+      { id: 'nested-parent-call/1', name: 'write', status: 'ok', arguments: { path: join(sibling, 'nested-recorded.txt') } },
+      { id: 'nested-parent-call/2', name: 'edit', status: 'error', arguments: { path: join(sibling, 'nested-failed.txt') } },
+      { id: 'nested-parent-call/3', name: 'write', status: 'ok', argumentsBytes: 65536 }
+    ] }
+  } })
   coverageBranch.push({ id: 'prose', type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: 'write ' + join(sibling, 'prose.txt') }] } })
   assert.deepEqual(await uncoveredWrites(coverageBranch, scope, scope, 'anchor', [{ path: '.ignored', reason: 'ignored' }]), [
     { path: join(sibling, 'new.txt'), reason: 'outside-workspace' },
     { path: join(scope, 'escape/deleted-parent/file.txt'), reason: 'outside-workspace' },
-    { path: join(scope, '.ignored/nested.txt'), reason: 'excluded' }
+    { path: join(scope, '.ignored/nested.txt'), reason: 'excluded' },
+    { path: join(sibling, 'nested-omitted.txt'), reason: 'outside-workspace' },
+    { path: join(sibling, 'nested-recorded.txt'), reason: 'outside-workspace' }
   ], 'scope diagnosis respects anchors, normalization, aliases, removed parents and successful write evidence')
   console.log('PASS: coverage path boundaries, exclusions, symlink escape, deduplication and committed tool evidence')
   await build({ entryPoints: [resolve('src/main/rewind/worker.ts')], outfile: join(temporary, 'rewind-worker.mjs'), bundle: true, platform: 'node', format: 'esm' })

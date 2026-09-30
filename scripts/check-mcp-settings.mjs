@@ -1,6 +1,5 @@
 /**
- * Settings → MCP regression check: the section owns the pi-mcp-adapter's
- * config files and the merged server roster.
+ * Settings → MCP regression check for Pi's built-in MCP files and tool roster.
  *
  * - Registry: the nav gains an MCP entry between Extensions and Skills.
  * - Roster: merged servers render with status dot, transport/scope badges and
@@ -10,7 +9,7 @@
  * - Visual editor: edit populates from the entry and saves through
  *   `mcpUpsertServer` (targetPath + originalName); adding goes through scope;
  *   validation blocks an empty name without any IPC write.
- * - Tools viewer: `mcpServerDetail` feeds the tools/resources/prompts lists.
+ * - Tools viewer: `mcpServerDetail` feeds live SDK-registered tools.
  * - JSON editors: valid edits save after a debounce via `mcpWriteConfig`;
  *   invalid JSON shows the parse error and never saves.
  * - Both locales; no renderer exceptions.
@@ -67,38 +66,38 @@ let projectContent = JSON.stringify({ mcpServers: {
 const roster = () => [
   { name: 'beui', transport: 'http', summary: 'https://mcp.beui.dev/mcp', disabled: state.beuiDisabled,
     scope: 'global', sourcePath: '/agent/mcp.json', editable: true,
-    status: state.beuiStatus, toolCount: 4, cachedAt: 1790330000000,
-    entry: { url: 'https://mcp.beui.dev/mcp', ...(state.beuiDisabled ? { disabled: true } : {}) } },
+    status: state.beuiStatus, toolCount: 4, exposure: 'codemode',
+    entry: { url: 'https://mcp.beui.dev/mcp', ...(state.beuiDisabled ? { enabled: false } : {}) } },
   { name: 'context7', transport: 'http', summary: 'https://mcp.context7.com/mcp', disabled: false,
     scope: 'global', sourcePath: '/agent/mcp.json', editable: true,
-    status: 'cached', toolCount: 2, cachedAt: 1790330000000,
+    status: 'configured', toolCount: 2, exposure: 'direct',
     entry: { url: 'https://mcp.context7.com/mcp', headers: { CONTEXT7_API_KEY: 'x' } } },
   { name: 'local-server', transport: 'stdio', summary: 'npx -y local-mcp', disabled: false,
-    scope: 'project', sourcePath: '/proj/.mcp.json', editable: true,
-    status: state.localStatus, toolCount: state.localTools, cachedAt: null,
+    scope: 'project', sourcePath: '/proj/.pi/mcp.json', editable: true,
+    status: state.localStatus, toolCount: state.localTools, exposure: 'deferred',
     entry: { command: 'npx', args: ['-y', 'local-mcp'] } },
-  { name: 'shared-server', transport: 'http', summary: 'https://shared.example.com/mcp', disabled: false,
-    scope: 'external', sourcePath: '/other/mcp.json', editable: false,
-    status: 'failed', toolCount: 1, cachedAt: 1790330000000,
-    entry: { url: 'https://shared.example.com/mcp' } }
+  { name: 'shared-server', transport: 'registered', summary: '—', disabled: false,
+    scope: 'external', editable: false,
+    status: 'failed', toolCount: 1, exposure: 'codemode',
+    entry: {} }
 ];
-const state = { beuiDisabled: false, beuiStatus: 'connected', localStatus: 'not-connected', localTools: null };
+const state = { beuiDisabled: false, beuiStatus: 'connected', localStatus: 'configured', localTools: null };
 const stateDTO = () => ({
-  adapterInstalled: true, adapterVersion: '2.34.0', projectCwd: '/proj',
+  projectCwd: '/proj', projectTrusted: true,
   global: { path: '/agent/mcp.json', exists: true, content: globalContent, parseError: null },
-  project: { path: '/proj/.mcp.json', exists: true, content: projectContent, parseError: null },
-  servers: roster()
+  project: { path: '/proj/.pi/mcp.json', exists: true, content: projectContent, parseError: null },
+  servers: roster(), configIssues: []
 });
 const detail = {
   name: 'beui',
   tools: [
-    { name: 'list_components', description: 'List every beUI component.' },
+    { name: 'list_components', description: 'List every beUI component.', exposure: 'codemode' },
     { name: 'get_component', description: 'Fetch one component source.',
       inputSchema: { type: 'object', properties: { slug: { type: 'string', description: 'Component slug.' } }, required: ['slug'] } }
   ],
-  resources: [{ uri: 'beui://registry', name: 'registry', description: 'The registry.' }],
-  prompts: [{ name: 'build-page', description: 'Build a page.', arguments: [{ name: 'topic', description: 'Page topic.', required: true }] }],
-  cachedAt: 1790330000000
+  resources: [],
+  prompts: [],
+  cachedAt: null
 };
 
 window.pi = {
@@ -297,7 +296,7 @@ app.on('window-all-closed',()=>app.quit());`
     await evaluate(`document.querySelector(${JSON.stringify(rowSelector('shared-server') + ' [data-mcp-status]')})?.classList.contains('bg-destructive')`),
     'shared-server shows the failed dot'
   )
-  // External rows are read-only: no edit/delete, toggle stays.
+  // Extension-registered rows are read-only and have no config toggle.
   assert.equal(
     await evaluate(`document.querySelectorAll(${JSON.stringify(rowSelector('shared-server') + ' button[aria-label="Edit"]')}).length`),
     0,
@@ -308,6 +307,12 @@ app.on('window-all-closed',()=>app.quit());`
     0,
     'external server has no delete button'
   )
+  assert.equal(
+    await evaluate(`document.querySelectorAll(${JSON.stringify(rowSelector('shared-server') + ' [role=checkbox]')}).length`),
+    0,
+    'extension-registered server has no config toggle'
+  )
+  assert.ok((await evaluate(`document.querySelector(${JSON.stringify(rowSelector('shared-server'))}).textContent`)).includes('Extension'), 'registered transport is accurate')
   await screenshot('roster')
 
   // 3. Toggle: the checkbox writes through and the roster re-renders.
@@ -372,9 +377,9 @@ app.on('window-all-closed',()=>app.quit());`
   assert.equal(upsertCall[1].targetPath, '/agent/mcp.json', 'upsert targets the defining file')
   assert.equal(upsertCall[1].originalName, 'beui', 'upsert carries the rename source')
   assert.equal(upsertCall[1].name, 'beui2', 'upsert carries the new name')
-  // Step 3 disabled beui; the editor round-trips the flag rather than
+  // Step 3 disabled beui; the editor round-trips the native flag rather than
   // silently re-enabling the server on save.
-  assert.deepEqual(upsertCall[1].entry, { url: 'https://mcp.beui.dev/mcp', disabled: true }, 'upsert carries the form entry')
+  assert.deepEqual(upsertCall[1].entry, { url: 'https://mcp.beui.dev/mcp', enabled: false }, 'upsert carries the native form entry')
   assert.equal(await evaluate(`!!document.querySelector('[role=dialog]')`), false, 'the dialog closes on save')
 
   // 6. Add: validation first (no IPC), then a valid stdio server saves by scope.
@@ -392,6 +397,17 @@ app.on('window-all-closed',()=>app.quit());`
   assert.equal(addCall[1].scope, 'global', 'a new server saves by scope')
   assert.equal(addCall[1].originalName, null, 'a new server has no rename source')
   assert.deepEqual(addCall[1].entry, { command: 'npx test-server' }, 'the stdio form builds the entry')
+
+  // The same visual add flow can target the native project file.
+  await evaluate(`[...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Add server').click()`)
+  await pause(150)
+  await evaluate(`[...document.querySelectorAll('[role=dialog] [role=radio]')].find((r) => r.closest('label')?.textContent.trim() === 'Project').click()`)
+  await typeField('Name', 'project-one')
+  await typeField('Command', 'node project-server.mjs')
+  await evaluate(`[...document.querySelectorAll('[role=dialog] button')].find((b) => b.textContent.trim() === 'Save').click()`)
+  await pause(200)
+  const projectAdd = (await evaluate(`window.calls.filter((c) => c[0] === 'mcpUpsertServer')`)).at(-1)
+  assert.equal(projectAdd[1].scope, 'project', 'visual add targets .pi/mcp.json')
 
   // 6b. JSON paste mode: invalid snippets are rejected without an IPC write;
   //     both documented shapes save with the raw entry preserved verbatim.
@@ -416,15 +432,21 @@ app.on('window-all-closed',()=>app.quit());`
     upsertCount,
     'invalid snippets never reach the IPC write'
   )
-  // From the mcpServers top level — unknown fields survive verbatim.
+  // Adapter-only fields are rejected before IPC, then a native exposure
+  // override survives the JSON snippet exactly.
   await typeInto('[role=dialog] textarea', '{"mcpServers":{"pasted":{"url":"https://x.test/mcp","customField":42}}}')
+  await evaluate(`[...document.querySelectorAll('[role=dialog] button')].find((b) => b.textContent.trim() === 'Save').click()`)
+  await pause(150)
+  assert.equal(await evaluate(`window.calls.filter((c) => c[0] === 'mcpUpsertServer').length`), upsertCount, 'unsupported field is not written')
+  assert.ok(await evaluate(`document.querySelector('[role=dialog]').textContent.includes('not supported')`), 'legacy field gets actionable error')
+  await typeInto('[role=dialog] textarea', '{"mcpServers":{"pasted":{"url":"https://x.test/mcp","exposure":"direct","toolExposure":{"write_*":"hidden"}}}}')
   await evaluate(`[...document.querySelectorAll('[role=dialog] button')].find((b) => b.textContent.trim() === 'Save').click()`)
   await pause(250)
   const topCall = (await evaluate(`window.calls.filter((c) => c[0] === 'mcpUpsertServer')`)).at(-1)
   assert.equal(topCall[1].scope, 'global', 'a pasted server lands global')
   assert.equal(topCall[1].originalName, null, 'a pasted server has no rename source')
   assert.equal(topCall[1].name, 'pasted', 'the snippet name wins')
-  assert.deepEqual(topCall[1].entry, { url: 'https://x.test/mcp', customField: 42 }, 'the raw entry is preserved verbatim')
+  assert.deepEqual(topCall[1].entry, { url: 'https://x.test/mcp', exposure: 'direct', toolExposure: { 'write_*': 'hidden' } }, 'native entry is preserved verbatim')
   assert.equal(await evaluate(`!!document.querySelector('[role=dialog]')`), false, 'the dialog closes on save')
   // From the bare name map.
   await evaluate(`[...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Add server').click()`)
@@ -438,17 +460,15 @@ app.on('window-all-closed',()=>app.quit());`
   assert.equal(bareCall[1].name, 'pasted2', 'the bare name map unwraps')
   assert.deepEqual(bareCall[1].entry, { command: 'npx', args: ['-y', 'srv'] }, 'the bare entry is preserved verbatim')
 
-  // 7. Tools viewer: tools/resources/prompts render from the detail read.
+  // 7. Tools viewer: current SDK tools and exposure render from the detail read.
   await evaluate(`document.querySelector(${JSON.stringify(rowSelector('beui'))} + ' button[aria-label="Browse tools"]').click()`)
   await pause(300)
   const toolsDialog = await evaluate(`document.querySelector('[role=dialog]')?.textContent ?? ''`)
   assert.ok(toolsDialog.includes('Tools (2)'), 'tools section lists the count')
   assert.ok(toolsDialog.includes('list_components'), 'tool names render')
-  assert.ok(toolsDialog.includes('Resources (1)'), 'resources section renders')
-  assert.ok(toolsDialog.includes('Prompts (1)'), 'prompts section renders')
+  assert.ok(toolsDialog.includes('Codemode'), 'per-tool exposure renders')
   assert.ok(toolsDialog.includes('slug'), 'input schema parameters render')
   assert.ok(toolsDialog.includes('Component slug.'), 'parameter descriptions render')
-  assert.ok(toolsDialog.includes('topic'), 'prompt arguments render')
   // Reopening the SAME server hits the store cache: content renders on the
   // first frame instead of flashing the loading line (the background refresh
   // then replaces it silently).
@@ -480,6 +500,7 @@ app.on('window-all-closed',()=>app.quit());`
   }
   const writeCall = await evaluate(`window.calls.find((c) => c[0] === 'mcpWriteConfig')`)
   assert.deepEqual(writeCall, ['mcpWriteConfig', 'global', '{"mcpServers":{}}'], 'valid JSON saves after the debounce')
+  assert.ok(await evaluate(`!!document.querySelector('textarea[aria-label="Project config"]')`), 'native project JSON editor uses .pi/mcp.json')
 
   // 9. zh-CN renders the section.
   await evaluate(`window.setLocale('zh-CN')`)
@@ -490,7 +511,7 @@ app.on('window-all-closed',()=>app.quit());`
   await screenshot('zh-CN')
 
   assert.deepEqual(exceptions, [], 'no renderer exceptions')
-  console.log('PASS: registry, roster + statuses, toggle write, live push, visual editor (edit/add/validation), tools viewer, JSON debounce save, both locales')
+  console.log('PASS: native roster + statuses, toggle, live push, visual editor, exposure, tool viewer, JSON editors, both locales')
 } finally {
   try { ws?.close() } catch {}
   try { child?.kill() } catch {}

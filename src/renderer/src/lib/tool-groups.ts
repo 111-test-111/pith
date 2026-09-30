@@ -1,8 +1,7 @@
 /**
  * Tool-family grouping for Settings → Tools. A tool's family is the one the
- * registry *declares* — the MCP whole (`mcp`, `mcpScript` and every
- * `mcp__<server>` proxy share no prefix, so only `tool-categories.ts` can say
- * they belong together), or a declared namespace prefix (`ctx_*`, `browser_*`)
+ * registry *declares* — native MCP tools and historical adapter names, or a
+ * declared namespace prefix (`ctx_*`, `browser_*`)
  * — and otherwise the extension that registers it, so a package whose tools
  * carry several prefixes or none at all still folds into ONE row (pi-lens:
  * `lens_*`, `ast_grep_*`, `read_symbol`, `lsp_navigation`).
@@ -59,6 +58,10 @@ export function extensionLabelOf(tool: {
  * they always have), else the extension that owns it. `null` means standalone.
  */
 export function toolGroupKey(name: string, extensionLabel?: string): string | null {
+  // These are independent entry points. In SDK sessions the built-in extension
+  // factories can share a source label, but that does not make their powers a
+  // family with MCP (or with each other).
+  if (name === 'codemode' || name === 'tool_search') return null
   return declaredToolFamily(name) ?? extensionLabel ?? null
 }
 

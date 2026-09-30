@@ -10,7 +10,7 @@
  * - Profiles: list/detail from `subagents:profiles` — scope badge, file path,
  *   frontmatter fields, system prompt preview.
  * - Tool editor: SDK built-ins + extension tools from the shared catalog, the
- *   MCP family collapsed into ONE row, every namespaced family in a section
+ *   MCP tools individually selectable, every namespaced family in a section
  *   collapsed into one tri-state row (select-all/clear in one gesture, members
  *   still individually checkable), profile-carried unknown names preserved on
  *   save, empty selection blocked, Reset returning to the saved state, and the
@@ -86,7 +86,12 @@ const catalog = {
     { name: 'read_symbol', description: 'Read one symbol body.', parameters: { type: 'object' }, source: { kind: 'extension', extensionId: '/ext/lens', label: 'pi-lens' }, active: true, disabledByExtension: false },
     { name: 'mcp', description: 'MCP gateway.', parameters: { type: 'object' }, source: { kind: 'extension', extensionId: '/ext/mcp', label: 'mcp-adapter' }, active: true, disabledByExtension: false },
     { name: 'mcpScript', description: 'MCP scripting.', parameters: { type: 'object' }, source: { kind: 'extension', extensionId: '/ext/mcp', label: 'mcp-adapter' }, active: true, disabledByExtension: false },
-    { name: 'mcp__beui', description: 'One server proxy.', parameters: { type: 'object' }, source: { kind: 'extension', extensionId: '/ext/mcp', label: 'mcp-adapter' }, active: true, disabledByExtension: false }
+    { name: 'mcp__beui', description: 'One server proxy.', parameters: { type: 'object' }, source: { kind: 'extension', extensionId: '/ext/mcp', label: 'mcp-adapter' }, active: true, disabledByExtension: false },
+    { name: 'mcp__beui__get_component', description: 'Get one component.', parameters: { type: 'object' }, source: { kind: 'extension', extensionId: '/ext/native-mcp', label: 'MCP' }, active: false, disabledByExtension: false },
+    { name: 'mcp__context7__resolve_library_id', description: 'Resolve a library.', parameters: { type: 'object' }, source: { kind: 'extension', extensionId: '/ext/native-mcp', label: 'MCP' }, active: false, disabledByExtension: false },
+    { name: 'list_mcp_resources', description: 'List resources.', parameters: { type: 'object' }, source: { kind: 'extension', extensionId: '/ext/native-mcp', label: 'MCP' }, active: false, disabledByExtension: false },
+    { name: 'codemode', description: 'Run a tool script.', parameters: { type: 'object' }, source: { kind: 'extension', extensionId: '/ext/native-mcp', label: 'MCP' }, active: true, disabledByExtension: false },
+    { name: 'tool_search', description: 'Find tools.', parameters: { type: 'object' }, source: { kind: 'extension', extensionId: '/ext/native-mcp', label: 'MCP' }, active: true, disabledByExtension: false }
   ],
   extensions: [],
   skills: [],
@@ -462,26 +467,29 @@ app.on('window-all-closed',()=>app.quit());`
   // Switching to explicit starts from everything; Reset returns to the saved state.
   await evaluate(`window.radioOf('Choose tools').click()`)
   await frame()
-  assert.equal(await evaluate(`window.checkedTools().length`), 17, 'explicit mode starts from the full universe (11 built-ins + 5 extension tools + MCP as one)')
+  assert.equal(await evaluate(`window.checkedTools().length`), 24, 'explicit mode starts from the full universe, with each MCP and scripting tool separate')
   assert.equal(await evaluate(`document.querySelector('[data-subagent-tools-reset]').disabled`), false, 'an edit in progress can be reset')
   await evaluate(`document.querySelector('[data-subagent-tools-reset]').click()`)
   await frame()
   assert.equal(await evaluate(`window.radioOf('All tools')?.getAttribute('data-state')`), 'checked', 'reset restores the saved mode')
 
-  // 4. The explore profile: MCP as one whole, unknown preserved, canonical save.
+  // 4. The explore profile: MCP tool grants stay separate, unknown preserved.
   await evaluate(`window.profileRow('explore').click()`)
   await frame()
   assert.ok(await evaluate(`document.querySelector('[data-subagents-section]').textContent.includes('/proj/.pi/agents/explore.md')`), 'the project file path reads')
   assert.ok(await evaluate(`document.querySelector('[data-subagents-section]').textContent.includes('Project')`), 'the project scope badge reads')
   assert.ok(await evaluate(`document.querySelector('[data-subagents-section]').textContent.includes('deepseek/chat')`), 'the model field reads')
   assert.ok(!await evaluate(`document.querySelector('[data-subagents-section] dl').textContent.includes('Turn limit')`), 'a legacy profile limit is no longer presented as a setting')
-  const mcpRow = await evaluate(`(()=>{const rows=[...document.querySelectorAll('[data-subagent-tool]')].map((r)=>r.dataset.subagentTool);return {mcp:rows.filter((n)=>n==='MCP'||n.startsWith('mcp')).join(','),ctx:rows.includes('ctx_one'),fff:rows.includes('ffgrep'),legacy:rows.includes('legacy-tool'),todo:rows.includes('todo_write')}})()`)
-  assert.equal(mcpRow.mcp, 'MCP', 'the three MCP tools answer one row')
+  const mcpRow = await evaluate(`(()=>{const rows=[...document.querySelectorAll('[data-subagent-tool]')].map((r)=>r.dataset.subagentTool);return {mcp:rows.filter((n)=>n==='mcp'||n==='mcpScript'||n.startsWith('mcp__')||n==='list_mcp_resources'),codemode:rows.includes('codemode'),search:rows.includes('tool_search'),ctx:rows.includes('ctx_one'),fff:rows.includes('ffgrep'),legacy:rows.includes('legacy-tool'),todo:rows.includes('todo_write')}})()`)
+  assert.deepEqual(mcpRow.mcp, ['mcp', 'mcpScript', 'list_mcp_resources', 'mcp__beui', 'mcp__beui__get_component', 'mcp__context7__resolve_library_id'], 'native and historical MCP names have independent rows')
+  assert.equal(mcpRow.codemode, true, 'codemode has its own row')
+  assert.equal(mcpRow.search, true, 'tool search has its own row')
   assert.equal(mcpRow.ctx, true, 'extension tools list under their group')
   assert.equal(mcpRow.fff, true, 'a second extension lists too')
   assert.equal(mcpRow.legacy, true, 'a profile-carried unknown name is shown, never dropped')
   assert.equal(mcpRow.todo, true, 'app tools list with the built-ins')
-  assert.equal(await evaluate(`window.boxState('MCP')`), 'false', 'MCP starts unchecked for this profile')
+  assert.equal(await evaluate(`window.boxState('mcp__beui__get_component')`), 'false', 'MCP starts unchecked for this profile')
+  assert.equal(await evaluate(`window.boxState('codemode')`), 'false', 'codemode starts unchecked independently')
   assert.equal(await evaluate(`window.boxState('legacy-tool')`), 'true', 'the unknown name stays checked')
 
   const groups = await evaluate(`[...document.querySelectorAll('[data-subagent-tool-group]')].map((g) => g.dataset.subagentToolGroup)`)
@@ -489,9 +497,15 @@ app.on('window-all-closed',()=>app.quit());`
 
   assert.equal(await evaluate(`document.querySelector('[data-subagent-debug] [role=checkbox]').getAttribute('aria-checked')`), 'false', 'a sibling role keeps its independent default')
 
-  // Enable MCP and save: canonical order, unknown preserved.
-  await evaluate(`window.toolBox('MCP').click()`)
+  // Enable exactly one native MCP tool and save: no gateway, codemode or
+  // sibling server is granted through the section's visual grouping.
+  await evaluate(`window.toolBox('mcp__beui__get_component').click()`)
   await frame()
+  assert.equal(await evaluate(`window.boxState('mcp')`), 'false', 'the old gateway is not implicitly granted')
+  assert.equal(await evaluate(`window.boxState('mcp__context7__resolve_library_id')`), 'false', 'another server stays unselected')
+  assert.equal(await evaluate(`window.boxState('list_mcp_resources')`), 'false', 'resource access stays unselected')
+  assert.equal(await evaluate(`window.boxState('codemode')`), 'false', 'codemode stays unselected')
+  assert.equal(await evaluate(`window.boxState('tool_search')`), 'false', 'tool search stays unselected')
   assert.equal(await evaluate(`document.querySelector('[data-subagent-tools-save]').disabled`), false, 'a real change enables Save')
   await evaluate(`document.querySelector('[data-subagent-tools-save]').click()`)
   await frame()
@@ -500,9 +514,9 @@ app.on('window-all-closed',()=>app.quit());`
     saved.at(-1),
     {
       filePath: '/proj/.pi/agents/explore.md',
-      tools: ['read', 'grep', 'find', 'ls', 'mcp', 'mcpScript', 'mcp__beui', 'legacy-tool']
+      tools: ['read', 'grep', 'find', 'ls', 'mcp__beui__get_component', 'legacy-tool']
     },
-    'the whole MCP family rides one check, in canonical order, keeping the unknown name'
+    'one MCP tool reaches the saved role without broadening to its siblings'
   )
   await screenshot('subagents-explore')
 
@@ -524,7 +538,7 @@ app.on('window-all-closed',()=>app.quit());`
   assert.deepEqual(families.extension, ['ctx', 'pi-lens'], 'the extension section groups a declared family by its key and one extension as one family')
   assert.deepEqual(families.builtin, ['browser'], 'a namespaced app tool family groups under the built-ins')
   assert.deepEqual(families.unknown, [], 'the unknown group has no family of its own')
-  assert.deepEqual(families.mcp, [], 'the MCP whole is deliberately not a family (the gateway reaches every server)')
+  assert.deepEqual(families.mcp, [], 'MCP tools have individual grants, with no select-all family')
   assert.deepEqual(await evaluate(`window.familyMembers('pi-lens')`), ['lens_diagnostics', 'read_symbol'], 'an extension whose tool names share no prefix is ONE family row')
   assert.deepEqual(
     await evaluate(`[...document.querySelector('[data-subagent-tool-family="pi-lens"] [data-subagent-tool-family-toggle]').querySelectorAll('span')].map((s) => s.textContent)`),
@@ -532,7 +546,7 @@ app.on('window-all-closed',()=>app.quit());`
     'a family named after its extension does not repeat that name as a source chip'
   )
   assert.equal(await evaluate(`!!document.querySelector('[data-subagent-tool="ffgrep"]').closest('[data-subagent-tool-family]')`), false, 'a lone prefix member stays a plain row')
-  assert.equal(await evaluate(`!!document.querySelector('[data-subagent-tool="MCP"]').closest('[data-subagent-tool-family]')`), false, 'the MCP row is not nested in a family')
+  assert.equal(await evaluate(`!!document.querySelector('[data-subagent-tool="mcp__beui__get_component"]').closest('[data-subagent-tool-family]')`), false, 'an MCP tool row is not nested in a family')
   assert.deepEqual(await evaluate(`window.familyMembers('ctx')`), ['ctx_one', 'ctx_two'], 'the family holds its members')
   assert.deepEqual(await evaluate(`window.familyMembers('browser')`), ['browser_click', 'browser_navigate', 'browser_type'], 'in the section sort order, not reshuffled')
   assert.equal(
@@ -605,13 +619,13 @@ app.on('window-all-closed',()=>app.quit());`
   assert.equal(await evaluate(`window.checkedTools().join(',')`), 'read,grep,find,ls,legacy-tool', 'reset drops the family selection with the rest of the draft')
 
   // 5. A failing save keeps the draft and reports.
-  await evaluate(`window.toolBox('MCP').click()`)
+  await evaluate(`window.toolBox('mcp__beui__get_component').click()`)
   await frame()
   await evaluate(`window.failProfileTools = true`)
   await evaluate(`document.querySelector('[data-subagent-tools-save]').click()`)
   await frame()
   assert.ok(await evaluate(`document.querySelector('[data-subagent-tools-editor]').textContent.includes('Could not save the tool set.')`), 'a failed save reports inline')
-  assert.equal(await evaluate(`window.boxState('MCP')`), 'true', 'the draft survives the failure')
+  assert.equal(await evaluate(`window.boxState('mcp__beui__get_component')`), 'true', 'the draft survives the failure')
   await evaluate(`window.failProfileTools = false`)
   await evaluate(`document.querySelector('[data-subagent-tools-reset]').click()`)
   await frame()
@@ -739,7 +753,7 @@ app.on('window-all-closed',()=>app.quit());`
   await frame()
   assert.ok(await evaluate(`document.querySelector('[data-subagents-section]').textContent.includes('内置工具')`), 'the built-in group title is localized')
   assert.ok(await evaluate(`document.querySelector('[data-subagents-section]').textContent.includes('扩展工具')`), 'the extension group title is localized')
-  assert.equal(await evaluate(`window.boxState('MCP')`), 'false', 'MCP stays one row in Chinese')
+  assert.equal(await evaluate(`window.boxState('mcp__beui__get_component')`), 'false', 'MCP grants stay individual in Chinese')
   await evaluate(`window.profileRow('piweb-agent').click()`)
   await frame()
   assert.ok(await evaluate(`document.querySelector('[data-subagent-tools-source]').textContent.includes('nope')`), 'the Chinese annotation still names the preset')
@@ -748,7 +762,7 @@ app.on('window-all-closed',()=>app.quit());`
   await screenshot('subagents-dark-zh')
 
   assert.deepEqual(exceptions, [], 'no renderer exceptions')
-  console.log('PASS: subagent settings — section owns the switch + limit, profiles list/edit with MCP-as-one, per-section tool families (select-all / clear / mixed), unknown preservation, both locales')
+  console.log('PASS: subagent settings — profiles grant MCP tools individually, preserve unknowns, and keep codemode separate in both locales')
 } finally {
   try {
     ws?.close()

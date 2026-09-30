@@ -11,7 +11,9 @@ import {
   buildSessionContext,
   createAgentSessionFromServices,
   createAgentSessionServices,
-  createEventBus,
+  createCodemodeExtension,
+  createMcpExtension,
+  createToolSearchExtension,
   DefaultPackageManager,
   estimateTokens,
   getAgentDir,
@@ -72,9 +74,8 @@ import { RewindClient } from '../rewind/client'
 import {
   buildMcpRoster,
   deleteMcpServerEntry,
-  findAdapterInstall,
-  loadAdapterModules,
   mcpServerDetail,
+  readMcpConfigIssues,
   readMcpConfigFile,
   setMcpServerDisabled,
   upsertMcpServerEntry,
@@ -144,7 +145,7 @@ import { loadSettings, saveSettings } from '../settings'
 import { buildToolCatalog, extensionId, loadPackageResources, type PackageResources } from './catalog'
 import { setDisableModelInvocation } from './skill-frontmatter'
 import { desktopExtension } from './extension-startup'
-import { createToolCallBoundaryExtension } from './tool-call-boundary'
+import { bindToolCallBoundary, createToolCallBoundaryExtension } from './tool-call-boundary'
 import {
   buildSideChatContext,
   runSideChatAnswer,
@@ -211,6 +212,7 @@ import type {
   SubagentActionPayload,
   SubagentRunDTO,
   McpRuntimeStatus,
+  McpToolDTO,
   McpServerDetailDTO,
   McpStateDTO,
   McpStatusPushDTO,
@@ -228,6 +230,14 @@ const MAX_FOLDERS = 12
  * so Settings → Subagents offers the same names without a session.
  */
 const BUILTIN_TOOL_NAMES = SDK_BUILTIN_TOOL_NAMES
+
+/** The old adapter remains installed in Pi's global package list for CLI users.
+ * This app runs Pi's native MCP extension, so exclude the adapter from this
+ * loader before binding extension handlers. Filtering after binding would run
+ * two MCP clients and could let the adapter replace the native /mcp command. */
+function isLegacyMcpAdapter(extension: Extension): boolean {
+  return /(?:^|[/\\])pi-mcp-adapter(?:[/\\]|$)/.test(extension.resolvedPath || extension.path)
+}
 
 /**
  * Streaming updates (`message_update` carries the FULL accumulated partial
@@ -382,6 +392,7 @@ interface ManagedSession {
   plan: PlanController
   /** The runtime tool ceiling (setter adapter + hook chain + execute recheck). */
   gate?: PlanGate
+  disposeToolCallBoundary?: () => void
   disposePlanStream?: () => void
   disposeContextBudget?: () => void
   planApproval?: PlanApprovalController
@@ -1233,10 +1244,6 @@ export class PiManager {
   /** Tools a now-disabled extension had registered at runtime, so a lazily
    * registering extension (pi-fff) keeps its tools listed while switched off. */
   private knownExtensionTools = new Map<string, ToolInfoDTO[]>()
-  /** Latest pi-mcp-adapter status snapshot per workspace cwd (Settings → MCP). */
-  private mcpLiveByCwd = new Map<string, Map<string, { status: McpRuntimeStatus; toolCount: number; disabled: boolean }>>()
-  /** Unsubscribes for the per-session extension event buses, keyed by loader. */
-  private mcpBusCleanup = new Map<ResourceLoader, () => void>()
 
   constructor(
     private emit: (channel: string, payload: unknown) => void,
@@ -1268,6 +1275,7 @@ export class PiManager {
       subagentMaxTurns: () => this.subagentMaxTurnsSetting ?? null,
       profileDebugEnabled: (cwd, name) => listSubagentProfiles(cwd).some(p => p.name === name && p.enabled && p.debugEnabled),
       planRestricted: path => this.sessions.get(path)?.plan.restricted ?? false,
+      frozenToolCeiling: path => this.sessions.get(path)?.subagentChild?.toolCeiling ?? null,
       commandTasks: () => this.commandTasks,
       acquireRunLease: (cwd, sessionPath) => {
         const managed = this.sessions.get(sessionPath)
@@ -1339,6 +1347,7 @@ export class PiManager {
         })
       )
     }
+    this.publishMcpStatusIfChanged()
   }
 
   /** Move a folder to the front of the known list and persist it. */
@@ -1387,37 +1396,37 @@ export class PiManager {
     // exactly the SDK's own default for this path.
     const settingsManager = SettingsManager.create(cwd, getAgentDir())
     this.applyResponseTimeout(settingsManager)
-    // An app-owned event bus per session: extensions (pi-mcp-adapter) receive it
-    // as `pi.events`, so the adapter's `pi-mcp-adapter/status/v1` snapshots land
-    // here and feed Settings → MCP. One bus per loader keeps sessions isolated.
-    const extensionEventBus = createEventBus()
-    const unsubscribeMcpStatus = extensionEventBus.on('pi-mcp-adapter/status/v1', (data) =>
-      this.onMcpStatusSnapshot(cwd, data)
-    )
+    const loadNativeTools = !recoveryOnly && (subagent === undefined || subagent.extensions === true)
     const services = await createAgentSessionServices({
       cwd,
       settingsManager,
       modelRuntime: await this.runtime(),
       resourceLoaderOptions: {
-        eventBus: extensionEventBus,
-        // A subagent child loads extensions ONLY when its frozen ceiling
-        // names an extension-attributed tool (web_search, mcp, ctx_*…): the
-        // ceiling create-allowlist then admits them by name, and
-        // `_refreshToolRegistry` keeps even lazily-registered ones inside it.
+        // A child loads extensions only when its frozen ceiling names one.
+        // The SDK's `tools` allowlist then restricts even late registrations.
         // Every other delegation stays extension-free — N children with
         // extension runtimes would multiply MCP hosts per workspace. A
         // recovery-only session never loads extensions at all.
         noExtensions: recoveryOnly || (subagent !== undefined && subagent.extensions !== true),
-        extensionFactories: [createToolCallBoundaryExtension(), todos.extension(), ...(planContext ? [planContext] : [])],
+        extensionFactories: [
+          createToolCallBoundaryExtension(), todos.extension(), ...(planContext ? [planContext] : []),
+          ...(loadNativeTools ? [
+            { name: 'native-codemode', factory: createCodemodeExtension(), hidden: true },
+            { name: 'native-tool-search', factory: createToolSearchExtension(), hidden: true },
+            { name: 'native-mcp', factory: createMcpExtension(), hidden: true }
+          ] : [])
+        ],
+        // The adapter may still be installed globally for Pi CLI. It must not
+        // bind in this app, where the native factories above own MCP.
+        extensionsOverride: result => ({
+          ...result,
+          extensions: result.extensions.filter(extension => !isLegacyMcpAdapter(extension))
+        }),
         ...(subagent?.appendSystemPrompt ? { appendSystemPrompt: [subagent.appendSystemPrompt] } : {}),
         // Children inherit AGENTS.md per the same live app setting — a
         // delegated implementer must still know the project's rules.
         agentsFilesOverride: (base) => (this.includeContextFiles ? base : { agentsFiles: [] })
       }
-    })
-    this.mcpBusCleanup.set(services.resourceLoader, () => {
-      unsubscribeMcpStatus()
-      extensionEventBus.clear()
     })
     return services
   }
@@ -1465,6 +1474,7 @@ export class PiManager {
     // Put the session's own tool setter and hook chain back before disposal,
     // so an SDK path that reaches the session during teardown sees its own
     // methods rather than a gate whose effective view is being discarded.
+    managed.disposeToolCallBoundary?.()
     managed.gate?.dispose()
     managed.jevWorkflow?.dispose()
     managed.disposePlanStream?.()
@@ -1500,8 +1510,6 @@ export class PiManager {
       if (!settled) managed.session.dispose()
       managed.unsubscribe()
       await managed.trajectory?.dispose()
-      this.mcpBusCleanup.get(managed.resourceLoader)?.()
-      this.mcpBusCleanup.delete(managed.resourceLoader)
       if (managed.streamFlushTimer) clearTimeout(managed.streamFlushTimer)
       managed.pendingStreamEvents.clear()
       if (this.sessions.get(managed.path) === managed) this.sessions.delete(managed.path)
@@ -2073,6 +2081,19 @@ export class PiManager {
         runInTerminal: () => this.debugTerminalBridge
       })
     ]
+    // These tools rely on a persisted top-level toolResult or its completion
+    // receipt. A codemode `ctx.executeTool()` call has no separate toolResult,
+    // so keep them model-facing while excluding them from script callables.
+    // Mutate the captured definitions in place: Plan proves exact identity,
+    // and Jev's description is a live getter that object spreading would lose.
+    const modelOnlyAppTools = new Set<string>([
+      PRESENT_TOOL_NAME, 'submit_plan', TODO_TOOL_NAME, SCHEDULED_TASK_TOOL_NAME,
+      JEV_TOOL_NAME, ASK_USER_TOOL_NAME, SUBAGENT_TOOL_NAME,
+      AGENT_STEER_TOOL_NAME, MESSAGE_PARENT_TOOL_NAME
+    ])
+    for (const definition of customTools) {
+      if (modelOnlyAppTools.has(definition.name)) definition.exposure = 'model-only'
+    }
     // Resolve the task's frozen model against the live registry; a model that
     // is no longer configured fails the run with a precise error.
     let scheduledModel: ReturnType<ModelRuntime['getModel']>
@@ -2287,6 +2308,7 @@ export class PiManager {
       appDefinitions: customTools,
       roleCeiling: () => managed.subagentChild?.toolCeiling
     })
+    managed.disposeToolCallBoundary = bindToolCallBoundary(session, managed.gate, managed.rewind)
     managed.planApproval = new PlanApprovalController({ session, controller: plan, storage: planStorage,
       read: request => { const result = this.readPlanDocument(request); if (!result.ok) throw new PlanAdmissionError(result.code, result.blockers); return result.value },
       applyTools: () => managed.gate?.refresh(), changed: () => plan.refresh(),
@@ -2493,18 +2515,30 @@ export class PiManager {
    * toggle's removal (browser_* going inactive when the user turns the
    * setting off) after the reload it rides.
    */
-  private applyActiveTools(managed: ManagedSession, loader: ResourceLoader): void {
+  private applyActiveTools(managed: ManagedSession, _loader: ResourceLoader): void {
+    const declarable = (name: string): boolean => {
+      const definition = managed.session.getToolDefinition(name)
+      const exposure = definition?.exposure ?? 'direct'
+      return exposure === 'direct' || exposure === 'model-only'
+    }
     if (managed.subagentChild) {
       // Children activate ONLY their frozen ceiling: the normal path below
       // re-activates every built-in + extension tool, which would silently
-      // widen a profile's tool restriction.
-      this.setActiveTools(managed, managed.subagentChild.toolCeiling.filter(name => (name !== JEV_TOOL_NAME || this.jevActive()) && (name !== 'debug' || this.debugEnabledFlag)))
+      // widen a profile's tool restriction. MCP codemode/deferred names remain
+      // callable under the frozen SDK allowlist but are never declared here.
+      this.setActiveTools(managed, managed.subagentChild.toolCeiling.filter(name =>
+        declarable(name) && (name !== JEV_TOOL_NAME || this.jevActive()) && (name !== 'debug' || this.debugEnabledFlag)))
       return
     }
-    // An SDK tools allowlist would also hide extension tools. Activate the
-    // complete set after lazy registration, deduplicating app overrides.
+    // An SDK tools allowlist would also hide extension tools. Select only
+    // declarable extension definitions: explicitly activating codemode or
+    // deferred MCP names would leak their full schemas into the model prompt.
     // The delegation tool is gated by its setting here (its customTool is
     // registered at build; the runtime re-checks dispatch live).
+    const extensionTools = managed.session.getAllTools().filter(tool => {
+      if (tool.sourceInfo?.source === 'builtin' || tool.sourceInfo?.source === 'sdk') return false
+      return declarable(tool.name) && managed.session.getToolDefinition(tool.name)?.defaultActive !== false
+    }).map(tool => tool.name)
     this.setActiveTools(managed, [...new Set([
       ...BUILTIN_TOOL_NAMES, ...APP_BASH_TOOL_NAMES, ...APP_FILE_TOOL_NAMES, TODO_TOOL_NAME, PRESENT_TOOL_NAME,
       // A scheduled-run session has no human surface: ask_user is disabled at
@@ -2514,7 +2548,11 @@ export class PiManager {
       ...(this.browserToolsFlag ? APP_BROWSER_TOOL_NAMES : []),
       ...(this.debugEnabledFlag ? APP_DEBUG_TOOL_NAMES : []),
       ...(this.jevActive() ? [JEV_TOOL_NAME] : []),
-      ...loader.getExtensions().extensions.flatMap((extension) => [...extension.tools.keys()])
+      // Preserve Pi's own discovery activation. MCP turns codemode on for
+      // codemode exposure (unless autoEnableCodemode is false) and tool_search
+      // on for deferred exposure; users may also opt in through defaultTools.
+      ...managed.session.getActiveToolNames().filter(name => name === 'codemode' || name === 'tool_search'),
+      ...extensionTools
     ])])
   }
 
@@ -4207,14 +4245,11 @@ export class PiManager {
     }
     await managed.lifecyclePromise
     const session = managed.session
-    // Tools can register long after initialization — an extension's MCP bridge
-    // (e.g. context-mode) spawns at the session's first `before_agent_start`,
-    // well after `lifecyclePromise` resolved. Fingerprint the registered tool
-    // names into the cache key so those late registrations (and any later
-    // removal) invalidate the cached catalog instead of serving the pre-bridge
-    // snapshot forever.
+    // Native MCP can register tools after initialization. Include exposure as
+    // well as names: editing a server's direct/deferred/codemode mode changes
+    // the Settings catalog even when its tool names stay the same.
     const sessionTools = session?.getAllTools() ?? []
-    const registeredTools = sessionTools.map((tool) => tool.name).sort().join('\u0001')
+    const registeredTools = sessionTools.map((tool) => `${tool.name}:${tool.exposure ?? 'direct'}`).sort().join('\u0001')
     const activeToolNames = session?.getActiveToolNames() ?? []
     // The effective view is part of the cache key: leaving/entering Plan must
     // invalidate a catalog that still describes the other mode's active rows.
@@ -4369,86 +4404,106 @@ export class PiManager {
     return this.catalog()
   }
 
-  // ---- MCP servers (Settings → MCP; pi-mcp-adapter) ----
+  // ---- MCP servers (Settings → MCP; Pi's native extension) ----
 
-  /**
-   * The adapter publishes `pi-mcp-adapter/status/v1` snapshots on the session's
-   * extension event bus (the app injects one per session in servicesFor). Keep
-   * the latest per cwd and relay it to the renderer as a sequence-free push.
-   */
-  private onMcpStatusSnapshot(cwd: string, data: unknown): void {
-    if (!data || typeof data !== 'object') return
-    const snapshot = data as { version?: unknown; servers?: unknown }
-    if (snapshot.version !== 1 || !Array.isArray(snapshot.servers)) return
-    const servers = new Map<string, { status: McpRuntimeStatus; toolCount: number; disabled: boolean }>()
-    for (const entry of snapshot.servers) {
-      if (!entry || typeof entry !== 'object') continue
-      const { name, status, toolCount, disabled } = entry as Record<string, unknown>
-      if (typeof name !== 'string' || typeof status !== 'string') continue
-      servers.set(name, {
-        status: status as McpRuntimeStatus,
-        toolCount: typeof toolCount === 'number' ? toolCount : 0,
-        disabled: disabled === true
-      })
+  /** Native MCP publishes no public status stream. Registered SDK tools reveal
+   * its tool catalog, but may remain after a transport disconnect; connection
+   * status is therefore always "configured" without stronger evidence. */
+  private mcpLiveTools(cwd: string | null): Map<string, { status: McpRuntimeStatus; tools: McpToolDTO[] }> {
+    const live = new Map<string, { status: McpRuntimeStatus; tools: McpToolDTO[] }>()
+    if (!cwd) return live
+    for (const managed of this.sessions.values()) {
+      if (managed.cwd !== cwd || managed.disposing || managed.subagentChild) continue
+      for (const tool of managed.session.getAllTools()) {
+        const namespace = tool.namespace?.name
+        if (!namespace?.startsWith('mcp__') || tool.exposure === 'hidden') continue
+        const name = namespace.slice('mcp__'.length)
+        if (!name || !tool.name.startsWith(`${namespace}__`)) continue
+        let entry = live.get(name)
+        if (!entry) { entry = { status: 'configured', tools: [] }; live.set(name, entry) }
+        if (entry.tools.some(existing => existing.name === tool.name)) continue
+        entry.tools.push({
+          name: tool.name,
+          description: tool.description,
+          inputSchema: JSON.parse(JSON.stringify(tool.parameters ?? {})) as Record<string, unknown>,
+          exposure: tool.exposure as McpToolDTO['exposure']
+        })
+      }
     }
-    this.mcpLiveByCwd.set(cwd, servers)
-    const push: McpStatusPushDTO = { cwd, servers: [...servers.entries()].map(([name, s]) => ({ name, ...s })) }
+    for (const entry of live.values()) entry.tools.sort((a, b) => a.name.localeCompare(b.name))
+    return live
+  }
+
+  /** Sequence-free settings push when native MCP tool registration changes. */
+  private mcpStatusKey = ''
+  private publishMcpStatusIfChanged(): void {
+    const cwd = this.cwd
+    if (!cwd) return
+    const agentDir = getAgentDir()
+    const projectTrusted = SettingsManager.create(cwd, agentDir).isProjectTrusted()
+    const rows = buildMcpRoster({ cwd, agentDir, projectTrusted, live: this.mcpLiveTools(cwd) })
+    const push: McpStatusPushDTO = { cwd, servers: rows.map(row => ({
+      name: row.name, status: row.status ?? 'configured', toolCount: row.toolCount ?? 0, disabled: row.disabled
+    })) }
+    const key = JSON.stringify(push)
+    if (key === this.mcpStatusKey) return
+    this.mcpStatusKey = key
     this.emit('pi:mcp-status', push)
   }
 
-  /**
-   * Everything Settings → MCP renders: the editable config files (raw text for
-   * the JSON editor) plus the merged server roster with provenance, cache and
-   * live status. The adapter package's own compiled modules do the merge when
-   * installed; without it the two editable files are the roster.
-   */
+  /** Editable native config plus SDK-discovered tools, with truthful status. */
   async mcpState(): Promise<McpStateDTO> {
     const cwd = this.activeSession?.cwd ?? null
     const agentDir = getAgentDir()
-    const adapter = findAdapterInstall(cwd, agentDir)
-    const modules = adapter ? await loadAdapterModules(adapter.installedPath) : null
+    const projectTrusted = cwd ? SettingsManager.create(cwd, agentDir).isProjectTrusted() : false
     return {
-      adapterInstalled: adapter !== null,
-      adapterVersion: adapter?.version,
       projectCwd: cwd,
+      projectTrusted,
       global: readMcpConfigFile('global', null, agentDir)!,
-      servers: buildMcpRoster({ cwd, agentDir, adapter, modules, live: cwd ? (this.mcpLiveByCwd.get(cwd) ?? null) : null })
+      project: readMcpConfigFile('project', cwd, agentDir),
+      servers: buildMcpRoster({ cwd, agentDir, projectTrusted, live: this.mcpLiveTools(cwd) }),
+      configIssues: readMcpConfigIssues(cwd, agentDir, projectTrusted)
+    }
+  }
+
+  /** The project file participates in MCP only after Pi trusts the project. */
+  private assertMcpProjectWriteAllowed(cwd: string | null, agentDir: string, targetPath: string | null): void {
+    if (!cwd || targetPath !== join(cwd, '.pi', 'mcp.json')) return
+    if (!SettingsManager.create(cwd, agentDir).isProjectTrusted()) {
+      throw new Error('Trust this project before editing its MCP configuration')
     }
   }
 
   /**
    * Save one config file's raw text (the JSON editor) and rebuild the live
-   * sessions so the adapter re-reads it. Throws on invalid JSON; the renderer
+   * sessions so native MCP re-reads it. Throws on invalid JSON; the renderer
    * validates first, so a throw here is a bug or a race.
    */
   async writeMcpConfig(scope: 'global' | 'project', content: string): Promise<McpStateDTO> {
     const cwd = this.activeSession?.cwd ?? null
-    writeMcpConfigFile(scope, content, cwd, getAgentDir())
+    const agentDir = getAgentDir()
+    if (scope === 'project') this.assertMcpProjectWriteAllowed(cwd, agentDir, cwd ? join(cwd, '.pi', 'mcp.json') : null)
+    writeMcpConfigFile(scope, content, cwd, agentDir)
     this.catalogCache = null
     await this.reloadLiveSessions()
     return this.mcpState()
   }
 
-  /** Toggle one server's `disabled` flag (in its defining file, or through the
-   * adapter's project override for externally-defined servers), then reload. */
+  /** Toggle one configured server's native `enabled` flag, then reload. */
   async setMcpServerDisabled(name: string, disabled: boolean): Promise<McpStateDTO> {
     const cwd = this.activeSession?.cwd ?? null
     const agentDir = getAgentDir()
-    const adapter = findAdapterInstall(cwd, agentDir)
-    const modules = adapter ? await loadAdapterModules(adapter.installedPath) : null
-    setMcpServerDisabled(name, disabled, { cwd, agentDir, modules })
+    const projectTrusted = cwd ? SettingsManager.create(cwd, agentDir).isProjectTrusted() : false
+    setMcpServerDisabled(name, disabled, { cwd, agentDir, projectTrusted })
     this.catalogCache = null
     await this.reloadLiveSessions()
     return this.mcpState()
   }
 
-  /** One server's cached tool/resource/prompt metadata (Settings → MCP detail). */
+  /** One server's currently registered tools (native MCP has no public cache). */
   async mcpServerDetail(name: string): Promise<McpServerDetailDTO> {
     const cwd = this.activeSession?.cwd ?? null
-    const agentDir = getAgentDir()
-    const adapter = findAdapterInstall(cwd, agentDir)
-    const modules = adapter ? await loadAdapterModules(adapter.installedPath) : null
-    return mcpServerDetail(name, agentDir, modules)
+    return mcpServerDetail(name, this.mcpLiveTools(cwd).get(name)?.tools ?? [])
   }
 
   /**
@@ -4458,7 +4513,9 @@ export class PiManager {
    */
   async mcpUpsertServer(payload: McpUpsertServerPayload): Promise<McpStateDTO> {
     const cwd = this.activeSession?.cwd ?? null
-    upsertMcpServerEntry(payload, { cwd, agentDir: getAgentDir() })
+    const agentDir = getAgentDir()
+    this.assertMcpProjectWriteAllowed(cwd, agentDir, payload.targetPath ?? (payload.scope === 'project' && cwd ? join(cwd, '.pi', 'mcp.json') : null))
+    upsertMcpServerEntry(payload, { cwd, agentDir })
     this.catalogCache = null
     await this.reloadLiveSessions()
     return this.mcpState()
@@ -4467,7 +4524,9 @@ export class PiManager {
   /** Delete one server from its defining config file (path validated as editable). */
   async mcpDeleteServer(path: string, name: string): Promise<McpStateDTO> {
     const cwd = this.activeSession?.cwd ?? null
-    deleteMcpServerEntry(path, name, { cwd, agentDir: getAgentDir() })
+    const agentDir = getAgentDir()
+    this.assertMcpProjectWriteAllowed(cwd, agentDir, path)
+    deleteMcpServerEntry(path, name, { cwd, agentDir })
     this.catalogCache = null
     await this.reloadLiveSessions()
     return this.mcpState()

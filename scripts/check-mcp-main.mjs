@@ -1,22 +1,4 @@
-/**
- * Main-process MCP module check: exercises src/main/pi/mcp.ts against the REAL
- * ~/.pi/agent install of pi-mcp-adapter (read-only) and temp dirs (writes).
- *
- * - parse/serialize round-trip, `mcp-servers` alias, invalid JSON.
- * - findAdapterInstall finds the npm package and its version.
- * - loadAdapterModules dynamically imports the adapter's compiled
- *   config/metadata-cache modules from its install path.
- * - buildMcpRoster merges through the adapter's own loader: the user's real
- *   global servers (beui, context7) appear, editable, with cache-derived
- *   tool counts; a live snapshot overrides status.
- * - mcpServerDetail reads the metadata cache.
- * - Writes (writeMcpConfigFile / upsert / delete / disabled toggle) land in a
- *   TEMP agent dir + project cwd; the real mcp.json is never touched.
- * - Path validation refuses writes outside the editable config files.
- *
- * Bundles the TS source with esbuild (no vite/electron boot):
- *   node scripts/check-mcp-main.mjs
- */
+/** Native MCP config boundary, roster, and write checks. Real user files are read only. */
 import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -25,11 +7,13 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { build } from 'esbuild'
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const temporary = await mkdtemp(join(tmpdir(), 'pith-mcp-main-'))
+const root = await mkdtemp(join(tmpdir(), 'pith-native-mcp-'))
+const agentDir = join(root, 'agent')
+const cwd = join(root, 'workspace')
+await mkdir(join(cwd, '.pi'), { recursive: true })
+await mkdir(agentDir, { recursive: true })
 
-// Bundle the module under test; the SDK stays external and resolves from the
-// repo's node_modules via the bundle's location inside it.
-const bundleDir = join(repo, 'node_modules', '.cache', 'pith-mcp-main-check')
+const bundleDir = join(repo, 'node_modules', '.cache', 'pith-native-mcp-check')
 await mkdir(bundleDir, { recursive: true })
 const bundlePath = join(bundleDir, 'mcp.bundle.mjs')
 await build({
@@ -38,141 +22,103 @@ await build({
   bundle: true,
   platform: 'node',
   format: 'esm',
-  external: ['@earendil-works/pi-coding-agent', 'electron'],
   logLevel: 'error'
 })
 const mcp = await import(pathToFileURL(bundlePath).href)
-const { getAgentDir } = await import('@earendil-works/pi-coding-agent')
 
-// ---- pure document model ----
-const parsed = mcp.parseMcpConfigJson('{"mcpServers":{"a":{"url":"https://x/mcp"}}}')
-assert.ok(parsed.ok && parsed.config.mcpServers.a.url === 'https://x/mcp', 'parses mcpServers')
-const alias = mcp.parseMcpConfigJson('{"mcp-servers":{"a":{"command":"npx"}}}')
-assert.ok(alias.ok && alias.config.mcpServers.a.command === 'npx', 'accepts the mcp-servers alias')
-assert.ok(!mcp.parseMcpConfigJson('{ nope').ok, 'invalid JSON is reported')
-assert.ok(!mcp.parseMcpConfigJson('[1]').ok, 'a non-object root is reported')
-const roundTrip = mcp.parseMcpConfigJson(mcp.serializeMcpConfig(parsed.config))
-assert.ok(roundTrip.ok && roundTrip.config.mcpServers.a.url === 'https://x/mcp', 'serialize round-trips')
+const globalPath = join(agentDir, 'mcp.json')
+const projectPath = join(cwd, '.pi', 'mcp.json')
+const oldProjectPath = join(cwd, '.mcp.json')
+const globalConfig = {
+  autoEnableCodemode: true,
+  mcpServers: {
+    beui: { url: 'https://example.com/mcp?token=secret', headers: { Authorization: 'Bearer ${TOKEN}' }, exposure: 'codemode' },
+    duplicate: { command: 'npx', args: ['-y', 'server'], enabled: false }
+  }
+}
+const projectConfig = {
+  mcpServers: {
+    duplicate: { url: 'https://project.example/mcp', exposure: 'direct', toolExposure: { 'write_*': 'hidden' } },
+    local: { command: 'node', args: ['server.mjs'], env: { API_KEY: '${API_KEY}' } }
+  }
+}
+await writeFile(globalPath, JSON.stringify(globalConfig, null, 2))
+await writeFile(projectPath, JSON.stringify(projectConfig, null, 2))
+await writeFile(oldProjectPath, JSON.stringify({ mcpServers: { ignored: { command: 'old' } } }))
 
-// ---- real adapter discovery + bridge (read-only) ----
-const agentDir = getAgentDir()
-const adapter = mcp.findAdapterInstall(null, agentDir)
-assert.ok(adapter, 'pi-mcp-adapter is installed for the real agent dir')
-assert.ok(adapter.version, `adapter version resolved: ${adapter.version}`)
-assert.ok(adapter.installedPath.includes('pi-mcp-adapter'), 'adapter install path resolved')
-const modules = await mcp.loadAdapterModules(adapter.installedPath)
-assert.ok(modules, 'the adapter config/cache modules import from the install path')
-assert.equal(typeof modules.config.loadMcpConfig, 'function', 'dist/config.js bridge works')
-assert.equal(typeof modules.cache.loadMetadataCache, 'function', 'dist/metadata-cache.js bridge works')
-
-// Roster through the adapter's own merge: the user's real global servers show
-// up, editable, with tool metadata from the real cache.
-const roster = mcp.buildMcpRoster({ cwd: null, agentDir, adapter, modules, live: null })
-const beui = roster.find((server) => server.name === 'beui')
-const context7 = roster.find((server) => server.name === 'context7')
-assert.ok(beui && context7, 'real global servers appear: ' + roster.map((s) => s.name).join(','))
-assert.equal(beui.scope, 'global', 'beui is global')
-assert.equal(beui.editable, true, 'beui is editable')
-assert.equal(beui.transport, 'http', 'beui transport is http')
-assert.ok((beui.toolCount ?? 0) > 0, 'beui has cached tools')
-assert.ok(beui.cachedAt, 'beui has a cache timestamp')
-assert.equal(beui.status, 'cached', 'beui status derives from the cache without a live snapshot')
-// A live snapshot wins over the cache-derived status.
-const liveRoster = mcp.buildMcpRoster({
-  cwd: null, agentDir, adapter, modules,
-  live: new Map([['beui', { status: 'connected', toolCount: 99, disabled: false }]])
-})
-const liveBeui = liveRoster.find((server) => server.name === 'beui')
-assert.equal(liveBeui.status, 'connected', 'live status wins')
-assert.equal(liveBeui.toolCount, 99, 'live tool count wins')
-
-// An idle server (lazy connect, first tool call) must not lose its cached
-// metadata to a zero-tool live report: status stays `cached` while the cache
-// is valid, and the cached tool count survives.
-const idleRoster = mcp.buildMcpRoster({
-  cwd: null, agentDir, adapter, modules,
-  live: new Map([['beui', { status: 'not-connected', toolCount: 0, disabled: false }]])
-})
-const idleBeui = idleRoster.find((server) => server.name === 'beui')
-assert.equal(idleBeui.status, 'cached', 'a live not-connected report keeps the cached status while the cache is valid')
-assert.equal(idleBeui.toolCount, beui.toolCount, 'the cached tool count survives a zero-tool live report')
-// A server with NO cache and a live not-connected report is honestly
-// not-connected and reports the live (zero) count — deterministic in its own
-// temp agent dir, unlike the real cache's changing freshness.
-const coldAgent = join(temporary, 'cold-agent')
-await mkdir(coldAgent, { recursive: true })
-mcp.writeMcpConfigFile('global', '{"mcpServers":{"one":{"command":"a"}}}', null, coldAgent)
-const coldRoster = mcp.buildMcpRoster({
-  cwd: null, agentDir: coldAgent, adapter: null, modules: null,
-  live: new Map([['one', { status: 'not-connected', toolCount: 0, disabled: false }]])
-})
-const cold = coldRoster.find((server) => server.name === 'one')
-assert.equal(cold.status, 'not-connected', 'no cache + idle live report is not-connected')
-assert.equal(cold.toolCount, 0, 'no cache reports the live count')
-
-const detail = mcp.mcpServerDetail('beui', agentDir, modules)
-assert.ok(detail.tools.length > 0, 'server detail lists cached tools')
-assert.ok(detail.tools.every((tool) => typeof tool.name === 'string'), 'tool rows carry names')
-
-// Fallback without the adapter bridge still lists the editable files' servers.
-const fallback = mcp.buildMcpRoster({ cwd: null, agentDir, adapter: null, modules: null, live: null })
-assert.ok(fallback.some((server) => server.name === 'beui'), 'fallback roster reads the global file')
-assert.ok(fallback.find((server) => server.name === 'beui').editable, 'fallback marks the global file editable')
-
-// ---- writes land only in the temp dirs ----
-const tempAgent = join(temporary, 'agent')
-const tempCwd = join(temporary, 'proj')
-await mkdir(tempAgent, { recursive: true })
-await mkdir(tempCwd, { recursive: true })
-
-const written = mcp.writeMcpConfigFile('global', '{"mcpServers":{"one":{"command":"a"}}}', null, tempAgent)
-assert.equal(written.parseError, null, 'write returns a clean file payload')
-const onDisk = JSON.parse(await readFile(join(tempAgent, 'mcp.json'), 'utf8'))
-assert.ok(onDisk.mcpServers.one.command === 'a', 'the global file was written')
-assert.throws(
-  () => mcp.writeMcpConfigFile('global', '{ broken', null, tempAgent),
-  /Invalid MCP config/,
-  'an invalid JSON write is refused'
+assert.equal(mcp.readMcpConfigFile('project', cwd, agentDir).path, projectPath, 'project path is .pi/mcp.json')
+assert.ok(mcp.parseMcpConfigJson('{').ok === false, 'invalid JSON rejected')
+assert.ok(mcp.parseMcpConfigJson('[]').ok === false, 'non-object root rejected')
+assert.ok(mcp.parseMcpConfigJson('{"mcpServers":[]}').ok === false, 'non-object roster rejected')
+assert.deepEqual(
+  mcp.readMcpConfigIssues(cwd, agentDir, true).map((issue) => issue.code),
+  ['legacyProjectPath'],
+  'native fields accepted; legacy project path gets a migration hint'
 )
+
+const live = new Map([
+  ['beui', { tools: [{ name: 'inspect', description: 'Inspect', exposure: 'codemode' }] }],
+  ['registered', { tools: [{ name: 'ping' }] }]
+])
+const roster = mcp.buildMcpRoster({ cwd, agentDir, projectTrusted: true, live })
+assert.deepEqual(roster.map((server) => server.name), ['beui', 'duplicate', 'local', 'registered'])
+assert.equal(roster.find((server) => server.name === 'duplicate').scope, 'project', 'trusted project wins')
+assert.equal(roster.find((server) => server.name === 'duplicate').exposure, 'direct', 'native exposure visible')
+assert.equal(roster.find((server) => server.name === 'beui').toolCount, 1, 'live SDK tool count visible')
+assert.equal(roster.find((server) => server.name === 'beui').status, 'configured', 'no invented connected state')
+assert.equal(roster.find((server) => server.name === 'beui').summary, 'https://example.com/mcp', 'URL credentials not shown')
+assert.equal(roster.find((server) => server.name === 'registered').transport, 'registered', 'extension server is not called stdio')
+const untrusted = mcp.buildMcpRoster({ cwd, agentDir, projectTrusted: false })
+assert.equal(untrusted.find((server) => server.name === 'duplicate').disabled, true, 'untrusted project is ignored')
+assert.ok(mcp.readMcpConfigIssues(cwd, agentDir, false).some((issue) => issue.code === 'untrustedProject'))
+assert.equal(mcp.mcpServerDetail('beui', live.get('beui').tools).tools[0].name, 'inspect', 'detail comes from live tools')
+
+// A toggle edits the winning native definition, preserving secrets and unrelated fields.
+mcp.setMcpServerDisabled('duplicate', true, { cwd, agentDir, projectTrusted: true })
+let projectOnDisk = JSON.parse(await readFile(projectPath, 'utf8'))
+assert.equal(projectOnDisk.mcpServers.duplicate.enabled, false)
+assert.equal(projectOnDisk.mcpServers.duplicate.toolExposure['write_*'], 'hidden')
+assert.equal(globalConfig.mcpServers.beui.headers.Authorization, 'Bearer ${TOKEN}')
+mcp.setMcpServerDisabled('duplicate', false, { cwd, agentDir, projectTrusted: true })
+projectOnDisk = JSON.parse(await readFile(projectPath, 'utf8'))
+assert.ok(!('enabled' in projectOnDisk.mcpServers.duplicate), 'enable removes default key')
 
 mcp.upsertMcpServerEntry(
-  { scope: 'project', name: 'two', entry: { url: 'https://two/mcp' } },
-  { cwd: tempCwd, agentDir: tempAgent }
+  { targetPath: projectPath, originalName: 'local', name: 'renamed', entry: { command: 'node', args: ['new.mjs'], exposure: 'deferred' } },
+  { cwd, agentDir }
 )
-const projectOnDisk = JSON.parse(await readFile(join(tempCwd, '.mcp.json'), 'utf8'))
-assert.ok(projectOnDisk.mcpServers.two.url === 'https://two/mcp', 'the project file was created')
-
-// Rename via originalName drops the old key.
-mcp.upsertMcpServerEntry(
-  { targetPath: join(tempCwd, '.mcp.json'), originalName: 'two', name: 'two-renamed', entry: { url: 'https://two/mcp', disabled: true } },
-  { cwd: tempCwd, agentDir: tempAgent }
-)
-const renamed = JSON.parse(await readFile(join(tempCwd, '.mcp.json'), 'utf8'))
-assert.ok(!('two' in renamed.mcpServers) && renamed.mcpServers['two-renamed'].disabled === true, 'rename moves the entry')
-
-// The disabled toggle edits the defining file in place (and removes the key
-// when enabling again).
-mcp.setMcpServerDisabled('one', true, { cwd: tempCwd, agentDir: tempAgent, modules: null })
-let globalOnDisk = JSON.parse(await readFile(join(tempAgent, 'mcp.json'), 'utf8'))
-assert.equal(globalOnDisk.mcpServers.one.disabled, true, 'disable writes the flag')
-mcp.setMcpServerDisabled('one', false, { cwd: tempCwd, agentDir: tempAgent, modules: null })
-globalOnDisk = JSON.parse(await readFile(join(tempAgent, 'mcp.json'), 'utf8'))
-assert.ok(!('disabled' in globalOnDisk.mcpServers.one), 'enable removes the flag')
-
-mcp.deleteMcpServerEntry(join(tempAgent, 'mcp.json'), 'one', { cwd: tempCwd, agentDir: tempAgent })
-globalOnDisk = JSON.parse(await readFile(join(tempAgent, 'mcp.json'), 'utf8'))
-assert.ok(!('one' in globalOnDisk.mcpServers), 'delete removes the entry')
-
-// Path validation: anything outside the editable set is refused.
+projectOnDisk = JSON.parse(await readFile(projectPath, 'utf8'))
+assert.ok(!projectOnDisk.mcpServers.local && projectOnDisk.mcpServers.renamed)
+mcp.deleteMcpServerEntry(projectPath, 'renamed', { cwd, agentDir })
+projectOnDisk = JSON.parse(await readFile(projectPath, 'utf8'))
+assert.ok(!projectOnDisk.mcpServers.renamed)
 assert.throws(
-  () => mcp.deleteMcpServerEntry(join(temporary, 'elsewhere.json'), 'x', { cwd: tempCwd, agentDir: tempAgent }),
+  () => mcp.upsertMcpServerEntry({ targetPath: oldProjectPath, name: 'x', entry: { command: 'x' } }, { cwd, agentDir }),
   /outside the MCP config files/,
-  'delete refuses a foreign path'
-)
-assert.throws(
-  () => mcp.upsertMcpServerEntry({ targetPath: join(temporary, 'elsewhere.json'), name: 'x', entry: {} }, { cwd: tempCwd, agentDir: tempAgent }),
-  /outside the MCP config files/,
-  'upsert refuses a foreign path'
+  'legacy .mcp.json is never overwritten'
 )
 
-console.log('PASS: document model, real adapter bridge (discovery/import/roster/detail), live override, temp-dir writes, path validation')
+const legacy = {
+  mcpServers: {
+    old: { command: 'run', disabled: true, auth: 'oauth', includeTools: ['read'] }
+  }
+}
+await writeFile(globalPath, JSON.stringify(legacy, null, 2))
+const issues = mcp.readMcpConfigIssues(cwd, agentDir, true)
+assert.ok(issues.some((issue) => issue.name === 'old' && issue.field === 'disabled'))
+assert.ok(issues.some((issue) => issue.name === 'old' && issue.field === 'auth'))
+assert.ok(issues.some((issue) => issue.name === 'old' && issue.field === 'includeTools'))
+const untouched = await readFile(globalPath, 'utf8')
+assert.throws(
+  () => mcp.setMcpServerDisabled('old', true, { cwd, agentDir, projectTrusted: true }),
+  /Invalid native MCP/,
+  'editing legacy document requires migration first'
+)
+assert.equal(await readFile(globalPath, 'utf8'), untouched, 'invalid write does not change credentials/config')
+assert.throws(
+  () => mcp.writeMcpConfigFile('global', '{"mcpServers":{"old":{"socket":"/tmp/x"}}}', cwd, agentDir),
+  /Invalid native MCP/,
+  'unsupported socket cannot silently enter native config'
+)
+
+console.log('PASS: native MCP config paths, precedence, tool roster, issues, safe writes and legacy preservation')

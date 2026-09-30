@@ -125,7 +125,30 @@ try {
   assert.equal(rows(retired, 'grep')[0].disabledByExtension, true)
   assert.deepEqual(names(retired), ['grep', 'ls'])
 
-  console.log('PASS: the tool catalog keeps exactly one row per tool name, owned by the live definition.')
+  // --- Exposure is distinct from the model-facing active set --------------
+  const nativeMcp = extension('/sdk/native-mcp.ts', [])
+  const exposed = catalogOf([nativeMcp], [
+    { ...live('mcp__beui__get_component', nativeMcp.path), exposure: 'codemode' },
+    { ...live('mcp__context7__resolve_library_id', nativeMcp.path), exposure: 'deferred' },
+    { ...live('mcp__hidden__secret', nativeMcp.path), exposure: 'hidden' }
+  ], { activeToolNames: [] })
+  assert.equal(rows(exposed, 'mcp__beui__get_component')[0].active, false, 'codemode MCP stays out of model declarations')
+  assert.equal(rows(exposed, 'mcp__beui__get_component')[0].exposure, 'codemode', 'the callable exposure reaches the renderer')
+  assert.equal(rows(exposed, 'mcp__context7__resolve_library_id')[0].exposure, 'deferred', 'on-demand exposure is preserved')
+  assert.equal(rows(exposed, 'mcp__hidden__secret')[0].exposure, 'hidden', 'hidden exposure is preserved for an honest inactive badge')
+  assert.equal(rows(overridden, 'grep')[0].exposure, 'direct', 'older extensions default to direct exposure')
+  const native = catalogOf([], [
+    { ...live('mcp__beui__get_component', '<inline:native-mcp>'), sourceInfo: { path: '<inline:native-mcp>', source: 'inline' }, exposure: 'codemode' },
+    { ...live('codemode', '<inline:native-codemode>'), sourceInfo: { path: '<inline:native-codemode>', source: 'inline' }, exposure: 'model-only' },
+    { ...live('tool_search', '<inline:native-tool-search>'), sourceInfo: { path: '<inline:native-tool-search>', source: 'inline' }, exposure: 'model-only' },
+    { ...live('third_party', '<inline:other>'), sourceInfo: { path: '<inline:other>', source: 'inline' } }
+  ])
+  assert.deepEqual(native.tools.map(tool => [tool.name, tool.source.label]), [
+    ['mcp__beui__get_component', 'Pi MCP'], ['codemode', 'codemode'],
+    ['tool_search', 'tool_search'], ['third_party', 'inline']
+  ], 'only the exact hidden SDK factories gain meaningful native source labels')
+
+  console.log('PASS: the tool catalog keeps one live row per name and preserves callable exposure separately from model activity.')
 } finally {
   await rm(scratch, { recursive: true, force: true })
 }

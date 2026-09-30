@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   CircleAlert,
+  ChevronRight,
   ExternalLink,
   Info,
   Pencil,
@@ -15,20 +16,24 @@ import { Checkbox } from '@/components/motion/checkbox'
 import { Input } from '@/components/motion/input'
 import { MorphingModal } from '@/components/motion/morphing-modal'
 import { RadioGroup, RadioGroupItem } from '@/components/motion/radio'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/motion/select'
 import { Tooltip } from '@/components/motion/tooltip'
 import { useI18n } from '@/i18n'
 import type { MessageKey } from '@/i18n/locales/en'
 import { cn } from '@/lib/utils'
 import { FadeScroll } from '@/components/app/FadeScroll'
+import { AgentDisclosure } from '@/components/agents/agent-disclosure'
 import {
-  MCP_ADAPTER_DOCS_URL,
+  MCP_DOCS_URL,
+  MCP_EXPOSURES,
   createEmptyMcpServerForm,
   formToServerEntry,
   parseMcpConfigJson,
   parseMcpServerSnippet,
   serverEntryToForm,
+  validateMcpServerEntry,
   validateMcpServerForm,
-  type McpAuthKind,
+  validateMcpConfigDocument,
   type McpKeyValue,
   type McpServerForm,
   type McpTransportKind
@@ -46,9 +51,10 @@ import {
 } from '@/lib/mcp-store'
 import { getToolParameterFields } from '@/lib/tool-schema'
 import { FORM_FIELD_HEADING, FORM_INPUT_LABEL } from '@/lib/form-standard'
-import { installExtension, useToolCatalog } from '@/lib/extensions-catalog'
 import type {
   McpConfigFileDTO,
+  McpConfigIssueDTO,
+  McpExposure,
   McpRuntimeStatus,
   McpServerDTO,
   McpServerDetailDTO
@@ -58,13 +64,8 @@ import { LabelTooltip } from '../LabelTooltip'
 import { SettingsGroup } from './SettingsRow'
 
 /**
- * Settings → MCP: the pi-mcp-adapter's home. One merged server roster (all
- * config layers, with provenance + live/cache status and the enable switch),
- * the visual per-server editor, a read-only tools viewer fed by the adapter's
- * metadata cache, and the raw JSON editors for the two app-editable files
- * (global `<agentDir>/mcp.json`, project `<cwd>/.mcp.json`). All writes go
- * through the main process, which validates the target file and reloads the
- * live sessions so the adapter re-reads its config.
+ * Settings → MCP: Pi's built-in configuration, at the native global and
+ * trusted-project paths. Tool metadata comes from the active SDK session.
  */
 
 const JSON_SAVE_DEBOUNCE_MS = 800
@@ -77,19 +78,21 @@ interface JsonDraft {
 
 interface EditorState {
   form: McpServerForm
-  /** Existing server: its defining file. New server: absent (lands global). */
+  /** Existing server: its defining file. New server: absent (uses scope). */
   targetPath?: string
+  scope: 'global' | 'project'
   /** Adding offers a paste-a-snippet mode beside the visual form. */
   mode: 'visual' | 'json'
   snippet: string
 }
 
 const STATUS_META: Record<McpRuntimeStatus, { dot: string; labelKey: MessageKey }> = {
+  configured: { dot: 'border border-muted-foreground/50', labelKey: 'mcp.status.configured' },
+  connecting: { dot: 'bg-sky-500', labelKey: 'mcp.status.connecting' },
   connected: { dot: 'bg-emerald-500', labelKey: 'mcp.status.connected' },
-  cached: { dot: 'bg-sky-500', labelKey: 'mcp.status.cached' },
+  disconnected: { dot: 'border border-muted-foreground/50', labelKey: 'mcp.status.disconnected' },
   failed: { dot: 'bg-destructive', labelKey: 'mcp.status.failed' },
   'needs-auth': { dot: 'bg-amber-500', labelKey: 'mcp.status.needsAuth' },
-  'not-connected': { dot: 'border border-muted-foreground/50', labelKey: 'mcp.status.notConnected' },
   disabled: { dot: 'bg-muted-foreground/40', labelKey: 'mcp.status.disabled' }
 }
 
@@ -134,7 +137,7 @@ export function McpSection() {
 
   const startNew = () => {
     setEditorError(null)
-    setEditor({ form: createEmptyMcpServerForm(), mode: 'visual', snippet: '' })
+    setEditor({ form: createEmptyMcpServerForm(), scope: 'global', mode: 'visual', snippet: '' })
   }
 
   const startEdit = (server: McpServerDTO) => {
@@ -143,6 +146,7 @@ export function McpSection() {
     setEditor({
       form: serverEntryToForm(server.name, server.entry),
       targetPath: server.sourcePath,
+      scope: server.scope === 'project' ? 'project' : 'global',
       mode: 'visual',
       snippet: ''
     })
@@ -169,12 +173,17 @@ export function McpSection() {
       const snippetForm = serverEntryToForm(parsed.name, parsed.entry)
       delete snippetForm.originalName
       const snippetIssues = validateMcpServerForm(snippetForm, existingNames)
+      const invalidNativeField = validateMcpServerEntry(parsed.name, parsed.entry)
+      if (invalidNativeField) {
+        setEditorError(t('mcp.error.legacyField', { field: invalidNativeField }))
+        return
+      }
       if (snippetIssues.length > 0) {
         setEditorError(t(`mcp.error.${snippetIssues[0]}` as MessageKey, { name: parsed.name }))
         return
       }
       const ok = await upsertMcpServer({
-        scope: 'global',
+        scope: editor.scope,
         originalName: null,
         name: parsed.name,
         entry: parsed.entry
@@ -189,7 +198,7 @@ export function McpSection() {
     }
     const ok = await upsertMcpServer({
       targetPath: editor.targetPath,
-      scope: editor.targetPath ? undefined : 'global',
+      scope: editor.targetPath ? undefined : editor.scope,
       originalName: editor.form.originalName ?? null,
       name: editor.form.name.trim(),
       entry: formToServerEntry(editor.form)
@@ -199,36 +208,33 @@ export function McpSection() {
 
   return (
     <div className="space-y-6">
-      {!data.adapterInstalled ? <AdapterBanner /> : null}
+      {data.configIssues.length > 0 ? <ConfigIssues issues={data.configIssues} /> : null}
 
       {actionError ? (
         <div className="flex items-start gap-2 rounded-xl border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
           <Info className="mt-0.5 size-3.5 shrink-0" />
           <span className="min-w-0 flex-1 break-words">{actionError}</span>
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            size="icon"
             aria-label={t('settings.extensionDismissError')}
             onClick={clearMcpActionError}
-            className="grid size-4 shrink-0 place-items-center rounded-capsule transition-colors hover:bg-destructive/10"
+            className="size-5 shrink-0"
           >
             <X className="size-3" />
-          </button>
+          </Button>
         </div>
       ) : null}
 
       <div className="flex items-center justify-between gap-2 px-1">
-        <p className="text-xs text-muted-foreground/70">
-          {data.adapterInstalled && data.adapterVersion
-            ? t('mcp.adapterVersion', { version: data.adapterVersion })
-            : null}
-        </p>
+        <p className="text-xs text-muted-foreground/70">{t('mcp.native')}</p>
         <div className="flex items-center gap-1">
           <Tooltip content={t('mcp.docs')}>
             <Button
               variant="ghost"
               size="icon"
               aria-label={t('mcp.docs')}
-              onClick={() => void window.pi.openExternal(MCP_ADAPTER_DOCS_URL)}
+              onClick={() => void window.pi.openExternal(MCP_DOCS_URL)}
             >
               <ExternalLink className="size-3.5" />
             </Button>
@@ -271,12 +277,14 @@ export function McpSection() {
         </Button>
       </div>
 
-      <JsonConfigCard file={data.global} />
+      <JsonConfigCard scope="global" file={data.global} />
+      {data.project ? <JsonConfigCard scope="project" file={data.project} trusted={data.projectTrusted} /> : null}
 
       <ServerEditorDialog
         editor={editor}
         error={editorError ?? actionError}
         saving={busy !== null && busy.startsWith('upsert:')}
+        projectAvailable={Boolean(data.project && data.projectTrusted)}
         onChange={(form) => {
           setEditorError(null)
           setEditor((prev) => (prev ? { ...prev, form } : prev))
@@ -284,6 +292,9 @@ export function McpSection() {
         onModeChange={(mode) => {
           setEditorError(null)
           setEditor((prev) => (prev ? { ...prev, mode } : prev))
+        }}
+        onScopeChange={(scope) => {
+          setEditor((prev) => (prev ? { ...prev, scope } : prev))
         }}
         onSnippetChange={(snippet) => {
           setEditorError(null)
@@ -311,31 +322,32 @@ export function McpSection() {
   )
 }
 
-// ---- adapter install banner ----
+// ---- native config diagnostics ----
 
-function AdapterBanner() {
+function ConfigIssues({ issues }: { issues: McpConfigIssueDTO[] }) {
   const { t } = useI18n()
-  const { busy, actionError } = useToolCatalog()
-  const installing = busy === 'install:npm:pi-mcp-adapter'
   return (
     <div className="space-y-2 rounded-xl border border-amber-500/30 bg-amber-500/5 px-3 py-2.5">
-      <div className="flex items-start gap-2 text-xs text-amber-700 dark:text-amber-400">
-        <Info className="mt-0.5 size-3.5 shrink-0" />
-        <span className="min-w-0 flex-1 leading-4.5">{t('mcp.adapterMissing')}</span>
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={installing}
-          onClick={() => {
-            void installExtension('npm:pi-mcp-adapter').then((ok) => {
-              if (ok) void refreshMcpState()
-            })
-          }}
-        >
-          {installing ? t('mcp.adapterInstalling') : t('mcp.adapterInstall')}
-        </Button>
-      </div>
-      {actionError ? <p className="break-words text-xs text-destructive">{actionError}</p> : null}
+      <p className="flex items-center gap-2 text-xs font-medium text-amber-700 dark:text-amber-400">
+        <Info className="size-3.5 shrink-0" />{t('mcp.configIssuesTitle')}
+      </p>
+      <ul className="list-disc space-y-1 pl-5 text-xs text-amber-700 dark:text-amber-400">
+        {issues.map((issue, index) => (
+          <li key={index}>
+            {t(issue.scope === 'global' ? 'mcp.scope.global' : 'mcp.scope.project')}: {' '}
+            {t(issue.code === 'legacyField' && !issue.name
+              ? 'mcp.issue.legacyRootField'
+              : issue.code === 'invalidField' && !issue.name
+                ? 'mcp.issue.invalidRootField'
+                : `mcp.issue.${issue.code}` as MessageKey, {
+              name: issue.name ?? '',
+              field: issue.field ?? '',
+              detail: issue.detail ?? ''
+            })}
+          </li>
+        ))}
+      </ul>
+      <p className="text-xs text-amber-700 dark:text-amber-400">{t('mcp.configIssuesHint')}</p>
     </div>
   )
 }
@@ -363,8 +375,8 @@ function ServerRow({
   const transportLabel =
     server.transport === 'http'
       ? t('mcp.type.http')
-      : server.transport === 'socket'
-        ? t('mcp.type.socket')
+      : server.transport === 'registered'
+        ? t('mcp.type.registered')
         : t('mcp.type.stdio')
   const scopeLabel =
     server.scope === 'global'
@@ -401,6 +413,9 @@ function ServerRow({
             )}
           >
             {scopeLabel}
+          </span>
+          <span className="shrink-0 rounded-control bg-muted px-1.5 py-px text-[10px] font-medium text-muted-foreground">
+            {t(`mcp.exposure.${server.exposure}` as MessageKey)}
           </span>
         </div>
         <p className="mt-0.5 truncate text-xs leading-4 text-muted-foreground">
@@ -442,14 +457,16 @@ function ServerRow({
             </span>
           </Tooltip>
         )}
-        <Checkbox
-          mark="square"
-          className="ml-1.5"
-          checked={!server.disabled}
-          disabled={toggling}
-          onCheckedChange={onToggle}
-          aria-label={t('mcp.toggleServer', { name: server.name })}
-        />
+        {server.editable ? (
+          <Checkbox
+            mark="square"
+            className="ml-1.5"
+            checked={!server.disabled}
+            disabled={toggling}
+            onCheckedChange={onToggle}
+            aria-label={t('mcp.toggleServer', { name: server.name })}
+          />
+        ) : null}
       </div>
     </div>
   )
@@ -457,7 +474,7 @@ function ServerRow({
 
 // ---- raw JSON editor for one config file ----
 
-function JsonConfigCard({ file }: { file: McpConfigFileDTO }) {
+function JsonConfigCard({ file, scope, trusted = true }: { file: McpConfigFileDTO; scope: 'global' | 'project'; trusted?: boolean }) {
   const { t } = useI18n()
   const [draft, setDraft] = useState<JsonDraft>({
     text: file.content,
@@ -471,12 +488,13 @@ function JsonConfigCard({ file }: { file: McpConfigFileDTO }) {
   const save = useCallback(async () => {
     const current = draftRef.current
     if (current.text === current.savedText) return
-    if (!parseMcpConfigJson(current.text).ok) return
-    const ok = await writeMcpConfig('global', current.text)
+    const parsed = parseMcpConfigJson(current.text)
+    if (!parsed.ok || validateMcpConfigDocument(parsed.config)) return
+    const ok = await writeMcpConfig(scope, current.text)
     if (ok && draftRef.current.text === current.text) {
       setDraft((prev) => ({ ...prev, savedText: current.text }))
     }
-  }, [])
+  }, [scope])
 
   const saveRef = useRef(save)
   saveRef.current = save
@@ -499,8 +517,8 @@ function JsonConfigCard({ file }: { file: McpConfigFileDTO }) {
     }
   }, [])
 
-  const title = t('mcp.globalConfigTitle')
-  const hint = t('mcp.globalConfigHint')
+  const title = t(scope === 'global' ? 'mcp.globalConfigTitle' : 'mcp.projectConfigTitle')
+  const hint = t(scope === 'global' ? 'mcp.globalConfigHint' : 'mcp.projectConfigHint')
 
   return (
     <section>
@@ -508,13 +526,14 @@ function JsonConfigCard({ file }: { file: McpConfigFileDTO }) {
         <div className="flex items-center justify-between gap-2">
           <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{title}</p>
           <LabelTooltip content={file.path} wrap wrapperClassName="min-w-0">
-            <button
-              type="button"
+            <Button
+              variant="ghost"
+              size="sm"
               className="truncate text-[11px] text-muted-foreground/60 transition-colors hover:text-muted-foreground"
               onClick={() => void window.pi.showInFolder(file.path)}
             >
               {shortenPath(file.path)}
-            </button>
+            </Button>
           </LabelTooltip>
         </div>
         <p className="mt-1 text-xs text-muted-foreground/70">{hint}</p>
@@ -522,6 +541,7 @@ function JsonConfigCard({ file }: { file: McpConfigFileDTO }) {
       <Input
         multiline
         rows={10}
+          disabled={!trusted}
           value={draft.text}
           aria-label={title}
           placeholder='{\n  "mcpServers": {}\n}'
@@ -531,7 +551,8 @@ function JsonConfigCard({ file }: { file: McpConfigFileDTO }) {
           error={draft.parseError ? `${t('mcp.parseError')}: ${draft.parseError}` : undefined}
           onChange={(text) => {
             const parsed = parseMcpConfigJson(text)
-            setDraft((prev) => ({ ...prev, text, parseError: parsed.ok ? null : parsed.error }))
+            const unsupported = parsed.ok ? validateMcpConfigDocument(parsed.config) : null
+            setDraft((prev) => ({ ...prev, text, parseError: parsed.ok ? (unsupported ? t('mcp.error.configField', { field: unsupported }) : null) : parsed.error }))
             if (timerRef.current) clearTimeout(timerRef.current)
             timerRef.current = setTimeout(() => void saveRef.current(), JSON_SAVE_DEBOUNCE_MS)
           }}
@@ -558,8 +579,10 @@ function ServerEditorDialog({
   editor,
   error,
   saving,
+  projectAvailable,
   onChange,
   onModeChange,
+  onScopeChange,
   onSnippetChange,
   onClose,
   onSave
@@ -567,14 +590,21 @@ function ServerEditorDialog({
   editor: EditorState | null
   error: string | null
   saving: boolean
+  projectAvailable: boolean
   onChange: (form: McpServerForm) => void
   onModeChange: (mode: 'visual' | 'json') => void
+  onScopeChange: (scope: 'global' | 'project') => void
   onSnippetChange: (snippet: string) => void
   onClose: () => void
   onSave: () => void
 }) {
   const { t } = useI18n()
   const form = editor?.form ?? null
+  const [oauthExpanded, setOauthExpanded] = useState(false)
+  const hasOauthSettings = Boolean(form && (
+    form.oauthClientId || form.oauthClientSecret || form.oauthCallbackPort || form.oauthCallbackUrl || form.oauthScope
+  ))
+  const oauthOpen = oauthExpanded || hasOauthSettings
   const set = (patch: Partial<McpServerForm>) => {
     if (form) onChange({ ...form, ...patch })
   }
@@ -582,21 +612,40 @@ function ServerEditorDialog({
   return (
     <MorphingModal viewId={editor ? 'mcp-server-editor' : null} onClose={onClose} placement="center" className="w-[min(52rem,calc(100vw-3rem))] max-w-none">
       {form && editor ? (
-        <div role="dialog" aria-modal="true" aria-label={t('mcp.editTitle')} className="flex max-h-[min(40rem,calc(100vh-3rem))] flex-col">
+        <div role="dialog" aria-modal="true" aria-label={t('mcp.editTitle')} className="flex max-h-[min(44rem,calc(100vh-3rem))] flex-col">
           <h2 className="text-base font-semibold text-foreground">
             {form.originalName ? t('mcp.editTitle') : t('mcp.addTitle')}
           </h2>
           <div data-form-items className="mt-3 grid min-h-0 flex-1 gap-5 overflow-y-auto overscroll-contain p-1 md:grid-cols-2">
             {!editor.targetPath ? (
+              <div className="grid gap-5 md:col-span-2 md:grid-cols-2">
+                <div>
+                  <p className={FORM_FIELD_HEADING}>{t('mcp.mode')}</p>
               <RadioGroup
                 value={editor.mode}
                 onValueChange={(mode) => onModeChange(mode as 'visual' | 'json')}
                 orientation="horizontal"
-                className="w-full md:col-span-2"
+                className="w-full"
               >
                 <RadioGroupItem value="visual" label={t('mcp.modeVisual')} className="flex-1" />
                 <RadioGroupItem value="json" label={t('mcp.modeJson')} className="flex-1" />
               </RadioGroup>
+                </div>
+                {projectAvailable ? (
+                  <div>
+                    <p className={FORM_FIELD_HEADING}>{t('mcp.saveScope')}</p>
+                    <RadioGroup
+                      value={editor.scope}
+                      onValueChange={(scope) => onScopeChange(scope as 'global' | 'project')}
+                      orientation="horizontal"
+                      className="w-full"
+                    >
+                      <RadioGroupItem value="global" label={t('mcp.scope.global')} className="flex-1" />
+                      <RadioGroupItem value="project" label={t('mcp.scope.project')} className="flex-1" />
+                    </RadioGroup>
+                  </div>
+                ) : null}
+              </div>
             ) : null}
 
             {editor.mode === 'json' ? (
@@ -639,7 +688,6 @@ function ServerEditorDialog({
               >
                 <RadioGroupItem value="stdio" label={t('mcp.type.stdio')} className="flex-1" />
                 <RadioGroupItem value="http" label={t('mcp.type.http')} className="flex-1" />
-                <RadioGroupItem value="socket" label={t('mcp.type.socket')} className="flex-1" />
               </RadioGroup>
             </div>
 
@@ -679,7 +727,7 @@ function ServerEditorDialog({
                   onChange={(cwd) => set({ cwd })}
                 />
               </>
-            ) : form.transport === 'http' ? (
+            ) : (
               <>
                 <Input
                   label={t('mcp.url')}
@@ -698,48 +746,77 @@ function ServerEditorDialog({
                   addLabel={t('mcp.addHeader')}
                   onChange={(headers) => set({ headers })}
                 />
-                <div>
-                  <p className={FORM_FIELD_HEADING}>{t('mcp.auth')}</p>
-                  <RadioGroup
-                    value={form.auth}
-                    onValueChange={(auth) => set({ auth: auth as McpAuthKind })}
-                    orientation="horizontal"
-                    className="w-full"
+                <div className="md:col-span-2">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="w-full justify-start gap-1.5 text-sm"
+                    aria-expanded={oauthOpen}
+                    aria-controls="mcp-oauth-options"
+                    onClick={() => setOauthExpanded((open) => !open)}
                   >
-                    <RadioGroupItem value="none" label={t('mcp.auth.none')} className="flex-1" />
-                    <RadioGroupItem value="bearer" label={t('mcp.auth.bearer')} className="flex-1" />
-                    <RadioGroupItem value="oauth" label={t('mcp.auth.oauth')} className="flex-1" />
-                  </RadioGroup>
+                    <ChevronRight className={cn('size-3.5 transition-transform', oauthOpen && 'rotate-90')} />
+                    {t('mcp.oauthOptions')}
+                  </Button>
+                  <AgentDisclosure id="mcp-oauth-options" open={oauthOpen} className="grid gap-5 pt-2 md:grid-cols-2">
+                <Input
+                  label={t('mcp.oauthClientId')}
+                  value={form.oauthClientId}
+                  placeholder={t('mcp.oauthClientIdPlaceholder')}
+                  spellCheck={false}
+                  autoComplete="off"
+                  classNames={FORM_INPUT_LABEL}
+                  onChange={(oauthClientId) => set({ oauthClientId })}
+                />
+                <Input
+                  label={t('mcp.oauthClientSecret')}
+                  type="password"
+                  value={form.oauthClientSecret}
+                  placeholder={t('mcp.oauthClientSecretPlaceholder')}
+                  autoComplete="off"
+                  classNames={FORM_INPUT_LABEL}
+                  onChange={(oauthClientSecret) => set({ oauthClientSecret })}
+                />
+                <Input
+                  label={t('mcp.oauthCallbackPort')}
+                  value={form.oauthCallbackPort}
+                  placeholder={t('mcp.oauthCallbackPortPlaceholder')}
+                  spellCheck={false}
+                  autoComplete="off"
+                  classNames={FORM_INPUT_LABEL}
+                  onChange={(oauthCallbackPort) => set({ oauthCallbackPort })}
+                />
+                <Input
+                  label={t('mcp.oauthCallbackUrl')}
+                  value={form.oauthCallbackUrl}
+                  placeholder={t('mcp.oauthCallbackUrlPlaceholder')}
+                  spellCheck={false}
+                  autoComplete="off"
+                  classNames={FORM_INPUT_LABEL}
+                  onChange={(oauthCallbackUrl) => set({ oauthCallbackUrl })}
+                />
+                <Input
+                  label={t('mcp.oauthScope')}
+                  value={form.oauthScope}
+                  placeholder={t('mcp.oauthScopePlaceholder')}
+                  spellCheck={false}
+                  autoComplete="off"
+                  classNames={FORM_INPUT_LABEL}
+                  onChange={(oauthScope) => set({ oauthScope })}
+                />
+                <p className="self-end text-xs leading-4 text-muted-foreground md:col-span-2">{t('mcp.oauthHint')}</p>
+                  </AgentDisclosure>
                 </div>
-                {form.auth === 'bearer' ? (
-                  <Input
-                    label={t('mcp.bearerToken')}
-                    type="password"
-                    value={form.bearerToken}
-                    placeholder={t('mcp.bearerTokenPlaceholder')}
-                    autoComplete="off"
-                    classNames={FORM_INPUT_LABEL}
-                    onChange={(bearerToken) => set({ bearerToken })}
-                  />
-                ) : null}
               </>
-            ) : (
-              <Input
-                label={t('mcp.socket')}
-                value={form.socket}
-                placeholder={t('mcp.socketPlaceholder')}
-                spellCheck={false}
-                autoComplete="off"
-                classNames={FORM_INPUT_LABEL}
-                onChange={(socket) => set({ socket })}
-              />
             )}
 
+            <ExposureField value={form.exposure} onChange={(exposure) => set({ exposure })} />
+            <ToolExposureEditor rows={form.toolExposure} onChange={(toolExposure) => set({ toolExposure })} />
             <label className="flex items-center gap-2 text-sm text-foreground">
               <Checkbox
                 mark="square"
-                checked={form.disabled}
-                onCheckedChange={(disabled) => set({ disabled })}
+                checked={!form.enabled}
+                onCheckedChange={(disabled) => set({ enabled: !disabled })}
                 aria-label={t('mcp.disabledOnSave')}
               />
               {t('mcp.disabledOnSave')}
@@ -760,6 +837,73 @@ function ServerEditorDialog({
         </div>
       ) : null}
     </MorphingModal>
+  )
+}
+
+function ExposureField({ value, onChange }: { value: McpExposure; onChange: (value: McpExposure) => void }) {
+  const { t } = useI18n()
+  return (
+    <div>
+      <p className={FORM_FIELD_HEADING}>{t('mcp.exposure')}</p>
+      <Select value={value} onValueChange={(next) => onChange(next as McpExposure)}>
+        <SelectTrigger className="w-full text-sm" aria-label={t('mcp.exposure')}><SelectValue /></SelectTrigger>
+        <SelectContent portal>
+          {MCP_EXPOSURES.map((exposure) => (
+            <SelectItem key={exposure} value={exposure} className="text-sm">
+              {t(`mcp.exposure.${exposure}` as MessageKey)}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <p className="mt-1.5 text-[11px] leading-4 text-muted-foreground">{t(`mcp.exposureHint.${value}` as MessageKey)}</p>
+    </div>
+  )
+}
+
+function ToolExposureEditor({ rows, onChange }: { rows: McpKeyValue[]; onChange: (rows: McpKeyValue[]) => void }) {
+  const { t } = useI18n()
+  return (
+    <div className="md:col-span-2">
+      <p className={FORM_FIELD_HEADING}>{t('mcp.toolExposure')}</p>
+      <div className="space-y-1.5">
+        {rows.map((row, index) => (
+          <div key={index} className="flex items-center gap-1.5">
+            <Input
+              className="min-w-0 flex-1"
+              value={row.key}
+              placeholder={t('mcp.toolExposureName')}
+              aria-label={t('mcp.toolExposureName')}
+              spellCheck={false}
+              autoComplete="off"
+              onChange={(key) => onChange(rows.map((item, i) => i === index ? { ...item, key } : item))}
+            />
+            <Select
+              value={MCP_EXPOSURES.includes(row.value as McpExposure) ? row.value : 'codemode'}
+              onValueChange={(value) => onChange(rows.map((item, i) => i === index ? { ...item, value } : item))}
+            >
+              <SelectTrigger className="w-44 text-sm" aria-label={t('mcp.toolExposure')}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent portal>
+                {MCP_EXPOSURES.map((exposure) => (
+                  <SelectItem key={exposure} value={exposure} className="text-sm">
+                    {t(`mcp.exposure.${exposure}` as MessageKey)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button variant="ghost" size="icon" aria-label={t('common.delete')}
+              onClick={() => onChange(rows.filter((_, i) => i !== index))}>
+              <X className="size-3.5" />
+            </Button>
+          </div>
+        ))}
+        <Button variant="ghost" size="sm" onClick={() => onChange([...rows, { key: '', value: 'codemode' }])}>
+          <Plus className="size-3.5" />{t('mcp.addToolExposure')}
+        </Button>
+      </div>
+      <p className="mt-1.5 text-[11px] leading-4 text-muted-foreground">{t('mcp.toolExposureHint')}</p>
+    </div>
   )
 }
 
@@ -918,7 +1062,6 @@ function ServerToolsDialog({
           </div>
           <p className="mt-1 text-xs text-muted-foreground">
             {statusMeta ? t(statusMeta.labelKey) : null}
-            {detail?.cachedAt ? ` · ${t('mcp.cachedAt', { time: new Date(detail.cachedAt).toLocaleString() })}` : null}
           </p>
           {server?.sourcePath ? (
             <button
@@ -1019,15 +1162,22 @@ function ServerToolsDialog({
   )
 }
 
-/** One cached tool with its JSON-Schema parameters, mirroring Settings → Tools. */
+/** One SDK-registered tool with its JSON-Schema parameters. */
 function ToolDetailBlock({ tool }: { tool: McpServerDetailDTO['tools'][number] }) {
   const { t } = useI18n()
   const fields = getToolParameterFields(tool.inputSchema ?? {})
   return (
     <li className="min-w-0 rounded-xl border border-border/60 bg-card px-3 py-2.5">
-      <code className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-xs font-semibold text-foreground">
-        {tool.name}
-      </code>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <code className="rounded-control bg-muted px-1.5 py-0.5 font-mono text-xs font-semibold text-foreground">
+          {tool.name}
+        </code>
+        {tool.exposure ? (
+          <span className="rounded-control bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+            {t(`mcp.exposure.${tool.exposure}` as MessageKey)}
+          </span>
+        ) : null}
+      </div>
       {tool.description ? (
         // Long server-provided prose (context7's instructions are infamous)
         // scrolls inside a bounded area instead of stretching the dialog.

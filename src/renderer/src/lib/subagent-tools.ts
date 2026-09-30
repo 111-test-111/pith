@@ -7,9 +7,8 @@ import { TOOL_GROUP_MIN_SIZE, toolGroupKey } from './tool-groups'
  *
  * The universe is the shared tools catalog — SDK built-ins, app tools and
  * every extension tool, one row per name, exactly what Settings → Tools
- * shows — with two collapsible levels: the MCP family (the `mcp` gateway,
- * `mcpScript` and every `mcp__<server>` proxy) answers ONE checkbox, because
- * the gateway alone reaches every server; and one family per tool family inside
+ * shows — with two collapsible levels: each native MCP tool and historical
+ * adapter entry point answers its OWN checkbox, while one family inside
  * a section becomes one row with a tri-state checkbox that selects the whole
  * family or opens to pick members one by one. A family is the one the registry
  * declares (`ctx_*`, `browser_*`) or else the extension that owns the tool, so
@@ -23,12 +22,11 @@ import { TOOL_GROUP_MIN_SIZE, toolGroupKey } from './tool-groups'
  * save unchanged.
  */
 
-/** MCP counts as one whole: the gateway, its scripting wrapper and every
- * per-server proxy share a single picker entry. The family is defined once, in
- * the tool-category registry (`tool-categories.ts`). */
+/** MCP tools share a visual section, but each has an independent grant.
+ * The category includes historical adapter names for saved profiles. */
 export const isMcpToolName = isMcpTool
 
-/** One picker row. `names` has more than one member only for the MCP family. */
+/** One picker row. `names` remains an array for the selection machinery. */
 export interface SubagentToolOption {
   names: string[]
   label: string
@@ -54,8 +52,8 @@ export interface SubagentToolRow {
 export type SubagentToolEntry = SubagentToolFamily | SubagentToolRow
 
 export interface SubagentToolGroups {
-  /** The single MCP entry, or null when no family member exists anywhere. */
-  mcp: SubagentToolOption | null
+  /** Individually selectable MCP tools, including saved historical names. */
+  mcp: SubagentToolEntry[]
   builtin: SubagentToolEntry[]
   extension: SubagentToolEntry[]
   /** Profile-carried names no current session registers (preserved on save). */
@@ -100,8 +98,7 @@ export function toToolEntries(
 }
 
 /** The family a single-name row belongs to: the one the registry declares,
- * else the extension that owns it. The MCP whole is many names by construction
- * and is never a family inside a section. */
+ * else the extension that owns it. MCP options skip this family operation. */
 function familyOf(option: SubagentToolOption): string | null {
   const name = option.names[0]
   if (option.names.length !== 1 || !name) return null
@@ -125,9 +122,13 @@ function mcpNamesOf(universe: ToolInfoDTO[], profileTools: 'all' | string[]): st
       if (isMcpToolName(name)) names.add(name)
     }
   }
-  // Gateway first, then the wrapper, then per-server proxies alphabetically.
+  // Historical adapter entry points first, then resource tools and per-server
+  // tools. A stable order prevents profile CSV churn across refreshes.
   return [...names].sort((a, b) => {
-    const rank = (name: string) => (name === 'mcp' ? 0 : name === 'mcpScript' ? 1 : 2)
+    const rank = (name: string) =>
+      name === 'mcp' ? 0 : name === 'mcpScript' ? 1 :
+      name === 'list_mcp_resources' ? 2 : name === 'list_mcp_resource_templates' ? 3 :
+      name === 'read_mcp_resource' ? 4 : 5
     return rank(a) - rank(b) || a.localeCompare(b)
   })
 }
@@ -161,7 +162,7 @@ export function subagentToolGroups(universe: ToolInfoDTO[], profileTools: 'all' 
   }
 
   return {
-    mcp: mcpNames.length ? { names: mcpNames, label: 'MCP' } : null,
+    mcp: mcpNames.map((name) => ({ kind: 'option', option: { names: [name], label: name } })),
     builtin: toToolEntries(
       [...builtin.values()].sort(
         (a, b) =>
@@ -175,13 +176,13 @@ export function subagentToolGroups(universe: ToolInfoDTO[], profileTools: 'all' 
 }
 
 /** Every concrete tool name the groups can write, in canonical CSV order:
- * SDK built-ins first, then extension tools, then the MCP family, then
+ * SDK built-ins first, then extension tools, then each MCP tool, then
  * profile-carried unknowns — a stable order so repeated saves don't churn. */
 export function canonicalToolNames(groups: SubagentToolGroups): string[] {
   return [
     ...optionsOf(groups.builtin).flatMap((option) => option.names),
     ...optionsOf(groups.extension).flatMap((option) => option.names),
-    ...(groups.mcp?.names ?? []),
+    ...optionsOf(groups.mcp).flatMap((option) => option.names),
     ...optionsOf(groups.unknown).flatMap((option) => option.names)
   ]
 }

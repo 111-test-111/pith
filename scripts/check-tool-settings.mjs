@@ -1,7 +1,7 @@
 /**
  * Settings → Tools redesign regression check: tool families collapse into one
  * group row that reveals its members — a family the registry declares
- * (`ctx_*`, the MCP whole) keeps its own key, and every other tool folds under
+ * (`ctx_*`, native MCP and historical adapter names) keeps its own key, and every other tool folds under
  * the extension that owns it (one extension is one family however its tools are
  * named) — and a long tool description sits in a bounded scroll viewport whose
  * clipped edge fades instead of cutting a line.
@@ -95,6 +95,19 @@ const REORDERED_CATALOG = {
   extensions: [],
   skills: [],
   skillDiagnostics: []
+}
+
+const ACCESS_CATALOG = {
+  tools: [
+    tool('read', 'Read a file.', { source: { kind: 'builtin', label: 'built-in' }, parameters: {}, exposure: 'direct' }),
+    tool('mcp__beui__get_component', 'Get a beUI component.', { source: { kind: 'extension', label: 'MCP' }, active: false, exposure: 'codemode' }),
+    tool('mcp__context7__resolve_library_id', 'Resolve a library.', { source: { kind: 'extension', label: 'MCP' }, active: false, exposure: 'deferred' }),
+    tool('mcp__hidden__secret', 'Unavailable tool.', { source: { kind: 'extension', label: 'MCP' }, active: false, exposure: 'hidden' }),
+    tool('mcp__disabled__tool', 'Disabled server tool.', { source: { kind: 'extension', label: 'MCP' }, active: false, disabledByExtension: true, exposure: 'codemode' }),
+    tool('codemode', 'Run a tool script.', { source: { kind: 'extension', label: 'MCP' }, exposure: 'model-only' }),
+    tool('tool_search', 'Find tools.', { source: { kind: 'extension', label: 'MCP' }, exposure: 'model-only' })
+  ],
+  extensions: [], skills: [], skillDiagnostics: []
 }
 
 const fixture = `<!doctype html><html><head><style>
@@ -297,6 +310,10 @@ app.on('window-all-closed',()=>app.quit());`)
     mcpKey: g.toolGroupKey('mcpScript'),
     proxyKey: g.toolGroupKey('mcp__beui'),
     declaredProxy: g.declaredToolFamily('mcp__context7'),
+    nativeKey: g.toolGroupKey('mcp__beui__get_component'),
+    resourceKey: g.toolGroupKey('list_mcp_resources'),
+    codemodeKey: g.toolGroupKey('codemode', 'MCP'),
+    toolSearchKey: g.toolGroupKey('tool_search', 'MCP'),
     declaredPrefix: g.declaredToolFamily('ctx_execute'),
     declaredApp: g.declaredToolFamily('browser_click'),
     notDeclared: g.declaredToolFamily('read_symbol'),
@@ -317,6 +334,10 @@ app.on('window-all-closed',()=>app.quit());`)
   assert.equal(grouping.mcpKey, 'mcp', 'the registry folds mcpScript into the mcp family')
   assert.equal(grouping.proxyKey, 'mcp', 'a server proxy lands in the same mcp family')
   assert.equal(grouping.declaredProxy, 'mcp', 'the declared mcp whole covers every server proxy')
+  assert.equal(grouping.nativeKey, 'mcp', 'native server tools fold under MCP')
+  assert.equal(grouping.resourceKey, 'mcp', 'native resource tools fold under MCP')
+  assert.equal(grouping.codemodeKey, null, 'codemode stays standalone even if its source label matches MCP')
+  assert.equal(grouping.toolSearchKey, null, 'tool search stays standalone even if its source label matches MCP')
   assert.equal(grouping.declaredPrefix, 'ctx', 'a declared namespace prefix is a family')
   assert.equal(grouping.declaredApp, 'browser', 'an app tool family is declared too')
   assert.equal(grouping.notDeclared, null, 'a name that merely reads like a namespace is no declaration')
@@ -335,6 +356,8 @@ app.on('window-all-closed',()=>app.quit());`)
   assert.deepEqual(loneProxy, ['tool:mcp__context7', 'tool:read'], 'a lone family member stays a plain row (no group for one click)')
   const mcpGroupOf = await evaluate('window.toolGrouping.groupPrefixOf(window.toolGrouping.buildToolList([{name:"mcp"},{name:"mcpScript"},{name:"mcp__context7"}]), "mcp__context7")')
   assert.equal(mcpGroupOf, 'mcp', 'the open-on-selection lookup resolves the mcp family')
+  const nativeMcp = await evaluate('window.toolGrouping.buildToolList([{name:"read"},{name:"mcp__beui__get_component"},{name:"mcp__context7__resolve_library_id"},{name:"list_mcp_resources"},{name:"codemode"},{name:"tool_search"}],{extensionOf:()=>"MCP"}).map(e => e.kind === "group" ? "group:" + e.prefix + "(" + e.tools.length + ")" : "tool:" + e.tool.name)')
+  assert.deepEqual(nativeMcp, ['group:mcp(3)', 'tool:read', 'tool:codemode', 'tool:tool_search'], 'native MCP tools group for display without pulling in codemode or tool search')
 
   // --- one extension is ONE family however its tools are named. pi-lens ships
   //     `lens_*`, `ast_grep_*`, `read_symbol` and `lsp_navigation`; the prefix
@@ -482,6 +505,26 @@ app.on('window-all-closed',()=>app.quit());`)
   await frame()
   assert.equal(await detailName(), 'read', 'a standalone tool still selects after a collapse')
 
+  // --- SDK exposure: callable MCP tools are not labelled inactive merely
+  //     because they are absent from the model-facing active declaration set.
+  await evaluate(`window.pi.toolsCatalog = async () => (${JSON.stringify(ACCESS_CATALOG)}); true`)
+  await evaluate('window.refreshCatalog()')
+  await pause(300)
+  assert.equal(await groupExpanded('mcp'), 'false', 'MCP access modes share a presentation group')
+  assert.equal(await evaluate(`!!document.querySelector('[data-tool="codemode"]').closest('#tool-group-mcp')`), false, 'codemode is not an MCP member even with the same source label')
+  assert.equal(await evaluate(`!!document.querySelector('[data-tool="tool_search"]').closest('#tool-group-mcp')`), false, 'tool search is not an MCP member even with the same source label')
+  await clickGroup('mcp')
+  await pause(300)
+  const accessOf = async (name) => {
+    await clickTool(name)
+    await frame()
+    return evaluate(`(()=>{const el=document.querySelector('[data-tool-access]');return [el.dataset.toolAccess,el.textContent.trim()]})()`)
+  }
+  assert.deepEqual(await accessOf('mcp__beui__get_component'), ['codemode', 'Callable in codemode'], 'codemode exposure is shown as callable')
+  assert.deepEqual(await accessOf('mcp__context7__resolve_library_id'), ['deferred', 'Callable on demand'], 'deferred exposure is shown as callable')
+  assert.deepEqual(await accessOf('mcp__hidden__secret'), ['inactive', 'Inactive'], 'hidden exposure is not presented as callable')
+  assert.deepEqual(await accessOf('mcp__disabled__tool'), ['inactive', 'Inactive'], 'a disabled extension overrides callable exposure')
+
   // --- families lead the rendered list even when the catalog does not
   await evaluate(`window.pi.toolsCatalog = async () => (${JSON.stringify(REORDERED_CATALOG)}); true`)
   await evaluate('window.refreshCatalog()')
@@ -532,6 +575,12 @@ app.on('window-all-closed',()=>app.quit());`)
   await pause(400)
   assert.equal(await groupExpanded('ctx'), 'true', 'the family expands under reduced motion too')
   assert.ok((await groupPanelHeight('ctx')) > 100, 'reduced motion skips the reveal animation, not the content')
+  await evaluate(`window.pi.toolsCatalog = async () => (${JSON.stringify(ACCESS_CATALOG)}); true`)
+  await evaluate('window.refreshCatalog()')
+  await pause(300)
+  await clickGroup('mcp')
+  await pause(100)
+  assert.deepEqual(await accessOf('mcp__beui__get_component'), ['codemode', '可在 Codemode 中调用'], 'Chinese UI describes callable codemode exposure')
   await screenshot('expanded-dark-zh')
 
   assert.deepEqual(exceptions, [], 'no renderer exceptions')

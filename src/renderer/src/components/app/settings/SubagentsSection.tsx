@@ -671,9 +671,9 @@ function ProfileDetail({
               <div className="space-y-3 pr-1">
                 <ToolGroup
                   id="mcp"
-                  title="MCP"
-                  entries={groups.mcp ? [{ kind: 'option', option: groups.mcp }] : []}
-                  meta={groups.mcp ? t('subagent.toolsMcpMeta') : undefined}
+                  title={t('tool.categoryMcp')}
+                  entries={groups.mcp}
+                  meta={groups.mcp.length ? t('subagent.toolsMcpMeta') : undefined}
                   selected={active.selected}
                   disabled={saving}
                   onToggle={onToggle}

@@ -415,7 +415,7 @@ const entriesOf = (...records) => records.map((record, index) => ({
 //     makes a child load extensions, and the profile list a session reads
 //     follows the files — a Settings save applies to the very next delegation ---
 {
-  const { ceilingNeedsExtensions } = await import('../src/main/pi/subagents/runtime.ts')
+  const { ceilingNeedsExtensions, parentDelegableToolNames } = await import('../src/main/pi/subagents/runtime.ts')
   const { createSubagentTool } = await import('../src/main/pi/subagents/tools.ts')
   // REAL SDK shapes: extension tools carry their extension's origin tag
   // ("local"/"temporary"/"npm:…"), never a literal "extension"; the SDK's two
@@ -434,6 +434,17 @@ const entriesOf = (...records) => records.map((record, index) => ({
   assert.equal(ceilingNeedsExtensions(['read', 'web_fetch'], parentTools), true, 'an npm-tagged extension tool counts too')
   assert.equal(ceilingNeedsExtensions(['mcp', 'mcpScript', 'mcp__beui'], parentTools), true, 'the MCP family counts (any non-builtin/sdk tag)')
   assert.equal(ceilingNeedsExtensions(['read', 'unknown-tool'], parentTools), false, 'unknown names never count')
+  const callable = ['read', 'mcp__beui__get_component', 'mcp__context7__resolve_library_id', 'list_mcp_resources', 'list_mcp_resource_templates', 'read_mcp_resource', 'mcp__legacy']
+  assert.deepEqual(
+    parentDelegableToolNames(['read', 'codemode'], callable, null),
+    ['read', 'codemode', 'mcp__beui__get_component', 'mcp__context7__resolve_library_id', 'list_mcp_resources', 'list_mcp_resource_templates', 'read_mcp_resource'],
+    'registered native MCP and resource tools can be delegated even when codemode exposure keeps them out of the active set'
+  )
+  assert.deepEqual(
+    parentDelegableToolNames(['read', 'codemode'], callable, ['read', 'mcp__beui__get_component']),
+    ['read', 'mcp__beui__get_component'],
+    'a child may delegate only names in its frozen role ceiling; codemode alone never widens it'
+  )
 
   const profileOf = (name, tools) => ({ name, displayName: name, description: `${name} profile`, systemPrompt: 'x', tools,
     toolsSource: 'explicit', inheritContext: false, runInBackground: false, enabled: true, scope: 'global', filePath: `/${name}.md` })
@@ -752,6 +763,7 @@ console.log('check-subagents: all assertions passed')
         messages: [],
         getLastAssistantText: () => undefined,
         getActiveToolNames: () => ['read', 'grep', 'edit', 'write', 'bash', 'todo_write'],
+        getCallableToolNames: () => [],
         getAllTools: () => [],
         sessionManager: parent,
         ...over
@@ -778,6 +790,7 @@ console.log('check-subagents: all assertions passed')
       subagentTurnLimitOverrideEnabled: () => turnLimitOverrideEnabled,
       subagentMaxTurns: () => userMaxTurns,
       planRestricted: () => planRestricted,
+      frozenToolCeiling: () => null,
       commandTasks: () => null,
       acquireRunLease: (_cwd, sessionPath) => { leases.add(sessionPath); return () => leases.delete(sessionPath) },
       createChildSession: async (options) => {
@@ -852,6 +865,45 @@ console.log('check-subagents: all assertions passed')
       assert.deepEqual(runtime.readChildRuns(on.sessionPath)[0].start.resource.tools, ['read'], 'resume cannot widen a frozen ceiling')
       const missing = await (await runtime.start(state, baseRequest({ profile: { ...profile, debugEnabled: true } }))).completion
       assert.ok(!runtime.readChildRuns(missing.sessionPath)[0].start.resource.tools.includes('debug'), 'parent active set is still the upper ceiling')
+    }
+
+    // Native MCP tools are callable through codemode without entering the
+    // parent model's active declarations. Explicit grants and `all` must see
+    // them, while a nested parent's frozen ceiling remains an upper bound.
+    {
+      const mcpParent = fakeSession({
+        sessionId: 'parent-session',
+        getActiveToolNames: () => ['read', 'codemode', 'tool_search'],
+        getCallableToolNames: () => ['read', 'mcp__beui__get_component', 'mcp__context7__resolve_library_id', 'list_mcp_resources'],
+        getAllTools: () => [
+          { name: 'read', sourceInfo: { source: 'builtin' } },
+          { name: 'codemode', sourceInfo: { source: 'temporary' } },
+          { name: 'tool_search', sourceInfo: { source: 'temporary' } },
+          { name: 'mcp__beui__get_component', sourceInfo: { source: 'temporary' } },
+          { name: 'mcp__context7__resolve_library_id', sourceInfo: { source: 'temporary' } },
+          { name: 'list_mcp_resources', sourceInfo: { source: 'temporary' } }
+        ]
+      })
+      const host = makeHost(fakeSession({ getLastAssistantText: () => 'done' }))
+      let parentFrozen = null
+      host.frozenToolCeiling = () => parentFrozen
+      const runtime = new SubagentRuntime(host), state = new SubagentParentState('parent-session')
+      const explicit = await (await runtime.start(state, baseRequest({ parentSession: mcpParent, profile: { ...profile, tools: ['read', 'mcp__beui__get_component'] } }))).completion
+      const firstResource = runtime.readChildRuns(explicit.sessionPath)[0].start.resource
+      assert.deepEqual(firstResource.tools, ['read', 'mcp__beui__get_component'], 'an explicit native MCP grant survives dispatch despite codemode exposure')
+      assert.equal(firstResource.extensions, true, 'the child loads the extension defining its MCP grant')
+      parentFrozen = ['read']
+      await (await runtime.resume(state, mcpParent, explicit.sessionId, 'continue')).completion
+      assert.deepEqual(runtime.readChildRuns(explicit.sessionPath)[0].start.resource.tools, ['read'], 'resume narrows a frozen MCP grant when the parent ceiling narrows')
+      parentFrozen = null
+      const all = await (await runtime.start(state, baseRequest({ parentSession: mcpParent, profile: { ...profile, tools: 'all' } }))).completion
+      assert.deepEqual(runtime.readChildRuns(all.sessionPath)[0].start.resource.tools,
+        ['read', 'codemode', 'tool_search', 'mcp__beui__get_component', 'mcp__context7__resolve_library_id', 'list_mcp_resources'],
+        'tools: all includes every callable native MCP and resource tool')
+      parentFrozen = ['read', 'mcp__beui__get_component']
+      const nested = await (await runtime.start(state, baseRequest({ parentSession: mcpParent, profile: { ...profile, tools: 'all' } }))).completion
+      assert.deepEqual(runtime.readChildRuns(nested.sessionPath)[0].start.resource.tools,
+        ['read', 'mcp__beui__get_component'], 'nested all cannot expand past its parent role ceiling')
     }
 
     // --- 1b) message_parent injection follows the communications flag ---

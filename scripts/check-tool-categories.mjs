@@ -1,7 +1,8 @@
 /**
  * Transcript tool-category regression check. Namespaced context-mode,
  * embedded-browser and MCP calls must each form their own maximal adjacent
- * run, while unknown names remain standalone. Pure: no Electron, model calls
+ * run. Codemode and tool search remain standalone; historical adapter names
+ * keep their old category. Pure: no Electron, model calls
  * or network.
  */
 import assert from 'node:assert/strict'
@@ -33,11 +34,19 @@ try {
   assert.equal(toolCategory('ctx_future_tool')?.id, 'context', 'new ctx_* tools join the context group')
   assert.equal(toolCategory('browser_navigate')?.id, 'browser')
   assert.equal(toolCategory('browser_future_tool')?.id, 'browser', 'new browser_* tools join the browser group')
-  assert.equal(toolCategory('mcp')?.id, 'mcp', 'the gateway is part of the MCP family')
-  assert.equal(toolCategory('mcpScript')?.id, 'mcp', 'so is the scripting wrapper')
-  assert.equal(toolCategory('mcp__beui')?.id, 'mcp', 'every per-server proxy joins the MCP family')
-  assert.equal(isMcpTool('mcp__future_server'), true, 'a server added later still joins the MCP family')
+  assert.equal(toolCategory('mcp')?.id, 'mcp', 'historical gateway calls stay grouped')
+  assert.equal(toolCategory('mcpScript')?.id, 'mcp', 'historical scripting calls stay grouped')
+  assert.equal(toolCategory('mcp__beui')?.id, 'mcp', 'historical server proxy calls stay grouped')
+  assert.equal(toolCategory('mcp__beui__get_component')?.id, 'mcp', 'native server tools join MCP')
+  assert.equal(toolCategory('list_mcp_resources')?.id, 'mcp', 'resource listing joins MCP')
+  assert.equal(toolCategory('list_mcp_resource_templates')?.id, 'mcp', 'resource templates join MCP')
+  assert.equal(toolCategory('read_mcp_resource')?.id, 'mcp', 'resource reads join MCP')
+  assert.equal(isMcpTool('mcp__future_server__future_tool'), true, 'a new native tool joins MCP')
   assert.equal(isMcpTool('mcpX'), false, 'a name that merely starts with mcp is not one')
+  assert.equal(isMcpTool('codemode'), false, 'codemode does not inherit MCP grouping or permission')
+  assert.equal(isMcpTool('tool_search'), false, 'tool search does not inherit MCP grouping or permission')
+  assert.equal(toolCategory('codemode'), undefined, 'codemode owns a standalone transcript row')
+  assert.equal(toolCategory('tool_search'), undefined, 'tool search owns a standalone transcript row')
   assert.equal(toolCategory('other_tool'), undefined)
 
   const calls = [
@@ -53,7 +62,11 @@ try {
     { id: 'm1', name: 'mcp' },
     { id: 'm2', name: 'mcpScript' },
     { id: 'm3', name: 'mcp__beui' },
-    { id: 'm4', name: 'mcp__context7' }
+    { id: 'm4', name: 'mcp__context7' },
+    { id: 'm5', name: 'mcp__beui__get_component' },
+    { id: 'm6', name: 'list_mcp_resources' },
+    { id: 's1', name: 'codemode' },
+    { id: 's2', name: 'tool_search' }
   ]
   const runs = splitByToolCategory(calls)
 
@@ -66,11 +79,13 @@ try {
       ['exploration', ['r1', 'g1']],
       [undefined, ['u1']],
       [undefined, ['u2']],
-      ['mcp', ['m1', 'm2', 'm3', 'm4']]
+      ['mcp', ['m1', 'm2', 'm3', 'm4', 'm5', 'm6']],
+      [undefined, ['s1']],
+      [undefined, ['s2']]
     ]
   )
 
-  console.log('PASS: consecutive ctx_*, browser_* and MCP calls each form their own transcript group.')
+  console.log('PASS: native and historical MCP calls share a transcript category; codemode and tool search stay separate.')
 } finally {
   await rm(scratch, { recursive: true, force: true })
 }

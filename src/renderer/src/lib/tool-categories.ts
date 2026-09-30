@@ -12,8 +12,9 @@ import type { MessageKey } from '@/i18n/locales/en'
  * as standalone rows, exactly as before.
  *
  * A category that declares `groupKey` or a `prefix` additionally owns one
- * folded row in Settings → Tools — a *declared family*: `mcp` + `mcpScript` +
- * every `mcp__<server>` proxy, one `ctx_*` row, one `browser_*` row. Tools no
+ * folded row in Settings → Tools — a *declared family*: native
+ * `mcp__<server>__<tool>` and MCP resource tools, legacy adapter names,
+ * one `ctx_*` row, one `browser_*` row. Tools no
  * declared family claims fold under the extension that registers them instead
  * (see `lib/tool-groups.ts`).
  */
@@ -29,8 +30,8 @@ export interface ToolCategory {
   /** Optional namespace prefix, including its separator (for example `ctx_`). */
   prefix?: string
   /** Settings → Tools folds this whole category into one group row under this
-   * key. The MCP family needs it: `mcp` and `mcpScript` carry no `prefix_`
-   * segment, so only the registry can say they belong with `mcp__<server>`. */
+   * key. MCP resource tools and legacy adapter entry points carry no
+   * `mcp__` prefix, so only the registry can place them in that family. */
   groupKey?: string
 }
 
@@ -83,10 +84,16 @@ export const TOOL_CATEGORIES: readonly ToolCategory[] = [
     id: 'mcp',
     labelKey: 'tool.categoryMcp',
     icon: Plug,
-    // pi-mcp-adapter: every configured server gets one `<adapter>__<server>`
-    // namespace proxy, on top of the gateway itself and its scripting wrapper.
+    // Native MCP uses `mcp__<server>__<tool>` plus three resource tools.
+    // Preserve the old adapter's `mcp`, `mcpScript`, and `mcp__<server>`
+    // transcript names so historical sessions keep their category.
+    // `codemode` and `tool_search` are independent capabilities, not MCP
+    // family members: selecting or grouping MCP must never imply either.
     prefix: 'mcp__',
-    tools: ['mcp', 'mcpScript'],
+    tools: [
+      'list_mcp_resources', 'list_mcp_resource_templates', 'read_mcp_resource',
+      'mcp', 'mcpScript'
+    ],
     groupKey: 'mcp'
   }
 ]
@@ -124,9 +131,8 @@ export function declaredToolFamily(name: string): string | null {
   return category.prefix ? category.prefix.replace(/_+$/, '') : null
 }
 
-/** The MCP family — the gateway, its scripting wrapper and every per-server
- * proxy — is one whole: one transcript group, one Settings → Tools group and
- * one checkbox in Settings → Subagents. */
+/** Native and historical MCP tools share transcript and Settings → Tools
+ * presentation. This classification grants no tool permissions. */
 export function isMcpTool(name: string): boolean {
   return toolCategory(name)?.id === 'mcp'
 }

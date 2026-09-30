@@ -42,18 +42,40 @@ export async function uncoveredWrites(branch: readonly SessionEntry[], cwd: stri
   excluded: RewindCheckpointDTO['excluded']): Promise<RewindUncoveredPathDTO[]> {
   const anchor = afterEntryId === null ? -1 : branch.findIndex(entry => entry.id === afterEntryId)
   const calls = new Map<string, { path: string; position: number }>()
+  const outerCalls = new Map<string, number>()
   const paths = new Set<string>()
+  const addPath = (raw: unknown): void => {
+    if (typeof raw !== 'string') return
+    try { paths.add(toolPath(raw, cwd)) } catch { /* Invalid paths cannot be executed by the built-in tool. */ }
+  }
   for (let position = 0; position < branch.length; position++) {
     const entry = branch[position]
     if (entry.type !== 'message') continue
     const message = entry.message
     if (message.role === 'assistant') {
-      for (const block of message.content) if (block.type === 'toolCall' && ['edit', 'write'].includes(block.name) && typeof block.arguments.path === 'string') {
-        try { calls.set(block.id, { path: toolPath(block.arguments.path, cwd), position }) } catch { /* Invalid paths cannot be executed by the built-in tool. */ }
+      for (const block of message.content) if (block.type === 'toolCall') {
+        outerCalls.set(block.id, position)
+        if (['edit', 'write'].includes(block.name) && typeof block.arguments.path === 'string') {
+          try { calls.set(block.id, { path: toolPath(block.arguments.path, cwd), position }) } catch { /* Invalid paths cannot be executed by the built-in tool. */ }
+        }
       }
-    } else if (message.role === 'toolResult' && !message.isError) {
-      const call = calls.get(message.toolCallId)
-      if (call && call.position > anchor) paths.add(call.path)
+    } else if (message.role === 'toolResult') {
+      if (!message.isError) {
+        const call = calls.get(message.toolCallId)
+        if (call && call.position > anchor) paths.add(call.path)
+      }
+      // A script may write successfully and then itself return an error. Its
+      // successful nested writes still happened. The app records exact paths
+      // in details because the SDK bounds nestedCalls to 256 calls and 32 KiB
+      // of arguments; older sessions can use the complete records it kept.
+      if ((outerCalls.get(message.toolCallId) ?? -1) <= anchor) continue
+      const details = message.details as { piAppNestedWrites?: { version?: unknown; paths?: unknown } } | undefined
+      if (details?.piAppNestedWrites?.version === 1 && Array.isArray(details.piAppNestedWrites.paths)) {
+        for (const path of details.piAppNestedWrites.paths) addPath(path)
+      }
+      for (const nested of message.nestedCalls?.calls ?? []) {
+        if (nested.status === 'ok' && (nested.name === 'edit' || nested.name === 'write')) addPath(nested.arguments?.path)
+      }
     }
   }
   return classifyUncoveredWrites([...paths], root, excluded)

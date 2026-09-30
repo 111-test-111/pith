@@ -9,7 +9,7 @@ import type {
 
 /**
  * Settings → MCP store: one main-process read (`mcpState`) feeds the section,
- * writes return the fresh state, and the adapter's live status snapshots ride
+ * writes return the fresh state. Optional native runtime observations ride
  * the sequence-free `pi:mcp-status` push, merged into the roster by name.
  */
 
@@ -40,7 +40,7 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-/** Merge a live adapter snapshot into the roster rows it names. */
+/** Merge an observed native runtime status into the roster rows it names. */
 function applyLiveStatus(push: McpStatusPushDTO): void {
   const data = state.data
   if (!data || data.projectCwd !== push.cwd) return
@@ -55,7 +55,10 @@ function applyLiveStatus(push: McpStatusPushDTO): void {
     changed = true
     return { ...server, status: entry.status, toolCount: entry.toolCount, disabled: entry.disabled }
   })
-  if (changed) setState({ data: { ...data, servers } })
+  if (changed) {
+    detailCache.clear()
+    setState({ data: { ...data, servers } })
+  }
 }
 
 /** Reload from the main process; concurrent callers share one request. */
@@ -65,6 +68,7 @@ export function refreshMcpState(): Promise<void> {
   inflight = (async () => {
     try {
       const data = await window.pi.mcpState()
+      detailCache.clear()
       setState({ status: 'ready', data, error: null })
     } catch (error) {
       setState({ status: 'error', error: messageOf(error) })
@@ -80,6 +84,7 @@ async function runAction(key: string, call: () => Promise<McpStateDTO>): Promise
   setState({ busy: key, actionError: null })
   try {
     const data = await call()
+    detailCache.clear()
     setState({ status: 'ready', data, error: null, busy: null })
     return true
   } catch (error) {
@@ -108,7 +113,7 @@ export function deleteMcpServer(path: string, name: string): Promise<boolean> {
   return runAction(`delete:${name}`, () => window.pi.mcpDeleteServer(path, name))
 }
 
-/** Per-server detail cache: reopening a tools viewer renders instantly. */
+/** Per-server detail cache, invalidated on every config or session refresh. */
 const detailCache = new Map<string, McpServerDetailDTO>()
 
 /** The cached detail for one server, or null when never fetched. */
@@ -116,7 +121,7 @@ export function peekMcpServerDetail(name: string): McpServerDetailDTO | null {
   return detailCache.get(name) ?? null
 }
 
-/** One server's cached tool/resource/prompt metadata, cached per name. */
+/** One server's currently registered tool metadata. */
 export async function fetchMcpServerDetail(name: string): Promise<McpServerDetailDTO> {
   const detail = await window.pi.mcpServerDetail(name)
   detailCache.set(name, detail)
@@ -129,8 +134,7 @@ export function clearMcpActionError(): void {
 
 function subscribe(listener: () => void): () => void {
   listeners.add(listener)
-  // The live-status push is only worth its IPC traffic while the section is
-  // mounted; subscribe lazily on first use and drop with the last listener.
+  // Subscribe lazily while Settings → MCP is mounted.
   if (!statusSubscription) statusSubscription = window.pi.onMcpStatus(applyLiveStatus)
   return () => {
     listeners.delete(listener)

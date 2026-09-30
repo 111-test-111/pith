@@ -346,7 +346,7 @@ const api = {
     ipcRenderer.invoke('pi:setAppendPrompt', text),
 
   toolsCatalog: (): Promise<ToolCatalogDTO> => ipcRenderer.invoke('pi:toolsCatalog'),
-  // ---- Settings → MCP (pi-mcp-adapter config files, roster, live status) ----
+  // ---- Settings → MCP (Pi native config files and observed SDK tools) ----
   mcpState: (): Promise<McpStateDTO> => ipcRenderer.invoke('pi:mcpState'),
   mcpWriteConfig: (scope: McpConfigScope, content: string): Promise<McpStateDTO> =>
     ipcRenderer.invoke('pi:mcpWriteConfig', scope, content),
