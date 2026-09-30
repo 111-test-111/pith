@@ -5,6 +5,8 @@ import { createPlanFixture } from './plan-fixture.mjs'
 
 const call = (id, plan) => ({ type: 'toolCall', id, name: 'submit_plan', arguments: { plan } })
 const text = { type: 'text', text: 'Done' }
+const systemPrompt = request => request.messages.filter(message => message.role === 'system')
+  .map(message => typeof message.content === 'string' ? message.content : message.content.map(part => part.text).join('\n')).join('\n\n')
 export async function checkPlanSubmission() {
   const f = await createPlanFixture()
   try {
@@ -36,8 +38,8 @@ export async function checkPlanSubmission() {
     assert(state.blockers.approve.includes('stale-submission'))
     assert.equal((await f.app.approvePlan(req)).ok, false, 'the old plan cannot start after feedback')
     assert(!f.session.getActiveToolNames().includes('write'), 'revision feedback retains the read-only tool ceiling')
-    assert.match(f.requests.at(-1).systemPrompt, /previous submitted plan \(version 1\)/)
-    assert.match(f.requests.at(-1).systemPrompt, /Read, then change\.|# Plan/)
+    assert.match(systemPrompt(f.requests.at(-1)), /previous submitted plan \(version 1\)/)
+    assert.match(systemPrompt(f.requests.at(-1)), /Read, then change\.|# Plan/)
     assert(!JSON.stringify(f.requests.at(-1)).includes('Application-controlled Jev workflow'), 'Plan turns must not receive Jev implementation routing')
     f.app.jevPreferences = { ...f.app.jevPreferences, mode: 'off' }
     const before = f.requests.length
@@ -95,6 +97,24 @@ export async function checkPlanSubmission() {
     assert.deepEqual(queued.session.getFollowUpMessages(), ['pending user followup'])
     assert(queued.app.getPlanState(queued.managed.path).blockers.approve.includes('queued-messages'))
   } finally { await queued.close() }
+  const boundary = await createPlanFixture({ respond: n => n === 1 ? [call('boundary', '# Boundary plan')] : [text],
+    extensionFactories: [pi => pi.on('agent_before_settle', () => ({ continue: true }))] })
+  try {
+    await boundary.managed.lifecyclePromise
+    await boundary.app.setSessionMode({ sessionPath: boundary.managed.path, mode: 'plan' })
+    let continues = 0
+    const previousContinue = boundary.session.agent.continue
+    boundary.session.agent.continue = async (...args) => {
+      if (++continues > 2) throw new Error('Sealed Plan spun the SDK boundary continuation loop')
+      return previousContinue.apply(boundary.session.agent, args)
+    }
+    await boundary.session.prompt('Submit a plan with an extension requesting continuation')
+    assert.equal(boundary.requests.length, 1)
+    assert.equal(boundary.session.isIdle, true)
+    assert.equal(boundary.app.getPlanState(boundary.managed.path).latest?.revision, 1)
+    assert.deepEqual(boundary.app.getPlanState(boundary.managed.path).blockers.approve, [])
+    assert.equal(continues, 1, 'a declined explicit extension continuation must end the outer run')
+  } finally { await boundary.close() }
   for (const kind of ['failed-result', 'wrong-hash']) {
     const f = await createPlanFixture({ respond: n => n === 1 ? [call(kind, '# Plan')] : [text],
       extensionFactories: [pi => pi.on('tool_result', event => {

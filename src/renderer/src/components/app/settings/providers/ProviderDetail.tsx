@@ -306,7 +306,7 @@ export function ProviderDetail({
             {provider.authTypes.includes('oauth') && provider.canLogin ? (
               <Button variant="outline" size="sm" disabled={busyAuth} onClick={() => void login('oauth')}>
                 <Globe className="size-3.5" />
-                {t('settings.oauth')}
+                {t(provider.id === 'openai' ? 'settings.signInWithChatGPT' : 'settings.oauth')}
               </Button>
             ) : null}
             {provider.authenticated ? (

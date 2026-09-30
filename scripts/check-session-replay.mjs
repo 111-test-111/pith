@@ -67,7 +67,7 @@ try {
   assert.equal(cancelledRetry.expected.trajectories.find(value => value.kind === 'retry').status, 'cancelled')
 
   await rejectsContract('ordinary-turn', fixture => { fixture.scenario.prompts[0] = 'A semantically different instruction.' }, /Provider call 1 request.*content/)
-  await rejectsContract('read-write-present', fixture => { fixture.calls[0].request.context.tools[0].parameters.properties.path.type = 'integer' }, /Provider call 1 request.*parameters/)
+  await rejectsContract('read-write-present', fixture => { fixture.calls[0].request.context.messages.find(message => message.role === 'system' && message.toolsAdded?.length).toolsAdded[0].parameters.properties.path.type = 'integer' }, /Provider call 1 request.*parameters/)
   await rejectsContract('read-write-present', fixture => { fixture.scenario.files[0].content = 'Revenue: 999\n' }, /Provider call 2 request.*content/)
   await rejectsContract('read-write-present', fixture => {
     const call = fixture.calls[1]

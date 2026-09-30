@@ -1,5 +1,5 @@
 {
-  "format": "pith-session-replay-v1",
+  "format": "pith-session-replay-v2",
   "source": "offline-synthetic-provider/real-sdk-session",
   "scenario": {
     "id": "cancelled-retry",
@@ -40,6 +40,15 @@
         "context": {
           "messages": [
             {
+              "content": "",
+              "role": "system",
+              "sections": {
+                "cwd": "<cwd>\n{{pith:workspace}}\n</cwd>",
+                "preamble": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools."
+              },
+              "timestamp": 0
+            },
+            {
               "content": [
                 {
                   "text": "Attempt an answer; I will cancel retry backoff.",
@@ -49,9 +58,7 @@
               "role": "user",
               "timestamp": 0
             }
-          ],
-          "systemPrompt": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools.\nCurrent working directory: {{pith:workspace}}\n",
-          "tools": []
+          ]
         },
         "options": {
           "maxRetryDelayMs": 60000,
@@ -86,23 +93,14 @@
             "authorization": "[redacted]",
             "messages": [
               {
-                "content": [
-                  {
-                    "text": "Attempt an answer; I will cancel retry backoff.",
-                    "type": "text"
-                  }
-                ],
-                "role": "user",
+                "content": "",
+                "role": "system",
+                "sections": {
+                  "cwd": "<cwd>\n{{pith:workspace}}\n</cwd>",
+                  "preamble": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools."
+                },
                 "timestamp": 0
-              }
-            ],
-            "model": "offline-replay",
-            "system": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools.\nCurrent working directory: {{pith:workspace}}\n",
-            "tools": []
-          },
-          "actual": {
-            "authorization": "[redacted]",
-            "messages": [
+              },
               {
                 "content": [
                   {
@@ -114,9 +112,32 @@
                 "timestamp": 0
               }
             ],
-            "model": "offline-replay",
-            "system": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools.\nCurrent working directory: {{pith:workspace}}\n",
-            "tools": []
+            "model": "offline-replay"
+          },
+          "actual": {
+            "authorization": "[redacted]",
+            "messages": [
+              {
+                "content": "",
+                "role": "system",
+                "sections": {
+                  "cwd": "<cwd>\n{{pith:workspace}}\n</cwd>",
+                  "preamble": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools."
+                },
+                "timestamp": 0
+              },
+              {
+                "content": [
+                  {
+                    "text": "Attempt an answer; I will cancel retry backoff.",
+                    "type": "text"
+                  }
+                ],
+                "role": "user",
+                "timestamp": 0
+              }
+            ],
+            "model": "offline-replay"
           }
         },
         {
@@ -240,6 +261,15 @@
   "expected": {
     "transcript": [
       {
+        "content": "",
+        "role": "system",
+        "sections": {
+          "cwd": "<cwd>\n{{pith:workspace}}\n</cwd>",
+          "preamble": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools."
+        },
+        "timestamp": 0
+      },
+      {
         "content": [
           {
             "text": "Attempt an answer; I will cancel retry backoff.",
@@ -258,9 +288,12 @@
       "message_end",
       "message_start",
       "message_end",
+      "message_start",
+      "message_end",
       "turn_end",
       "agent_end",
       "auto_retry_start",
+      "entry_appended",
       "auto_retry_end",
       "agent_settled"
     ],
@@ -320,6 +353,15 @@
           "context": {
             "messages": [
               {
+                "content": "",
+                "role": "system",
+                "sections": {
+                  "cwd": "<cwd>\n{{pith:workspace}}\n</cwd>",
+                  "preamble": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools."
+                },
+                "timestamp": 0
+              },
+              {
                 "content": [
                   {
                     "text": "Attempt an answer; I will cancel retry backoff.",
@@ -329,9 +371,7 @@
                 "role": "user",
                 "timestamp": 0
               }
-            ],
-            "systemPrompt": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools.\nCurrent working directory: {{pith:workspace}}\n",
-            "tools": []
+            ]
           },
           "options": {
             "api": "openai-completions",
@@ -369,6 +409,15 @@
             "authorization": "[redacted]",
             "messages": [
               {
+                "content": "",
+                "role": "system",
+                "sections": {
+                  "cwd": "<cwd>\n{{pith:workspace}}\n</cwd>",
+                  "preamble": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools."
+                },
+                "timestamp": 0
+              },
+              {
                 "content": [
                   {
                     "text": "Attempt an answer; I will cancel retry backoff.",
@@ -379,9 +428,7 @@
                 "timestamp": 0
               }
             ],
-            "model": "offline-replay",
-            "system": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools.\nCurrent working directory: {{pith:workspace}}\n",
-            "tools": []
+            "model": "offline-replay"
           },
           "response": {
             "headers": {

@@ -118,14 +118,15 @@ Presentation follows from those facts:
 - The approved plan reaches the model as a synthetic user message. That message carries the plan body, not a user's words, so while its approval is the started one the transcript renders **no row for it and no rail tick** (matched exactly by `UserMsg.sessionEntryId === approval.executionEntryId`), and the review switcher suppresses its prompt label instead of quoting protocol text. The message itself stays in the branch and in the session file.
 - The card body keeps the plan readable (taller scroll cap) while its action strip stays a thin one-line footer; both are asserted in `check-plan-mode-ui.mjs`.
 
-## SDK 0.85.1 upgrade assumptions
+## SDK 0.99.1 upgrade assumptions
 
 These adapters use public SDK surfaces. Re-run the Plan checks on every SDK upgrade:
 
 - Dynamic registration/reload ends at `session.setActiveToolsByName`; there is no invented registry-change event. Its filtered prior view is not the app's configured base.
 - Agent tool hooks are chained with Rewind/extensions, including a second admission check after an awaited hook.
 - SDK session listeners see `message_end` **before** append. The later awaited `agent.subscribe` listener sees the persisted message and blocks the loop while fsync/approval association completes. `PlanStorage` also guards `appendMessage`, because a thrown SDK write has already changed its in-memory tree.
-- `shouldStopAfterTurn` stops the agent's inner loop, but **AgentSession's outer post-run loop may still drain queues via `agent.continue()`**. The public continuation adapter declines that drain while sealed, preserving queued user input. This behavior was reproduced with real steer/follow-up queues.
+- `finishTurn` ends the agent's inner loop, but **AgentSession's outer post-run loop may still drain queues via `agent.continue()`**. While sealed, `hasQueuedMessages` reports false to that loop, preserving queued user input. An `agent_before_settle` extension can request continuation even with empty queues; if that reaches the public continuation adapter, it calls `session.abort()` without awaiting the same run's idle promise. This ends the outer loop without executing another request or discarding queued input. Both paths have real-SDK regressions.
+- SDK 0.99 nested `ctx.executeTool()` calls bypass the public agent hooks and app execute wrappers. The hidden app tool-call boundary rejects these calls explicitly; ordinary model-issued tool calls still use Plan admission and Rewind leases. Nested calls must not be enabled until their execution and persisted evidence participate in the full app lifecycle.
 - `context` covers ordinary requests/retries/custom wakes; summaries bypass it. The public `agent.streamFunction` overlay appends only the Plan mode fact and preserves the summary task. It does not claim to intercept a plugin's independent LLM client.
 - `agent_settled` ends SDK activity; managed task and notification lifetimes remain separate.
 

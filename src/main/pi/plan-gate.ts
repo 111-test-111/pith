@@ -158,7 +158,7 @@ function createGate(options: PlanGateOptions): PlanGate {
   }
 
   const originalSet = session.setActiveToolsByName
-  const previousStop = session.agent.shouldStopAfterTurn
+  const previousFinish = session.agent.finishTurn
   const previousPrompt = session.agent.prompt
   const promptRun: typeof previousPrompt = async (...args) => {
     if (cancelledPlanOpening(controller)) throw new Error('plan-opening-aborted')
@@ -170,12 +170,24 @@ function createGate(options: PlanGateOptions): PlanGate {
   }
   session.agent.prompt = promptRun
   const previousContinue = session.agent.continue
-  // SDK 0.85.1 also drains queues in AgentSession._handlePostAgentRun AFTER
-  // shouldStopAfterTurn. A sealed loop must leave those queues intact. The
-  // public continuation adapter declines that drain; the outer loop consumes
-  // its last-assistant marker and settles normally on its next check.
+  const previousHasQueued = session.agent.hasQueuedMessages
+  // finishTurn ends the low-level loop, but AgentSession's outer post-run
+  // loop still probes this method and would call continue repeatedly while a
+  // submitted plan has queued user input. Keep the queue intact for the next
+  // admitted turn while making this sealed run settle.
+  const hasQueued: typeof previousHasQueued = () => !controller.submissionLocked && previousHasQueued.call(session.agent)
+  session.agent.hasQueuedMessages = hasQueued
+  // AgentSession also drains queues in _handlePostAgentRun AFTER finishTurn.
+  // A sealed loop must leave those queues intact. The
+  // public continuation adapter also stops explicit agent_before_settle
+  // continuations: those can request work even when both queues are empty.
   const continueRun: typeof previousContinue = async (...args) => {
-    if (controller.submissionLocked) return
+    if (controller.submissionLocked) {
+      // abort marks the outer run synchronously and preserves pending queues.
+      // Do not await: its idle promise is fulfilled only after this hook exits.
+      void session.abort()
+      return
+    }
     controller.checkWorkAdmission()
     return previousContinue.apply(session.agent, args)
   }
@@ -299,7 +311,7 @@ function createGate(options: PlanGateOptions): PlanGate {
         }
       }
       seen.add(name)
-      // SDK 0.85 snapshots descriptions when registering tools. Jev capability
+      // SDK registration snapshots descriptions. Jev capability
       // switches also affect live turns; refresh only this owned definition's
       // metadata, preserving the captured implementation and provenance gate.
       const current = name === JEV_TOOL_NAME && provenance === 'app' && definition
@@ -354,8 +366,9 @@ function createGate(options: PlanGateOptions): PlanGate {
     return changed ? { block: true, reason: changed } : result
   }
   session.agent.beforeToolCall = beforeToolCall
-  const stop: typeof previousStop = async (context, signal) => controller.submissionLocked || (await previousStop?.(context, signal)) === true
-  session.agent.shouldStopAfterTurn = stop
+  const finish: typeof previousFinish = async (context, signal) => controller.submissionLocked
+    ? { action: 'end' } : (await previousFinish?.(context, signal)) || undefined
+  session.agent.finishTurn = finish
 
   // Materialize immediately: a session reopened in Plan must never expose the
   // registry's full set even for the first few ms before bindExtensions.
@@ -378,9 +391,10 @@ function createGate(options: PlanGateOptions): PlanGate {
       disposed = true
       if (session.setActiveToolsByName === setter) session.setActiveToolsByName = originalSet
       if (session.agent.beforeToolCall === beforeToolCall) session.agent.beforeToolCall = previousBefore
-      if (session.agent.shouldStopAfterTurn === stop) session.agent.shouldStopAfterTurn = previousStop
+      if (session.agent.finishTurn === finish) session.agent.finishTurn = previousFinish
       if (session.agent.prompt === promptRun) session.agent.prompt = previousPrompt
       if (session.agent.continue === continueRun) session.agent.continue = previousContinue
+      if (session.agent.hasQueuedMessages === hasQueued) session.agent.hasQueuedMessages = previousHasQueued
       installed.delete(session)
     }
   }

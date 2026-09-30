@@ -1033,6 +1033,7 @@ const en = {
   'settings.refreshProviders': 'Refresh providers',
   'settings.apiKey': 'API key',
   'settings.oauth': 'OAuth',
+  'settings.signInWithChatGPT': 'Sign in with ChatGPT',
   'settings.signOut': 'Sign out of {name}',
   'settings.noProviders': 'No providers discovered.',
   'settings.saveFailed': 'Failed to save models.json',

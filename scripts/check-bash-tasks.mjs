@@ -15,6 +15,19 @@ const until = async (predicate, label, ms = 10000) => {
 }
 const quote = (text) => `'${text.replaceAll("'", "'\\''")}'`
 const nodeCommand = (js) => `${quote(process.execPath)} -e ${quote(js)}`
+const requestTools = (context) => {
+  const tools = new Map()
+  for (const message of context.messages) {
+    if (message.role !== 'system') continue
+    for (const tool of message.toolsRemoved ?? []) tools.delete(tool.name)
+    for (const tool of message.toolsAdded ?? []) tools.set(tool.name, tool)
+  }
+  return [...tools.values()]
+}
+const requestPrompt = (context) => context.messages
+  .filter((message) => message.role === 'system')
+  .map((message) => [message.content, ...Object.values(message.sections ?? {})].join('\n'))
+  .join('\n')
 let tasks
 const sessions = []
 try {
@@ -175,7 +188,7 @@ export { CheckoutCoordinator } from './src/main/rewind/coordinator';`, resolveDi
     session.subscribe((event) => { events.push(event) })
     let calls = 0
     session.agent.streamFunction = (_model, context, options) => {
-      const names = context.tools.map((tool) => tool.name)
+      const names = requestTools(context).map((tool) => tool.name)
       assert.equal(names.length, new Set(names).size, `model request has duplicate tools: ${names}`)
       return respond(++calls, context, options, { session, outbox, path, managed })
     }
@@ -202,15 +215,17 @@ export { CheckoutCoordinator } from './src/main/rewind/coordinator';`, resolveDi
   const extensionLoader = { ...loader,
     getExtensions: () => ({ extensions: [extension], errors: [], runtime: extensionRuntime }) }
   const registration = await setup('tool-registration', (n, context) => {
-    assert.match(context.tools.find((tool) => tool.name === 'bash').description, /threshold/)
+    const tools = requestTools(context)
+    const prompt = requestPrompt(context)
+    assert.match(tools.find((tool) => tool.name === 'bash').description, /threshold/)
     // Check the actual SDK/model boundary, including the request after reload:
     // putting guidelines on a tool object alone does not prove they reach it.
-    assert.match(context.systemPrompt, /END the current response/)
-    assert.match(context.systemPrompt, /a single sleep N, sleep N; tail/)
-    assert.match(context.tools.find((tool) => tool.name === 'bash').description, /same command keeps running/)
-    assert.match(context.tools.find((tool) => tool.name === 'bash_task').description, /bounded tail/)
-    assert.equal(context.tools.find((tool) => tool.name === 'read').description, 'fixture read')
-    assert(context.tools.some((tool) => tool.name === 'extension_probe'), 'session_start tools remain enabled')
+    assert.match(prompt, /END the current response/)
+    assert.match(prompt, /a single sleep N, sleep N; tail/)
+    assert.match(tools.find((tool) => tool.name === 'bash').description, /same command keeps running/)
+    assert.match(tools.find((tool) => tool.name === 'bash_task').description, /bounded tail/)
+    assert.equal(tools.find((tool) => tool.name === 'read').description, 'fixture read')
+    assert(tools.some((tool) => tool.name === 'extension_probe'), 'session_start tools remain enabled')
     return stream(message(n === 1 ? [call('registered-bash', 'printf managed-bash'),
       { type: 'toolCall', id: 'registered-extension', name: 'extension_probe', arguments: {} },
       { type: 'toolCall', id: 'registered-read', name: 'read', arguments: {} }] : text('registration verified')))

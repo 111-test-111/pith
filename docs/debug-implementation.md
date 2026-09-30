@@ -82,7 +82,7 @@ The outer schema stays at five fields: `debugId`, `stopId`, `request`,
 {"debugId":"target-id","stopId":3,"request":{"action":"disassemble","memoryReference":"0x100003cc","count":32}}
 ```
 
-SDK 0.85.x `prepareArguments` normalizes existing flat calls before validation;
+SDK `prepareArguments` normalizes existing flat calls before validation;
 `execute` also normalizes direct callers. Legacy source breakpoint arrays become
 `items: [{line, condition?, hitCondition?, logMessage?}]`. Mismatched parallel
 arrays, extra fields from another action, and mixed old/new envelopes reject.

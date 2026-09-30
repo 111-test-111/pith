@@ -237,8 +237,9 @@ try {
     const documents = JSON.parse(exported).documents
     assert(documents.context?.messages.length > 0, 'SDK context survives worker structured cloning')
     assert(documents.options?.api, 'options are captured alongside context')
-    assert(documents.context.tools.some(tool => tool.name === 'present'))
-    assert(documents.context.tools.every(tool => Object.keys(tool).every(key => ['name', 'description', 'parameters', 'constrainedSampling'].includes(key))))
+    const declaredTools = documents.context.messages.filter(message => message.role === 'system').flatMap(message => message.toolsAdded ?? [])
+    assert(declaredTools.some(tool => tool.name === 'present'))
+    assert(declaredTools.every(tool => Object.keys(tool).every(key => ['name', 'description', 'parameters', 'constrainedSampling'].includes(key))))
     assert(!request.captureError, 'tool execution closures do not cause incomplete capture')
   }
   assert(fixture.session.agent.state.tools.every(tool => typeof tool.execute === 'function'), 'capture does not mutate live tools')

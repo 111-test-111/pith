@@ -70,10 +70,12 @@ export class TrajectoryRecorder {
     }
     // AgentTool definitions carry execute/prepareArguments closures. Only the
     // public model-facing Tool fields belong in a cloneable request document.
-    const capturedContext = { ...context, tools: context.tools?.map(tool => ({
-      name: tool.name, description: tool.description, parameters: tool.parameters,
-      ...(tool.constrainedSampling !== undefined ? { constrainedSampling: tool.constrainedSampling } : {})
-    })) }
+    const capturedContext = { ...context, messages: context.messages.map(message => message.role === 'system'
+      ? { ...message, toolsAdded: message.toolsAdded?.map(tool => ({
+        name: tool.name, description: tool.description, parameters: tool.parameters,
+        ...(tool.constrainedSampling !== undefined ? { constrainedSampling: tool.constrainedSampling } : {})
+      })) }
+      : message) }
     await this.save(record, { context: capturedContext, options: requestOptions })
     const attempts = [record]
     let payloads = 0
@@ -261,7 +263,7 @@ export class TrajectoryRecorder {
       this.retry = this.create('retry', String(event.attempt))
       void this.save(this.retry, { event })
     } else if (event.type === 'auto_retry_end') {
-      // SDK 0.85 reports backoff cancellation through this public outcome;
+      // SDK reports backoff cancellation through this public outcome;
       // its backoff AbortController is separate from the agent stream signal.
       const cancelled = !event.success && event.finalError === 'Retry cancelled'
       if (cancelled) this.runCancelled = true

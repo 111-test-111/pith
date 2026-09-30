@@ -1,5 +1,5 @@
 {
-  "format": "pith-session-replay-v1",
+  "format": "pith-session-replay-v2",
   "source": "offline-synthetic-provider/real-sdk-session",
   "scenario": {
     "id": "ordinary-turn",
@@ -35,6 +35,15 @@
         "context": {
           "messages": [
             {
+              "content": "",
+              "role": "system",
+              "sections": {
+                "cwd": "<cwd>\n{{pith:workspace}}\n</cwd>",
+                "preamble": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools."
+              },
+              "timestamp": 0
+            },
+            {
               "content": [
                 {
                   "text": "Reply with a short greeting.",
@@ -44,9 +53,7 @@
               "role": "user",
               "timestamp": 0
             }
-          ],
-          "systemPrompt": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools.\nCurrent working directory: {{pith:workspace}}\n",
-          "tools": []
+          ]
         },
         "options": {
           "maxRetryDelayMs": 60000,
@@ -81,23 +88,14 @@
             "authorization": "[redacted]",
             "messages": [
               {
-                "content": [
-                  {
-                    "text": "Reply with a short greeting.",
-                    "type": "text"
-                  }
-                ],
-                "role": "user",
+                "content": "",
+                "role": "system",
+                "sections": {
+                  "cwd": "<cwd>\n{{pith:workspace}}\n</cwd>",
+                  "preamble": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools."
+                },
                 "timestamp": 0
-              }
-            ],
-            "model": "offline-replay",
-            "system": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools.\nCurrent working directory: {{pith:workspace}}\n",
-            "tools": []
-          },
-          "actual": {
-            "authorization": "[redacted]",
-            "messages": [
+              },
               {
                 "content": [
                   {
@@ -109,9 +107,32 @@
                 "timestamp": 0
               }
             ],
-            "model": "offline-replay",
-            "system": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools.\nCurrent working directory: {{pith:workspace}}\n",
-            "tools": []
+            "model": "offline-replay"
+          },
+          "actual": {
+            "authorization": "[redacted]",
+            "messages": [
+              {
+                "content": "",
+                "role": "system",
+                "sections": {
+                  "cwd": "<cwd>\n{{pith:workspace}}\n</cwd>",
+                  "preamble": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools."
+                },
+                "timestamp": 0
+              },
+              {
+                "content": [
+                  {
+                    "text": "Reply with a short greeting.",
+                    "type": "text"
+                  }
+                ],
+                "role": "user",
+                "timestamp": 0
+              }
+            ],
+            "model": "offline-replay"
           }
         },
         {
@@ -405,6 +426,15 @@
         "context": {
           "messages": [
             {
+              "content": "",
+              "role": "system",
+              "sections": {
+                "cwd": "<cwd>\n{{pith:workspace}}\n</cwd>",
+                "preamble": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools."
+              },
+              "timestamp": 0
+            },
+            {
               "content": [
                 {
                   "text": "Reply with a short greeting.",
@@ -426,6 +456,7 @@
               "provider": "pith-replay",
               "role": "assistant",
               "stopReason": "stop",
+              "thinkingLevel": "off",
               "timestamp": 0,
               "usage": {
                 "cacheRead": 3,
@@ -452,9 +483,7 @@
               "role": "user",
               "timestamp": 0
             }
-          ],
-          "systemPrompt": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools.\nCurrent working directory: {{pith:workspace}}\n",
-          "tools": []
+          ]
         },
         "options": {
           "maxRetryDelayMs": 60000,
@@ -489,6 +518,15 @@
             "authorization": "[redacted]",
             "messages": [
               {
+                "content": "",
+                "role": "system",
+                "sections": {
+                  "cwd": "<cwd>\n{{pith:workspace}}\n</cwd>",
+                  "preamble": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools."
+                },
+                "timestamp": 0
+              },
+              {
                 "content": [
                   {
                     "text": "Reply with a short greeting.",
@@ -510,6 +548,7 @@
                 "provider": "pith-replay",
                 "role": "assistant",
                 "stopReason": "stop",
+                "thinkingLevel": "off",
                 "timestamp": 0,
                 "usage": {
                   "cacheRead": 3,
@@ -537,14 +576,21 @@
                 "timestamp": 0
               }
             ],
-            "model": "offline-replay",
-            "system": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools.\nCurrent working directory: {{pith:workspace}}\n",
-            "tools": []
+            "model": "offline-replay"
           },
           "actual": {
             "authorization": "[redacted]",
             "messages": [
               {
+                "content": "",
+                "role": "system",
+                "sections": {
+                  "cwd": "<cwd>\n{{pith:workspace}}\n</cwd>",
+                  "preamble": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools."
+                },
+                "timestamp": 0
+              },
+              {
                 "content": [
                   {
                     "text": "Reply with a short greeting.",
@@ -566,6 +612,7 @@
                 "provider": "pith-replay",
                 "role": "assistant",
                 "stopReason": "stop",
+                "thinkingLevel": "off",
                 "timestamp": 0,
                 "usage": {
                   "cacheRead": 3,
@@ -593,9 +640,7 @@
                 "timestamp": 0
               }
             ],
-            "model": "offline-replay",
-            "system": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools.\nCurrent working directory: {{pith:workspace}}\n",
-            "tools": []
+            "model": "offline-replay"
           }
         },
         {
@@ -869,6 +914,15 @@
   "expected": {
     "transcript": [
       {
+        "content": "",
+        "role": "system",
+        "sections": {
+          "cwd": "<cwd>\n{{pith:workspace}}\n</cwd>",
+          "preamble": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools."
+        },
+        "timestamp": 0
+      },
+      {
         "content": [
           {
             "text": "Reply with a short greeting.",
@@ -890,6 +944,7 @@
         "provider": "pith-replay",
         "role": "assistant",
         "stopReason": "stop",
+        "thinkingLevel": "off",
         "timestamp": 0,
         "usage": {
           "cacheRead": 3,
@@ -928,6 +983,7 @@
         "provider": "pith-replay",
         "role": "assistant",
         "stopReason": "stop",
+        "thinkingLevel": "off",
         "timestamp": 0,
         "usage": {
           "cacheRead": 3,
@@ -949,6 +1005,8 @@
     "eventTypes": [
       "agent_start",
       "turn_start",
+      "message_start",
+      "message_end",
       "message_start",
       "message_end",
       "message_start",
@@ -1030,6 +1088,15 @@
           "context": {
             "messages": [
               {
+                "content": "",
+                "role": "system",
+                "sections": {
+                  "cwd": "<cwd>\n{{pith:workspace}}\n</cwd>",
+                  "preamble": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools."
+                },
+                "timestamp": 0
+              },
+              {
                 "content": [
                   {
                     "text": "Reply with a short greeting.",
@@ -1039,9 +1106,7 @@
                 "role": "user",
                 "timestamp": 0
               }
-            ],
-            "systemPrompt": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools.\nCurrent working directory: {{pith:workspace}}\n",
-            "tools": []
+            ]
           },
           "options": {
             "api": "openai-completions",
@@ -1083,6 +1148,15 @@
             "authorization": "[redacted]",
             "messages": [
               {
+                "content": "",
+                "role": "system",
+                "sections": {
+                  "cwd": "<cwd>\n{{pith:workspace}}\n</cwd>",
+                  "preamble": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools."
+                },
+                "timestamp": 0
+              },
+              {
                 "content": [
                   {
                     "text": "Reply with a short greeting.",
@@ -1093,9 +1167,7 @@
                 "timestamp": 0
               }
             ],
-            "model": "offline-replay",
-            "system": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools.\nCurrent working directory: {{pith:workspace}}\n",
-            "tools": []
+            "model": "offline-replay"
           },
           "response": {
             "headers": {
@@ -1159,6 +1231,15 @@
           "context": {
             "messages": [
               {
+                "content": "",
+                "role": "system",
+                "sections": {
+                  "cwd": "<cwd>\n{{pith:workspace}}\n</cwd>",
+                  "preamble": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools."
+                },
+                "timestamp": 0
+              },
+              {
                 "content": [
                   {
                     "text": "Reply with a short greeting.",
@@ -1180,6 +1261,7 @@
                 "provider": "pith-replay",
                 "role": "assistant",
                 "stopReason": "stop",
+                "thinkingLevel": "off",
                 "timestamp": 0,
                 "usage": {
                   "cacheRead": 3,
@@ -1206,9 +1288,7 @@
                 "role": "user",
                 "timestamp": 0
               }
-            ],
-            "systemPrompt": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools.\nCurrent working directory: {{pith:workspace}}\n",
-            "tools": []
+            ]
           },
           "options": {
             "api": "openai-completions",
@@ -1250,6 +1330,15 @@
             "authorization": "[redacted]",
             "messages": [
               {
+                "content": "",
+                "role": "system",
+                "sections": {
+                  "cwd": "<cwd>\n{{pith:workspace}}\n</cwd>",
+                  "preamble": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools."
+                },
+                "timestamp": 0
+              },
+              {
                 "content": [
                   {
                     "text": "Reply with a short greeting.",
@@ -1271,6 +1360,7 @@
                 "provider": "pith-replay",
                 "role": "assistant",
                 "stopReason": "stop",
+                "thinkingLevel": "off",
                 "timestamp": 0,
                 "usage": {
                   "cacheRead": 3,
@@ -1298,9 +1388,7 @@
                 "timestamp": 0
               }
             ],
-            "model": "offline-replay",
-            "system": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools.\nCurrent working directory: {{pith:workspace}}\n",
-            "tools": []
+            "model": "offline-replay"
           },
           "response": {
             "headers": {

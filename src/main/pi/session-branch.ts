@@ -18,17 +18,18 @@ const NEWLINE = 0x0a
 export interface RewindSelectionData {
   operationId?: string
   target?: string | null
-  /** Whether the selected branch held any message when it was selected. */
+  /** Whether the selected branch held any visible conversation message when selected. */
   empty?: boolean
 }
 
 interface Selection {
   data?: RewindSelectionData
+  message?: { role?: string }
   [key: string]: unknown
 }
 
 /**
- * Does the session's SELECTED branch hold a message?
+ * Does the session's SELECTED branch hold a visible conversation message?
  *
  * `SessionManager.listAll()` counts every message entry in the file — abandoned
  * branches included — so a session restored to before its first turn kept its
@@ -67,7 +68,7 @@ export async function selectedBranchHasMessages(path: string): Promise<boolean> 
         if (decision !== undefined) return decision
       }
     }
-    // The whole file holds no message entry and no selection: nothing to show.
+    // The whole file holds no conversation message and no selection: nothing to show.
     return false
   } catch {
     return true
@@ -86,7 +87,7 @@ function decisionOf(line: Buffer): boolean | undefined {
   } catch {
     return undefined
   }
-  if (entry?.type === 'message') return true
+  if (entry?.type === 'message') return entry.message?.role === 'system' ? undefined : true
   if (entry?.type !== 'custom' || entry.customType !== 'pith_rewind_selection') return undefined
   if (entry.data?.empty === true) return false
   // A selection written before the branch fact was recorded still decides the

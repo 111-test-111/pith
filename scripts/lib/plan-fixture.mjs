@@ -138,7 +138,7 @@ export async function createAgentSessionFromServices(options){
     return {
       async *[Symbol.asyncIterator]() {
         if (providerCallbacks) {
-          await options?.onPayload?.({ model: model.id, messages: context.messages, system: context.systemPrompt, authorization: 'fixture-secret' }, model)
+          await options?.onPayload?.({ model: model.id, messages: context.messages, authorization: 'fixture-secret' }, model)
           await options?.onResponse?.({ status: 200, headers: { authorization: 'fixture-secret', 'x-request-id': 'fixture-request' } }, model)
           yield { type: 'text_delta', contentIndex: 0, delta: '', partial: message }
           if (content[0]?.type === 'text') yield { type: 'text_delta', contentIndex: 0, delta: content[0].text, partial: message }

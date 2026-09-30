@@ -47,10 +47,15 @@ export async function checkPlanLifecycle() {
  * settle, which is what put a transient "compressing" row in the transcript.
  */
 async function checkNothingToCompact() {
-  const f = await createPlanFixture()
+  const f = await createPlanFixture({ keepRecentTokens: 1 })
   try {
     await f.managed.lifecyclePromise
     await f.session.prompt('Too small to summarize')
+    f.session.settingsManager.applyOverrides({ compaction: {
+      enabled: false, keepRecentTokens: 1,
+      modelOverrides: { 'fixture/fixture': { keepRecentTokens: 20000 } }
+    } })
+    assert.equal(f.session.settingsManager.getCompactionSettings(f.session.model).keepRecentTokens, 20000)
     const events = []
     const unsubscribe = f.session.subscribe(event => events.push(event.type))
     await assert.rejects(
@@ -60,7 +65,7 @@ async function checkNothingToCompact() {
     unsubscribe()
     assert(
       !events.includes('compaction_start') && !events.includes('compaction_end'),
-      'a too-small session must not emit compaction events'
+      'the selected model\'s recent-token override must prevent spurious compaction events'
     )
   } finally { await f.close() }
 }
@@ -91,7 +96,7 @@ async function checkRestoration() {
     const before = f.requests.length
     const compacted = await f.app.compactSession(cold.path)
     assert(f.requests.length > before, 'manual compaction must exercise the real SDK summary stream')
-    assert.match(f.requests.at(-1).systemPrompt, /Current working mode: Plan Mode/)
+    assert.match(JSON.stringify(f.requests.at(-1).messages.filter(message => message.role === 'system')), /Current working mode: Plan Mode/)
     assert(compacted.messages.some(m => m.role === 'compactionSummary'))
     const messageKey = message => `${message.role}:${message.timestamp}:${message.toolCallId ?? ''}`
     const contextKeys = new Set(cold.session.messages.map(messageKey))

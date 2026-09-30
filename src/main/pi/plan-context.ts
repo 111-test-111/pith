@@ -1,9 +1,10 @@
 import type { AgentSession, InlineExtension } from '@earendil-works/pi-coding-agent'
+import { currentSystemPrompt } from './transcript-context'
 
 /**
  * Plan Mode instructions ride the system prompt alone: `before_agent_start`
- * appends the full text for ordinary turns (the SDK writes it into
- * `agent.state.systemPrompt`, which the stream context carries), and the
+ * appends the full text for ordinary turns (the SDK carries it in the
+ * transcript's system messages), and the
  * stream overlay below covers the requests that bypass extension events (SDK
  * summarization). A hidden context-message channel used to repeat the same
  * text on every request — one channel is enough.
@@ -35,14 +36,15 @@ const PLAN_OVERLAY_NOTE = 'Current working mode: Plan Mode; local model tools ar
 
 /** Covers requests that bypass extension events (SDK summarization) without
  * changing their task. Ordinary turns already carry the full instructions via
- * before_agent_start — visible in the stream context's systemPrompt — so the
+ * before_agent_start — visible in the stream transcript — so the
  * overlay stays out of those instead of appending a second copy. */
 export function installPlanStreamOverlay(session: AgentSession, restricted: () => boolean): () => void {
   const previous = session.agent.streamFunction
   const overlay: typeof previous = (model, context, options) => previous(model, restricted()
-    ? context.systemPrompt?.includes(PLAN_INSTRUCTIONS_MARKER)
+    ? currentSystemPrompt(context).includes(PLAN_INSTRUCTIONS_MARKER)
       ? context
-      : { ...context, systemPrompt: `${context.systemPrompt ?? ''}\n\n${PLAN_OVERLAY_NOTE}` }
+      : { ...context, messages: [...context.messages,
+        { role: 'system', content: PLAN_OVERLAY_NOTE, timestamp: Date.now() }] }
     : context, options)
   session.agent.streamFunction = overlay
   return () => { if (session.agent.streamFunction === overlay) session.agent.streamFunction = previous }

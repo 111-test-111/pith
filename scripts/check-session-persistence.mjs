@@ -80,6 +80,7 @@ try {
   const managed = { cwd: temp, plan: planFor(source), askRecords: { restore() {} }, todos: new TodoState(source), path: original, session: {
     sessionManager: source, isStreaming: false,
     agent: { state: { messages: source.buildSessionContext().messages } },
+    refreshContext() { this.agent.state.messages = source.buildSessionContext().messages },
     prompt: async (text) => { source.appendMessage(user(text, 6)) }
   } }
   app.activeSession = managed

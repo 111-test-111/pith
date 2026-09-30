@@ -4,7 +4,7 @@
  * per-role context accounting. `src/main/pi/context-detail.ts` builds those two,
  * and this check pins each of them — the bucketing and how the residue
  * reconciles with the ring's provider-anchored total, the reasoning aggregation
- * (message usage AND the summary entries' own usage, with a real 0 kept distinct
+ * (message usage AND summary/standalone usage entries, with a real 0 kept distinct
  * from "no provider reported"), and, the accuracy pin, that the disk fallback's
  * `statsFromEntries` reproduces a REAL `AgentSession.getSessionStats()` exactly
  * on a session file that carries usage, tool results and a compaction. No
@@ -84,9 +84,10 @@ try {
     { type: 'message', message: user('u') },
     { type: 'compaction', usage: { reasoning: 7 } },
     { type: 'branch_summary', usage: { reasoning: 1 } },
+    { type: 'usage', usage: { reasoning: 5 } },
     { type: 'custom', data: { anything: true } }
   ]
-  assert.equal(reasoningTokens(entries), 320, 'reasoning sums message and summary usage only')
+  assert.equal(reasoningTokens(entries), 325, 'reasoning sums message, summary and standalone usage')
   assert.equal(reasoningTokens([{ type: 'message', message: { role: 'assistant' } }]), null, 'no split reported reads as unknown')
   assert.equal(
     reasoningTokens([{ type: 'message', message: assistant('a', { usage: { reasoning: 0 } }) }]),
@@ -143,7 +144,8 @@ try {
         message: { role: 'toolResult', toolCallId: 'c1', toolName: 'read', content: 'ok', timestamp: Date.now(), usage: usage(1000, 5, 800, 0, 3, 0.02) }
       },
       { type: 'compaction', id: 'k1', parentId: 't1', timestamp: stamp(), summary: 'sum', firstKeptEntryId: 't1', tokensBefore: 5000, usage: usage(300, 400, 20, 5, 250, 0.25) },
-      { type: 'message', id: 'u2', parentId: 'k1', timestamp: stamp(), message: { role: 'user', timestamp: Date.now(), content: 'again' } },
+      { type: 'usage', id: 'g1', parentId: 'k1', timestamp: stamp(), kind: 'fixture', provider: 'fixture', model: 'fixture-model', usage: usage(40, 80, 0, 0, 11, 0.1) },
+      { type: 'message', id: 'u2', parentId: 'g1', timestamp: stamp(), message: { role: 'user', timestamp: Date.now(), content: 'again' } },
       { type: 'thinking_level_change', id: 'x1', parentId: 'u2', timestamp: stamp(), thinkingLevel: 'high' }
     ].map((line) => JSON.stringify(line)).join('\n') + '\n'
   )
@@ -163,12 +165,12 @@ try {
   assert.equal(mine.toolCalls, sdkStats.toolCalls, 'tool calls match the SDK')
   assert.equal(mine.toolResults, sdkStats.toolResults, 'tool results match the SDK')
   assert.equal(mine.totalMessages, sdkStats.totalMessages, 'message count matches the SDK')
-  assert.deepEqual(mine.tokens, sdkStats.tokens, 'cumulative tokens match the SDK, summary usage included')
+  assert.deepEqual(mine.tokens, sdkStats.tokens, 'cumulative tokens match the SDK, summary and standalone usage included')
   assert.equal(mine.cost, sdkStats.cost, 'cost matches the SDK')
   assert.equal(
     reasoningTokens(fileEntries),
-    120 + 3 + 250,
-    'reasoning counts the assistant round, the tool result round and the compaction call'
+    120 + 3 + 250 + 11,
+    'reasoning counts the assistant round, tool result, compaction and standalone usage'
   )
 
   // The whole DTO over that session: the counts are the stats' own, the
@@ -199,7 +201,7 @@ try {
   assert.equal(detail.toolResults, sdkStats.toolResults)
   assert.equal(detail.tokens.input, sdkStats.tokens.input)
   assert.equal(detail.cost, sdkStats.cost)
-  assert.equal(detail.tokens.reasoning, 373)
+  assert.equal(detail.tokens.reasoning, 384)
   assert.equal(detail.breakdown.total, 9000, 'the ring total anchors the breakdown')
   assert.equal(
     detail.breakdown.user + detail.breakdown.assistant + detail.breakdown.toolResults + detail.breakdown.other,

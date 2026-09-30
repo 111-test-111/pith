@@ -1,5 +1,5 @@
 {
-  "format": "pith-session-replay-v1",
+  "format": "pith-session-replay-v2",
   "source": "offline-synthetic-provider/real-sdk-session",
   "scenario": {
     "id": "failed-present",
@@ -42,6 +42,53 @@
         "context": {
           "messages": [
             {
+              "content": "",
+              "role": "system",
+              "sections": {
+                "cwd": "<cwd>\n{{pith:workspace}}\n</cwd>",
+                "preamble": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools."
+              },
+              "timestamp": 0,
+              "toolsAdded": [
+                {
+                  "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. Usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
+                  "name": "present",
+                  "parameters": {
+                    "properties": {
+                      "files": {
+                        "items": {
+                          "properties": {
+                            "description": {
+                              "description": "Brief description of the final deliverable.",
+                              "maxLength": 1000,
+                              "type": "string"
+                            },
+                            "path": {
+                              "description": "Existing regular file. Relative paths use the session working directory.",
+                              "maxLength": 4096,
+                              "minLength": 1,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "path"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 8,
+                        "minItems": 1,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "files"
+                    ],
+                    "type": "object"
+                  }
+                }
+              ]
+            },
+            {
               "content": [
                 {
                   "text": "Present the output directory.",
@@ -50,45 +97,6 @@
               ],
               "role": "user",
               "timestamp": 0
-            }
-          ],
-          "systemPrompt": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools.\nCurrent working directory: {{pith:workspace}}\n",
-          "tools": [
-            {
-              "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. Usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
-              "name": "present",
-              "parameters": {
-                "properties": {
-                  "files": {
-                    "items": {
-                      "properties": {
-                        "description": {
-                          "description": "Brief description of the final deliverable.",
-                          "maxLength": 1000,
-                          "type": "string"
-                        },
-                        "path": {
-                          "description": "Existing regular file. Relative paths use the session working directory.",
-                          "maxLength": 4096,
-                          "minLength": 1,
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "path"
-                      ],
-                      "type": "object"
-                    },
-                    "maxItems": 8,
-                    "minItems": 1,
-                    "type": "array"
-                  }
-                },
-                "required": [
-                  "files"
-                ],
-                "type": "object"
-              }
             }
           ]
         },
@@ -125,6 +133,53 @@
             "authorization": "[redacted]",
             "messages": [
               {
+                "content": "",
+                "role": "system",
+                "sections": {
+                  "cwd": "<cwd>\n{{pith:workspace}}\n</cwd>",
+                  "preamble": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools."
+                },
+                "timestamp": 0,
+                "toolsAdded": [
+                  {
+                    "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. Usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
+                    "name": "present",
+                    "parameters": {
+                      "properties": {
+                        "files": {
+                          "items": {
+                            "properties": {
+                              "description": {
+                                "description": "Brief description of the final deliverable.",
+                                "maxLength": 1000,
+                                "type": "string"
+                              },
+                              "path": {
+                                "description": "Existing regular file. Relative paths use the session working directory.",
+                                "maxLength": 4096,
+                                "minLength": 1,
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "path"
+                            ],
+                            "type": "object"
+                          },
+                          "maxItems": 8,
+                          "minItems": 1,
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "files"
+                      ],
+                      "type": "object"
+                    }
+                  }
+                ]
+              },
+              {
                 "content": [
                   {
                     "text": "Present the output directory.",
@@ -135,51 +190,59 @@
                 "timestamp": 0
               }
             ],
-            "model": "offline-replay",
-            "system": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools.\nCurrent working directory: {{pith:workspace}}\n",
-            "tools": [
-              {
-                "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. Usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
-                "name": "present",
-                "parameters": {
-                  "properties": {
-                    "files": {
-                      "items": {
-                        "properties": {
-                          "description": {
-                            "description": "Brief description of the final deliverable.",
-                            "maxLength": 1000,
-                            "type": "string"
-                          },
-                          "path": {
-                            "description": "Existing regular file. Relative paths use the session working directory.",
-                            "maxLength": 4096,
-                            "minLength": 1,
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "path"
-                        ],
-                        "type": "object"
-                      },
-                      "maxItems": 8,
-                      "minItems": 1,
-                      "type": "array"
-                    }
-                  },
-                  "required": [
-                    "files"
-                  ],
-                  "type": "object"
-                }
-              }
-            ]
+            "model": "offline-replay"
           },
           "actual": {
             "authorization": "[redacted]",
             "messages": [
               {
+                "content": "",
+                "role": "system",
+                "sections": {
+                  "cwd": "<cwd>\n{{pith:workspace}}\n</cwd>",
+                  "preamble": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools."
+                },
+                "timestamp": 0,
+                "toolsAdded": [
+                  {
+                    "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. Usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
+                    "name": "present",
+                    "parameters": {
+                      "properties": {
+                        "files": {
+                          "items": {
+                            "properties": {
+                              "description": {
+                                "description": "Brief description of the final deliverable.",
+                                "maxLength": 1000,
+                                "type": "string"
+                              },
+                              "path": {
+                                "description": "Existing regular file. Relative paths use the session working directory.",
+                                "maxLength": 4096,
+                                "minLength": 1,
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "path"
+                            ],
+                            "type": "object"
+                          },
+                          "maxItems": 8,
+                          "minItems": 1,
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "files"
+                      ],
+                      "type": "object"
+                    }
+                  }
+                ]
+              },
+              {
                 "content": [
                   {
                     "text": "Present the output directory.",
@@ -190,46 +253,7 @@
                 "timestamp": 0
               }
             ],
-            "model": "offline-replay",
-            "system": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools.\nCurrent working directory: {{pith:workspace}}\n",
-            "tools": [
-              {
-                "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. Usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
-                "name": "present",
-                "parameters": {
-                  "properties": {
-                    "files": {
-                      "items": {
-                        "properties": {
-                          "description": {
-                            "description": "Brief description of the final deliverable.",
-                            "maxLength": 1000,
-                            "type": "string"
-                          },
-                          "path": {
-                            "description": "Existing regular file. Relative paths use the session working directory.",
-                            "maxLength": 4096,
-                            "minLength": 1,
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "path"
-                        ],
-                        "type": "object"
-                      },
-                      "maxItems": 8,
-                      "minItems": 1,
-                      "type": "array"
-                    }
-                  },
-                  "required": [
-                    "files"
-                  ],
-                  "type": "object"
-                }
-              }
-            ]
+            "model": "offline-replay"
           }
         },
         {
@@ -576,6 +600,53 @@
         "context": {
           "messages": [
             {
+              "content": "",
+              "role": "system",
+              "sections": {
+                "cwd": "<cwd>\n{{pith:workspace}}\n</cwd>",
+                "preamble": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools."
+              },
+              "timestamp": 0,
+              "toolsAdded": [
+                {
+                  "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. Usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
+                  "name": "present",
+                  "parameters": {
+                    "properties": {
+                      "files": {
+                        "items": {
+                          "properties": {
+                            "description": {
+                              "description": "Brief description of the final deliverable.",
+                              "maxLength": 1000,
+                              "type": "string"
+                            },
+                            "path": {
+                              "description": "Existing regular file. Relative paths use the session working directory.",
+                              "maxLength": 4096,
+                              "minLength": 1,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "path"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 8,
+                        "minItems": 1,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "files"
+                    ],
+                    "type": "object"
+                  }
+                }
+              ]
+            },
+            {
               "content": [
                 {
                   "text": "Present the output directory.",
@@ -605,6 +676,7 @@
               "provider": "pith-replay",
               "role": "assistant",
               "stopReason": "toolUse",
+              "thinkingLevel": "off",
               "timestamp": 0,
               "usage": {
                 "cacheRead": 3,
@@ -634,45 +706,6 @@
               "timestamp": 0,
               "toolCallId": "{{pith:tool:1}}",
               "toolName": "present"
-            }
-          ],
-          "systemPrompt": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools.\nCurrent working directory: {{pith:workspace}}\n",
-          "tools": [
-            {
-              "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. Usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
-              "name": "present",
-              "parameters": {
-                "properties": {
-                  "files": {
-                    "items": {
-                      "properties": {
-                        "description": {
-                          "description": "Brief description of the final deliverable.",
-                          "maxLength": 1000,
-                          "type": "string"
-                        },
-                        "path": {
-                          "description": "Existing regular file. Relative paths use the session working directory.",
-                          "maxLength": 4096,
-                          "minLength": 1,
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "path"
-                      ],
-                      "type": "object"
-                    },
-                    "maxItems": 8,
-                    "minItems": 1,
-                    "type": "array"
-                  }
-                },
-                "required": [
-                  "files"
-                ],
-                "type": "object"
-              }
             }
           ]
         },
@@ -709,6 +742,53 @@
             "authorization": "[redacted]",
             "messages": [
               {
+                "content": "",
+                "role": "system",
+                "sections": {
+                  "cwd": "<cwd>\n{{pith:workspace}}\n</cwd>",
+                  "preamble": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools."
+                },
+                "timestamp": 0,
+                "toolsAdded": [
+                  {
+                    "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. Usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
+                    "name": "present",
+                    "parameters": {
+                      "properties": {
+                        "files": {
+                          "items": {
+                            "properties": {
+                              "description": {
+                                "description": "Brief description of the final deliverable.",
+                                "maxLength": 1000,
+                                "type": "string"
+                              },
+                              "path": {
+                                "description": "Existing regular file. Relative paths use the session working directory.",
+                                "maxLength": 4096,
+                                "minLength": 1,
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "path"
+                            ],
+                            "type": "object"
+                          },
+                          "maxItems": 8,
+                          "minItems": 1,
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "files"
+                      ],
+                      "type": "object"
+                    }
+                  }
+                ]
+              },
+              {
                 "content": [
                   {
                     "text": "Present the output directory.",
@@ -738,6 +818,7 @@
                 "provider": "pith-replay",
                 "role": "assistant",
                 "stopReason": "toolUse",
+                "thinkingLevel": "off",
                 "timestamp": 0,
                 "usage": {
                   "cacheRead": 3,
@@ -769,51 +850,59 @@
                 "toolName": "present"
               }
             ],
-            "model": "offline-replay",
-            "system": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools.\nCurrent working directory: {{pith:workspace}}\n",
-            "tools": [
-              {
-                "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. Usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
-                "name": "present",
-                "parameters": {
-                  "properties": {
-                    "files": {
-                      "items": {
-                        "properties": {
-                          "description": {
-                            "description": "Brief description of the final deliverable.",
-                            "maxLength": 1000,
-                            "type": "string"
-                          },
-                          "path": {
-                            "description": "Existing regular file. Relative paths use the session working directory.",
-                            "maxLength": 4096,
-                            "minLength": 1,
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "path"
-                        ],
-                        "type": "object"
-                      },
-                      "maxItems": 8,
-                      "minItems": 1,
-                      "type": "array"
-                    }
-                  },
-                  "required": [
-                    "files"
-                  ],
-                  "type": "object"
-                }
-              }
-            ]
+            "model": "offline-replay"
           },
           "actual": {
             "authorization": "[redacted]",
             "messages": [
               {
+                "content": "",
+                "role": "system",
+                "sections": {
+                  "cwd": "<cwd>\n{{pith:workspace}}\n</cwd>",
+                  "preamble": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools."
+                },
+                "timestamp": 0,
+                "toolsAdded": [
+                  {
+                    "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. Usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
+                    "name": "present",
+                    "parameters": {
+                      "properties": {
+                        "files": {
+                          "items": {
+                            "properties": {
+                              "description": {
+                                "description": "Brief description of the final deliverable.",
+                                "maxLength": 1000,
+                                "type": "string"
+                              },
+                              "path": {
+                                "description": "Existing regular file. Relative paths use the session working directory.",
+                                "maxLength": 4096,
+                                "minLength": 1,
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "path"
+                            ],
+                            "type": "object"
+                          },
+                          "maxItems": 8,
+                          "minItems": 1,
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "files"
+                      ],
+                      "type": "object"
+                    }
+                  }
+                ]
+              },
+              {
                 "content": [
                   {
                     "text": "Present the output directory.",
@@ -843,6 +932,7 @@
                 "provider": "pith-replay",
                 "role": "assistant",
                 "stopReason": "toolUse",
+                "thinkingLevel": "off",
                 "timestamp": 0,
                 "usage": {
                   "cacheRead": 3,
@@ -874,46 +964,7 @@
                 "toolName": "present"
               }
             ],
-            "model": "offline-replay",
-            "system": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools.\nCurrent working directory: {{pith:workspace}}\n",
-            "tools": [
-              {
-                "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. Usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
-                "name": "present",
-                "parameters": {
-                  "properties": {
-                    "files": {
-                      "items": {
-                        "properties": {
-                          "description": {
-                            "description": "Brief description of the final deliverable.",
-                            "maxLength": 1000,
-                            "type": "string"
-                          },
-                          "path": {
-                            "description": "Existing regular file. Relative paths use the session working directory.",
-                            "maxLength": 4096,
-                            "minLength": 1,
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "path"
-                        ],
-                        "type": "object"
-                      },
-                      "maxItems": 8,
-                      "minItems": 1,
-                      "type": "array"
-                    }
-                  },
-                  "required": [
-                    "files"
-                  ],
-                  "type": "object"
-                }
-              }
-            ]
+            "model": "offline-replay"
           }
         },
         {
@@ -1187,6 +1238,53 @@
   "expected": {
     "transcript": [
       {
+        "content": "",
+        "role": "system",
+        "sections": {
+          "cwd": "<cwd>\n{{pith:workspace}}\n</cwd>",
+          "preamble": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools."
+        },
+        "timestamp": 0,
+        "toolsAdded": [
+          {
+            "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. Usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
+            "name": "present",
+            "parameters": {
+              "properties": {
+                "files": {
+                  "items": {
+                    "properties": {
+                      "description": {
+                        "description": "Brief description of the final deliverable.",
+                        "maxLength": 1000,
+                        "type": "string"
+                      },
+                      "path": {
+                        "description": "Existing regular file. Relative paths use the session working directory.",
+                        "maxLength": 4096,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "path"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 8,
+                  "minItems": 1,
+                  "type": "array"
+                }
+              },
+              "required": [
+                "files"
+              ],
+              "type": "object"
+            }
+          }
+        ]
+      },
+      {
         "content": [
           {
             "text": "Present the output directory.",
@@ -1216,6 +1314,7 @@
         "provider": "pith-replay",
         "role": "assistant",
         "stopReason": "toolUse",
+        "thinkingLevel": "off",
         "timestamp": 0,
         "usage": {
           "cacheRead": 3,
@@ -1258,6 +1357,7 @@
         "provider": "pith-replay",
         "role": "assistant",
         "stopReason": "stop",
+        "thinkingLevel": "off",
         "timestamp": 0,
         "usage": {
           "cacheRead": 3,
@@ -1307,6 +1407,8 @@
     "eventTypes": [
       "agent_start",
       "turn_start",
+      "message_start",
+      "message_end",
       "message_start",
       "message_end",
       "message_start",
@@ -1387,6 +1489,53 @@
           "context": {
             "messages": [
               {
+                "content": "",
+                "role": "system",
+                "sections": {
+                  "cwd": "<cwd>\n{{pith:workspace}}\n</cwd>",
+                  "preamble": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools."
+                },
+                "timestamp": 0,
+                "toolsAdded": [
+                  {
+                    "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. Usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
+                    "name": "present",
+                    "parameters": {
+                      "properties": {
+                        "files": {
+                          "items": {
+                            "properties": {
+                              "description": {
+                                "description": "Brief description of the final deliverable.",
+                                "maxLength": 1000,
+                                "type": "string"
+                              },
+                              "path": {
+                                "description": "Existing regular file. Relative paths use the session working directory.",
+                                "maxLength": 4096,
+                                "minLength": 1,
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "path"
+                            ],
+                            "type": "object"
+                          },
+                          "maxItems": 8,
+                          "minItems": 1,
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "files"
+                      ],
+                      "type": "object"
+                    }
+                  }
+                ]
+              },
+              {
                 "content": [
                   {
                     "text": "Present the output directory.",
@@ -1395,45 +1544,6 @@
                 ],
                 "role": "user",
                 "timestamp": 0
-              }
-            ],
-            "systemPrompt": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools.\nCurrent working directory: {{pith:workspace}}\n",
-            "tools": [
-              {
-                "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. Usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
-                "name": "present",
-                "parameters": {
-                  "properties": {
-                    "files": {
-                      "items": {
-                        "properties": {
-                          "description": {
-                            "description": "Brief description of the final deliverable.",
-                            "maxLength": 1000,
-                            "type": "string"
-                          },
-                          "path": {
-                            "description": "Existing regular file. Relative paths use the session working directory.",
-                            "maxLength": 4096,
-                            "minLength": 1,
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "path"
-                        ],
-                        "type": "object"
-                      },
-                      "maxItems": 8,
-                      "minItems": 1,
-                      "type": "array"
-                    }
-                  },
-                  "required": [
-                    "files"
-                  ],
-                  "type": "object"
-                }
               }
             ]
           },
@@ -1485,6 +1595,53 @@
             "authorization": "[redacted]",
             "messages": [
               {
+                "content": "",
+                "role": "system",
+                "sections": {
+                  "cwd": "<cwd>\n{{pith:workspace}}\n</cwd>",
+                  "preamble": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools."
+                },
+                "timestamp": 0,
+                "toolsAdded": [
+                  {
+                    "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. Usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
+                    "name": "present",
+                    "parameters": {
+                      "properties": {
+                        "files": {
+                          "items": {
+                            "properties": {
+                              "description": {
+                                "description": "Brief description of the final deliverable.",
+                                "maxLength": 1000,
+                                "type": "string"
+                              },
+                              "path": {
+                                "description": "Existing regular file. Relative paths use the session working directory.",
+                                "maxLength": 4096,
+                                "minLength": 1,
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "path"
+                            ],
+                            "type": "object"
+                          },
+                          "maxItems": 8,
+                          "minItems": 1,
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "files"
+                      ],
+                      "type": "object"
+                    }
+                  }
+                ]
+              },
+              {
                 "content": [
                   {
                     "text": "Present the output directory.",
@@ -1495,46 +1652,7 @@
                 "timestamp": 0
               }
             ],
-            "model": "offline-replay",
-            "system": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools.\nCurrent working directory: {{pith:workspace}}\n",
-            "tools": [
-              {
-                "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. Usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
-                "name": "present",
-                "parameters": {
-                  "properties": {
-                    "files": {
-                      "items": {
-                        "properties": {
-                          "description": {
-                            "description": "Brief description of the final deliverable.",
-                            "maxLength": 1000,
-                            "type": "string"
-                          },
-                          "path": {
-                            "description": "Existing regular file. Relative paths use the session working directory.",
-                            "maxLength": 4096,
-                            "minLength": 1,
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "path"
-                        ],
-                        "type": "object"
-                      },
-                      "maxItems": 8,
-                      "minItems": 1,
-                      "type": "array"
-                    }
-                  },
-                  "required": [
-                    "files"
-                  ],
-                  "type": "object"
-                }
-              }
-            ]
+            "model": "offline-replay"
           },
           "response": {
             "headers": {
@@ -1595,6 +1713,53 @@
           "context": {
             "messages": [
               {
+                "content": "",
+                "role": "system",
+                "sections": {
+                  "cwd": "<cwd>\n{{pith:workspace}}\n</cwd>",
+                  "preamble": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools."
+                },
+                "timestamp": 0,
+                "toolsAdded": [
+                  {
+                    "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. Usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
+                    "name": "present",
+                    "parameters": {
+                      "properties": {
+                        "files": {
+                          "items": {
+                            "properties": {
+                              "description": {
+                                "description": "Brief description of the final deliverable.",
+                                "maxLength": 1000,
+                                "type": "string"
+                              },
+                              "path": {
+                                "description": "Existing regular file. Relative paths use the session working directory.",
+                                "maxLength": 4096,
+                                "minLength": 1,
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "path"
+                            ],
+                            "type": "object"
+                          },
+                          "maxItems": 8,
+                          "minItems": 1,
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "files"
+                      ],
+                      "type": "object"
+                    }
+                  }
+                ]
+              },
+              {
                 "content": [
                   {
                     "text": "Present the output directory.",
@@ -1624,6 +1789,7 @@
                 "provider": "pith-replay",
                 "role": "assistant",
                 "stopReason": "toolUse",
+                "thinkingLevel": "off",
                 "timestamp": 0,
                 "usage": {
                   "cacheRead": 3,
@@ -1653,45 +1819,6 @@
                 "timestamp": 0,
                 "toolCallId": "{{pith:tool:1}}",
                 "toolName": "present"
-              }
-            ],
-            "systemPrompt": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools.\nCurrent working directory: {{pith:workspace}}\n",
-            "tools": [
-              {
-                "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. Usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
-                "name": "present",
-                "parameters": {
-                  "properties": {
-                    "files": {
-                      "items": {
-                        "properties": {
-                          "description": {
-                            "description": "Brief description of the final deliverable.",
-                            "maxLength": 1000,
-                            "type": "string"
-                          },
-                          "path": {
-                            "description": "Existing regular file. Relative paths use the session working directory.",
-                            "maxLength": 4096,
-                            "minLength": 1,
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "path"
-                        ],
-                        "type": "object"
-                      },
-                      "maxItems": 8,
-                      "minItems": 1,
-                      "type": "array"
-                    }
-                  },
-                  "required": [
-                    "files"
-                  ],
-                  "type": "object"
-                }
               }
             ]
           },
@@ -1735,6 +1862,53 @@
             "authorization": "[redacted]",
             "messages": [
               {
+                "content": "",
+                "role": "system",
+                "sections": {
+                  "cwd": "<cwd>\n{{pith:workspace}}\n</cwd>",
+                  "preamble": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools."
+                },
+                "timestamp": 0,
+                "toolsAdded": [
+                  {
+                    "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. Usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
+                    "name": "present",
+                    "parameters": {
+                      "properties": {
+                        "files": {
+                          "items": {
+                            "properties": {
+                              "description": {
+                                "description": "Brief description of the final deliverable.",
+                                "maxLength": 1000,
+                                "type": "string"
+                              },
+                              "path": {
+                                "description": "Existing regular file. Relative paths use the session working directory.",
+                                "maxLength": 4096,
+                                "minLength": 1,
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "path"
+                            ],
+                            "type": "object"
+                          },
+                          "maxItems": 8,
+                          "minItems": 1,
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "files"
+                      ],
+                      "type": "object"
+                    }
+                  }
+                ]
+              },
+              {
                 "content": [
                   {
                     "text": "Present the output directory.",
@@ -1764,6 +1938,7 @@
                 "provider": "pith-replay",
                 "role": "assistant",
                 "stopReason": "toolUse",
+                "thinkingLevel": "off",
                 "timestamp": 0,
                 "usage": {
                   "cacheRead": 3,
@@ -1795,46 +1970,7 @@
                 "toolName": "present"
               }
             ],
-            "model": "offline-replay",
-            "system": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools.\nCurrent working directory: {{pith:workspace}}\n",
-            "tools": [
-              {
-                "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. Usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
-                "name": "present",
-                "parameters": {
-                  "properties": {
-                    "files": {
-                      "items": {
-                        "properties": {
-                          "description": {
-                            "description": "Brief description of the final deliverable.",
-                            "maxLength": 1000,
-                            "type": "string"
-                          },
-                          "path": {
-                            "description": "Existing regular file. Relative paths use the session working directory.",
-                            "maxLength": 4096,
-                            "minLength": 1,
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "path"
-                        ],
-                        "type": "object"
-                      },
-                      "maxItems": 8,
-                      "minItems": 1,
-                      "type": "array"
-                    }
-                  },
-                  "required": [
-                    "files"
-                  ],
-                  "type": "object"
-                }
-              }
-            ]
+            "model": "offline-replay"
           },
           "response": {
             "headers": {

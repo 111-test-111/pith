@@ -1009,6 +1009,7 @@ const zhCN: Messages = {
   'settings.refreshProviders': '刷新提供商',
   'settings.apiKey': 'API key',
   'settings.oauth': 'OAuth',
+  'settings.signInWithChatGPT': '使用 ChatGPT 登录',
   'settings.signOut': '退出登录 {name}',
   'settings.noProviders': '未发现提供商。',
   'settings.saveFailed': '保存 models.json 失败',

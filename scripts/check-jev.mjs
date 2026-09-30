@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { build } from 'esbuild'
 import { ModelRuntime, SessionManager } from '@earendil-works/pi-coding-agent'
+import { createPlanFixture } from './lib/plan-fixture.mjs'
 
 const temporary = await mkdtemp(join(tmpdir(), 'pith-jev-'))
 const agentDir = join(temporary, 'agent'), project = join(temporary, 'project')
@@ -174,7 +175,7 @@ extensionFactories:options.resourceLoaderOptions.extensionFactories}})};` }))
   assert.equal((await app.updateJevSettings({ preferences: { ...prefs } })).ok, true)
   assert(session.getActiveToolNames().includes('jev_decide'), 'enabling reaches existing sessions')
   assert.match(session.agent.state.tools.find(t => t.name === 'jev_decide').description, /Currently enabled question types: choice, score, noul\./)
-  assert.match(session.agent.state.systemPrompt, /Jev never sees question IDs/)
+  assert.match(session.systemPrompt, /Jev never sees question IDs/)
   assert.equal((await app.updateJevSettings({ apiKey: 'manager-fixture' })).ok, true)
   const settings = await app.jevSettings()
   assert.equal(settings.keySource, 'saved')
@@ -296,8 +297,7 @@ extensionFactories:options.resourceLoaderOptions.extensionFactories}})};` }))
   assert(evidence.some(e => e.results.some(r => r.isError)), 'verifier sees actual failed tool results')
   assert(!JSON.stringify(evidence).includes('fixture-credential'), 'common credential patterns redacted')
   for (const context of contexts) {
-    assert.equal(context.systemPrompt, contexts[0].systemPrompt, 'stage changes preserve system prefix')
-    assert.deepEqual(context.tools, contexts[0].tools, 'stage changes preserve tool schema/order')
+    assert.deepEqual(context.messages.filter(m => m.role === 'system'), contexts[0].messages.filter(m => m.role === 'system'), 'stage changes preserve system prompt and tool schema/order')
   }
   assert.deepEqual(contexts[1].messages.slice(0, contexts[0].messages.length), contexts[0].messages, 'the actual model request keeps the preceding guidance prefix')
   const store = new PiStore(), snapshot = app.snapshotOf(corrections)
@@ -325,11 +325,12 @@ extensionFactories:options.resourceLoaderOptions.extensionFactories}})};` }))
   assert.equal(waiting.jevWorkflow.snapshot.requests, 2)
 
   const visual = await makeWorkflow(); route = 'respond'
-  await visual.session.prompt('Explain this screenshot.', { images: [{ type: 'image', data: 'private-image-fixture', mimeType: 'image/png' }] })
+  const privateImage = (await readFile(new URL('../resources/icons/16x16.png', import.meta.url))).toString('base64')
+  await visual.session.prompt('Explain this screenshot.', { images: [{ type: 'image', data: privateImage, mimeType: 'image/png' }] })
   assert.equal(visual.jevWorkflow.snapshot.phase, 'completed')
   assert(evidence.every(e => e.attachmentsOmitted === true), 'Jev is explicitly told about omitted images')
-  assert(!JSON.stringify(evidence).includes('private-image-fixture'), 'image bytes never enter Jev requests')
-  assert(contexts[0].messages.some(m => Array.isArray(m.content) && m.content.some(c => c.type === 'image' && c.data === 'private-image-fixture')), 'the primary executor keeps the original image')
+  assert(!JSON.stringify(evidence).includes(privateImage), 'image bytes never enter Jev requests')
+  assert(contexts[0].messages.some(m => Array.isArray(m.content) && m.content.some(c => c.type === 'image')), 'the primary executor keeps the image')
 
   const planning = await makeWorkflow()
   assert.equal((await app.setSessionMode({ sessionPath: planning.path, mode: 'plan' })).ok, true)
@@ -412,6 +413,35 @@ extensionFactories:options.resourceLoaderOptions.extensionFactories}})};` }))
   await failedRouter.session.prompt('Do a task.')
   assert.equal(primaryCalls, 0); assert.equal(failedRouter.jevWorkflow.snapshot.reason, 'authentication')
   assert.equal(app.jevTraces(failedRouter.path).items[0].error, 'authentication', 'failed judgments have an inspectable safe error')
+  for (const delivery of ['steer', 'followUp']) {
+    const queued = await makeWorkflow()
+    let continues = 0, settled = 0
+    const previousContinue = queued.session.agent.continue
+    // Bound the regression itself: the broken outer loop otherwise starves
+    // timers indefinitely while repeatedly awaiting a no-op continue().
+    queued.session.agent.continue = async (...args) => {
+      if (++continues > 2) throw new Error('Paused Jev spun the SDK continuation loop')
+      return previousContinue.apply(queued.session.agent, args)
+    }
+    const unsubscribe = queued.session.subscribe(event => { if (event.type === 'agent_settled') settled++ })
+    app.jevService.options.fetch = async (url, init) => {
+      if (!JSON.parse(init.body).questions.review) return workflowFetch(url, init)
+      await queued.session[delivery]('Keep this queued input.')
+      return new Response('{}', { status: 401 })
+    }
+    await queued.session.prompt('Answer this question.')
+    assert.equal(queued.jevWorkflow.snapshot.reason, 'authentication')
+    assert.equal(continues, 0, 'a paused verifier must stop outer-loop queue draining')
+    assert.equal(settled, 1)
+    assert.equal(queued.session.isIdle, true)
+    assert.deepEqual(delivery === 'steer' ? queued.session.getSteeringMessages() : queued.session.getFollowUpMessages(), ['Keep this queued input.'])
+    unsubscribe()
+    queued.session.agent.continue = previousContinue
+    queued.session.clearQueue()
+    app.jevService.options.fetch = workflowFetch
+    await queued.session.prompt('Answer a new question.')
+    assert.equal(queued.jevWorkflow.snapshot.phase, 'completed', 'a new user turn can resume after a paused run')
+  }
   const cancelled = await makeWorkflow()
   let verifying = false
   app.jevService.options.fetch = (url, init) => {
@@ -434,6 +464,28 @@ extensionFactories:options.resourceLoaderOptions.extensionFactories}})};` }))
   app.jevService.options.fetch = workflowFetch
   await switched.session.prompt('Jev is now off.')
   assert.equal(primaryCalls, 1, 'off mode restores ordinary primary execution')
+  const boundary = await createPlanFixture({
+    extensionFactories: [pi => pi.on('agent_before_settle', event => ({ continue: true, entries: [...event.entries,
+      { type: 'custom_message', customType: 'fixture_continuation', content: 'Continue this task.', display: false }] }))]
+  })
+  try {
+    await boundary.managed.lifecyclePromise
+    assert((await boundary.app.updateJevSettings({ apiKey: 'boundary-fixture' })).ok)
+    assert((await boundary.app.updateJevSettings({ preferences: { ...prefs, mode: 'workflow' } })).ok)
+    boundary.app.jevService.options.fetch = (url, init) => JSON.parse(init.body).questions.review
+      ? new Response('{}', { status: 401 }) : workflowFetch(url, init)
+    let continues = 0
+    const previousContinue = boundary.session.agent.continue
+    boundary.session.agent.continue = async (...args) => {
+      if (++continues > 2) throw new Error('Paused Jev spun the SDK boundary continuation loop')
+      return previousContinue.apply(boundary.session.agent, args)
+    }
+    await boundary.session.prompt('Answer this question.')
+    assert.equal(boundary.requests.length, 1)
+    assert.equal(boundary.managed.jevWorkflow.snapshot.reason, 'authentication')
+    assert.equal(boundary.session.isIdle, true)
+    assert.equal(continues, 1, 'extension continuation cannot bypass a paused verifier or spin the outer loop')
+  } finally { await boundary.close() }
   console.log('PASS: mandatory routing, action-intent correction, evidence verification, continuous execution, paged audit, cache prefix, pause/recovery, cancellation and mode switching')
 
   if (process.env.PI_JEV_LIVE_KEY_FILE || process.env.PI_JEV_LIVE_SAVED_KEY_FILE) {

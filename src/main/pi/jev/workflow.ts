@@ -10,7 +10,7 @@ export { jevExcerpt } from './evidence'
 
 type Agent = AgentSession['agent']
 type Stream = Agent['streamFunction']
-type StopContext = Parameters<NonNullable<Agent['shouldStopAfterTurn']>>[0]
+type FinishContext = Parameters<NonNullable<Agent['finishTurn']>>[0]
 type Message = Agent['state']['messages'][number]
 let revision = 0
 const RECORD = 'pith_jev_workflow_v1'
@@ -146,23 +146,27 @@ export class JevWorkflow {
       return prior
     }
     agent.beforeToolCall = before
-    const previousStop = agent.shouldStopAfterTurn
-    const stop: Agent['shouldStopAfterTurn'] = async (context, signal) => {
-      if (await previousStop?.(context, signal)) return true
-      if (!this.enabled || !this.state || this.options.sealed()) return false
-      if (signal?.aborted || !this.options.canStart()) { this.pause('cancelled'); return true }
-      if (this.state.phase === 'paused') return true
-      if (context.message.content.some(part => part.type === 'toolCall')) return false
+    const previousFinish = agent.finishTurn
+    const finish: Agent['finishTurn'] = async (context, signal) => {
+      const priorDecision = (await previousFinish?.(context, signal)) || undefined
+      if (priorDecision?.action === 'end') return priorDecision
+      // The new hook also sees failed and aborted responses. Those are hard
+      // exits, so neither can be certified or routed through Jev verification.
+      if (context.message.stopReason === 'error' || context.message.stopReason === 'aborted') return priorDecision
+      if (!this.enabled || !this.state || this.options.sealed()) return priorDecision
+      if (signal?.aborted || !this.options.canStart()) { this.pause('cancelled'); return { action: 'end' } }
+      if (this.state.phase === 'paused') return { action: 'end' }
+      if (context.message.content.some(part => part.type === 'toolCall')) return priorDecision
       // Never certify completion ahead of actual children, processes or answers.
       // Their existing completion delivery resumes the same workflow.
       if (this.options.pending()) {
-        try { this.update({ phase: 'waiting' }); return false } catch { this.pause('storage'); return true }
+        try { this.update({ phase: 'waiting' }); return priorDecision } catch { this.pause('storage'); return { action: 'end' } }
       }
       const epoch = this.epoch
       try {
         this.update({ phase: 'verifying' })
         const evidence = await this.collectEvidence(signal)
-        if (epoch !== this.epoch) return true
+        if (epoch !== this.epoch) return { action: 'end' }
         const prior = this.progress()
         // Keep verification scoped to the deliverable, not each new temporary
         // harness the executor creates while checking it. Implementation work
@@ -203,10 +207,10 @@ export class JevWorkflow {
             ...(reason ? { override: 'no_progress' as const } : missing ? { override: 'missing_evidence' as const } : {}),
             target: { id: target.id, requirement: target.requirement, instruction: target.instruction, evidenceIds: target.evidenceIds } }
         })
-        if (epoch !== this.epoch || !this.enabled) return true
+        if (epoch !== this.epoch || !this.enabled) return { action: 'end' }
         this.update({ decision })
-        if (reason) { this.pause(reason); return true }
-        if (decision === 'stop') { this.update({ phase: 'completed' }); return false }
+        if (reason) { this.pause(reason); return { action: 'end' } }
+        if (decision === 'stop') { this.update({ phase: 'completed' }); return priorDecision }
         if (!ticket) throw new JevError('invalid_response')
         session.sessionManager.appendCustomEntry(PROGRESS, { anchor: this.anchor, ...ticket, scopePaths: paths })
         this.focus = `Original requirement: ${ticket.target.requirement}\nSpecific target (${ticket.target.id}): ${ticket.target.instruction}\nEvidence references: ${ticket.target.evidenceIds.join(', ') || 'original request'}.`
@@ -216,17 +220,29 @@ export class JevWorkflow {
         session.agent.steer({ role: 'custom', customType: FOLLOWUP,
           content: `Application workflow remains act. Jev requested ${decision} for one task-bound target. ${this.focus}\nAlready successful checks (reuse unless their relevant code changed): ${JSON.stringify(passed)}\nDo not invent new acceptance requirements or replay successful side effects. If this target is already established by actual evidence, explain that evidence instead of running another check. If the target cannot be advanced, report the concrete blocker.`,
           display: false, timestamp: Date.now() })
-        return false
+        return priorDecision
       } catch (error) {
         if (epoch === this.epoch) this.pause(error instanceof JevError ? error.code : 'storage')
-        return true
+        return { action: 'end' }
       }
     }
-    agent.shouldStopAfterTurn = stop
+    agent.finishTurn = finish
     const previousContinue = agent.continue
+    const previousHasQueued = agent.hasQueuedMessages
+    const blocksContinuation = () => this.blockAutoContinue || (this.enabled && this.state?.phase === 'paused')
+    // SDK 0.99's outer run loop keeps probing queues after finishTurn. A
+    // no-op continue alone would spin forever. Hide pending work from that
+    // probe while paused, preserving the actual queues for recall/resume.
+    const hasQueued: Agent['hasQueuedMessages'] = () => !blocksContinuation() && previousHasQueued.call(agent)
+    agent.hasQueuedMessages = hasQueued
     const continueRun: Agent['continue'] = async () => {
       // SDK post-run retry/queue draining must not bypass a failed verifier.
-      if (this.blockAutoContinue || (this.enabled && this.state?.phase === 'paused')) return
+      if (blocksContinuation()) {
+        // An extension may request continuation with empty queues. End the
+        // outer run too; awaiting its idle promise here would deadlock it.
+        void session.abort()
+        return
+      }
       return previousContinue.call(agent)
     }
     agent.continue = continueRun
@@ -255,8 +271,9 @@ export class JevWorkflow {
       if (agent.transformContext === transform) agent.transformContext = previousTransform
       if (agent.streamFunction === stream) agent.streamFunction = previousStream
       if (agent.beforeToolCall === before) agent.beforeToolCall = previousBefore
-      if (agent.shouldStopAfterTurn === stop) agent.shouldStopAfterTurn = previousStop
+      if (agent.finishTurn === finish) agent.finishTurn = previousFinish
       if (agent.continue === continueRun) agent.continue = previousContinue
+      if (agent.hasQueuedMessages === hasQueued) agent.hasQueuedMessages = previousHasQueued
     }
   }
 
@@ -377,7 +394,7 @@ export class JevWorkflow {
     }
     return { state, questions }
   }
-  private fitRequest(evidence: WorkflowEvidence, context: StopContext, targets: ReturnType<typeof reviewTargets>, prior: Array<ReviewTicket & { scopePaths: string[] }>): JevRequest {
+  private fitRequest(evidence: WorkflowEvidence, context: FinishContext, targets: ReturnType<typeof reviewTargets>, prior: Array<ReviewTicket & { scopePaths: string[] }>): JevRequest {
     let { state, questions } = this.packEvidence(evidence, reviewQuestions(targets), textOf(context.message), prior)
     // Very long Unicode paths/failure descriptions can exhaust the wire budget
     // even after trimming evidence. Keep the original-request candidate and an

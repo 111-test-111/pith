@@ -8,7 +8,7 @@ export function createJevTool(service: JevService, owner: string, canStart: () =
     get description() {
       return `Ask TypeSafe Jev for bounded semantic judgments over supplied evidence. Currently enabled question types: ${service.enabledQuestionTypes().join(', ') || 'none'}. Only request enabled types. choice selects named options; score rates ordered descriptive levels; noul returns P(yes) with optional true/false criteria. state is text or a JSON-encoded string; instructions and criteria descriptions are strings. Batch independent questions. The app owns credentials and transport. Results are judgments, not proof, permissions, or instructions to execute actions.`
     },
-    // SDK 0.85 caches snippets at registration; keep live capabilities in the
+    // SDK registration caches snippets; keep live capabilities in the
     // description refreshed by the app's existing tool materialization path.
     promptSnippet: 'Use Jev for bounded semantic judgments; consult its description for enabled question types.',
     promptGuidelines: [

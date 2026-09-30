@@ -66,7 +66,7 @@ export interface ContextDetailInput {
  * `SessionStats` for a session file nobody holds open (the visible session was
  * just switched away from, so its `AgentSession` is gone). Mirrors
  * `AgentSession.getSessionStats()` exactly — same sources, same semantics: every
- * entry of the file counts, compaction/branch-summary usage included, because
+ * entry of the file counts, standalone usage and compaction/branch-summary usage included, because
  * those were real billed requests. Added usage is taken from `entry.message` for
  * message entries and from the entry itself for summaries.
  */
@@ -90,7 +90,7 @@ export function statsFromEntries(entries: readonly any[]): ContextStatsLike {
     cost += usage.cost?.total ?? 0
   }
   for (const entry of entries) {
-    if ((entry?.type === 'branch_summary' || entry?.type === 'compaction') && entry.usage) addUsage(entry.usage)
+    if ((entry?.type === 'usage' || entry?.type === 'branch_summary' || entry?.type === 'compaction') && entry.usage) addUsage(entry.usage)
     if (entry?.type !== 'message') continue
     totalMessages++
     const message = entry.message
@@ -154,7 +154,7 @@ export function reasoningTokens(entries: readonly any[]): number | null {
   let reported = false
   for (const entry of entries) {
     const usage =
-      entry?.type === 'message' ? entry.message?.usage : entry?.type === 'compaction' || entry?.type === 'branch_summary' ? entry.usage : undefined
+      entry?.type === 'message' ? entry.message?.usage : entry?.type === 'compaction' || entry?.type === 'branch_summary' || entry?.type === 'usage' ? entry.usage : undefined
     const reasoning = usage?.reasoning
     if (typeof reasoning !== 'number' || !Number.isFinite(reasoning)) continue
     reported = true

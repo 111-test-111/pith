@@ -126,12 +126,12 @@ window.pi = {
   toolsCatalog: () => count('toolsCatalog', catalog),
   setExtensionEnabled: (id, enabled) => count('setExtensionEnabled', { ...catalog }),
   usageStats: () => count('usageStats', usage),
-  providers: () => count('providers', []),
-  models: () => count('models', []),
+  providers: () => count('providers', [{ id: 'openai', name: 'OpenAI', authTypes: ['api_key', 'oauth'], authenticated: false, canLogin: true, builtin: true, custom: false, discoverable: false }]),
+  models: () => count('models', [{ providerId: 'openai', providerName: 'OpenAI', id: 'gpt-6.1-sol', name: 'GPT-6.1 Sol', reasoning: true, thinkingLevels: ['low', 'medium', 'high'], input: ['text', 'image'], contextWindow: 200000, maxTokens: 16384, available: true, costInputPerM: 0, costOutputPerM: 0 }]),
   defaultModel: () => count('defaultModel', null),
   modelsConfig: () => count('modelsConfig', { providers: {} }),
   saveModelsConfig: (config) => count('saveModelsConfig', config),
-  login: (id) => count('login', undefined),
+  login: (id, kind) => { window.lastLogin = { id, kind }; return count('login', undefined) },
   logout: (id) => count('logout', undefined),
   readSkill: () => count('readSkill', { path: '/skills/github/SKILL.md', text: '# github — Skill body.', truncated: false }),
   openPath: () => count('openPath', undefined),
@@ -491,6 +491,16 @@ app.on('window-all-closed',()=>app.quit());`
   }
   await clickJev('移除已保存的密钥')
   assert.equal(await evaluate(`${jevButton('测试连接')}.disabled`), true)
+
+  // The OpenAI OAuth action introduced by the SDK names ChatGPT explicitly
+  // in both locales and keeps the existing provider login IPC contract.
+  await evaluate(`window.openTab(window.zh['settings.providers'])`)
+  assert.equal(await evaluate(`document.body.textContent.includes(window.zh['settings.signInWithChatGPT'])`), true)
+  await evaluate(`[...document.querySelectorAll('button')].find(b => b.textContent.trim() === window.zh['settings.signInWithChatGPT']).click()`)
+  assert.deepEqual(await evaluate('window.lastLogin'), { id: 'openai', kind: 'oauth' })
+  await evaluate('window.changeLocale("en")')
+  await pause(100)
+  assert.equal(await evaluate(`document.body.textContent.includes(window.en['settings.signInWithChatGPT'])`), true)
 
   assert.deepEqual(exceptions, [], 'no renderer exceptions')
   console.log('PASS: settings tabs — lazy sections, switches never remount, drafts and stores survive')

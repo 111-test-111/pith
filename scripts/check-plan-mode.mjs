@@ -258,6 +258,7 @@ const header = storageManager.getHeader()
 if (header) {
   await mkdir(sessions, { recursive: true })
   await writeFile(storageFile, `${JSON.stringify(header)}\n`, { flag: 'wx' })
+  storageManager.setSessionFile(storageFile)
 }
 const planStorage = new PlanStorage(storageManager)
 const customId = planStorage.append(PLAN_MODE_ENTRY, { version: 1, mode: 'plan', planId: 'p2', via: 'toggle' })
@@ -351,6 +352,7 @@ const unitManager = SessionManager.create(project, unitDir)
 const unitFile = join(unitDir, 'admission.jsonl')
 unitManager.setSessionFile(unitFile)
 await writeFile(unitFile, `${JSON.stringify(unitManager.getHeader())}\n`, { flag: 'wx' })
+unitManager.setSessionFile(unitFile)
 
 const facts = baseFacts()
 let publishes = 0
@@ -451,6 +453,7 @@ const unsupportedManager = SessionManager.create(project, unitDir)
 const unsupportedFile = join(unitDir, 'unsupported.jsonl')
 unsupportedManager.setSessionFile(unsupportedFile)
 await writeFile(unsupportedFile, `${JSON.stringify(unsupportedManager.getHeader())}\n`, { flag: 'wx' })
+unsupportedManager.setSessionFile(unsupportedFile)
 unsupportedManager.appendCustomEntry(PLAN_MODE_ENTRY, { version: 99, mode: 'plan', planId: 'future' })
 const unsupportedFacts = baseFacts()
 const unsupported = new PlanController({
@@ -574,6 +577,7 @@ const accountingManager = SessionManager.create(project, unitDir)
 const accountingFile = join(unitDir, 'wake-accounting.jsonl')
 accountingManager.setSessionFile(accountingFile)
 await writeFile(accountingFile, `${JSON.stringify(accountingManager.getHeader())}\n`, { flag: 'wx' })
+accountingManager.setSessionFile(accountingFile)
 const accountingFacts = baseFacts()
 let accountingClock = 0
 let gateCalls = 0

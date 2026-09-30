@@ -204,7 +204,7 @@ export function ProvidersSection() {
             ) : (
               <Globe className="size-3.5" />
             )}
-            {t('settings.oauth')}
+            {t(provider.id === 'openai' ? 'settings.signInWithChatGPT' : 'settings.oauth')}
           </Button>
         ) : null}
         {provider.authenticated ? (

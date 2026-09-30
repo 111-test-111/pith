@@ -70,7 +70,7 @@ export function syntheticProvider(scenario) {
       usage: structuredClone(usage), ...(script.error ? { errorMessage: script.error } : {}), ...(script.cancel ? { errorMessage: 'Request cancelled' } : {}) }
     return {
       async *[Symbol.asyncIterator]() {
-        await options?.onPayload?.({ model: model.id, system: context.systemPrompt, messages: context.messages, tools: providerReplayContext(context).tools ?? [], authorization: 'synthetic-secret-never-use' }, model)
+        await options?.onPayload?.({ model: model.id, messages: providerReplayContext(context).messages, authorization: 'synthetic-secret-never-use' }, model)
         await options?.onResponse?.({ status: script.error ? 503 : 200, headers: { 'content-type': 'text/event-stream', 'x-request-id': 'synthetic-request', authorization: 'synthetic-secret-never-use' } }, model)
         let partial = { ...structuredClone(message), content: [], stopReason: 'pending' }
         yield { type: 'start', partial }

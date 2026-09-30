@@ -1,4 +1,5 @@
 import { estimateTokens, type AgentSession } from '@earendil-works/pi-coding-agent'
+import { currentSystemPrompt, currentTools } from './transcript-context'
 
 type StreamFunction = AgentSession['agent']['streamFunction']
 type RequestContext = Parameters<StreamFunction>[1]
@@ -58,6 +59,9 @@ function nonnegative(value: number | undefined, fallback: number): number {
 }
 
 function messageTokens(message: RequestMessage): number {
+  // The transcript carries prompt/tool declarations as system messages. They
+  // have their own estimate below and must not enter the dialogue total twice.
+  if (message.role === 'system') return 0
   return estimateTokens(message) + MESSAGE_FRAMING_TOKENS
 }
 
@@ -115,8 +119,8 @@ export function budgetRequestContext(
   const modelReplyLimit = nonnegative(model.maxTokens, 16384) || 16384
   const replyReserveTokens = nonnegative(options?.maxTokens, Math.min(modelReplyLimit, nonnegative(settings.reserveTokens, 16384)))
   const recentBudgetTokens = nonnegative(settings.keepRecentTokens, 20000)
-  const systemTokensEstimate = Math.ceil((context.systemPrompt?.length ?? 0) / 4)
-  const toolDefinitionTokensEstimate = Math.ceil(JSON.stringify((context.tools ?? []).map(tool => ({
+  const systemTokensEstimate = Math.ceil(currentSystemPrompt(context).length / 4)
+  const toolDefinitionTokensEstimate = Math.ceil(JSON.stringify(currentTools(context).map(tool => ({
     name: tool.name, description: tool.description, parameters: tool.parameters, constrainedSampling: tool.constrainedSampling
   }))).length / 4)
   const estimates = context.messages.map(messageTokens)
@@ -195,10 +199,10 @@ export function budgetRequestContext(
 }
 
 /** Install outside the recorder and inside Plan's system-prompt overlay. */
-export function installContextBudgetOverlay(session: AgentSession, settings: () => ContextBudgetSettings): () => void {
+export function installContextBudgetOverlay(session: AgentSession, settings: (model: RequestModel) => ContextBudgetSettings): () => void {
   const previous = session.agent.streamFunction
   const overlay: StreamFunction = (model, context, options) => previous(model, budgetRequestContext(model, context, options, {
-    ...settings(), latestUserTimestamp: session.messages.findLast(message => message.role === 'user')?.timestamp
+    ...settings(model), latestUserTimestamp: session.messages.findLast(message => message.role === 'user')?.timestamp
   }), options)
   session.agent.streamFunction = overlay
   return () => { if (session.agent.streamFunction === overlay) session.agent.streamFunction = previous }

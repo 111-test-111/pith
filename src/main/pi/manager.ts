@@ -144,6 +144,7 @@ import { loadSettings, saveSettings } from '../settings'
 import { buildToolCatalog, extensionId, loadPackageResources, type PackageResources } from './catalog'
 import { setDisableModelInvocation } from './skill-frontmatter'
 import { desktopExtension } from './extension-startup'
+import { createToolCallBoundaryExtension } from './tool-call-boundary'
 import {
   buildSideChatContext,
   runSideChatAnswer,
@@ -291,7 +292,10 @@ function serialize(value: unknown): any {
  * them from subsequent model requests.
  */
 function transcriptMessages(manager: SessionManager): ChatMessage[] {
-  return manager.getBranch().flatMap(sessionEntryToContextMessages) as ChatMessage[]
+  // Since SDK 0.86, prompt and tool changes are persisted as system messages.
+  // They belong to provider context, not the visible conversation.
+  return manager.getBranch().flatMap(sessionEntryToContextMessages)
+    .filter(message => message.role !== 'system') as ChatMessage[]
 }
 
 function modelRef(model: any): ModelRefDTO | null {
@@ -808,7 +812,7 @@ export class PiManager {
       // summarize. Catching this here avoids emitting `compaction_start` /
       // `compaction_end` events and the transient "compressing" row they produce.
       const branch = managed.session.sessionManager.getBranch()
-      const settings = managed.session.settingsManager.getCompactionSettings()
+      const settings = managed.session.settingsManager.getCompactionSettings(managed.session.model ?? undefined)
       const messages = buildSessionContext(branch).messages
       const tokens = messages.reduce((sum, m) => sum + estimateTokens(m), 0)
       if (tokens <= settings.keepRecentTokens) {
@@ -1404,7 +1408,7 @@ export class PiManager {
         // extension runtimes would multiply MCP hosts per workspace. A
         // recovery-only session never loads extensions at all.
         noExtensions: recoveryOnly || (subagent !== undefined && subagent.extensions !== true),
-        extensionFactories: [todos.extension(), ...(planContext ? [planContext] : [])],
+        extensionFactories: [createToolCallBoundaryExtension(), todos.extension(), ...(planContext ? [planContext] : [])],
         ...(subagent?.appendSystemPrompt ? { appendSystemPrompt: [subagent.appendSystemPrompt] } : {}),
         // Children inherit AGENTS.md per the same live app setting — a
         // delegated implementer must still know the project's rules.
@@ -1801,7 +1805,7 @@ export class PiManager {
 
   /**
    * `SessionManager.create()` keeps a brand-new session in memory until the
-   * first assistant message is appended (the `hasAssistant` gate in its
+   * first user or assistant message is appended (the `hasConversationMessage` gate in its
    * private `_persist`), so it stays invisible to `SessionManager.list*()` and
    * would be lost the moment the user switches to another session. Write the
    * header to disk up front and reload it through the manager, which marks the
@@ -2256,7 +2260,7 @@ export class PiManager {
     })
     managed.unsubscribe = () => { unsubscribeSession(); unsubscribeCommitted() }
     managed.trajectory = new TrajectoryRecorder(session, this.trajectory)
-    managed.disposeContextBudget = installContextBudgetOverlay(session, () => services.settingsManager.getCompactionSettings())
+    managed.disposeContextBudget = installContextBudgetOverlay(session, model => services.settingsManager.getCompactionSettings(model))
     managed.disposePlanStream = installPlanStreamOverlay(session, () => plan.restricted)
     if (!isChild && !isScheduled) managed.jevWorkflow = new JevWorkflow({ session, service: this.jevService, owner: path,
       // Jev's action route asks the model to implement changes. Planning owns
@@ -3874,7 +3878,7 @@ export class PiManager {
             // reset to an empty root) and rebuild the agent's message list.
             if (entry.parentId) sessionManager.branch(entry.parentId)
             else sessionManager.resetLeaf()
-            session.agent.state.messages = sessionManager.buildSessionContext().messages
+            session.refreshContext()
           } else {
             const result = await session.navigateTree(entry.id)
             if (result.cancelled) throw new Error('Resend cancelled')
@@ -4818,13 +4822,13 @@ export class PiManager {
     }
     if (manager.getLeafId() !== leaf) {
       if (leaf === null) manager.resetLeaf(); else manager.branch(leaf)
-      session.agent.state.messages = manager.buildSessionContext().messages
+      session.refreshContext()
     }
     manager.appendCustomEntry('pith_rewind_selection', { operationId, target: leaf,
       // The sidebar lists a session from its SELECTED branch, not from the
       // file's abandoned history: record whether this selection has anything
       // to show. `session-branch.ts` reads it back without a second full read.
-      empty: !manager.getBranch().some(entry => entry.type === 'message') })
+      empty: !manager.getBranch().some(entry => entry.type === 'message' && entry.message.role !== 'system') })
     const file = await openFile(managed.path, 'r')
     try { await file.sync() } finally { await file.close() }
     managed.todos.restore(); managed.askRecords.restore(); managed.changeScopes.restore(); managed.eventSequence += 1

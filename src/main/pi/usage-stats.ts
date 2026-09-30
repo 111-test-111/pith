@@ -14,8 +14,9 @@ import type {
  * until the next user prompt or the end of the file).
  *
  * Semantics notes:
- * - Every assistant entry with a usage report counts, including entries on
- *   abandoned branches: each one was a real paid request. This intentionally
+ * - Every SDK usage report counts (assistant/tool messages, summaries and
+ *   standalone usage entries), including entries on abandoned branches.
+ *   Each one was a real paid request. This intentionally
  *   differs from the transcript view, which walks only the selected branch.
  * - The day bucket uses the entry timestamp (request end) in the machine's
  *   local timezone — the app runs on the user's machine, so local == user.
@@ -164,12 +165,7 @@ export function accumulateSessionFile(acc: UsageAccumulator, text: string): void
   for (const line of text.split('\n')) {
     // Cheap string pre-filter before paying for JSON.parse (same trick as the
     // SDK's session lister). User lines are needed too — they close turns.
-    const maybeAssistant = line.includes('assistant')
-    const maybeVision = !maybeAssistant && line.includes('pi-web-vision')
-    const maybeSpace = line.includes('pi-web:model-space-usage') || line.includes('pi-web:goal-evaluation-usage')
-    const maybeModelChange = !maybeAssistant && !maybeVision && !maybeSpace && line.includes('model_change')
-    const maybeUser = !maybeAssistant && !maybeVision && !maybeSpace && !maybeModelChange && line.includes('"user"')
-    if (!maybeAssistant && !maybeVision && !maybeModelChange && !maybeSpace && !maybeUser) continue
+    if (!line.includes('"usage"') && !line.includes('model_change') && !line.includes('"user"')) continue
 
     let entry: Record<string, unknown>
     try {
@@ -181,6 +177,18 @@ export function accumulateSessionFile(acc: UsageAccumulator, text: string): void
     if (entry.type === 'model_change') {
       if (typeof entry.provider === 'string') currentProvider = entry.provider
       if (typeof entry.modelId === 'string') currentModel = entry.modelId
+      continue
+    }
+    if (entry.type === 'usage' || entry.type === 'compaction' || entry.type === 'branch_summary') {
+      const usage = entry.usage
+      const ts = typeof entry.timestamp === 'string' ? Date.parse(entry.timestamp) : NaN
+      if (usage && typeof usage === 'object' && Number.isFinite(ts) && ts > 0) {
+        // Standalone usage owns its model; summaries use the selected model.
+        const provider = typeof entry.provider === 'string' ? entry.provider : entry.type === 'usage' ? 'unknown' : currentProvider ?? 'unknown'
+        const model = typeof entry.model === 'string' ? entry.model : entry.type === 'usage' ? 'unknown' : currentModel ?? 'unknown'
+        if (!turn) turn = { startTs: null, endTs: 0, models: new Map(), tokens: 0, cost: 0, requests: 0 }
+        recordUsage(acc, turn, ts, provider, model, usage as Record<string, unknown>)
+      }
       continue
     }
     if (
@@ -221,22 +229,21 @@ export function accumulateSessionFile(acc: UsageAccumulator, text: string): void
       continue
     }
 
-    // Vision tool results (pi-web): usage rides the vision_analyze toolResult,
-    // attributed to the vision model's own bucket.
+    // SDK 0.99 also aggregates nested/classifier usage onto the outer result.
+    // Count that aggregate once, never recurse into nestedCalls. Only legacy
+    // vision results identify their model; don't attribute other tool usage
+    // to the chat model that requested the tool.
     if (message.role === 'toolResult') {
       const details = message.details as Record<string, unknown> | undefined
       const usage = message.usage as Record<string, unknown> | undefined
-      if (
-        details?.kind === 'pi-web-vision' &&
-        typeof details.provider === 'string' &&
-        typeof details.modelId === 'string' &&
-        usage &&
-        typeof usage === 'object'
-      ) {
+      if (usage && typeof usage === 'object') {
         const ts = entryTimestamp(entry, message)
         if (Number.isFinite(ts) && ts > 0) {
+          const vision = details?.kind === 'pi-web-vision'
+          const provider = vision && typeof details.provider === 'string' ? details.provider : 'unknown'
+          const model = vision && typeof details.modelId === 'string' ? details.modelId : 'unknown'
           if (!turn) turn = { startTs: null, endTs: 0, models: new Map(), tokens: 0, cost: 0, requests: 0 }
-          recordUsage(acc, turn, ts, details.provider, details.modelId, usage)
+          recordUsage(acc, turn, ts, provider, model, usage)
         }
       }
       continue

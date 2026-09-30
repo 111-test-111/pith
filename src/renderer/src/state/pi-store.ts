@@ -581,6 +581,9 @@ export class PiStore {
         // Main attaches SDK context usage to these events, so the ring lands in
         // the same tick as the message it belongs to.
         if ('contextUsage' in event) this.setContextUsage(event.contextUsage ?? null)
+        // SDK system messages carry prompt/tool updates, not chat transcript
+        // rows. Their timestamps can match the following user message.
+        if (event.message?.role === 'system') break
         const message = event.message as ChatMessage
         if (message.role === 'user') {
           const incoming = message as UserMsg
@@ -591,7 +594,7 @@ export class PiStore {
           if (last && (last as any).__optimistic && last.role === 'user') {
             messages[lastIndex] = incoming
             this.set({ messages })
-          } else if (!last || last.timestamp !== incoming.timestamp) {
+          } else if (!last || last.role !== 'user' || last.timestamp !== incoming.timestamp) {
             // A send the renderer believed idle can be queued as a steer when
             // the main process disagrees (double-send before agent_start
             // arrives); its message_end then lands mid-run with the echo no

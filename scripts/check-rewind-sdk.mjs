@@ -201,6 +201,7 @@ pi.on('tool_result',e=>{if(e.toolName==='todo_write'&&e.input.todos[0]?.content=
   await mkdir(branchDir, { recursive: true })
   const at = new Date().toISOString()
   const userMessage = (id, parentId) => ({ type: 'message', id, parentId, timestamp: at, message: { role: 'user', content: [{ type: 'text', text: 'hello' }], timestamp: 1 } })
+  const systemMessage = (id, parentId) => ({ type: 'message', id, parentId, timestamp: at, message: { role: 'system', content: 'prompt', timestamp: 1 } })
   const selection = (id, parentId, data) => ({ type: 'custom', customType: 'pith_rewind_selection', data, id, parentId, timestamp: at })
   let branchFiles = 0
   const branchFile = async (list) => {
@@ -210,7 +211,9 @@ pi.on('tool_result',e=>{if(e.toolName==='todo_write'&&e.input.todos[0]?.content=
   }
   const assertBranch = async (expected, entries, label) => assert.equal(await selectedBranchHasMessages(await branchFile(entries)), expected, label)
   await assertBranch(true, [userMessage('m1', null)], 'a branch ending in a message has something to show')
+  await assertBranch(false, [systemMessage('sys1', null)], 'SDK system declarations alone do not create a chat row')
   await assertBranch(false, [selection('s1', null, { operationId: 'op', target: null, empty: true })], 'a selection that recorded an empty branch hides the session')
+  await assertBranch(false, [selection('s1', null, { operationId: 'op', target: null, empty: true }), systemMessage('sys1', 's1')], 'a later SDK system update leaves an empty chat hidden')
   await assertBranch(true, [userMessage('m1', null), selection('s1', 'm1', { operationId: 'op', target: 'm1', empty: false })], 'a selection that recorded messages keeps it')
   await assertBranch(false, [userMessage('m1', null), selection('s1', 'm1', { operationId: 'op', target: null })], 'a selection written before the fact is known still decides a reset leaf')
   await assertBranch(true, [userMessage('m1', null), selection('s1', 'm1', { operationId: 'op', target: 'm1' })], 'an unrecorded selection over messages stays listed')

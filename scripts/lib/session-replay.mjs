@@ -2,7 +2,7 @@
 import { readFile, writeFile } from 'node:fs/promises'
 import { isDeepStrictEqual } from 'node:util'
 
-export const SESSION_REPLAY_FORMAT = 'pith-session-replay-v1'
+export const SESSION_REPLAY_FORMAT = 'pith-session-replay-v2'
 const tokenPattern = /\{\{pith:(workspace|profile|sessions|tool:\d+)\}\}/g
 const secretKey = /^(?:authorization|proxy-authorization|cookie|set-cookie|(?:(?:x[-_])?(?:goog[-_])?)api[-_]?key|(?:x[-_])?auth[-_]?token|access[-_]?token|refresh[-_]?token|client[-_]?secret|password|secret)$/i
 // AgentLoopConfig is spread into stream options by the public SDK. These
@@ -10,7 +10,7 @@ const secretKey = /^(?:authorization|proxy-authorization|cookie|set-cookie|(?:(?
 // through the resulting context, tool events and durable transcript.
 const callbackOptions = new Set(['signal', 'onPayload', 'onResponse', 'fetch', 'telemetryContext', 'model',
   'convertToLlm', 'transformContext', 'getApiKey', 'getSteeringMessages', 'getFollowUpMessages',
-  'shouldStopAfterTurn', 'prepareNextTurn', 'beforeToolCall', 'afterToolCall'])
+  'finishTurn', 'prepareRequest', 'prepareNextTurn', 'prepareNextTurnWithContext', 'beforeToolCall', 'afterToolCall', 'onProviderStreamEvent'])
 const chunkTypes = new Set(['start', 'text_start', 'text_delta', 'text_end', 'thinking_start', 'thinking_delta', 'thinking_end', 'toolcall_start', 'toolcall_delta', 'toolcall_end', 'done', 'error'])
 const jsonClone = value => JSON.parse(JSON.stringify(value))
 
@@ -18,9 +18,12 @@ const jsonClone = value => JSON.parse(JSON.stringify(value))
  * are runtime hooks, not payload fields. Retain every model-visible schema. */
 export function providerReplayContext(context) {
   const { contextBudget: _diagnostic, ...result } = context
-  if (context.tools) result.tools = context.tools.map(({ name, description, parameters, constrainedSampling }) => ({
-    name, description, parameters, ...(constrainedSampling === undefined ? {} : { constrainedSampling })
-  }))
+  result.messages = context.messages.map(message => message.role === 'system' ? {
+    ...message,
+    toolsAdded: message.toolsAdded?.map(({ name, description, parameters, constrainedSampling }) => ({
+      name, description, parameters, ...(constrainedSampling === undefined ? {} : { constrainedSampling })
+    }))
+  } : message)
   return result
 }
 
@@ -86,7 +89,7 @@ export function createReplayNormalizer({ workspace, profile, sessions, secretVal
       if (!Number.isFinite(value)) throw new Error('session-replay-non-finite-number')
       // Equal wall-clock milliseconds need not stay equal on another run.
       // Message order/correlation is checked separately, so time is zeroed.
-      if (!data && key === 'timestamp' && ['user', 'assistant', 'toolResult', 'custom', 'compactionSummary', 'branchSummary', 'bashExecution'].includes(parent?.role)) return 0
+      if (!data && key === 'timestamp' && ['system', 'user', 'assistant', 'toolResult', 'custom', 'compactionSummary', 'branchSummary', 'bashExecution'].includes(parent?.role)) return 0
       return value
     }
     if (value === null || typeof value === 'boolean') return value
@@ -129,7 +132,7 @@ function requestOf(model, context, options, normalizer) {
     serializableOptions[key] = key === 'sessionId' ? '{{session}}' : value
   }
   // contextBudget is app-authored diagnostic metadata; provider-visible
-  // systemPrompt, schemas and messages remain byte-for-byte semantic inputs.
+  // system messages, schemas and dialogue remain byte-for-byte semantic inputs.
   return { model: normalizer.capture(model, { redactCredentials: true }), context: normalizer.capture(providerReplayContext(context)),
     options: normalizer.capture(serializableOptions, { redactCredentials: true }) }
 }

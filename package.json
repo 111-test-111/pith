@@ -29,7 +29,7 @@
     "benchmark:long-session": "node scripts/benchmark-long-session.mjs"
   },
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "^0.85.1",
+    "@earendil-works/pi-coding-agent": "^0.99.1",
     "@floating-ui/react": "^0.27.20",
     "@lobehub/icons-static-svg": "^1.95.0",
     "@paper-design/shaders-react": "^0.0.80",
