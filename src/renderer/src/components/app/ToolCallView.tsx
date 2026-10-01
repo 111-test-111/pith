@@ -275,7 +275,7 @@ function LazyDiff({ file, diff, status, tool }: LazyDiffProps) {
       // the reader never asked for — the row's own header already names the
       // file, and the bar made the card's bottom padding larger than its top
       // (the same call the tool rows made when they dropped their
-      // "复制 + Completed" footer, see `tool-result`).
+      // "Copy + Completed" footer, see `tool-result`).
     />
   )
 }

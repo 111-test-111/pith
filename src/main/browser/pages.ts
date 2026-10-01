@@ -1,7 +1,5 @@
-/**
- * 浏览器页面注册表的纯模型（移植自 pi-web lib/browser-pages.ts）。
- * 不持有 Electron 运行期对象——webContents 等运行期对象由后续的 browser-service 另行索引。
- */
+/** Pure browser-page registry; Electron and Playwright objects live in service.ts.
+ * Ownership, interaction generations and snapshots stay serializable. */
 import type { BrowserPageMeta } from '../../shared/browser.ts'
 
 export interface PageSnapshotState {
@@ -12,9 +10,9 @@ export interface PageSnapshotState {
 export interface BrowserPageRecord extends BrowserPageMeta {
   interactionGeneration: number
   snapshot: PageSnapshotState | null
-  /** renderer 上报的 guest webContents id（主进程 input-event 中继的映射键）。 */
+
   webContentsId?: number
-  /** agent popup 页的待导航 URL：renderer 声明，运行期登记后由服务端 goto 消费。 */
+
   pendingNavigate?: string
 }
 
@@ -25,7 +23,6 @@ export interface BrowserPagesState {
 
 export const EMPTY_BROWSER_PAGES: BrowserPagesState = { pages: [], activeByOwner: {} }
 
-// createBrowserPageId 从 shared/browser re-export（单一实现，渲染层 popup 物化同源）
 export { createBrowserPageId } from '../../shared/browser.ts'
 
 export function pageMeta(record: BrowserPageRecord): BrowserPageMeta {
@@ -86,7 +83,7 @@ export function removePage(state: BrowserPagesState, id: string): BrowserPagesSt
   return { pages, activeByOwner }
 }
 
-/** 切换 active；双方 snapshot 无条件清空（spec: active page 切换清空当前 snapshot）。 */
+/** Switching active pages invalidates every snapshot owned by that session. */
 export function setActivePage(state: BrowserPagesState, owner: string, id: string): BrowserPagesState {
   const target = pageById(state, id)
   if (!target || target.owner !== owner) return state
@@ -118,12 +115,11 @@ export function bumpInteraction(state: BrowserPagesState, id: string): BrowserPa
   return mapPage(state, id, (p) => ({ ...p, interactionGeneration: p.interactionGeneration + 1 }))
 }
 
-/** renderer 上报 guest 的 webContents id（重复上报同值时状态不变）。 */
+/** Repeated reports of the same guest ID preserve the record identity. */
 export function setPageWebContentsId(state: BrowserPagesState, id: string, webContentsId: number): BrowserPagesState {
   return mapPage(state, id, (p) => (p.webContentsId === webContentsId ? p : { ...p, webContentsId }))
 }
 
-/** 记录/清除待导航 URL（null 清除）。 */
 export function setPendingNavigate(state: BrowserPagesState, id: string, url: string | null): BrowserPagesState {
   return mapPage(state, id, (p) => {
     if (url === null) {

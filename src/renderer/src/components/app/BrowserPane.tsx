@@ -24,22 +24,15 @@ import { MiddleEllipsis } from './MiddleEllipsis'
  *  registration. The service's own 1s reconcile keeps the registry fresh;
  *  this poll only reads status. */
 const BROWSER_POLL_MS = 2_500
-/** 本地占位行的寿命：服务端对 pendingCreates 有 TTL，本地行也必须会过期——一个失败/
- *  被丢弃的 popup 或恢复不能留下永久空行（以及它物化出来的空 guest）。 */
+/** Local placeholders need the same TTL discipline as server pendingCreates: failed/discarded popups or restores must not leave permanent blank rows/guests. */
 const PENDING_ROW_TTL_MS = 20_000
-/** 本地占位行的 TTL 清扫节奏（与状态轮询同拍）。 */
+/** Placeholder sweep cadence matches status polling. */
 const PENDING_ROW_SWEEP_MS = 2_500
-/** 恢复/弹窗行的「停在 marker」自愈门槛：navigateTo 声明后超过这个时间仍无进展
- *  （未登记，或已登记但服务端 url 仍是 marker）就采取行动——健康路径登记+导航
- *  ≤2.5s，门槛给了 2 倍余量（症状：收起再展开后某页一直空白，刷新只是重载
- *  marker，新开同 URL 却正常）。 */
+/** Marker-stall threshold for restored/popup rows with navigateTo. Registration/navigation normally finishes within 2.5s; allow twice that before retrying an unregistered or still-marker page. Refreshing the marker alone cannot repair this state. */
 const PENDING_NAVIGATE_RETRY_MS = 5_000
-/** 自愈里「换 guest」的次数上限：仍未登记且重报无效——guest 一落地就死了
- *  （Invalid guestInstanceId，同批 spawn 竞态，diag4 实测）或 target 对连接不可
- *  见，都只能重挂 webview 换新 target；最多两次，TTL 对最后一个 guest 兜底。 */
+/** Cap replacement guests when repeated registration cannot repair a dead guest or CDP-invisible target. Batch spawn can produce Invalid guestInstanceId; remount at most twice, with TTL covering the final attempt. */
 const MAX_GUEST_RESTARTS = 2
-/** 恢复行 webview 错峰 spawn 的间隔：同批一次性挂载正是死 guest 竞态的触发器
- *  （diag4 实测：三行同挂，一行 Invalid guestInstanceId），错峰从源头规避。 */
+/** Stagger restored guest spawns to avoid the measured batch-mount Invalid guestInstanceId race. */
 const RESTORE_SPAWN_STAGGER_MS = 350
 
 /** A local row materialized by the pane itself (Task 15 popups, and the
@@ -139,18 +132,13 @@ export function BrowserPane({
    *  the dom-ready handshake (browserSeen with navigateTo) and the row clears
    *  in the self-heal once the server list covers the tempId. */
   const [localPending, setLocalPending] = useState<LocalPendingRow[]>([])
-  /** 自愈台阶二的 guest 重挂计数：id → 已重挂数。BrowserPageView 以它作 webview
- *  的 key——变化即销毁旧 guest（它对服务的 CDP 连接不可见，重报救不回）重挂新
- *  target，同 marker id 干净地 attach 后由已存的 pendingNavigate 导航到位。 */
+  /** Guest replacement count by page ID. BrowserPageView uses it as the webview key: replace CDP-invisible guests, keep marker identity, then navigate through the saved pendingNavigate after a fresh handshake. */
   const [guestRestarts, setGuestRestarts] = useState<Record<string, number>>({})
-  /** 本地占位行的创建时刻（TTL 清理用）。 */
+  /** Placeholder creation timestamps for TTL cleanup. */
   const localPendingAtRef = useRef(new Map<string, number>())
-  /** 带待导航（navigateTo）的本地行的自愈登记：id → owner/target/创建时刻。一个
- *  恢复/弹窗行的 guest 若因 seen 被入口守卫丢弃、登记后的 goto 失败（20s
- *  domcontentloaded 超时被吞）或登记迟到而一直停在 marker，sweep 重报 seen 治愈。 */
+  /** Recovery registry for local navigateTo rows: owner/target/created time by ID. Re-report seen when admission was dropped, goto timed out or late registration leaves the guest on its marker. */
   const localPendingNavRef = useRef(new Map<string, { owner: string; navigateTo: string; at: number; attempts: number; restarts: number }>())
-  /** 恢复行的 webview 错峰 spawn 延迟（id → ms）：条面仍一次性画齐，只有 guest
- *  的诞生错开——同批挂载会以约一半概率弄死一个 guest（Invalid guestInstanceId）。 */
+  /** Restore spawn delays by ID. Paint all row chrome immediately, staggering only guest creation to avoid dead-instance races. */
   const restoreSpawnDelaysRef = useRef(new Map<string, number>())
   /** Task 15: webContentsId → page ownership, recorded at each page's dom-ready
    *  handshake (where the id is read) and consulted when a `browser:popup`
@@ -319,12 +307,7 @@ export function BrowserPane({
     })
   }, [active, handleZoomShortcut])
 
-  // Agent 键盘动作前的聚焦握手（main 等到 ack 才派按键）。为什么必须在这里做：CDP 派给
-  // guest 的按键会先交给窗口当前聚焦的 widget——壳窗口持焦点时它会同时出现在壳窗口 DOM，
-  // 于是 agent 按一次 Esc（Composer 的停止键）就把本轮停掉；实测只有 `<webview>` 元素拿到
-  // DOM 焦点才彻底隔开，main 侧 `webContents.focus()` 与 `Page.bringToFront` 都不动壳窗口
-  // 的 DOM 焦点。按 wcId 找元素（与 dom-ready 上报同一条链路），找不到也要 ack——
-  // 焦点给不了时退回旧行为，但绝不能把一次键盘动作卡住。
+  // Focus handshake before agent keys: main waits for acknowledgement. CDP keys otherwise reach the shell widget too, where Esc can stop the agent. Only DOM focus on the webview isolates them; webContents.focus/bringToFront do not. Resolve the reported wcId and always acknowledge, even without a matching element, so keys cannot hang.
   useEffect(() => {
     return window.pi.onBrowserFocusGuest(({ webContentsId, requestId }) => {
       const elements = [...document.querySelectorAll('webview')] as unknown as Array<{
@@ -350,7 +333,7 @@ export function BrowserPane({
   }, [store])
 
   // Merged page model (pi-web BrowserTab semantics): serverPages ∪
-  // pendingCreates(物化为 pending 行) ∪ localPending(Task 15 popups + 快照恢复行) ∪
+  // pendingCreates (materialized pending rows) ∪ localPending (popups and restored rows) ∪
   // optimistic − closedIds. Identify optimistic pages by MEMBERSHIP in
   // state.optimistic (T6-①), never by reading `pending === false` as
   // "materialized".
@@ -502,8 +485,7 @@ export function BrowserPane({
         const targets: ReadonlyArray<OpenBrowserPageEntry> =
           saved.length > 0 ? saved : [{ owner: HUMAN_OWNER }]
         const rows = targets.map((entry) => pendingRowOf(createBrowserPageId(), entry.owner, entry.url))
-        // 错峰 spawn：条面一次性画齐（行/URL/名字都在），只有 webview 的 src 延后
-        // 落地——同批一次性挂载是死 guest 竞态的触发器（见 restoreSpawnDelaysRef）。
+        // Paint restored row chrome together, but delay each webview src to avoid batch guest-spawn races (restoreSpawnDelaysRef).
         restoreSpawnDelaysRef.current = new Map(rows.map((row, index) => [row.id, Math.min(index, 8) * RESTORE_SPAWN_STAGGER_MS]))
         setLocalPending((prev) => [...prev, ...rows])
         for (const row of rows) {
@@ -679,25 +661,14 @@ export function BrowserPane({
     if (wasLast) fireEmpty()
   }, [fireEmpty, store])
 
-  // 本地占位行的 TTL 清扫：PENDING_ROW_TTL_MS 的承诺此前只有常量没有执行者。
-  // 快照恢复行也走 localPending 之后必须兑现——服务不可用/登记失败时，一个占位
-  // 行不能连同它物化出来的空 guest 永久留在条上。已登记的行在自愈 effect 里随
-  // server 列表覆盖删除时间戳，不会误伤；清走走的是 closePage（同步摘行 +
-  // idempotent 的服务端满理），最后一行过期同样触发 onEmpty，与手工关闭一致。
+  // Sweep local placeholders by TTL so unavailable services/failed registration cannot retain blank rows and guests forever. Server-covered rows already remove timestamps in recovery. closePage removes rows synchronously and cleans the server idempotently; expiring the last row calls onEmpty like manual close.
   useEffect(() => {
     const timer = setInterval(() => {
       const now = Date.now()
       for (const [id, at] of [...localPendingAtRef.current.entries()]) {
         if (now - at > PENDING_ROW_TTL_MS) closePage(id)
       }
-      // 停在 marker 的自愈（两级）：服务端 url 仍是 marker（或未登记）就是这个形态。
-      // 台阶一（重报 seen）：已登记 → existing 分支立即 goto；未登记 → 新条目重存
-      // pendingNavigate 等 reconcile 消费。台阶二（换 guest）：仍未登记说明 guest
-      // 一落地就死了（Invalid guestInstanceId——同批 spawn 竞态，diag4 实测：重报
-      // 治不了，元素里的 guest 引用已指向死实例）或 target 对连接不可见——重挂
-      // webview（同 marker id 的新 target 干净地 attach，重握手 + 已存
-      // pendingNavigate 导航到位），≤MAX_GUEST_RESTARTS 次，每次重置时钟，TTL 对
-      // 最后一个 guest 兜底。导航成功（服务端 url 非 marker）或行离开模型即清册。
+      // Recover marker stalls in two stages. Re-report seen to navigate existing pages or restore pendingNavigate for reconciliation. If still unregistered, replace the dead/CDP-invisible guest under the same marker, up to MAX_GUEST_RESTARTS with a reset clock; TTL covers the last attempt. Clear tracking after navigation or row removal.
       const serverPages = store.getState().status?.pages ?? []
       for (const [id, meta] of [...localPendingNavRef.current.entries()]) {
         if (!pagesRef.current.some((page) => page.id === id)) {
@@ -722,7 +693,7 @@ export function BrowserPane({
           owner: meta.owner,
           url: buildMarkerUrl(meta.owner, id),
           navigateTo: meta.navigateTo
-        }).catch(() => { /* 下一轮 sweep 再试；台阶二/TTL 兜底 */ })
+        }).catch(() => { /* Retry on the next sweep; replacement/TTL provide the fallback. */ })
         if (!serverRow && meta.restarts < MAX_GUEST_RESTARTS) {
           meta.at = now
           meta.restarts += 1

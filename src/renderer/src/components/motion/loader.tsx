@@ -594,7 +594,7 @@ function Dither({
   // the twelve remaining cells into the four holes.
   corners?: boolean;
 }) {
-  // local patch (pi-app): 「关闭动效」 freezes motion globally, but a running
+  // local patch (pi-app): reduced motion freezes motion globally, but a running
   // indicator's own motion is the information (see `lib/reduce-motion.ts`), so
   // the particles keep jumping — through Tailwind's own `pulse` keyframe, with
   // the vendored duration and Bayer stagger moved onto the CSS animation. That

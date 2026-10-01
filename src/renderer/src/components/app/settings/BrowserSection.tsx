@@ -13,10 +13,10 @@ import type {
 } from '../../../../../shared/types'
 import { SettingsRow } from './SettingsRow'
 
-/** 两步确认的回退时限：第一次点击后 5s 未再点则回到常态。 */
+/** Reset two-step confirmation if the second click does not arrive within five seconds. */
 const CLEAR_CONFIRM_TIMEOUT_MS = 5000
 
-/** 导入失败码 → 本地化文案；unknown 一律落到数据库读取失败。 */
+/** Map import failure codes to localized messages; unknown uses the database-read failure. */
 function importErrorMessage(t: ReturnType<typeof useI18n>['t'], code?: string): string {
   if (code === 'keychain') return t('settings.browserImportErrKeychain')
   if (code === 'permission') return t('settings.browserImportErrPermission')
@@ -51,7 +51,7 @@ export function BrowserSection() {
   const { t } = useI18n()
   const toast = useToast()
 
-  // --- 代理浏览器工具 ---
+  // Agent browser tools.
   const [toolsEnabled, setToolsEnabled] = useState(false)
   const [savingTools, setSavingTools] = useState(false)
 
@@ -72,7 +72,7 @@ export function BrowserSection() {
     setSavingTools(true)
     void window.pi
       .setBrowserAgentTools(value)
-      // 主进程持久化后回读 appInfo，落定到权威值（与其他 app:set* 开关一致）
+      // Read authoritative appInfo after main persists the setting, as with other app:set preferences.
       .then(() => window.pi.appInfo())
       .then(
         (info) => setToolsEnabled(info.browserAgentToolsEnabled),
@@ -81,13 +81,13 @@ export function BrowserSection() {
       .finally(() => setSavingTools(false))
   }
 
-  // --- 链接在内置浏览器打开（localStorage 偏好，即时生效） ---
+  // Open links in the embedded browser: immediate localStorage preference.
   const { openLinksInBrowser, setOpenLinksInBrowser } = useOpenLinksInBrowserPref()
 
-  // --- 侧栏收起时保持浏览器页面活跃（localStorage 偏好，即时生效） ---
+  // Keep pages alive while the rail is folded: immediate localStorage preference.
   const { browserKeepAlive, setBrowserKeepAlive } = useBrowserKeepAlivePref()
 
-  // --- 从 Chrome 导入登录态 ---
+  // Import Chrome login state.
   const [discovery, setDiscovery] = useState<BrowserImportDiscoveryDTO>({
     status: 'absent',
     profiles: [],
@@ -120,8 +120,7 @@ export function BrowserSection() {
     }
   }, [])
 
-  // 导入/清除结果只走右下角通知卡（ToastProvider / beUI AnimatedToastStack）：
-  // 设置页本身不留行动后信息；常驻的只有清除行的档案/计数 meta 与状态引导。
+  // Import/clear outcomes use ToastProvider/beUI AnimatedToastStack only. Settings retains profile/count metadata and status guidance, without lingering action results.
   const runImport = () => {
     if (importing || !profileId) return
     setImporting(true)
@@ -159,7 +158,7 @@ export function BrowserSection() {
       .finally(() => setImporting(false))
   }
 
-  // --- 清除已导入的登录态：两步确认 ---
+  // Clear imported login state with two-step confirmation.
   const [confirmingClearImport, setConfirmingClearImport] = useState(false)
   const [clearingImport, setClearingImport] = useState(false)
   const clearImportTimer = useRef<number | null>(null)
@@ -198,7 +197,7 @@ export function BrowserSection() {
       .finally(() => setClearingImport(false))
   }
 
-  // --- 清除浏览数据：两步确认 ---
+  // Clear browser data with two-step confirmation.
   const [confirmingClear, setConfirmingClear] = useState(false)
   const [clearing, setClearing] = useState(false)
   const [clearDone, setClearDone] = useState(false)
@@ -212,7 +211,7 @@ export function BrowserSection() {
     }
   }
 
-  // 确认态是纯 UI 状态：卸载时清掉回退定时器，不留活儿
+  // Confirmation is UI-only; clear its reset timer on unmount.
   useEffect(() => stopConfirmTimer, [])
 
   const clearData = () => {
@@ -220,7 +219,7 @@ export function BrowserSection() {
     setClearDone(false)
     setClearFailed(false)
     if (!confirmingClear) {
-      // 第一次点击：进入确认态，5s 未再点回退
+      // The first click enters confirmation; reset after five seconds without another click.
       setConfirmingClear(true)
       stopConfirmTimer()
       confirmTimer.current = window.setTimeout(() => {
@@ -237,7 +236,7 @@ export function BrowserSection() {
       .then(
         () => {
           setClearDone(true)
-          // 分区已被整体清空，导入清单随之失效。
+          // Clearing the whole partition also invalidates the import manifest.
           setImportStatus({ present: false, cookieCount: 0 })
         },
         () => setClearFailed(true)
@@ -247,7 +246,7 @@ export function BrowserSection() {
 
   return (
     <div className="space-y-6" data-browser-section>
-      {/* 无标题卡片：页头 h2 已是该区的标题，行组直接从卡片开始 */}
+      {/* The section heading already supplies the title; start directly with untitled grouped rows. */}
       <div className="divide-y divide-border/60 rounded-xl border border-border/70 bg-card">
         <SettingsRow
           label={t('settings.browserAgentTools')}
@@ -320,10 +319,7 @@ export function BrowserSection() {
             <p className="text-xs leading-4 text-muted-foreground">
               {t('settings.browserImportBlocked')}
             </p>
-            {/* 双路径引导（实测结论）：dev/preview（未打包，进程是仓库里的
-                Electron.app，FDA 列表里看不见）→ 给启动终端授「完全磁盘访问」
-                即可，无需添加应用本身；正式安装的 app 在列表里可见 → 直接
-                勾选 pi-app。两条路都只此一句，重步骤式引导不再展开。 */}
+            {/* Full Disk Access guidance differs by launch: dev/preview uses the repository Electron.app, so grant the launching terminal; installed apps are listed directly. Keep one concise instruction per path. */}
             <p
               data-browser-import-fda-guide={discovery.devMode ? 'dev' : 'installed'}
               className="mt-1.5 text-xs leading-4 text-muted-foreground"

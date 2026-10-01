@@ -26,15 +26,15 @@ import {
 } from '@/lib/browser/session'
 import { cn } from '@/lib/utils'
 
-/** Second-click deadline of the two-step 清空历史 confirm. */
+/** Second-click deadline of the two-step clear-history confirm. */
 const CLEAR_CONFIRM_MS = 5_000
 
-/** After a successful 清除数据 the note lingers 3s, then the panel closes
+/** After a successful clear-data the note lingers 3s, then the panel closes
  *  itself (spec: transient note + auto-close). */
 const CLEAR_DONE_CLOSE_MS = 3_000
 
-/** Menu entry shape — Ruling C: entries are data, so Task 14's 设备模拟 /
- *  清除数据 additions are new array items, not new markup. The clear-data
+/** Menu entry shape — Ruling C: entries are data, so Task 14's device emulation /
+ *  clear-data additions are new array items, not new markup. The clear-data
  *  entry is the first one that changes costume in place (confirm tint, busy
  *  spinner), so the shape grows the three optional flags it needs. */
 interface BrowserMenuEntry {
@@ -42,7 +42,7 @@ interface BrowserMenuEntry {
   icon: IconComponent
   label: string
   onSelect: () => void
-  /** Destructive tint (the confirm costume of 清除数据). */
+  /** Destructive tint (the confirm costume of clear-data). */
   destructive?: boolean
   /** Disabled while the clear round trip is in flight. */
   disabled?: boolean
@@ -53,7 +53,7 @@ interface BrowserMenuEntry {
 /**
  * The selected page's ⋮ overflow menu (Task 13, Ruling C menu shell): the
  * toolbar's last control opens one beUI `MorphPopover` anchored to it. The
- * entries are a simple growable array and the 历史 entry swaps the SAME
+ * entries are a simple growable array and the history entry swaps the SAME
  * panel's content over to the history list — one portal, one anchor, one
  * dismissal surface, so outside press and Escape close both views through the
  * vendored component's own handlers.
@@ -76,13 +76,13 @@ export function BrowserOverlays({
    *  null when the parse/whitelist/guest rejected it. */
   onNavigate: (raw: string) => string | null
   /** Device-emulation state (T14): owned by the page view (selection-scoped,
-   *  not persisted), edited through the 设备 sub-view. */
+   *  not persisted), edited through the device sub-view. */
   device: DeviceEmulationState
   onDeviceChange: (next: DeviceEmulationState) => void
 }): JSX.Element {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
-  // Synchronous mirror of `open`: the 清除数据 round trip may resolve after
+  // Synchronous mirror of `open`: the clear-data round trip may resolve after
   // the user already dismissed the popover, and its handlers must see CLOSED
   // at that moment — not after the next passive-effect flush. Every open/
   // close path routes through setOpenTracked so the mirror is exact.
@@ -109,7 +109,7 @@ export function BrowserOverlays({
     setOpenTracked(false)
   }, [setOpenTracked, triggerEl])
 
-  // ---- 清除数据 (T14): the ⋮ quick path beside Settings' row (T11). Same
+  // ---- clear-data (T14): the ⋮ quick path beside Settings' row (T11). Same
   // browserClearData call — only the inline two-step confirm lives here. ----
   const [clearConfirming, setClearConfirming] = useState(false)
   const [clearing, setClearing] = useState(false)
@@ -270,7 +270,7 @@ export function BrowserOverlays({
         onPrint()
       }
     },
-    // Task 14 appends 设备模拟 / 清除数据 entries here.
+    // Task 14 appends device emulation / clear-data entries here.
     {
       id: 'device',
       icon: Smartphone,
@@ -350,7 +350,7 @@ export function BrowserOverlays({
             })}
           </div>
         )}
-        {/* 清除数据's transient result note: inside the popover, below the
+        {/* clear-data's transient result note: inside the popover, below the
             view content, so it survives a view swap while it lingers. */}
         {clearDone || clearFailed ? (
           <p
@@ -370,15 +370,15 @@ export function BrowserOverlays({
 }
 
 /**
- * The 设备 view of the overflow panel (T14): an in-panel row list — 无 (a real
+ * The device view of the overflow panel (T14): an in-panel row list — none (a real
  * off switch: clicking it returns the page to full-fill), the five presets
- * (names verbatim) and 自定义 — plus, while a device is active, the 宽/高
+ * (names verbatim) and custom — plus, while a device is active, the width/height
  * number fields. NOT a nested Select dropdown: the vendored Select renders
  * its options inline (no portal), so inside this popover's panel they clip
  * at the panel edge. Editing holds DIGIT-ONLY DRAFTS (never clobbering a
  * partial entry like “393”); leaving a field commits it through
  * `commitDeviceSize` (clamp 200–3840), and the committed pair then resolves
- * back to its preset or falls to 自定义. The state itself lives in the page
+ * back to its preset or falls to custom. The state itself lives in the page
  * view — this panel only edits it, so the pinning survives the popover
  * closing.
  */
@@ -399,7 +399,7 @@ function BrowserDevicePanel({
 
   const handlePresetChange = useCallback(
     (presetId: string) => {
-      // 无 never routes through here — the row list maps it directly to
+      // none never routes through here — the row list maps it directly to
       // INITIAL_DEVICE_STATE (a real off switch); this guard stays defensive.
       if (presetId === DEVICE_NONE_ID) return
       setWidthDraft(null)
@@ -408,7 +408,7 @@ function BrowserDevicePanel({
       if (preset) {
         onDeviceChange({ presetId, width: preset.width, height: preset.height })
       } else {
-        // 自定义 keeps the last committed dimensions (seeded from the first
+        // custom keeps the last committed dimensions (seeded from the first
         // preset when the user jumps straight to custom).
         onDeviceChange({ ...device, presetId: CUSTOM_DEVICE_ID })
       }
@@ -433,7 +433,7 @@ function BrowserDevicePanel({
     <div className="flex flex-col gap-2.5 p-2" data-browser-device>
       {/* In-panel row list, not a nested Select: the vendored dropdown renders
           inline (no portal) and clips at this popover panel's edge. The list
-          also gives 无 a real off switch instead of a disabled row. */}
+          also gives none a real off switch instead of a disabled row. */}
       <div className="flex flex-col gap-0.5" role="radiogroup" aria-label={t('browser.menuDevice')}>
         {[
           { id: DEVICE_NONE_ID, name: t('browser.deviceNone') },
@@ -543,7 +543,7 @@ function formatRelativeTime(at: number, locale: string, now: number): string {
 }
 
 /**
- * The 历史 view of the overflow panel: the shared browser history store
+ * The history view of the overflow panel: the shared browser history store
  * (`useSyncExternalStore` over `subscribeBrowserHistory`), one row per entry
  * (favicon chain, truncated title with a url fallback, truncated url,
  * relative time). A row click navigates the CURRENT page through the

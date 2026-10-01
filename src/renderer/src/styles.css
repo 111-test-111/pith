@@ -613,7 +613,7 @@ html[data-compact-tools='true'] [data-transcript-rows] {
   opacity: 1 !important;
 }
 
-/* 「关闭动效」 (Settings → Appearance, `lib/reduce-motion.ts`) — the CSS half of
+/* reduced motion (Settings → Appearance, `lib/reduce-motion.ts`) — the CSS half of
  * the switch; the same call sets motion's own global flag, which handles every
  * JS animation. What is left for CSS is hover transitions and the few keyframes
  * the app still carries (beui-text-shimmer, the theme View Transition's

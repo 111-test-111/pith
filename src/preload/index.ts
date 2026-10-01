@@ -444,8 +444,7 @@ const api = {
   /** Wipes the browser partition's storage (login states included); the
    * renderer menu confirms twice. */
   browserClearData: (): Promise<void> => ipcRenderer.invoke('browser:clearData'),
-  /** Chrome 登录态导入（Settings → Browser）：档案列表 / 导入 / 清单读数 / 清除已导入。
-   *  解密只在 main；渲染层拿到的是计数与错误码，不碰 cookie 值。 */
+  /** Chrome login-state import: profile discovery, import, inventory and removal. Main alone decrypts; the renderer receives counts/error codes, never cookie values. */
   browserImportSources: (): Promise<BrowserImportDiscoveryDTO> => ipcRenderer.invoke('browser:importSources'),
   browserOpenPrivacySettings: (): Promise<void> => ipcRenderer.invoke('browser:openPrivacySettings'),
   browserImportCookies: (profileId: string): Promise<BrowserImportResultDTO> =>
@@ -463,9 +462,7 @@ const api = {
    *  zoom through the app ladder and f/p to the selected page's find/print. */
   onBrowserGuestShortcut: (cb: (payload: BrowserGuestShortcutInfo) => void) =>
     subscribe('browser:guest-shortcut', cb),
-  /** 渲染层快捷键目录（lib/shortcuts）推送的 identities：guest 持焦点时主进程
-   *  按此拦截组合键并经 browser:guest-app-shortcut 回转给应用 dispatcher。
-   *  send（非 invoke）：推送无需回执，fixture/壳无此 handler 时静默 no-op。 */
+  /** Renderer shortcut identities let main intercept guest keys and forward browser:guest-app-shortcut to the app dispatcher. send needs no reply and is a no-op when fixture handlers are absent. */
   setBrowserAppShortcuts: (identities: string[]): void => {
     ipcRenderer.send('browser:setAppShortcuts', identities)
   },
@@ -475,8 +472,7 @@ const api = {
    *  reaches the host DOM, so host-side overlays use this as their outside-press
    *  (the ⋮ popover closes when the user clicks the page). */
   onBrowserGuestPointer: (cb: () => void) => subscribe('browser:guest-pointer', () => cb()),
-  /** main 的聚焦握手：agent 键盘动作前把对应 guest 的 `<webview>` 元素聚焦，然后必须 ack
-   *  （main 等到 ack 才派按键，见 BrowserService.focusGuestForKeys）。 */
+  /** Before agent keyboard input, focus the requested guest <webview> and acknowledge it. Main waits for the acknowledgement (BrowserService.focusGuestForKeys). */
   onBrowserFocusGuest: (cb: (payload: BrowserFocusGuestPayload) => void) =>
     subscribe('browser:focus-guest', cb),
   browserFocusGuestDone: (requestId: number): Promise<void> =>

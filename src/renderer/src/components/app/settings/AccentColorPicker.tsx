@@ -13,8 +13,8 @@ import { useI18n } from '@/i18n'
  * strip are plain drag tracks, not hand-rolled primitives.
  *
  * Picking is a DRAFT until confirmed: dragging the tracks or typing a hex
- * value only moves the preview, the accent changes solely on 「应用」. Closing
- * the popover any other way (「取消」, Escape, outside pointer) discards the
+ * value only moves the preview, the accent changes solely on Apply. Closing
+ * the popover any other way (Cancel, Escape, outside pointer) discards the
  * draft, and the next open re-seeds it from the remembered pick.
  */
 

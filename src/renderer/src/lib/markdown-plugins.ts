@@ -12,7 +12,7 @@ import type { PluggableList } from 'unified'
  * lists, strikethrough, literal autolinks), math, plus two fixes for CJK prose —
  *
  * 1. `remark-cjk-friendly` (parse side only) applies the alternative emphasis
- *    spec in which `**标签：**正文` is bold. Plain CommonMark refuses it: the
+ *    spec allowing emphasis after a CJK label and full-width colon. Plain CommonMark refuses it: the
  *    closing `**` is preceded by punctuation and followed by a non-space, so
  *    it is not "right-flanking" and stays literal.
  * 2. `remarkCjkAutolinkTrim` cuts GFM's literal autolinks at CJK punctuation,
@@ -27,14 +27,14 @@ export const REMARK_PLUGINS: PluggableList = [
  * GFM's literal autolink syntax (`https://…`, `www.…`) ends the link at ASCII
  * whitespace or `<` only, and its "trailing punctuation" trim set is ASCII
  * too. In CJK prose a bare URL glued to full-width punctuation —
- * `（https://moodle-infohub.hku.hk/），课程名` — therefore swallows everything
+ * a URL inside full-width parentheses followed by CJK punctuation/prose — therefore swallows everything
  * up to the next space into the link, because neither `）` nor `，` terminates
  * it. Cut the link at the first CJK/typographic punctuation character, then
  * re-run GFM's own ASCII trail trim on the prefix so `https://x/a(b)。` keeps
  * its balance-matched paren.
  *
  * The cut set is deliberately punctuation-only, not CJK letters: a URL whose
- * path legitimately holds CJK (`…/wiki/中文`) and is followed by a space must
+ * path legitimately holds CJK (a CJK wiki path) and is followed by a space must
  * stay intact.
  */
 const CJK_GLUE =

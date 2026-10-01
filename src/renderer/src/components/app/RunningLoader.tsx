@@ -4,7 +4,7 @@ import { cn } from '@/lib/utils'
 
 /**
  * The app's running-state `Loader`: beUI's component, unchanged, except that it
- * keeps moving while 「关闭动效」 is on (Settings → Appearance).
+ * keeps moving while reduced motion is on (Settings → Appearance).
  *
  * The vendored loader animates through `motion`, and that preference switches
  * motion off globally — which is right for every entrance, exit and hover, and

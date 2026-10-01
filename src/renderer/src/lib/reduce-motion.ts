@@ -2,7 +2,7 @@ import { MotionGlobalConfig } from 'motion/react'
 import { useSyncExternalStore } from 'react'
 
 /**
- * 「关闭动效」 — Settings → Appearance, persisted as `pi-app:reduce-motion`
+ * reduced motion — Settings → Appearance, persisted as `pi-app:reduce-motion`
  * (default off, so the app behaves exactly as it did before).
  *
  * One switch makes every interface animation land instantly. That takes two

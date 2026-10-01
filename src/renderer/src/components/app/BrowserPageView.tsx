@@ -116,13 +116,9 @@ export interface BrowserPageViewProps {
    *  webContentsId, so the pane can keep its wcId → page-ownership map (popup
    *  owner inheritance). Optional; only the pane binds it. */
   onWebContentsId?: (webContentsId: number, id: string, owner: string) => void
-  /** 自愈台阶二（BrowserPane 的 marker 停滞升级）：变化即重挂本行的 webview
- *  （key 变更销毁旧 guest），新 guest 重跑 marker 握手——旧 guest 对服务的 CDP
- *  连接不可见（attach 竞态），重报救不回，只能换 target。 */
+  /** Marker-stall recovery generation: changing the key destroys the old CDP-invisible guest and creates a new target with a fresh marker handshake; re-reporting alone cannot fix an attach race. */
   restart?: number
-  /** 恢复行的错峰 spawn（ms）：webview 元素立刻就位，src 延迟落地——同批一次性
-   *  挂载会以约一半概率弄死一个 guest（Invalid guestInstanceId），错峰从源头规
-   *  避；条面不受影响（行/URL/名字在恢复时即已画齐）。 */
+  /** Restore spawn delay in ms. Mount the element/row chrome immediately, but delay src to avoid Invalid guestInstanceId races from simultaneous guest creation. */
   spawnDelay?: number
   /** Registers the SELECTED page's find/print surface with the pane, so the
    *  pane-level ⌘F/⌘P shortcuts (and the guest relay) act on the page on
@@ -417,9 +413,9 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, onWeb
     setBrowserZoom(nextBrowserZoom(getBrowserZoom(), -1))
   }, [])
 
-  // ---- 设备模拟 (T14) ----
+  // ---- device emulation (T14) ----
   // Selection-scoped view state (spec: lives in the component, NOT persisted;
-  // switching the selected page resets to 无): each page view resets whenever
+  // switching the selected page resets to none): each page view resets whenever
   // it gains OR loses selection, so every newly selected page starts at
   // full-fill and no hidden background page keeps a stale pin.
   const [device, setDevice] = useState<DeviceEmulationState>(INITIAL_DEVICE_STATE)
@@ -616,7 +612,7 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, onWeb
     if (!selected) closeFind()
   }, [closeFind, selected])
 
-  // ---- 批注模式 (Task 16) ----
+  // ---- annotation mode (Task 16) ----
   // Per-page selection-scoped view state, like the device state above: only
   // the selected page renders the capture layer, and losing selection OR the
   // pane's active rail tab exits the mode, so every newly selected page
@@ -1008,7 +1004,7 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, onWeb
           {/* T13 ⋮ overflow menu + history panel. The callbacks are the same
               function references bound into BrowserPageActions above, so a
               menu entry and the pane-level shortcuts share one path. T14:
-              device state lives here and the 设备 sub-view edits it. */}
+              device state lives here and the device sub-view edits it. */}
           <BrowserOverlays
             onFind={openFind}
             onPrint={printPage}

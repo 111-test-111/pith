@@ -19,12 +19,12 @@ if (accent) document.documentElement.dataset.accent = accent
 // Same for the interface/monospace typefaces (Settings → Appearance).
 initFonts()
 
-// Same for 「关闭动效」: motion reads the flag when an animation is created, so
+// Same for reduced motion: motion reads the flag when an animation is created, so
 // setting it before the first render is what keeps the boot free of entrance
 // animations.
 initReduceMotion()
 
-// Same for 「紧凑显示连续工具调用」: the transcript's row spacing is styled off
+// Same for compact tool-call display: the transcript's row spacing is styled off
 // this attribute, so setting it before the first render avoids a re-spacing
 // flash on an opened session.
 initCompactTools()

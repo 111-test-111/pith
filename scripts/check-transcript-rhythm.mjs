@@ -95,7 +95,7 @@ document.documentElement.dataset.corners = params.get('style') ?? 'square';
 // not a row; the third case turns it back on to prove the same rhythm holds
 // when reasoning rows alternate with tool rows.
 localStorage.setItem('pi-app:show-reasoning', caseName === 'reasoning' || caseName === 'images' || caseName === 'compact' ? 'on' : 'off');
-// 「紧凑显示连续工具调用」 is read from storage at boot; the fixture boots it the
+// Compact consecutive tool calls is read from storage at boot; the fixture boots it the
 // way main.tsx does, so the real html[data-compact-tools] CSS is what runs.
 localStorage.setItem('pi-app:compact-tools', params.get('compact') === '1' ? 'on' : 'off');
 initCompactTools();
@@ -203,7 +203,7 @@ const longTurn = [
   round(20, [call('g1', 'grep')]),
   result('g1', 'grep', 21)
 ];
-// 「紧凑显示连续工具调用」: a turn whose rows alternate process → process pairs
+// Compact consecutive tool calls: a turn whose rows alternate process → process pairs
 // with a prose row between them. Reasoning rows count as process rows too.
 const compactTurn = [
   { role: 'user', timestamp: 1, content: 'go' },
@@ -213,7 +213,7 @@ const compactTurn = [
   result('g1', 'grep', 21), result('b2', 'bash', 22)
 ];
 // A steer-delivered notice: the parent model's steering data painted as a quiet
-// tool row ("子代理完成" / "任务结束" / a running subagent's message). It sits
+// tool row ("Subagent completed" / "Task finished" / a running subagent's message). It sits
 // BETWEEN tool rounds; every kind shares their row geometry and spacing.
 const subagentNotice = (timestamp) => ({
   role: 'custom', customType: 'subagent_message', display: true, timestamp, content: '',
@@ -423,7 +423,7 @@ window.innerBodyFrame = (groupNeedle, index) => {
 /**
  * The rows INSIDE an expanded tool group's body (see ToolGroupView): the body
  * is the disclosure SIBLING of the group's trigger, so this walks up to the row
- * wrapper first. Used to measure 「紧凑显示连续工具调用」 inside the body.
+ * wrapper first. Used to measure Compact consecutive tool calls inside the body.
  */
 window.groupRows = (needle) => {
   const row = window.findRow(needle);
@@ -836,7 +836,7 @@ app.on('window-all-closed',()=>app.quit());`
 
   // --- a tool card has no copy/status footer row: the header already states the
   //     status with its glyph, and the bar made the card's bottom padding larger
-  //     than its top (the reported "复制 + Completed" row)
+  //     than its top (the reported "Copy + Completed" row)
   assert.equal(await evaluate(`window.openRow('bash ·')`), true, 'the bash row opens')
   await pause(400)
   const card = await evaluate(`window.bodyFrame('bash ·')`)

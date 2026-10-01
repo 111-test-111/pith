@@ -19,7 +19,7 @@ export const SubagentCompletionRow = memo(function SubagentCompletionRow({ run }
   const [open, setOpen] = useState(false)
   const status = run.status === 'completed' ? 'success' : run.status === 'failed' ? 'error' : 'cancelled'
   return (
-    // A PROCESS row for 「紧凑显示连续工具调用」 (`lib/compact-tools`): the notice
+    // A PROCESS row for compact tool-call display (`lib/compact-tools`): the notice
     // is a tool row, so it takes the transcript's tightened gap beside the rows
     // around it.
     <div data-row="process" data-subagent-completion={run.runId} data-subagent-status={run.status}>
@@ -159,7 +159,7 @@ function SubagentRow({ run, sessionPath, onOpenSession, onAction }: {
     // `interrupted` has no equivalent in the vendored status vocabulary (it
     // renders as "Cancelled"), so it keeps an explicit localized label; the
     // other statuses come from the row's own glyph/word and must not be
-    // repeated here — `已完成Completed` was exactly that duplication.
+    // repeated here — `CompletedCompleted` was exactly that duplication.
     ...(run.status === 'interrupted' ? [t('subagent.interrupted')] : []),
     ...(run.limitReached ? [t('subagent.turnLimit')] : []),
     formatElapsed(elapsedOf(run, now), t),

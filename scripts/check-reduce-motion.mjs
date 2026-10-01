@@ -1,5 +1,5 @@
 /**
- * 「关闭动效」 (Settings → Appearance, `lib/reduce-motion.ts`) in isolated
+ * Disable animations (Settings → Appearance, `lib/reduce-motion.ts`) in isolated
  * Electron: no model calls, no user data. The real components are mounted
  * against a Vite dev server, so every assertion reads what the app renders.
  *
@@ -22,7 +22,7 @@
  *   oracle.
  * - The Settings row itself: label/description in both locales, the click
  *   flipping store + `<html>` + motion's flag + storage, and clicking back. The
- *   neighbouring 「紧凑显示连续工具调用」 row (Appearance) is checked here too —
+ *   neighbouring Compact consecutive tool calls row (Appearance) is checked here too —
  *   its own store key and `<html>` attribute, which the transcript's row spacing
  *   is styled off (the spacing itself is pinned in `check-transcript-rhythm.mjs`).
  * - The shader backdrop's freeze (its `speed` is not motion's or CSS's to stop).

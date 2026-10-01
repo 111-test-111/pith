@@ -170,12 +170,7 @@ function extractCodeBlock(children: ReactNode): { code: string; language?: strin
   return { code: code.replace(/\n$/, ''), language: match?.[1] }
 }
 
-/** Markdown 链接拦截——作用于所有 Markdown 面（聊天、侧聊、摘要行、文件预览），有意
- *  如此（Settings 文案即「Chat and markdown links」）：无修饰键的普通点击 + http(s) 链接 +
- *  「链接在内置浏览器打开」
- *  偏好开 → 内置浏览器打开。其余一律放行现有行为：⌘/Ctrl/Shift/Alt 点击（新标签等用户
- *  意图）、其他 scheme（file 链接走 FileNavigationProvider 路由、其余 openExternal）、
- *  偏好关。同步读偏好——事件回调里拿不到 hook 的 React 上下文。 */
+/** Route ordinary unmodified HTTP(S) clicks from every Markdown surface into the embedded browser when enabled. Preserve modifier-key intent and other schemes (files use FileNavigationProvider, others open externally). Read the preference synchronously outside hook context. */
 function isBrowserOpenLinkClick(href: string, event: { metaKey: boolean; ctrlKey: boolean; shiftKey: boolean; altKey: boolean }): boolean {
   if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return false
   if (!/^https?:\/\//i.test(href)) return false
@@ -230,8 +225,7 @@ const components: MarkdownComponents = {
               element.textContent?.toLowerCase().replace(/[^\p{L}\p{N}\p{M}_\-\s]/gu, '').replace(/\s/g, '-') === anchor)
             if (page && heading) page.scrollTop += heading.getBoundingClientRect().top - page.getBoundingClientRect().top
           } else if (isBrowserOpenLinkClick(href, event)) {
-            // Task 15: 入队 + 派发 pith:browser-open-link——面板已开则立即 drain，
-            // 未开则 Workspace 先开面板、挂载 drain 兜底。preventDefault 已在上面。
+            // Queue and dispatch pith:browser-open-link. Mounted panes drain immediately; otherwise Workspace opens the pane and mount drains. preventDefault already ran above.
             requestBrowserOpenLink(href)
           } else navigation.open(href)
         }}

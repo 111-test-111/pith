@@ -1,22 +1,8 @@
-/**
- * Chrome 登录态导入回归检查（Settings → Browser → 从 Chrome 导入）。
- *
- * Part 1（纯 Node，无 Electron）：真 `src/main/browser/import-cookies.ts` 对着一个
- * 合成的 Chrome 用户数据目录跑全链路——profile 发现（Local State 显示名、
- * Network/Cookies 与旧版 Cookies 两种位置）、v10 解密（含 v11/空值/损坏 blob）、
- * 行→Electron 明细映射（域 cookie / host-only / __Host- / __Secure- / 会话 cookie /
- * 过期 / samesite 各档）、int64 安全的过期时间读取、导入清单的去重合并、
- * 清除的 removal URL 推导、各错误码。fixture 的加密用已知口令在脚本里反向做，
- * 不碰真 Keychain（`getKey` 注入）。
- *
- * Part 2（隔离 Electron + mocked window.pi）：真实 BrowserSection 的两行——
- * 档案 Select + 导入按钮、done/skipped/错误便签、清除已导入的两步确认、
- * 无 Chrome 时的降级文案，双语。
- *
- * 运行：node scripts/check-browser-import.mjs（需先 `npm run build`？不需要——
- * Part 2 走 vite 现编译，Part 1 直接 import .ts；node ≥ 23.6）。
- * `PI_BROWSER_IMPORT_SCREENSHOT_DIR` 保留截图。
- */
+/** Offline Chrome-cookie import checks: synthetic databases and injected keys,
+ * followed by the real BrowserSection in isolated Electron with mocked IPC.
+ * Covers crypto, safe timestamps, mapping, manifests, errors and both locales.
+ * No build is required; use Node >=23.6 for native TypeScript imports.
+ * PI_BROWSER_IMPORT_SCREENSHOT_DIR retains screenshots. */
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
@@ -36,12 +22,11 @@ const pause = (ms) => new Promise((r) => setTimeout(r, ms))
 
 const mod = await import('../src/main/browser/import-cookies.ts')
 
-// ---- fixture 加密：与 Chrome os_crypt 相同的 KDF/IV/前缀，口令已知 ----
 const FIXTURE_PASSPHRASE = 'fixture-safe-storage-pass'
 const FIXTURE_KEY = pbkdf2Sync(FIXTURE_PASSPHRASE, 'saltysalt', 1003, 16, 'sha1')
 const IV = Buffer.alloc(16, 0x20)
 function encryptValue(plain, prefix = 'v10', hostKey = null) {
-  // hostKey：Chrome ≥152 的域绑定格式 —— 明文 = sha256(host_key) || value
+
   const payload = hostKey
     ? Buffer.concat([createHash('sha256').update(hostKey, 'utf8').digest(), Buffer.from(plain, 'utf8')])
     : Buffer.from(plain, 'utf8')
@@ -53,11 +38,11 @@ function encryptValue(plain, prefix = 'v10', hostKey = null) {
   ])
 }
 
-const FUTURE_UNIX = 4102444800 // 2100-01-01，微秒值 > 2^53：裸读会抛错，SQL cast 必须接住
+// The corresponding WebKit microseconds exceed 2^53; SQL must perform the conversion.
+const FUTURE_UNIX = 4102444800
 const PAST_UNIX = 1000000000 // 2001-09-09
 const toWebkitMicro = (unix) => BigInt(unix + 11644473600) * 1000000n
 
-/** 行描述：value 走 v10 加密；plain 直落 value 列；blob 原样塞 encrypted_value。 */
 function buildCookiesDb(file, rows, { withSameSite = true } = {}) {
   const db = new DatabaseSync(file)
   db.exec(`CREATE TABLE cookies (
@@ -100,15 +85,13 @@ function buildCookiesDb(file, rows, { withSameSite = true } = {}) {
   db.close()
 }
 
-// ---- Part 1：纯 Node ----
 const temporary = await mkdtemp(join(tmpdir(), 'pith-browser-import-'))
 const chromeRoot = join(temporary, 'chrome')
 const recordPath = join(temporary, 'browser-import.json')
 const getKey = async () => FIXTURE_PASSPHRASE
 
 try {
-  // Chrome 用户数据目录：Local State + Default(Network/) + Profile 3(旧版根) +
-  // Profile 5(全加密，验证错口令) + Corrupt(坏库) + 无库目录 + 点开头目录。
+
   await mkdir(join(chromeRoot, 'Default', 'Network'), { recursive: true })
   await mkdir(join(chromeRoot, 'Profile 3'), { recursive: true })
   await mkdir(join(chromeRoot, 'Profile 5'), { recursive: true })
@@ -126,27 +109,27 @@ try {
   buildCookiesDb(
     join(chromeRoot, 'Default', 'Network', 'Cookies'),
     [
-      // 域 cookie：secure+httpOnly+lax+持久
+
       { host: '.example.com', name: 'sid', value: 'sess-1', path: '/', expiresUnix: FUTURE_UNIX, secure: true, httpOnly: true, persistent: true, samesite: 1 },
-      // host-only 明文 value 列（encrypted_value 为空）
+
       { host: 'www.plain.test', name: 'theme', plain: 'plain-val', persistent: true },
-      // __Host-：path 强制 '/'、host-only
+
       { host: 'api.bank.test', name: '__Host-csrf', value: 'tok', path: '/deep/path', secure: true, persistent: true, samesite: 2 },
-      // 过期
+
       { host: '.old.test', name: 'dead', value: 'x', expiresUnix: PAST_UNIX, persistent: true },
-      // 会话 cookie：无 expirationDate
+
       { host: '.agg.test', name: 'tracker', value: 't', expiresUnix: 0, persistent: false },
-      // v20 前缀（Windows ABE 形状）：unsupported 跳过
+
       { host: '.win.test', name: 'ab', blob: encryptValue('x', 'v20'), persistent: true },
-      // 损坏 v10：failed
+
       { host: '.bad.test', name: 'broken', blob: Buffer.concat([Buffer.from('v10', 'latin1'), Buffer.alloc(32, 0xab)]), persistent: true },
       // samesite=0 + secure → no_restriction
       { host: '.none.test', name: 'ns', value: 'v', secure: true, persistent: true, samesite: 0 },
-      // samesite=0 + 非 secure → 降级 unspecified
+
       { host: '.down.test', name: 'd', value: 'v', persistent: true, samesite: 0 },
-      // __Secure- 前缀但库里 is_secure=0：强制 secure
+
       { host: 'legacy.site', name: '__Secure-pre', value: 'v', persistent: true },
-      // Chrome ≥152 域绑定格式（新方案，真库 1575/1575 全是这个形状）
+
       { host: '.bound.test', name: 'sess', value: 'bound-value-1', hostKey: '.bound.test', path: '/', expiresUnix: FUTURE_UNIX, secure: true, persistent: true, samesite: 1 },
       { host: 'api2.bank.test', name: '__Host-bound', value: 'bound-2', hostKey: 'api2.bank.test', secure: true, persistent: true }
     ],
@@ -155,7 +138,7 @@ try {
   buildCookiesDb(
     join(chromeRoot, 'Profile 3', 'Cookies'),
     [
-      // 与 Default 的 sid 同身份（去重合并）但值不同；无 samesite 列 → unspecified
+
       { host: '.example.com', name: 'sid', value: 'sess-1-b', path: '/', expiresUnix: FUTURE_UNIX, secure: true, persistent: true },
       { host: '.new.test', name: 'extra', value: 'e', persistent: true }
     ],
@@ -167,7 +150,6 @@ try {
   ])
   await writeFile(join(chromeRoot, 'Corrupt', 'Cookies'), 'this is not a sqlite database at all', 'utf8')
 
-  // -- profile 发现：顺序、显示名、无库/点目录排除
   const sources = mod.listChromeProfiles(chromeRoot)
   assert.deepEqual(
     sources.map((s) => s.id),
@@ -181,7 +163,6 @@ try {
   )
   assert.deepEqual(mod.listChromeProfiles(join(temporary, 'no-such-root')), [], 'missing root lists nothing')
 
-  // -- 目录分类：absent / none / ok / blocked（TCC 形状：readdir 拋 EPERM）
   assert.equal(mod.chromeRootStatus(join(temporary, 'gone')), 'absent', 'a missing root classifies as absent')
   assert.equal(mod.chromeRootStatus(chromeRoot), 'ok', 'a root with cookie DBs classifies as ok')
   const emptyRoot = join(temporary, 'empty-chrome')
@@ -214,7 +195,6 @@ try {
   assert.equal(blockedImport.result.code, 'permission', 'the failure carries the permission code')
   assert.equal(existsSync(recordPath), false, 'a blocked import writes no record')
 
-  // -- 导入 Default：收集 apply，检查明细与计数
   const applied = []
   const first = await mod.importChromeCookies({
     profileId: 'Default',
@@ -270,14 +250,13 @@ try {
   assert.equal(byName.has('dead'), false, 'the expired cookie never reaches apply')
   assert.equal(byName.has('ab'), false, 'the v20 blob never reaches apply')
 
-  // -- 第二次导入 Profile 3（旧版位置、无 samesite 列）：清单合并去重
   const second = await mod.importChromeCookies({
     profileId: 'Profile 3',
     chromeRoot,
     recordPath,
     getKey,
     apply: async (details) => ({
-      // 第一条写入失败：验证失败条不进清单、错误消息上浮
+
       results: details.map((_detail, index) => index !== 0),
       firstError: 'synthetic set failure'
     })
@@ -298,7 +277,6 @@ try {
   assert.equal(status.profileLabel, '工作', 'status names the latest import')
   assert.equal(status.cookieCount, 10, 'status counts the merged applied identities')
 
-  // -- 清除：removal URL 推导 + 清单删除
   const removals = []
   const cleared = await mod.clearImportedCookies(recordPath, async (url, name) => {
     removals.push([url, name])
@@ -323,10 +301,8 @@ try {
   assert.equal(mod.readImportStatus(recordPath).present, false, 'status is absent after clearing')
   assert.deepEqual(await mod.clearImportedCookies(recordPath, async () => {}), { removed: 0, failed: 0 }, 'clearing again is a no-op')
 
-  // -- removalUrlFor 的空 path 兜底
   assert.equal(mod.removalUrlFor(['.x.test', 'n', '', 0]), 'http://x.test/', 'an empty path falls back to /')
 
-  // -- 解密单元：v11 前缀 / 空值 / 短 blob
   assert.deepEqual(mod.decryptCookieValue(undefined, FIXTURE_KEY), { status: 'ok', value: '' }, 'missing blob decrypts to empty')
   assert.deepEqual(mod.decryptCookieValue(Buffer.alloc(0), FIXTURE_KEY), { status: 'ok', value: '' }, 'empty blob decrypts to empty')
   const v11 = mod.decryptCookieValue(encryptValue('v11-value', 'v11'), FIXTURE_KEY)
@@ -349,7 +325,6 @@ try {
     'a mismatched host hash is left in place (no blind strip)'
   )
 
-  // -- 错误码：路径穿越 / 未知档案 / 坏库 / 根不存在
   const escape = await mod.importChromeCookies({ profileId: '../etc', chromeRoot, recordPath, getKey })
   assert.equal(escape.result.code, 'profile-not-found', 'a path-traversal profile id is rejected')
   const unknown = await mod.importChromeCookies({ profileId: 'Nope', chromeRoot, recordPath, getKey })
@@ -359,7 +334,6 @@ try {
   const noRoot = await mod.importChromeCookies({ profileId: 'Default', chromeRoot: join(temporary, 'gone'), recordPath, getKey })
   assert.equal(noRoot.result.code, 'chrome-not-found', 'a missing chrome root reports chrome-not-found')
 
-  // -- 错口令：全部解密失败 → keychain（不谎报 0 条成功）
   const wrongKey = await mod.importChromeCookies({
     profileId: 'Profile 5',
     chromeRoot,
@@ -372,7 +346,6 @@ try {
   assert.equal(wrongKey.result.imported, 0, 'nothing is imported with the wrong key')
   assert.equal(existsSync(recordPath), false, 'a failed import writes no record')
 
-  // -- 映射兜底：空 host 行按 invalid 跳过（计入 skippedUndecryptable 合计）
   const invalid = mod.mapCookieRow({ host_key: '', name: 'x', value: '', path: '/', is_secure: 0, is_httponly: 0, is_persistent: 1, samesite: -1, expires_unix: FUTURE_UNIX }, 'v', FUTURE_UNIX)
   assert.deepEqual(invalid, { kind: 'skipped', reason: 'invalid' }, 'a row without a host is skipped as invalid')
 
@@ -381,7 +354,6 @@ try {
   await rm(temporary, { recursive: true, force: true }).catch(() => {})
 }
 
-// ---- Part 2：真实 BrowserSection + mocked window.pi ----
 const fixturePath = '/__browser_import_check.html'
 const fixture = `<!doctype html><html><head><style>
 body { margin: 0; background: var(--background); }
@@ -402,7 +374,7 @@ const status = params.get('blocked') === '1' ? 'blocked'
   : params.get('absent') === '1' ? 'absent'
   : params.get('sources') === 'none' ? 'none'
   : 'ok';
-// FDA 双路径引导的形态开关：默认 dev（未打包），?installed=1 模拟正式安装的 app
+// Full Disk Access fixture: development by default; ?installed=1 simulates a packaged app.
 const devMode = params.get('installed') !== '1';
 const profiles = status !== 'ok' ? [] : [
   { id: 'Default', label: 'Person 1' },
@@ -578,7 +550,6 @@ app.on('window-all-closed',()=>app.quit());`
     await writeFile(join(process.env.PI_BROWSER_IMPORT_SCREENSHOT_DIR, name + '.png'), Buffer.from(capture.data, 'base64'))
   }
 
-  // -- 静态形状：两行 + 档案 Select + 初始禁用的清除
   await load()
   await pause(300)
   assert.equal(await evaluate('window.q("[data-browser-import]") !== null'), true, 'the import row renders')
@@ -589,7 +560,6 @@ app.on('window-all-closed',()=>app.quit());`
   assert.equal(await evaluate('window.q("[data-browser-clear-import]").textContent'), 'Clear imported login state', 'the clear-import row is labelled')
   assert.equal(await evaluate('window.importNote("none")'), null, 'the no-chrome note stays hidden when profiles exist')
 
-  // -- 导入：busy → 计数便签 → 清除行激活并带上 meta
   assert.equal(await click('[data-browser-import]'), true)
   await frame()
   assert.equal(await evaluate('window.q("[data-browser-import]").dataset.browserImport'), 'busy', 'the button enters its busy state')
@@ -610,7 +580,6 @@ app.on('window-all-closed',()=>app.quit());`
   )
   await screenshot('browser-import-done-light')
 
-  // -- 清除已导入：两步确认
   assert.equal(await click('[data-browser-clear-import]'), true)
   await frame()
   assert.equal(await evaluate('window.q("[data-browser-clear-import]").dataset.browserClearImport'), 'confirm', 'the first click arms the confirm state')
@@ -622,7 +591,6 @@ app.on('window-all-closed',()=>app.quit());`
   assert.equal((await evaluate('window.toastText()')).includes('Removed 2 imported cookies.'), true, 'the removal reports its count in a toast')
   assert.equal(await evaluate('window.q("[data-browser-clear-import]").disabled'), true, 'clear-import disables again after clearing')
 
-  // -- 错误码文案：钥匙串拒绝
   await load('?fail=keychain')
   await pause(300)
   assert.equal(await click('[data-browser-import]'), true)
@@ -634,7 +602,6 @@ app.on('window-all-closed',()=>app.quit());`
     'a keychain failure surfaces its localized reason as an error toast'
   )
 
-  // -- 部分写入失败：成功与失败信息同在一张卡里，错误消息可见（不再静默 1299 条失败）
   await load('?fail=write')
   await pause(300)
   assert.equal(await click('[data-browser-import]'), true)
@@ -646,7 +613,6 @@ app.on('window-all-closed',()=>app.quit());`
   assert.equal(await evaluate('window.importNote("failedwrite")'), null, 'no inline failedwrite note remains')
   assert.equal(await evaluate('window.q("[data-browser-clear-import]").disabled'), false, 'clear-import tracks only applied cookies')
 
-  // -- 无 Chrome：降级文案 + 禁用（none：装了但没有档案）
   await load('?sources=none')
   await pause(300)
   assert.equal(await evaluate('window.q("[data-browser-import-profile]")'), null, 'no profile select renders without Chrome')
@@ -654,7 +620,6 @@ app.on('window-all-closed',()=>app.quit());`
   assert.equal(await evaluate('window.importNote("none")'), 'No Chrome profiles found on this Mac.', 'the no-chrome note renders')
   assert.equal(await evaluate('window.importNote("absent")'), null, 'the absent note stays hidden for none')
 
-  // -- blocked（TCC）：双路径授权引导（dev → 授启动终端；正式安装 → 勾选 pi-app）
   await load('?blocked=1')
   await pause(300)
   assert.equal(await evaluate('window.q("[data-browser-import]").disabled'), true, 'the import button is disabled while blocked')
@@ -668,7 +633,7 @@ app.on('window-all-closed',()=>app.quit());`
   assert.equal(await click('[data-browser-import-permission] button'), true)
   await frame()
   assert.deepEqual(await evaluate('window.calls'), [['openPrivacySettings']], 'the button routes through the open-privacy-settings bridge')
-  // dev 路径：一句话点明「给启动终端授权即可，无需添加 Electron 应用本身」
+
   assert.equal(
     await evaluate('window.q("[data-browser-import-fda-guide]")?.getAttribute("data-browser-import-fda-guide")'),
     'dev',
@@ -680,7 +645,6 @@ app.on('window-all-closed',()=>app.quit());`
   assert.equal(await evaluate('window.q("[data-browser-import-fda-path]")'), null, 'the path chip and the ⌘⇧G paste steps are gone (one line, in passing)')
   assert.equal(await evaluate('window.importNote("none")'), null, 'no misleading none-note while blocked')
 
-  // -- 正式安装（?installed=1）：引导改为直接勾选 pi-app 本身
   await load('?blocked=1&installed=1')
   await pause(300)
   assert.equal(
@@ -692,13 +656,11 @@ app.on('window-all-closed',()=>app.quit());`
   assert.equal(installedGuide.includes('Full Disk Access'), true, 'the installed guidance names Full Disk Access')
   assert.equal(installedGuide.includes('terminal'), false, 'the installed guidance does not send the user down the terminal path')
 
-  // -- absent（没装 Chrome）：与 none 区分开
   await load('?absent=1')
   await pause(300)
   assert.equal(await evaluate('window.importNote("absent")'), 'Chrome is not installed on this Mac.', 'the absent note is distinct')
   assert.equal(await evaluate('window.importNote("none")'), null, 'the none note stays hidden for absent')
 
-  // -- 中文
   await evaluate('localStorage.setItem("pi-app:locale","zh-CN")')
   await load()
   await pause(300)
@@ -714,7 +676,6 @@ app.on('window-all-closed',()=>app.quit());`
   await frame()
   await screenshot('browser-import-done-dark-zh')
 
-  // -- 中文 blocked（TCC）双路径：dev 一句话点名终端与「无需添加」
   await load('?blocked=1')
   await pause(300)
   const zhDevGuide = await evaluate('window.q("[data-browser-import-fda-guide]").textContent')

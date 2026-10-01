@@ -1,14 +1,25 @@
-node_modules
-.worktrees/
-out/
-dist/
-*.log
-.DS_Store
+# Dependencies and local worktrees
+/node_modules/
+/.worktrees/
+
+# Build, packaging and generated file-type icons
+/out/
+/dist/
+/src/renderer/public/file-icons/
+/.vite/
+*.tsbuildinfo
+
+# Native debug-fixture outputs
+/scripts/debug-fixtures/dap-comparison/*/ledger
+/scripts/debug-fixtures/dap-comparison/*/index_test
+*.dSYM/
+__pycache__/
+*.pyc
+
+# Local configuration and machine files
 .env
 .env.*
-
-# Generated: file-type icon SVGs written by scripts/prepare-file-icons.mjs
-src/renderer/public/file-icons/
-
-# TypeScript incremental build info
-*.tsbuildinfo
+!.env.example
+*.log
+.DS_Store
+Thumbs.db

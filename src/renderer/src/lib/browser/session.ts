@@ -1,17 +1,9 @@
-/**
- * 浏览器标签页的会话持久化（仅 Electron 壳客户端；localStorage 承载）：
- * - 最近打开的 URL：起始页「最近打开」列表的数据源（human 页真实导航时记录）
- * - 打开页快照：当前打开着的 human 页 URL，持续写入——浏览器标签页关闭即卸载
- *   webview（guest 随之销毁、服务端注册表随之清扫），重开时按快照恢复各页
- * 纯函数核心与 localStorage 适配分离，便于 node 直测。
- * 移植自 pi-web lib/browser-session.ts：键名 pi-app:browser-*，HUMAN_OWNER 来自
- * shared/browser；SSR 守卫删除（纯 SPA），读写失败仍静默降级为空。
- */
+/** Embedded-browser persistence in localStorage: real human navigation feeds recent URLs; open-page snapshots restore guests destroyed by pane unmount. Pure transformations are separate from storage for Node checks. Ported from pi-web with pi-app keys and shared HUMAN_OWNER; storage failures fall back to empty state. */
 import { HUMAN_OWNER } from '../../../../shared/browser.ts'
 
 export const BROWSER_RECENTS_LIMIT = 8
 export const OPEN_BROWSER_PAGES_LIMIT = 12
-/** 浏览历史容量（human 页真实导航的全量流水，区别于最近打开的 8 条热列表）。 */
+/** Full human-navigation history capacity, separate from the eight-entry recent list. */
 export const BROWSER_HISTORY_LIMIT = 500
 
 const RECENTS_KEY = 'pi-app:browser-recents'
@@ -22,18 +14,18 @@ export function isRecordableUrl(url: string): boolean {
   return url.startsWith('http://') || url.startsWith('https://')
 }
 
-// ---- 浏览历史（纯函数核心）----
+// Browsing history: pure transformations.
 
 export interface BrowserHistoryEntry {
   url: string
-  /** 页面标题：did-navigate 时往往未至，由 page-title-updated 回填。 */
+  /** Titles may arrive after did-navigate; page-title-updated fills them in. */
   title: string
-  /** 站点图标 URL：由 page-favicon-updated 回填；旧条目缺失时面板回落站点根 /favicon.ico。 */
+  /** page-favicon-updated fills this URL; older entries fall back to /favicon.ico. */
   favicon?: string
   at: number
 }
 
-/** 追加一条历史：非 http(s) 不入列；与队首同 URL 不重复（刷新/同页导航），只回填标题。 */
+/** Append HTTP(S) navigation; repeated newest URLs only update the title. */
 export function pushBrowserHistory(
   list: readonly BrowserHistoryEntry[],
   entry: { url: string, title?: string, at: number },
@@ -48,7 +40,7 @@ export function pushBrowserHistory(
   return [{ url: entry.url, title: entry.title ?? '', at: entry.at }, ...list].slice(0, cap)
 }
 
-/** 标题回填：更新最新一条同 URL 条目的标题（未找到/无变化时保持引用）。 */
+/** Update the newest matching title; preserve identity when absent or unchanged. */
 export function updateBrowserHistoryTitle(
   list: readonly BrowserHistoryEntry[],
   url: string,
@@ -62,7 +54,7 @@ export function updateBrowserHistoryTitle(
   return next
 }
 
-/** 站点图标回填：更新最新一条同 URL 条目的图标（未找到/无图标/无变化时保持引用）。 */
+/** Update the newest matching favicon; preserve identity when absent or unchanged. */
 export function updateBrowserHistoryFavicon(
   list: readonly BrowserHistoryEntry[],
   url: string,
@@ -76,29 +68,24 @@ export function updateBrowserHistoryFavicon(
   return next
 }
 
-/** 记录一次 URL：非 http(s) 不入列（返回原引用）；同 URL 去重置顶；超量截断。 */
+/** Record HTTP(S) URLs, deduplicate to the front and enforce the limit; otherwise retain identity. */
 export function upsertRecentUrl(list: string[], url: string, cap = BROWSER_RECENTS_LIMIT): string[] {
   if (!isRecordableUrl(url) || list[0] === url) return list
   return [url, ...list.filter((u) => u !== url)].slice(0, cap)
 }
 
-/** 打开页快照条目：owner 随页保存——agent 页（`agent:<sessionId>`）也在快照里，
- *  恢复时按原 owner 重新登记，其会话的工具经 activeByOwner 再次找到它。
- *  title/favicon 让恢复后的条面立即显示折叠前的名字（内容加载完由页面事件刷新）；
- *  url 缺省 = 空白页——about:blank 起始页也入册，条数与次序因此完全保持。 */
+/** Open-page snapshot retains owner, including agent:<sessionId>, so restoration registers the same owner and tools rediscover it. Saved title/favicon populate tab chrome immediately; page events refresh them. An absent URL means a blank page, preserving count/order. */
 export interface OpenBrowserPageEntry {
   owner: string
-  /** 可导航目标（仅 http(s)，与恢复侧 navigateTo 的白名单一致）；空白页不带。 */
+  /** Optional HTTP(S) target, matching the restore navigateTo allowlist; blank pages omit it. */
   url?: string
   title?: string
   favicon?: string
-  /** 写在折叠时处于活动态的那一条上；恢复时优先重选它（无标记则选首行）。 */
+  /** Marks the active page for restoration; without a marker, select the first row. */
   selected?: true
 }
 
-/** 打开页快照：全 owner、全页面（空白页也入册，url 缺省），保持打开顺序与数量（限量）。
- *  human 页与 agent 页同等入册——两类页在引擎层同构（同一分区、同一注册表），差的
- *  只是 owner 命名空间；不可记录 URL（file: 等）恢复为空白页，条数仍保持。 */
+/** Bounded ordered snapshot of all owners/pages, including blank pages. Human/agent guests share the engine and differ only by owner; unrecordable URLs restore blank without changing count. */
 export function snapshotOpenPages(
   pages: readonly { owner: string, url: string, id?: string, title?: string, favicon?: string }[],
   selectedId?: string | null,
@@ -116,7 +103,7 @@ export function snapshotOpenPages(
     .slice(0, limit)
 }
 
-// ---- localStorage 适配（隐私模式等读写失败时静默降级为空） ----
+// localStorage adapter: storage failures silently fall back to empty state.
 
 function readList(key: string): string[] {
   try {
@@ -134,7 +121,7 @@ const lastWritten: Record<string, string> = {}
 
 function writeList<T>(key: string, list: readonly T[]): void {
   const raw = JSON.stringify(list)
-  // status 轮询反复派生同值时不写盘
+  // Avoid writes when repeated status polls produce identical values.
   if (lastWritten[key] === raw) return
   lastWritten[key] = raw
   try {
@@ -144,7 +131,7 @@ function writeList<T>(key: string, list: readonly T[]): void {
   }
 }
 
-// 最近打开列表的订阅（起始页挂载期间有新导航时即时刷新）
+// Subscribe recent-page views to new navigation.
 const recentsListeners = new Set<() => void>()
 
 export function subscribeBrowserRecents(cb: () => void): () => void {
@@ -154,7 +141,7 @@ export function subscribeBrowserRecents(cb: () => void): () => void {
   }
 }
 
-// useSyncExternalStore 的 snapshot 要求身份稳定——模块级缓存
+// Cache stable useSyncExternalStore snapshots at module scope.
 let recentsCache: string[] | null = null
 
 export function getRecentUrls(): string[] {
@@ -162,7 +149,7 @@ export function getRecentUrls(): string[] {
   return recentsCache
 }
 
-/** human 页发生真实导航（did-navigate）时记录；已在顶则无变化不通知。 */
+/** Record real human did-navigate events; an unchanged newest URL does not notify. */
 export function recordRecentUrl(url: string): void {
   const next = upsertRecentUrl(getRecentUrls(), url)
   if (next === recentsCache) return
@@ -171,9 +158,7 @@ export function recordRecentUrl(url: string): void {
   for (const cb of recentsListeners) cb()
 }
 
-/** 打开页快照读取：兼容旧格式（string[]，一律视作 human 页）与当前条目——
- *  url 可缺（空白页）；selected/title/favicon 原样保留（丢了 selected 恢复就永远
- *  落回首行）；坏条目/坏 JSON 静默降级。 */
+/** Read legacy URL arrays as human pages and current entries with optional blank URLs. Preserve selected/title/favicon; invalid entries/JSON fall back silently. */
 function readOpenPagesList(): OpenBrowserPageEntry[] {
   try {
     const raw = window.localStorage.getItem(OPEN_PAGES_KEY)
@@ -212,7 +197,7 @@ export function writeOpenBrowserPages(entries: readonly OpenBrowserPageEntry[]):
   writeList(OPEN_PAGES_KEY, entries.slice(0, OPEN_BROWSER_PAGES_LIMIT))
 }
 
-// ---- 浏览历史（localStorage 适配 + 订阅）----
+// Browsing history: localStorage adapter and subscriptions.
 
 const historyListeners = new Set<() => void>()
 let historyCache: BrowserHistoryEntry[] | null = null
@@ -242,7 +227,7 @@ export function getBrowserHistory(): BrowserHistoryEntry[] {
   return historyCache
 }
 
-/** human 页真实导航（did-navigate）时记录。 */
+/** Record real human did-navigate events. */
 export function recordBrowserHistory(url: string, at: number = Date.now()): void {
   const next = pushBrowserHistory(getBrowserHistory(), { url, at })
   if (next === historyCache) return
@@ -251,7 +236,7 @@ export function recordBrowserHistory(url: string, at: number = Date.now()): void
   for (const cb of historyListeners) cb()
 }
 
-/** page-title-updated 回填最新一条同 URL 条目的标题。 */
+/** Fill the newest matching title from page-title-updated. */
 export function updateBrowserHistoryTitleFor(url: string, title: string): void {
   const next = updateBrowserHistoryTitle(getBrowserHistory(), url, title)
   if (next === historyCache) return
@@ -260,7 +245,7 @@ export function updateBrowserHistoryTitleFor(url: string, title: string): void {
   for (const cb of historyListeners) cb()
 }
 
-/** page-favicon-updated 回填最新一条同 URL 条目的站点图标。 */
+/** Fill the newest matching favicon from page-favicon-updated. */
 export function updateBrowserHistoryFaviconFor(url: string, favicon: string): void {
   const next = updateBrowserHistoryFavicon(getBrowserHistory(), url, favicon)
   if (next === historyCache) return

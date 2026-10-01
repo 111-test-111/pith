@@ -48,7 +48,7 @@ function buildPalette(): string[] {
  *
  * Two independent signals freeze the shader's `speed`, because a WebGL effect is
  * neither motion's nor CSS's to stop: the OS preference (the vendored wrapper
- * reads `useReducedMotion()`) and 「关闭动效」, which this component reads itself
+ * reads `useReducedMotion()`) and reduced motion, which this component reads itself
  * and passes as `speed={0}` — a preference flip has to freeze the running shader
  * without waiting for the component to remount.
  */

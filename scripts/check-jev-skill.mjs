@@ -39,7 +39,7 @@ try {
     const actual = loadSkillsFromDir({ dir: installed, source: 'user' })
     assert.equal(actual.skills.length, 1); assert.deepEqual(actual.diagnostics, [])
     assert.equal(await readFile(join(installed, 'SKILL.md'), 'utf8'), once, 'installed adaptation matches the maintained bridge')
-    assert.equal(await readFile(join(installed, 'references/pi-app.md'), 'utf8'), await readFile(join(repo, 'resources/jev/pi-app.md'), 'utf8'))
+    assert.equal(await readFile(join(installed, 'references/pi-app.md'), 'utf8'), await readFile(join(repo, 'docs/jev-tool-reference.md'), 'utf8'))
   }
   const module = join(temporary, 'jev.mjs')
   await build({ entryPoints: [join(repo, 'src/main/pi/jev/protocol.ts')], outfile: module, bundle: true, platform: 'node', format: 'esm' })

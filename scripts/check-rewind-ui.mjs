@@ -556,7 +556,7 @@ try {
   console.log('PASS: compact history rows, pointer/keyboard preview, Undo/Redo identity, passive older entries, long paths and independent skipped-file details')
   await evaluate(`window.setOpen(false);window.setLocale('en')`);await until(`!document.querySelector('[data-rewind-panel]')`)
   assert.equal(await evaluate('document.body.style.overflow'),'')
-  // The two anchored entrances — the user bubble's 回退 (conversation) and the
+  // The two anchored entrances — the user bubble's Rewind (conversation) and the
   // changed-files card's Undo (files) — land ON their checkpoint with the
   // entry point's mode preselected, without a second click, and never execute.
   const restoresBeforeAnchored = await evaluate('window.restores.length')

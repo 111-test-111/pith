@@ -170,7 +170,7 @@ export function registerIpc(
   // connect is lazy behind consent — target discovery rides the service's own
   // 1s reconcile poll plus the renderer's explicit pulls (pane createPage,
   // consent), never a status read.
-  // Agent 键盘动作前的「请渲染层聚焦 guest」握手：待应答表 + 序号 + ack 超时（见下方 focusGuest）。
+  // Guest-focus handshake before agent keyboard actions: pending acknowledgements, sequence IDs and timeout (see focusGuest).
   const pendingGuestFocus = new Map<number, () => void>()
   const GUEST_FOCUS_ACK_TIMEOUT_MS = 1_000
   let focusGuestSeq = 0
@@ -199,12 +199,12 @@ export function registerIpc(
         /* best-effort */
       }
     },
-    // 键盘输入前把焦点交给 guest——**必须由渲染层把 `<webview>` 元素 focus**。
-    // 实测：壳窗口持焦点时，派给 guest 的按键会同时落到壳窗口 DOM，于是 agent 按一次
-    // Escape 就把本轮停掉（Escape 是 Composer 的停止键）；而 `webviewElement.focus()`
-    // 之后同样的按键壳窗口一个也收不到。main 侧 `webContents.focus()` 与 playwright 的
-    // `Page.bringToFront` 都**不动壳窗口的 DOM 焦点**（实测 activeElement 始终是 BUTTON），
-    // 所以这里发请求 + 等 ack（带超时兜底：页被关掉/面板未挂载时不会卡住键盘动作）。
+    // Keyboard input requires the renderer to focus the guest <webview> element.
+    // With shell focus, guest keyboard events also reach the shell DOM.
+    // An agent Escape would therefore stop the run through the Composer shortcut.
+    // webviewElement.focus() contains subsequent keys in the guest. Main webContents.focus() and
+    // Playwright Page.bringToFront leave the shell DOM focus unchanged.
+    // Wait for the renderer acknowledgement, with a timeout for closed pages or unmounted panes.
     focusGuest: async (webContentsId: number) => {
       const target = mainWindow()
       if (!target) return
@@ -227,7 +227,7 @@ export function registerIpc(
     }
   })
 
-  // 渲染层聚焦完 guest 后的 ack（main 等到它才派按键，见 BrowserFocusGuestPayload）。
+  // The renderer acknowledges guest focus before main dispatches keys (BrowserFocusGuestPayload).
   ipcMain.handle('browser:focus-guest-done', (_event, requestId: number) => {
     pendingGuestFocus.get(requestId)?.()
     pendingGuestFocus.delete(requestId)
@@ -290,16 +290,16 @@ export function registerIpc(
     await ses.clearAuthCache()
   })
 
-  // ---- Chrome 登录态导入（Settings → Browser）。逻辑全在 import-cookies.ts；
-  // 这里只把 partition session 接进去（解密/读取永不触碰渲染层）。 ----
+  // Chrome login-state import (Settings → Browser) is implemented in import-cookies.ts.
+  // Only pass the partition session here; reading and decryption never reach the renderer.
   ipcMain.handle('browser:importSources', (): BrowserImportDiscoveryDTO => ({
     ...discoverChrome(),
-    // 两条引导路：dev/preview（未打包，进程是仓库里的 Electron.app，FDA 列表
-    // 看不见）→ 授启动终端即可；正式安装（已打包，FDA 列表可见）→ 直接勾选 app。
+    // In dev/preview, grant Full Disk Access to the launching terminal because the repository Electron.app
+    // is absent from the permission list. Installed builds instead grant access to the app itself.
     devMode: !app.isPackaged
   }))
-  // discovery 把根目录分类：blocked（macOS 应用数据保护拦住了读取，引导用户去授
-  // 「完全磁盘访问」）/ none / absent / ok —— 渲染层据此显示引导而非误导性的「未找到」。
+  // Discovery distinguishes blocked (macOS data protection), none, absent and ok,
+  // so the renderer can offer access guidance instead of a misleading not-found message.
   ipcMain.handle('browser:openPrivacySettings', () => {
     void shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles')
   })

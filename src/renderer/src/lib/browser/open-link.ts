@@ -1,11 +1,6 @@
 import { useSyncExternalStore } from 'react'
 
-/**
- * 聊天等处的网页链接 → 内置浏览器打开的 window CustomEvent + 待处理队列。
- * detail 不带 URL：浏览器标签页可能尚未挂载（Workspace 听到事件才去开标签），迟到者
- * 错过同步派发的事件——队列让浏览器面板挂载时 drain 兜底；已挂载时事件触发即 drain。
- * 移植自 pi-web lib/browser-open-link.ts：事件名换成壳侧的 pith 命名空间。
- */
+/** A window CustomEvent and pending queue route web links from chat/Markdown into the embedded browser. Events carry no URL: an unmounted pane can miss synchronous dispatch, then drain the queue on mount; mounted panes drain on delivery. Ported from pi-web under the pith event namespace. */
 export const BROWSER_OPEN_LINK_EVENT = 'pith:browser-open-link'
 
 const pendingUrls: string[] = []
@@ -15,19 +10,19 @@ export function requestBrowserOpenLink(url: string): void {
   window.dispatchEvent(new CustomEvent(BROWSER_OPEN_LINK_EVENT))
 }
 
-/** 取走并清空待打开队列（浏览器面板挂载时与事件触发时各 drain 一次）。 */
+/** Drain queued links on pane mount and event delivery. */
 export function drainPendingBrowserOpenLinks(): string[] {
   return pendingUrls.splice(0, pendingUrls.length)
 }
 
-// ---- 「链接在内置浏览器打开」偏好（localStorage 承载，默认开；仅 'false' 视为关） ----
+// Open-links-in-browser preference: localStorage, default enabled; only false disables.
 
 const OPEN_LINKS_PREF_KEY = 'pi-app:open-links-in-browser'
 
-// markdown 链接路由与设置行共用同一 store（useSyncExternalStore 订阅）
+// Markdown routing and Settings share one subscribed store.
 const openLinksListeners = new Set<() => void>()
 
-// useSyncExternalStore 的 snapshot 要求身份稳定——布尔值天然稳定，缓存只为避免每次读盘
+// Boolean snapshots are inherently stable; cache them to avoid repeated storage reads.
 let openLinksCache: boolean | null = null
 
 export function subscribeOpenLinksInBrowser(cb: () => void): () => void {
@@ -37,7 +32,7 @@ export function subscribeOpenLinksInBrowser(cb: () => void): () => void {
   }
 }
 
-/** 同步读偏好（非 React 上下文用——markdown 链接路由在事件回调里读，拿不到 hook）。 */
+/** Synchronous preference reader for non-React Markdown click callbacks. */
 export function getOpenLinksInBrowserPref(): boolean {
   if (openLinksCache === null) {
     try {
@@ -49,7 +44,7 @@ export function getOpenLinksInBrowserPref(): boolean {
   return openLinksCache
 }
 
-/** 即时生效：写盘（隐私模式等失败静默降级）+ 通知订阅者。 */
+/** Apply immediately: persist with silent storage fallback, then notify subscribers. */
 export function setOpenLinksInBrowser(value: boolean): void {
   if (value === getOpenLinksInBrowserPref()) return
   openLinksCache = value
@@ -61,7 +56,7 @@ export function setOpenLinksInBrowser(value: boolean): void {
   for (const cb of openLinksListeners) cb()
 }
 
-/** 「链接在内置浏览器打开」偏好 hook（设置行与 markdown 链接路由共用）。 */
+/** Shared open-links-in-browser hook for Settings and Markdown routing. */
 export function useOpenLinksInBrowserPref(): {
   openLinksInBrowser: boolean
   setOpenLinksInBrowser: (value: boolean) => void

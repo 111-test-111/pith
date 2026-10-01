@@ -27,7 +27,7 @@ import {
   SelectTrigger,
 } from "@/components/motion/select";
 import { SPRING_SWAP } from "@/lib/ease";
-// local patch (pi-app): the height glide honours the app's own 关闭动效
+// local patch (pi-app): the height glide honours the app's own reduced motion
 // switch (the vendored `useReducedMotion` above is the OS signal).
 import { useReduceMotion } from "@/lib/reduce-motion";
 // local patch (pi-app): native plaintext editing preserves selection and undo.
@@ -119,7 +119,7 @@ export function PromptInput({
   ...editorProps
 }: PromptInputProps) {
   const reduce = useReducedMotion() ?? false;
-  // local patch (pi-app): the app-level 关闭动效 switch (not the OS signal
+  // local patch (pi-app): the app-level reduced motion switch (not the OS signal
   // above) decides whether a draft's height change glides or lands instantly.
   const appReduceMotion = useReduceMotion();
   const [internalValue, setInternalValue] = useState(defaultValue);

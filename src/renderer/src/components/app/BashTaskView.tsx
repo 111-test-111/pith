@@ -75,7 +75,7 @@ export function BashTaskRow({ task: fallback, completion = false, inset = false 
     // with an icon on the same line. A transcript row keeps the shared
     // `ToolResult` inset it has beside every other tool row.
     //
-    // A transcript row is a PROCESS row for 「紧凑显示连续工具调用」
+    // A transcript row is a PROCESS row for compact tool-call display
     // (`lib/compact-tools`): the completion notice a steer delivers is a tool
     // row like the call it reports, so it takes the same tightened gap beside
     // its neighbours. The panel's `inset` rows are not transcript rows and are

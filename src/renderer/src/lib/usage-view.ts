@@ -319,7 +319,7 @@ export function buildUsageChartModel(
   }
 }
 
-/** Locale-aware compact token count ("654M", "1.1B", "6323万") for axes and tooltips. */
+/** Locale-aware compact token counts for axes and tooltips. */
 export function formatCompactTokens(tokens: number, locale: string): string {
   return new Intl.NumberFormat(locale, { notation: 'compact', maximumFractionDigits: 1 }).format(tokens)
 }

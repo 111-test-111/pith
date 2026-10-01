@@ -53,7 +53,7 @@ function formatUsd(cost: number): string {
   return `$${cost.toFixed(4)}`
 }
 
-/** "Aug 14, 08:55 AM" / "8月14日 08:55" — locale-aware, no seconds. */
+/** Locale-aware date/time label without seconds. */
 function formatRecordTime(ts: number, locale: string): string {
   return new Date(ts).toLocaleString(locale, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 }

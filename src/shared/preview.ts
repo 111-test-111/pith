@@ -55,7 +55,7 @@ const FONT = new Set(['.ttf', '.otf', '.woff', '.woff2'])
 const MEDIA_KIND_SET: ReadonlySet<PreviewKind> = new Set<PreviewKind>(['image', 'video', 'audio'])
 /** Kinds whose bytes are decoded as text by `files:document`. */
 const TEXT_KINDS: ReadonlySet<PreviewKind> = new Set<PreviewKind>(['text', 'markdown', 'html', 'table', 'diff', 'notebook', 'subtitle'])
-/** Kinds that own a rendered preview, i.e. get a 预览 tab next to the source. */
+/** Kinds that own a rendered preview tab beside the source tab. */
 const PREVIEW_KINDS: ReadonlySet<PreviewKind> = new Set<PreviewKind>(['markdown', 'html', 'table', 'diff', 'notebook', 'subtitle'])
 /** Kinds that take the whole pane: no view tabs, and never a document read. */
 const INLINE_KINDS: ReadonlySet<PreviewKind> = new Set<PreviewKind>(['image', 'video', 'audio', 'pdf', 'unplayable', 'spreadsheet', 'font'])

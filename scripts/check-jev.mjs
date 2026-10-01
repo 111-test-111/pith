@@ -163,7 +163,8 @@ extensionFactories:options.resourceLoaderOptions.extensionFactories}})};` }))
   const runtime = await ModelRuntime.create({ authPath: join(agentDir, 'auth.json'), modelsPath: join(agentDir, 'models.json'), modelsStorePath: join(agentDir, 'models-store'), refreshOnCreate: false })
   runtime.hasConfiguredAuth = () => true
   runtime.checkAuth = () => { throw new Error('Unexpected model credential access') }
-  runtime.getAvailableSnapshot = () => [{ id: 'fixture', name: 'fixture', provider: 'fixture', api: 'openai-completions', baseUrl: 'http://127.0.0.1:1', reasoning: false, input: ['text'], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 200000, maxTokens: 4096 }]
+  // The visual workflow case requires an image-capable primary fixture.
+  runtime.getAvailableSnapshot = () => [{ id: 'fixture', name: 'fixture', provider: 'fixture', api: 'openai-completions', baseUrl: 'http://127.0.0.1:1', reasoning: false, input: ['text', 'image'], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 200000, maxTokens: 4096 }]
   const app = new PiManager(() => {}, error => { throw new Error(error) }); apps.push(app)
   app.runtime = async () => runtime
   app.jevService.options.fetch = fetch

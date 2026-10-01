@@ -1,6 +1,6 @@
 import type { Messages } from './en'
 
-/** 简体中文 — key 必须与 en.ts 完全一致（类型强制）。 */
+/** Simplified Chinese; keys must match en.ts exactly, enforced by the type. */
 const zhCN: Messages = {
   "trajectory.status.unavailable": "数据不可用",
   "trajectory.doc.response": "响应头",
@@ -331,7 +331,7 @@ const zhCN: Messages = {
   "rewind.recover": "恢复操作前状态",
   "rewind.openRecovery": "打开保留的文件",
   "rewind.error.busy": "此目录有进行中的工作或排队消息。请等待工作结束、取回排队消息并关闭交互终端后再恢复。",
-  // 面板顶部的实时提示只讲当前真正拦住回退的那一件事（见 `RewindBusyReason`）。
+  // Live panel notices name only the current Rewind blocker (see RewindBusyReason).
   "rewind.busy.turn": "本会话正在回答，等这一轮结束后即可回退。",
   "rewind.busy.queued": "队列里还有排队消息，先取回后再回退。",
   "rewind.busy.work": "有正在运行的工具、后台命令或子代理在写这个目录，等它结束后再回退。",
@@ -357,7 +357,7 @@ const zhCN: Messages = {
   'app.name': 'Pith',
   'app.starting': '正在启动 Pith…',
 
-  // ask_user_question 面板 + 转写卡片 + 等待行
+  // ask_user_question panel, transcript card and waiting row.
   'askUser.kicker': '来自助手的提问',
   'askUser.sourceSubagent': '子代理',
   'askUser.sourceSubagentNamed': '子代理 · {profile}',
@@ -637,7 +637,7 @@ const zhCN: Messages = {
   'composer.hintSteer': '回车：立即发送 · {modifier}+回车：结束后发送',
   'composer.hintFollowUp': '回车：结束后发送 · {modifier}+回车：立即发送',
 
-  // 右侧边栏面板
+  // Right-sidebar panes.
   'sidebar.title': '侧边栏',
   'sidebar.newTab': '新建标签页',
   'sidebar.closeTab': '关闭 {label}',
@@ -662,7 +662,7 @@ const zhCN: Messages = {
   'sidebar.chatAnswerFailed': '回答失败',
   'sidebar.chatAborted': '已停止',
 
-  // 键盘快捷键（设置 → 快捷键）
+  // Keyboard shortcuts (Settings -> Shortcuts).
   'shortcuts.title': '快捷键',
   'shortcuts.description': '全局与右侧面板的键盘快捷键',
   'shortcuts.intro':
@@ -725,7 +725,7 @@ const zhCN: Messages = {
   'shortcuts.error.unsupported': '该按键不能用作快捷键',
   'shortcuts.error.conflict': '已被「{action}」占用',
 
-  // 审阅标签页
+  // Review tab.
   'review.emptyTitle': '暂无可审阅的改动',
   'terminal.tab': '终端 {n}',
   'terminal.new': '新建终端',
@@ -741,7 +741,7 @@ const zhCN: Messages = {
   'terminal.clear': '清屏',
   'terminal.selectAll': '全选',
 
-  // 浏览器标签页
+  // Browser tab.
   'browser.consentTitle': '共享浏览器 profile',
   'browser.consentBody':
     '内嵌浏览器会在本机持久保存登录态。所有会话与 agent 浏览器工具共享该 profile——agent 能以你已登录的身份读取和操作网站。',
@@ -803,7 +803,7 @@ const zhCN: Messages = {
   'review.expandAll': '展开全部文件',
   'review.openFile': '打开 {name}',
 
-  // 图片预览浮层
+  // Image-preview overlay.
   'imagePreview.dialogLabel': '图片预览',
   'imagePreview.open': '预览图片 {name}',
   'imagePreview.attachment': '附件 {index}',
@@ -815,14 +815,14 @@ const zhCN: Messages = {
   'imagePreview.openFile': '打开文件',
   'imagePreview.failed': '图片加载失败。',
 
-  // 上下文用量圆环
+  // Context-usage ring.
   'context.label': '上下文用量',
   'context.used': '已使用 {percent}% 上下文',
   'context.tokens': '{used} / {total} Token',
   'context.cacheHitLabel': '缓存命中',
   'context.costLabel': '费用',
 
-  // 上下文详情页（右侧栏，点圆环打开）
+  // Context-details pane (right rail, opened from the ring).
   'contextDetail.title': '上下文',
   'contextDetail.refresh': '刷新上下文详情',
   'contextDetail.error': '无法读取会话上下文',
@@ -869,14 +869,14 @@ const zhCN: Messages = {
   'model.reasoning': '推理',
   'model.standard': '标准',
   'model.contextK': '{k}k 上下文',
-  // 模型支持的输入形式，作为条目内的标签显示。
+  // Supported model input types, displayed as item tags.
   'model.inputsAria': '支持的输入',
   'model.inputText': '文本',
   'model.inputImage': '图像',
   'model.noProviders': '尚无已配置的提供商，请在设置中添加 API key。',
   'model.thinkingTitle': '思考强度',
 
-  // 思考强度（值对应 SDK 的 ModelThinkingLevel）
+  // Thinking intensity (values correspond to SDK ModelThinkingLevel).
   'thinking.off': '关闭',
   'thinking.minimal': '极简',
   'thinking.low': '低',
@@ -1227,7 +1227,7 @@ const zhCN: Messages = {
   'settings.skillPreviewTruncated': '预览已截断 — 打开文件查看剩余内容。',
   'settings.skillReadFailed': '读取技能文件失败。',
 
-  // browser（内嵌浏览器：代理工具、链接路由、浏览数据）
+  // Embedded browser: agent tools, link routing and browsing data.
   'settings.browserTitle': '浏览器',
   'settings.browserDesc': '内嵌浏览器 — 代理工具、聊天链接的打开方式与浏览数据。',
   'settings.browserAgentTools': '代理浏览器工具',
@@ -1808,7 +1808,7 @@ const zhCN: Messages = {
   "files.error.tooLarge": "差异过大，无法预览。请在编辑器中打开文件。",
   "files.error.git": "无法读取 Git 差异，请刷新重试。",
 
-  // ---- 定时任务 ----
+  // ---- Scheduled tasks ----
   "scheduledTasks.open": "定时任务",
   "scheduledTasks.title": "定时任务",
   "scheduledTasks.back": "返回",

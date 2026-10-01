@@ -1064,21 +1064,19 @@ export interface SandboxStatusDTO {
  * webview guest (marker URL). Same shape the service's pendingCreates carries. */
 export interface BrowserPendingCreateDTO { id: string; owner: string; createdAt: number }
 
-// ---- Chrome 登录态导入（Settings → Browser；清单 = <userData>/browser-import.json） ----
+// Chrome login-state import (Settings → Browser; inventory: <userData>/browser-import.json).
 
-/** 可导入的 Chrome 档案（目录名 + 显示名）。 */
+/** Importable Chrome profile: directory name and display name. */
 export interface BrowserImportSourceDTO {
   id: string
   label: string
 }
 
-/** 档案发现结果：`ok` 可导入；`blocked` 被 macOS 应用数据保护拦住（引导授权）；
- *  `none` 装了 Chrome 但没有带 cookie 库的档案；`absent` 没装。 */
+/** Discovery status: ok permits import; blocked needs macOS data-access permission; none means Chrome has no profile cookie database; absent means Chrome is not installed. */
 export interface BrowserImportDiscoveryDTO {
   status: 'ok' | 'blocked' | 'none' | 'absent'
   profiles: BrowserImportSourceDTO[]
-  /** 是否 dev 模式（含 preview，进程都是仓库里的 Electron.app）：blocked 引导
-   *  走两条路 —— dev 授「完全磁盘访问」给启动终端即可，正式安装则直接勾选 pi-app。 */
+  /** Dev/preview runs the repository Electron.app: blocked guidance grants Full Disk Access to the launching terminal. Installed builds grant access to the app itself. */
   devMode: boolean
 }
 
@@ -1087,24 +1085,24 @@ export type BrowserImportErrorCode =
   | 'profile-not-found'
   | 'keychain'
   | 'database'
-  /** macOS 应用数据保护（TCC）拦住了对 Chrome 目录的读取 —— 引导用户授「完全磁盘访问」。 */
+  /** macOS TCC blocked Chrome-directory reads; offer Full Disk Access guidance. */
   | 'permission'
 
-/** 一次导入的结果。code 只在 ok=false 时有值；计数无论成败都尽力填充。 */
+/** Import result. code appears only on failure; populate counts as far as possible in either case. */
 export interface BrowserImportResultDTO {
   ok: boolean
   code?: BrowserImportErrorCode
   total: number
   imported: number
   failed: number
-  /** 第一条写入失败的技术性错误消息（英文，仅诊断展示，可缺省）。 */
+  /** First failed-write diagnostic in English, when available. */
   firstError?: string
   skippedExpired: number
-  /** v20/损坏/空身份等「跳过不导」的合计。 */
+  /** Total skipped cookies, including v20, malformed data and empty identities. */
   skippedUndecryptable: number
 }
 
-/** 已导入清单的读数；present=false 表示没有可清除的导入。 */
+/** Imported inventory totals; present=false means no imported cookies can be cleared. */
 export interface BrowserImportStatusDTO {
   present: boolean
   source?: 'chrome'

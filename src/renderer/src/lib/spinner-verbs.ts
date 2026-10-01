@@ -34,7 +34,7 @@ export interface SpinnerVerb {
   id: string
   /** Sentence shown for `en` ("Pi is tinkering with the tricky bits"). */
   en: string
-  /** Sentence shown for `zh-CN` ("Pi 正在调试难题"). */
+  /** Localized sentence shown for zh-CN. */
   zh: string
 }
 

@@ -4,7 +4,7 @@
  * color well; a preset click swaps `data-accent` (and clears the custom inline
  * tokens). The well opens the app-built picker (MorphPopover + drag tracks +
  * hex field — beUI ships no color picker): picking is a DRAFT that only moves
- * the preview, 「取消」/Escape discards it, and solely 「应用」 stores the hex,
+ * the preview, Cancel/Escape discards it, and solely Apply stores the hex,
  * activates the 'custom' slot and writes the four derived light/dark token
  * values as inline custom properties on <html>. Dark mode flips to the derived
  * dark pair, the pick survives a reload with the boot path re-deriving the
@@ -171,7 +171,7 @@ try {
   assert.deepEqual(sky.customVars, [], 'a preset still has no inline custom tokens')
 
   // 3. Opening the well changes NOTHING yet: the picker is a draft surface.
-  //    Typing a hex moves only the preview; 「取消」 discards it.
+  //    Typing a hex moves only the preview; Cancel discards it.
   await evaluate(`window.openPicker()`)
   await waitFor(`!!document.querySelector('[data-accent-picker]')`)
   await pause(300)
@@ -215,7 +215,7 @@ try {
   assert.equal(escaped.accent, 'sky', 'Escape keeps the accent')
   assert.equal(escaped.storedCustom, null, 'Escape discards the draft')
 
-  // 5. The hue track drags (a press applies immediately), and solely 「应用」
+  // 5. The hue track drags (a press applies immediately), and solely Apply
   //    commits: stores the hex, activates 'custom', writes the four derived
   //    tokens inline — resolved in BOTH modes.
   await evaluate(`window.openPicker()`)

@@ -15,7 +15,7 @@
     "preview": "electron-vite preview",
     "start": "electron-vite preview",
     "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit",
-    "clean": "rm -rf node_modules/.vite out",
+    "clean": "node scripts/clean.mjs",
     "icons": "node scripts/generate-icons.mjs",
     "prepare:file-icons": "node scripts/prepare-file-icons.mjs",
     "icons:file-types": "node scripts/generate-file-icon-map.mjs",

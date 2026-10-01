@@ -1,19 +1,13 @@
 import { useSyncExternalStore } from 'react'
 
-/**
- * 「侧栏收起时保持浏览器页面活跃」偏好（localStorage 承载，默认关；仅 'true' 视为开）。
- * 开启后，右侧 rail 收起不再卸载浏览器面板——SidebarPanel 让 `motion.aside`
- * 以 width 0 / opacity 0 保持挂载（与切 rail 标签的 opacity-0 保活层同一形态），
- * webview 全尺寸不重排，页面正在进行的动作不中断；展开后与收起前完全一致。
- * 关闭浏览器标签、关闭本开关仍走原有的卸载路径（快照恢复）。
- */
+/** Keep browser pages alive while the rail is folded: localStorage, default off; only true enables. SidebarPanel retains a zero-width/transparent aside with full-sized guests, preserving actions and layout. Closing the browser tab or disabling the preference still unmounts and restores from snapshots. */
 
 const KEEP_ALIVE_PREF_KEY = 'pi-app:browser-keep-alive'
 
-// 与「在内置浏览器打开链接」偏好共用同一 store 模式（useSyncExternalStore 订阅）
+// Use the same subscribed preference-store pattern as browser link routing.
 const listeners = new Set<() => void>()
 
-// useSyncExternalStore 的 snapshot 要求身份稳定——布尔值天然稳定，缓存只为避免每次读盘
+// Boolean snapshots are inherently stable; caching avoids repeated storage reads.
 let cache: boolean | null = null
 
 function subscribe(cb: () => void): () => void {
@@ -23,7 +17,7 @@ function subscribe(cb: () => void): () => void {
   }
 }
 
-/** 同步读偏好（SidebarPanel 每次渲染都会读，走缓存）。 */
+/** Cached synchronous reader used by SidebarPanel renders. */
 export function getBrowserKeepAlivePref(): boolean {
   if (cache === null) {
     try {
@@ -35,7 +29,7 @@ export function getBrowserKeepAlivePref(): boolean {
   return cache
 }
 
-/** 即时生效：写盘（隐私模式等失败静默降级）+ 通知订阅者。 */
+/** Apply immediately: persist with silent storage fallback, then notify subscribers. */
 export function setBrowserKeepAlive(value: boolean): void {
   if (value === getBrowserKeepAlivePref()) return
   cache = value
@@ -47,7 +41,7 @@ export function setBrowserKeepAlive(value: boolean): void {
   for (const cb of listeners) cb()
 }
 
-/** 偏好 hook（设置行与 SidebarPanel 共用）。 */
+/** Preference hook shared by Settings and SidebarPanel. */
 export function useBrowserKeepAlivePref(): {
   browserKeepAlive: boolean
   setBrowserKeepAlive: (value: boolean) => void

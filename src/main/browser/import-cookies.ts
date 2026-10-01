@@ -1,24 +1,9 @@
-/**
- * Chrome → 内嵌浏览器「登录态导入」：读 Chrome 的 cookie 库、解密、转成 Electron
- * `cookies.set` 明细；另维护一份导入清单（`browser-import.json`）支撑「清除已导入」。
- *
- * 该模块刻意不 import electron（可被检查脚本在纯 Node 下驱动）：所有会碰到
- * Electron session / userData / Keychain 的边界都以注入点形式暴露——
- * - `apply`：真正写 cookie 的函数（ipc.ts 传入 partition session 的批量 setter）；
- * - `getKey`：取 Chrome Safe Storage 口令（默认 spawn `security`，会弹一次钥匙串授权）；
- * - `chromeRoot` / `recordPath`：路径根，测试注入 fixture。
- *
- * 平台：macOS only。Windows 的 cookie 是 App-Bound 加密（v20，第三方不可解），
- * Linux 是硬编码口令 `peanuts`（以后要支持很容易，同一条链路换个口令）。
- *
- * 格式事实（2026-09 核实）：macOS Chrome 的 `encrypted_value` 仍是
- * Keychain「Chrome Safe Storage」口令 + PBKDF2-HMAC-SHA1(saltysalt, 1003 轮, 16 字节)
- * 派生的 AES-128-CBC，IV 固定 16×0x20，前缀 `v10`/`v11`，PKCS5 填充。
- * 值在 SQL 里取：`node:sqlite` 读超出 2^53 的 int64 列会直接抛错，Chrome 的
- * WebKit 微秒时间戳（~1.3e16）必然越界，所以 expires_utc 必须在 SQL 里降成 unix 秒。
- * cookie 库文件位置：现代 Chrome 是 `<profile>/Network/Cookies`，旧档案是
- * `<profile>/Cookies`，两处都认。
- */
+/** Import Chrome cookies into the embedded browser on macOS.
+ * Electron writes, Keychain access and paths are injected for offline checks.
+ * Copy the database and WAL before reading; convert WebKit microseconds to
+ * Unix seconds in SQL to avoid unsafe JavaScript int64 conversion.
+ * Keep a deduplicated manifest of successful writes for selective removal.
+ * Native Node type stripping requires erasable TypeScript syntax here. */
 import { execFile } from 'node:child_process'
 import { existsSync, readdirSync, readFileSync, type Dirent } from 'node:fs'
 import { copyFile, mkdir, mkdtemp, rename, rm, writeFile } from 'node:fs/promises'
@@ -33,23 +18,22 @@ import type {
   BrowserImportStatusDTO
 } from '../../shared/types'
 
-// ---- Chrome os_crypt 常量 ----
 const SAFE_STORAGE_SERVICE = 'Chrome Safe Storage'
 const SAFE_STORAGE_SALT = 'saltysalt'
 const SAFE_STORAGE_ITERATIONS = 1003
-/** 固定 IV：16 个 0x20（空格）。 */
+
 const LEGACY_IV = Buffer.alloc(16, 0x20)
-/** Chrome ≥152（macOS）的域绑定前缀长度：sha256(host_key)。 */
+
+/** SHA-256 host binding used by newer macOS Chrome cookie values. */
 const DOMAIN_HASH_BYTES = 32
-/** 微秒(1601 纪元) → unix 秒 的 SQL 偏移，只在 SQL 里用，别在 JS 里碰原始值。 */
+
+/** Apply this epoch offset in SQL; never read raw microseconds as a JS number. */
 const WEBKIT_EPOCH_OFFSET_SECONDS = 11644473600
-/** 一次 `cookies.set` 批量写入的并发上限（每条都是一次到网络服务的 IPC）。 */
+
 const APPLY_CONCURRENCY = 24
-/** Keychain 授权框可能等用户很久；给一个宽限但不挂死 IPC。 */
+
 const KEYCHAIN_TIMEOUT_MS = 120_000
 
-// 注意：本模块被 scripts/check-browser-import.mjs 以 Node 原生 type-stripping 直接
-// import，只能用可擦除语法（无 parameter property / enum 等）。
 export class BrowserImportError extends Error {
   readonly code: BrowserImportErrorCode
   constructor(code: BrowserImportErrorCode, message: string) {
@@ -58,7 +42,6 @@ export class BrowserImportError extends Error {
   }
 }
 
-/** 写入 partition 的 cookie 明细（结构同 Electron CookiesSetDetails 的子集）。 */
 export interface ImportedCookieDetail {
   url: string
   name: string
@@ -71,7 +54,6 @@ export interface ImportedCookieDetail {
   sameSite: 'unspecified' | 'no_restriction' | 'lax' | 'strict'
 }
 
-/** 清单里的 cookie 身份（紧凑元组：host_key / name / path / secure）。 */
 export type CookieIdentity = [host: string, name: string, path: string, secure: number]
 
 export function defaultChromeRoot(): string {
@@ -82,9 +64,6 @@ export function browserImportRecordPath(userDataDir: string): string {
   return join(userDataDir, 'browser-import.json')
 }
 
-// ---- profile 发现 ----
-
-/** `Local State` → `profile.info_cache[dir].name` 的显示名映射；读不了就退回目录名。 */
 function readProfileLabels(chromeRoot: string): Map<string, string> {
   const labels = new Map<string, string>()
   try {
@@ -99,12 +78,11 @@ function readProfileLabels(chromeRoot: string): Map<string, string> {
       }
     }
   } catch {
-    /* Local State 缺失/损坏 → 显示名退回目录名 */
+
   }
   return labels
 }
 
-/** 档案目录排序：Default 永远第一，其余 Profile N 按号、再按名字。 */
 function profileOrder(a: BrowserImportSourceDTO, b: BrowserImportSourceDTO): number {
   if (a.id === 'Default') return b.id === 'Default' ? 0 : -1
   if (b.id === 'Default') return 1
@@ -114,8 +92,9 @@ function profileOrder(a: BrowserImportSourceDTO, b: BrowserImportSourceDTO): num
   return a.id.localeCompare(b.id)
 }
 
+/** Prefer Network/Cookies over the legacy profile-root database. */
 function cookiesFileFor(profileDir: string): string | null {
-  // 现代 Chrome 在 Network/ 子目录；旧档案在档案根。Network 优先（两者同存时它才是活的）。
+
   const modern = join(profileDir, 'Network', 'Cookies')
   if (existsSync(modern)) return modern
   const legacy = join(profileDir, 'Cookies')
@@ -123,15 +102,11 @@ function cookiesFileFor(profileDir: string): string | null {
   return null
 }
 
-/** 根目录四种状态。`blocked` = macOS 26 的应用数据保护（TCC/com.apple.macl）把
- *  `~/Library/Application Support/Google/Chrome` 藏起来了：readdir 直接 EPERM，
- *  open 会伪装成 ENOENT —— 数据明明在（父目录 stat 可见 55 个条目），只是不许
- *  别的进程读。解法：系统设置里给 pi-app 勾「完全磁盘访问权限」后重启应用。 */
 export type ChromeRootStatus = 'ok' | 'blocked' | 'none' | 'absent'
 
-/** 可注入的 readdir（检查脚本用拋 EPERM 的假实现复现 TCC 形状）。 */
 export type ReaddirImpl = (path: string, options: { withFileTypes: true }) => Dirent[]
 
+/** TCC may report EPERM on directory reads but ENOENT on file opens. */
 export function chromeRootStatus(
   chromeRoot = defaultChromeRoot(),
   readdirImpl: ReaddirImpl = readdirSync
@@ -174,7 +149,6 @@ export interface ChromeDiscovery {
   profiles: BrowserImportSourceDTO[]
 }
 
-/** 发现入口：状态 + 可导入档案（status !== 'ok' 时 profiles 恒为空）。 */
 export function discoverChrome(
   chromeRoot = defaultChromeRoot(),
   readdirImpl?: ReaddirImpl
@@ -184,9 +158,6 @@ export function discoverChrome(
   return { status, profiles: listChromeProfiles(chromeRoot) }
 }
 
-// ---- 解密 ----
-
-/** 读取 macOS Keychain 里 Chrome 的 os_crypt 口令。首次会弹系统授权框。 */
 export function readChromeSafeStorageKey(): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile(
@@ -211,10 +182,11 @@ export function deriveMacOsCryptKey(passphrase: string): Buffer {
 
 export type CookieDecrypt =
   | { status: 'ok'; value: string }
-  /** v20 / 未知前缀：mac 上不该出现，出现只计数跳过。 */
+
   | { status: 'unsupported' }
   | { status: 'failed' }
 
+/** Accept v10/v11 CBC values; strip a host hash only when it matches exactly. */
 export function decryptCookieValue(
   encrypted: Uint8Array | null | undefined,
   key: Buffer,
@@ -228,11 +200,7 @@ export function decryptCookieValue(
   try {
     const decipher = createDecipheriv('aes-128-cbc', key, LEGACY_IV)
     let plain = Buffer.concat([decipher.update(buf.subarray(3)), decipher.final()])
-    // Chrome ≥152（macOS）把 Windows v20 的域绑定方案下沉到了 mac：v10 明文变成了
-    // sha256(host_key) || value（实测 1575/1575 命中，原像 = host_key 原样含前导点）。
-    // 不剥掉它，每个值都带着 32 字节哈希，cookies.set 以「ASCII control characters」
-    // 拒收 —— 实测 1314/1328 失败，剩下的“成功”值本身也是错的（哈希字节碰巧干净）。
-    // 哈希命中即剥；未命中的旧格式值（无前缀）原样通过，向后兼容。
+
     if (hostKey && plain.length >= DOMAIN_HASH_BYTES) {
       const expected = createHash('sha256').update(hostKey, 'utf8').digest()
       if (expected.equals(plain.subarray(0, DOMAIN_HASH_BYTES))) {
@@ -241,12 +209,10 @@ export function decryptCookieValue(
     }
     return { status: 'ok', value: plain.toString('utf8') }
   } catch {
-    // 填充校验失败 ≈ 口令不对或数据损坏
+
     return { status: 'failed' }
   }
 }
-
-// ---- SQLite 读取 ----
 
 interface CookieRow {
   host_key: string
@@ -258,7 +224,7 @@ interface CookieRow {
   is_httponly: number
   is_persistent: number
   samesite: number | null
-  /** SQL 里已降成 unix 秒（int64 原始微秒列绝不能裸读，node:sqlite 会抛错）。 */
+
   expires_unix: number
 }
 
@@ -286,7 +252,7 @@ function readCookieRows(dbFile: string): CookieRow[] {
         throw new BrowserImportError('database', `cookies table missing column ${required}`)
       }
     }
-    // samesite 列是后来加的；老档案没有时按 unspecified。
+
     const sameSiteExpr = columns.has('samesite') ? 'samesite' : '-1'
     return db
       .prepare(
@@ -301,10 +267,8 @@ function readCookieRows(dbFile: string): CookieRow[] {
   }
 }
 
-// ---- 行 → Electron 明细 ----
-
 function mapSameSite(raw: number | null, secure: boolean): ImportedCookieDetail['sameSite'] {
-  // Chromium 落库值：-1 unspecified / 0 none / 1 lax / 2 strict；NULL 是老行，按 unspecified。
+
   if (raw == null) return 'unspecified'
   if (raw === 1) return 'lax'
   if (raw === 2) return 'strict'
@@ -316,6 +280,7 @@ export type MappedCookie =
   | { kind: 'detail'; detail: ImportedCookieDetail; identity: CookieIdentity }
   | { kind: 'skipped'; reason: 'expired' | 'invalid' }
 
+/** Preserve host-only/domain semantics and enforce __Host-/__Secure- requirements. */
 export function mapCookieRow(row: CookieRow, value: string, nowSec: number): MappedCookie {
   const host = typeof row.host_key === 'string' ? row.host_key : ''
   const name = typeof row.name === 'string' ? row.name : ''
@@ -329,8 +294,7 @@ export function mapCookieRow(row: CookieRow, value: string, nowSec: number): Map
 
   const isDomainCookie = host.startsWith('.')
   const hostOnlyHost = isDomainCookie ? host.slice(1) : host
-  // __Secure- / __Host- 前缀按 Chromium 语义必须 secure；导入时兜底补上，
-  // 否则 cookies.set 直接拒绝。
+
   const secure = !!row.is_secure || name.startsWith('__Secure-') || name.startsWith('__Host-')
   const isHostPrefix = name.startsWith('__Host-')
   const path = isHostPrefix ? '/' : row.path?.startsWith('/') ? row.path : '/'
@@ -340,7 +304,7 @@ export function mapCookieRow(row: CookieRow, value: string, nowSec: number): Map
     url: `${scheme}://${hostOnlyHost}${path}`,
     name,
     value,
-    // __Host- 必须 host-only（不带 domain）；其余按 Chrome 的域 cookie 点号语义。
+
     domain: isHostPrefix || !isDomainCookie ? undefined : host,
     path,
     secure,
@@ -352,15 +316,13 @@ export function mapCookieRow(row: CookieRow, value: string, nowSec: number): Map
   return { kind: 'detail', detail, identity: [host, name, path, secure ? 1 : 0] }
 }
 
-/** 清除时由身份重建 removal URL：scheme 跟着 secure 走，host 去点，path 用原值。 */
+/** Reconstruct a removal URL from the stored secure flag, host and path. */
 export function removalUrlFor(identity: CookieIdentity): string {
   const [host, , path, secure] = identity
   const hostOnlyHost = host.startsWith('.') ? host.slice(1) : host
   const safePath = path?.startsWith('/') ? path : '/'
   return `${secure ? 'https' : 'http'}://${hostOnlyHost}${safePath}`
 }
-
-// ---- 导入清单（browser-import.json） ----
 
 interface ImportEvent {
   source: 'chrome'
@@ -373,7 +335,7 @@ interface ImportEvent {
 interface ImportRecord {
   version: 1
   imports: ImportEvent[]
-  /** 身份元组，按 `host|name|path|secure` 去重合并。 */
+
   cookies: CookieIdentity[]
 }
 
@@ -416,9 +378,6 @@ export function readImportStatus(recordPath: string): BrowserImportStatusDTO {
   }
 }
 
-// ---- 编排 ----
-
-/** 校验档案 id，返回 cookie 库绝对路径；找不到抛 profile-not-found。 */
 function resolveProfileCookiesFile(chromeRoot: string, profileId: string): string {
   if (!/^[A-Za-z0-9][A-Za-z0-9 .()_-]*$/.test(profileId)) {
     throw new BrowserImportError('profile-not-found', `invalid profile id: ${profileId}`)
@@ -428,8 +387,7 @@ function resolveProfileCookiesFile(chromeRoot: string, profileId: string): strin
   return file
 }
 
-/** 把库里一行复制到临时目录（Chrome 正在运行会锁库；副本避免争用，WAL 一并带上。
- *  -shm 不复制：那只是索引，SQLite 打开副本时会自己重建。 */
+/** Copy WAL with the database; SQLite recreates the shared-memory index. */
 async function stageCookiesCopy(source: string): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), 'pith-chrome-cookies-'))
   const target = join(dir, 'Cookies')
@@ -438,6 +396,7 @@ async function stageCookiesCopy(source: string): Promise<string> {
   return dir
 }
 
+/** Reject inaccessible profiles before Keychain prompts; record only applied cookies. */
 export async function importChromeCookies(options: {
   profileId: string
   chromeRoot?: string
@@ -459,14 +418,14 @@ export async function importChromeCookies(options: {
 
   const discoveryStatus = chromeRootStatus(chromeRoot, options.readdirImpl)
   if (discoveryStatus === 'blocked') {
-    // 被 TCC 拦住：尽早拒绝并给出引导码，不去碰钥匙串（省掉一次无意义的授权弹框）。
+
     return {
       result: { ok: false, code: 'permission', ...counts },
       status: readImportStatus(recordPath)
     }
   }
   if (discoveryStatus !== 'ok') {
-    // absent：没装 Chrome；none：装了但没有带 cookie 库的档案 —— 都按「未找到档案」报。
+
     return {
       result: { ok: false, code: 'chrome-not-found', ...counts },
       status: readImportStatus(recordPath)
@@ -498,7 +457,7 @@ export async function importChromeCookies(options: {
         counts.failed += 1
         continue
       }
-      // encrypted_value 为空的行：value 列本来就是明文。
+
       const value = row.encrypted_value && row.encrypted_value.length > 0 ? decrypted.value : row.value ?? ''
       const mapped = mapCookieRow(row, value, nowSec)
       if (mapped.kind === 'skipped') {
@@ -510,7 +469,6 @@ export async function importChromeCookies(options: {
       identities.push(mapped.identity)
     }
 
-    // 一条都没解开 = 口令不对（钥匙串给了别的值/数据整体损坏），别谎报 0 条成功。
     if (counts.total > 0 && counts.failed === counts.total) {
       return {
         result: { ok: false, code: 'keychain', ...counts },
@@ -519,8 +477,7 @@ export async function importChromeCookies(options: {
     }
 
     const apply = options.apply ?? ((_details: ImportedCookieDetail[]) => Promise.resolve<ApplyReport>({ results: [] }))
-    // apply 返回逐条写入结果；只有真正写进去的身份才进导入清单（否则「清除已导入」
-    // 会把从未落地的 cookie 也计入 —— 上线首日 1313 对 14 的谎报就是这么来的）。
+
     const report = await apply(details)
     let applyFailed = 0
     const appliedIdentities: CookieIdentity[] = []
@@ -563,7 +520,7 @@ export async function importChromeCookies(options: {
         failed: counts.failed,
         firstError: report.firstError,
         skippedExpired: counts.skippedExpired,
-        // UI 把 unsupported/invalid 合并展示为「跳过」。
+
         skippedUndecryptable: counts.skippedUndecryptable + skippedInvalid,
         total: counts.total
       },
@@ -601,8 +558,7 @@ export async function clearImportedCookies(
   return { removed, failed }
 }
 
-/** 默认 apply：限并发写 partition session。 */
-/** apply 的返回：逐条写入结果 + 第一条失败的技术性错误消息（仅诊断展示）。 */
+/** Per-cookie application outcomes plus the first technical error for diagnostics. */
 export interface ApplyReport {
   results: boolean[]
   firstError?: string

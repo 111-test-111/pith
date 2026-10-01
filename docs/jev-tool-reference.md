@@ -2,14 +2,11 @@
 
 Use this reference for a judgment in the current Pi task. For writing a TypeSafe integration into a user's application, follow the official skill's live-docs and SDK workflow instead.
 
-## Three application modes
+## Application modes
 
-Settings → Jev selects **Off**, **Provide tool**, or **Jev workflow**.
-Off performs no model-driven Jev calls. Provide tool exposes `jev_decide` with the chosen question types. Enforce workflow is an app-owned parent-session controller: Jev routes the task, the primary model executes under existing permissions, and Jev chooses continue / retry / verify / stop from bounded evidence. It continues without a correction-count, primary-request-count or total-duration cap. Service failures, Stop and mode changes still interrupt it. Routing is guidance, never additional permission: missing project context means inspect the project. Requests to change code require actual execution, not advice. Jev receives text excerpts only; the primary model reads files and any supported image attachments, and must not treat its own descriptions as independent visual verification. The task-strip Jev panel exposes actual submitted evidence, outputs and any app corrections.
+Settings → Jev selects **Off**, **Provide tool**, or **Jev workflow**. Off makes no model-driven Jev calls. Provide tool exposes `jev_decide` for enabled question types. Workflow routes and verifies the parent task through the app controller; the optional tool is hidden and children do not start recursive controllers. Follow the supplied workflow instructions, preserve the user's scope and reuse passed checks while their relevant source is unchanged.
 
-In workflow mode the optional tool is absent intentionally. Do not recreate the controller with SDK, shell or extra tool calls, and do not start a recursive controller in subagents. Follow the app's appended workflow instructions and actual permission gates. A Jev judgment cannot approve a Plan, authorize a forbidden tool, turn a missing test into a passing test, or silently replay successful side effects. A paused workflow needs user action; never bypass it through alternate transport.
-
-Work toward the original requested outcome. The controller retains actual patches, current source, command outcomes and prior targets. Reuse passed checks while their relevant code is unchanged; source inspection can establish that two UI entries use the same component. Do not turn a small change into repeated builds, screenshots, pixel comparisons, packaging or benchmark work unless the user request, project instructions or a concrete failure requires it. When a target is already established, cite that evidence; when it cannot advance, report the specific blocker. Never invent another acceptance requirement merely to keep working. The controller detects repeated targets on unchanged code and exposes an unresolved review instead of declaring success or repeating indefinitely. Actual progress remains uncapped. Current source outranks old patches, and stale passing checks cannot certify changed files.
+A judgment grants no extra permissions, cannot approve a Plan or replace actual execution, and cannot convert a missing test into a pass. Do not bypass a disabled capability or paused workflow through SDK, shell, credentials or alternate transport. Jev receives text evidence; the primary model owns source/image inspection.
 
 ## Native tool contract
 

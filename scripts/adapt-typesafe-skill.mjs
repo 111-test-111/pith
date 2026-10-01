@@ -34,7 +34,7 @@ export async function adaptTypesafeSkill(directory) {
   const adapted = source.replace(/^(description: >\s*\n)/m, `$1${discovery}`)
     .replace('# Build with TypeSafe\n', `# Build with TypeSafe\n\n${bridge}\n`)
   await mkdir(join(directory, 'references'), { recursive: true })
-  await copyFile(new URL('../resources/jev/pi-app.md', import.meta.url), join(directory, 'references/pi-app.md'))
+  await copyFile(new URL('../docs/jev-tool-reference.md', import.meta.url), join(directory, 'references/pi-app.md'))
   await writeFile(path, adapted)
   return path
 }

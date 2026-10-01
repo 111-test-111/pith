@@ -1,5 +1,5 @@
 /**
- * Real-Electron E2E for the embedded browser (Task 17).
+ * Real-Electron E2E for the embedded browser.
  *
  * Ruling E (binding): this launches the REAL built app (`electron .` over
  * `out/main/index.mjs`) — real preload, real main BrowserService, isolated
@@ -11,7 +11,7 @@
  * BrowserService wraps). The service's orchestration semantics stay
  * mock-covered by `scripts/check-browser.mjs`; this check proves the
  * cross-process/live layer and re-proves the 13 Electron-44 iron rules from
- * the design spec §11 (docs/superpowers/specs/2026-09-17-embedded-browser-design.md).
+ * docs/architecture/embedded-browser.md.
  *
  * Group 1 output carries EXACTLY 13 iron-rule entries. Each is either
  * exercised live or printed as an explicit `[source-assertion]` — never
@@ -604,7 +604,7 @@ try {
   await guest.keyboard.press('Shift')
   await pause(300)
   assert.equal(await evaluate('JSON.stringify(window.__pitoKeys)'), '[]', 'with the <webview> focused the same key reaches the shell DOM zero times')
-  // 还原成“壳窗口持焦点”（应用平时的静止状态：用户刚在对话区操作过）
+
   await evaluate(`(() => { const w = document.querySelector('webview'); w && w.blur && w.blur(); const b = document.querySelector('[data-browser-toolbar] button'); b && b.focus(); return 1 })()`)
   pass('flow', 'agent keys stay in the page: while the shell owned focus a guest-bound Shift also fired in the shell DOM; after the <webview> took DOM focus the same key reached the shell zero times — the fact BrowserService.focusGuest uses before every keyboard action')
   await assertSource('agent keys focus the guest before dispatch (main awaits the renderer)', ['src/main/ipc.ts'], /target\.webContents\.send\('browser:focus-guest', payload\)/)
@@ -1551,7 +1551,7 @@ try {
   assert.ok(disposeBody, 'BrowserService.dispose() found in service.ts')
   assert.match(disposeBody, /this\.handleProcessExit\(\)/, 'dispose hands lifecycle back to ipc.ts/shutdown.ts (references dropped)')
   assert.match(disposeBody, /this\.clearStateNotify\(\)/, 'dispose tears down the notify timer (references dropped)')
-  assert.match(disposeBody, /刻意不调 electronBrowser\.close\(\)/, 'dispose documents the deliberate no-close decision')
+  assert.match(disposeBody, /Intentionally do not call electronBrowser\.close\(\)/, 'dispose documents the deliberate no-close decision')
   // The negative guard spans the WHOLE file (comments stripped — block
   // comments first, then line comments): dispose() is the one place a close
   // could hide today, but any future method joining it must trip the same alarm.
@@ -1585,11 +1585,8 @@ try {
   assert.match(serviceNoComments, /AGENT_SNAPSHOT_TIMEOUT_MS/, 'snapshots carry an explicit timeout instead of the 30s default')
   iron(8, 'source', ruleSourceMessage[8])
   assert.match(serviceNoComments, /document\.elementFromPoint/, 'rule 9: element lookup runs inside the page')
-  // rule 9 原本是「一律不得出现 DOM.getNodeForLocation」（它跨进程导航后不可靠）。
-  // ax 形态是这条规则的**唯一例外**，也是必需的例外：elementFromPoint 进不去闭合阴影根，
-  // 那里唯一的命中测试就是 CDP 的。所以例外被钉得比原来更窄——它必须**恰好出现一次**，
-  // 且必须落在 cdpNodeAt 这个命中校验助手里（坐标来自紧邻读取的 DOM.getBoxModel，不是它）。
-  // 于是规则 9 的失效模式只能是「拒绝动作」并报出盖住它的元素，不可能是「点错地方」。
+
+  // AX hit verification is the sole CDP hit-test exception, confined to cdpNodeAt.
   const hitTestCalls = [...serviceNoComments.matchAll(/DOM\.getNodeForLocation/g)]
   assert.equal(hitTestCalls.length, 1, 'rule 9: DOM.getNodeForLocation appears exactly once — the ax hit-test')
   const hitTestHelperStart = serviceNoComments.indexOf('private async cdpNodeAt(')

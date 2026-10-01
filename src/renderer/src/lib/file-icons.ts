@@ -3,7 +3,7 @@ import { basename } from './format'
 
 /**
  * File-type artwork is Catppuccin Icons for the whole app: the interface style
- * preference changes corners, not icons, so 直角 and 超椭圆 draw the same set.
+ * preference changes corners, not icons, so square and squircle draw the same set.
  *
  * `scripts/prepare-file-icons.mjs` writes only the SVGs this map can reach into
  * the generated, gitignored `src/renderer/public/file-icons/`; the renderer

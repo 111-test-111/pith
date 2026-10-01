@@ -236,7 +236,7 @@ export function AgentActivity({
               inflated this span's line box (23px against the row's 20px line)
               and lifted the label ~1.5px above the trigger's centre. That made
               a Reasoning/group row's gap to the row below read ~3px larger than
-              its gap above as soon as 「紧凑显示连续工具调用」 closed the box
+              its gap above as soon as compact tool-call display closed the box
               gaps. Long summaries still truncate through their own inner spans
               (the group row's tool names own the `truncate`). */}
           <span className="flex min-w-0 items-center">

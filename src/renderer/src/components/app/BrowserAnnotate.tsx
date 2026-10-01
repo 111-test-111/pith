@@ -8,14 +8,14 @@ import { createWheelGesture, wheelPixels } from '@/lib/wheel-gesture'
 import { isEditableTarget, type BrowserWebviewElement } from './BrowserPageView'
 
 /**
- * 批注模式（annotation mode）— ported from pi-web BrowserTab.tsx's annotate
+ * Annotation mode— ported from pi-web BrowserTab.tsx's annotate
  * surface onto this app's beUI primitives. A capture layer covers the guest
  * for the WHOLE mode (even after a target is selected — unmounting it would
  * hand hover/clicks back to the page and the page would really interact), so
  * wheel scrolling must be forwarded by hand, and element resolution runs in
  * the LIVE guest document via webview.executeJavaScript.
  *
- * The measured traps this port honors (pi-web docs/architecture/embedded-browser.md):
+ * The measured traps this implementation honors (docs/architecture/embedded-browser.md):
  *  1. capture layer stays mounted for the whole mode (guest gets no pointer events);
  *  2. wheel forwarding: sendInputEvent mouseWheel with PURE PIXEL deltas and an
  *     INVERTED sign — payloads carrying wheelTicks or precise-scrolling flags
@@ -65,8 +65,7 @@ function isElementInfo(value: unknown): value is BrowserElementInfo {
   )
 }
 
-/** 页面内 elementFromPoint 解析片段（与 pi-web BrowserTab.tsx / 服务端
- *  resolveElementAt 同源：tag/text/path/box）。坐标必须是 guest CSS 视口值。 */
+/** In-page elementFromPoint resolver, matching pi-web/server resolveElementAt tag/text/path/box fields. Coordinates must use the guest CSS viewport. */
 function buildElementAtScript(x: number, y: number): string {
   return `(() => {
     const el = document.elementFromPoint(${Math.round(x)}, ${Math.round(y)});
@@ -364,7 +363,7 @@ export function BrowserAnnotate({ wv, wrapEl, pageZoom, active, onExit, page }: 
 
   // Submit: compose the annotation text, dispatch it to the composer, and
   // leave annotate mode with the selection cleared. Lines with empty values
-  // are omitted (the note is optional by definition) — the `[页面批注]`
+  // are omitted (the note is optional by definition) — the `[Page annotation]`
   // header, the element line and the page identity are the stable format.
   const submit = useCallback(() => {
     if (!annotation) return

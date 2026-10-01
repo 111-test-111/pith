@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react'
 
 /**
- * 「紧凑显示连续工具调用」 — Settings → Appearance, persisted as
+ * compact tool-call display — Settings → Appearance, persisted as
  * `pi-app:compact-tools` (default off, so the transcript keeps the uniform row
  * rhythm it has always had).
  *
