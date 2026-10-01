@@ -3,7 +3,7 @@
 // beui.dev/components/motion/adaptive-stepper
 
 // local patch (pi-app): glyphs come from the app's icon adapter
-// (lib/icons.tsx), which renders the pack the interface style selects.
+// (lib/icons.tsx), which uses Hugeicons Stroke Rounded in both interface styles.
 import { Minus, Plus } from "@/lib/icons";
 import {
   AnimatePresence,
@@ -340,9 +340,10 @@ function StepperAction({
         >
           {children ??
             (direction === -1 ? (
-              <Minus className="size-5" strokeWidth={2.5} />
+              // local patch (pi-app): keep the family's native 1.5 stroke.
+              <Minus className="size-5" />
             ) : (
-              <Plus className="size-5" strokeWidth={2.5} />
+              <Plus className="size-5" />
             ))}
         </motion.span>
       </motion.button>

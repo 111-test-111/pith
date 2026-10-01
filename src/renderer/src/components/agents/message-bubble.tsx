@@ -3,7 +3,7 @@
 // local patch (pi-app): the expand action shares the control radius.
 // beui.dev/components/agents/chat-app
 
-// local patch (pi-app): use the shared Lucide icon adapter.
+// local patch (pi-app): use the shared UI icon adapter.
 import { ChevronDown } from "@/lib/icons";
 import {
   type HTMLMotionProps,

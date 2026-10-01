@@ -82,7 +82,7 @@ export function NewSessionHeader({ projectName, cwd, projects, onProjectChange, 
             <div className="max-h-72 overflow-y-auto">
               <SelectItem value={NO_PROJECT} className="py-1.5">
                 <span className="flex min-w-0 flex-1 items-center gap-2">
-                  <Chat01 aria-hidden="true" className="size-3.5 shrink-0" />
+                  <Chat01 aria-hidden="true" className="size-4 shrink-0" />
                   <span className="truncate text-sm text-foreground">
                     {t('newSession.noProject')}
                   </span>
@@ -93,7 +93,7 @@ export function NewSessionHeader({ projectName, cwd, projects, onProjectChange, 
                   not a project yet (the dialog makes it one). */}
               <SelectItem value={NEW_PROJECT} className="py-1.5">
                 <span className="flex min-w-0 flex-1 items-center gap-2">
-                  <FolderPlus aria-hidden="true" className="size-3.5 shrink-0" />
+                  <FolderPlus aria-hidden="true" className="size-4 shrink-0" />
                   <span className="truncate text-sm text-foreground">
                     {t('newSession.newProject')}
                   </span>

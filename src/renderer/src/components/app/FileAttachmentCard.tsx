@@ -45,7 +45,7 @@ export function FileAttachmentCard({
           onClick={() => navigation.openPath(path)}
           className="flex h-14 w-56 items-center gap-2.5 rounded-xl border border-border bg-transparent px-3 text-left transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         >
-          <FileTypeIcon path={path} className="size-7 shrink-0" />
+          <FileTypeIcon path={path} variant="card" className="shrink-0" />
           <span className="min-w-0 flex-1">
             <MiddleEllipsis name={name} className="flex text-xs font-medium text-foreground" />
             <MiddleEllipsis name={dir === '/' ? '.' : dir} className="mt-0.5 flex text-[11px] leading-4 text-muted-foreground" />

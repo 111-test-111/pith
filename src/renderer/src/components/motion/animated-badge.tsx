@@ -1,7 +1,7 @@
 "use client";
 // beui.dev/components/motion/animated-badge
 
-// local patch (pi-app): use the shared Lucide icon adapter.
+// local patch (pi-app): use the shared UI icon adapter.
 import {
   AlertTriangle,
   Check,

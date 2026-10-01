@@ -5,15 +5,10 @@ import { cn } from './utils'
  * The app's status marks: one small circle per outcome — waiting, done, failed,
  * cancelled.
  *
- * A settled mark is the icon adapter's own Lucide artwork — `circle-check` /
- * `circle-x` / `ban` (see `lib/icons.tsx`), each a ring of r=10 in the family's
- * 24 box carrying the mark that names the outcome. Routing them through
- * `lib/icons.tsx` is what keeps a status mark the same family as every other
- * glyph: Lucide is the app's only icon family and `lib/ui-style.ts` changes
- * corners only, so 直角 and 超椭圆 draw one circle. The family draws at 2px by
- * default, but a settled mark is rendered at the same 1.5px the waiting arc is
- * drawn at — a stroke family makes that a prop rather than a compromise, and it
- * is what lets one row's waiting and settled marks read as one circle.
+ * Settled marks use the adapter's Hugeicons Stroke Rounded artwork, at the
+ * same native 1.5 stroke as the waiting arc. Success/error have an r=10 ring,
+ * cancellation an r=9 ring, on the shared 24 grid. Both corner presets draw
+ * the same artwork; no status row introduces a private settled mark.
  *
  * Waiting stays drawn here, because it is the one status that moves: the same
  * r=9 / 1.5px circle as a 3/4 arc (`pathLength` 1 with a 0.75/0.25 dash) that
@@ -21,12 +16,12 @@ import { cn } from './utils'
  * and held still under reduced motion. No glyph carries that arc.
  *
  * Sizing belongs to the call site's Tailwind class (`size-3` in a tool row,
- * `size-4` in a task-strip row); the glyph's 24px width/height are the fallback
+ * `size-4` in a task-strip row); the glyph's 18px width/height are the fallback
  * and CSS wins over them.
  */
 export type StatusRingStatus = 'running' | 'success' | 'error' | 'cancelled'
 
-/** One Lucide glyph per settled outcome, drawn at the waiting arc's weight. */
+/** One Hugeicons glyph per settled outcome, drawn at the waiting arc's weight. */
 const SETTLED_GLYPHS = {
   success: CircleCheck,
   error: CircleX,

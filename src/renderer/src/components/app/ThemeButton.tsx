@@ -34,13 +34,13 @@ export function ThemeButton() {
       aria-label={label}
       onClick={() => reveal(() => setTheme(next))}
     >
-      <ActionSwapIcon value={mode} animation="blur" className="size-4">
+      <ActionSwapIcon value={mode} animation="blur" className="size-[18px]">
         {mode === 'light' ? (
-          <Sun className="size-4" />
+          <Sun className="size-[18px]" />
         ) : mode === 'dark' ? (
-          <Moon className="size-4" />
+          <Moon className="size-[18px]" />
         ) : (
-          <Monitor className="size-4" />
+          <Monitor className="size-[18px]" />
         )}
       </ActionSwapIcon>
     </Button>

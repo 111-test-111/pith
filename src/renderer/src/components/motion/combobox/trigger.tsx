@@ -1,7 +1,7 @@
 // local patch (pi-app): keep UI frames and focus rings in this component at 1px.
 "use client";
 
-// local patch (pi-app): use the shared Lucide icon adapter.
+// local patch (pi-app): use the shared UI icon adapter.
 import { ChevronsUpDown, Search } from "@/lib/icons";
 import type {
   InputHTMLAttributes,

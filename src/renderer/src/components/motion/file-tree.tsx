@@ -3,7 +3,7 @@
 // beui.dev/components/motion/file-tree
 
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-// local patch (pi-app): use the shared Lucide adapter.
+// local patch (pi-app): use the shared UI icon adapter.
 import { ChevronRight, FileText as File, Folder, FolderOpen } from "@/lib/icons";
 import {
   Children,

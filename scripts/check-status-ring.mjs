@@ -4,24 +4,18 @@
  *
  * The small circle at the right of a tool row — and of every row in the task
  * strip (background tasks, Q&A records, subagents) — is one mark per outcome.
- * A settled row draws Lucide's own `circle-check` / `circle-x` / `ban` through
+ * A settled row draws Hugeicons' own success / error / cancellation marks through
  * the icon adapter, and only the waiting row is drawn app-side in
  * `lib/status-ring.tsx`, because no glyph carries the spinning 3/4 arc. The task
- * panel's rows split the same way: the awaiting row is Lucide's `circle-dashed`,
- * while the moving and draw-in marks stay the app's artwork.
+ * panel's rows split the same way: awaiting uses the pack's dashed circle,
+ * while moving arcs stay app geometry and draw-in marks use pack artwork.
  *
  * This check renders the real surfaces and asserts:
  *
  *   geometry     the waiting arc is an r=9 circle at 1.5 stroke in the 24 box,
- *                and every settled glyph draws the family's r=10 ring in that
- *                same 24 box at the same 1.5 stroke — a stroke family lets the
- *                app set that weight rather than accept the pack's 2px default
+ *                and settled glyphs keep Hugeicons' native r=10 success/error
+ *                and r=9 cancellation rings in that same box at 1.5 stroke
  *
- *   family       settled marks ARE adapter glyphs (`data-app-icon`) and waiting
- *                arcs are not — one owner per mark, no second drawing
- *   statuses     the right mark per status across the transcript, the task strip
- *                and the todo panel (waiting / done / failed / cancelled)
-
  *   family       settled marks ARE adapter glyphs (`data-app-icon`) and waiting
  *                arcs are not — one owner per mark, no second drawing
  *   statuses     the right mark per status across the transcript, the task strip
@@ -186,7 +180,7 @@ app.on('window-all-closed',()=>app.quit());`)
 
   /**
    * Every status mark inside one surface, reduced to the facts that matter. A
-   * settled mark is an adapter glyph (one Lucide drawing on the family's 24 grid,
+   * settled mark is an adapter glyph (one Hugeicons drawing on the family's 24 grid,
    * no circle element); a waiting mark is the drawn 24-box 3/4 arc. `box` is the
    * mark's own user-space box and `side` that box rendered into the 24 box, so
    * both owners can be measured against the one circle they draw.
@@ -210,9 +204,9 @@ app.on('window-all-closed',()=>app.quit());`)
   const PURITY = '12 12 9 1.5'
   const ARC_BOX = '3 3 18 18'
   const ARC_STROKE = 1.5
-  // Settled: Lucide's ring on the family's own 24 grid — a circle of r=10 drawn
-  // at the 1.5px stroke the arc uses.
-  const GLYPH_SIDE = 20
+  // Native Hugeicons rings: r=10 for success/error, r=9 for cancellation,
+  // all at the same 1.5 stroke as the waiting arc.
+  const GLYPH_SIDE = { success: 20, error: 20, cancelled: 18 }
   const SETTLED = { success: 'CircleCheck', error: 'CircleX', cancelled: 'Ban' }
   const isArc = mark => mark.status === 'running'
   const assertArc = (mark, where) => {
@@ -224,11 +218,11 @@ app.on('window-all-closed',()=>app.quit());`)
     assert.equal(mark.box, ARC_BOX, where + ': the waiting arc spans the shared mark box')
   }
   const assertGlyph = (mark, where) => {
-    assert.equal(mark.glyph, SETTLED[mark.status], where + ': Lucide ' + SETTLED[mark.status])
+    assert.equal(mark.glyph, SETTLED[mark.status], where + ': Hugeicons ' + SETTLED[mark.status])
     assert.equal(mark.viewBox, '0 0 24 24', where + ': the glyph draws in the same 24 box')
     assert.equal(mark.stroke, String(ARC_STROKE), where + ': the glyph is drawn at the arc\'s weight')
     assert.ok(mark.paths >= 1, where + ': the glyph draws real geometry')
-    assert.ok(Math.abs(mark.side - GLYPH_SIDE) < 1, where + ": the glyph's ring is the row's own circle")
+    assert.ok(Math.abs(mark.side - GLYPH_SIDE[mark.status]) < 1, where + ": the glyph's ring is the row's own circle")
     assert.equal(mark.reads, true, where + ': the mark follows the row colour')
   }
 
@@ -256,7 +250,7 @@ app.on('window-all-closed',()=>app.quit());`)
     else assertGlyph(mark, where)
   }
 
-  // 3. One owner per mark: a settled row is the adapter's Lucide glyph, and
+  // 3. One owner per mark: a settled row is the adapter's Hugeicons glyph, and
   //    only the waiting arc is drawn app-side.
   for (const mark of [...rows, ...bash, ...qa]) {
     assert.equal(mark.glyph, isArc(mark) ? null : SETTLED[mark.status], mark.status + ': one owner per mark')
@@ -283,7 +277,7 @@ app.on('window-all-closed',()=>app.quit());`)
     [done, 'a completed todo row', 'CircleCheck'],
     [dropped, 'a dropped todo row', 'Ban']
   ]) {
-    assert.equal(mark.glyph, glyph, where + ' is Lucide ' + glyph)
+    assert.equal(mark.glyph, glyph, where + ' is Hugeicons ' + glyph)
     assert.equal(mark.viewBox, '0 0 24 24', where + ' draws in the shared 24 box')
     assert.equal(mark.stroke, String(ARC_STROKE), where + " is drawn at the arc's weight")
     assert.ok(mark.paths >= 1, where + ' draws real geometry')

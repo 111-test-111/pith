@@ -31,6 +31,8 @@
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.99.1",
     "@floating-ui/react": "^0.27.20",
+    "@hugeicons/core-free-icons": "^4.3.5",
+    "@hugeicons/react": "^1.1.10",
     "@lobehub/icons-static-svg": "^1.95.0",
     "@paper-design/shaders-react": "^0.0.80",
     "@phosphor-icons/react": "^2.1.10",
@@ -39,7 +41,6 @@
     "@xterm/addon-webgl": "^0.19.0",
     "@xterm/xterm": "^6.0.0",
     "clsx": "^2.1.1",
-    "lucide-react": "^1.48.0",
     "micromark-factory-space": "^2.0.1",
     "micromark-util-character": "^2.1.1",
     "motion": "^13.2.0",

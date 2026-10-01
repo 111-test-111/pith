@@ -2,7 +2,7 @@
 "use client";
 // beui.dev/components/agents/chat-app
 
-// local patch (pi-app): use the shared Lucide icon adapter.
+// local patch (pi-app): use the shared UI icon adapter.
 import {
   Check,
   ChevronDown,
@@ -192,7 +192,16 @@ export function StreamingResponse({
           // rounded. Kept out of this comment: the literal utility name —
           // Tailwind's scanner reads comments and would generate it again.
           // local patch (pi-app): inline and fenced code use fixed type steps.
-          "text-sm leading-6 text-foreground/90 [&_a]:font-medium [&_a]:underline [&_a]:underline-offset-4 [&_code]:rounded-detail [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-xs [&_ol]:my-3 [&_ol]:list-decimal [&_ol]:space-y-1 [&_ol]:pl-5 [&_p+p]:mt-3 [&_pre:not([data-code-block-pre])]:my-3 [&_pre:not([data-code-block-pre])]:overflow-x-auto [&_pre:not([data-code-block-pre])]:rounded-xl [&_pre:not([data-code-block-pre])]:border [&_pre:not([data-code-block-pre])]:border-border [&_pre:not([data-code-block-pre])]:bg-muted/45 [&_pre:not([data-code-block-pre])]:p-3 [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_pre_code]:rounded-none [&_pre_code]:text-sm [&_ul]:my-3 [&_ul]:list-disc [&_ul]:space-y-1 [&_ul]:pl-5",
+          // local patch (pi-app): the raw-fence code rules stay off beUI's own
+          // CodeBlock (its pre is marked `data-code-block-pre`, like the frame
+          // rules beside them). An ancestor's descendant rule is a DIRECT
+          // declaration on that inner code element, so it beat the size the
+          // component declares on its pre and every fenced block in a reply
+          // rendered one step larger than inline code, tool output, diffs and
+          // the file viewer — the transcript's only oversized code. Guarding
+          // it lets the block keep its own fixed step; a raw fence (no
+          // CodeBlock) still gets the app's framing.
+          "text-sm leading-6 text-foreground/90 [&_a]:font-medium [&_a]:underline [&_a]:underline-offset-4 [&_code]:rounded-detail [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-xs [&_ol]:my-3 [&_ol]:list-decimal [&_ol]:space-y-1 [&_ol]:pl-5 [&_p+p]:mt-3 [&_pre:not([data-code-block-pre])]:my-3 [&_pre:not([data-code-block-pre])]:overflow-x-auto [&_pre:not([data-code-block-pre])]:rounded-xl [&_pre:not([data-code-block-pre])]:border [&_pre:not([data-code-block-pre])]:border-border [&_pre:not([data-code-block-pre])]:bg-muted/45 [&_pre:not([data-code-block-pre])]:p-3 [&_pre:not([data-code-block-pre])_code]:bg-transparent [&_pre:not([data-code-block-pre])_code]:p-0 [&_pre:not([data-code-block-pre])_code]:rounded-none [&_pre:not([data-code-block-pre])_code]:text-sm [&_ul]:my-3 [&_ul]:list-disc [&_ul]:space-y-1 [&_ul]:pl-5",
           contentClassName,
         )}
       >

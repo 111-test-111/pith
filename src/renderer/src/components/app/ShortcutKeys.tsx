@@ -17,16 +17,17 @@ import {
   type IconComponent
 } from '@/lib/icons'
 import { cn } from '@/lib/utils'
+import { UI_ICON_SIZE, UI_ICON_STROKE } from '@/lib/icon-metrics'
 
 /**
- * The mac ⇧ (U+21E7) as drawn artwork: Lucide draws ⌘ and ⌥ (`Command`,
+ * The mac ⇧ (U+21E7) as drawn artwork: Hugeicons draws ⌘ and ⌥ (`Command`,
  * `Option`) and this adapter maps ⌃ to its `ChevronUp` caret, but the pack ships
  * no shift drawing, and the text character's baseline varies by fallback font —
  * exactly the off-centre look this component exists to kill. Stroked at the
- * family's own default weight (2px in the 24 box), so it sits evenly next to
+ * family's own default weight (1.5px in the 24 box), so it sits evenly next to
  * them.
  */
-function ShiftGlyph({ size = 14 }: { size?: string | number }): ReactElement {
+function ShiftGlyph({ size = UI_ICON_SIZE.compact }: { size?: string | number }): ReactElement {
   return (
     <svg
       width={size}
@@ -34,7 +35,7 @@ function ShiftGlyph({ size = 14 }: { size?: string | number }): ReactElement {
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth={2}
+      strokeWidth={UI_ICON_STROKE}
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden="true"
@@ -97,7 +98,7 @@ export function ShortcutKeys({
               key.length > 3 ? 'text-[10px]' : 'text-[13px]'
             )}
           >
-            {Icon ? <Icon size={14} /> : key}
+            {Icon ? <Icon size={UI_ICON_SIZE.compact} /> : key}
           </kbd>
         )
       })}

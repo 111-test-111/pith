@@ -308,7 +308,7 @@ function SidebarTabStrip({
               return (
                 <div key={kind} data-sidebar-tab={kind} className="group/tab relative flex items-center">
                   <LabelTooltip content={path ?? (agentPath ?? scheduledPath ? label : '')}><TabsTrigger value={kind} className="h-9 min-h-0 gap-2 pl-2.5 pr-8">
-                    {agentPath ? <Subagent aria-hidden="true" className="size-3.5 shrink-0" /> : scheduledPath ? <CalendarCheck aria-hidden="true" className="size-3.5 shrink-0" /> : path ? <FileTypeIcon path={path} className="size-4 shrink-0" /> : TabIcon ? <TabIcon aria-hidden="true" className="size-3.5 shrink-0" /> : null}
+                    {agentPath ? <Subagent aria-hidden="true" className="size-4 shrink-0" /> : scheduledPath ? <CalendarCheck aria-hidden="true" className="size-4 shrink-0" /> : path ? <FileTypeIcon path={path} variant="tab" className="size-4 shrink-0" /> : TabIcon ? <TabIcon aria-hidden="true" className="size-4 shrink-0" /> : null}
                     <MiddleEllipsis name={label} className="max-w-32 text-xs" />
                   </TabsTrigger></LabelTooltip>
                   <Tooltip

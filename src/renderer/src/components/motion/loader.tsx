@@ -1,6 +1,6 @@
 "use client";
 
-// local patch (pi-app): animate Lucide artwork through the shared SVG adapter.
+// local patch (pi-app): animate shared UI artwork through the SVG adapter.
 import { AnimatedIcon } from "@/lib/animated-icons";
 
 import { motion, useReducedMotion } from "motion/react";

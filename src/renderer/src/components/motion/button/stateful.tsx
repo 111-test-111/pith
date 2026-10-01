@@ -1,6 +1,6 @@
 "use client";
 
-// local patch (pi-app): use the shared Lucide icon adapter.
+// local patch (pi-app): use the shared UI icon adapter.
 import { Check, Loader2, X } from "@/lib/icons";
 import {
   AnimatePresence,

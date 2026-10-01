@@ -50,28 +50,28 @@ const SECTIONS: {
     id: 'general',
     labelKey: 'settings.general',
     descriptionKey: 'settings.generalDesc',
-    icon: <Settings2 className="size-4" />,
+    icon: <Settings2 className="size-[18px]" />,
     render: () => <GeneralSection />
   },
   {
     id: 'notifications',
     labelKey: 'settings.notifications',
     descriptionKey: 'settings.notificationsDesc',
-    icon: <Bell className="size-4" />,
+    icon: <Bell className="size-[18px]" />,
     render: () => <NotificationsSection />
   },
   {
     id: 'prompt',
     labelKey: 'settings.prompt',
     descriptionKey: 'settings.promptDesc',
-    icon: <TextAlignCenter className="size-4" />,
+    icon: <TextAlignCenter className="size-[18px]" />,
     render: () => <PromptSection />
   },
   {
     id: 'appearance',
     labelKey: 'settings.appearance',
     descriptionKey: 'settings.appearanceDesc',
-    icon: <Palette className="size-4" />,
+    icon: <Palette className="size-[18px]" />,
     render: (props) => (
       <AppearanceSection
         accent={props.accent}
@@ -85,70 +85,70 @@ const SECTIONS: {
     id: 'picture-in-picture',
     labelKey: 'settings.pictureInPicture',
     descriptionKey: 'settings.pictureInPictureDesc',
-    icon: <PictureInPicture2 className="size-4" />,
+    icon: <PictureInPicture2 className="size-[18px]" />,
     render: () => <PictureInPictureSection />
   },
   {
     id: 'shortcuts',
     labelKey: 'shortcuts.title',
     descriptionKey: 'shortcuts.description',
-    icon: <Keyboard className="size-4" />,
+    icon: <Keyboard className="size-[18px]" />,
     render: () => <ShortcutsSection />
   },
   {
     id: 'providers',
     labelKey: 'settings.providers',
     descriptionKey: 'settings.providersDesc',
-    icon: <KeyRound className="size-4" />,
+    icon: <KeyRound className="size-[18px]" />,
     render: () => <ProvidersSection />
   },
   {
     id: 'tools',
     labelKey: 'settings.tools',
     descriptionKey: 'settings.toolsDesc',
-    icon: <Wrench className="size-4" />,
+    icon: <Wrench className="size-[18px]" />,
     render: () => <ToolsSection />
   },
   {
     id: 'subagents',
     labelKey: 'subagent.settingsTitle',
     descriptionKey: 'subagent.settingsDesc',
-    icon: <Subagent className="size-4" />,
+    icon: <Subagent className="size-[18px]" />,
     render: () => <SubagentsSection />
   },
   {
     id: 'extensions',
     labelKey: 'settings.extensions',
     descriptionKey: 'settings.extensionsDesc',
-    icon: <Puzzle className="size-4" />,
+    icon: <Puzzle className="size-[18px]" />,
     render: () => <ExtensionsSection />
   },
   {
     id: 'mcp',
     labelKey: 'settings.mcp',
     descriptionKey: 'settings.mcpDesc',
-    icon: <Plug className="size-4" />,
+    icon: <Plug className="size-[18px]" />,
     render: () => <McpSection />
   },
   {
     id: 'skills',
     labelKey: 'settings.skills',
     descriptionKey: 'settings.skillsDesc',
-    icon: <Skills className="size-4" />,
+    icon: <Skills className="size-[18px]" />,
     render: () => <SkillsSection />
   },
   {
     id: 'browser',
     labelKey: 'settings.browserTitle',
     descriptionKey: 'settings.browserDesc',
-    icon: <Globe className="size-4" />,
+    icon: <Globe className="size-[18px]" />,
     render: () => <BrowserSection />
   },
   {
     id: 'usage',
     labelKey: 'settings.usage',
     descriptionKey: 'settings.usageDesc',
-    icon: <Chart className="size-4" />,
+    icon: <Chart className="size-[18px]" />,
     render: () => <UsageSection />
   },
   {
@@ -156,7 +156,7 @@ const SECTIONS: {
     labelKey: 'jev.title',
     descriptionKey: 'jev.description',
     badgeKey: 'settings.beta',
-    icon: <Flask className="size-4" />,
+    icon: <Flask className="size-[18px]" />,
     render: () => <JevSection />
   }
 ]

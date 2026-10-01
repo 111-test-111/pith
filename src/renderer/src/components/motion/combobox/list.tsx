@@ -1,6 +1,6 @@
 "use client";
 
-// local patch (pi-app): use the shared Lucide icon adapter.
+// local patch (pi-app): use the shared UI icon adapter.
 import { Check } from "@/lib/icons";
 import { motion } from "motion/react";
 import {

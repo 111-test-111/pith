@@ -25,7 +25,7 @@ const PresentedFileCard = memo(function PresentedFileCard({ file }: { file: Pres
   }
   return <div data-presented-file={file.path} className="min-w-0 rounded-card border border-border bg-background p-3">
     <div className="flex min-w-0 items-center gap-2">
-      <FileTypeIcon path={file.path} className="size-5 shrink-0" />
+      <FileTypeIcon path={file.path} variant="card" className="shrink-0" />
       <span className="min-w-0 flex-1 truncate px-1 text-sm" title={file.path}>{basename(file.path)}</span>
       <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{formatBytes(file.size)}</span>
     </div>

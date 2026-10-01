@@ -1,5 +1,5 @@
 // local patch (pi-app): keep UI frames and focus rings in this component at 1px.
-// local patch (pi-app): use the shared Lucide icon adapter.
+// local patch (pi-app): use the shared Hugeicons adapter at its native 1.5 stroke.
 import {
   Check,
   Circle,
@@ -36,7 +36,7 @@ function StepRow({ item }: { item: AgentActivityStep }) {
         className="mt-0.5 grid size-4 shrink-0 place-items-center text-muted-foreground/70"
       >
         {state === "complete" ? (
-          <Check className="size-4" strokeWidth={1.8} />
+          <Check className="size-4" />
         ) : state === "active" ? (
           <span className="relative grid size-3 place-items-center">
             <motion.span
@@ -47,7 +47,7 @@ function StepRow({ item }: { item: AgentActivityStep }) {
             <span className="size-1.5 rounded-full bg-foreground/60" />
           </span>
         ) : (
-          <Circle className="size-3" strokeWidth={1.5} />
+          <Circle className="size-3" />
         )}
       </span>
       <span
@@ -86,7 +86,7 @@ function SearchResultRow({
         aria-hidden="true"
         className="grid size-5 shrink-0 place-items-center text-muted-foreground"
       >
-        {result.icon ?? <Globe2 className="size-3" strokeWidth={2} />}
+        {result.icon ?? <Globe2 className="size-4" />}
       </span>
       <span className="min-w-0 truncate font-medium text-foreground/90">
         {result.title}
@@ -129,7 +129,7 @@ function SearchRow({ item }: { item: AgentActivitySearch }) {
   return (
     <div className="space-y-0.5">
       <div className="flex min-h-7 items-center gap-2.5 rounded-md px-1.5 py-1 text-muted-foreground">
-        <Search aria-hidden="true" className="size-4 shrink-0" strokeWidth={1.7} />
+        <Search aria-hidden="true" className="size-4 shrink-0" />
         <span className="min-w-0 truncate">{item.query}</span>
       </div>
       {item.results?.length ? (

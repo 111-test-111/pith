@@ -3,7 +3,7 @@
 // beui.dev/components/motion/context-menu
 
 // local patch (pi-app): glyphs come from the app's icon adapter
-// (lib/icons.tsx), which renders the pack the interface style selects.
+// (lib/icons.tsx), which uses Hugeicons Stroke Rounded in both interface styles.
 import { Check } from "@/lib/icons";
 import {
   AnimatePresence,
@@ -633,7 +633,8 @@ export function ContextMenuCheckboxItem({
               exit={{ opacity: 0, scale: context.reduce ? 1 : 0.75 }}
               transition={context.reduce ? { duration: 0.08 } : SPRING_PANEL}
             >
-              <Check aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={2.4} />
+              {/* local patch (pi-app): use the family's native 1.5 stroke. */}
+              <Check aria-hidden="true" className="size-4" />
             </motion.span>
           ) : null}
         </AnimatePresence>

@@ -6,7 +6,7 @@ import { useId } from "react";
 import { EASE_OUT, SPRING_PRESS } from "@/lib/ease";
 import { cn } from "@/lib/utils";
 
-// local patch (pi-app): animate Lucide artwork through the shared SVG adapter.
+// local patch (pi-app): animate shared UI artwork through the SVG adapter.
 import { AnimatedIcon } from "@/lib/animated-icons";
 import { useUiStyle } from "@/lib/ui-style";
 
@@ -145,7 +145,7 @@ export function Checkbox({
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="currentColor"
-                strokeWidth={2}
+                // local patch (pi-app): keep the shared mark's native 1.5 stroke.
                 strokeLinecap="round"
                 strokeLinejoin="round"
                 initial={reduce ? { opacity: 1 } : { opacity: 0, scale: 0.5 }}

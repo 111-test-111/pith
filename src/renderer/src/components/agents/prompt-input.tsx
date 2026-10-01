@@ -2,8 +2,9 @@
 "use client";
 // beui.dev/components/agents/chat-app
 
-// local patch (pi-app): use the shared Lucide icon adapter.
-import { Plus, Send, Square } from "@/lib/icons";
+// local patch (pi-app): use the shared Hugeicons icon adapter and size scale.
+import { CircleOff, Plus, Send } from "@/lib/icons";
+import { UI_ICON_SIZE } from "@/lib/icon-metrics";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   type FormEvent,
@@ -340,9 +341,11 @@ export function PromptInput({
               draft (submit path) and only falls back to stop when it is empty —
               send doubles as queue-while-busy, like pi's TUI. */}
           {/* local patch (pi-app): the send control is a quiet glyph button, not
-              a filled primary square — the shape only appears as a faded
-              primary wash on hover, so the composer's corner stays calm. It is
-              capsule-by-design, so its shape token follows the UI style. */}
+              a filled primary square — the shape only appears as a faded wash on
+              hover, so the composer's corner stays calm. Glyph and wash both
+              follow the state: the accent while it sends, the error red while it
+              stops. It is capsule-by-design, so its shape token follows the UI
+              style. */}
           <Button
             type={loading && !canQueue ? "button" : "submit"}
             variant="ghost"
@@ -350,7 +353,15 @@ export function PromptInput({
             disabled={loading && !canQueue ? !onStop : !canQueue && !canSubmit}
             aria-label={loading ? (canQueue ? "Queue message" : "Stop generating") : "Send prompt"}
             onClick={loading && !canQueue ? onStop : undefined}
-            className="size-8 rounded-capsule text-primary hover:bg-primary/10 hover:text-primary disabled:opacity-40"
+            className={cn(
+              "size-8 rounded-capsule disabled:opacity-40",
+              // local patch (pi-app): the stop state wears the error red —
+              // glyph and frame wash alike — so the control never flashes the
+              // accent under a red glyph, in either theme.
+              loading && !canQueue
+                ? "text-destructive hover:bg-destructive/10 hover:text-destructive"
+                : "text-primary hover:bg-primary/10 hover:text-primary",
+            )}
           >
             <AnimatePresence initial={false} mode="popLayout">
               <motion.span
@@ -362,14 +373,11 @@ export function PromptInput({
                 className="grid place-items-center"
               >
                 {loading && !canQueue ? (
-                  // Two steps up from the glyph's original `size-3`, then one more:
-                  // a 12px fill read as a dot beside the 16px Send arrow it
-                  // replaces, so the stop control looked smaller than the control
-                  // it takes over. Only the stop grows — the send icon keeps its
-                  // size.
-                  <Square className="size-4 fill-current" />
+                  // local patch (pi-app): send/stop share the 20px primary-action
+                  // canvas. Keep the stop stroked so its off slash stays visible.
+                  <CircleOff size={UI_ICON_SIZE.primary} />
                 ) : (
-                  <Send className="size-4" />
+                  <Send size={UI_ICON_SIZE.primary} />
                 )}
               </motion.span>
             </AnimatePresence>

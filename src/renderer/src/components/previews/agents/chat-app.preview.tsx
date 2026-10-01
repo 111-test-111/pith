@@ -2,7 +2,7 @@
 
 // local patch (pi-app): preview controls use the app-wide 1px focus stroke.
 
-// local patch (pi-app): use the shared Lucide icon adapter.
+// local patch (pi-app): use the shared UI icon adapter.
 import { Maximize2, Minimize2 } from "@/lib/icons";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ChatAppExample } from "@/components/previews/agents/chat-app-usage";

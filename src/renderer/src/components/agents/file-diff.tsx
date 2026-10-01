@@ -2,7 +2,7 @@
 "use client";
 // beui.dev/components/agents/chat-app
 
-// local patch (pi-app): use the shared Lucide icon adapter.
+// local patch (pi-app): use the shared UI icon adapter.
 import {
   Check,
   ChevronDown,

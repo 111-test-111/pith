@@ -1,25 +1,23 @@
 import { forwardRef, type ReactNode } from 'react'
 import { motion, type SVGMotionProps } from 'motion/react'
+import {
+  Cancel01Icon,
+  CheckIcon,
+  CheckmarkCircle02Icon,
+  LoaderCircleIcon,
+  MinusSignIcon
+} from '@hugeicons/core-free-icons'
+import { UI_ICON_SIZE, UI_ICON_STROKE } from './icon-metrics'
 
-// Lucide geometry, read out of the pack's own drawings. beUI animates these with
-// a pathLength transition, so they stay app-rendered — one node per tag, because
-// the completion mark is a circle plus a path — but the strokes are the family's
-// own, which is why a drawn mark and an imported glyph match.
-type Node = { tag: 'path'; d: string } | { tag: 'circle'; cx: number; cy: number; r: number }
-
+// beUI owns the pathLength animation; the pack owns the SVG geometry. Import
+// those same Stroke Rounded drawings instead of copying another family's paths.
 const artwork = {
-  check: [{ tag: 'path', d: 'M20 6 9 17l-5-5' }],
-  minus: [{ tag: 'path', d: 'M5 12h14' }],
-  cancel: [
-    { tag: 'path', d: 'M18 6 6 18' },
-    { tag: 'path', d: 'm6 6 12 12' }
-  ],
-  complete: [
-    { tag: 'circle', cx: 12, cy: 12, r: 10 },
-    { tag: 'path', d: 'm16 9-5.5 5.5L8 12' }
-  ],
-  spinner: [{ tag: 'path', d: 'M21 12a9 9 0 1 1-6.219-8.56' }]
-} satisfies Record<string, Node[]>
+  check: CheckIcon,
+  minus: MinusSignIcon,
+  cancel: Cancel01Icon,
+  complete: CheckmarkCircle02Icon,
+  spinner: LoaderCircleIcon
+} as const
 
 const MOTION_TAGS = {
   path: motion.path,
@@ -30,9 +28,9 @@ type Artwork = keyof typeof artwork
 type DrawProps = Pick<SVGMotionProps<SVGPathElement>, 'initial' | 'animate' | 'transition'>
 
 export function IconPaths({ icon, ...props }: { icon: Artwork } & SVGMotionProps<SVGPathElement>) {
-  return artwork[icon].map((node, index) => {
-    const Tag = MOTION_TAGS[node.tag]
-    return <Tag {...node} {...props} key={index} />
+  return artwork[icon].map(([tag, attributes], index) => {
+    const Tag = MOTION_TAGS[tag as keyof typeof MOTION_TAGS]
+    return <Tag {...attributes} {...props} key={attributes.key ?? index} />
   })
 }
 
@@ -44,20 +42,21 @@ export const AnimatedIcon = forwardRef<SVGSVGElement, Omit<SVGMotionProps<SVGSVG
   <motion.svg
     ref={ref}
     xmlns="http://www.w3.org/2000/svg"
-    width={24}
-    height={24}
+    width={UI_ICON_SIZE.normal}
+    height={UI_ICON_SIZE.normal}
     viewBox="0 0 24 24"
     fill="none"
     stroke="currentColor"
+    strokeWidth={UI_ICON_STROKE}
     strokeLinecap="round"
     strokeLinejoin="round"
     aria-hidden="true"
     focusable="false"
     data-app-icon={icon}
+    data-icon-family="hugeicons"
     {...props}
   >
-    {/* Lucide's own default weight, so a drawn mark matches an imported glyph. */}
-    <IconPaths icon={icon} {...draw} strokeWidth={props.strokeWidth ?? 2} />
+    <IconPaths icon={icon} {...draw} strokeWidth={props.strokeWidth ?? UI_ICON_STROKE} />
     {children}
   </motion.svg>
 ))

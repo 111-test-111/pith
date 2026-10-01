@@ -1404,7 +1404,7 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
       <WindowTitlebar className="border-b border-border/50">
         <Tooltip content={t('workspace.toggleSessions')}>
           <AnimatedSidebarTrigger aria-label={t('workspace.toggleSessions')} className="size-8 text-muted-foreground hover:bg-muted hover:text-foreground">
-            <PanelLeft className="size-4" />
+            <PanelLeft className="size-[18px]" />
           </AnimatedSidebarTrigger>
         </Tooltip>
         <div className="flex min-w-0 flex-1 items-center gap-2 text-sm">
@@ -1438,21 +1438,21 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
               {
                 id: 'compact',
                 label: t('palette.compact'),
-                icon: <Minimize2 className="size-4" />,
+                icon: <Minimize2 className="size-[18px]" />,
                 disabled: !shell.sessionPath || shell.scheduledTaskSession,
                 onSelect: () => void handleCompact()
               },
               {
                 id: 'reload',
                 label: t('palette.reload'),
-                icon: <RefreshCw className="size-4" />,
+                icon: <RefreshCw className="size-[18px]" />,
                 disabled: !shell.sessionPath || shell.scheduledTaskSession,
                 onSelect: () => void handleReload()
               },
               {
                 id: 'system-prompt',
                 label: t('workspace.systemPrompt'),
-                icon: <TextAlignCenter className="size-4" />,
+                icon: <TextAlignCenter className="size-[18px]" />,
                 // Always available: the manager falls back to the active
                 // session, so an unpersisted chat has a prompt to show too.
                 onSelect: () => void showSystemPrompt()
@@ -1460,7 +1460,7 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
               {
                 id: 'picture-in-picture',
                 label: t('pip.open'),
-                icon: <PictureInPicture2 className="size-4" />,
+                icon: <PictureInPicture2 className="size-[18px]" />,
                 disabled: !shell.sessionPath,
                 onSelect: () => {
                   if (!shell.sessionPath) return
@@ -1489,7 +1489,7 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
               ...(shell.scheduledTaskSession ? [] : [{
                 id: 'rewind',
                 label: t(rewindWarning ? 'rewind.captureWarning' : 'rewind.title'),
-                icon: rewindWarning ? <AlertTriangle className="size-4 text-destructive" /> : <ArrowLeftFromLine className="size-4" />,
+                icon: rewindWarning ? <AlertTriangle className="size-4 text-destructive" /> : <ArrowLeftFromLine className="size-[18px]" />,
                 disabled: !shell.sessionPath,
                 onSelect: () => { if (shell.sessionPath) setRewindTarget({ path: shell.sessionPath }) }
               }])
@@ -1497,7 +1497,7 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
           />
           <Tooltip content={t('workspace.settings')} className={settingsOpen ? 'hidden' : undefined}>
             <Button variant="ghost" size="icon" className="size-8" aria-label={t('workspace.settings')} onClick={() => setSettingsOpen(true)}>
-              <SettingsIcon className="size-4" />
+              <SettingsIcon className="size-[18px]" />
             </Button>
           </Tooltip>
           <ThemeButton />
@@ -1516,13 +1516,13 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
               disabled={!sidePanelOpen}
               onClick={() => setSidePanelMode((mode) => mode === 'closed' ? mode : mode === 'fullscreen' ? 'docked' : 'fullscreen')}
             >
-              {sidePanelFullscreen ? <ArrowsInLineHorizontal className="size-4" /> : <ArrowsOutLineHorizontal className="size-4" />}
+              {sidePanelFullscreen ? <ArrowsInLineHorizontal className="size-[18px]" /> : <ArrowsOutLineHorizontal className="size-[18px]" />}
             </Button>
           </Tooltip>
           <Tooltip content={t('workspace.sidebar')}>
             <Button variant="ghost" size="icon" aria-label={t('workspace.sidebar')} aria-pressed={sidePanelOpen}
               onClick={() => setSidePanelOpen((open) => !open)} className={cn('size-8', sidePanelOpen && 'bg-primary/5 text-foreground')}>
-              <PanelRight className="size-4" />
+              <PanelRight className="size-[18px]" />
             </Button>
           </Tooltip>
         </div>

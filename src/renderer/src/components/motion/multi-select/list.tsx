@@ -2,7 +2,7 @@
 // beui.dev/components/motion/multi-select
 
 // local patch (pi-app): glyphs come from the app's icon adapter
-// (lib/icons.tsx), which renders the pack the interface style selects.
+// (lib/icons.tsx), which uses Hugeicons Stroke Rounded in both interface styles.
 import { Check } from "@/lib/icons";
 import { motion } from "motion/react";
 import {

@@ -910,7 +910,7 @@ export function BrowserPane({
                             className="size-3.5 shrink-0 rounded-detail object-contain"
                           />
                         ) : page.owner !== HUMAN_OWNER ? (
-                          <Bot aria-hidden="true" className="size-3.5 shrink-0" />
+                          <Bot aria-hidden="true" className="size-4 shrink-0" />
                         ) : (
                           <Globe aria-hidden="true" className="size-3.5 shrink-0" />
                         )}

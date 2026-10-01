@@ -3,7 +3,7 @@
 
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 // local patch (pi-app): glyphs come from the app's icon adapter
-// (lib/icons.tsx), which renders the pack the interface style selects.
+// (lib/icons.tsx), which uses Hugeicons Stroke Rounded in both interface styles.
 import { Search, type IconComponent } from "@/lib/icons";
 import {
   type ReactNode,

@@ -15,8 +15,9 @@
  * Files with type "preview" are skipped: they land under components/previews/
  * and are never imported by the app.
  *
- * Icons: beUI components import lucide-react, which is also the app's pack, so
- * their imports are left exactly as the registry wrote them (see AGENTS.md).
+ * Icons: registry lucide-react imports are routed through the app's semantic
+ * adapter (Hugeicons Stroke Rounded). New vendored files carry a local-patch
+ * comment, and existing files still remain untouched.
  */
 import { mkdir, readFile, writeFile, access } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
@@ -27,7 +28,7 @@ const SRC = join(ROOT, 'src', 'renderer', 'src')
 const REGISTRY = 'https://beui.dev/r'
 
 /** Dependencies the app already provides (or that are not npm packages). */
-const PROVIDED_DEPS = new Set(['react', 'react-dom', 'clsx', 'tailwind-merge'])
+const PROVIDED_DEPS = new Set(['react', 'react-dom', 'clsx', 'tailwind-merge', 'lucide-react'])
 
 const args = process.argv.slice(2)
 const checkOnly = args.includes('--check')
@@ -74,7 +75,14 @@ for (const slug of slugs) {
       continue
     }
     const target = join(SRC, file.path)
-    const content = file.content ?? ''
+    const original = file.content ?? ''
+    const usesRegistryIcons = /from\s*['"]lucide-react['"]/.test(original)
+    const content = usesRegistryIcons
+      ? '// local patch (pi-app): use the shared Hugeicons icon adapter.\n' + original
+        .replace(/(from\s*)['"]lucide-react['"]/g, '$1"@/lib/icons"')
+        .replace(/\bLucideIcon\b/g, 'IconComponent')
+        .replace(/\bLucideProps\b/g, 'IconProps')
+      : original
 
     // The one thing that must never happen: clobbering a locally patched
     // vendored file (or an app-owned helper that happens to share a path).

@@ -3,7 +3,7 @@ import { useSyncExternalStore } from 'react'
 /**
  * Interface style — Settings → Appearance. ONE global preference that drives
  * the corner/radius preset (`data-corners`). Icons are NOT part of it: the app
- * has a single icon family (Lucide for UI glyphs, Catppuccin for file types),
+ * has a single icon family (Hugeicons UI glyphs, Catppuccin file types),
  * so both styles draw the same artwork and only the geometry differs.
  *
  * The squircle values are recovered from 397f6ed^ (the parent of the commit
