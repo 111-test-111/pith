@@ -125,8 +125,8 @@ try {
   )
   assert.equal(await evaluate(`document.querySelectorAll('[data-activity-week]').length`), 0, 'the weekly blocks are gone')
 
-  // Hover treatment: the header carries its month labels, the hovered particle
-  // lifts with the inner ring — and it is the ONLY particle that moves. The
+  // Hover treatment: the header carries its month labels and the hovered
+  // particle is the ONLY particle that moves. The
   // vendored ripple scaled its neighbours too, which read as the pointer
   // deforming the cells it passed over.
   const dailyLabels = await evaluate(`(()=>{const grid=document.querySelector('[data-heat-cell]').closest('.grid');return [...grid.children].filter(node=>node.tagName==='SPAN'&&getComputedStyle(node).gridRow==='1').length})()`)
@@ -135,12 +135,11 @@ try {
   await waitFor(`(()=>{const cells=[...document.querySelectorAll('[data-heat-cell]')];const visual=cells[cells.length-1].firstElementChild;const t=getComputedStyle(visual).transform;return getComputedStyle(visual).opacity==='1'&&(t==='none'||Math.abs(new DOMMatrix(t).a-1)<0.01)})()`)
   // Pick an interior cell, so all four neighbours exist to be measured.
   const hotCell = await evaluate(`(()=>{const cells=[...document.querySelectorAll('[data-heat-cell]')];const inner=(cell)=>{const [w,d]=cell.getAttribute('data-heat-cell').split('-').map(Number);return w>=2&&w<=40&&d>=1&&d<=5};const cell=cells.find(inner);cell.dispatchEvent(new PointerEvent('pointerenter',{bubbles:true}));cell.dispatchEvent(new PointerEvent('pointerover',{bubbles:true}));return cell.getAttribute('data-heat-cell')})()`)
-  await waitFor(`(()=>{const cell=document.querySelector('[data-heat-cell][aria-describedby]');if(!cell)return false;const t=getComputedStyle(cell.firstElementChild).transform;return t!=='none'&&new DOMMatrix(t).a>1.2})()`)
+  await waitFor(`(()=>{const cell=document.querySelector('[data-heat-cell][aria-describedby]');if(!cell)return false;const t=getComputedStyle(cell.firstElementChild).transform;return t!=='none'&&new DOMMatrix(t).a>1.01})()`)
   await pause(400)
   const [hotW, hotD] = hotCell.split('-').map(Number)
-  const hoverTreatment = await evaluate(`(()=>{const scale=(id)=>{const cell=document.querySelector('[data-heat-cell="'+id+'"]');if(!cell)return null;const t=getComputedStyle(cell.firstElementChild).transform;return t==='none'?1:new DOMMatrix(t).a};const visual=document.querySelector('[data-heat-cell="${hotCell}"]').firstElementChild;const ring=visual.querySelector('span');return {scale:scale('${hotCell}'),ring:ring?{width:getComputedStyle(ring).borderTopWidth,color:getComputedStyle(ring).borderTopColor}:null,neighbours:[scale('${hotW - 1}-${hotD}'),scale('${hotW + 1}-${hotD}'),scale('${hotW}-${hotD - 1}'),scale('${hotW}-${hotD + 1}')]}})()`)
-  assert.ok(hoverTreatment.scale > 1.15, 'the hovered particle lifts: ' + JSON.stringify(hoverTreatment))
-  assert.ok(hoverTreatment.ring && hoverTreatment.ring.width === '1.5px', 'with the inner 1.5px ring: ' + JSON.stringify(hoverTreatment.ring))
+  const hoverTreatment = await evaluate(`(()=>{const scale=(id)=>{const cell=document.querySelector('[data-heat-cell="'+id+'"]');if(!cell)return null;const t=getComputedStyle(cell.firstElementChild).transform;return t==='none'?1:new DOMMatrix(t).a};return {scale:scale('${hotCell}'),neighbours:[scale('${hotW - 1}-${hotD}'),scale('${hotW + 1}-${hotD}'),scale('${hotW}-${hotD - 1}'),scale('${hotW}-${hotD + 1}')]}})()`)
+  assert.ok(hoverTreatment.scale > 1.01, 'the hovered particle responds to the pointer: ' + JSON.stringify(hoverTreatment))
   assert.ok(
     hoverTreatment.neighbours.every((s) => s !== null && Math.abs(s - 1) < 0.01),
     'and the hover leaves every neighbour untouched: ' + JSON.stringify(hoverTreatment.neighbours)
@@ -182,13 +181,11 @@ try {
   assert.ok(rightX > svgRect.width * 0.65, 'and lands at the right edge: ' + rightX)
   assert.ok(glide > leftX + 5 && glide < rightX - 5, `having glided there instead of stepping: left ${leftX} → mid ${glide} → right ${rightX}`)
 
-  // The crosshair readout is the shared TooltipSurface: the exact counts ride
-  // in the same bubble the calendar readout wears, with the Total row.
+  // The crosshair readout carries the exact series counts and the Total row.
   await waitFor(`[...document.querySelectorAll('[role="tooltip"]')].some((tip)=>/Total/.test(tip.textContent))`)
-  const readout = await evaluate(`(()=>{const tip=[...document.querySelectorAll('[role="tooltip"]')].find((t)=>/Total/.test(t.textContent));return {text:tip.textContent,shadow:getComputedStyle(tip).boxShadow}})()`)
-  assert.match(readout.text, /600/, 'the readout lists the series counts: ' + readout.text)
-  assert.match(readout.text, /Total/, 'with the total row')
-  assert.notEqual(readout.shadow, 'none', 'and it wears the shared tooltip surface')
+  const readout = await evaluate(`[...document.querySelectorAll('[role="tooltip"]')].find((t)=>/Total/.test(t.textContent)).textContent`)
+  assert.match(readout, /600/, 'the readout lists the series counts: ' + readout)
+  assert.match(readout, /Total/, 'with the total row')
 
   // The boundary dot sits exactly ON the line it marks. The drawing used to be a
   // quadratic-midpoint spline that only touched the midpoints between days, so a

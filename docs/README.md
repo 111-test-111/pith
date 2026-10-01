@@ -37,6 +37,8 @@ Start with [README](../README.md) for the product, setup and development command
 
 ## Verification
 
-After changes, run `npm run typecheck && npm run build`, then the checks for affected topics. Electron UI checks use the built application. Offline fixtures do not prove real-model behavior or every platform/adapter. An adapter SKIP is not a runtime pass; disclose failed or unrun checks when delivering work.
+The [testing guide](testing.md) describes the unified commands, catalog, reports, CI lanes, prerequisites and rules for keeping only useful coverage. `npm test` prepares and runs standard suites; `npm run test:core`, `test:ui`, `test:native` and `test:performance` select layers. `npm run test:list` lists behavior and ownership without executing.
+
+After changes, run `npm run typecheck && npm run build`, then affected suites with `npm test -- --no-prepare --suite <id>`. Offline fixtures do not prove real-model behavior or every platform/adapter. An adapter SKIP is not a runtime pass; disclose failed or unrun checks when delivering work.
 
 Maintained technical documentation lives in `docs/`. Root README, AGENTS and LICENSE are project entry points. Third-party distribution licenses and test fixtures remain in their runtime/test asset locations.

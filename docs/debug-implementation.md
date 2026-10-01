@@ -56,6 +56,7 @@ DAP verified confirms breakpoint binding, not condition compilation. LLDB condit
 node scripts/check-debug-actions.mjs
 node scripts/check-debug-protocol.mjs
 node scripts/check-debug-regressions.mjs
+node scripts/check-debug-adapters.mjs
 node scripts/check-debug-ui.mjs
 node scripts/check-debug-native.mjs
 node scripts/check-debug-native-ui.mjs

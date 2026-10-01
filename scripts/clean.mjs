@@ -5,7 +5,7 @@ import { join } from 'node:path'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
 const outputs = [
-  'out', 'dist', '.vite', 'node_modules/.vite', 'node_modules/.vite-temp',
+  'out', 'dist', '.vite', '.test-results', 'node_modules/.vite', 'node_modules/.vite-temp',
   'src/renderer/public/file-icons'
 ]
 for (const entry of await readdir(root)) {

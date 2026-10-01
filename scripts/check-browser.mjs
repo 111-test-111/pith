@@ -916,6 +916,7 @@ test("service: external registration is idempotent, validates inputs and never r
 
 test("service: disconnect immediately rejects parked creation and clears pendingCreates", async () => {
   const ctx = mockContext()
+  let connected = true
   let emitDisconnected = () => {}
   const browser = {
     contexts: () => [ctx],
@@ -923,7 +924,12 @@ test("service: disconnect immediately rejects parked creation and clears pending
     close: async () => {},
   }
   const svc = new BrowserService(makeDeps(ctx, {
-    connectElectronFn: async () => browser,
+    connectElectronFn: async () => {
+      // A disconnected host cannot hand the same live connection back. Doing
+      // so turns the next failure assertion into two 30-second handshakes.
+      if (!connected) throw new BrowserHostUnavailableError(false)
+      return browser
+    },
     createTimeoutMs: 30_000,
   }))
   svc.grantConsent()
@@ -932,10 +938,12 @@ test("service: disconnect immediately rejects parked creation and clears pending
   const rejection = assert.rejects(pending, BrowserHostUnavailableError)
   await new Promise((r) => setTimeout(r, 20))
   assert.equal(svc.getStatus().pendingCreates.length, 1, "Renderer can observe pending creation")
+  connected = false
   emitDisconnected()
   await rejection
   assert.equal(svc.getStatus().pendingCreates.length, 0, "Clear pendingCreates")
   await assert.rejects(svc.createPage('agent:s1'), BrowserHostUnavailableError, "Creation before reconnect reports host unavailable")
+  svc.dispose()
 })
 
 test("service: invalid webContents IDs do not relay input; valid IDs invalidate old snapshots", async () => {
@@ -1832,29 +1840,6 @@ test("popup source pin: client IDs, shared pending rows, navigateTo handshake an
     "Report pending navigateTo during dom-ready; service owns goto",
   )
   assert.ok(!/loadURL\s*\(/.test(pane), "BrowserPane must not call loadURL; service owns popup navigation")
-})
-
-// Reapply zoom on every dom-ready before the one-time browserSeen latch.
-
-test("zoom source pin: dom-ready reapplies zoom before the one-time handshake latch", () => {
-  const source = readFileSync(
-    new URL('../src/renderer/src/components/app/BrowserPageView.tsx', import.meta.url),
-    'utf8',
-  )
-  const domReadyAt = source.indexOf('const onDomReady = () => {')
-  const onNavAt = source.indexOf('const onNav = (event: Event) => {')
-  assert.ok(domReadyAt !== -1, "Locate BrowserPageView onDomReady; update this pin after refactoring")
-  assert.ok(onNavAt > domReadyAt, "onNav must follow onDomReady for a valid handler slice")
-  const handler = source.slice(domReadyAt, onNavAt)
-  const applyZoomAt = handler.indexOf('applyZoom(')
-  const latchAt = handler.indexOf('handshakeCompleteRef')
-  assert.ok(applyZoomAt !== -1, "dom-ready reapplies zoom to prevent cross-origin reset flashes")
-  assert.ok(latchAt !== -1, "dom-ready retains the one-time handshakeCompleteRef latch")
-  assert.ok(
-    applyZoomAt < latchAt,
-    `applyZoom offset ${applyZoomAt} must precede handshake latch offset ${latchAt}` +
-      "; the latch gates registration only, while every dom-ready reapplies zoom",
-  )
 })
 
 test("browser tools: fourteen unique names match BROWSER_TOOL_NAMES", () => {

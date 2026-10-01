@@ -148,7 +148,26 @@ try {
   }
   const wait = (expression, label) => until(() => evaluate(`Boolean(${expression})`), label)
   const click = selector => evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`)
-  const guest = expression => evaluate(`document.querySelector('[data-file-html] webview').executeJavaScript(${JSON.stringify(expression)})`)
+  let expectedGuestPath
+  const guest = async expression => {
+    let value
+    // Switching views and refreshing files can replace the webview after a
+    // DOM predicate matched its predecessor. Reacquire the attached, loaded
+    // guest on each attempt; never invoke a method on a missing/remounting node.
+    await until(async () => {
+      const result = await evaluate(`(async()=>{
+        const view=document.querySelector('[data-file-html] webview');
+        if(!view)return {ready:false};
+        try{const url=new URL(view.getURL());if(url.protocol!=='http:'||view.isLoading())return {ready:false};if(${JSON.stringify(expectedGuestPath ?? null)}!==null&&decodeURIComponent(url.pathname)!==${JSON.stringify(expectedGuestPath ?? null)})return {ready:false}}catch{return {ready:false}};
+        try{return await view.executeJavaScript(${JSON.stringify(`(()=>{if(document.readyState==='loading')return {ready:false};return {ready:true,value:(${expression})}})()`)})}
+        catch(error){if(!view.isConnected||/The WebView must be attached|Object has been destroyed|Invalid guestInstanceId/.test(String(error)))return {ready:false};throw error}
+      })()`)
+      if (!result?.ready) return false
+      value = result.value
+      return true
+    }, 'HTML guest attached and loaded')
+    return value
+  }
   await send('Runtime.enable')
   await wait('document.body.innerText.length > 50', 'shell')
   await evaluate('localStorage.setItem("pi-app:locale","en");localStorage.setItem("pi-app:reduce-motion","true")')
@@ -159,6 +178,7 @@ try {
   await wait('document.querySelector("[data-file-tree]")?.textContent.includes("index.html")', 'file tree')
   const openTreeFile = async name => {
     await evaluate(`Array.from(document.querySelectorAll('[data-file-tree] [role=treeitem]')).find(b=>b.getAttribute('aria-label')===${JSON.stringify(name)} || b.textContent.trim()===${JSON.stringify(name)}).click()`)
+    expectedGuestPath = '/' + name
   }
   await openTreeFile('index.html')
   await wait('document.querySelector("[data-file-html] webview") && !document.querySelector("[data-file-html] [role=status]")', 'HTML preview')

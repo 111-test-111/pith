@@ -2,11 +2,11 @@
  * The SDK appends `<read-files>`/`<modified-files>` to every summary it
  * generates (`formatFileOperations`) — a convention between the SDK and the
  * model that markdown cannot render. `splitSummaryFiles` takes those sections
- * out so `SummaryRow` can draw them as file links; this checks the pure split,
- * plus a real compacted summary from disk. No Electron.
+ * out so `SummaryRow` can draw them as file links. Deterministic fixtures check
+ * prose fidelity, file paths, fences and incomplete sections. No Electron.
  */
 import assert from 'node:assert/strict'
-import { mkdir, readFile, rm, writeFile, readdir } from 'node:fs/promises'
+import { mkdir, rm } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
@@ -101,46 +101,7 @@ try {
   assert.deepEqual(dangling.read, [], 'an unterminated block contributes nothing')
   assert.equal(dangling.body, unterminated.trimEnd(), 'and its text is not lost')
 
-  // Real data: the newest compacted summary on this machine, if there is one.
-  const sessionsRoot = join(process.env.HOME ?? '', '.pi', 'agent', 'sessions')
-  const files = []
-  const walk = async (dir, depth = 0) => {
-    if (depth > 3) return
-    for (const entry of await readdir(dir, { withFileTypes: true }).catch(() => [])) {
-      const path = join(dir, entry.name)
-      if (entry.isDirectory()) await walk(path, depth + 1)
-      else if (entry.name.endsWith('.jsonl')) files.push(path)
-    }
-  }
-  await walk(sessionsRoot)
-  let verified = 0
-  for (const file of files.slice(0, 400)) {
-    const raw = await readFile(file, 'utf8').catch(() => '')
-    if (!raw.includes('"type":"compaction"')) continue
-    for (const line of raw.split('\n')) {
-      if (!line.includes('"type":"compaction"') && !line.includes('<read-files>')) continue
-      let entry
-      try {
-        entry = JSON.parse(line)
-      } catch {
-        continue
-      }
-      const summary = entry?.type === 'compaction' ? entry.summary : undefined
-      if (typeof summary !== 'string' || !summary.includes('<read-files>')) continue
-      const real = splitSummaryFiles(summary)
-      assert.ok(real.read.length > 0 || real.modified.length > 0, `the real summary yields paths: ${file}`)
-      assert.ok(!real.body.includes('<read-files>'), `the tags are gone from the body: ${file}`)
-      assert.ok(!real.body.includes('<modified-files>'), `nor are the other tags left behind: ${file}`)
-      assert.ok(real.body.length > 0, `the summarised prose survives: ${file}`)
-      verified++
-      break
-    }
-    if (verified === 2) break
-  }
-  console.log(
-    `PASS: summary file sections (body preserved, fences and unterminated blocks untouched` +
-      `${verified ? `, ${verified} real compacted summar${verified === 1 ? 'y' : 'ies'} on this machine verified` : ', no real compacted summary on this machine to check'})`
-  )
+  console.log('PASS: summary file sections (body preserved, file paths intact, fences and unterminated blocks untouched)')
 } finally {
   await rm(scratch, { recursive: true, force: true })
 }

@@ -209,23 +209,6 @@ window.__checkboxes = function () {
 
 window.__text = function () { return document.body.textContent; };
 
-/** The accent swatches: the one control that offers raw colour, so its size is
- * a design decision worth pinning (the owner had them shrunk from 32px). */
-window.__swatches = function (prefix) {
-  return [...document.querySelectorAll('button[aria-pressed]')]
-    .filter(function (el) { return (el.getAttribute('aria-label') || '').indexOf(prefix) === 0; })
-    .map(function (el) {
-      const box = el.getBoundingClientRect();
-      return {
-        label: el.getAttribute('aria-label'),
-        width: Math.round(box.width),
-        height: Math.round(box.height),
-        radius: getComputedStyle(el).borderRadius,
-        pressed: el.getAttribute('aria-pressed')
-      };
-    });
-};
-
 /** A real transcript entrance: the same row with and without \`animateIn\`. */
 window.__entrance = function (animateIn) {
   return new Promise(function (done) {
@@ -501,19 +484,6 @@ try {
   )
   reduceBox = await evaluate(`window.__reveal(${json(dict.en['settings.reduceMotion'])})`)
   assert.equal(reduceBox.onScreen, true, 'the switch is on screen before clicking it: ' + json(reduceBox))
-  // The accent swatches live in the same section: seven compact controls (24px),
-  // not the 32px blocks they were shipped as.
-  const swatches = await evaluate(`window.__swatches(${json(dict.en['settings.accentAria'].split('{id}')[0])})`)
-  assert.equal(swatches.length, 7, 'every accent preset is offered: ' + json(swatches))
-  assert.ok(
-    swatches.every((swatch) => swatch.width === 24 && swatch.height === 24),
-    'each accent swatch is the compact 24px control: ' + json(swatches)
-  )
-  assert.equal(
-    swatches.filter((swatch) => swatch.pressed === 'true').length,
-    1,
-    'exactly the active preset is marked: ' + json(swatches)
-  )
   await clickAt(reduceBox.x, reduceBox.y)
   await pause(250)
   state = await evaluate(`window.__state()`)

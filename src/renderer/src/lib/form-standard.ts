@@ -26,8 +26,7 @@
  *  - One title colour: `text-foreground`. Helper and error lines are
  *    annotations, not titles, and stay at 11–12px, 6px under their control.
  *
- * Verified by `node scripts/check-form-standard.mjs`,
- * `check-mcp-settings.mjs`, `check-scheduled-tasks-ui.mjs` and
+ * Exercised by `check-mcp-settings.mjs`, `check-scheduled-tasks-ui.mjs` and
  * `check-subagent-settings.mjs`.
  */
 

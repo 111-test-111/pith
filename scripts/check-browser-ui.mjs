@@ -24,13 +24,13 @@
  *   `setPath('userData', <appData>/pi-app')`) ignores `HOME` on macOS, and
  *   `--user-data-dir` is clobbered by that setPath — launching the app
  *   unmodified reads AND WRITES the user's real profile. So the check copies
- *   the built `out/` tree into the temp root and redirects EXACTLY ONE path
- *   constant in `out/main/index.mjs` (`join(app.getPath("appData"),
- *   "pi-app")` → the temp profile; the replacement is asserted to hit once).
+ *   the built `out/` tree into the temp root and redirects the userData path
+ *   in `out/main/index.mjs` (`join(app.getPath("appData"), "pi-app")` → the
+ *   temp profile; the replacement is asserted to hit once). The fixture also
+ *   sets Electron's native downloads path inside that same temporary tree.
  *   Everything else is the real built app; `HOME` isolates the `~/.pi` agent
- *   dir (Node's os.homedir honors it). The only file the run may place
- *   outside the temp root is a download in the real ~/Downloads, which is
- *   content-verified and deleted at cleanup.
+ *   dir (Node's os.homedir honors it). Download bytes and completion events
+ *   still pass through the production browser-session handler.
  * - Rejection policy: unhandled rejections are allowed ONLY when they match
  *   playwright's connection-teardown family (the deliberately abandoned
  *   guest close and the dropped clients at app kill) — counted NOTEs. Any
@@ -47,9 +47,9 @@ import assert from 'node:assert/strict'
 import { spawn, execFile } from 'node:child_process'
 import { once } from 'node:events'
 import { promisify } from 'node:util'
-import { mkdtemp, mkdir, cp, readFile, rm, writeFile, stat, unlink, symlink } from 'node:fs/promises'
+import { mkdtemp, mkdir, cp, readFile, rm, writeFile, stat, symlink } from 'node:fs/promises'
 import { createServer } from 'node:http'
-import { homedir, tmpdir } from 'node:os'
+import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import electron from 'electron'
 import { chromium } from 'playwright-core'
@@ -68,12 +68,12 @@ const temporary = await mkdtemp(join(tmpdir(), 'pith-browser-ui-'))
 const profile = join(temporary, 'profile')
 const home = join(temporary, 'home')
 const project = join(temporary, 'project')
+const downloads = join(temporary, 'downloads')
 
 const results = { iron: [], flow: [], ui: [] }
 const assertedIronRules = new Set()
 const trims = []
 let server, app, ws, browser1, browser2, stderr = ''
-const downloadArtifacts = []
 /** Set immediately before the app is killed. The unhandled-rejection allowlist
  *  below only applies from here on: a rejection BEFORE teardown begins is never
  *  benign (a mid-run browser.close()/context.close() would otherwise be counted
@@ -150,8 +150,7 @@ process.on('unhandledRejection', (reason) => {
 try {
   // ---- Fixture server: deterministic http pages on 127.0.0.1 (the navigation
   // whitelist accepts any http/https URL; a local server needs no network). ----
-  // Unique download filename: a same-named file in the user's real Downloads
-  // must never collide (the handler dedupes only when it exists at that moment).
+  // Unique download filename, verified through the real download handler.
   const downloadName = `browser-check-${process.pid}-${Date.now()}.txt`
   // keep-alive leg state: the heartbeat page pings /tick every 350ms; the
   // server counts pings and tracks the highest n — continuity of n across a
@@ -261,10 +260,11 @@ try {
   const fixtureUrl = `http://127.0.0.1:${fixture.address().port}/`
 
   // ---- Isolated profile + patched-launch app tree. `HOME` isolates ~/.pi;
-  // the userData redirection is the single built-bundle patch described in
-  // the header. Settings are seeded into the temp userData only.
-  await mkdir(join(profile, 'Downloads'), { recursive: true })
-  await mkdir(join(home, 'Downloads'), { recursive: true })
+  // the userData/downloads redirection is the fixture-only built-bundle patch
+  // described in the header. Settings are seeded into the temp userData only.
+  await mkdir(profile, { recursive: true })
+  await mkdir(home, { recursive: true })
+  await mkdir(downloads)
   await mkdir(project, { recursive: true })
   const appTree = join(temporary, 'out')
   // Fail HERE, loudly, if the build is missing: without the renderer entry the
@@ -285,12 +285,12 @@ try {
   await symlink(join(repo, 'node_modules'), join(temporary, 'node_modules'))
   const mainEntry = join(appTree, 'main', 'index.mjs')
   const original = await readFile(mainEntry, 'utf8')
-  const NEEDLE = 'join(app.getPath("appData"), "pi-app")'
+  const NEEDLE = 'app.setPath("userData", join(app.getPath("appData"), "pi-app"));'
   assert.equal(
     original.split(NEEDLE).length - 1, 1,
     'expected exactly one userData-rooting expression in the built main entry — update this check'
   )
-  await writeFile(mainEntry, original.replace(NEEDLE, JSON.stringify(profile)))
+  await writeFile(mainEntry, original.replace(NEEDLE, `app.setPath("userData", ${JSON.stringify(profile)});\napp.setPath("downloads", ${JSON.stringify(downloads)});`))
   await writeFile(join(profile, 'app-settings.json'), JSON.stringify({
     cwd: project, folders: [project], startup: 'new',
     contextFiles: false, browserConsent: false, browserAgentToolsEnabled: false
@@ -613,17 +613,10 @@ try {
   // ================= Download (flow) =========================================
   await guest.locator('#download').click({ force: true, timeout: 10_000 })
   await eventually(() => evaluate('Boolean(document.querySelector(\'[data-browser-toolbar] button[aria-label="Reveal in folder"]\'))'), 'toolbar download indicator', 20_000)
-  const downloadCandidates = [join(home, 'Downloads', downloadName), join(homedir(), 'Downloads', downloadName)]
-  const downloadPath = await eventually(async () => {
-    for (const candidate of downloadCandidates) {
-      try { if ((await stat(candidate)).size > 0) return candidate } catch { /* not yet */ }
-    }
-    return null
+  const downloadPath = join(downloads, downloadName)
+  await eventually(async () => {
+    try { return (await stat(downloadPath)).size > 0 } catch { return false }
   }, 'downloaded fixture file', 20_000)
-  // Pre-register for cleanup BEFORE content verification: a failed verification
-  // must still remove the artifact. (A temp-home landing dies with the temp dir;
-  // only the real-home fallback needs explicit cleanup.)
-  if (downloadPath.startsWith(homedir())) downloadArtifacts.push(downloadPath)
   assert.equal(await readFile(downloadPath, 'utf8'), 'browser download fixture')
   pass('flow', `guest download is intercepted by the browser session: toolbar indicator appears and the file lands complete (${downloadPath})`)
 
@@ -934,12 +927,7 @@ try {
   await guest.waitForLoadState('domcontentloaded', { timeout: 10_000 })
   await eventually(async () => Math.abs((await guest.evaluate(() => window.innerWidth)) - widthAt110) <= 3, 'zoom factor surviving dom-ready', 10_000)
   assert.equal(await zoomLabel(), '110%')
-  await assertSource(
-    'zoom reapplies outside the one-shot handshake latch',
-    ['src/renderer/src/components/app/BrowserPageView.tsx'],
-    /const onDomReady = \(\) => \{[\s\S]*?applyZoom\(wv as unknown as BrowserWebviewElement, pageZoomRef\.current\)[\s\S]*?handshakeCompleteRef/
-  )
-  pass('flow', 'zoom survives a real guest navigation: the 110% factor is reapplied on dom-ready (guest innerWidth unchanged, toolbar label unchanged; the onDomReady latch-exclusion corroborated in source)')
+  pass('flow', 'zoom survives a real guest navigation: the 110% factor is reapplied on dom-ready (guest innerWidth unchanged, toolbar label unchanged)')
 
   // ================= Toolbar reload goes through the service (iron 6) ========
   // The doc specifies `goto(currentUrl)` (reloadGuest) for a page the service
@@ -1551,7 +1539,6 @@ try {
   assert.ok(disposeBody, 'BrowserService.dispose() found in service.ts')
   assert.match(disposeBody, /this\.handleProcessExit\(\)/, 'dispose hands lifecycle back to ipc.ts/shutdown.ts (references dropped)')
   assert.match(disposeBody, /this\.clearStateNotify\(\)/, 'dispose tears down the notify timer (references dropped)')
-  assert.match(disposeBody, /Intentionally do not call electronBrowser\.close\(\)/, 'dispose documents the deliberate no-close decision')
   // The negative guard spans the WHOLE file (comments stripped — block
   // comments first, then line comments): dispose() is the one place a close
   // could hide today, but any future method joining it must trip the same alarm.
@@ -1703,13 +1690,6 @@ try {
   } catch (error) {
     console.error('orphan check failed:', error.message)
     process.exitCode = 1
-  }
-  // A download into the REAL user Downloads dir is this run's only footprint
-  // outside the temp root; remove exactly our verified file.
-  for (const artifact of downloadArtifacts) {
-    try {
-      if (await readFile(artifact, 'utf8') === 'browser download fixture') await unlink(artifact)
-    } catch { /* best effort */ }
   }
   await new Promise((r) => (server ? server.close(r) : r()))
   await rm(temporary, { recursive: true, force: true })

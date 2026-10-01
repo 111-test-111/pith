@@ -49,6 +49,9 @@ try {
         }))
         builder.onResolve({ filter: /^electron$/ }, () => ({ path: 'electron', namespace: 'fixture' }))
         builder.onResolve({ filter: /^proper-lockfile$/ }, args => ({ path: fileURLToPath(import.meta.resolve(args.path)), external: true }))
+        builder.onResolve({ filter: /^playwright-core(\/|$)|^chromium-bidi(\/|$)/ }, args => ({
+          path: fileURLToPath(import.meta.resolve(args.path)), external: true
+        }))
         builder.onLoad({ filter: /.*/, namespace: 'fixture' }, () => ({
           contents: `export const app = { getPath: () => ${JSON.stringify(userData)}, getVersion: () => '0.0.0' };
 export const shell = {};`

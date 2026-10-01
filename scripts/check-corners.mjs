@@ -328,8 +328,7 @@ app.on('window-all-closed',()=>app.quit());`)
         // hard-edged rectangle in the squircle style: the pill nav takes the
         // control step (asserted above through its moving indicator) and the
         // compact horizontal strips the inner step — the segment variant's
-        // browser pages AND the underline variant's rail/file tabs, which the
-        // rail check (check-rail-tabs.mjs) measures in the real Workspace.
+        // browser pages AND the underline variant's rail/file tabs.
         const underline = await evaluate('(()=>{const e=document.querySelector("#underline [role=tab][aria-selected=false]"),s=getComputedStyle(e),r=e.getBoundingClientRect();return {width:r.width,height:r.height,radius:parseFloat(s.borderTopLeftRadius),shape:s.cornerShape}})()')
         assert.ok(underline.width > 0 && underline.height > 0, `${preset}: the fixture underline tab renders`)
         assert.equal(

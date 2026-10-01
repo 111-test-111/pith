@@ -11,7 +11,7 @@ import { createServer } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import electron from 'electron'
-import { checkTerminalAppearance } from './check-terminal-appearance.mjs'
+import { checkTerminalAppearance } from './lib/check-terminal-appearance.mjs'
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const temporary = await mkdtemp(join(tmpdir(), 'pith-terminal-'))

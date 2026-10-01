@@ -42,7 +42,7 @@ npm run preview      # 启动已构建的应用
 npm run clean        # 清理构建、打包、缓存及生成资源，保留依赖
 ```
 
-修改后运行 `npm run typecheck` 和 `npm run build`。项目通过 `scripts/check-*.mjs` 执行针对性的协议、运行时和 Electron UI 检查；按[文档索引](docs/README.md)与 [AGENTS.md](AGENTS.md) 选择受影响的检查，不必把所有套件作为每次修改的入口。
+运行 `npm test` 执行统一回归测试，或用 `npm run test:core` / `npm run test:ui` 选择测试层级。运行器统一准备构建、隔离测试环境，并将 JSON/JUnit 报告与日志写入 `.test-results/`。性能与真实模型测试需要单独选择。运行依赖、CI 与覆盖边界见[测试指南](docs/testing.md)。
 
 验证完成后可运行 `npm run clean` 回到未构建状态；下次开发或构建会自动重新生成所需的文件类型图标。
 

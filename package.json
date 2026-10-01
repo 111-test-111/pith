@@ -15,6 +15,13 @@
     "preview": "electron-vite preview",
     "start": "electron-vite preview",
     "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit",
+    "test": "node scripts/test.mjs",
+    "test:core": "node scripts/test.mjs --group core",
+    "test:ui": "node scripts/test.mjs --group ui",
+    "test:native": "node scripts/test.mjs --group native",
+    "test:performance": "node scripts/test.mjs --group performance",
+    "test:live": "node scripts/test.mjs --group live",
+    "test:list": "node scripts/test.mjs --list",
     "clean": "node scripts/clean.mjs",
     "icons": "node scripts/generate-icons.mjs",
     "prepare:file-icons": "node scripts/prepare-file-icons.mjs",
@@ -23,9 +30,6 @@
     "dist:mac": "npm run build && electron-builder --mac",
     "dist:win": "npm run build && electron-builder --win",
     "dist:linux": "npm run build && electron-builder --linux",
-    "check:context-budget": "node scripts/check-context-budget.mjs",
-    "check:session-replay": "node scripts/check-session-replay.mjs",
-    "check:long-session-benchmark": "node scripts/check-long-session-benchmark.mjs",
     "benchmark:long-session": "node scripts/benchmark-long-session.mjs"
   },
   "dependencies": {

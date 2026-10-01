@@ -42,7 +42,7 @@ npm run preview      # Launch the built app
 npm run clean        # Remove outputs, caches and generated assets; keep dependencies
 ```
 
-Run `npm run typecheck` and `npm run build` after changes. The `scripts/check-*.mjs` suites provide focused protocol, runtime and Electron UI checks. Use the [documentation index](docs/README.md) and [AGENTS.md](AGENTS.md) to select checks for the affected behavior.
+Run `npm test` for the unified regression suite, or `npm run test:core` / `npm run test:ui` for a specific layer. The runner prepares once, isolates fixtures and writes JSON/JUnit reports and logs to `.test-results/`. Performance and real-provider tests are explicit separate groups. See the [testing guide](docs/testing.md) for selection, prerequisites, CI and coverage limits.
 
 After verification, `npm run clean` returns the checkout to an unbuilt state. The next development or build run regenerates the required file-type icons.
 

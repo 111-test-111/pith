@@ -116,9 +116,9 @@ try {
   await writeFile(join(project, 'cursor.cur'), Buffer.alloc(4096, 5))
   await writeFile(join(project, 'still.heic'), Buffer.alloc(4096, 6))
   // A real font, so the preview proves it loaded rather than merely mounted.
-  const fontSource = '/System/Library/Fonts/Supplemental/Arial.ttf'
-  const hasFont = await copyFile(fontSource, join(project, 'Arial.ttf')).then(() => true, () => false)
-  const fontBytes = hasFont ? (await readFile(join(project, 'Arial.ttf'))).byteLength : 0
+  const fontSource = fileURLToPath(import.meta.resolve('temml/dist/Temml.woff2'))
+  await copyFile(fontSource, join(project, 'Temml.woff2'))
+  const fontBytes = (await readFile(join(project, 'Temml.woff2'))).byteLength
 
   // 0. The routing table itself, before anything is spawned: this is the one
   //    place the pane, the document reader and the protocol agree.
@@ -177,6 +177,7 @@ import {initFonts,useFontSettings} from '/src/lib/fonts.ts';
 import {ImagePreviewProvider} from '/src/components/app/ImagePreview.tsx';
 import {I18nProvider} from '/src/i18n/index.tsx';
 import {PiStore} from '/src/state/pi-store.ts';import {FileBrowserStore} from '/src/state/file-browser-store.ts';
+import {DebugStore} from '/src/state/debug-store.ts';
 import en from '/src/i18n/locales/en.ts';import zh from '/src/i18n/locales/zh-CN.ts';
 import '/src/styles.css';
 initFonts();
@@ -184,9 +185,9 @@ initFonts();
 // survives through a real reload.
 if(!localStorage.getItem('pi-app:locale'))localStorage.setItem('pi-app:locale','en');
 const cwd=${JSON.stringify(project)};
-const files=new FileBrowserStore(),pi=new PiStore();
+const files=new FileBrowserStore(),pi=new PiStore(),debug=new DebugStore();
 pi.applySnapshot({cwd,sessionId:crypto.randomUUID(),messages:[],model:null,thinkingLevel:'off',availableThinkingLevels:['off'],isStreaming:false});
-const App=()=>{const [,setFonts]=useFontSettings();window.setFonts=setFonts;const state=React.useSyncExternalStore(files.subscribe,files.getSnapshot);return React.createElement(FilesPane,{files,store:pi,filePath:state.active})};
+const App=()=>{const [,setFonts]=useFontSettings();window.setFonts=setFonts;const state=React.useSyncExternalStore(files.subscribe,files.getSnapshot);return React.createElement(FilesPane,{files,store:pi,filePath:state.active,debug})};
 createRoot(document.getElementById('root')).render(React.createElement(React.StrictMode,null,React.createElement(I18nProvider,null,React.createElement(ImagePreviewProvider,null,React.createElement(App)))));
 window.cwd=cwd;window.files=files;window.en=en;window.zh=zh;
 window.parseCues=parseCues;
@@ -415,18 +416,18 @@ app.on('window-all-closed',()=>app.quit());`, resolveDir: repo, loader: 'ts' }, 
   console.log('PASS: .lrc opens on timed lyrics, retains source, bounds output and explains untimed files')
 
   // 6. A font preview takes the pane, loads the real face and renders with it.
-  if (hasFont) {
-    await open('Arial.ttf')
+  {
+    await open('Temml.woff2')
     await waitFor('document.querySelector("[data-file-font]")', 'font preview')
     await waitFor(`document.fonts.check('16px "' + getComputedStyle(document.querySelector('[data-font-sample]')).fontFamily.replace(/"/g,'') + '"')`, 'the face is registered')
     assert.equal(await evaluate(`document.querySelectorAll('[data-file-view-tabs]').length`), 0, 'a font takes the pane without view tabs')
     assert.equal(await evaluate(`document.querySelectorAll('[data-font-sample]').length`), 4, 'the specimen sets several sizes')
     assert.equal(await evaluate(`document.querySelectorAll('[data-font-glyphs]').length`), 1, 'a glyph run is shown')
-    // The sample really uses the loaded face: Arial's 'W' is much narrower than
-    // the fallback's at the same size, so a fallback render would measure wider.
-    const arial = await evaluate(`(()=>{const node=document.querySelector('[data-font-sample]');const probe=document.createElement('span');probe.style.cssText='position:absolute;visibility:hidden;white-space:pre;font-size:100px;font-family:'+getComputedStyle(node).fontFamily;probe.textContent='Width';document.body.append(probe);const loaded=probe.getBoundingClientRect().width;probe.style.fontFamily='monospace';const fallback=probe.getBoundingClientRect().width;probe.remove();return {loaded:Math.round(loaded),fallback:Math.round(fallback)}})()`)
-    assert.notEqual(arial.loaded, arial.fallback, 'the sample renders in the loaded face, not the fallback: ' + JSON.stringify(arial))
-    assert.ok((await paneText()).includes('TTF'), 'the format is reported: ' + (await paneText()))
+    // Temml's shipped face contains Mathematical Script capitals rather than
+    // ASCII. Use those glyphs so a missing face cannot pass via text fallback.
+    const metrics = await evaluate(`(()=>{const node=document.querySelector('[data-font-sample]');const probe=document.createElement('span');probe.style.cssText='position:absolute;visibility:hidden;white-space:pre;font-size:100px;font-family:'+getComputedStyle(node).fontFamily;probe.textContent='𝒜𝒟𝒲𝒴';document.body.append(probe);const loaded=probe.getBoundingClientRect().width;probe.style.fontFamily='monospace';const fallback=probe.getBoundingClientRect().width;probe.remove();return {loaded:Math.round(loaded),fallback:Math.round(fallback)}})()`)
+    assert.notEqual(metrics.loaded, metrics.fallback, 'the sample renders in the loaded face, not the fallback: ' + JSON.stringify(metrics))
+    assert.ok((await paneText()).includes('WOFF2'), 'the format is reported: ' + (await paneText()))
     assert.ok((await paneText()).includes(`${Math.round(fontBytes / 1024)}`), 'the file size is reported')
     const before = await evaluate(`getComputedStyle(document.querySelector('[data-font-sample]')).fontSize`)
     // Selected by its accessible name, not by position: beUI's Tooltip wraps the
@@ -442,8 +443,6 @@ app.on('window-all-closed',()=>app.quit());`, resolveDir: repo, loader: 'ts' }, 
     await pause(200)
     assert.equal(await evaluate(`[...document.fonts].filter(f=>f.family.startsWith('pith-font')).length`), 0, 'the face is removed with the tab')
     console.log('PASS: font preview loads the real face, zooms, edits its sample and unregisters on close')
-  } else {
-    console.log('SKIP: font preview (no system TTF fixture)')
   }
 
   // 7. No non-text family may reach `files:document` — the guard is the main
@@ -451,13 +450,13 @@ app.on('window-all-closed',()=>app.quit());`, resolveDir: repo, loader: 'ts' }, 
   for (const name of ['notes.ipynb', 'captions.srt', 'changes.patch']) {
     assert.ok(docPaths.some(path => path.endsWith('/' + name)), name + ' is read as a document')
   }
-  for (const name of ['Arial.ttf', 'audiobook.m4b', 'still.apng', 'cursor.cur', 'diagram.svgz', 'still.heic']) {
+  for (const name of ['Temml.woff2', 'audiobook.m4b', 'still.apng', 'cursor.cur', 'diagram.svgz', 'still.heic']) {
     assert.equal(docPaths.some(path => path.endsWith('/' + name)), false, name + ' is never read as a document')
   }
   // And the reader refuses one anyway, if a caller ever asked directly. The
   // claim is that no `text` field is produced at all, so absence is what is
   // tested — an array element would turn `undefined` into `null` on the way out.
-  const refused = await evaluate(`(async()=>{const r=await window.pi.readFileDocument({cwd:window.cwd,path:window.cwd+'/Arial.ttf'});return [r.error,'text' in r]})()`)
+  const refused = await evaluate(`(async()=>{const r=await window.pi.readFileDocument({cwd:window.cwd,path:window.cwd+'/Temml.woff2'});return [r.error,'text' in r]})()`)
   assert.equal(refused[0], 'binary', 'a font read as a document is refused')
   assert.equal(refused[1], false, 'and carries no bytes')
   console.log('PASS: non-text families never reach files:document, and the reader refuses them by itself')

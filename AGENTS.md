@@ -11,7 +11,7 @@ npm run build        # production output in out/
 npm run preview      # run the built app
 ```
 
-Always run `npm run typecheck && npm run build` after changes, then affected `scripts/check-*.mjs` suites. Checks use fixtures/Electron/CDP, without a separate test framework; read the script for prerequisites. Missing adapters are SKIP, not coverage. For an unbuilt delivery, verify before removing output.
+Always run `npm run typecheck && npm run build` after changes, then affected suites through `npm test -- --no-prepare --suite <id>`. `npm test` prepares and runs standard suites; `npm run test:list` lists the source-owned catalog. Checks use fixtures/Electron/CDP and Node assertions. Missing adapters are SKIP, not coverage. See [testing](docs/testing.md) for layers, reports and CI. For an unbuilt delivery, verify before removing output.
 
 Keep electron-vite/Vite/React-plugin peer compatibility. Main/preload/workers remain ESM `.mjs`, with `out/main/index.mjs` as the explicit entry. Use `npm run preview` for the correct userData directory; if Electron installation was skipped, run `node node_modules/electron/install.js`. Preparation scripts patch the pinned SDK, restore the macOS PTY helper mode and generate file icons; review patches on SDK upgrades.
 
@@ -113,18 +113,8 @@ Paths below use renderer/main-relative shorthand where clear.
 - BrowserService owns marker webviews over app CDP. Renderer creates/closes guests; restore waits for readiness. Inactive agent pages use full-size opacity/pointer-events, never `display: none`. Keys await renderer guest focus. Preserve sequence-free state, registration/active/catalog/icon alignment, bounded evaluations/snapshots, ambiguity checks and native AX hit-test safety. Consent partitions are shared; permissions deny by default. See [browser](docs/architecture/embedded-browser.md).
 - TerminalStore owns emulators across pane mounts; output uses `terminal:*`, never React state/Pi events. Preserve utility-process batching/backpressure even when hidden. Resize snapshots completed renders only; no fit per drag frame. Exit permanently disposes emulator/scrollback. Theme cache keeps literal ANSI black/white, 256/RGB colors and mode 2031/OSC notifications. Chrome is beUI.
 
-## Checks by affected area
+## Selecting checks
 
-Run `node scripts/<name>.mjs`; read affected docs/scripts and include adjacent checks for shared changes. `PI_*_SCREENSHOT_DIR` retains galleries; run performance checks alone.
-
-| Change | Primary suites |
-| --- | --- |
-| UI tokens / geometry | `check-corners`, `check-icons`, `check-status-ring`, `check-reduce-motion`, `check-rail-tabs`; each touched form's `check-form-standard`/MCP/scheduler/subagent panel suite |
-| Shell / composer / transcript | `check-window-chrome`, `check-settings-tabs`, `check-transcript-rhythm`, `check-transcript-order`, `check-composer-scroll`, `check-queue-panel`, `check-markdown-math`, `check-written-file-preview` |
-| Session / tasks | `check-session-lifecycle`, `check-session-persistence`, `check-session-list`, `check-session-search`, `check-continue`, `check-todos`, `check-bash-tasks`, `check-bash-task-ui`, `check-ask-user`, `check-ask-user-ui`, `check-scheduled-tasks`, `check-subagents`, `check-subagents-integration` |
-| Safety / branch changes | `check-sandbox`, `check-plan-mode`, `check-plan-mode-ui`, `check-rewind`, `check-rewind-sdk`, `check-rewind-ui`, `check-sdk-tool-boundary` |
-| Context / recording / extensions | `check-image-safety`, `check-context-budget`, `check-session-replay`, `check-present-trajectory`, `check-present-trajectory-ui`, `check-context-detail-ui`, `check-codemode-contracts`, `check-native-mcp-codemode`, `check-tool-settings` |
-| Jev / debug | `check-jev`, `check-jev-evidence`, `check-debug-actions`, `check-debug-protocol`, `check-debug-ui`, `check-debug-native`, `check-debug-native-ui`, `check-debug-sessions`, `check-debug` |
-| File / browser / terminal | `check-preview-routing`, `check-file-browser`, `check-file-source`, `check-file-browser-cache`, `check-media-preview`, `check-html-preview`, `check-pdf-preview`, `check-table-preview`, `check-browser`, `check-browser-ui`, `check-terminal`, `check-wheel-gesture` |
+Use `scripts/tests/manifest.mjs` and `npm run test:list` for behavior, layer, area, platform and deadline; do not duplicate the catalog here. Read affected docs/scripts and include adjacent checks for shared boundaries. Required suites use `--strict-skips`; disclose optional adapter/platform gaps. `PI_*_SCREENSHOT_DIR` retains galleries; run performance checks alone. Add observable behavior tests, not redundant source-string or cosmetic-token assertions, and keep helpers out of the standalone catalog.
 
 Do not commit generated `out/`, packaged `dist/`, caches, screenshots, logs or generated file-icon assets. Keep new technical documentation under `docs/`, update its index/links, and avoid duplicating source-owned shapes/token tables or historical handoff notes here.

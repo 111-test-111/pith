@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { deflateSync } from 'node:zlib'
-import { SessionManager, resizeImage } from '@earendil-works/pi-coding-agent'
+import { SessionManager, resizeImage, createCodemodeExtension } from '@earendil-works/pi-coding-agent'
 import { createPlanFixture } from './lib/plan-fixture.mjs'
 
 // This is the 70-byte image from the reported session. Its IDAT CRC and zlib
@@ -44,8 +44,10 @@ assert(await resizeImage(Buffer.from(GOOD_PNG, 'base64'), 'image/png'),
 
 let fixture
 try {
-  fixture = await createPlanFixture({ providerCallbacks: true })
+  fixture = await createPlanFixture({ providerCallbacks: true, extensionFactories: [createCodemodeExtension()] })
   await fixture.managed.lifecyclePromise
+  fixture.session.setActiveToolsByName([...fixture.session.getActiveToolNames(), 'codemode'])
+  assert(fixture.session.getActiveToolNames().includes('codemode'), 'the isolated fixture explicitly activates its real SDK codemode extension')
   fixture.session.agent.state.model = { ...fixture.session.model, input: ['text', 'image'] }
   const first = fixture.requests.length + 1
   fixture.setRespond(index => index === first

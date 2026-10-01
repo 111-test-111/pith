@@ -7,14 +7,14 @@
  * context that was just summarized away. Main therefore falls back to the
  * estimate the SDK itself uses for a compaction's `estimatedTokensAfter`:
  * `src/main/pi/context-estimate.ts`, checked here against the real SDK
- * estimator and a real compacted session file. No Electron.
+ * estimator and deterministic compacted context fixtures. No Electron.
  */
 import assert from 'node:assert/strict'
-import { mkdir, readdir, readFile, rm } from 'node:fs/promises'
+import { mkdir, rm } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
-import { estimateTokens, SessionManager } from '@earendil-works/pi-coding-agent'
+import { estimateTokens } from '@earendil-works/pi-coding-agent'
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 // Built inside the repo: a bundle in the OS temp dir cannot resolve the SDK
@@ -82,36 +82,8 @@ try {
     'a longer summary raises the estimate'
   )
 
-  // End to end on a real session file, when one exists: the context the SDK
-  // rebuilt for a compacted session is what the ring shows.
-  const sessionsRoot = join(process.env.HOME ?? '', '.pi', 'agent', 'sessions')
-  const files = []
-  const walk = async (dir, depth = 0) => {
-    if (depth > 3) return
-    for (const entry of await readdir(dir, { withFileTypes: true }).catch(() => [])) {
-      const path = join(dir, entry.name)
-      if (entry.isDirectory()) await walk(path, depth + 1)
-      else if (entry.name.endsWith('.jsonl')) files.push(path)
-    }
-  }
-  await walk(sessionsRoot)
-  let checked = 0
-  for (const file of files.slice(0, 400)) {
-    const raw = await readFile(file, 'utf8').catch(() => '')
-    if (!raw.includes('"type":"compaction"')) continue
-    const manager = SessionManager.open(file)
-    const { messages } = manager.buildSessionContext()
-    const tokens = compactedContextTokens(messages)
-    assert.ok(tokens !== null, `a compacted session yields an estimate: ${file}`)
-    const before = manager.getEntries().filter((entry) => entry.type === 'compaction').at(-1)?.tokensBefore ?? 0
-    assert.ok(tokens > 0, `the estimate is a real number: ${file}`)
-    assert.ok(tokens < before, `the ring drops after a compaction (${tokens} < ${before}): ${file}`)
-    checked++
-    if (checked === 3) break
-  }
   console.log(
-    `PASS: compaction context estimate (metric identical to the SDK's, no fallback without a summary` +
-      `${checked ? `, ${checked} real compacted session${checked === 1 ? '' : 's'} verified` : ', no real compacted session on this machine to check'})`
+    "PASS: compaction context estimate (metric identical to the SDK's, no fallback without a summary, larger summaries raise the estimate)"
   )
 } finally {
   await rm(scratch, { recursive: true, force: true })

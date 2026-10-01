@@ -1,8 +1,7 @@
-/** Review regressions: checkout ownership, child-target restart and Python
- * module configurations. Wire fixtures run everywhere; real adapters may SKIP. */
+/** Deterministic debugger regressions: checkout ownership, child-target
+ * restart and Python module configuration arguments. Uses wire fixtures only. */
 import assert from 'node:assert/strict'
-import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -156,60 +155,6 @@ try {
   }
   console.log('[PASS] child-target breakpoints: native/fallback restarts retain edits, extras and clears, with separate launch-tree ownership')
 
-  // Real-adapter checks: do not count a fixture substitute as runtime coverage.
-  for (const restore of restoreAdapters) restore()
-  delete process.env.PI_DAP_PROTOCOL_LOG
-  if (await lldb.detect(workspace)) {
-    const source = join(workspace, 'worker.c'), program = join(workspace, 'worker'), marker = join(workspace, 'running')
-    writeFileSync(source, '#include <stdio.h>\n#include <unistd.h>\nint main(int argc,char **argv){FILE *f=fopen(argv[1],"w");fputs("running",f);fclose(f);sleep(30);return 0;}\n')
-    execFileSync(process.platform === 'darwin' ? 'xcrun' : 'clang', [...(process.platform === 'darwin' ? ['clang'] : []), '-g', '-O0', source, '-o', program], { timeout: 30_000 })
-    const path = '/review/real-lldb'
-    await launch(path, { program, args: [marker] })
-    await until(() => existsSync(marker), 'real LLDB debuggee writes owning workspace')
-    await assertFenced()
-    await manager.stopSession(path); assertReleased()
-    console.log('[PASS] real LLDB: external-cwd process writes its owning workspace while both checkouts reject restore/snapshot')
-  } else console.log('[SKIP] real LLDB ownership: adapter unavailable')
-
-  if (await python.detect(runtime)) {
-    const moduleFile = join(runtime, 'review_module.py')
-    writeFileSync(moduleFile, 'import time\nvalue = 42\nprint(value, flush=True)\ntime.sleep(30)\n')
-    const path = '/review/real-python'
-    const module = await invoke(path, { action: 'start', configuration: 'Python module' })
-    assert.equal(module.status, 'stopped')
-    const frames = await manager.stack(path, module.activeThreadId, undefined, module.id, module.stopId)
-    assert.ok(frames.some(f => f.file === moduleFile))
-    await manager.setBreakpoints(path, moduleFile, [3], undefined, module.id)
-    const hit = await manager.control(path, 'continue', undefined, 5000, module.id)
-    assert.equal(hit.session.location?.line, 3)
-    assert.equal((await manager.evaluate(path, 'value', undefined, module.id)).result, '42')
-    await manager.stopSession(path); assertReleased()
-    console.log('[PASS] real debugpy: imported module-only launch stops, exposes its source and hits/evaluates a breakpoint')
-  } else console.log('[SKIP] real Python module launch: debugpy unavailable')
-
-  if (await js.detect(runtime)) {
-    const program = join(workspace, 'loop.js')
-    writeFileSync(program, 'let value = 0;\nfunction tick() {\n  value++;\n}\nsetInterval(tick, 25);\n')
-    const path = '/review/real-js'
-    const root = await launch(path, { adapter: 'js-debug', program, stopOnEntry: true })
-    const child = await childOf(path, root.id)
-    await manager.setBreakpoints(path, program, [3], { conditions: ['value >= 1'] }, child.id)
-    assert.equal((await manager.control(path, 'continue', undefined, 5000, child.id)).session.location?.line, 3)
-    const restarted = await manager.restart(path, root.id)
-    assert.equal(restarted.id, root.id, 'real js-debug uses native restart')
-    const replacement = await childOf(path, root.id, child.id)
-    assert.equal((await manager.breakpoints(path, replacement.id))[0]?.condition, 'value >= 1')
-    const hit = await manager.control(path, 'continue', undefined, 5000, replacement.id)
-    assert.equal(hit.settled, true); assert.equal(hit.session.location?.line, 3)
-    assert.equal((await manager.evaluate(path, 'value', undefined, replacement.id)).result, '1')
-    await manager.setBreakpoints(path, program, [], undefined, replacement.id)
-    await manager.restart(path, root.id)
-    const cleared = await childOf(path, root.id, replacement.id)
-    const running = await manager.control(path, 'continue', undefined, 500, cleared.id)
-    assert.equal(running.settled, false); assert.equal(running.session.status, 'running')
-    await manager.stopSession(path); assertReleased()
-    console.log('[PASS] real js-debug: a child conditional breakpoint re-hits after native restart; clearing it survives the next restart')
-  } else console.log('[SKIP] real js-debug restart: adapter unavailable')
 } finally {
   for (const restore of restoreAdapters) restore()
   await manager?.dispose()

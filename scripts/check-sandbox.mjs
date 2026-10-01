@@ -331,6 +331,7 @@ if (runner === null) {
   // Fail-closed is the contract, so assert it loudly rather than skipping.
   assert.throws(() => confineShellArgv(['/bin/bash', '-c', 'true'], sandboxPolicyFor('workspace-write', workspace)), SandboxUnavailableError, 'with no runner, confinement refuses instead of running on the host')
   console.log('PASS: no sandbox runner on this host — confined commands fail closed, path policy and env scrub verified.')
+  console.log('SKIP: kernel sandbox enforcement — no usable sandbox runner on this host')
 } else {
   const tasks = new BashTaskManager(join(temporary, 'tasks'), () => {}, () => {})
   const run = async (command, mode) => {

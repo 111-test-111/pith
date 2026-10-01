@@ -11,7 +11,7 @@
  * Electron.
  */
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -210,86 +210,9 @@ try {
   )
   assert.ok(!('messages' in detail), 'no message body rides the DTO any more')
 
-  // 5. Real session files from this machine, to keep the shape honest against
-  //    sessions this app did not write: the reasoning split matches an
-  //    independent JSONL parse, and the breakdown always sums to the ring.
-  const sessionsRoot = join(process.env.HOME ?? '', '.pi', 'agent', 'sessions')
-  const files = []
-  const walk = async (dir, depth = 0) => {
-    if (depth > 3) return
-    for (const entry of await readdir(dir, { withFileTypes: true }).catch(() => [])) {
-      const path = join(dir, entry.name)
-      if (entry.isDirectory()) await walk(path, depth + 1)
-      else if (entry.name.endsWith('.jsonl')) files.push(path)
-    }
-  }
-  await walk(sessionsRoot)
-
-  let checked = 0
-  for (const sessionFile of files.slice(0, 400)) {
-    const text = await readFile(sessionFile, 'utf8').catch(() => '')
-    if (!text.includes('"toolCallId"')) continue // a session with a real tool round
-    const disk = SessionManager.open(sessionFile)
-
-    // The oracle: straight off the file, no SDK interpretation.
-    let expectedReasoning = 0
-    let reasoningReported = false
-    for (const line of text.split('\n')) {
-      if (!line.trim()) continue
-      let entry
-      try {
-        entry = JSON.parse(line)
-      } catch {
-        continue // a torn last line of a live session
-      }
-      const entryUsage = entry.type === 'message' ? entry.message?.usage : entry.usage
-      if (typeof entryUsage?.reasoning === 'number') {
-        reasoningReported = true
-        expectedReasoning += entryUsage.reasoning
-      }
-    }
-
-    const diskEntries = disk.getEntries()
-    const diskStats = statsFromEntries(diskEntries)
-    const { messages: diskMessages } = disk.buildSessionContext()
-    const diskDetail = buildContextDetail({
-      messages: diskMessages,
-      entries: diskEntries,
-      stats: diskStats,
-      usage: { tokens: 500_000, contextWindow: 1_000_000, percent: 50, sessionCost: diskStats.cost, cacheHitRate: null },
-      meta: {
-        sessionId: disk.getSessionId(),
-        sessionPath: sessionFile,
-        title: null,
-        cwd: disk.getCwd(),
-        projectless: false,
-        provider: null,
-        model: null,
-        thinkingLevel: null,
-        createdAt: null,
-        lastActivity: null
-      }
-    })
-
-    assert.equal(
-      diskDetail.tokens.reasoning,
-      reasoningReported ? expectedReasoning : null,
-      `reasoning matches the file's own usage reports: ${sessionFile}`
-    )
-    assert.equal(diskDetail.breakdown.total, 500_000, `the ring total anchors the breakdown: ${sessionFile}`)
-    assert.equal(
-      diskDetail.breakdown.user + diskDetail.breakdown.assistant + diskDetail.breakdown.toolResults + diskDetail.breakdown.other,
-      diskDetail.breakdown.total,
-      `the breakdown sums to the ring: ${sessionFile}`
-    )
-    assert.ok(diskDetail.breakdown.toolResults > 0, `a tool-using session has tool bytes in context: ${sessionFile}`)
-    checked++
-    if (checked === 3) break
-  }
-
   console.log(
     'PASS: context detail (bucket math and reconciliation, reasoning incl. summary entries and a real 0,' +
-      ` stats identical to a real AgentSession.getSessionStats(), no message bodies in the DTO${checked ? `, ${checked} real session file${checked === 1 ? '' : 's'} against an independent JSONL oracle` : ', no real tool-using session on this machine to check'})`
+      ' stats identical to a real AgentSession.getSessionStats(), no message bodies in the DTO)'
   )
 } finally {
   await rm(temporary, { recursive: true, force: true })

@@ -144,6 +144,8 @@ export function MessageScroller({
   const contentRef = useRef<HTMLDivElement>(null);
   const followingRef = useRef(followOutput);
   const programmaticScrollRef = useRef(false);
+  // local patch (pi-app): native anchoring scrolls can precede resize delivery.
+  const viewportHeightRef = useRef<number | undefined>(undefined);
   const scrollTimerRef = useRef<number | undefined>(undefined);
   const positionFrameRef = useRef<number | undefined>(undefined);
   const railFrameRef = useRef<number | undefined>(undefined);
@@ -165,6 +167,7 @@ export function MessageScroller({
   const setViewportRef = useCallback(
     (node: HTMLElement | null) => {
       viewportRef.current = node;
+      viewportHeightRef.current = node?.clientHeight;
       if (typeof externalViewportRef === "function") {
         externalViewportRef(node);
       } else if (externalViewportRef) {
@@ -348,6 +351,18 @@ export function MessageScroller({
 
     const distance =
       viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
+    const resized = viewportHeightRef.current !== viewport.clientHeight;
+    viewportHeightRef.current = viewport.clientHeight;
+
+    // local patch (pi-app): composer resizing and content-visibility can emit
+    // a native anchoring scroll before ResizeObserver. Preserve a following
+    // reader through that event, rather than treating the new gap as intent.
+    // Real scroll gestures refresh this snapshot in leaveLiveEdge below.
+    if (resized && followingRef.current) {
+      if (distance > 1) scrollToEnd("auto");
+      updateActiveRailItem();
+      return;
+    }
 
     // local patch (pi-app): while a programmatic scroll is settling, keep the
     // following state untouched instead of re-deriving it from the distance.
@@ -362,10 +377,11 @@ export function MessageScroller({
 
     setFollowing(distance <= followThreshold);
     updateActiveRailItem();
-  }, [followThreshold, setFollowing, updateActiveRailItem]);
+  }, [followThreshold, scrollToEnd, setFollowing, updateActiveRailItem]);
 
   const leaveLiveEdge = useCallback(() => {
     programmaticScrollRef.current = false;
+    viewportHeightRef.current = viewportRef.current?.clientHeight;
   }, []);
 
   useLayoutEffect(() => {
@@ -428,6 +444,7 @@ export function MessageScroller({
     const viewport = viewportRef.current;
     if (!viewport || typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(() => {
+      viewportHeightRef.current = viewport.clientHeight;
       if (!followOutput || !followingRef.current) return;
       if (
         viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight <=
@@ -609,4 +626,3 @@ export function MessageScroller({
     </div>
   );
 }
-

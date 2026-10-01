@@ -29,4 +29,4 @@ node scripts/check-context-detail-ui.mjs
 node scripts/check-debug-ui.mjs
 ```
 
-UI checks require a build and measure narrow/docked/breakpoint/fullscreen states in both languages/themes/corner presets. Shared rail changes also require file-browser, written-file-preview, window-chrome, rail-tabs and terminal checks.
+UI checks require a build and measure narrow/docked/breakpoint/fullscreen states in both languages/themes/corner presets. Shared rail changes also require file-browser, written-file-preview, window-chrome, corners and terminal checks.

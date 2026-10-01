@@ -87,6 +87,16 @@ try {
   await page.goto(url)
   const viewport = page.locator('[data-slot="message-scroller"] section')
   await viewport.waitFor()
+  await page.evaluate(() => {
+    const v = document.querySelector('[data-slot="message-scroller"] section')
+    window.scrollTrace = []
+    const record = kind => {
+      window.scrollTrace.push({ kind, at: Math.round(performance.now()), top: v.scrollTop, height: v.scrollHeight, client: v.clientHeight, distance: v.scrollHeight - v.scrollTop - v.clientHeight })
+      if (window.scrollTrace.length > 24) window.scrollTrace.shift()
+    }
+    v.addEventListener('scroll', () => record('scroll'))
+    new ResizeObserver(() => record('resize')).observe(v)
+  })
   const state = () => page.evaluate(() => {
     const v = document.querySelector('[data-slot="message-scroller"] section')
     return { top: v.scrollTop, height: v.scrollHeight, client: v.clientHeight, distance: v.scrollHeight - v.scrollTop - v.clientHeight, thumbs: document.querySelectorAll('form img').length, cards: document.querySelectorAll('[data-attachment-card]').length }
@@ -94,11 +104,21 @@ try {
   // A DOM predicate can resolve before ResizeObserver's pre-paint delivery.
   // Sample the first painted frame, after that delivery (no smooth-scroll wait).
   const afterPaint = () => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => setTimeout(resolve, 0))))
-  const scrollTo = (top) => page.evaluate((next) => {
+  const scrollTo = (top) => page.evaluate((next) => new Promise(resolve => {
     const v = document.querySelector('[data-slot="message-scroller"] section')
+    const previous = v.scrollTop
+    const painted = () => requestAnimationFrame(() => setTimeout(resolve, 0))
+    // Setting scrollTop queues a native scroll event. Delivering a synthetic
+    // event first leaves that native event pending until the next resize, when
+    // it can mistake the new composer height for the reader scrolling away.
+    const onScroll = () => painted()
+    v.addEventListener('scroll', onScroll, { once: true })
     v.scrollTop = next
-    v.dispatchEvent(new Event('scroll'))
-  }, top)
+    if (v.scrollTop === previous) {
+      v.removeEventListener('scroll', onScroll)
+      painted()
+    }
+  }), top)
 
   // The transcript overflows and opens pinned to the live edge.
   await page.waitForFunction(() => {
@@ -167,7 +187,21 @@ try {
   await page.waitForFunction(() => document.querySelectorAll('form img').length === 1)
   await afterPaint()
   const regrown = await state()
-  assert.ok(regrown.distance <= 1, 'returning to the bottom re-arms the instant follow: ' + JSON.stringify(regrown))
+  assert.ok(regrown.distance <= 1, 'returning to the bottom re-arms the instant follow: ' + JSON.stringify({ ...regrown, trace: await page.evaluate(() => window.scrollTrace) }))
+
+  // 6. A real wheel gesture leaves follow mode. Shrinking the attachment tray
+  // afterward must preserve the reader's position rather than pinning again.
+  await viewport.hover()
+  await page.mouse.wheel(0, -100_000)
+  await page.waitForFunction(() => document.querySelector('[data-slot="message-scroller"] section').scrollTop === 0)
+  await afterPaint()
+  const wheelAway = await state()
+  assert.ok(wheelAway.distance > 56, 'the wheel gesture moved the reader away from the live edge')
+  await page.getByRole('button', { name: 'Remove attach-a.png' }).click()
+  await page.waitForFunction(() => document.querySelectorAll('form img').length === 0)
+  await afterPaint()
+  const wheelShrunk = await state()
+  assert.equal(wheelShrunk.top, wheelAway.top, 'a real wheel gesture prevents attachment resizing from re-enabling follow: ' + JSON.stringify(wheelShrunk))
 
   assert.deepEqual(errors, [])
   console.log('PASS: composer attachment resize keeps the transcript pinned at the live edge, untouched when scrolled away')

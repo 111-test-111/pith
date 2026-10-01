@@ -20,6 +20,7 @@ import React from 'react';import {createRoot} from 'react-dom/client';
 import {flushSync} from 'react-dom';
 import {ChatView} from '/src/components/app/ChatView.tsx';
 import {Composer} from '/src/components/app/Composer.tsx';
+import {QueuePanel} from '/src/components/app/QueuePanel.tsx';
 import {ImagePreviewProvider} from '/src/components/app/ImagePreview.tsx';
 import {PiStore} from '/src/state/pi-store.ts';
 import {extractReviewTurns} from '/src/lib/turn-written-files.ts';
@@ -65,6 +66,16 @@ window.startStartupFixture=()=>{
   return React.createElement(Composer,{start:{projectName:'fixture',cwd:'/ui',projects:[],onProjectChange:()=>{}},models:[],model:null,thinkingLevel:'off',availableThinkingLevels:['off'],busy:false,initializing:shell.initializing,
    queued:{steering:[],followUp:[]},onSend:p=>window.startupSends.push(p),onQueue:()=>{throw Error('unexpected queue')},onRecallQueue:async()=>[],onModelChange:()=>{},onThinkingLevelChange:()=>{}});}
  flushSync(()=>window.checkRoot.render(React.createElement(I18nProvider,{key:'startup'},React.createElement(ImagePreviewProvider,null,React.createElement('div',{id:'startup-fixture',style:{width:800,margin:'20px auto'}},React.createElement(Startup))))));
+};
+window.startQueueFixture=()=>{
+ window.turnStore=null;window.queueActions=[];
+ function Queued(){const {setLocale}=useI18n();window.setLocale=setLocale;return React.createElement(QueuePanel,{
+  steering:[{text:'current steer',imageCount:1,filePaths:['a.ts','b.ts']}],
+  followUp:[{text:'duplicate draft',imageCount:0,filePaths:[]},{text:'duplicate draft',imageCount:0,filePaths:[]}],
+  onPromote:index=>window.queueActions.push({action:'promote',index}),
+  onRemove:(kind,index)=>window.queueActions.push({action:'remove',kind,index}),
+  onRecall:()=>window.queueActions.push({action:'recall'})});}
+ flushSync(()=>window.checkRoot.render(React.createElement(I18nProvider,{key:'queue'},React.createElement('div',{id:'queue-fixture',style:{width:800,margin:'20px auto'}},React.createElement(Queued)))));
 };
 window.addTasks=(count)=>{for(let i=0;i<count;i++)listener?.({...window.task,id:'bulk-'+i,toolCallId:'bulk-call-'+i,command:'echo bulk task '+i,status:'succeeded',background:true,exitCode:0,endedAt:Date.now(),revision:1})};
 window.startControlFixture=()=>{
@@ -1117,6 +1128,25 @@ try {
   assert.equal(await evaluate(`document.querySelector('[data-jev-trigger]').getAttribute('aria-expanded')`), 'false', 'taskbar button toggles Jev closed')
   assert.equal(exceptions.length, 0, JSON.stringify(exceptions))
   console.log('PASS: Jev taskbar entry, shared overlay exclusivity, fixed chat geometry, lazy audit detail, original/corrected decisions, bilingual output, both themes and Escape focus.')
+  // Consolidated queue coverage: test action dispatch and duplicate-message
+  // identity in this existing browser, without a second style-only harness.
+  await evaluate('window.startQueueFixture()')
+  await evaluate(`window.setLocale('en')`); await pause(100)
+  const queueRows = await evaluate(`Array.from(document.querySelectorAll('#queue-fixture [data-queue-row]')).map(row=>({text:row.textContent,actions:Array.from(row.querySelectorAll('button')).map(button=>button.getAttribute('aria-label'))}))`)
+  assert.equal(queueRows.length, 3, 'duplicate queued messages keep separate rows')
+  assert.deepEqual(queueRows[0].actions, ['Remove from queue'], 'steers only offer removal')
+  assert.deepEqual(queueRows[1].actions, ['Send now', 'Remove from queue'])
+  assert.deepEqual(queueRows[2].actions, queueRows[1].actions)
+  await evaluate(`document.querySelectorAll('#queue-fixture [data-queue-row]')[0].querySelector('button').click();document.querySelectorAll('#queue-fixture [data-queue-row]')[2].querySelector('button[aria-label="Send now"]').click();document.querySelectorAll('#queue-fixture [data-queue-row]')[2].querySelector('button[aria-label="Remove from queue"]').click();document.querySelector('#queue-fixture button[aria-label="Recall to input"]').click()`)
+  assert.deepEqual(await evaluate('window.queueActions'), [
+    {action:'remove',kind:'steering',index:0}, {action:'promote',index:1},
+    {action:'remove',kind:'followUp',index:1}, {action:'recall'}
+  ], 'actions identify the correct kind and duplicate-message index')
+  await evaluate(`window.setLocale('zh-CN')`); await pause(100)
+  assert.match(await evaluate(`document.querySelector('#queue-fixture').textContent`), /已排队 · 3/)
+  assert.deepEqual(await evaluate(`Array.from(document.querySelectorAll('#queue-fixture [data-queue-row]')[1].querySelectorAll('button')).map(button=>button.getAttribute('aria-label'))`), ['立即发送', '移出队列'])
+  assert.equal(exceptions.length, 0, JSON.stringify(exceptions))
+  console.log('PASS: queued message removal, promotion, recall and duplicate indices in both locales.')
   console.log('PASS: native beUI background rows/group status, completion localization, bounded incremental output, stop action, threshold settings, themes and invisible scrollbars.')
 } finally {
   ws?.close()

@@ -7,6 +7,7 @@
 /dist/
 /src/renderer/public/file-icons/
 /.vite/
+/.test-results/
 *.tsbuildinfo
 
 # Native debug-fixture outputs

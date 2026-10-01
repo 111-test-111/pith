@@ -33,6 +33,10 @@ let child, ws
 
 try {
   const main = join(temporary, 'main.cjs')
+  const preload = join(temporary, 'preload.mjs')
+  await writeFile(preload, `import {contextBridge,ipcRenderer} from 'electron';
+import ${JSON.stringify(join(repo, 'out/preload/index.mjs'))};
+contextBridge.exposeInMainWorld('__scheduledFixture',{mutationCalls:()=>ipcRenderer.invoke('fixture:mutationCalls')});`)
   await build({ stdin: { contents: `
 import {app,BrowserWindow,ipcMain} from 'electron';
 import {windowChromeOptions,setWindowTheme} from ${JSON.stringify(join(repo, 'src/main/window-chrome.ts'))};
@@ -61,7 +65,12 @@ app.whenReady().then(()=>{
  ipcMain.handle('scheduled:runOutput',(_,runId)=>({ok:true,value:{text:runId==='fixture-run'?${JSON.stringify(sampleRunOutput)}:'Older result'}}));
  ipcMain.handle('scheduled:pickDirectory',()=>({path:'/fixture/picked-folder'}));
  ipcMain.handle('files:read',(_,path)=>({path,relPath:path,kind:'text',size:12}));
- const w=new BrowserWindow({...windowChromeOptions(),width:1280,height:800,minWidth:760,minHeight:560,title:'Scheduled UI check',backgroundColor:'#0b0b0d',webPreferences:{preload:${JSON.stringify(join(repo, 'out/preload/index.mjs'))},contextIsolation:true,nodeIntegration:false,sandbox:false,backgroundThrottling:false}});
+ const mutations=[];
+ ipcMain.handle('fixture:mutationCalls',()=>[...mutations]);
+ for(const channel of ['pi:compact','pi:reload','pi:prompt','pi:setModel','pi:setThinkingLevel','sandbox:setMode','pi:resendMessage','rewind:restore']){
+   ipcMain.handle(channel,()=>{mutations.push(channel);throw new Error('Read-only scheduled conversation attempted '+channel)});
+ }
+ const w=new BrowserWindow({...windowChromeOptions(),width:1280,height:800,minWidth:760,minHeight:560,title:'Scheduled UI check',backgroundColor:'#0b0b0d',webPreferences:{preload:${JSON.stringify(preload)},contextIsolation:true,nodeIntegration:false,sandbox:false,backgroundThrottling:false}});
  ipcMain.on('window:setTheme',(event,theme)=>setWindowTheme(BrowserWindow.fromWebContents(event.sender),theme));
  w.loadFile(${JSON.stringify(join(repo, 'out/renderer/index.html'))});
 });app.on('window-all-closed',()=>app.quit());`, resolveDir: repo, loader: 'ts' },
@@ -311,9 +320,16 @@ app.whenReady().then(()=>{
   // conversation and must show no rewind affordance at all.
   await click(`document.querySelector('[data-titlebar-more]')`)
   await waitFor(`document.querySelector('[data-titlebar-overflow] [data-titlebar-action="compact"]')`)
-  const conversation = await evaluate(`({mainReadonly:document.querySelector('[data-composer-readonly]')?.textContent?.includes('Read-only')||document.querySelector('[data-composer-readonly]')?.textContent?.includes('只读'),mainTranscript:document.body.textContent?.includes('Run conversation'),title:[...document.querySelectorAll('[data-window-interactive]')].some(e=>/Scheduled run conversation|定时任务会话/.test(e.textContent??''))||document.body.textContent?.includes('Scheduled run conversation')||document.body.textContent?.includes('定时任务会话'),pocketActions:document.querySelectorAll('[data-titlebar-overflow] [data-titlebar-action]').length,rewind:!!document.querySelector('[data-titlebar-overflow] [data-titlebar-action="rewind"]'),rail:!!document.querySelector('[data-scheduled-pane]')})`)
+  const conversation = await evaluate(`(()=>{const action=id=>document.querySelector('[data-titlebar-overflow] [data-titlebar-action="'+id+'"]'),editor=document.querySelector('[data-prompt-editor]'),send=document.querySelector('button[aria-label="Send prompt"]'),model=document.querySelector('button[aria-label="Choose model"],button[aria-label="选择模型"]'),permission=document.querySelector('button[aria-label="Sandbox mode"],button[aria-label="沙箱模式"]'),messageActions=[...document.querySelectorAll('[data-message-actions] button')].map(button=>button.getAttribute('aria-label'));return{mainReadonly:document.querySelector('[data-composer-readonly]')?.textContent?.includes('Read-only')||document.querySelector('[data-composer-readonly]')?.textContent?.includes('只读'),mainTranscript:document.body.textContent?.includes('Run conversation'),title:document.body.textContent?.includes('Scheduled run conversation')||document.body.textContent?.includes('定时任务会话'),mutatingActions:['compact','reload'].map(id=>({id,disabled:action(id)?.disabled===true})),inspectionEnabled:action('system-prompt')?.disabled===false,editorDisabled:!!editor&&editor.contentEditable==='false'&&editor.getAttribute('aria-disabled')==='true',sendDisabled:send?.disabled===true,modelDisabled:model?.disabled===true,permissionDisabled:permission?.disabled===true,messageMutations:messageActions.filter(label=>/^(Edit and resend|Retry response|Continue response|Fork from here|Rewind|编辑并重新发送|重试此回答|从中断处继续|从此处分叉会话|回退)$/.test(label??'')),copyAvailable:messageActions.some(label=>/^(Copy message|复制消息)$/.test(label??'')),rewind:!!action('rewind'),rail:!!document.querySelector('[data-scheduled-pane]')}})()`)
+  assert.ok(conversation.mainReadonly && conversation.mainTranscript && conversation.title && !conversation.rewind && !conversation.rail, `View conversation opens the main read-only transcript without a checkpoint entry: ${JSON.stringify(conversation)}`)
+  assert.deepEqual(conversation.mutatingActions, [{ id: 'compact', disabled: true }, { id: 'reload', disabled: true }], 'scheduled conversations disable compaction and reload independently of harmless titlebar additions')
+  assert.ok(conversation.editorDisabled && conversation.sendDisabled && conversation.modelDisabled && conversation.permissionDisabled, `scheduled conversations prevent prompt and configuration changes: ${JSON.stringify(conversation)}`)
+  assert.deepEqual(conversation.messageMutations, [], 'scheduled transcript offers no edit, retry, continue, fork or rewind actions')
+  assert.ok(conversation.copyAvailable && conversation.inspectionEnabled, 'read-only conversations retain copy and inspection actions')
+  await evaluate(`(()=>{for(const selector of ['[data-titlebar-action="compact"]','[data-titlebar-action="reload"]','button[aria-label="Send prompt"]','button[aria-label="Choose model"],button[aria-label="选择模型"]','button[aria-label="Sandbox mode"],button[aria-label="沙箱模式"]'])document.querySelector(selector)?.click();document.querySelector('[data-prompt-editor]')?.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));})()`)
+  await pause(100)
+  assert.deepEqual(await evaluate('window.__scheduledFixture.mutationCalls()'), [], 'disabled controls and Enter cannot dispatch scheduled-session mutations')
   await click(`document.querySelector('[data-titlebar-more]')`)
-  assert.ok(conversation.mainReadonly && conversation.mainTranscript && conversation.title && conversation.pocketActions === 3 && !conversation.rewind && !conversation.rail, `View conversation opens the main read-only transcript without a checkpoint entry: ${JSON.stringify(conversation)}`)
   await screenshot('run-conversation')
   assert.deepEqual(exceptions, [], 'no renderer exception while opening editor and dropdowns')
   console.log(`ok   scheduled editor: ${Math.round(openMs)}ms to mount, ${Math.round(layout.width)}×${Math.round(layout.height)}, 64-model menu ${Math.round(modelMs)}ms, 60-minute grid ${Math.round(minuteMs)}ms, stable first frames`)

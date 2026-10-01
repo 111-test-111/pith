@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { Check } from 'typebox/value'
+import { createCodemodeExtension } from '@earendil-works/pi-coding-agent'
 import { createBrowserTools } from '../src/main/browser/tools.ts'
 import { RefNotInSnapshotError } from '../src/main/browser/service.ts'
 import { createPlanFixture } from './lib/plan-fixture.mjs'
@@ -26,13 +27,14 @@ for (const name of ['browser_screenshot', 'browser_navigate', 'browser_click']) 
 
 let fixture
 try {
-  fixture = await createPlanFixture({ extensionFactories: [api => {
+  fixture = await createPlanFixture({ extensionFactories: [createCodemodeExtension(), api => {
     for (const tool of browserTools) api.registerTool({ ...tool, name: `fixture_${tool.name}` })
   }] })
   await fixture.managed.lifecyclePromise
   fixture.app.setSessionSandboxMode(fixture.managed.path, 'danger-full-access')
   fixture.app.setBashMaxWaitMs(1000)
-  fixture.session.setActiveToolsByName([...fixture.session.getActiveToolNames(), ...browserTools.map(t => `fixture_${t.name}`)])
+  fixture.session.setActiveToolsByName([...fixture.session.getActiveToolNames(), 'codemode', ...browserTools.map(t => `fixture_${t.name}`)])
+  assert(fixture.session.getActiveToolNames().includes('codemode'), 'the isolated fixture explicitly activates its real SDK codemode extension')
   const run = async code => {
     const next = fixture.requests.length + 1, id = `contract-${next}`
     fixture.setRespond(i => i === next ? [{ type: 'toolCall', id, name: 'codemode', arguments: { code } }]
