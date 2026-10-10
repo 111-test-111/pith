@@ -494,7 +494,9 @@ export const ChatView = memo(function ChatView({
   return (
     <BashTasksProvider sessionPath={state.sessionPath}>
       <ImageReplaysProvider sessionPath={state.sessionPath} disabled={busy || state.initializing || state.subagentChild || state.scheduledTaskSession || state.plan?.mode === 'plan' || state.sandboxMode === 'read-only'}>
-      <SessionTasks jevState={state.jevWorkflow} key={state.sessionPath} todos={state.todos} subagents={state.subagents} askUserRecords={state.askUserRecords} busy={busy} sessionPath={state.sessionPath} onOpenSession={onOpenSession} />
+      <SessionTasks jevState={state.jevWorkflow} key={state.sessionPath} todos={state.todos} subagents={state.subagents} askUserRecords={state.askUserRecords} busy={busy} sessionPath={state.sessionPath} onOpenSession={onOpenSession}
+        goal={state.goal} goalSeq={state.goalSeq} goalAvailable={!!state.sessionPath && !state.subagentChild && !state.scheduledTaskSession} goalRestricted={state.plan?.mode === 'plan'} goalInitializing={state.initializing}
+        onGoalState={(sessionPath, goal, goalSeq) => store.dispatch({ type: 'goal_update', sessionPath, goal, goalSeq })} />
       <ContextMenu open={menuOpen} onOpenChange={setMenuOpen}>
       <ContextMenuTrigger>
       <MessageScroller

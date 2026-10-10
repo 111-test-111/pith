@@ -104,6 +104,10 @@ import { RewindFailure, failure as rewindFailure } from '../rewind/types'
 import { ChangeScopes } from './change-scopes'
 import { TodoState, createTodoTool } from './todo'
 import { TODO_TOOL_NAME } from './todo-protocol'
+import { GoalRuntime } from './goals/runtime'
+import { createGoalTools, createGoalContextExtension } from './goals/tools'
+import { GOAL_GET, GOAL_UPDATE, GOAL_STEP, goalLive } from './goals/protocol'
+import { validGoalLimits, type GoalActionRequest, type GoalActionResult, type GoalReason } from '../../shared/goal'
 import { JevCredentials } from './jev/credentials'
 import { JevService } from './jev/service'
 import { JevWorkflow } from './jev/workflow'
@@ -400,6 +404,7 @@ function scheduledDelay(signal: AbortSignal, ms: number): Promise<void> {
 }
 
 interface ManagedSession {
+  goals?: GoalRuntime
   manualCompaction?: ManualCompaction
   trajectory?: TrajectoryRecorder
   jevWorkflow?: JevWorkflow
@@ -1237,6 +1242,7 @@ export class PiManager {
   private sessionBuilds = new Map<string, Promise<ManagedSession>>()
   /** Per-session-file Plan metadata clock; survives a managed rebuild. */
   private planSequences = new Map<string, number>()
+  private goalSequences = new Map<string, number>()
   /** Queue metadata clock also advances when a managed session is rebuilt. */
   private compactionQueueRevision = 0
   private compactionProcessRevision = 0
@@ -1428,7 +1434,7 @@ export class PiManager {
   /** Runtime facts belong to the same loader as the native MCP extension. */
   private mcpRuntimeStatuses = new WeakMap<ResourceLoader, Map<string, { name: string; status: McpRuntimeStatus }>>()
 
-  private async servicesFor(cwd: string, todos: TodoState, recoveryOnly = false, subagent?: { appendSystemPrompt?: string; extensions?: boolean }, planContext?: ReturnType<typeof createPlanContextExtension>, compactionProcess?: ReturnType<typeof createCompactionProcessExtension>): Promise<AgentSessionServices> {
+  private async servicesFor(cwd: string, todos: TodoState, recoveryOnly = false, subagent?: { appendSystemPrompt?: string; extensions?: boolean }, planContext?: ReturnType<typeof createPlanContextExtension>, compactionProcess?: ReturnType<typeof createCompactionProcessExtension>, goalContext?: ReturnType<typeof createGoalContextExtension>): Promise<AgentSessionServices> {
     // A loader owns mutable extension closures and an ExtensionRuntime whose
     // actions bind to ONE session. Sharing it by cwd lets another session's
     // bind/reload/dispose overwrite or invalidate a still-live MCP context.
@@ -1457,6 +1463,7 @@ export class PiManager {
         extensionFactories: [
           createToolCallBoundaryExtension(), todos.extension(), createPromptFormatExtension(), createSearchResultExtension(), ...(planContext ? [planContext] : []),
           ...(compactionProcess ? [compactionProcess] : []),
+          ...(goalContext ? [goalContext] : []),
           // Ordered last below: enhance the default without masking a read
           // override, including one registered lazily by another inline factory.
           { name: 'native-read', factory: api => api.registerTool(createAppReadTool(cwd)), hidden: true },
@@ -1534,6 +1541,7 @@ export class PiManager {
     if (managed.subagentChild) clearSubagentAskUserRequests(managed.path)
     if (managed.disposePromise) return managed.disposePromise
     managed.disposing = true
+    managed.goals?.dispose()
     managed.manualCompaction?.dispose()
     managed.imageReplay?.controller.abort()
     this.jevService.cancel(managed.path)
@@ -1801,6 +1809,7 @@ export class PiManager {
   }
 
   private emitSessionError(managed: ManagedSession, error: unknown): void {
+    managed.goals?.observe({ type: 'pi_error' })
     managed.streaming = null
     this.emit('pi:event', {
       type: 'pi_error',
@@ -1988,7 +1997,8 @@ export class PiManager {
       createCompactionProcessExtension({
         prepared: event => managed.compactionProcess?.prepared(event),
         applied: event => managed.compactionProcess?.applied(event)
-      })
+      }),
+      createGoalContextExtension(() => managed?.goals)
     )
     const services = { ...fullServices, resourceLoader: this.filterExtensions(fullServices.resourceLoader) }
     let notifications: TaskNotifications | undefined
@@ -2054,6 +2064,8 @@ export class PiManager {
         generatedImage: (path, size) => capturePresentedImage(sessionManager, path, size) }),
       createPlanSubmissionTool(plan),
       createTodoTool(todos, () => (notifications?.canStart ?? false) && this.planToolAdmitted(managed)),
+      ...(isChild || isScheduled ? [] : createGoalTools(() => managed.goals,
+        () => (notifications?.canStart ?? false) && !managed.plan.restricted && this.planToolAdmitted(managed))),
       // The scheduler's own tool: registered for every session (children
       // exclude it through their ceilings); the service is resolved lazily in
       // execute so definition reads never boot the scheduler.
@@ -2182,6 +2194,7 @@ export class PiManager {
     // and Jev's description is a live getter that object spreading would lose.
     const modelOnlyAppTools = new Set<string>([
       PRESENT_TOOL_NAME, IMAGE_TOOL_NAME, 'submit_plan', TODO_TOOL_NAME, SCHEDULED_TASK_TOOL_NAME,
+      GOAL_UPDATE,
       JEV_TOOL_NAME, ASK_USER_TOOL_NAME, SUBAGENT_TOOL_NAME,
       AGENT_STEER_TOOL_NAME, MESSAGE_PARENT_TOOL_NAME
     ])
@@ -2272,19 +2285,39 @@ export class PiManager {
       await this.disposeManaged(managed)
       throw new Error('Application is shutting down')
     }
+    if (!isChild && !isScheduled) managed.goals = new GoalRuntime({
+      session, storage: planStorage, userData: app.getPath('userData'), cwd: managed.cwd,
+      nextSeq: () => {
+        // Like the lazy session services, support constructor-free SDK fixtures.
+        this.goalSequences ??= new Map()
+        const seq = (this.goalSequences.get(path) ?? 0) + 1
+        this.goalSequences.set(path, seq)
+        return seq
+      },
+      changed: (goal, goalSeq) => this.emit('pi:event', { type: 'goal_update', sessionPath: path, goal, goalSeq }),
+      available: () => !this.closing && !managed.disposing && !managed.initializing && !managed.lifecyclePromise &&
+        session.isIdle && !managed.imageReplay && !managed.continuationRequest && !plan.restricted && !plan.submissionLocked &&
+        !this.checkoutCoordinator.needsRecovery(managed.cwd) && this.planToolAdmitted(managed),
+      pending: () => { const f = this.planFacts(managed); return !!(f.tasks || f.subagents || f.deliveries || f.questions || f.escalations || f.queuedMessages) },
+      unfinishedTodos: () => !!managed.todos.snapshot?.items.some(t => t.status === 'pending' || t.status === 'in_progress'),
+      review: () => managed.jevWorkflow?.paused ? 'paused' : this.jevPreferences.mode !== 'workflow' || managed.jevWorkflow?.snapshot?.phase === 'completed' ? 'ready' : 'waiting',
+      reserve: () => plan.beginWork('background'),
+      stop: reason => this.stopManaged(managed, reason),
+      run: (content, initial, dispatchId, signal, accepted) => this.runGoal(managed, content, initial, dispatchId, signal, accepted)
+    })
     notifications.onSettledWithQueued = () => queueMicrotask(() => {
       if (!notifications?.canStart || !session.isIdle) return
       this.rebuildQueues(managed)
     })
     // Pending deliveries are live Plan facts: a completion that is still owed
     // to the model blocks a mode change even though the SDK reports idle.
-    notifications.onPendingChanged = () => managed.plan.refresh()
-    askUserNotifications.onPendingChanged = () => managed.plan.refresh()
+    notifications.onPendingChanged = () => { managed.plan.refresh(); managed.goals?.flush() }
+    askUserNotifications.onPendingChanged = () => { managed.plan.refresh(); managed.goals?.flush() }
     // Background wakes ask this session's controller for admission BEFORE they
     // touch the session: a sealed planning turn or an in-flight mode transition
     // defers them (pending stays owned, no attempt spent, no retry armed).
     const admitWake = (): (() => void) | null => {
-      if (managed.jevWorkflow?.paused) return null
+      if (managed.jevWorkflow?.paused || managed.goals?.stopsWakes) return null
       try {
         return managed.plan.beginWork('background')
       } catch {
@@ -2306,6 +2339,7 @@ export class PiManager {
         notifications?.flush()
         askUserNotifications?.flush()
         subagentState?.notifications?.flush()
+        managed.goals?.flush()
       })
     }
     plan.onWakeOpened = flushDeferredWakes
@@ -2329,7 +2363,7 @@ export class PiManager {
         void run
       })
       subagentState.notifications = subagentNotifications
-      subagentNotifications.onPendingChanged = () => managed.plan.refresh()
+      subagentNotifications.onPendingChanged = () => { managed.plan.refresh(); managed.goals?.flush() }
       subagentNotifications.admitWake = admitWake
       subagentNotifications.onSettledWithQueued = () => queueMicrotask(() => {
         if (!subagentNotifications.canStart || !session.isIdle) return
@@ -2369,12 +2403,13 @@ export class PiManager {
         ...(previousRecords !== managed.askRecords.snapshot ? { askUserRecords: managed.askRecords.snapshot } : {}),
         ...('message' in event ? { message: { ...this.stampPlanMessages(managed, [managed.changeScopes.stamp(event.message as ChatMessage)], [event.message as ChatMessage])[0], ...(userEntryId ? { sessionEntryId: userEntryId } : {}) } } : {}),
         ...(event.type === 'agent_start' ? { changeScopeId: managed.changeScopes.active } : {}),
-        ...(event.type === 'agent_settled' ? { continuing: notifications!.continuesAtSettled || subagentState?.notifications?.continuesAtSettled || askUserNotifications!.continuesAtSettled } : {})
+        ...(event.type === 'agent_settled' ? { continuing: notifications!.continuesAtSettled || subagentState?.notifications?.continuesAtSettled || askUserNotifications!.continuesAtSettled || managed.goals?.continuesAtSettled } : {})
       }
       this.routeEvent(managed, routed as AgentSessionEvent)
       notifications!.observe(event)
       subagentState?.notifications?.observe(event)
       askUserNotifications!.observe(event)
+      managed.goals?.observe(event)
       // Plan metadata follows this session's live facts — never only model text.
       if (PLAN_FACT_EVENT_TYPES.has(event.type)) managed.plan.refresh()
     }
@@ -2385,6 +2420,7 @@ export class PiManager {
     })
     const unsubscribeCommitted = session.agent.subscribe(event => {
       if (event.type === 'message_end') managed.trajectory?.observe(event)
+      if (event.type === 'message_end' && event.message.role !== 'user' && event.message.role !== 'toolResult') managed.goals?.committed(event)
       if (event.type === 'message_start' && event.message.role === 'user') plan.releaseSubmissionForUser()
       if (event.type !== 'message_end' || (event.message.role !== 'user' && event.message.role !== 'toolResult')) return
       const leaf = session.sessionManager.getLeafEntry()
@@ -2392,6 +2428,7 @@ export class PiManager {
       if (event.message.role === 'user') plan.observeCommittedUser(leaf.id)
       else if (parsePlanSubmission(event.message)) plan.observeCommittedSubmission(event.message.toolCallId)
       observeEvent(event)
+      managed.goals?.committed(event)
     })
     managed.unsubscribe = () => { unsubscribeSession(); unsubscribeCommitted() }
     managed.manualCompaction = new ManualCompaction(session, {
@@ -2425,6 +2462,7 @@ export class PiManager {
       sealed: () => plan.submissionLocked,
       changed: jevWorkflow => this.emit('pi:event', serialize({ type: 'jev_workflow_update', sessionPath: path, jevWorkflow, jevWorkflowSeq: managed.jevWorkflow?.revision ?? 0 }))
     })
+    managed.goals?.installStreamGuard()
     // The mode is a fact about the selected branch: fold it (and publish) as
     // soon as the session owns a listener, before extension startup finishes.
     plan.restore()
@@ -2676,6 +2714,7 @@ export class PiManager {
     }).map(tool => tool.name)
     this.setActiveTools(managed, [...new Set([
       ...BUILTIN_TOOL_NAMES, ...APP_BASH_TOOL_NAMES, ...APP_FILE_TOOL_NAMES, TODO_TOOL_NAME, PRESENT_TOOL_NAME, IMAGE_TOOL_NAME,
+      ...(managed.subagentChild || managed.scheduledTask ? [] : [GOAL_GET, GOAL_UPDATE]),
       // A scheduled-run session has no human surface: ask_user is disabled at
       // registration AND left out of the active set.
       ...(managed.scheduledTask ? [] : [ASK_USER_TOOL_NAME]), 'submit_plan', SCHEDULED_TASK_TOOL_NAME,
@@ -2952,7 +2991,7 @@ export class PiManager {
         signal.throwIfAborted()
         if (managed.disposing || this.closing) throw new Error('The conversation was closed before the scheduled run started')
         await managed.lifecyclePromise
-        if (!managed.initializing && session.isIdle) {
+        if (!managed.initializing && session.isIdle && !managed.goals?.live && !managed.goals?.preparing) {
           try {
             managed.plan.checkWorkAdmission()
             break
@@ -2963,6 +3002,7 @@ export class PiManager {
         await scheduledDelay(signal, 500)
       }
       if (session.isIdle) managed.continuationRequest?.abort()
+      managed.goals?.userPrompt()
       managed.notifications.resume()
       managed.askUser.resume()
       managed.subagents?.notifications?.resume()
@@ -3153,7 +3193,7 @@ export class PiManager {
       closing: this.closing || managed.disposing,
       child: Boolean(managed.subagentChild),
       recovery: managed.recoveryOnly || this.checkoutCoordinator.needsRecovery(managed.cwd),
-      sdkIdle: session.isIdle && !managed.imageReplay,
+      sdkIdle: session.isIdle && !managed.imageReplay && !managed.goals?.preparing,
       tasks,
       subagents: managed.subagents?.hasLiveRuns ? 1 : 0,
       deliveries:
@@ -3233,6 +3273,7 @@ export class PiManager {
     if (!managed) return { ok: false, code: 'no-session', blockers: [] }
     if (managed.subagentChild || managed.scheduledTask) return { ok: false, code: 'child-session', blockers: ['child-session'] }
     try {
+      if (mode === 'plan' && managed.session.isIdle) { managed.goals?.pause('plan'); await managed.goals?.idle() }
       const value = await managed.plan.setMode(mode)
       return { ok: true, value }
     } catch (error) {
@@ -3302,7 +3343,7 @@ export class PiManager {
    * "mid-run" by construction.
    */
   private sessionBusy(managed: ManagedSession): boolean {
-    return managed.session.isStreaming || managed.notifications.continuesAtSettled || managed.askUser.continuesAtSettled
+    return managed.session.isStreaming || managed.notifications.continuesAtSettled || managed.askUser.continuesAtSettled || !!managed.goals?.preparing
   }
 
   /**
@@ -3366,6 +3407,8 @@ export class PiManager {
       plan: managed.plan.snapshot,
       jevWorkflow: managed.jevWorkflow?.snapshot ?? null,
       jevWorkflowSeq: managed.jevWorkflow?.revision ?? 0,
+      goal: managed.goals?.snapshot ?? null,
+      goalSeq: managed.goals?.seq ?? 0,
       eventSequence: managed.eventSequence
     }
   }
@@ -3789,6 +3832,7 @@ export class PiManager {
     }
     // A real new prompt supersedes a Continue still preparing to start.
     if (session.isIdle) managed.continuationRequest?.abort()
+    managed.goals?.userPrompt()
     // A mode change owns the session while it is in flight; a prompt admitted
     // then would race the branch write it is about to make.
     try {
@@ -3899,6 +3943,7 @@ export class PiManager {
       followUp: recallOf(managed.queueMirror.followUp)
     }
     if (stopping) {
+      managed.goals?.pause('stopped')
       managed.manualCompaction?.cancel()
       managed.continuationRequest?.abort()
       managed.notifications.pause()
@@ -4109,6 +4154,97 @@ export class PiManager {
     await job.promise
   }
 
+  /** UI-owned transitions pin both the session and the independent Goal revision. */
+  async goalAction(request: GoalActionRequest): Promise<GoalActionResult> {
+    const managed = this.sessions.get(request?.sessionPath)
+    const goals = managed?.goals
+    if (!managed || !goals || managed.subagentChild || managed.scheduledTask || this.closing || managed.disposing) return { ok: false, code: 'unavailable' }
+    if (!Number.isSafeInteger(request.expectedSeq) || request.expectedSeq !== goals.seq || request.goalId !== (goals.snapshot?.id ?? null)) return { ok: false, code: 'stale' }
+    if (request.action === 'pause' || request.action === 'cancel') {
+      if (!goals.snapshot) return { ok: false, code: 'invalid' }
+      if (request.action === 'cancel') goals.cancel()
+      this.stopManaged(managed, 'user')
+      if (goals.snapshot?.reason === 'storage') return { ok: false, code: 'storage' }
+      return { ok: true, goal: goals.snapshot, seq: goals.seq }
+    }
+    if (!['create', 'resume', 'limits'].includes(request.action)) return { ok: false, code: 'invalid' }
+    if (managed.initializing || managed.lifecyclePromise || !managed.session.isIdle || goals.preparing || managed.imageReplay || managed.continuationRequest) return { ok: false, code: 'busy' }
+    if (request.action !== 'limits' && (managed.plan.restricted || managed.plan.submissionLocked)) return { ok: false, code: 'plan' }
+    if ((request.action === 'create' || request.action === 'limits') && !validGoalLimits(request.limits)) return { ok: false, code: 'invalid' }
+    if (request.action === 'create') {
+      if (typeof request.objective !== 'string' || typeof request.acceptance !== 'string' || !request.objective.trim() || !request.acceptance.trim() ||
+        request.objective.length > 8000 || request.acceptance.length > 8000) return { ok: false, code: 'invalid' }
+      const current = goals.snapshot
+      if (current && !['completed', 'cancelled'].includes(current.status)) return { ok: false, code: 'busy' }
+      const facts = this.planFacts(managed)
+      if (facts.tasks || facts.subagents || facts.deliveries || facts.questions || facts.escalations || facts.queuedMessages) return { ok: false, code: 'busy' }
+    } else {
+      if (!goals.snapshot || ['completed', 'cancelled'].includes(goals.snapshot.status)) return { ok: false, code: 'invalid' }
+      if (request.action === 'resume' && !goals.snapshot.accountingAvailable) return { ok: false, code: 'storage' }
+      if (request.action === 'resume' && goals.quota()) return { ok: false, code: 'quota' }
+    }
+    let release: () => void
+    try { release = managed.plan.beginWork('branch') } catch { return { ok: false, code: 'busy' } }
+    try {
+      if (!existsSync(managed.path)) this.materializeSession(managed.session.sessionManager)
+      if (request.action === 'create') this.rememberFolder(managed.cwd)
+      if (request.action === 'create') goals.create(request.objective.trim(), request.acceptance.trim(), request.limits)
+      else if (request.action === 'limits') goals.limits(request.limits)
+      else {
+        const owners = [managed.notifications, managed.askUser, managed.subagents?.notifications].filter(owner => owner != null)
+        // Re-arm preserved answers before checking pending work, while holding
+        // their idle wakes until explicit Resume grants goal execution.
+        for (const owner of owners) { owner.holdWake(); owner.resume() }
+        try { managed.jevWorkflow?.resume(); goals.resume() }
+        finally { for (const owner of owners) owner.releaseWake() }
+      }
+      if (goals.snapshot?.reason === 'storage') return { ok: false, code: 'storage' }
+      return { ok: true, goal: goals.snapshot, seq: goals.seq }
+    } catch { return { ok: false, code: 'storage' } }
+    finally { release() }
+  }
+
+  /** Uses the same SDK continuation, wake ownership and checkout lease as Continue. */
+  private async runGoal(managed: ManagedSession, content: string, initial: boolean, dispatchId: string,
+    signal: AbortSignal, accepted: () => boolean): Promise<void> {
+    const session = managed.session
+    const owners = [managed.notifications, managed.askUser, managed.subagents?.notifications].filter(owner => owner != null)
+    for (const owner of owners) { owner.holdWake(); owner.resume() }
+    let releaseRun: (() => void) | undefined
+    let settled!: () => void
+    const done = new Promise<void>(resolve => { settled = resolve })
+    signal.addEventListener('abort', settled, { once: true })
+    const unsubscribe = session.subscribe(event => { if (event.type === 'agent_settled') settled() })
+    const unsubscribeStart = session.agent.subscribe(event => {
+      if (event.type !== 'message_start' && event.type !== 'message_end') return
+      const message = event.message
+      const belongs = initial ? message.role === 'user' && message.content === content :
+        message.role === 'custom' && message.customType === GOAL_STEP && (message.details as { dispatchId?: string } | undefined)?.dispatchId === dispatchId
+      if (!belongs) return
+      if (event.type === 'message_start' && (signal.aborted || this.closing || managed.disposing)) session.agent.abort()
+      if (event.type === 'message_end') managed.goals?.started(dispatchId)
+    })
+    try {
+      await managed.lifecyclePromise
+      releaseRun = await this.checkoutCoordinator.enter(managed.cwd, 'run', managed.path, signal)
+      if (!accepted() || signal.aborted || this.closing || managed.disposing) return
+      managed.plan.checkWorkAdmission()
+      managed.changeScopes.continue()
+      if (initial) await session.prompt(content)
+      else {
+        const frontier = continuationTarget(this.transcriptOf(managed))
+        const continued = frontier ? `${content}\n\n${continuationContent(frontier)}` : content
+        await session.sendCustomMessage({ customType: GOAL_STEP, content: continued, display: false, details: { dispatchId } }, { triggerTurn: true })
+      }
+      // SDK prompt resolution can precede retries/compaction/follow-ups.
+      await done
+    } finally {
+      signal.removeEventListener('abort', settled)
+      unsubscribe(); unsubscribeStart(); releaseRun?.()
+      for (const owner of owners) owner.releaseWake()
+    }
+  }
+
   /** Resume the interrupted frontier using its original context and scope. */
   async continueMessage(payload: ContinuePayload): Promise<void> {
     const managed = this.activeSession
@@ -4117,6 +4253,7 @@ export class PiManager {
     if (managed.continuationRequest || managed.imageReplay || !session.isIdle) throw new Error('continue-busy')
     const target = continuationTarget(this.transcriptOf(managed))
     if (!target || target.timestamp !== payload.timestamp) throw new Error('continue-stale-turn')
+    managed.goals?.userPrompt()
     // A continuation cannot lift a submitted plan's seal or bypass approval.
     const releasePlan = managed.plan.beginWork('background')
     const request = managed.continuationRequest = new AbortController()
@@ -4170,6 +4307,7 @@ export class PiManager {
     if (!managed || !session) throw new Error('No active session')
     if (managed.subagentChild) throw new Error('A subagent session is read-only')
     if (managed.scheduledTask) throw new Error('A scheduled task session is read-only')
+    managed.goals?.pause('rewound')
     if (managed.continuationRequest && session.isIdle) throw new Error('continue-busy')
     const replay = managed.imageReplay
     replay?.controller.abort()
@@ -4232,6 +4370,7 @@ export class PiManager {
           // value here would silently widen on the next reopen.
           managed.sandboxMode = sandboxModeFromBranch(sessionManager.getBranch(), this.defaultSandboxMode)
           managed.plan.restore()
+          managed.goals?.restore('rewound')
           managed.planApproval?.recover()
         }
         // Edited file references are re-inlined from disk (fresh content) — the
@@ -4314,6 +4453,11 @@ export class PiManager {
   abort(): void {
     const managed = this.activeSession
     if (!managed) return
+    this.stopManaged(managed, 'stopped')
+  }
+
+  private stopManaged(managed: ManagedSession, reason: GoalReason): void {
+    managed.goals?.pause(reason)
     managed.manualCompaction?.cancel()
     managed.continuationRequest?.abort()
     managed.imageReplay?.controller.abort()
@@ -5214,12 +5358,16 @@ export class PiManager {
     // branch's values live.
     managed.sandboxMode = sandboxModeFromBranch(manager.getBranch(), this.defaultSandboxMode)
     managed.plan.restore()
+    managed.goals?.restore('rewound')
     managed.planApproval?.recover()
   }
 
   rewindRestore(request: RewindRequest): Promise<RewindResult<RewindCommitDTO>> {
     return this.rewindResult(async () => {
       const managed = this.rewindSession(request.sessionPath)
+      if (!managed.session.isIdle) throw new RewindFailure('busy')
+      // Invalidate the wake without changing the leaf bound by the preview.
+      managed.goals?.pause('rewound', false)
       if (!['files', 'conversation', 'all'].includes(request.mode)) throw new RewindFailure('missing')
       let releasePlanWork: () => void
       try { releasePlanWork = managed.plan.beginWork('branch') }
@@ -5228,6 +5376,7 @@ export class PiManager {
         throw error
       }
       try {
+        await managed.goals?.idle()
         await managed.lifecyclePromise
         await managed.rewind?.idle()
         return await this.checkoutCoordinator.withExclusive(managed.cwd, 'restore', async () => {

@@ -5,6 +5,7 @@
  */
 
 import type { AskUserRecordDTO, PendingAskUserDTO } from './ask-user'
+import type { GoalSnapshotDTO } from './goal'
 import type { CompactionProcessDTO, CompactionProcessStateDTO, CompactionQueueStateDTO } from './compaction'
 import type { TableFormat } from './table'
 import type { BrowserPageMeta, BrowserSearchEngine } from './browser'
@@ -808,6 +809,8 @@ export interface ToolRunDTO {
 }
 
 export interface SessionSnapshotDTO {
+  goal?: GoalSnapshotDTO | null
+  goalSeq?: number
   jevWorkflow?: JevWorkflowDTO | null
   jevWorkflowSeq?: number
   /** Transcript is available while session_start hooks finish preparing tools. */

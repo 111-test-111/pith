@@ -41,6 +41,7 @@ export async function createPlanFixture({ respond: initialRespond, extensionFact
 export { debugAdapterSpec } from './src/main/debug/adapters';
 export { startLibraryService } from './src/main/library/service';
 export { PlanStorage } from './src/main/pi/plan-storage';
+export { GoalStorage } from './src/main/pi/goals/storage';
 export * from './src/main/pi/plan-protocol';
 export { PiStore } from './src/renderer/src/state/pi-store';
 export { SessionManager, ModelRuntime, SettingsManager, setPlanFixtureStream, registerPlanFixtureExtensionFactories } from '@earendil-works/pi-coding-agent';`,
@@ -218,6 +219,7 @@ export async function createAgentSessionFromServices(options){
     library,
     debugAdapterSpec,
     project,
+    userData,
     temporary,
     requests,
     events,

@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto'
 import { pathToFileURL } from 'node:url'
 import { getAgentDir } from '@earendil-works/pi-coding-agent'
 import type { ImageReplayRequest } from '../shared/image-replay'
+import type { GoalActionRequest } from '../shared/goal'
 import { registerPlanIpc } from './pi/plan-ipc'
 import { PiManager } from './pi/manager'
 import { registerResourceIpc } from './resources/service'
@@ -445,6 +446,7 @@ export function registerIpc(
   // The live mode belongs to a session, not to the app: the composer switches
   // this session's mode and gets the refreshed snapshot back.
   registerPlanIpc(pi)
+  ipcMain.handle('goal:action', (_event, request: GoalActionRequest) => pi.goalAction(request))
   ipcMain.handle('sandbox:setMode', (_event, sessionPath: string, mode: SandboxMode) =>
     pi.setSessionSandboxMode(sessionPath, mode))
   // Manual compaction; the promise waits for a live session's safe boundary.

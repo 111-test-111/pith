@@ -1,5 +1,6 @@
 import type { TrajectoryQuery, TrajectoryPage, TrajectoryDetail, TrajectoryNodeRequest, TrajectoryNodePage } from '../shared/types'
 import type { ImageReplayRequest, ImageReplaySnapshot } from '../shared/image-replay'
+import type { GoalActionRequest, GoalActionResult } from '../shared/goal'
 import type { GitBranch, GitCommitDetails, GitCommitFile, GitDiff, GitDiffRequest, GitDiscardPreview, GitGraph, GitGraphRequest, GitHistory, GitHistoryRequest, GitMutation, GitMutationReceipt, GitRepository, GitResult, GitWorkspaceRequest } from '../shared/git'
 import type { LibraryKind, LibraryPage, LibraryQuery, LibraryResult, LibrarySettingsUpdate, LibraryStatus, LibraryTextPreview } from '../shared/library'
 import type { AskUserAnswer } from '../shared/ask-user'
@@ -251,6 +252,7 @@ setAlwaysOnTop: (flag: boolean): Promise<boolean> => ipcRenderer.invoke('window:
   /** Change one session's mode; resolves with that session's fresh snapshot. */
   exportPlan: (request: PlanDocumentRequest): Promise<PlanActionResult<{ cancelled: boolean }>> => ipcRenderer.invoke('plan:export', request),
   setSessionMode: (request: PlanModeRequest): Promise<PlanActionResult<PlanStateDTO>> => ipcRenderer.invoke('plan:setMode', request),
+  goalAction: (request: GoalActionRequest): Promise<GoalActionResult> => ipcRenderer.invoke('goal:action', request),
   getPlanState: (path: string): Promise<PlanStateDTO> => ipcRenderer.invoke('plan:state', path),
   readPlanDocument: (request: PlanDocumentRequest): Promise<PlanActionResult<PlanDocumentDTO>> => ipcRenderer.invoke('plan:document', request),
   approvePlan: (request: PlanDocumentRequest): Promise<PlanActionResult<PlanApprovalDTO>> => ipcRenderer.invoke('plan:approve', request),

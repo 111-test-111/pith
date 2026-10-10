@@ -114,6 +114,7 @@ type BeforeResult = Awaited<ReturnType<BeforeHook>>
 
 /** App tools the Plan ceiling may expose, by name, once identity is proven. */
 const PLAN_APP_TOOLS: ReadonlySet<string> = new Set([
+  'get_goal',
   ...APP_BASH_TOOL_NAMES,
   ASK_USER_TOOL_NAME,
   TODO_TOOL_NAME,
@@ -127,6 +128,7 @@ const PLAN_APP_TOOLS: ReadonlySet<string> = new Set([
 
 /** A child may investigate and report, never re-dispatch or submit a parent plan. */
 const CHILD_FORBIDDEN_TOOLS: ReadonlySet<string> = new Set([
+  'get_goal', 'update_goal',
   SUBAGENT_TOOL_NAME,
   AGENT_STEER_TOOL_NAME,
   'submit_plan'
@@ -140,6 +142,7 @@ const CHILD_FORBIDDEN_TOOLS: ReadonlySet<string> = new Set([
  * deliverable is the returned preview, which a nested call would flatten into a
  * script result. */
 const MODEL_ONLY_APP_TOOLS: ReadonlySet<string> = new Set([
+  'update_goal',
   PRESENT_TOOL_NAME,
   IMAGE_TOOL_NAME,
   TODO_TOOL_NAME,

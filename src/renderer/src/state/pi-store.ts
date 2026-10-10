@@ -1,4 +1,5 @@
 import { isNothingToCompactError } from '../../../shared/compaction-errors'
+import type { GoalSnapshotDTO } from '../../../shared/goal'
 import type { CompactionProcessStateDTO, CompactionQueueStateDTO } from '../../../shared/compaction'
 import type {
   AssistantMsg,
@@ -43,6 +44,8 @@ export interface Notice {
 }
 
 export interface PiState {
+  goal: GoalSnapshotDTO | null
+  goalSeq: number
   jevWorkflow: JevWorkflowDTO | null
   initializing: boolean
   todos: TodoSnapshotDTO | null
@@ -205,6 +208,8 @@ const EMPTY_COMPACTION_QUEUE: CompactionQueueStateDTO = { queued: false, revisio
 const EMPTY_COMPACTION_PROCESS: CompactionProcessStateDTO = { process: null, revision: 0 }
 
 const initialState: PiState = {
+  goal: null,
+  goalSeq: 0,
   initializing: false,
   todos: null,
   askUserRecords: [],
@@ -309,6 +314,14 @@ export class PiStore {
    * rendering and replay only those newer than the returned snapshot. */
   private planStates = new Map<string, PlanStateDTO>()
   private jevStates = new Map<string, { seq: number; state: JevWorkflowDTO | null }>()
+  private goalStates = new Map<string, { seq: number; goal: GoalSnapshotDTO | null }>()
+  private mergeGoal(path: string | null, goal: GoalSnapshotDTO | null | undefined, seq = 0): { goal: GoalSnapshotDTO | null; goalSeq: number } {
+    if (!path) return { goal: null, goalSeq: 0 }
+    const previous = this.goalStates.get(path)
+    if (!previous || seq > previous.seq) this.goalStates.set(path, { seq, goal: goal ?? null })
+    const merged = this.goalStates.get(path)!
+    return { goal: merged.goal, goalSeq: merged.seq }
+  }
   private compactionQueues = new Map<string, CompactionQueueStateDTO>()
   private compactionProcesses = new Map<string, CompactionProcessStateDTO>()
   private mergeCompactionProcess(path: string | null, next?: CompactionProcessStateDTO): CompactionProcessStateDTO {
@@ -375,6 +388,7 @@ export class PiStore {
     const sessionPath = snapshot.sessionPath ?? null
     const plan = this.mergePlanState(sessionPath, snapshot.plan)
     const jevWorkflow = this.mergeJevState(sessionPath, snapshot.jevWorkflow, snapshot.jevWorkflowSeq)
+    const goal = this.mergeGoal(sessionPath, snapshot.goal, snapshot.goalSeq)
     const compactionQueue = this.mergeCompactionQueue(sessionPath, snapshot.compactionQueue)
     const compactionProcess = this.mergeCompactionProcess(sessionPath, snapshot.compactionProcess)
     const previousCached = sessionPath ? this.sessionStates.get(sessionPath) : undefined
@@ -382,7 +396,7 @@ export class PiStore {
     // Roster revisions are independent of transcript revisions, and belong
     // only to this session. Never merge the outgoing chat into an incoming one.
     const subagents = mergeRoster(previousCached?.subagents ?? [], snapshot.subagents ?? [])
-    const cached = previousCached ? { ...previousCached, subagents, plan, jevWorkflow, compactionQueue, compactionProcess } : undefined
+    const cached = previousCached ? { ...previousCached, subagents, plan, jevWorkflow, ...goal, compactionQueue, compactionProcess } : undefined
     if (cached) this.sessionStates.set(sessionPath!, cached)
     // A readiness/event push can overtake an IPC snapshot of a cached session.
     // Keep the newer projection (including its sequence), then replay any
@@ -416,6 +430,7 @@ export class PiStore {
       // never recorded one keeps what we last saw.
       plan,
       jevWorkflow,
+      ...goal,
       sandboxMode: snapshot.sandboxMode ?? cached?.sandboxMode ?? DEFAULT_SANDBOX_MODE,
       sandbox: snapshot.sandbox ?? cached?.sandbox ?? null,
       isStreaming: snapshot.isStreaming,
@@ -584,6 +599,16 @@ export class PiStore {
       const cached = this.sessionStates.get(event.sessionPath)
       if (cached) this.sessionStates.set(event.sessionPath, { ...cached, jevWorkflow })
       if (event.sessionPath === this.state.sessionPath && jevWorkflow !== this.state.jevWorkflow) this.set({ jevWorkflow })
+      return
+    }
+    if (event.type === 'goal_update' && event.sessionPath) {
+      const goal = this.mergeGoal(event.sessionPath, event.goal, event.goalSeq)
+      const cached = this.sessionStates.get(event.sessionPath)
+      if (cached) this.sessionStates.set(event.sessionPath, { ...cached, ...goal })
+      if (event.sessionPath === this.state.sessionPath && goal.goalSeq !== this.state.goalSeq) this.set({ ...goal,
+        // A Goal can decide to pause after the settled event's continuation
+        // hint. Clearing that hint is metadata, not a second transcript end.
+        ...(goal.goal && !goal.goal.executing && !['active', 'verifying'].includes(goal.goal.status) ? { isStreaming: false } : {}) })
       return
     }
     if (event.type === 'plan_state_update' && event.sessionPath && event.plan) {

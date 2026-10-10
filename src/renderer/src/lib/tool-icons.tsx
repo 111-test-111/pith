@@ -69,6 +69,8 @@ const TOOL_ICONS: Record<string, IconComponent> = {
   // matches the composer button that switched the session into plan mode.
   submit_plan: NotebookPen,
   todo_write: ListChecks,
+  get_goal: Compass,
+  update_goal: Compass,
   present: CoPresent,
   // The app's image tool paints a picture rather than declaring one, so it
   // takes the image glyph instead of `present`'s co-present one.
