@@ -142,6 +142,7 @@ export class PlanController {
   private lock = false
   /** In-flight work registrations that must be over before a mode change. */
   private readonly reservations = new Set<symbol>()
+  private branchReservations = 0
   /** App-owned user-turn registrations, the only key that opens the seal. */
   private userReservations = 0
   private sealed = false
@@ -188,6 +189,11 @@ export class PlanController {
   get transitionBusy(): boolean {
     return this.lock
   }
+
+  get workCount(): number { return this.reservations.size }
+  get branchWork(): boolean { return this.branchReservations > 0 }
+  /** Preparation ended; session-owned goal admission may be retried. */
+  onWorkSettled?: () => void
 
   /**
    * True after a successful `submit_plan` committed in the current planning
@@ -242,11 +248,14 @@ export class PlanController {
    * mode change. The operation should stay synchronous: that is what makes
    * check → save → apply atomic in a single event-loop turn.
    */
-  async transition<T>(operation: () => Promise<T>): Promise<T> {
+  async transition<T>(operation: () => Promise<T>, prepare?: () => Promise<void>): Promise<T> {
     if (this.lock) throw new PlanAdmissionError('A session mode change is already in progress', ['transition'])
     this.lock = true
     this.trackWakeAdmission()
     try {
+      // Cancellation/draining of a session-owned wake happens under the same
+      // lock, before checking the final idle facts. No Resume may enter here.
+      if (prepare) await prepare()
       const blockers = this.factBlockers(this.options.facts(), false)
       if (blockers.length) throw new PlanAdmissionError('The session is not ready for a mode change', blockers)
       return await operation()
@@ -254,6 +263,7 @@ export class PlanController {
       this.lock = false
       this.refresh()
       this.trackWakeAdmission()
+      if (!this.reservations.size) this.onWorkSettled?.()
     }
   }
 
@@ -262,7 +272,7 @@ export class PlanController {
    * entry is appended and fsynced first, and a failure rolls the in-memory leaf
    * back and publishes nothing.
    */
-  async setMode(mode: SessionMode): Promise<PlanStateDTO> {
+  async setMode(mode: SessionMode, prepare?: () => Promise<void>): Promise<PlanStateDTO> {
     if (mode !== 'normal' && mode !== 'plan') throw new Error(`Unknown session mode: ${String(mode)}`)
     await this.transition(async () => {
       if (this.approvalRecovery) throw new PlanAdmissionError('plan-recovery-required', ['recovery'])
@@ -291,7 +301,7 @@ export class PlanController {
       this.branchState = reconstructPlan(manager.getBranch())
       this.publish(this.build())
       this.trackWakeAdmission()
-    })
+    }, prepare)
     return this.build()
   }
 
@@ -329,6 +339,7 @@ export class PlanController {
     }
     const token = Symbol(kind)
     this.reservations.add(token)
+    if (kind === 'branch') this.branchReservations += 1
     if (kind === 'user') this.userReservations += 1
     this.refresh()
     let released = false
@@ -336,8 +347,10 @@ export class PlanController {
       if (released) return
       released = true
       this.reservations.delete(token)
+      if (kind === 'branch') this.branchReservations = Math.max(0, this.branchReservations - 1)
       if (kind === 'user') this.userReservations = Math.max(0, this.userReservations - 1)
       this.refresh()
+      if (!this.reservations.size) this.onWorkSettled?.()
     }
   }
 

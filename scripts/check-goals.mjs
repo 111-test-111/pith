@@ -7,6 +7,7 @@ import { pathToFileURL } from 'node:url'
 import { createPlanFixture, submitFixturePlan } from './lib/plan-fixture.mjs'
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
+function deferred() { let resolve; const promise = new Promise(done => { resolve = done }); return { promise, resolve } }
 async function until(predicate, label = 'condition') {
   for (let i = 0; i < 600; i++) { if (await predicate()) return; await sleep(10) }
   assert.fail(`Timed out: ${label}`)
@@ -65,7 +66,24 @@ try {
   const livePreview = await f.app.rewindPreview(f.managed.path, checkpoints.value.checkpoints[0].id)
   assert.equal(livePreview.error, undefined)
   const beforeFiles = f.manager.getLeafId()
-  const filesRestore = await f.app.rewindRestore({ sessionPath: f.managed.path, token: livePreview.value.token, mode: 'files', operationId: randomUUID() })
+  const workerCall = f.app.rewindClient.call.bind(f.app.rewindClient)
+  const restoreGate = deferred()
+  let restorePreparing = false
+  f.app.rewindClient.call = async (...args) => {
+    if (args[0] === 'list') { restorePreparing = true; await restoreGate.promise }
+    return workerCall(...args)
+  }
+  const restoringFiles = f.app.rewindRestore({ sessionPath: f.managed.path, token: livePreview.value.token, mode: 'files', operationId: randomUUID() })
+  await until(() => restorePreparing, 'Rewind preparing under branch reservation')
+  f.managed.goals.host.available = available
+  for (const action of ['resume', 'pause', 'cancel']) assert.equal((await call(f, action)).code, 'busy', `${action} cannot modify Rewind's reviewed leaf`)
+  assert.throws(() => f.app.prompt({ text: 'Racing user turn', images: [], files: [] }), /in progress/)
+  f.app.abort()
+  assert.equal(f.manager.getLeafId(), beforeFiles, 'Stop during Rewind cannot append a Goal transition')
+  assert.equal(f.requests.length, 3)
+  restoreGate.resolve()
+  const filesRestore = await restoringFiles
+  f.app.rewindClient.call = workerCall
   assert.equal(filesRestore.error, undefined, 'suspending a live goal cannot invalidate its reviewed preview')
   assert.equal(f.manager.getLeafId(), beforeFiles, 'file-only Rewind preserves the exact SDK leaf')
   assert.equal(goal(f).status, 'paused')
@@ -131,7 +149,7 @@ try {
   assert.equal(goal(capped).reason, 'storage')
 
   // Stop closes ownership even in the gap before the SDK starts its turn.
-  const stopped = await fixture({ respond: () => [text('Unfinished')] })
+  const stopped = await fixture({ withRewind: true, respond: () => [text('Unfinished')] })
   const enter = stopped.app.checkoutCoordinator.enter.bind(stopped.app.checkoutCoordinator)
   let releasePreparation
   const prepared = new Promise(resolve => { releasePreparation = resolve })
@@ -147,6 +165,38 @@ try {
   assert.equal((await call(stopped, 'resume')).ok, true)
   await until(() => goal(stopped)?.reason === 'no_progress' && idle(stopped), 'explicit resume after Stop')
   assert.equal(stopped.requests.length, 3)
+  assert.equal(goal(stopped).autoRuns, 3, 'Resume of an unaccepted initial input still spends a new dispatch')
+  assert.equal(stopped.manager.getBranch().filter(e => e.type === 'message' && e.message.role === 'user').length, 1)
+  assert.equal((await stopped.app.rewindList(stopped.managed.path)).value.checkpoints.length, 1, 'Resume before first admission creates its normal Rewind checkpoint')
+
+  // A killed process may have defined/claimed its first turn without committing
+  // a user entry. Reopening grants no work; explicit Resume needs a checkpoint.
+  const unaccepted = await fixture({ withRewind: true, respond: () => [text('Work remains.')] })
+  unaccepted.managed.goals.host.available = () => false
+  assert.equal((await create(unaccepted, { maxAutoRuns: 1, tokenBudget: null })).ok, true)
+  const pendingModules = await import(pathToFileURL(join(unaccepted.temporary, 'modules.mjs')).href)
+  const pendingStorage = new pendingModules.GoalStorage(unaccepted.userData, unaccepted.session.sessionId)
+  const pendingId = goal(unaccepted).id
+  pendingStorage.update(pendingId, l => { l.run = { id: 'unaccepted-first-claim', state: 'claimed', before: unaccepted.manager.getEntries().map(e => e.id) } })
+  unaccepted.managed.unsubscribe(); unaccepted.session.dispose(); unaccepted.app.sessions.delete(unaccepted.managed.path)
+  const reopened = await unaccepted.app.buildSession(pendingModules.SessionManager.open(unaccepted.managed.path))
+  await reopened.lifecyclePromise
+  const resumedFirst = { ...unaccepted, managed: reopened, session: reopened.session, manager: reopened.session.sessionManager }
+  assert.equal(goal(resumedFirst).reason, 'interrupted')
+  assert.equal(goal(resumedFirst).autoRuns, 0)
+  assert.equal(pendingStorage.read(pendingId).run, null)
+  const reopenedLeaf = resumedFirst.manager.getLeafId()
+  reopened.goals.restore('interrupted')
+  assert.equal(resumedFirst.manager.getLeafId(), reopenedLeaf, 'Goal recovery preserves the exact initialized branch leaf')
+  assert.equal(resumedFirst.manager.getBranch().filter(e => e.type === 'custom' && e.customType === 'pith_goal_v1').length, 1, 'reopening never appends a Goal transition')
+  await sleep(40)
+  assert.equal(unaccepted.requests.length, 0, 'recovery never replays an unaccepted claim')
+  assert.equal((await call(resumedFirst, 'resume')).ok, true)
+  await until(() => goal(resumedFirst)?.reason === 'runs' && idle(resumedFirst), 'first input after process recovery')
+  assert.equal(unaccepted.requests.length, 1)
+  assert.equal(goal(resumedFirst).autoRuns, 1)
+  assert.equal(resumedFirst.manager.getBranch().filter(e => e.type === 'message' && e.message.role === 'user').length, 1)
+  assert.equal((await resumedFirst.app.rewindList(reopened.path)).value.checkpoints.length, 1)
 
   const quitting = await fixture({ respond: () => [text('Must not run after Quit')] })
   const quitEnter = quitting.app.checkoutCoordinator.enter.bind(quitting.app.checkoutCoordinator)
@@ -217,6 +267,143 @@ try {
   await until(() => goal(stalled)?.reason === 'no_progress' && idle(stalled), 'no progress')
   assert.equal(stalled.requests.length, 3, 'three settled runs without new evidence pause')
   assert.equal(stalled.store.getState().isStreaming, false, 'a pause decided after settlement clears the continuation hint')
+
+  // Plan takes its lock before awaiting Goal drainage. Resume/End cannot
+  // enter that gap, and rejected manual work cannot rewrite verification.
+  const stalledAvailable = stalled.managed.goals.host.available
+  stalled.managed.goals.host.available = () => false
+  assert.equal((await call(stalled, 'resume')).ok, true)
+  const goalIdle = stalled.managed.goals.idle.bind(stalled.managed.goals)
+  const planGate = deferred()
+  stalled.managed.goals.idle = () => planGate.promise
+  const enteringPlan = stalled.app.setSessionMode({ sessionPath: stalled.managed.path, mode: 'plan' })
+  assert.equal(stalled.managed.plan.transitionBusy, true, 'Plan locks synchronously before Goal drainage')
+  for (const action of ['resume', 'pause', 'cancel']) assert.equal((await call(stalled, action)).code, 'busy')
+  assert.equal(stalled.requests.length, 3)
+  planGate.resolve()
+  assert.equal((await enteringPlan).ok, true)
+  stalled.managed.goals.idle = goalIdle
+  assert.equal((await stalled.app.setSessionMode({ sessionPath: stalled.managed.path, mode: 'normal' })).ok, true)
+  assert.equal(goal(stalled).status, 'paused')
+  stalled.managed.goals.save({ status: 'verifying', reason: null, evidence: 'A committed verification candidate.' })
+  const rejectedLeaf = stalled.manager.getLeafId()
+  const transitionGate = deferred()
+  const transitioning = stalled.managed.plan.transition(async () => {}, () => transitionGate.promise)
+  assert.throws(() => stalled.app.prompt({ text: 'Rejected during transition', images: [], files: [] }), /in progress/)
+  await assert.rejects(stalled.app.resendMessage({ timestamp: 1, text: 'Rejected resend', images: [] }), /in progress/)
+  assert.equal(stalled.manager.getLeafId(), rejectedLeaf, 'rejected work must not append a Goal entry')
+  assert.equal(goal(stalled).status, 'verifying')
+  transitionGate.resolve(); await transitioning
+  stalled.managed.goals.host.available = stalledAvailable
+  await call(stalled, 'pause')
+
+  // A manual prompt holds admission through async file preparation. Goal
+  // wakes cannot spend a claim or insert a hidden step ahead of that prompt.
+  const manual = await fixture({ respond: () => [text('More work remains.')] })
+  await create(manual)
+  await until(() => goal(manual)?.reason === 'no_progress' && idle(manual))
+  const manualAvailable = manual.managed.goals.host.available
+  manual.managed.goals.host.available = () => false
+  await call(manual, 'resume')
+  const manualGate = deferred()
+  const readBlocks = manual.app.readFileBlocks.bind(manual.app)
+  manual.app.readFileBlocks = async (...args) => { await manualGate.promise; return readBlocks(...args) }
+  manual.app.prompt({ text: 'Inspect my new evidence', images: [], files: [] })
+  manual.managed.goals.host.available = manualAvailable
+  manual.managed.goals.flush()
+  await sleep(20)
+  assert.equal(manual.requests.length, 3)
+  assert.equal(goal(manual).autoRuns, 2, 'preparation cannot spend automatic allowance')
+  assert.equal((await call(manual, 'resume')).code, 'busy')
+  assert.equal((await manual.app.setSessionMode({ sessionPath: manual.managed.path, mode: 'plan' })).code, 'busy')
+  assert.equal(goal(manual).status, 'active', 'a refused Plan transition cannot interrupt admitted manual preparation')
+  manual.setRespond(n => n === 4 ? [tool('manual-complete', 'update_goal', { goalId: goal(manual).id, status: 'complete', evidence: 'Verified the new user evidence.' })] : [text('Verified.')])
+  manualGate.resolve()
+  await until(() => goal(manual)?.status === 'completed' && idle(manual), 'manual work releases Goal verification')
+  assert.equal(manual.requests.length, 5)
+  assert.equal(goal(manual).autoRuns, 2)
+  assert.equal(goal(manual).tokens, 10, 'a live Goal bills manual work once without counting an extra dispatch')
+  assert(manual.requests[3].messages.some(message => message.role === 'user' && JSON.stringify(message.content).includes('Inspect my new evidence')))
+
+  // Creation returns while attachments are still being read. The actual first
+  // turn preserves the composer text/images, uses a user checkpoint, and is
+  // excluded from the automatic continuation count.
+  const attached = await fixture({ withRewind: true })
+  const attachmentPath = join(attached.project, 'attachment.txt')
+  await writeFile(attachmentPath, 'Attached evidence\n')
+  const attachmentGate = deferred()
+  let attachmentPreparing = false
+  const attachmentBlocks = attached.app.readFileBlocks.bind(attached.app)
+  attached.app.readFileBlocks = async (...args) => { attachmentPreparing = true; await attachmentGate.promise; return attachmentBlocks(...args) }
+  attached.setRespond(n => n === 1 ? [tool('attachment-complete', 'update_goal', { goalId: goal(attached).id, status: 'complete', evidence: 'Verified the attached request.' })] : [text('Verified.')])
+  const image = { type: 'image', mimeType: 'image/png', data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==' }
+  assert.equal((await call(attached, 'create', { objective: 'Verify my attachments', acceptance: 'Verify my attachments', limits: { maxAutoRuns: 2, tokenBudget: null }, files: [attachmentPath], images: [image] })).ok, true)
+  await until(() => attachmentPreparing, 'initial attachment preparation')
+  assert.equal(attached.requests.length, 0, 'Goal IPC returns before the first provider request')
+  assert.equal(goal(attached).status, 'active')
+  attachmentGate.resolve()
+  await until(() => goal(attached)?.status === 'completed' && idle(attached), 'attached Goal completed')
+  assert.equal(goal(attached).autoRuns, 0)
+  const attachedUser = attached.manager.getBranch().find(e => e.type === 'message' && e.message.role === 'user').message
+  assert.deepEqual(attachedUser.content.filter(part => part.type === 'image'), [image])
+  assert(attachedUser.content.find(part => part.type === 'text').text.startsWith('Verify my attachments\n\n'))
+  assert(attachedUser.content.find(part => part.type === 'text').text.includes('Attached evidence'))
+  assert.equal((await attached.app.rewindList(attached.managed.path)).value.checkpoints.length, 1)
+
+  const transformed = await fixture({ extensionFactories: [pi => pi.on('input', event => ({ action: 'transform', text: `${event.text}\nExtension context.`, images: event.images }))] })
+  transformed.setRespond(n => n === 1 ? [text('Work remains.')] : n === 2 ? [tool('transformed-complete', 'update_goal', { goalId: goal(transformed).id, status: 'complete', evidence: 'Verified the transformed input.' })] : [text('Verified.')])
+  await create(transformed)
+  await until(() => goal(transformed)?.status === 'completed' && idle(transformed), 'transformed initial Goal')
+  assert.equal(goal(transformed).autoRuns, 1, 'SDK input transformation cannot turn continuations into repeated uncharged initial prompts')
+  assert.equal(transformed.manager.getBranch().filter(e => e.type === 'message' && e.message.role === 'user').length, 1)
+  assert(JSON.stringify(transformed.requests[0]).includes('Extension context.'))
+
+  const handled = await fixture({ extensionFactories: [pi => pi.on('input', () => ({ action: 'handled' }))] })
+  await create(handled)
+  await until(() => goal(handled)?.reason === 'error' && idle(handled), 'handled Goal input releases ownership')
+  assert.equal(handled.requests.length, 0)
+  assert.equal(goal(handled).autoRuns, 0)
+
+  // Cancellation reaches the fresh SDK signal after async input hooks. A
+  // later explicit prompt waits for that old preparation, then retains its
+  // own async answer wakes without a duplicate Goal continuation.
+  const hookGate = deferred()
+  let hookPreparing = false, inputs = 0
+  const hooked = await fixture({ extensionFactories: [pi => pi.on('input', async () => {
+    if (++inputs === 1) { hookPreparing = true; await hookGate.promise }
+  })] })
+  await create(hooked)
+  await until(() => hookPreparing, 'Goal SDK input hook preparation')
+  hooked.setRespond(n => n === 1 ? [tool('hooked-question', 'ask_user_question', { mode: 'async', questions: [{ question: 'Choose output', options: [{ label: 'Text' }, { label: 'JSON' }] }] })] :
+    n === 3 ? [tool('hooked-complete', 'update_goal', { goalId: goal(hooked).id, status: 'complete', evidence: 'Consumed the superseding instructions and their answer.' })] : [text('Waiting or answered.')])
+  hooked.app.prompt({ text: 'Superseding user instructions', images: [], files: [] })
+  await sleep(20)
+  assert.equal(hooked.requests.length, 0)
+  hookGate.resolve()
+  await until(() => hooked.requests.length === 2 && idle(hooked), 'new prompt after cancelled Goal hook')
+  const hookedQuestion = hooked.events.findLast(e => e.type === 'ask_user' && e.requests.length)?.requests[0]
+  assert(hookedQuestion)
+  assert.equal(hooked.app.respondAskUser(hookedQuestion.requestId, hooked.managed.path, { answers: [{ question: 'Choose output', selected: ['JSON'] }] }), true)
+  await until(() => hooked.requests.length === 4 && goal(hooked)?.status === 'completed' && idle(hooked), 'superseding prompt answer wake')
+  assert(hooked.requests.every(request => !request.messages.some(message => message.role === 'user' && Array.isArray(message.content) && message.content.some(part => part.type === 'text' && part.text === 'Implement the requested change'))), 'the superseded initial prompt never reaches the provider')
+  assert.equal(goal(hooked).autoRuns, 0)
+
+  // Resend remains an ordinary explicit user turn in a paused Goal chat. Its
+  // async answer owner must still be allowed to wake without resuming Goal.
+  const resent = await fixture({ respond: () => [text('Work remains.')] })
+  await create(resent, { maxAutoRuns: 1, tokenBudget: null })
+  await until(() => goal(resent)?.reason === 'runs' && idle(resent))
+  const resentUser = resent.manager.getBranch().find(e => e.type === 'message' && e.message.role === 'user').message
+  resent.setRespond(n => n === 3 ? [tool('resent-question', 'ask_user_question', { mode: 'async', questions: [{ question: 'Choose a format', options: [{ label: 'Text' }, { label: 'JSON' }] }] })] : [text('Waiting or answered.')])
+  await resent.app.resendMessage({ timestamp: resentUser.timestamp, text: resentUser.content, images: [] })
+  await until(() => resent.requests.length === 4 && idle(resent), 'ordinary resend waits for its answer')
+  const resentQuestion = resent.events.findLast(e => e.type === 'ask_user' && e.requests.length)?.requests[0]
+  assert(resentQuestion)
+  assert.equal(resent.app.respondAskUser(resentQuestion.requestId, resent.managed.path, { answers: [{ question: 'Choose a format', selected: ['JSON'] }] }), true)
+  await until(() => resent.requests.length === 5 && idle(resent), 'Resend answer wakes the explicit user turn')
+  assert.equal(goal(resent).status, 'paused')
+  assert.equal(goal(resent).tokens, 4)
+  assert.equal(goal(resent).autoRuns, 1)
 
   const todo = await fixture()
   todo.setRespond(n => n === 1 ? [tool('todo-pending', 'todo_write', { todos: [{ content: 'Verify result', status: 'pending' }] })] :
@@ -295,6 +482,28 @@ try {
   fresh.goals.restore('interrupted')
   assert.equal(fresh.goals.snapshot.reason, 'storage', 'corrupt accounting fails closed')
   await writeFile(ledgerPath, original)
+  fresh.goals.restore('interrupted')
+  const freshCall = (action, data = {}) => recovered.app.goalAction({ sessionPath: fresh.path, expectedSeq: fresh.goals.seq, goalId: fresh.goals.snapshot.id, action, ...data })
+  assert.equal((await freshCall('limits', { limits: { maxAutoRuns: 3, tokenBudget: null } })).ok, true)
+  const durableUpdate = fresh.goals.store.update.bind(fresh.goals.store)
+  let failClaim = true
+  fresh.goals.store.update = (...args) => {
+    const committed = durableUpdate(...args)
+    // Model the crash/failure window after atomic replacement, before the
+    // caller observes directory fsync success. Disk keeps the charged claim.
+    if (failClaim && committed.run?.state === 'claimed') { failClaim = false; throw new Error('claim-fsync-response-lost') }
+    return committed
+  }
+  assert.equal((await freshCall('resume')).ok, true)
+  await until(() => fresh.goals.snapshot.reason === 'storage' && fresh.session.isIdle && !fresh.goals.preparing, 'lost durable claim acknowledgement')
+  assert.equal(recovered.requests.length, 2, 'a failed claim acknowledgement cannot reach the provider')
+  assert.equal(storage.read(oldGoal.id).autoRuns, 2)
+  fresh.goals.store.update = durableUpdate
+  fresh.goals.restore('interrupted')
+  assert.equal(fresh.goals.snapshot.autoRuns, 2, 'recovery retains the durable charge, never the stale in-memory amount')
+  assert.equal(fresh.goals.snapshot.tokens, 4)
+  assert.equal(storage.read(oldGoal.id).run, null)
+  assert.equal(recovered.requests.length, 2, 'claim recovery never automatically replays')
   console.log('PASS goals: receipts, Todo, continuation, quotas, Plan, revisions and crash accounting')
 } finally {
   for (const f of fixtures.reverse()) await f.close()

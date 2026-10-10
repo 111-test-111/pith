@@ -9,7 +9,7 @@ import {
   type DragEvent as ReactDragEvent,
   type ReactNode
 } from 'react'
-import { CalendarCheck, Check, Subagent, ImagePlus, LinkSimple, Loader2, NotebookPen, X } from '@/lib/icons'
+import { CalendarCheck, Check, Compass, Subagent, ImagePlus, LinkSimple, Loader2, NotebookPen, X } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
 import { PromptInput } from '@/components/agents/prompt-input'
 import type { PromptEditorHandle } from '@/lib/hooks/use-prompt-editor'
@@ -95,11 +95,14 @@ interface ComposerProps {
   sandboxMode?: SandboxMode
   sandbox?: SandboxStatusDTO | null
   sessionPath?: string | null
+  goalEnabled?: boolean
+  goalPending?: boolean
+  onGoalModeChange?: (enabled: boolean) => void
   /** Apply the snapshot a mode switch returns; the store owns that state. */
   onSandboxSnapshot?: (snapshot: SessionSnapshotDTO) => void
   queued: { steering: QueuedItemDTO[]; followUp: QueuedItemDTO[] }
   compactionQueued?: boolean
-  onSend: (payload: { text: string; images: ImageContent[]; files: string[] }) => void
+  onSend: (payload: { text: string; images: ImageContent[]; files: string[] }) => void | Promise<boolean>
   /** Queue the draft against the running turn — steer interrupts before the
    * next model call, followUp waits for the run to finish. */
   onQueue: (payload: {
@@ -149,6 +152,9 @@ export function Composer({
   sandboxMode = DEFAULT_SANDBOX_MODE,
   sandbox = null,
   sessionPath = null,
+  goalEnabled = false,
+  goalPending = false,
+  onGoalModeChange,
   onSandboxSnapshot,
   queued,
   compactionQueued = false,
@@ -344,20 +350,26 @@ export function Composer({
     // A queued or in-flight mode intent gates the send too: the first prompt
     // must go out under the mode the control shows, not race the flush IPC into
     // a 'busy' refusal (and a revert that silently downgrades the request).
-    if (initializing || readOnly || pendingMode !== null || modePending) return
+    if (initializing || readOnly || pendingMode !== null || modePending || goalPending) return
     if (!text && !images.length && !files.length) return
     const payload = {
       text,
       images: images.map((a) => a.image),
       files: files.map((f) => f.path)
     }
-    if (busy) onQueue({ ...payload, streamingBehavior: sendBehavior })
-    else onSend(payload)
+    const result = busy ? onQueue({ ...payload, streamingBehavior: sendBehavior }) : onSend(payload)
     setRefining(false)
     setValue('')
     setImages([])
     setFiles([])
     setMention(null)
+    if (result && typeof result.then === 'function') void result.then(accepted => {
+      if (accepted || currentPath.current !== sessionPath) return
+      // The IPC may fail after typing has resumed. Preserve any newer draft.
+      setValue(current => current || value)
+      setImages(current => current.length ? current : images)
+      setFiles(current => current.length ? current : files)
+    })
   }
 
   /**
@@ -599,7 +611,7 @@ export function Composer({
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
               loading={busy}
-              submitDisabled={initializing || readOnly || pendingMode !== null || modePending}
+              submitDisabled={initializing || readOnly || pendingMode !== null || modePending || goalPending}
               disabled={readOnly}
               onStop={() => void handleStop()}
               onSubmit={() => dispatch(behavior)}
@@ -680,6 +692,16 @@ export function Composer({
                       <span>{t('plan.plan')}</span>
                     </Button>
                   ) : null}
+                  {goalEnabled ? <Button type="button" variant="ghost" size="sm" data-goal-mode-control=""
+                    aria-label={t('goal.exit')} aria-pressed="true" disabled={readOnly || goalPending || !sessionPath}
+                    onMouseDown={event => event.preventDefault()} onClick={() => { editorRef.current?.focus({ preventScroll: true }); onGoalModeChange?.(false) }}
+                    className="group h-8 gap-1.5 px-2 text-xs text-primary hover:bg-muted hover:text-primary">
+                    <span aria-hidden="true" className="relative size-4 shrink-0">
+                      <Compass className="absolute inset-0 size-4 transition-opacity group-hover:opacity-0" />
+                      <X className="absolute inset-0 size-4 opacity-0 transition-opacity group-hover:opacity-100" />
+                    </span>
+                    <span>{t('goal.title')}</span>
+                  </Button> : null}
                 </span>
               }
               contextIndicator={
@@ -719,6 +741,13 @@ export function Composer({
                   icon: <NotebookPen />,
                   disabled: readOnly || busy || modePending || !sessionPath || (plan?.blockers.switch.some((blocker) => blocker !== 'initializing') ?? false)
                 },
+                ...(onGoalModeChange ? [{
+                  value: 'toggle-goal',
+                  label: <span className="flex w-full items-center justify-between gap-2"><span>{t('composer.goalMode')}</span>
+                    {goalEnabled ? <Check aria-hidden="true" className="size-3.5 shrink-0 text-primary" /> : null}</span>,
+                  icon: <Compass />,
+                  disabled: readOnly || goalPending || !sessionPath || (!goalEnabled && busy)
+                }] : []),
                 {
                   value: 'attach-image',
                   label: t('composer.attachImage'),
@@ -734,6 +763,9 @@ export function Composer({
                 if (action === 'toggle-plan') {
                   editorRef.current?.focus({ preventScroll: true })
                   void changeMode(effectiveMode === 'plan' ? 'normal' : 'plan')
+                } else if (action === 'toggle-goal') {
+                  editorRef.current?.focus({ preventScroll: true })
+                  onGoalModeChange?.(!goalEnabled)
                 } else if (action === 'attach-image') imageInputRef.current?.click()
                 else if (action === 'attach-file') fileInputRef.current?.click()
               }}

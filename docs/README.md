@@ -14,7 +14,8 @@ Start with [README](../README.md) for the product, setup and development command
 | Document | Contract |
 | --- | --- |
 | [Plan Mode](plan-mode-implementation.md) | Read-only planning, sealed submissions, approval and recovery |
-| [Session goals](goals-implementation.md) | Native goal control, Todo reuse, bounded continuation, pause/resume and crash accounting |
+| [Session goals](goals-implementation.md) | Composer activation, Todo reuse, bounded continuation, pause/resume, End and crash accounting |
+| [Goals next steps](goals-next-steps.md) | Criterion evidence, process-kill recovery, owned-work billing and quality evaluation |
 | [Rewind](rewind-implementation.md) | Before-turn checkpoints, raw-byte transactions, partial/single-file restore |
 | [Git workbench](git-workbench.md) | Repository status, safe staging/discard, commits, branches, history, multi-branch graph and remote operations |
 | [Subagents](subagents-implementation.md) | Role grants, persisted runs, notifications and recovery |

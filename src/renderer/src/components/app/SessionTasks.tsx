@@ -17,16 +17,20 @@ import type { JevWorkflowDTO, SubagentRunDTO, TodoSnapshotDTO } from '../../../.
 import type { AskUserRecordDTO } from '../../../../shared/ask-user'
 import type { GoalSnapshotDTO } from '../../../../shared/goal'
 import { GoalPanel } from './GoalPanel'
+import type { GoalUIState } from '@/state/pi-store'
 
 type Panel = 'todo' | 'bash' | 'agents' | 'ask' | 'jev' | 'goal'
 
 /** One stable overlay owner for all task views, including Jev. Switching tabs never moves the transcript. */
-export const SessionTasks = memo(function SessionTasks({ todos, subagents = [], askUserRecords = [], busy, sessionPath = null, onOpenSession, jevState = null, goal = null, goalSeq = 0, goalAvailable = false, goalRestricted = false, goalInitializing = false, onGoalState }: {
+export const SessionTasks = memo(function SessionTasks({ todos, subagents = [], askUserRecords = [], busy, sessionPath = null, onOpenSession, jevState = null, goal = null, goalSeq = 0, goalAvailable = false, goalRestricted = false, goalInitializing = false, goalUI, onGoalDraft, onGoalEnd, onGoalState }: {
   goal?: GoalSnapshotDTO | null
   goalSeq?: number
   goalAvailable?: boolean
   goalRestricted?: boolean
   goalInitializing?: boolean
+  goalUI?: GoalUIState
+  onGoalDraft?: (draft: Pick<GoalUIState, 'limits' | 'acceptance'>) => void
+  onGoalEnd?: () => void
   onGoalState?: (path: string, goal: GoalSnapshotDTO | null, seq: number) => void
   jevState?: JevWorkflowDTO | null
   todos: TodoSnapshotDTO | null
@@ -44,6 +48,8 @@ export const SessionTasks = memo(function SessionTasks({ todos, subagents = [], 
   const records = askUserRecords
   const tasks = useBashTasks().filter((task) => task.background)
   const [selected, setSelected] = useState<Panel | null>(null)
+  const showGoal = goalAvailable && !!goalUI?.enabled
+  useEffect(() => { if (showGoal && goalUI?.openRevision) setSelected('goal') }, [sessionPath, showGoal, goalUI?.openRevision])
   const root = useRef<HTMLDivElement>(null)
   const triggers = useRef<Partial<Record<Panel, HTMLButtonElement | null>>>({})
   const baseId = useId()
@@ -57,7 +63,7 @@ export const SessionTasks = memo(function SessionTasks({ todos, subagents = [], 
   const running = tasks.filter(bashTaskLive).length
   const agentsRunning = subagents.filter((run) => run.status === 'running').length
   const awaiting = records.filter((record) => record.status === 'pending').length
-  const open = selected !== null && (selected === 'goal' ? goalAvailable && !!sessionPath : selected === 'jev' ? !!sessionPath && !!jevState : selected === 'todo' ? items.length > 0 : selected === 'bash' ? tasks.length > 0 : selected === 'agents' ? subagents.length > 0 : records.length > 0)
+  const open = selected !== null && (selected === 'goal' ? showGoal && !!sessionPath : selected === 'jev' ? !!sessionPath && !!jevState : selected === 'todo' ? items.length > 0 : selected === 'bash' ? tasks.length > 0 : selected === 'agents' ? subagents.length > 0 : records.length > 0)
   const close = useCallback(() => setSelected(null), [])
   const focusTrigger = useCallback(() => { if (selected) triggers.current[selected]?.focus() }, [selected])
   // Portalled dialogs sit outside `root` but own the whole window. Their
@@ -78,7 +84,7 @@ export const SessionTasks = memo(function SessionTasks({ todos, subagents = [], 
     window.addEventListener('keydown', keydown, true)
     return () => window.removeEventListener('keydown', keydown, true)
   }, [open, close, focusTrigger])
-  const hasTasks = !!(goalAvailable || items.length || tasks.length || subagents.length || records.length || jevState)
+  const hasTasks = !!(showGoal || items.length || tasks.length || subagents.length || records.length || jevState)
   if (!hasTasks) return null
   const title = selected === 'goal' ? t('goal.title') : selected === 'jev' ? t('jev.panelTitle') : selected === 'todo' ? t('todo.title') : selected === 'bash' ? t('taskPanel.background') : selected === 'agents' ? t('taskPanel.agents') : t('askUser.recordsTitle')
   const summary = selected === 'goal' ? t('goal.panelSummary') : selected === 'jev' ? t('jev.panelSummary') : selected === 'todo'
@@ -93,7 +99,7 @@ export const SessionTasks = memo(function SessionTasks({ todos, subagents = [], 
     <div ref={root} className="relative z-20 shrink-0" data-session-tasks>
       <div role="group" aria-label={t('taskPanel.label')} className="flex flex-wrap items-center gap-1 border-b border-border px-4 py-1.5">
         {(['goal', 'todo', 'bash', 'agents', 'ask', 'jev'] as const).map((panel) => {
-          if (panel === 'goal' ? !goalAvailable : panel === 'jev' ? !jevState : panel === 'todo' ? !items.length : panel === 'bash' ? !tasks.length : panel === 'agents' ? !subagents.length : !records.length) return null
+          if (panel === 'goal' ? !showGoal : panel === 'jev' ? !jevState : panel === 'todo' ? !items.length : panel === 'bash' ? !tasks.length : panel === 'agents' ? !subagents.length : !records.length) return null
           const active = open && selected === panel
           const Icon = panel === 'goal' ? Compass : panel === 'todo' ? ListTodo : panel === 'bash' ? Terminal : panel === 'agents' ? Subagent : CircleHelp
           const label = panel === 'goal' ? t('goal.title') : panel === 'jev' ? t('jev.title') : panel === 'todo' ? t('todo.title') : panel === 'bash' ? t('taskPanel.background') : panel === 'agents' ? t('taskPanel.agents') : t('askUser.recordsTitle')
@@ -151,8 +157,9 @@ export const SessionTasks = memo(function SessionTasks({ todos, subagents = [], 
             <SubagentList runs={subagents} sessionPath={sessionPath} onOpenSession={onOpenSession} />
           ) : null}
           {selected === 'jev' && sessionPath ? <JevWorkflowPanel key={sessionPath} sessionPath={sessionPath} state={jevState} /> : null}
-          {goalAvailable && sessionPath && onGoalState ? <div hidden={selected !== 'goal'}>
-            <GoalPanel sessionPath={sessionPath} goal={goal} seq={goalSeq} busy={busy || goalInitializing || !!goal?.executing} restricted={goalRestricted} onState={onGoalState} />
+          {showGoal && goalUI && sessionPath && onGoalState && onGoalDraft && onGoalEnd ? <div hidden={selected !== 'goal'}>
+            <GoalPanel sessionPath={sessionPath} goal={goal} seq={goalSeq} busy={busy || goalInitializing || !!goal?.executing} restricted={goalRestricted}
+              ui={goalUI} onDraft={onGoalDraft} onEnd={onGoalEnd} onState={onGoalState} />
           </div> : null}
           {selected === 'ask' ? <AskUserRecordList records={records} /> : null}
         </AgentDisclosure>

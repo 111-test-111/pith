@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { AgentSession, AgentSessionEvent } from '@earendil-works/pi-coding-agent'
-import type { GoalLimits, GoalRecord, GoalReason, GoalSnapshotDTO } from '../../../shared/goal'
+import type { GoalInput, GoalLimits, GoalRecord, GoalReason, GoalSnapshotDTO } from '../../../shared/goal'
 import { statsFromEntries } from '../context-detail'
 import { collectJevEvidence } from '../jev/evidence'
 import { BASH_COMPLETION_TYPE } from '../task-notifications'
@@ -24,7 +24,7 @@ interface Host {
   review(): 'ready' | 'waiting' | 'paused'
   reserve(): () => void
   stop(reason: GoalReason): void
-  run(content: string, initial: boolean, dispatchId: string, signal: AbortSignal, accepted: () => boolean): Promise<void>
+  run(content: string, initial: boolean, dispatchId: string, signal: AbortSignal, accepted: () => boolean, input?: GoalInput): Promise<void>
 }
 
 /** Session-owned wake owner. Neither model tools nor restored entries can resume it. */
@@ -41,6 +41,8 @@ export class GoalRuntime {
   private evaluate = false
   private scheduled = false
   private previous = ''
+  private initialInput: GoalInput | null = null
+  private countInitial = false
   private disposeStream: (() => void) | null = null
   seq = 0
   constructor(private host: Host) {
@@ -92,10 +94,13 @@ export class GoalRuntime {
   private invalidate(): void { this.generation++; this.job?.abort(); this.scheduled = false }
   restore(reason: 'interrupted' | 'rewound'): void {
     this.invalidate()
+    this.initialInput = null
+    this.countInitial = false
     // Finish billing the outgoing goal before selecting another branch's fact.
     this.bill()
     if (this.ledger?.run) this.updateLedger(l => { l.run = null })
-    this.goal = goalFromBranch(this.host.session.sessionManager.getBranch())
+    const branch = this.host.session.sessionManager.getBranch()
+    this.goal = goalFromBranch(branch)
     this.ledger = null
     this.failed = false
     if (this.goal) {
@@ -104,6 +109,14 @@ export class GoalRuntime {
       // Reconcile a persisted run after a hard crash. A claim is never replayed.
       this.bill()
       if (this.ledger.run) this.updateLedger(l => { l.run = null })
+      const first = branch.findIndex(e => e.type === 'custom' && e.customType === GOAL_ENTRY && (e.data as { id?: string } | undefined)?.id === this.goal!.id)
+      if (!['completed', 'cancelled'].includes(this.goal.status) && first >= 0 &&
+        !branch.slice(first + 1).some(e => e.type === 'message' && e.message.role === 'user')) {
+        // No input was accepted. Explicit Resume must establish a normal
+        // first-user checkpoint, rather than run writes without one.
+        this.initialInput = {}
+        this.countInitial = true
+      }
       // Restoring must preserve the reviewed SDK leaf and Rewind's journal
       // endpoints. Recovery grants no execution; explicit Resume persists the
       // next transition. Reopening this active branch will pause it again.
@@ -112,15 +125,17 @@ export class GoalRuntime {
     this.evaluate = false
     this.publish(true)
   }
-  create(objective: string, acceptance: string, limits: GoalLimits): void {
+  create(objective: string, acceptance: string, limits: GoalLimits, input: GoalInput = {}): void {
     this.invalidate()
     const id = randomUUID()
     this.goal = { version: 1, id, objective, acceptance, limits: structuredClone(limits),
       status: 'active', reason: null, evidence: null, createdAt: Date.now(), updatedAt: Date.now() }
     this.failed = false
+    this.initialInput = input
+    this.countInitial = false
     if (!this.updateLedger(() => {}, true)) return
     this.save({})
-    if (this.live) this.start(true)
+    if (this.live) this.start()
   }
   limits(limits: GoalLimits): void { this.save({ limits: structuredClone(limits) }) }
   quota(): GoalReason | null {
@@ -132,11 +147,12 @@ export class GoalRuntime {
   resume(): void {
     if (!this.goal || this.failed || this.quota()) return
     this.invalidate()
+    if (this.initialInput !== null) this.countInitial = true
     this.manualWakes = false
     this.evaluate = false
     this.updateLedger(l => { l.noProgress = 0; l.fingerprint = null })
     this.save({ status: 'active', reason: null, evidence: null })
-    this.start(false)
+    this.start()
   }
   pause(reason: GoalReason, persist = true): void {
     this.manualWakes = false
@@ -148,6 +164,7 @@ export class GoalRuntime {
   }
   cancel(): void {
     this.invalidate()
+    this.initialInput = null
     if (!this.goal) return
     if (!this.failed) { this.save({ status: 'cancelled', reason: 'user' }); return }
     // Cancellation can still be persisted when only the independent ledger
@@ -180,6 +197,7 @@ export class GoalRuntime {
     if (event.type !== 'message_end') return
     this.bill()
     const message = event.message
+    if (message.role === 'user') this.initialInput = null
     // Verification cannot certify mutations/failures or late outcomes that
     // arrived after its receipt. Let the model review the new evidence first.
     if (this.goal?.status === 'verifying' && (
@@ -215,15 +233,16 @@ export class GoalRuntime {
     const generation = this.generation
     queueMicrotask(() => {
       this.scheduled = false
-      if (generation === this.generation) this.start(false)
+      if (generation === this.generation) this.start()
     })
   }
   private content(initial: boolean): string {
     const g = this.goal!
-    return initial ? `Work on this goal until its acceptance criteria are verified. Use the existing Todo list to track the work.\n\n${g.objective}\n\nAcceptance criteria:\n${g.acceptance}` :
+    return initial ? g.objective :
       `Continue the current goal from the committed results; preserve completed work and use the existing Todo list. Goal and acceptance criteria (quoted JSON): ${JSON.stringify({ id: g.id, objective: g.objective, acceptance: g.acceptance })}. Check remaining work and verify it. Request completion through update_goal only with concrete evidence for every criterion; report a concrete external blocker if necessary. Respect user instructions and permissions.`
   }
-  private start(initial: boolean): void {
+  private start(): void {
+    const initial = this.initialInput !== null
     if (!this.live || this.disposed || this.job || !this.host.available() || this.host.pending()) return
     const review = this.host.review()
     if (review === 'paused') { this.pause('review'); return }
@@ -236,6 +255,8 @@ export class GoalRuntime {
     let release: () => void
     try { release = this.host.reserve() } catch { return }
     const controller = this.job = new AbortController()
+    const input = this.initialInput ?? undefined
+    const counted = !initial || this.countInitial
     const generation = this.generation
     const accepted = () => generation === this.generation && !controller.signal.aborted && this.live && !this.disposed && this.host.available() && !this.host.pending()
     this.jobPromise = (async () => {
@@ -253,11 +274,11 @@ export class GoalRuntime {
         const dispatchId = randomUUID()
         // The durable claim is charged once, before dispatch; crash recovery never replays it.
         if (!this.updateLedger(l => {
-          if (!initial) l.autoRuns++
+          if (counted) l.autoRuns++
           l.run = { id: dispatchId, state: 'claimed', before: this.host.session.sessionManager.getEntries().map(e => e.id) }
         })) return
         this.publish()
-        await this.host.run(this.content(initial), initial, dispatchId, controller.signal, accepted)
+        await this.host.run(this.content(initial), initial, dispatchId, controller.signal, accepted, input)
       } catch {
         if (!controller.signal.aborted) this.pause('error')
       } finally {
@@ -271,7 +292,10 @@ export class GoalRuntime {
     })()
   }
   started(dispatchId: string): void {
-    if (this.ledger?.run?.id === dispatchId) this.updateLedger(l => { if (l.run?.id === dispatchId) l.run.state = 'started' })
+    if (this.ledger?.run?.id === dispatchId) {
+      this.initialInput = null
+      this.updateLedger(l => { if (l.run?.id === dispatchId) l.run.state = 'started' })
+    }
   }
   /** Bound every primary model request, including SDK/Jev continuations within a run. */
   installStreamGuard(): void {
@@ -280,10 +304,11 @@ export class GoalRuntime {
     const stream: typeof previous = async (model, context, options) => {
       this.bill()
       const owned = this.live || !this.manualWakes || (!this.failed && !!this.ledger?.run)
-      if (owned && (this.failed || this.ledger?.run && this.goal?.limits.tokenBudget !== null && this.ledger.tokens >= (this.goal?.limits.tokenBudget ?? Infinity))) {
-        if (!this.failed) this.pause('tokens')
+      const cancelled = !!options?.signal?.aborted
+      if (cancelled || owned && (this.failed || this.ledger?.run && this.goal?.limits.tokenBudget !== null && this.ledger.tokens >= (this.goal?.limits.tokenBudget ?? Infinity))) {
+        if (!cancelled && !this.failed) this.pause('tokens')
         const message = { role: 'assistant' as const, content: [], api: model.api, provider: model.provider, model: model.id,
-          stopReason: 'aborted' as const, errorMessage: 'GOAL_TOKEN_BUDGET', timestamp: Date.now(),
+          stopReason: 'aborted' as const, errorMessage: cancelled ? 'GOAL_CANCELLED' : 'GOAL_TOKEN_BUDGET', timestamp: Date.now(),
           usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } }
         return { async *[Symbol.asyncIterator]() { yield { type: 'error' as const, reason: 'aborted' as const, error: message } }, result: async () => message } as unknown as Awaited<ReturnType<typeof stream>>
       }
@@ -294,6 +319,7 @@ export class GoalRuntime {
   }
   dispose(): void {
     this.pause('interrupted')
+    this.initialInput = null
     this.disposed = true
     this.disposeStream?.()
     // The manager still observes committed abort results before removing subscribers.

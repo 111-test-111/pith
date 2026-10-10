@@ -1,7 +1,10 @@
+import type { ImageContent } from './types'
+
 /** Goal is a session fact, independent of permission/Plan mode and Todo. */
 export type GoalStatus = 'active' | 'verifying' | 'paused' | 'blocked' | 'completed' | 'cancelled'
 export type GoalReason = 'user' | 'stopped' | 'plan' | 'rewound' | 'interrupted' | 'runs' | 'tokens' | 'no_progress' | 'review' | 'error' | 'storage'
 export interface GoalLimits { maxAutoRuns: number; tokenBudget: number | null }
+export interface GoalInput { images?: ImageContent[]; files?: string[] }
 export const DEFAULT_GOAL_LIMITS: GoalLimits = { maxAutoRuns: 20, tokenBudget: null }
 export interface GoalRecord {
   version: 1
@@ -29,7 +32,7 @@ export type GoalActionRequest = {
   expectedSeq: number
   goalId: string | null
 } & (
-  { action: 'create'; objective: string; acceptance: string; limits: GoalLimits } |
+  ({ action: 'create'; objective: string; acceptance: string; limits: GoalLimits } & GoalInput) |
   { action: 'resume' | 'pause' | 'cancel' } |
   { action: 'limits'; limits: GoalLimits }
 )

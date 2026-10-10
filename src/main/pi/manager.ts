@@ -107,7 +107,7 @@ import { TODO_TOOL_NAME } from './todo-protocol'
 import { GoalRuntime } from './goals/runtime'
 import { createGoalTools, createGoalContextExtension } from './goals/tools'
 import { GOAL_GET, GOAL_UPDATE, GOAL_STEP, goalLive } from './goals/protocol'
-import { validGoalLimits, type GoalActionRequest, type GoalActionResult, type GoalReason } from '../../shared/goal'
+import { validGoalLimits, type GoalActionRequest, type GoalActionResult, type GoalInput, type GoalReason } from '../../shared/goal'
 import { JevCredentials } from './jev/credentials'
 import { JevService } from './jev/service'
 import { JevWorkflow } from './jev/workflow'
@@ -2296,6 +2296,7 @@ export class PiManager {
       },
       changed: (goal, goalSeq) => this.emit('pi:event', { type: 'goal_update', sessionPath: path, goal, goalSeq }),
       available: () => !this.closing && !managed.disposing && !managed.initializing && !managed.lifecyclePromise &&
+        plan.workCount <= (managed.goals?.preparing ? 1 : 0) &&
         session.isIdle && !managed.imageReplay && !managed.continuationRequest && !plan.restricted && !plan.submissionLocked &&
         !this.checkoutCoordinator.needsRecovery(managed.cwd) && this.planToolAdmitted(managed),
       pending: () => { const f = this.planFacts(managed); return !!(f.tasks || f.subagents || f.deliveries || f.questions || f.escalations || f.queuedMessages) },
@@ -2303,8 +2304,9 @@ export class PiManager {
       review: () => managed.jevWorkflow?.paused ? 'paused' : this.jevPreferences.mode !== 'workflow' || managed.jevWorkflow?.snapshot?.phase === 'completed' ? 'ready' : 'waiting',
       reserve: () => plan.beginWork('background'),
       stop: reason => this.stopManaged(managed, reason),
-      run: (content, initial, dispatchId, signal, accepted) => this.runGoal(managed, content, initial, dispatchId, signal, accepted)
+      run: (content, initial, dispatchId, signal, accepted, input) => this.runGoal(managed, content, initial, dispatchId, signal, accepted, input)
     })
+    plan.onWorkSettled = () => managed.goals?.flush()
     notifications.onSettledWithQueued = () => queueMicrotask(() => {
       if (!notifications?.canStart || !session.isIdle) return
       this.rebuildQueues(managed)
@@ -3273,8 +3275,14 @@ export class PiManager {
     if (!managed) return { ok: false, code: 'no-session', blockers: [] }
     if (managed.subagentChild || managed.scheduledTask) return { ok: false, code: 'child-session', blockers: ['child-session'] }
     try {
-      if (mode === 'plan' && managed.session.isIdle) { managed.goals?.pause('plan'); await managed.goals?.idle() }
-      const value = await managed.plan.setMode(mode)
+      const goals = managed.goals
+      const drainGoal = mode === 'plan' && managed.session.isIdle && goals && (goals.live || goals.preparing)
+      // Other admitted preparation owns the session. Refuse synchronously so
+      // the transition lock cannot interrupt its next asynchronous boundary.
+      if (drainGoal && managed.plan.workCount > (goals.preparing ? 1 : 0)) throw new PlanAdmissionError('The session is busy', ['busy'])
+      const value = await managed.plan.setMode(mode, drainGoal ? async () => {
+        goals.pause('plan'); await goals.idle()
+      } : undefined)
       return { ok: true, value }
     } catch (error) {
       if (error instanceof PlanAdmissionError) {
@@ -3832,15 +3840,16 @@ export class PiManager {
     }
     // A real new prompt supersedes a Continue still preparing to start.
     if (session.isIdle) managed.continuationRequest?.abort()
-    managed.goals?.userPrompt()
     // A mode change owns the session while it is in flight; a prompt admitted
     // then would race the branch write it is about to make.
     try {
       managed.plan.checkWorkAdmission()
+      if (managed.plan.branchWork) throw new PlanAdmissionError('Branch work is in progress', ['transition'])
     } catch {
       this.notifyError('A session mode change is in progress. Try again in a moment.')
       return
     }
+    const preparingGoal = session.isIdle && managed.goals?.preparing ? managed.goals : undefined
     managed.notifications.resume()
     managed.askUser?.resume()
     managed.subagents?.notifications?.resume()
@@ -3849,6 +3858,7 @@ export class PiManager {
     // and a mode switch must not slip in. A user turn may be requested while a
     // planning turn is sealed; only its own message_start lifts that seal.
     const releasePlanWork = managed.plan.beginWork('user')
+    managed.goals?.userPrompt()
     managed.notifications.holdWake()
     managed.askUser.holdWake()
     managed.subagents?.notifications?.holdWake()
@@ -3861,9 +3871,15 @@ export class PiManager {
           this.materializeSession(session.sessionManager)
           this.rememberFolder(managed.cwd)
         }
-        const fileBlocks = await this.readFileBlocks(payload.files)
+        // A superseded Goal may still be inside an asynchronous SDK input
+        // hook. Drain that preparation before admitting this new user turn.
+        await preparingGoal?.idle()
+        const fileBlocks = await this.readFileBlocks(payload.files, managed.cwd)
         await managed.lifecyclePromise
         if (this.closing || managed.disposing || !managed.notifications.canStart) return
+        // Draining the superseded run may have paused Goal on its abort
+        // outcome. This explicit prompt still owns its ordinary answer wakes.
+        managed.goals?.userPrompt()
         const text = fileBlocks ? `${payload.text}\n\n${fileBlocks}` : payload.text
         // Only a streaming session can queue, and only then does a payload
         // need parking — an idle prompt just starts a run and is never claimed.
@@ -3900,9 +3916,9 @@ export class PiManager {
     })()
   }
 
-  private async readFileBlocks(paths: string[]): Promise<string> {
-    const fileIndex = this.fileIndex
-    if (!paths.length || !fileIndex) return ''
+  private async readFileBlocks(paths: string[], cwd: string): Promise<string> {
+    if (!paths.length) return ''
+    const fileIndex = new FileIndex(cwd)
     const blocks: string[] = []
     for (const path of paths.slice(0, 12)) {
       try {
@@ -4161,6 +4177,7 @@ export class PiManager {
     if (!managed || !goals || managed.subagentChild || managed.scheduledTask || this.closing || managed.disposing) return { ok: false, code: 'unavailable' }
     if (!Number.isSafeInteger(request.expectedSeq) || request.expectedSeq !== goals.seq || request.goalId !== (goals.snapshot?.id ?? null)) return { ok: false, code: 'stale' }
     if (request.action === 'pause' || request.action === 'cancel') {
+      if (managed.plan.branchWork || managed.plan.transitionBusy) return { ok: false, code: 'busy' }
       if (!goals.snapshot) return { ok: false, code: 'invalid' }
       if (request.action === 'cancel') goals.cancel()
       this.stopManaged(managed, 'user')
@@ -4168,10 +4185,12 @@ export class PiManager {
       return { ok: true, goal: goals.snapshot, seq: goals.seq }
     }
     if (!['create', 'resume', 'limits'].includes(request.action)) return { ok: false, code: 'invalid' }
-    if (managed.initializing || managed.lifecyclePromise || !managed.session.isIdle || goals.preparing || managed.imageReplay || managed.continuationRequest) return { ok: false, code: 'busy' }
+    if (managed.initializing || managed.lifecyclePromise || !managed.session.isIdle || goals.preparing || managed.imageReplay || managed.continuationRequest || managed.plan.workCount) return { ok: false, code: 'busy' }
     if (request.action !== 'limits' && (managed.plan.restricted || managed.plan.submissionLocked)) return { ok: false, code: 'plan' }
     if ((request.action === 'create' || request.action === 'limits') && !validGoalLimits(request.limits)) return { ok: false, code: 'invalid' }
     if (request.action === 'create') {
+      if ((request.images !== undefined && (!Array.isArray(request.images) || request.images.some(image => !image || image.type !== 'image' || typeof image.data !== 'string' || typeof image.mimeType !== 'string'))) ||
+        (request.files !== undefined && (!Array.isArray(request.files) || request.files.some(path => typeof path !== 'string')))) return { ok: false, code: 'invalid' }
       if (typeof request.objective !== 'string' || typeof request.acceptance !== 'string' || !request.objective.trim() || !request.acceptance.trim() ||
         request.objective.length > 8000 || request.acceptance.length > 8000) return { ok: false, code: 'invalid' }
       const current = goals.snapshot
@@ -4188,7 +4207,7 @@ export class PiManager {
     try {
       if (!existsSync(managed.path)) this.materializeSession(managed.session.sessionManager)
       if (request.action === 'create') this.rememberFolder(managed.cwd)
-      if (request.action === 'create') goals.create(request.objective.trim(), request.acceptance.trim(), request.limits)
+      if (request.action === 'create') goals.create(request.objective.trim(), request.acceptance.trim(), request.limits, { images: request.images, files: request.files })
       else if (request.action === 'limits') goals.limits(request.limits)
       else {
         const owners = [managed.notifications, managed.askUser, managed.subagents?.notifications].filter(owner => owner != null)
@@ -4206,23 +4225,30 @@ export class PiManager {
 
   /** Uses the same SDK continuation, wake ownership and checkout lease as Continue. */
   private async runGoal(managed: ManagedSession, content: string, initial: boolean, dispatchId: string,
-    signal: AbortSignal, accepted: () => boolean): Promise<void> {
+    signal: AbortSignal, accepted: () => boolean, input?: GoalInput): Promise<void> {
     const session = managed.session
     const owners = [managed.notifications, managed.askUser, managed.subagents?.notifications].filter(owner => owner != null)
     for (const owner of owners) { owner.holdWake(); owner.resume() }
     let releaseRun: (() => void) | undefined
     let settled!: () => void
     const done = new Promise<void>(resolve => { settled = resolve })
+    let dispatchingInitial = false
+    let initialMessage: object | null = null
     signal.addEventListener('abort', settled, { once: true })
     const unsubscribe = session.subscribe(event => { if (event.type === 'agent_settled') settled() })
     const unsubscribeStart = session.agent.subscribe(event => {
       if (event.type !== 'message_start' && event.type !== 'message_end') return
       const message = event.message
-      const belongs = initial ? message.role === 'user' && message.content === content :
+      if (initial && dispatchingInitial && message.role === 'user' && !initialMessage && event.type === 'message_start') {
+        // Follow the actual SDK message identity, as Plan approval does;
+        // input hooks, templates and image hints may rewrite the original text.
+        initialMessage = message
+      }
+      const belongs = initial ? dispatchingInitial && message === initialMessage :
         message.role === 'custom' && message.customType === GOAL_STEP && (message.details as { dispatchId?: string } | undefined)?.dispatchId === dispatchId
       if (!belongs) return
       if (event.type === 'message_start' && (signal.aborted || this.closing || managed.disposing)) session.agent.abort()
-      if (event.type === 'message_end') managed.goals?.started(dispatchId)
+      if (event.type === 'message_end') { managed.goals?.started(dispatchId); dispatchingInitial = false }
     })
     try {
       await managed.lifecyclePromise
@@ -4230,7 +4256,19 @@ export class PiManager {
       if (!accepted() || signal.aborted || this.closing || managed.disposing) return
       managed.plan.checkWorkAdmission()
       managed.changeScopes.continue()
-      if (initial) await session.prompt(content)
+      if (initial) {
+        const blocks = await this.readFileBlocks(input?.files ?? [], managed.cwd)
+        if (!accepted() || signal.aborted || this.closing || managed.disposing) return
+        dispatchingInitial = true
+        let started = false
+        await session.prompt(blocks ? `${content}\n\n${blocks}` : content, { images: input?.images,
+          preflightResult: disposition => {
+            if (disposition !== 'started') return
+            if (!accepted() || signal.aborted || this.closing || managed.disposing) throw new Error('goal-dispatch-cancelled')
+            started = true
+          } })
+        if (!started && !signal.aborted) { this.stopManaged(managed, 'error'); return }
+      }
       else {
         const frontier = continuationTarget(this.transcriptOf(managed))
         const continued = frontier ? `${content}\n\n${continuationContent(frontier)}` : content
@@ -4253,9 +4291,10 @@ export class PiManager {
     if (managed.continuationRequest || managed.imageReplay || !session.isIdle) throw new Error('continue-busy')
     const target = continuationTarget(this.transcriptOf(managed))
     if (!target || target.timestamp !== payload.timestamp) throw new Error('continue-stale-turn')
-    managed.goals?.userPrompt()
     // A continuation cannot lift a submitted plan's seal or bypass approval.
+    if (managed.plan.branchWork) throw new Error('continue-busy')
     const releasePlan = managed.plan.beginWork('background')
+    managed.goals?.userPrompt()
     const request = managed.continuationRequest = new AbortController()
     const owners = [managed.notifications, managed.askUser, managed.subagents?.notifications].filter(owner => owner != null)
     for (const owner of owners) { owner.holdWake(); owner.resume() }
@@ -4307,13 +4346,14 @@ export class PiManager {
     if (!managed || !session) throw new Error('No active session')
     if (managed.subagentChild) throw new Error('A subagent session is read-only')
     if (managed.scheduledTask) throw new Error('A scheduled task session is read-only')
-    managed.goals?.pause('rewound')
     if (managed.continuationRequest && session.isIdle) throw new Error('continue-busy')
+    if (managed.plan.branchWork) throw new Error('Wait for the current branch operation')
     const replay = managed.imageReplay
     replay?.controller.abort()
     // Branch move + fresh user turn: reserve before the first await, and keep
     // the user registration so the new turn can lift a submission seal.
     const releasePlanWork = managed.plan.beginWork('user')
+    managed.goals?.pause('rewound')
     try {
       await replay?.promise
       await managed.lifecyclePromise
@@ -4376,11 +4416,12 @@ export class PiManager {
         // Edited file references are re-inlined from disk (fresh content) — the
         // retry path carries its blocks inside the stored text already.
         if (payload.edited && payload.files?.length) {
-          const fileBlocks = await this.readFileBlocks(payload.files)
+          const fileBlocks = await this.readFileBlocks(payload.files, managed.cwd)
           if (fileBlocks) text = text ? `${text}\n\n${fileBlocks}` : fileBlocks
         }
         if (!text && !images.length) throw new Error('Nothing to resend')
 
+        managed.goals?.userPrompt()
         managed.notifications?.resume()
         managed.subagents?.notifications?.resume()
         managed.notifications?.holdWake()

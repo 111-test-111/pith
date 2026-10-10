@@ -496,6 +496,8 @@ export const ChatView = memo(function ChatView({
       <ImageReplaysProvider sessionPath={state.sessionPath} disabled={busy || state.initializing || state.subagentChild || state.scheduledTaskSession || state.plan?.mode === 'plan' || state.sandboxMode === 'read-only'}>
       <SessionTasks jevState={state.jevWorkflow} key={state.sessionPath} todos={state.todos} subagents={state.subagents} askUserRecords={state.askUserRecords} busy={busy} sessionPath={state.sessionPath} onOpenSession={onOpenSession}
         goal={state.goal} goalSeq={state.goalSeq} goalAvailable={!!state.sessionPath && !state.subagentChild && !state.scheduledTaskSession} goalRestricted={state.plan?.mode === 'plan'} goalInitializing={state.initializing}
+        goalUI={state.goalUI} onGoalDraft={draft => { if (state.sessionPath) store.setGoalDraft(state.sessionPath, draft) }}
+        onGoalEnd={() => { if (state.sessionPath) void store.endGoalMode(state.sessionPath) }}
         onGoalState={(sessionPath, goal, goalSeq) => store.dispatch({ type: 'goal_update', sessionPath, goal, goalSeq })} />
       <ContextMenu open={menuOpen} onOpenChange={setMenuOpen}>
       <ContextMenuTrigger>

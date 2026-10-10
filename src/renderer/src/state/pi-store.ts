@@ -1,5 +1,5 @@
 import { isNothingToCompactError } from '../../../shared/compaction-errors'
-import type { GoalSnapshotDTO } from '../../../shared/goal'
+import { DEFAULT_GOAL_LIMITS, validGoalLimits, type GoalErrorCode, type GoalInput, type GoalLimits, type GoalSnapshotDTO } from '../../../shared/goal'
 import type { CompactionProcessStateDTO, CompactionQueueStateDTO } from '../../../shared/compaction'
 import type {
   AssistantMsg,
@@ -43,7 +43,19 @@ export interface Notice {
   detail?: string
 }
 
+/** Composer intent is local to a chat; selecting it never grants execution. */
+export interface GoalUIState {
+  enabled: boolean
+  openRevision: number
+  limits: GoalLimits
+  acceptance: string
+  pending: boolean
+  error: GoalErrorCode | null
+}
+const EMPTY_GOAL_UI: GoalUIState = { enabled: false, openRevision: 0, limits: DEFAULT_GOAL_LIMITS, acceptance: '', pending: false, error: null }
+
 export interface PiState {
+  goalUI: GoalUIState
   goal: GoalSnapshotDTO | null
   goalSeq: number
   jevWorkflow: JevWorkflowDTO | null
@@ -111,6 +123,7 @@ export interface PiState {
  * streaming deltas churn `streaming`/`toolRuns`/`messages` in the full state.
  */
 export interface PiShellState {
+  goalUI: GoalUIState
   initializing: boolean
   ready: boolean
   cwd: string | null
@@ -208,6 +221,7 @@ const EMPTY_COMPACTION_QUEUE: CompactionQueueStateDTO = { queued: false, revisio
 const EMPTY_COMPACTION_PROCESS: CompactionProcessStateDTO = { process: null, revision: 0 }
 
 const initialState: PiState = {
+  goalUI: EMPTY_GOAL_UI,
   goal: null,
   goalSeq: 0,
   initializing: false,
@@ -245,6 +259,7 @@ const initialState: PiState = {
 }
 
 function shellOf(state: PiState, availableThinkingLevels: ThinkingLevel[]): PiShellState {  return {
+    goalUI: state.goalUI,
     initializing: state.initializing,
     ready: state.ready,
     cwd: state.cwd,
@@ -315,6 +330,67 @@ export class PiStore {
   private planStates = new Map<string, PlanStateDTO>()
   private jevStates = new Map<string, { seq: number; state: JevWorkflowDTO | null }>()
   private goalStates = new Map<string, { seq: number; goal: GoalSnapshotDTO | null }>()
+  private goalUIStates = new Map<string, GoalUIState>()
+  private goalUIFor(path: string | null, goal?: GoalSnapshotDTO | null): GoalUIState {
+    if (!path) return EMPTY_GOAL_UI
+    let ui = this.goalUIStates.get(path)
+    if (!ui) {
+      ui = { ...EMPTY_GOAL_UI, enabled: !!goal && !['completed', 'cancelled'].includes(goal.status), limits: goal?.limits ?? DEFAULT_GOAL_LIMITS }
+      this.goalUIStates.set(path, ui)
+    }
+    return ui
+  }
+  private setGoalUI(path: string, patch: Partial<GoalUIState>): void {
+    const goalUI = { ...this.goalUIFor(path), ...patch }
+    this.goalUIStates.set(path, goalUI)
+    const cached = this.sessionStates.get(path)
+    if (cached) this.sessionStates.set(path, { ...cached, goalUI })
+    if (this.state.sessionPath === path) this.set({ goalUI })
+  }
+  openGoalMode(path: string): void {
+    const ui = this.goalUIFor(path)
+    this.setGoalUI(path, { enabled: true, openRevision: ui.openRevision + 1, error: null })
+  }
+  setGoalDraft(path: string, draft: Pick<GoalUIState, 'limits' | 'acceptance'>): void {
+    this.setGoalUI(path, { ...draft, error: null })
+  }
+  /** IPC records the goal and admits its first user turn without awaiting that turn. */
+  async startGoal(input: GoalInput & { text: string }): Promise<boolean> {
+    const path = this.state.sessionPath
+    if (!path) return false
+    const ui = this.goalUIFor(path)
+    if (!ui.enabled || ui.pending) return false
+    if (!input.text.trim() || !validGoalLimits(ui.limits)) {
+      this.setGoalUI(path, { error: 'invalid', openRevision: ui.openRevision + 1 }); return false
+    }
+    const identity = this.goalStates.get(path)
+    this.setGoalUI(path, { pending: true, error: null })
+    try {
+      const result = await window.pi.goalAction({ sessionPath: path, expectedSeq: identity?.seq ?? 0, goalId: identity?.goal?.id ?? null,
+        action: 'create', objective: input.text, acceptance: ui.acceptance.trim() || input.text, limits: ui.limits, images: input.images, files: input.files })
+      if (!result.ok) { this.setGoalUI(path, { error: result.code, openRevision: this.goalUIFor(path).openRevision + 1 }); return false }
+      this.dispatch({ type: 'goal_update', sessionPath: path, goal: result.goal, goalSeq: result.seq })
+      this.setGoalUI(path, { acceptance: '' })
+      return true
+    } catch { this.setGoalUI(path, { error: 'unavailable', openRevision: this.goalUIFor(path).openRevision + 1 }); return false }
+    finally { this.setGoalUI(path, { pending: false }) }
+  }
+  async endGoalMode(path: string): Promise<void> {
+    const ui = this.goalUIFor(path)
+    if (ui.pending) return
+    const identity = this.goalStates.get(path)
+    if (!identity?.goal || ['completed', 'cancelled'].includes(identity.goal.status)) {
+      this.setGoalUI(path, { enabled: false, error: null }); return
+    }
+    this.setGoalUI(path, { pending: true, error: null })
+    try {
+      const result = await window.pi.goalAction({ sessionPath: path, expectedSeq: identity.seq, goalId: identity.goal.id, action: 'cancel' })
+      if (!result.ok) { this.setGoalUI(path, { error: result.code, openRevision: this.goalUIFor(path).openRevision + 1 }); return }
+      this.dispatch({ type: 'goal_update', sessionPath: path, goal: result.goal, goalSeq: result.seq })
+      this.setGoalUI(path, { enabled: false })
+    } catch { this.setGoalUI(path, { error: 'unavailable', openRevision: this.goalUIFor(path).openRevision + 1 }) }
+    finally { this.setGoalUI(path, { pending: false }) }
+  }
   private mergeGoal(path: string | null, goal: GoalSnapshotDTO | null | undefined, seq = 0): { goal: GoalSnapshotDTO | null; goalSeq: number } {
     if (!path) return { goal: null, goalSeq: 0 }
     const previous = this.goalStates.get(path)
@@ -389,6 +465,7 @@ export class PiStore {
     const plan = this.mergePlanState(sessionPath, snapshot.plan)
     const jevWorkflow = this.mergeJevState(sessionPath, snapshot.jevWorkflow, snapshot.jevWorkflowSeq)
     const goal = this.mergeGoal(sessionPath, snapshot.goal, snapshot.goalSeq)
+    const goalUI = this.goalUIFor(sessionPath, goal.goal)
     const compactionQueue = this.mergeCompactionQueue(sessionPath, snapshot.compactionQueue)
     const compactionProcess = this.mergeCompactionProcess(sessionPath, snapshot.compactionProcess)
     const previousCached = sessionPath ? this.sessionStates.get(sessionPath) : undefined
@@ -396,7 +473,7 @@ export class PiStore {
     // Roster revisions are independent of transcript revisions, and belong
     // only to this session. Never merge the outgoing chat into an incoming one.
     const subagents = mergeRoster(previousCached?.subagents ?? [], snapshot.subagents ?? [])
-    const cached = previousCached ? { ...previousCached, subagents, plan, jevWorkflow, ...goal, compactionQueue, compactionProcess } : undefined
+    const cached = previousCached ? { ...previousCached, subagents, plan, jevWorkflow, ...goal, goalUI, compactionQueue, compactionProcess } : undefined
     if (cached) this.sessionStates.set(sessionPath!, cached)
     // A readiness/event push can overtake an IPC snapshot of a cached session.
     // Keep the newer projection (including its sequence), then replay any
@@ -431,6 +508,7 @@ export class PiStore {
       plan,
       jevWorkflow,
       ...goal,
+      goalUI,
       sandboxMode: snapshot.sandboxMode ?? cached?.sandboxMode ?? DEFAULT_SANDBOX_MODE,
       sandbox: snapshot.sandbox ?? cached?.sandbox ?? null,
       isStreaming: snapshot.isStreaming,
@@ -547,6 +625,7 @@ export class PiStore {
     const prev = this.state
     this.state = {
       ...cached,
+      goalUI: this.goalUIFor(sessionPath, cached.goal),
       plan: this.mergePlanState(sessionPath, cached.plan),
       compactionQueue: this.mergeCompactionQueue(sessionPath, cached.compactionQueue),
       compactionProcess: this.mergeCompactionProcess(sessionPath, cached.compactionProcess)

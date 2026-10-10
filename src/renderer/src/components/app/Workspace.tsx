@@ -585,11 +585,15 @@ const [alwaysOnTop, setAlwaysOnTop] = useState(false)
 
   const handleSend = useCallback(
     ({ text, images, files }: { text: string; images: ImageContent[]; files: string[] }) => {
-      // Mirror the main process's file blocks so chips render on the optimistic echo.
-      store.appendOptimisticUser(optimisticEchoText(text, files), images)
+      const { goal, goalUI } = store.getState()
       // Sending always returns to the live edge, even if the user was reading
       // history when they hit send.
       setScrollResetKey((value) => value + 1)
+      if (goalUI.enabled && (!goal || goal.status === 'completed' || goal.status === 'cancelled')) {
+        return store.startGoal({ text, images, files })
+      }
+      // Mirror the main process's file blocks so chips render on the optimistic echo.
+      store.appendOptimisticUser(optimisticEchoText(text, files), images)
       void window.pi.prompt({ text, images, files })
     },
     [store]
@@ -1309,7 +1313,7 @@ const [alwaysOnTop, setAlwaysOnTop] = useState(false)
    * cwd at creation); an unanswered session is only written once an assistant
    * reply lands, so switching back and forth leaves no stray file behind. */
   const newSessionStart = useMemo<NewSessionContext | undefined>(() => {
-    if (!isNewSession) return undefined
+    if (!isNewSession || shell.goalUI.enabled) return undefined
     const active = shell.cwd && !shell.projectless ? shell.cwd : null
     return {
       projectName: active ? basename(active) : null,
@@ -1329,7 +1333,7 @@ const [alwaysOnTop, setAlwaysOnTop] = useState(false)
         }
       }
     }
-  }, [isNewSession, shell.cwd, shell.projectless, newSessionProjects, newSession])
+  }, [isNewSession, shell.goalUI.enabled, shell.cwd, shell.projectless, newSessionProjects, newSession])
 
   /** Session paths whose live SDK session is currently streaming, so the
    * sidebar row shows the running spinner instead of the file glyph. The
@@ -1677,7 +1681,7 @@ const [alwaysOnTop, setAlwaysOnTop] = useState(false)
       <AnimatedSidebarInset className="isolate min-h-0 overflow-hidden bg-background md:-ml-[3px]">
         <div className="flex min-h-0 flex-1">
           <div data-pip-source="conversation" className="flex min-h-0 min-w-0 flex-1 flex-col" inert={sidePanelFullscreen} aria-hidden={sidePanelFullscreen || undefined}>
-            {!isNewSession ? (
+            {!isNewSession || shell.goalUI.enabled ? (
               <ChatView
                 onRefinePlan={shell.scheduledTaskSession ? undefined : () => window.dispatchEvent(new CustomEvent('pith:refine-plan', { detail: { sessionPath: shell.sessionPath } }))}
                 store={store}
@@ -1740,6 +1744,13 @@ const [alwaysOnTop, setAlwaysOnTop] = useState(false)
               sandboxMode={shell.sandboxMode}
               sandbox={shell.sandbox}
               sessionPath={shell.sessionPath}
+              goalEnabled={shell.goalUI.enabled}
+              goalPending={shell.goalUI.pending}
+              onGoalModeChange={enabled => {
+                if (!shell.sessionPath) return
+                if (enabled) store.openGoalMode(shell.sessionPath)
+                else void store.endGoalMode(shell.sessionPath)
+              }}
               onSandboxSnapshot={(snapshot) => store.applySnapshot(snapshot)}
               contextUsage={shell.contextUsage}
               onOpenContext={() => openSidePanelTab('context')}
