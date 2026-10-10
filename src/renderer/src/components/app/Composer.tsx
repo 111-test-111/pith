@@ -36,6 +36,7 @@ import { ImagePreviewGroup, PreviewThumb } from './ImagePreview'
 import { FileAttachmentCard } from './FileAttachmentCard'
 import { ModelPicker } from './ModelPicker'
 import { parsePlanCommand, planErrorKey } from '@/lib/plan-submissions'
+import type { GoalErrorCode } from '../../../../shared/goal'
 import { SandboxModePicker } from './SandboxModePicker'
 import { ContextRing } from './ContextRing'
 import { QueuePanel } from './QueuePanel'
@@ -97,6 +98,7 @@ interface ComposerProps {
   sessionPath?: string | null
   goalEnabled?: boolean
   goalPending?: boolean
+  goalError?: GoalErrorCode | null
   onGoalModeChange?: (enabled: boolean) => void
   /** Apply the snapshot a mode switch returns; the store owns that state. */
   onSandboxSnapshot?: (snapshot: SessionSnapshotDTO) => void
@@ -154,6 +156,7 @@ export function Composer({
   sessionPath = null,
   goalEnabled = false,
   goalPending = false,
+  goalError = null,
   onGoalModeChange,
   onSandboxSnapshot,
   queued,
@@ -579,6 +582,7 @@ export function Composer({
           />
 
           {modeError && <p role="alert" className="mb-2 text-xs text-destructive">{t(planErrorKey(modeError))}</p>}
+          {goalEnabled && goalError && <p role="alert" data-goal-error="" className="mb-2 text-xs text-destructive">{t(`goal.error.${goalError}`)}</p>}
           {plan?.mode === 'plan' && plan.shellEnforcement !== 'full' && <p className="mb-2 text-xs text-muted-foreground">{t('plan.shellUnavailable')}</p>}
           {/* A disabled composer explains who owns the session's turns. */}
           {readOnly ? (

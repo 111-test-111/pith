@@ -1746,6 +1746,7 @@ const [alwaysOnTop, setAlwaysOnTop] = useState(false)
               sessionPath={shell.sessionPath}
               goalEnabled={shell.goalUI.enabled}
               goalPending={shell.goalUI.pending}
+              goalError={shell.goalUI.error}
               onGoalModeChange={enabled => {
                 if (!shell.sessionPath) return
                 if (enabled) store.openGoalMode(shell.sessionPath)

@@ -43,14 +43,14 @@ export function GoalPanel({ sessionPath, goal, seq, busy, restricted, ui, onDraf
     } catch { setError('unavailable') }
     finally { setActing(false) }
   }
-  const shownError = error ?? ui.error
   return <div data-goal-panel>
     <FadeScroll className="max-h-[min(55vh,25rem)] p-4">
       <div className="flex flex-col gap-4 text-sm">
         {goal ? <div className="flex flex-col gap-1.5" data-goal-status={goal.status}>
           <div className="flex flex-wrap items-center justify-between gap-2"><span className="font-medium">{t(`goal.status.${goal.status}`)}</span>
             <span className="text-xs tabular-nums text-muted-foreground">{goal.accountingAvailable ? t('goal.usage', { runs: goal.autoRuns, max: goal.limits.maxAutoRuns, tokens: goal.tokens }) : t('goal.accountingUnavailable')}</span></div>
-          <p className="whitespace-pre-wrap break-words">{goal.objective}</p>
+          <p className="mt-1 text-xs font-medium">{t('goal.objective')}</p>
+          <p className="whitespace-pre-wrap break-words" data-goal-objective>{goal.objective}</p>
           <p className="mt-1 text-xs font-medium">{t('goal.acceptance')}</p>
           <p className="whitespace-pre-wrap break-words text-xs text-muted-foreground">{goal.acceptance === goal.objective ? t('goal.acceptanceFromRequest') : goal.acceptance}</p>
           {goal.reason ? <p role="status" className="text-xs text-muted-foreground">{t(`goal.reason.${goal.reason}`)}</p> : null}
@@ -70,7 +70,7 @@ export function GoalPanel({ sessionPath, goal, seq, busy, restricted, ui, onDraf
         </div>
         <p className="text-xs text-muted-foreground">{t('goal.budgetHint')}</p>
         {restricted ? <p role="status" className="text-xs text-muted-foreground">{t('goal.reason.plan')}</p> : null}
-        {shownError ? <p role="alert" className="text-xs text-destructive">{t(`goal.error.${shownError}`)}</p> : null}
+        {error ? <p role="alert" className="text-xs text-destructive">{t(`goal.error.${error}`)}</p> : null}
       </div>
     </FadeScroll>
     <div className="flex justify-end gap-2 border-t border-border/60 px-4 py-3">

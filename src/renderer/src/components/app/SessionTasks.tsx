@@ -48,8 +48,7 @@ export const SessionTasks = memo(function SessionTasks({ todos, subagents = [], 
   const records = askUserRecords
   const tasks = useBashTasks().filter((task) => task.background)
   const [selected, setSelected] = useState<Panel | null>(null)
-  const showGoal = goalAvailable && !!goalUI?.enabled
-  useEffect(() => { if (showGoal && goalUI?.openRevision) setSelected('goal') }, [sessionPath, showGoal, goalUI?.openRevision])
+  const showGoal = goalAvailable && !!goalUI?.enabled && !!goalUI.submitted && !!goal
   const root = useRef<HTMLDivElement>(null)
   const triggers = useRef<Partial<Record<Panel, HTMLButtonElement | null>>>({})
   const baseId = useId()

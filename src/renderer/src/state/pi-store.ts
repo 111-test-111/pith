@@ -46,13 +46,14 @@ export interface Notice {
 /** Composer intent is local to a chat; selecting it never grants execution. */
 export interface GoalUIState {
   enabled: boolean
-  openRevision: number
+  /** Show the task-strip entry only after this mode has a submitted goal. */
+  submitted: boolean
   limits: GoalLimits
   acceptance: string
   pending: boolean
   error: GoalErrorCode | null
 }
-const EMPTY_GOAL_UI: GoalUIState = { enabled: false, openRevision: 0, limits: DEFAULT_GOAL_LIMITS, acceptance: '', pending: false, error: null }
+const EMPTY_GOAL_UI: GoalUIState = { enabled: false, submitted: false, limits: DEFAULT_GOAL_LIMITS, acceptance: '', pending: false, error: null }
 
 export interface PiState {
   goalUI: GoalUIState
@@ -335,7 +336,8 @@ export class PiStore {
     if (!path) return EMPTY_GOAL_UI
     let ui = this.goalUIStates.get(path)
     if (!ui) {
-      ui = { ...EMPTY_GOAL_UI, enabled: !!goal && !['completed', 'cancelled'].includes(goal.status), limits: goal?.limits ?? DEFAULT_GOAL_LIMITS }
+      const submitted = !!goal && !['completed', 'cancelled'].includes(goal.status)
+      ui = { ...EMPTY_GOAL_UI, enabled: submitted, submitted, limits: goal?.limits ?? DEFAULT_GOAL_LIMITS }
       this.goalUIStates.set(path, ui)
     }
     return ui
@@ -349,7 +351,10 @@ export class PiStore {
   }
   openGoalMode(path: string): void {
     const ui = this.goalUIFor(path)
-    this.setGoalUI(path, { enabled: true, openRevision: ui.openRevision + 1, error: null })
+    // Unsubmitted edits to a previous goal's limits must not strand a new
+    // selection, which has no task panel until its first message is sent.
+    const limits = validGoalLimits(ui.limits) ? ui.limits : this.goalStates.get(path)?.goal?.limits ?? DEFAULT_GOAL_LIMITS
+    this.setGoalUI(path, { enabled: true, limits, error: null })
   }
   setGoalDraft(path: string, draft: Pick<GoalUIState, 'limits' | 'acceptance'>): void {
     this.setGoalUI(path, { ...draft, error: null })
@@ -361,18 +366,18 @@ export class PiStore {
     const ui = this.goalUIFor(path)
     if (!ui.enabled || ui.pending) return false
     if (!input.text.trim() || !validGoalLimits(ui.limits)) {
-      this.setGoalUI(path, { error: 'invalid', openRevision: ui.openRevision + 1 }); return false
+      this.setGoalUI(path, { error: 'invalid' }); return false
     }
     const identity = this.goalStates.get(path)
     this.setGoalUI(path, { pending: true, error: null })
     try {
       const result = await window.pi.goalAction({ sessionPath: path, expectedSeq: identity?.seq ?? 0, goalId: identity?.goal?.id ?? null,
         action: 'create', objective: input.text, acceptance: ui.acceptance.trim() || input.text, limits: ui.limits, images: input.images, files: input.files })
-      if (!result.ok) { this.setGoalUI(path, { error: result.code, openRevision: this.goalUIFor(path).openRevision + 1 }); return false }
+      if (!result.ok) { this.setGoalUI(path, { error: result.code }); return false }
       this.dispatch({ type: 'goal_update', sessionPath: path, goal: result.goal, goalSeq: result.seq })
-      this.setGoalUI(path, { acceptance: '' })
+      this.setGoalUI(path, { acceptance: '', submitted: true })
       return true
-    } catch { this.setGoalUI(path, { error: 'unavailable', openRevision: this.goalUIFor(path).openRevision + 1 }); return false }
+    } catch { this.setGoalUI(path, { error: 'unavailable' }); return false }
     finally { this.setGoalUI(path, { pending: false }) }
   }
   async endGoalMode(path: string): Promise<void> {
@@ -380,15 +385,15 @@ export class PiStore {
     if (ui.pending) return
     const identity = this.goalStates.get(path)
     if (!identity?.goal || ['completed', 'cancelled'].includes(identity.goal.status)) {
-      this.setGoalUI(path, { enabled: false, error: null }); return
+      this.setGoalUI(path, { enabled: false, submitted: false, error: null }); return
     }
     this.setGoalUI(path, { pending: true, error: null })
     try {
       const result = await window.pi.goalAction({ sessionPath: path, expectedSeq: identity.seq, goalId: identity.goal.id, action: 'cancel' })
-      if (!result.ok) { this.setGoalUI(path, { error: result.code, openRevision: this.goalUIFor(path).openRevision + 1 }); return }
+      if (!result.ok) { this.setGoalUI(path, { error: result.code }); return }
       this.dispatch({ type: 'goal_update', sessionPath: path, goal: result.goal, goalSeq: result.seq })
-      this.setGoalUI(path, { enabled: false })
-    } catch { this.setGoalUI(path, { error: 'unavailable', openRevision: this.goalUIFor(path).openRevision + 1 }) }
+      this.setGoalUI(path, { enabled: false, submitted: false })
+    } catch { this.setGoalUI(path, { error: 'unavailable' }) }
     finally { this.setGoalUI(path, { pending: false }) }
   }
   private mergeGoal(path: string | null, goal: GoalSnapshotDTO | null | undefined, seq = 0): { goal: GoalSnapshotDTO | null; goalSeq: number } {
