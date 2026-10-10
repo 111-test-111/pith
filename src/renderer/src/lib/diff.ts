@@ -1,5 +1,10 @@
 import type { FileDiffLine } from '@/components/agents/file-diff'
 
+/** Shared gutter metric for full diffs and page-scrolled row windows. */
+export function diffGutterColumns(lines: FileDiffLine[]): number {
+  return lines.reduce((digits, line) => Math.max(digits, String(line.oldLine ?? 0).length, String(line.newLine ?? 0).length), 2)
+}
+
 /**
  * Parse a unified diff (as produced by pi's edit/write tools:
  * `--- a/file\n+++ b/file\n@@ -l,c +l,c @@ ...`) into FileDiff rows.

@@ -59,7 +59,7 @@ export function SystemPromptDialog({
         </div>
       </div>
 
-      <pre className="mt-4 max-h-[60vh] overflow-auto whitespace-pre-wrap break-words rounded-xl bg-muted/60 p-3 font-mono text-xs leading-5 text-foreground">
+      <pre className="mt-4 max-h-[60vh] overflow-auto whitespace-pre-wrap break-words rounded-xl bg-muted/60 p-3 font-mono text-content text-foreground">
         {text}
       </pre>
 

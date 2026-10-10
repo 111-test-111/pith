@@ -4,6 +4,9 @@ import remarkMath from 'remark-math'
 import { remarkTexMath } from './remark-tex-math'
 import { remarkMathNodes } from './remark-math-nodes'
 import { remarkSafeBreaks } from './remark-safe-breaks'
+import { remarkSafeInlineHtml } from './remark-safe-inline-html'
+import { remarkAlerts } from './remark-alerts'
+import { remarkSoftBreaks } from './remark-soft-breaks'
 import type { Link, Parent, PhrasingContent, Text } from 'mdast'
 import type { PluggableList } from 'unified'
 
@@ -20,8 +23,11 @@ import type { PluggableList } from 'unified'
  */
 export const REMARK_PLUGINS: PluggableList = [
   remarkGfm, remarkCjkFriendly, remarkCjkAutolinkTrim, remarkSafeBreaks,
+  remarkSafeInlineHtml, remarkAlerts,
   [remarkMath, { singleDollarTextMath: false }], remarkTexMath, remarkMathNodes
 ]
+
+export const FILE_REMARK_PLUGINS: PluggableList = [...REMARK_PLUGINS, remarkSoftBreaks]
 
 /**
  * GFM's literal autolink syntax (`https://…`, `www.…`) ends the link at ASCII

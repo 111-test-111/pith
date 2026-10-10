@@ -4,6 +4,7 @@ import type {
   UsageStatsDTO,
   UsageTurnRecordDTO
 } from '../../shared/types'
+import { IMAGE_TOOL_NAME, parseImageToolResult } from '../../shared/image'
 
 /**
  * Cross-session token/cost usage aggregation, grouped by local day × model.
@@ -240,8 +241,9 @@ export function accumulateSessionFile(acc: UsageAccumulator, text: string): void
         const ts = entryTimestamp(entry, message)
         if (Number.isFinite(ts) && ts > 0) {
           const vision = details?.kind === 'pi-web-vision'
-          const provider = vision && typeof details.provider === 'string' ? details.provider : 'unknown'
-          const model = vision && typeof details.modelId === 'string' ? details.modelId : 'unknown'
+          const image = message.toolName === IMAGE_TOOL_NAME ? parseImageToolResult(details) : null
+          const provider = image ? 'openrouter' : vision && typeof details.provider === 'string' ? details.provider : 'unknown'
+          const model = image ? image.model : vision && typeof details.modelId === 'string' ? details.modelId : 'unknown'
           if (!turn) turn = { startTs: null, endTs: 0, models: new Map(), tokens: 0, cost: 0, requests: 0 }
           recordUsage(acc, turn, ts, provider, model, usage)
         }

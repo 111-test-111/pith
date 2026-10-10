@@ -102,8 +102,8 @@ export function usePromptEditor({ value, onValueChange, inputRef, minRows, maxRo
     const editor = editorRef.current
     if (!editor) return
     // At the draft boundary there is no character to delete. Chromium may
-    // otherwise consume the caret-host BR itself when backspacing an inline
-    // editing host. Keep this structural node out of deletion transactions.
+    // otherwise consume the caret-host BR itself. Keep this structural node
+    // out of deletion transactions.
     const beforeInput = (event: InputEvent) => {
       if (event.isComposing || !event.inputType.startsWith('delete')) return
       const offsets = selectionOffsets(editor)
@@ -137,8 +137,8 @@ export function usePromptEditor({ value, onValueChange, inputRef, minRows, maxRo
 
   const publish = () => onValueChange(editorRef.current ? readText(editorRef.current) : '')
 
-  // The inline editor shares the chip's line box but the WHOLE field remains
-  // clickable, including the empty minRows area and the end of a short line.
+  // The whole field remains clickable, including the empty minRows area
+  // and the end of a short line.
   const onMouseDown = (event: MouseEvent<HTMLDivElement>) => {
     const editor = editorRef.current
     if (!editor?.isContentEditable || event.defaultPrevented || event.button !== 0) return

@@ -1,11 +1,14 @@
+// local patch (pi-app): shared scalable typography for UI annotations.
 // local patch (pi-app): keep UI frames and focus rings in this component at 1px.
 "use client";
 // local patch (pi-app): resolution badges and retry actions use semantic radii.
 // beui.dev/components/agents/chat-app
 
 // local patch (pi-app): use the shared UI icon adapter.
-import { Check, CircleAlert, RotateCcw } from "@/lib/icons";
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { CircleCheck, CircleX, RotateCcw } from "@/lib/icons";
+import { AnimatePresence, motion } from "motion/react";
+// local patch (pi-app): observe both live app and system motion preferences.
+import { useReduceMotion, useSystemReducedMotion } from "@/lib/reduce-motion";
 import type { CSSProperties, ReactNode } from "react";
 import { useEffect, useRef } from "react";
 import { EASE_IN_OUT, EASE_OUT, SPRING_PRESS } from "@/lib/ease";
@@ -30,6 +33,9 @@ export interface ImageGenerationProps {
   /** CSS aspect ratio reserved before generated media is available. */
   aspectRatio?: CSSProperties["aspectRatio"];
   size?: "compact" | "fluid";
+  // local patch (pi-app): app metadata shares the status column beside media.
+  layout?: "vertical" | "horizontal";
+  metadata?: ReactNode;
   /** Lets the active dither cluster follow fine-pointer movement. */
   interactive?: boolean;
   statusText?: string;
@@ -78,11 +84,11 @@ function DitherMark({
   reduce: boolean;
 }) {
   if (status === "complete") {
-    return <Check aria-hidden="true" className="size-3.5" />;
+    return <CircleCheck aria-hidden="true" className="size-3.5" />;
   }
 
   if (status === "error") {
-    return <CircleAlert aria-hidden="true" className="size-3.5" />;
+    return <CircleX aria-hidden="true" className="size-3.5" />;
   }
 
   return (
@@ -215,7 +221,8 @@ function DitherField({
     const resizeObserver =
       typeof ResizeObserver === "undefined"
         ? null
-        : new ResizeObserver(resize);
+        // local patch (pi-app): resizing clears a static reduced-motion canvas.
+        : new ResizeObserver(() => { resize(); if (reduce) draw(0); });
 
     resize();
     resizeObserver?.observe(canvas);
@@ -255,6 +262,8 @@ export function ImageGeneration({
   resolution = "1024 × 1024",
   aspectRatio = "1 / 1",
   size = "compact",
+  layout = "vertical",
+  metadata,
   interactive = true,
   statusText,
   showStatus = true,
@@ -263,7 +272,9 @@ export function ImageGeneration({
   mediaClassName,
   statusClassName,
 }: ImageGenerationProps) {
-  const reduce = useReducedMotion() ?? false;
+  const appReduce = useReduceMotion();
+  const systemReduce = useSystemReducedMotion();
+  const reduce = appReduce || systemReduce;
   const active =
     status === "queued" || status === "generating" || status === "refining";
   const mediaState = MEDIA_STATE[status];
@@ -280,15 +291,18 @@ export function ImageGeneration({
     >
       <div
         className={cn(
-          "w-full",
-          size === "compact" && "mx-auto max-w-52",
+          "w-full min-w-0",
+          layout === "horizontal"
+            ? "grid grid-cols-[minmax(0,min(13rem,45%))_minmax(0,1fr)] items-start gap-4"
+            : size === "compact" && "mx-auto max-w-52",
         )}
       >
         <div
-          role="img"
+          // local patch (pi-app): retain the accessible preview button children.
+          role="group"
           aria-label={resolvedLabel}
           style={{ aspectRatio }}
-          className="relative isolate w-full overflow-hidden rounded-xl bg-muted"
+          className="relative isolate w-full overflow-hidden rounded-item bg-muted"
         >
           <motion.div
             aria-hidden={children ? undefined : true}
@@ -333,14 +347,14 @@ export function ImageGeneration({
           </AnimatePresence>
 
           {resolution ? (
-            <span className="absolute top-2 right-2 z-10 rounded-item bg-background/75 px-2 py-0.5 font-mono text-[10px] tabular-nums text-muted-foreground">
+            <span className="absolute top-2 right-2 z-10 rounded-item bg-background/75 px-2 py-0.5 font-mono text-micro tabular-nums text-muted-foreground">
               {resolution}
             </span>
           ) : null}
         </div>
 
-        {showStatus || prompt ? (
-          <div className="mt-3 text-left">
+        {showStatus || prompt || metadata || (status === "error" && onRetry) ? (
+          <div data-slot="image-generation-details" className={cn("min-w-0 text-left", layout === "vertical" && "mt-3")}>
             {showStatus ? (
               <div
                 aria-live="polite"
@@ -372,21 +386,23 @@ export function ImageGeneration({
                 “{prompt}”
               </p>
             ) : null}
-          </div>
-        ) : null}
 
-        {status === "error" && onRetry ? (
-          <motion.button
-            type="button"
-            onClick={onRetry}
-            // local patch (pi-app): no press scale — this action button must not
-            // dip inward while pressed (see `button/base`).
-            transition={SPRING_PRESS}
-            className="mt-3 inline-flex min-h-10 items-center gap-2 rounded-control px-3 text-sm font-medium text-foreground outline-none transition-colors hover:bg-muted focus-visible:ring-1 focus-visible:ring-ring"
-          >
-            <RotateCcw aria-hidden="true" className="size-4" />
-            Try again
-          </motion.button>
+            {metadata}
+
+            {status === "error" && onRetry ? (
+              <motion.button
+                type="button"
+                onClick={onRetry}
+                // local patch (pi-app): no press scale — this action button must not
+                // dip inward while pressed (see `button/base`).
+                transition={SPRING_PRESS}
+                className="mt-3 inline-flex min-h-10 items-center gap-2 rounded-control px-3 text-sm font-medium text-foreground outline-none transition-colors hover:bg-muted focus-visible:ring-1 focus-visible:ring-ring"
+              >
+                <RotateCcw aria-hidden="true" className="size-4" />
+                Try again
+              </motion.button>
+            ) : null}
+          </div>
         ) : null}
       </div>
     </div>

@@ -98,8 +98,6 @@ export function JevSection() {
         </Button>
         {settings.keySource === 'saved' && <Button variant="destructive" size="sm" disabled={busy} onClick={() => void act({ apiKey: null })}>{t('jev.removeKey')}</Button>}
       </SettingsRow>
-    </SettingsGroup>
-    <SettingsGroup title={t('jev.connection')} description={t('jev.connectionDesc')}>
       <SettingsRow label={t('jev.model')} description={t('jev.testDesc')}>
         <Button variant="outline" size="sm" disabled={busy || !['saved', 'environment'].includes(settings.keySource)} onClick={() => void act()}>{busy ? t('jev.working') : t('jev.test')}</Button>
       </SettingsRow>
@@ -130,7 +128,7 @@ export function JevSection() {
             error={error ? t(`jev.error.${error}`) : undefined}
             reserveErrorLine
             onKeyDown={event => { if (event.key === 'Enter' && draft.trim() && !busy) void saveKey() }}
-            classNames={{ field: 'h-9', input: 'px-3 text-sm' }}
+
           />
         </div>
         <div className="mt-4 flex justify-end gap-2">

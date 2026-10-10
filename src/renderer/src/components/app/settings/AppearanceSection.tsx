@@ -8,11 +8,16 @@ import { useFontSettings } from '@/lib/fonts'
 import { useSidebarGlass } from '@/lib/sidebar-glass'
 import { setReduceMotion, useReduceMotion } from '@/lib/reduce-motion'
 import { setCompactTools, useCompactTools } from '@/lib/compact-tools'
+import { useShowReasoning } from '@/lib/show-reasoning'
+import { useSpinnerVerbs } from '@/lib/spinner-verbs'
+import { useToolGrouping } from '@/lib/tool-grouping'
 import { useI18n, LOCALE_NAMES, type Locale } from '@/i18n'
 import { ACCENT_PRESETS, CUSTOM_ACCENT, useCustomAccent } from '@/lib/accent'
 import type { UiStyle } from '@/lib/ui-style'
 import { AccentColorPicker } from './AccentColorPicker'
 import { SettingsGroup, SettingsRow } from './SettingsRow'
+import { FontSizesGroup } from './FontSizesGroup'
+import { CodeThemesGroup } from './CodeThemesGroup'
 
 /** Interface style: the corner/radius preset and the icon pack that matches it.
  * They are one choice on purpose — the two dimensions can never disagree. */
@@ -23,7 +28,7 @@ export const UI_STYLE_OPTIONS = [
 
 /** Free-text family field, shared by the three typefaces; empty leaves the app
  * on its default (the sans-serif tail for the interface, the platform mono for
- * code, the bundled Latin Modern Math for formulas). The field previews the
+ * code, the bundled TeX Gyre DejaVu Math for formulas). The field previews the
  * family it edits — `--app-font-ui`/`--app-font-mono`/`--app-font-math` carry
  * the typed name first, so `font-sans`/`font-mono`/`font-math` here renders
  * the typed value as it is typed — while the monospace and math fields pin
@@ -55,15 +60,14 @@ function FontPicker({
         autoComplete="off"
         classNames={{
           root: 'w-56',
-          field: 'h-8',
-          input: `text-xs ${inputClassName}`
+          input: inputClassName
         }}
       />
     </SettingsRow>
   )
 }
 
-/** Language / theme mode / accent / fonts — everything that changes how the app looks. */
+/** Language, theme, accent, fonts and transcript display — how the app looks. */
 export function AppearanceSection({
   accent,
   onAccentChange,
@@ -82,6 +86,10 @@ export function AppearanceSection({
   const [sidebarGlass, setSidebarGlass] = useSidebarGlass()
   const reduceMotion = useReduceMotion()
   const compactTools = useCompactTools()
+  // Transcript display preferences, shared with the message rows.
+  const [showReasoning, setShowReasoning] = useShowReasoning()
+  const [toolGrouping, setToolGrouping] = useToolGrouping()
+  const [spinnerVerbs, setSpinnerVerbs] = useSpinnerVerbs()
   const [mounted, setMounted] = useState(false)
 
   // next-themes resolves the stored theme after mount; render the neutral
@@ -90,8 +98,8 @@ export function AppearanceSection({
 
   return (
     <div className="space-y-6">
-      <SettingsGroup title={t('settings.language')} description={t('settings.languageDesc')}>
-        <div className="px-4 py-3.5">
+      <SettingsGroup title={t('settings.languageThemeGroup')}>
+        <SettingsRow label={t('settings.language')} description={t('settings.languageDesc')}>
           <RadioGroup
             orientation="horizontal"
             value={locale}
@@ -102,11 +110,8 @@ export function AppearanceSection({
               <RadioGroupItem key={id} value={id} label={LOCALE_NAMES[id]} />
             ))}
           </RadioGroup>
-        </div>
-      </SettingsGroup>
-
-      <SettingsGroup title={t('settings.theme')}>
-        <div className="px-4 py-3.5">
+        </SettingsRow>
+        <SettingsRow label={t('settings.theme')}>
           <RadioGroup
             orientation="horizontal"
             value={mounted ? (theme ?? 'system') : 'system'}
@@ -117,11 +122,8 @@ export function AppearanceSection({
             <RadioGroupItem value="dark" label={t('settings.dark')} />
             <RadioGroupItem value="system" label={t('settings.system')} />
           </RadioGroup>
-        </div>
-      </SettingsGroup>
-
-      <SettingsGroup title={t('settings.uiStyle')} description={t('settings.uiStyleDesc')}>
-        <div className="px-4 py-3.5">
+        </SettingsRow>
+        <SettingsRow label={t('settings.uiStyle')} description={t('settings.uiStyleDesc')}>
           <RadioGroup
             orientation="horizontal"
             value={uiStyle}
@@ -132,8 +134,10 @@ export function AppearanceSection({
               <RadioGroupItem key={option.id} value={option.id} label={t(option.labelKey)} />
             ))}
           </RadioGroup>
-        </div>
+        </SettingsRow>
       </SettingsGroup>
+
+      <CodeThemesGroup />
 
       <SettingsGroup title={t('settings.fonts')} description={t('settings.fontsDesc')}>
         <FontPicker
@@ -160,6 +164,8 @@ export function AppearanceSection({
           inputClassName="font-math placeholder:font-sans"
           onChange={(math) => setFonts({ math })}
         />
+        {/* Base sizes sit beside the families they scale. */}
+        <FontSizesGroup />
       </SettingsGroup>
 
       <SettingsGroup title={t('settings.accent')} description={t('settings.accentDesc')}>
@@ -197,7 +203,7 @@ export function AppearanceSection({
         </div>
       </SettingsGroup>
 
-      <SettingsGroup title={t('settings.sidebar')}>
+      <SettingsGroup title={t('settings.interfaceGroup')}>
         <SettingsRow
           label={t('settings.sidebarGlass')}
           description={t('settings.sidebarGlassDesc')}
@@ -209,9 +215,6 @@ export function AppearanceSection({
             aria-label={t('settings.sidebarGlass')}
           />
         </SettingsRow>
-      </SettingsGroup>
-
-      <SettingsGroup title={t('settings.motion')}>
         <SettingsRow
           label={t('settings.reduceMotion')}
           description={t('settings.reduceMotionDesc')}
@@ -225,7 +228,42 @@ export function AppearanceSection({
         </SettingsRow>
       </SettingsGroup>
 
+      {/* Every preference for how conversation rows render lives here —
+          reasoning visibility, folding, working phrases and density. */}
       <SettingsGroup title={t('settings.transcript')}>
+        <SettingsRow
+          label={t('settings.showReasoning')}
+          description={t('settings.showReasoningDesc')}
+        >
+          <Checkbox
+            mark="square"
+            checked={showReasoning}
+            onCheckedChange={setShowReasoning}
+            aria-label={t('settings.showReasoning')}
+          />
+        </SettingsRow>
+        <SettingsRow
+          label={t('settings.toolGrouping')}
+          description={t('settings.toolGroupingDesc')}
+        >
+          <Checkbox
+            mark="square"
+            checked={toolGrouping}
+            onCheckedChange={setToolGrouping}
+            aria-label={t('settings.toolGrouping')}
+          />
+        </SettingsRow>
+        <SettingsRow
+          label={t('settings.spinnerVerbs')}
+          description={t('settings.spinnerVerbsDesc')}
+        >
+          <Checkbox
+            mark="square"
+            checked={spinnerVerbs}
+            onCheckedChange={setSpinnerVerbs}
+            aria-label={t('settings.spinnerVerbs')}
+          />
+        </SettingsRow>
         <SettingsRow
           label={t('settings.compactTools')}
           description={t('settings.compactToolsDesc')}

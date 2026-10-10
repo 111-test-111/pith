@@ -52,7 +52,7 @@ export const TimeZoneField = memo(function TimeZoneField({
         aria-invalid={invalid || undefined}
         spellCheck={false}
         className="min-w-0 flex-1"
-        classNames={{ field: 'h-9', input: 'text-sm' }}
+
       />
       <MorphPopover open={open} onOpenChange={setOpen}>
         <MorphPopoverTrigger>
@@ -60,7 +60,7 @@ export const TimeZoneField = memo(function TimeZoneField({
             <ChevronDown aria-hidden="true" className="size-4" />
           </Button>
         </MorphPopoverTrigger>
-        <MorphPopoverContent align="end" radius="var(--app-radius-card)" className="w-64 p-1" instant>
+        <MorphPopoverContent align="end" radius="var(--app-radius-card)" className="w-64 p-1">
           <div className="max-h-64 overflow-y-auto p-1">
             {zones.map((zone) => (
               <Button

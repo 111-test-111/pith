@@ -4,10 +4,9 @@
  * `AgentSession.getContextUsage()` deliberately reports no token count once a
  * compaction boundary exists — the only provider usage it can see belongs to an
  * assistant that answered before that boundary, and that number describes the
- * context that was just summarized away. Main therefore falls back to the
- * estimate the SDK itself uses for a compaction's `estimatedTokensAfter`:
- * `src/main/pi/context-estimate.ts`, checked here against the real SDK
- * estimator and deterministic compacted context fixtures. No Electron.
+ * context that was just summarized away. The fallback folds current system
+ * state and estimates the canonical projection with the installed SDK. No
+ * Electron or provider calls.
  */
 import assert from 'node:assert/strict'
 import { mkdir, rm } from 'node:fs/promises'
@@ -33,6 +32,7 @@ try {
     outfile: bundle
   })
   const { compactedContextTokens } = await import(bundle)
+  const { getCurrentSystemMessage } = await import(new URL('../node_modules/@earendil-works/pi-ai/dist/index.js', import.meta.resolve('@earendil-works/pi-coding-agent')))
 
   const user = (timestamp, text) => ({ role: 'user', timestamp, content: text })
   const assistant = (timestamp, text) => ({
@@ -47,9 +47,7 @@ try {
     timestamp
   })
 
-  // A session that was never compacted keeps its blank ring: this estimate
-  // covers neither the system prompt nor the tool schemas, so inventing one
-  // would be worse than the honest `—`.
+  // Only post-compaction unknown usage needs this fallback.
   assert.equal(compactedContextTokens([]), null, 'an empty session has nothing to estimate')
   assert.equal(
     compactedContextTokens([user(1, 'hello'), assistant(2, 'hi')]),
@@ -57,9 +55,7 @@ try {
     'a session without a compaction summary never takes the fallback'
   )
 
-  // The metric has to be the SDK's own: a compaction's `estimatedTokensAfter`
-  // is the summed per-message estimate over the compacted list, so the ring
-  // shows the same number the SDK computed while compacting.
+  // Without system patches this is the SDK's summed compacted-message estimate.
   const compacted = [
     summary('Long summary of everything that happened.', 204325),
     user(1, 'kept request'),
@@ -69,6 +65,11 @@ try {
   ]
   const expected = compacted.reduce((total, message) => total + estimateTokens(message), 0)
   assert.equal(compactedContextTokens(compacted), expected, 'the estimate matches the SDK estimator')
+  const systemUpdates = [
+    { role: 'system', timestamp: 0, content: 'base', sections: { large: 'x'.repeat(12000) }, toolsAdded: [{ name: 'read', description: 'old', parameters: {} }] },
+    { role: 'system', timestamp: 1, content: '', sections: { large: 'small' }, toolsRemoved: [{ name: 'read' }] }
+  ]
+  assert.equal(compactedContextTokens([...systemUpdates, ...compacted]), expected + estimateTokens(getCurrentSystemMessage(systemUpdates)), 'post-compaction estimate folds checkpoints and subsequent system patches like the SDK')
   assert.ok(expected > 0 && expected < 204325, `a compacted context is smaller than what it replaced: ${expected}`)
 
   // The summary is part of the context that will be sent, so a bigger summary

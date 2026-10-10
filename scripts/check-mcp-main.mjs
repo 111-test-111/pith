@@ -121,4 +121,46 @@ assert.throws(
   'unsupported socket cannot silently enter native config'
 )
 
-console.log('PASS: native MCP config paths, precedence, tool roster, issues, safe writes and legacy preservation')
+const nativeEntry = {
+  url: 'https://native.example/mcp', description: 'Native server discovery',
+  auth: { provider: 'anthropic' }, exposure: 'codemode-deferred',
+  toolExposure: { 'read-*': 'codemode-deferred' },
+  oauth: { clientId: 'registered', clientSecret: '${MCP_SECRET}', callbackPort: 8000,
+    callbackUrl: 'http://127.0.0.1:8000/callback', scope: 'read', clientName: 'Pith',
+    authServerMetadataUrl: 'https://auth.example/.well-known/oauth-authorization-server' }
+}
+mcp.writeMcpConfigFile('global', JSON.stringify({ mcpServers: { 'native-server': nativeEntry } }), cwd, agentDir)
+const nativeLive = new Map([['native_server', { tools: [{ name: 'mcp__native_server__read_file', exposure: 'deferred' }] }]])
+const nativeRoster = mcp.buildMcpRoster({ cwd, agentDir, projectTrusted: true, live: nativeLive })
+assert.equal(nativeRoster.filter(row => row.name === 'native-server' || row.name === 'native_server').length, 1,
+  'a normalized SDK namespace has exactly one editable config row')
+assert.equal(nativeRoster.find(row => row.name === 'native-server').toolCount, 1)
+assert.equal(nativeRoster.find(row => row.name === 'native-server').exposure, 'codemode', 'legacy exposure aliases display canonically')
+assert(!mcp.readMcpConfigIssues(cwd, agentDir, true).some(issue => issue.name === 'native-server'), 'all Pi 1.0 fields are accepted')
+mcp.setMcpServerDisabled('native-server', true, { cwd, agentDir, projectTrusted: true })
+assert.deepEqual(JSON.parse(await readFile(globalPath, 'utf8')).mcpServers['native-server'], { ...nativeEntry, enabled: false },
+  'toggling preserves provider auth, every OAuth field and raw exposure aliases')
+const globalBefore = await readFile(globalPath, 'utf8')
+for (const entry of [
+  { ...nativeEntry, description: 42 },
+  { ...nativeEntry, url: 'http://remote.example/mcp' },
+  { ...nativeEntry, auth: { provider: '' } },
+  { ...nativeEntry, oauth: { clientName: ' ' } },
+  { ...nativeEntry, oauth: { authServerMetadataUrl: 'http://remote.example/auth' } }
+]) {
+  assert.throws(() => mcp.upsertMcpServerEntry({ name: 'invalid', entry }, { cwd, agentDir }), /Invalid native MCP/)
+  assert.equal(await readFile(globalPath, 'utf8'), globalBefore, 'rejected writes leave the complete config unchanged')
+}
+const projectBefore = await readFile(projectPath, 'utf8')
+assert.throws(() => mcp.upsertMcpServerEntry({ scope: 'project', name: 'credentials', entry: nativeEntry }, { cwd, agentDir }), /Invalid native MCP.*auth/)
+assert.throws(() => mcp.upsertMcpServerEntry({ scope: 'project', name: 'native_server', entry: { command: 'node' } }, { cwd, agentDir }), /name conflicts/)
+assert.equal(await readFile(projectPath, 'utf8'), projectBefore, 'project auth and cross-file namespace collisions fail before writing')
+assert.throws(() => mcp.writeMcpConfigFile('global', JSON.stringify({ mcpServers: {
+  'same-name': { command: 'node' }, same_name: { command: 'node' }
+} }), cwd, agentDir), /Invalid native MCP/)
+mcp.upsertMcpServerEntry({ scope: 'project', name: 'native-server', entry: { command: 'node' } }, { cwd, agentDir })
+assert.equal(mcp.buildMcpRoster({ cwd, agentDir, projectTrusted: true, live: nativeLive }).find(row => row.name === 'native-server').scope, 'project',
+  'exact-name project overrides still work')
+assert.equal(await readFile(globalPath, 'utf8'), globalBefore, 'project overrides never rewrite global credentials')
+
+console.log('PASS: native MCP paths, precedence, normalized roster, Pi 1.0 auth/OAuth/description, aliases, namespace collisions and atomic rejected writes')

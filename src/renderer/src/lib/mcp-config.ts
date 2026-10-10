@@ -1,47 +1,15 @@
 /** Pure helpers for Pi's built-in MCP mcp.json shape. Files are written by main. */
-import type { McpExposure } from '../../../shared/types'
+import type { McpConfigScope, McpExposure } from '../../../shared/types'
+import { MCP_EXPOSURES, MCP_SERVER_NAME, MCP_SERVER_FIELDS, collidingMcpServerNames, isSecureMcpUrl, mcpServerIssues, mcpServerKey, normalizeMcpExposure, type McpServerEntry, type McpConfigDocument } from '../../../shared/mcp'
+export { MCP_EXPOSURES } from '../../../shared/mcp'
+export type { McpServerEntry, McpConfigDocument } from '../../../shared/mcp'
 
 export type McpTransportKind = 'stdio' | 'http'
 export const MCP_DOCS_URL = 'https://pi.dev/docs/latest/mcp'
-export const MCP_EXPOSURES: McpExposure[] = ['codemode', 'codemode-deferred', 'deferred', 'direct', 'hidden']
-
-const SERVER_NAME_RE = /^[A-Za-z0-9_-]+$/
-const NATIVE_FIELDS = new Set([
-  'type', 'command', 'args', 'env', 'cwd', 'url', 'headers', 'oauth',
-  'enabled', 'exposure', 'toolExposure', 'timeout'
-])
 const FORM_OWNED_KEYS = new Set([
-  'type', 'command', 'args', 'env', 'cwd', 'url', 'headers', 'oauth',
+  'type', 'description', 'command', 'args', 'env', 'cwd', 'url', 'headers', 'oauth', 'auth',
   'enabled', 'exposure', 'toolExposure'
 ])
-
-export interface McpServerEntry {
-  type?: 'stdio' | 'http' | 'streamable-http'
-  command?: string
-  args?: string[]
-  env?: Record<string, string>
-  cwd?: string
-  url?: string
-  headers?: Record<string, string>
-  oauth?: {
-    clientId?: string
-    clientSecret?: string
-    callbackPort?: number
-    callbackUrl?: string
-    scope?: string
-  }
-  enabled?: boolean
-  exposure?: McpExposure
-  toolExposure?: Record<string, McpExposure>
-  timeout?: number
-  [key: string]: unknown
-}
-
-export interface McpConfigDocument {
-  mcpServers: Record<string, McpServerEntry>
-  autoEnableCodemode?: boolean
-  [key: string]: unknown
-}
 
 export interface McpKeyValue {
   key: string
@@ -50,6 +18,7 @@ export interface McpKeyValue {
 
 export interface McpServerForm {
   name: string
+  description: string
   originalName?: string
   transport: McpTransportKind
   command: string
@@ -58,6 +27,9 @@ export interface McpServerForm {
   cwd: string
   url: string
   headers: McpKeyValue[]
+  authProvider: string
+  oauthClientName: string
+  oauthAuthServerMetadataUrl: string
   oauthClientId: string
   oauthClientSecret: string
   oauthCallbackPort: string
@@ -117,6 +89,7 @@ export function inferMcpTransport(entry: McpServerEntry): McpTransportKind {
 export function createEmptyMcpServerForm(): McpServerForm {
   return {
     name: '',
+    description: '',
     transport: 'stdio',
     command: '',
     args: [''],
@@ -124,6 +97,9 @@ export function createEmptyMcpServerForm(): McpServerForm {
     cwd: '',
     url: '',
     headers: [{ key: '', value: '' }],
+    authProvider: '',
+    oauthClientName: '',
+    oauthAuthServerMetadataUrl: '',
     oauthClientId: '',
     oauthClientSecret: '',
     oauthCallbackPort: '',
@@ -145,6 +121,7 @@ export function serverEntryToForm(name: string, entry: McpServerEntry): McpServe
   const args = Array.isArray(entry.args) ? entry.args.filter((arg): arg is string => typeof arg === 'string') : []
   return {
     name,
+    description: typeof entry.description === 'string' ? entry.description : '',
     originalName: name,
     transport: inferMcpTransport(entry),
     command: typeof entry.command === 'string' ? entry.command : '',
@@ -153,14 +130,17 @@ export function serverEntryToForm(name: string, entry: McpServerEntry): McpServe
     cwd: typeof entry.cwd === 'string' ? entry.cwd : '',
     url: typeof entry.url === 'string' ? entry.url : '',
     headers: recordToRows(toStringRecord(entry.headers)),
+    authProvider: isRecord(entry.auth) && typeof entry.auth.provider === 'string' ? entry.auth.provider : '',
+    oauthClientName: typeof oauth.clientName === 'string' ? oauth.clientName : '',
+    oauthAuthServerMetadataUrl: typeof oauth.authServerMetadataUrl === 'string' ? oauth.authServerMetadataUrl : '',
     oauthClientId: typeof oauth.clientId === 'string' ? oauth.clientId : '',
     oauthClientSecret: typeof oauth.clientSecret === 'string' ? oauth.clientSecret : '',
     oauthCallbackPort: typeof oauth.callbackPort === 'number' ? String(oauth.callbackPort) : '',
     oauthCallbackUrl: typeof oauth.callbackUrl === 'string' ? oauth.callbackUrl : '',
     oauthScope: typeof oauth.scope === 'string' ? oauth.scope : '',
     enabled: entry.enabled !== false,
-    exposure: MCP_EXPOSURES.includes(entry.exposure as McpExposure) ? entry.exposure as McpExposure : 'codemode',
-    toolExposure: recordToRows(toStringRecord(entry.toolExposure)),
+    exposure: normalizeMcpExposure(entry.exposure) ?? 'codemode',
+    toolExposure: recordToRows(toStringRecord(entry.toolExposure)).map(row => ({ ...row, value: normalizeMcpExposure(row.value) ?? row.value })),
     extras
   }
 }
@@ -168,11 +148,15 @@ export function serverEntryToForm(name: string, entry: McpServerEntry): McpServe
 export function formToServerEntry(form: McpServerForm): McpServerEntry {
   const entry: McpServerEntry = { ...form.extras }
   for (const key of FORM_OWNED_KEYS) delete entry[key]
+  if (form.description.trim()) entry.description = form.description.trim()
   if (form.transport === 'http') {
+    if (form.authProvider.trim()) entry.auth = { provider: form.authProvider.trim() }
     entry.url = form.url.trim()
     const headers = rowsToRecord(form.headers)
     if (headers) entry.headers = headers
     const oauth: NonNullable<McpServerEntry['oauth']> = {}
+    if (form.oauthClientName.trim()) oauth.clientName = form.oauthClientName.trim()
+    if (form.oauthAuthServerMetadataUrl.trim()) oauth.authServerMetadataUrl = form.oauthAuthServerMetadataUrl.trim()
     if (form.oauthClientId.trim()) oauth.clientId = form.oauthClientId.trim()
     if (form.oauthClientSecret.trim()) oauth.clientSecret = form.oauthClientSecret.trim()
     if (form.oauthCallbackPort.trim()) oauth.callbackPort = Number(form.oauthCallbackPort.trim())
@@ -195,7 +179,7 @@ export function formToServerEntry(form: McpServerForm): McpServerEntry {
 }
 
 export function isValidMcpServerName(name: string): boolean {
-  return SERVER_NAME_RE.test(name)
+  return MCP_SERVER_NAME.test(name)
 }
 
 export type McpSnippetIssue = 'json' | 'shape' | 'multiple'
@@ -226,70 +210,36 @@ export function parseMcpServerSnippet(
 
 /** One concrete field the native SDK would reject or ignore, if any. */
 export function unsupportedMcpField(entry: McpServerEntry): string | null {
-  for (const key of Object.keys(entry)) if (!NATIVE_FIELDS.has(key)) return key
+  for (const key of Object.keys(entry)) if (!MCP_SERVER_FIELDS.has(key)) return key
   return null
 }
 
-export function validateMcpServerEntry(name: string, entry: McpServerEntry): string | null {
-  if (!SERVER_NAME_RE.test(name)) return `${name}.name`
-  const unsupported = unsupportedMcpField(entry)
-  if (unsupported) return `${name}.${unsupported}`
-  if (entry.type !== undefined && !['stdio', 'http', 'streamable-http'].includes(String(entry.type))) return `${name}.type`
-  if (entry.enabled !== undefined && typeof entry.enabled !== 'boolean') return `${name}.enabled`
-  if (entry.exposure !== undefined && !MCP_EXPOSURES.includes(entry.exposure)) return `${name}.exposure`
-  if (entry.toolExposure !== undefined) {
-    if (!isRecord(entry.toolExposure) || Object.values(entry.toolExposure).some((value) => !MCP_EXPOSURES.includes(value as McpExposure))) {
-      return `${name}.toolExposure`
-    }
-  }
-  if (entry.timeout !== undefined && (typeof entry.timeout !== 'number' || !(entry.timeout > 0))) return `${name}.timeout`
-  const http = typeof entry.url === 'string' && (entry.type === undefined || entry.type === 'http' || entry.type === 'streamable-http')
-  const stdio = typeof entry.command === 'string' && (entry.type === undefined || entry.type === 'stdio')
-  if (!http && !stdio) return `${name}.command/url`
-  if (http) {
-    if (!URL.canParse(entry.url!) || !/^https?:$/.test(new URL(entry.url!).protocol)) return `${name}.url`
-    if (entry.headers !== undefined && (!isRecord(entry.headers) || Object.values(entry.headers).some((value) => typeof value !== 'string'))) return `${name}.headers`
-    if (entry.oauth !== undefined) {
-      if (!isRecord(entry.oauth)) return `${name}.oauth`
-      const oauth = entry.oauth
-      for (const [field, value] of Object.entries(oauth)) {
-        if (!['clientId', 'clientSecret', 'callbackPort', 'callbackUrl', 'scope'].includes(field)) return `${name}.oauth.${field}`
-        if (field !== 'callbackPort' && typeof value !== 'string') return `${name}.oauth.${field}`
-      }
-      const port = oauth.callbackPort
-      if (port !== undefined && (typeof port !== 'number' || !Number.isInteger(port) || port < 1 || port > 65535)) return `${name}.oauth.callbackPort`
-      if (typeof oauth.callbackUrl === 'string') {
-        const url = URL.canParse(oauth.callbackUrl) ? new URL(oauth.callbackUrl) : null
-        if (!url || url.protocol !== 'http:' || !['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) || url.search || url.hash || (url.port && port !== undefined && Number(url.port) !== port)) {
-          return `${name}.oauth.callbackUrl`
-        }
-      }
-    }
-  } else {
-    if (entry.args !== undefined && (!Array.isArray(entry.args) || entry.args.some((value) => typeof value !== 'string'))) return `${name}.args`
-    if (entry.env !== undefined && !isRecord(entry.env)) return `${name}.env`
-    if (entry.env !== undefined && Object.values(entry.env ?? {}).some((value) => typeof value !== 'string')) return `${name}.env`
-    if (entry.cwd !== undefined && typeof entry.cwd !== 'string') return `${name}.cwd`
-  }
-  return null
+export function validateMcpServerEntry(name: string, entry: McpServerEntry, scope: McpConfigScope = 'global'): string | null {
+  const issue = mcpServerIssues(name, entry, scope)[0]
+  return issue ? `${name}.${issue.field ?? 'command/url'}` : null
 }
 
-export function validateMcpServerForm(form: McpServerForm, existingNames: string[]): string[] {
+export function validateMcpServerForm(form: McpServerForm, existingNames: string[], scope: McpConfigScope = 'global'): string[] {
   const issues: string[] = []
   const name = form.name.trim()
   if (!name) issues.push('name')
   else if (!isValidMcpServerName(name)) issues.push('nameInvalid')
-  else if (existingNames.includes(name) && name !== form.originalName) issues.push('duplicate')
+  else if (existingNames.some(existing => existing !== form.originalName && mcpServerKey(existing) === mcpServerKey(name))) issues.push('duplicate')
   if (form.transport === 'http') {
     const url = form.url.trim()
     if (!URL.canParse(url) || !/^https?:$/.test(new URL(url).protocol)) issues.push('url')
+    if (form.authProvider.trim()) {
+      if (scope === 'project') issues.push('authScope')
+      if (!isSecureMcpUrl(url)) issues.push('authUrl')
+    }
+    if (form.oauthAuthServerMetadataUrl.trim() && !isSecureMcpUrl(form.oauthAuthServerMetadataUrl.trim())) issues.push('oauthMetadataUrl')
     if (form.oauthCallbackPort.trim()) {
       const port = Number(form.oauthCallbackPort.trim())
       if (!Number.isInteger(port) || port < 1 || port > 65535) issues.push('oauthPort')
     }
     if (form.oauthCallbackUrl.trim()) {
       const callback = URL.canParse(form.oauthCallbackUrl) ? new URL(form.oauthCallbackUrl) : null
-      if (!callback || callback.protocol !== 'http:' || !['localhost', '127.0.0.1', '[::1]'].includes(callback.hostname) || callback.search || callback.hash) {
+      if (!callback || callback.protocol !== 'http:' || !['localhost', '127.0.0.1', '[::1]'].includes(callback.hostname) || callback.search || callback.hash || (callback.port && form.oauthCallbackPort.trim() && Number(callback.port) !== Number(form.oauthCallbackPort.trim()))) {
         issues.push('oauthCallback')
       }
     }
@@ -297,19 +247,21 @@ export function validateMcpServerForm(form: McpServerForm, existingNames: string
     issues.push('command')
   }
   if (form.toolExposure.some((row) => row.key.trim() && !MCP_EXPOSURES.includes(row.value as McpExposure))) issues.push('toolExposure')
-  if (Object.keys(form.extras).some((key) => !NATIVE_FIELDS.has(key))) issues.push('legacyField')
+  if (Object.keys(form.extras).some((key) => !MCP_SERVER_FIELDS.has(key))) issues.push('legacyField')
   return issues
 }
 
-export function validateMcpConfigDocument(config: McpConfigDocument): string | null {
+export function validateMcpConfigDocument(config: McpConfigDocument, scope: McpConfigScope = 'global'): string | null {
   if (config['mcp-servers'] !== undefined) return 'mcp-servers'
   for (const key of Object.keys(config)) {
     if (key !== 'mcpServers' && key !== 'autoEnableCodemode') return key
   }
   if (config.autoEnableCodemode !== undefined && typeof config.autoEnableCodemode !== 'boolean') return 'autoEnableCodemode'
+  const collision = collidingMcpServerNames(Object.keys(config.mcpServers))[0]
+  if (collision) return `${collision}.name`
   for (const [name, entry] of Object.entries(config.mcpServers)) {
-    if (!SERVER_NAME_RE.test(name) || !isRecord(entry)) return name
-    const issue = validateMcpServerEntry(name, entry)
+    if (!MCP_SERVER_NAME.test(name) || !isRecord(entry)) return name
+    const issue = validateMcpServerEntry(name, entry, scope)
     if (issue) return issue
   }
   return null

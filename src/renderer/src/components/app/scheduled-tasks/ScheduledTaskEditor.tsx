@@ -211,7 +211,7 @@ export const ScheduledTaskEditor = memo(function ScheduledTaskEditor({
       <span data-scheduled-field-title className={FORM_FIELD_TITLE}>{label}</span>
       {content}
       {error ? (
-        <p role="alert" className="flex items-center gap-1 text-[11px] text-destructive">
+        <p role="alert" className="flex items-center gap-1 text-caption text-destructive">
           <AlertCircle aria-hidden="true" className="size-3 shrink-0" />
           {error}
         </p>
@@ -232,7 +232,7 @@ export const ScheduledTaskEditor = memo(function ScheduledTaskEditor({
             <div className="grid min-w-0 md:col-start-1 md:row-start-1 md:row-span-5 md:grid-rows-subgrid">
 
               {field(t('scheduledTasks.editor.name'), errors.name, (
-                <Input value={name} onChange={setName} placeholder={t('scheduledTasks.editor.namePlaceholder')} aria-invalid={!!errors.name || undefined} classNames={{ field: 'h-9', input: 'text-sm' }} />
+                <Input value={name} onChange={setName} placeholder={t('scheduledTasks.editor.namePlaceholder')} aria-invalid={!!errors.name || undefined}  />
               ))}
 
               {field(t('scheduledTasks.editor.prompt'), errors.prompt, (
@@ -290,7 +290,7 @@ export const ScheduledTaskEditor = memo(function ScheduledTaskEditor({
                     <SelectItem value="worktree" className="text-sm">{t('scheduledTasks.editor.environmentWorktree')}</SelectItem>
                   </SelectContent>
                 </Select>
-              ), <p className="text-[11px] leading-4 text-muted-foreground">{t('scheduledTasks.editor.environmentHint')}</p>) : null}
+              ), <p className="text-caption leading-ui-tight text-muted-foreground">{t('scheduledTasks.editor.environmentHint')}</p>) : null}
 
             </div>
             <div className="grid min-w-0 md:col-start-2 md:row-start-1 md:row-span-5 md:grid-rows-subgrid">
@@ -313,7 +313,7 @@ export const ScheduledTaskEditor = memo(function ScheduledTaskEditor({
 
                 {scheduleKind === 'interval'
                   ? field(t('scheduledTasks.editor.minutes'), errors.minutes, (
-                      <Input value={minutes} onChange={setMinutes} inputMode="numeric" aria-invalid={!!errors.minutes || undefined} classNames={{ field: 'h-9', input: 'text-sm' }} />
+                      <Input value={minutes} onChange={setMinutes} inputMode="numeric" aria-invalid={!!errors.minutes || undefined}  />
                     ))
                   : null}
 
@@ -401,7 +401,7 @@ export const ScheduledTaskEditor = memo(function ScheduledTaskEditor({
         ) : null}
 
         <div className="mt-auto flex items-center justify-between gap-3 border-t border-border/60 pt-3">
-          <p className="text-[11px] leading-4 text-muted-foreground">{t('scheduledTasks.editor.environmentNote')}</p>
+          <p className="text-caption leading-ui-tight text-muted-foreground">{t('scheduledTasks.editor.environmentNote')}</p>
           <div className="flex shrink-0 gap-2">
             <Button variant="ghost" size="sm" onClick={() => onOpenChange(false)}>
               {t('scheduledTasks.editor.cancel')}

@@ -1,3 +1,4 @@
+// local patch (pi-app): shared scalable typography for UI line metrics.
 // local patch (pi-app): keep UI frames and focus rings in this component at 1px.
 "use client";
 // beui.dev/components/agents/chat-app
@@ -232,19 +233,24 @@ export function MessageScroller({
     const viewport = viewportRef.current;
     if (!content || !viewport) return;
 
-    const messages = Array.from(
-      content.querySelectorAll<HTMLElement>('[data-slot="message"]'),
-    );
-
     // local patch (pi-app): app-driven rail — items arrive as data, rows are
     // located by the caller's data-rail-id instead of derived from DOM text.
     if (railItems) {
       const targets = new Map<string, HTMLElement>();
       const nextItems: PreviewRailItem[] = [];
+      // One pass over the rows: a per-item querySelector rescans the whole
+      // transcript for every tick, which is quadratic on a long session and
+      // runs on every message change.
+      const located = new Map<string, HTMLElement>();
+      for (const element of content.querySelectorAll<HTMLElement>(
+        "[data-rail-id]",
+      )) {
+        const id = element.dataset.railId;
+        // First match wins, like a single querySelector("[data-rail-id=...]")
+        if (id && !located.has(id)) located.set(id, element);
+      }
       for (const item of railItems) {
-        const element = content.querySelector<HTMLElement>(
-          `[data-rail-id="${CSS.escape(item.id)}"]`,
-        );
+        const element = located.get(item.id);
         if (!element) continue;
         targets.set(item.id, element);
         nextItems.push(item);
@@ -270,6 +276,11 @@ export function MessageScroller({
       return;
     }
 
+    // Stock rail: message rows come from the DOM, so the query runs only on
+    // this path (the app-driven branch above never needs it).
+    const messages = Array.from(
+      content.querySelectorAll<HTMLElement>('[data-slot="message"]'),
+    );
     const targets = new Map<string, HTMLElement>();
     const nextItems = messages.map((message, index) => {
       let id = railIdRef.current.get(message);
@@ -609,7 +620,7 @@ export function MessageScroller({
           itemSize={14}
           className="h-full min-h-0 overflow-hidden"
           previewContainerClassName="right-8 left-3"
-          previewClassName="mr-1 w-64 max-w-full [&_[data-slot=preview-rail-card]]:h-20 [&_[data-slot=preview-rail-card]]:overflow-hidden [&_[data-slot=preview-rail-card]]:p-3 [&_[data-slot=preview-rail-title]]:line-clamp-1 [&_[data-slot=preview-rail-title]]:text-xs [&_[data-slot=preview-rail-title]]:leading-4 [&_[data-slot=preview-rail-description]]:line-clamp-2 [&_[data-slot=preview-rail-description]]:text-xs [&_[data-slot=preview-rail-description]]:leading-4"
+          previewClassName="mr-1 w-64 max-w-full [&_[data-slot=preview-rail-card]]:h-20 [&_[data-slot=preview-rail-card]]:overflow-hidden [&_[data-slot=preview-rail-card]]:p-3 [&_[data-slot=preview-rail-title]]:line-clamp-1 [&_[data-slot=preview-rail-title]]:text-xs [&_[data-slot=preview-rail-title]]:leading-ui-tight [&_[data-slot=preview-rail-description]]:line-clamp-2 [&_[data-slot=preview-rail-description]]:text-xs [&_[data-slot=preview-rail-description]]:leading-ui-tight"
           railClassName={cn(
             "absolute inset-y-3 right-1 w-7 content-center py-1 [&_[data-slot=preview-rail-item]]:w-7 [&_[data-slot=preview-rail-item]]:justify-end [&_[data-slot=preview-rail-tick]]:h-px [&_[data-slot=preview-rail-tick]]:w-4 [&_[data-slot=preview-rail-tick]]:origin-right",
             railOverflowing

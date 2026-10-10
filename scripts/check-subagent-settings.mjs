@@ -9,8 +9,13 @@
  *   disables while subagents are off.
  * - Profiles: list/detail from `subagents:profiles` — scope badge, file path,
  *   frontmatter fields, system prompt preview.
+ * - Frontmatter fields: not presented at all — the file is their only
+ *   editor; even the path rides the open-file button's hover tooltip. The
+ *   debugger is an ordinary tool grant (all, or an explicit debug entry),
+ *   with no dedicated switch.
  * - Tool editor: SDK built-ins + extension tools from the shared catalog, the
- *   MCP tools individually selectable, every namespaced family in a section
+ *   MCP section collapsed into ONE family row (a tri-state select-all beside
+ *   the still-independent per-tool grants), every namespaced family in a section
  *   collapsed into one tri-state row (select-all/clear in one gesture, members
  *   still individually checkable), profile-carried unknown names preserved on
  *   save, empty selection blocked, Reset returning to the saved state, and the
@@ -76,6 +81,7 @@ const catalog = {
     { name: 'find', description: 'Find files.', parameters: { type: 'object' }, source: { kind: 'builtin', label: 'Built-in' }, active: true, disabledByExtension: false },
     { name: 'ls', description: 'List a directory.', parameters: { type: 'object' }, source: { kind: 'builtin', label: 'Built-in' }, active: true, disabledByExtension: false },
     { name: 'todo_write', description: 'Write the todo list.', parameters: { type: 'object' }, source: { kind: 'builtin', label: 'Built-in' }, active: true, disabledByExtension: false },
+    { name: 'debug', description: 'Debug a session.', parameters: { type: 'object' }, source: { kind: 'builtin', label: 'Built-in' }, active: true, disabledByExtension: false },
     { name: 'browser_navigate', description: 'Open a page.', parameters: { type: 'object' }, source: { kind: 'builtin', label: 'Built-in' }, active: true, disabledByExtension: false },
     { name: 'browser_click', description: 'Click an element.', parameters: { type: 'object' }, source: { kind: 'builtin', label: 'Built-in' }, active: true, disabledByExtension: false },
     { name: 'browser_type', description: 'Type into a field.', parameters: { type: 'object' }, source: { kind: 'builtin', label: 'Built-in' }, active: true, disabledByExtension: false },
@@ -120,11 +126,6 @@ window.pi = {
   setSubagentCommsEnabled: (v) => count('setSubagentCommsEnabled', v),
   setSubagentTurnLimitOverrideEnabled: (v) => window.failTurnOverride ? Promise.reject(new Error('disk failure')) : count('setSubagentTurnLimitOverrideEnabled', v),
   setSubagentMaxTurns: (v) => window.failMaxTurns ? Promise.reject(new Error('disk failure')) : count('setSubagentMaxTurns', v),
-  setSubagentProfileDebug: (filePath, enabled) => {
-    if (window.failProfileDebug) return Promise.reject(new Error('disk failure'));
-    profiles = profiles.map(p => p.filePath === filePath ? {...p, debugEnabled: enabled} : p);
-    return count('setSubagentProfileDebug', {filePath, enabled}).then(listDTO);
-  },
   models: () => Promise.resolve([
     { providerId: 'fixture', id: 'standard', name: 'Fixture Standard', providerName: 'Fixture', reasoning: false,
       thinkingLevels: ['off'], input: ['text'], contextWindow: 32000, maxTokens: 4096, available: true, costInputPerM: 0, costOutputPerM: 0 },
@@ -247,23 +248,23 @@ app.on('window-all-closed',()=>app.quit());`
   child = spawn(electron, [main], { env, stdio: ['ignore', 'ignore', 'pipe'] })
   const endpoint = await new Promise((resolve, reject) => {
     let output = ''
-    const timer = setTimeout(() => reject(new Error('Electron debugger did not start: ' + output)), 15000)
+    const timer = setTimeout(() => reject(new Error(`Electron debugger did not start: ${output}`)), 15000)
     child.once('exit', (code) => {
       clearTimeout(timer)
-      reject(new Error('Electron exited: ' + code))
+      reject(new Error(`Electron exited: ${code}`))
     })
     child.stderr.on('data', (chunk) => {
       output += chunk
       const match = /DevTools listening on ws:\/\/127\.0\.0\.1:(\d+)/.exec(output)
       if (match) {
         clearTimeout(timer)
-        resolve('http://127.0.0.1:' + match[1])
+        resolve(`http://127.0.0.1:${match[1]}`)
       }
     })
   })
   let page
   for (let i = 0; i < 100 && !page; i++) {
-    page = (await (await fetch(endpoint + '/json/list')).json()).find((p) => p.type === 'page')
+    page = (await (await fetch(`${endpoint}/json/list`)).json()).find((p) => p.type === 'page')
     if (!page) await pause(50)
   }
   assert.ok(page, 'Electron page created')
@@ -302,7 +303,7 @@ app.on('window-all-closed',()=>app.quit());`
     if (!process.env.PI_SUBAGENT_SETTINGS_SCREENSHOT_DIR) return
     await mkdir(process.env.PI_SUBAGENT_SETTINGS_SCREENSHOT_DIR, { recursive: true })
     const capture = await send('Page.captureScreenshot')
-    await writeFile(join(process.env.PI_SUBAGENT_SETTINGS_SCREENSHOT_DIR, name + '.png'), Buffer.from(capture.data, 'base64'))
+    await writeFile(join(process.env.PI_SUBAGENT_SETTINGS_SCREENSHOT_DIR, `${name}.png`), Buffer.from(capture.data, 'base64'))
   }
   for (let i = 0; i < 200; i++) {
     if (await evaluate(`!!window.fixtureReady && !!document.querySelector('[role=tablist]')`)) break
@@ -314,11 +315,10 @@ app.on('window-all-closed',()=>app.quit());`
   // 1. Registry: Subagents sits after Tools, and General no longer carries the
   //    subagent rows.
   const order = await evaluate(`[...document.querySelectorAll('[role=tab]')].map((t) => t.textContent.trim())`)
-  assert.deepEqual(
-    order,
-    ['General', 'Notifications', 'Prompt', 'Appearance', 'Picture in picture', 'Shortcuts', 'Providers', 'Tools', 'Subagents', 'Extensions', 'MCP', 'Skills', 'Browser', 'Usage', 'JevBeta'],
-    'the Subagents entry follows Tools in the registry order'
-  )
+  const toolsIndex = order.indexOf('Tools')
+  assert.ok(toolsIndex >= 0, 'the Tools section remains in the settings registry')
+  assert.equal(order[toolsIndex + 1], 'Subagents', 'the Subagents entry follows Tools in the registry order')
+  assert.equal(order.filter(label => label === 'Subagents').length, 1, 'the Subagents section appears once')
   assert.equal(await evaluate(`!!document.querySelector('button[role=checkbox][aria-label="${ENABLE_LABEL}"]')`), false, 'General no longer renders the subagents enable checkbox')
   assert.equal(await evaluate(`!!document.querySelector('input[aria-label="${CONCURRENCY_LABEL}"]')`), false, 'General no longer renders the concurrency field')
 
@@ -393,81 +393,40 @@ app.on('window-all-closed',()=>app.quit());`
   // 3. The profile list and the first detail (a tools: all profile).
   const listed = await evaluate(`[...document.querySelectorAll('[data-subagent-profile]')].map((r) => r.dataset.subagentProfile)`)
   assert.deepEqual(listed, ['general-purpose', 'explore', 'piweb-agent', 'preset-agent'], 'every profile is one row, in list order')
-  assert.ok(await evaluate(`document.querySelector('[data-subagents-section]').textContent.includes('/agents/general-purpose.md')`), 'the detail shows the file path')
+  assert.ok(!await evaluate(`document.querySelector('[data-subagents-section]').textContent.includes('/agents/general-purpose.md')`), 'the file path no longer renders as text')
   assert.ok(await evaluate(`document.querySelector('[data-subagents-section]').textContent.includes('Global')`), 'the scope badge reads')
   assert.equal(await evaluate(`window.radioOf('All tools')?.getAttribute('data-state')`), 'checked', 'an all-tools profile selects the all radio')
-  assert.ok(!await evaluate(`document.querySelector('[data-subagents-section] dl').textContent.includes('Turn limit')`), 'per-role turn limits are removed from the detail')
+  assert.equal(await evaluate(`!!document.querySelector('[data-subagents-section] dl')`), false, 'no field list renders in the detail')
   assert.equal(await evaluate(`window.radioOf('Choose tools')?.getAttribute('data-state')`), 'unchecked', 'not the explicit radio')
   assert.equal(await evaluate(`document.querySelector('[data-subagent-tools-save]').disabled`), true, 'a pristine editor offers no Save')
 
-  // All tools does not grant debug. The dedicated checkbox saves this role only.
-  assert.equal(await evaluate(`document.querySelector('[data-subagent-debug] [role=checkbox]').getAttribute('aria-checked')`), 'false')
-  await evaluate(`document.querySelector('[data-subagent-debug] [role=checkbox]').click()`)
-  await frame()
-  assert.equal(await evaluate(`document.querySelector('[data-subagent-debug] [role=checkbox]').getAttribute('aria-checked')`), 'true')
-  assert.deepEqual(await evaluate(`window.calls.filter(c=>c[0]==='setSubagentProfileDebug').at(-1)[1]`), {filePath:'/agents/general-purpose.md',enabled:true})
-  await evaluate(`window.failProfileDebug=true; document.querySelector('[data-subagent-debug] [role=checkbox]').click()`)
-  await frame()
-  assert.equal(await evaluate(`document.querySelector('[data-subagent-debug] [role=checkbox]').getAttribute('aria-checked')`), 'true', 'failed save retains the saved grant')
-  assert.ok(await evaluate(`document.querySelector('[data-subagent-debug]').textContent.includes('Could not save')`))
-  await evaluate(`window.failProfileDebug=false`)
+  // The debugger is an ordinary tool grant now: no dedicated switch, and the
+  // tools list (all, or an explicit debug entry) is the only place it lives.
+  assert.equal(await evaluate(`!!document.querySelector('[data-subagent-debug]')`), false, 'no dedicated debug switch remains')
+  assert.equal(await evaluate(`window.callsOf('setSubagentProfileDebug')`), 0, 'the page never writes a separate debug grant')
 
-  // The four role defaults have an editor; empty optional fields retain the
-  // current behavior, and Cancel/failure never changes the saved defaults.
-  await evaluate(`document.querySelector('[data-subagent-edit-defaults]').click()`)
-  await pause(250)
-  await frame()
-  assert.ok(await evaluate(`!!document.querySelector('[data-subagent-defaults-form]')`))
-  assert.equal(await evaluate(`document.querySelector('[data-subagent-defaults-save]').disabled`), true, 'an unchanged form does not save')
-  const defaultsFacts = await evaluate(`(()=>{const root=document.querySelector('[data-subagent-defaults-form]'), titles=[...root.querySelectorAll('[data-subagent-default-title]')],style=getComputedStyle(root),gap=e=>Math.round(e.nextElementSibling.getBoundingClientRect().top-e.getBoundingClientRect().bottom),inset=e=>Math.round(e.getBoundingClientRect().left-e.parentElement.getBoundingClientRect().left);return{columns:style.gridTemplateColumns.split(' ').length,gutter:style.gap,count:titles.length,sizes:[...new Set(titles.map(e=>getComputedStyle(e).fontSize))],colors:[...new Set(titles.map(e=>getComputedStyle(e).color))],gaps:[...new Set(titles.map(gap))],insets:[...new Set(titles.map(inset))],pickerSize:getComputedStyle(root.querySelector('[role=group] button')).fontSize,scrolls:[...root.closest('[role=dialog]').querySelectorAll('div')].filter(e=>['auto','scroll'].includes(getComputedStyle(e).overflowY)&&e.scrollHeight>e.clientHeight+1).length}})()`)
-  assert.deepEqual({columns:defaultsFacts.columns,gutter:defaultsFacts.gutter,count:defaultsFacts.count}, {columns:2,gutter:'20px',count:4}, 'the editor uses the two-column form rhythm')
-  assert.deepEqual(defaultsFacts.sizes, ['14px'])
-  assert.equal(defaultsFacts.colors.length, 1)
-  assert.deepEqual(defaultsFacts.gaps, [10], 'field titles sit 10px above their controls')
-  assert.deepEqual(defaultsFacts.insets, [0], 'field titles are flush')
-  assert.equal(defaultsFacts.pickerSize, '14px')
-  assert.equal(defaultsFacts.scrolls, 0, 'the complete editor fits on a normal window')
-  await evaluate(`document.querySelector('[data-subagent-defaults-form] [role=group] button').click()`)
-  await pause(200)
-  await evaluate(`document.querySelector('[data-model-option="fixture/standard"]').click()`)
-  await frame()
-  await evaluate(`document.querySelector('[data-subagent-defaults-form] [aria-label="Thinking"]').click()`)
-  await pause(200)
-  await evaluate(`[...document.querySelectorAll('[role=option]')].find(e=>e.textContent.trim()==='High').click()`)
-  await frame()
-  await evaluate(`document.querySelector('[data-subagent-defaults-form] button[aria-label="Inherit parent context"]').click(); document.querySelector('[data-subagent-defaults-form] button[aria-label="Run in background"]').click()`)
+  // Model, thinking and the other frontmatter fields are not presented at
+  // all — the file is their only editor, and the path rides the open-file
+  // button's tooltip instead of a field row.
+  assert.equal(await evaluate(`!!document.querySelector('[data-subagent-defaults]')`), false, 'no defaults editing area renders')
+  assert.equal(await evaluate(`!!document.querySelector('[data-subagent-edit-defaults]')`), false, 'no edit entry remains')
+  const detailText = await evaluate(`document.querySelector('[data-subagents-section]').textContent`)
+  for (const label of ['File', 'Model', 'Thinking', 'Inherit parent context', 'Run in background']) {
+    assert.ok(!detailText.includes(label), `the ${label} label is gone`)
+  }
+  assert.equal(await evaluate(`window.callsOf('setSubagentProfileDefaults')`), 0, 'the page never writes the defaults')
+  // The open-file button names its full target on hover.
+  await evaluate(`(()=>{const b=[...document.querySelectorAll('[data-subagents-section] button')].find(e=>e.textContent.trim()==='Open file'); b.dispatchEvent(new PointerEvent('pointerover',{bubbles:true,pointerId:1,isPrimary:true,pointerType:'mouse'}))})()`)
+  await pause(300)
+  assert.ok(await evaluate(`[...document.querySelectorAll('[role=tooltip]')].some(e=>e.textContent.includes('/agents/general-purpose.md'))`), 'the open-file button shows the full path on hover')
+  await evaluate(`(()=>{const b=[...document.querySelectorAll('[data-subagents-section] button')].find(e=>e.textContent.trim()==='Open file'); b.dispatchEvent(new PointerEvent('pointerout',{bubbles:true,pointerId:1,isPrimary:true,pointerType:'mouse'}))})()`)
   await frame()
   await screenshot('subagent-defaults-en')
-  await evaluate(`window.failDefaults=true; document.querySelector('[data-subagent-defaults-save]').click()`)
-  await frame()
-  assert.ok(await evaluate(`!!document.querySelector('[data-subagent-defaults-form]')`), 'a failed save keeps the editor and draft')
-  assert.ok(await evaluate(`document.querySelector('[role=dialog] [role=alert]').textContent.includes('Could not save')`))
-  await evaluate(`window.failDefaults=false; document.querySelector('[data-subagent-defaults-save]').click()`)
-  await pause(200)
-  await frame()
-  assert.deepEqual(await evaluate(`window.calls.filter(c=>c[0]==='setSubagentProfileDefaults').at(-1)[1]`), {
-    filePath:'/agents/general-purpose.md', defaults:{model:'fixture/standard',thinking:'high',inheritContext:false,runInBackground:true}
-  }, 'all four defaults reach the profile setter')
-  assert.ok(!await evaluate(`!!document.querySelector('[data-subagent-defaults-form]')`))
-  assert.ok(await evaluate(`document.querySelector('[data-subagents-section] dl').textContent.includes('fixture/standard')`), 'the detail reflects the saved defaults')
-  await evaluate(`document.querySelector('[data-subagent-edit-defaults]').click()`)
-  await pause(250)
-  await evaluate(`document.querySelector('[data-subagent-defaults-form] [role=group] button').click()`)
-  await pause(200)
-  await evaluate(`[...document.querySelectorAll('[role=option]')].find(e=>e.textContent.trim()==='Use parent model').click()`)
-  await frame()
-  await evaluate(`document.querySelector('[data-subagent-defaults-form] [aria-label="Thinking"]').click()`)
-  await pause(200)
-  await evaluate(`[...document.querySelectorAll('[role=option]')].find(e=>e.textContent.trim()==='Not set').click()`)
-  await frame()
-  await evaluate(`document.querySelector('[data-subagent-defaults-save]').click()`)
-  await pause(200)
-  assert.deepEqual(await evaluate(`window.calls.filter(c=>c[0]==='setSubagentProfileDefaults').at(-1)[1].defaults`), {model:null,thinking:null,inheritContext:false,runInBackground:true}, 'optional defaults can be cleared independently of boolean choices')
 
   // Switching to explicit starts from everything; Reset returns to the saved state.
   await evaluate(`window.radioOf('Choose tools').click()`)
   await frame()
-  assert.equal(await evaluate(`window.checkedTools().length`), 24, 'explicit mode starts from the full universe, with each MCP and scripting tool separate')
+  assert.equal(await evaluate(`window.checkedTools().length`), 25, 'explicit mode starts from the full universe, with each MCP and scripting tool separate')
   assert.equal(await evaluate(`document.querySelector('[data-subagent-tools-reset]').disabled`), false, 'an edit in progress can be reset')
   await evaluate(`document.querySelector('[data-subagent-tools-reset]').click()`)
   await frame()
@@ -476,10 +435,17 @@ app.on('window-all-closed',()=>app.quit());`
   // 4. The explore profile: MCP tool grants stay separate, unknown preserved.
   await evaluate(`window.profileRow('explore').click()`)
   await frame()
-  assert.ok(await evaluate(`document.querySelector('[data-subagents-section]').textContent.includes('/proj/.pi/agents/explore.md')`), 'the project file path reads')
+  assert.ok(!await evaluate(`document.querySelector('[data-subagents-section]').textContent.includes('/proj/.pi/agents/explore.md')`), 'the project path no longer renders as text either')
   assert.ok(await evaluate(`document.querySelector('[data-subagents-section]').textContent.includes('Project')`), 'the project scope badge reads')
-  assert.ok(await evaluate(`document.querySelector('[data-subagents-section]').textContent.includes('deepseek/chat')`), 'the model field reads')
-  assert.ok(!await evaluate(`document.querySelector('[data-subagents-section] dl').textContent.includes('Turn limit')`), 'a legacy profile limit is no longer presented as a setting')
+  // The path rides the open-file button's tooltip instead.
+  await evaluate(`(()=>{const b=[...document.querySelectorAll('[data-subagents-section] button')].find(e=>e.textContent.trim()==='Open file'); b.dispatchEvent(new PointerEvent('pointerover',{bubbles:true,pointerId:1,isPrimary:true,pointerType:'mouse'}))})()`)
+  await pause(300)
+  assert.ok(await evaluate(`[...document.querySelectorAll('[role=tooltip]')].some(e=>e.textContent.includes('/proj/.pi/agents/explore.md'))`), 'the open-file tooltip carries the project path')
+  await evaluate(`(()=>{const b=[...document.querySelectorAll('[data-subagents-section] button')].find(e=>e.textContent.trim()==='Open file'); b.dispatchEvent(new PointerEvent('pointerout',{bubbles:true,pointerId:1,isPrimary:true,pointerType:'mouse'}))})()`)
+  await frame()
+  const exploreText = await evaluate(`document.querySelector('[data-subagents-section]').textContent`)
+  assert.ok(!exploreText.includes('deepseek/chat'), 'the model is not presented')
+  assert.equal(await evaluate(`!!document.querySelector('[data-subagents-section] dl')`), false, 'no field list renders for a project profile either')
   const mcpRow = await evaluate(`(()=>{const rows=[...document.querySelectorAll('[data-subagent-tool]')].map((r)=>r.dataset.subagentTool);return {mcp:rows.filter((n)=>n==='mcp'||n==='mcpScript'||n.startsWith('mcp__')||n==='list_mcp_resources'),codemode:rows.includes('codemode'),search:rows.includes('tool_search'),ctx:rows.includes('ctx_one'),fff:rows.includes('ffgrep'),legacy:rows.includes('legacy-tool'),todo:rows.includes('todo_write')}})()`)
   assert.deepEqual(mcpRow.mcp, ['mcp', 'mcpScript', 'list_mcp_resources', 'mcp__beui', 'mcp__beui__get_component', 'mcp__context7__resolve_library_id'], 'native and historical MCP names have independent rows')
   assert.equal(mcpRow.codemode, true, 'codemode has its own row')
@@ -494,8 +460,6 @@ app.on('window-all-closed',()=>app.quit());`
 
   const groups = await evaluate(`[...document.querySelectorAll('[data-subagent-tool-group]')].map((g) => g.dataset.subagentToolGroup)`)
   assert.deepEqual(groups, ['mcp', 'builtin', 'extension', 'unknown'], 'the picker groups render mcp-first with an unknown group')
-
-  assert.equal(await evaluate(`document.querySelector('[data-subagent-debug] [role=checkbox]').getAttribute('aria-checked')`), 'false', 'a sibling role keeps its independent default')
 
   // Enable exactly one native MCP tool and save: no gateway, codemode or
   // sibling server is granted through the section's visual grouping.
@@ -520,6 +484,52 @@ app.on('window-all-closed',()=>app.quit());`
   )
   await screenshot('subagents-explore')
 
+  // The MCP section is one family row, exactly like an extension family:
+  // collapsed by default, one tri-state checkbox selecting every server, and
+  // the per-tool grants still independent underneath.
+  assert.equal(await evaluate(`window.familyToggle('mcp').getAttribute('aria-expanded')`), 'false', 'the MCP family starts collapsed')
+  assert.equal(await evaluate(`window.familyState('mcp')`), 'false', 'with no MCP grant the family box reads unchecked')
+  assert.equal(await evaluate(`window.familyCount('mcp')`), '0/6', 'the family counts its selected members')
+  await evaluate(`window.familyBox('mcp').click()`)
+  await frame()
+  for (const name of ['mcp', 'mcpScript', 'list_mcp_resources', 'mcp__beui', 'mcp__beui__get_component', 'mcp__context7__resolve_library_id']) {
+    assert.equal(await evaluate(`window.boxState(${JSON.stringify(name)})`), 'true', `the family box selects ${name}`)
+  }
+  assert.equal(await evaluate(`window.familyState('mcp')`), 'true', 'a full family reads checked')
+  assert.equal(await evaluate(`window.familyCount('mcp')`), '6/6', 'the count follows')
+  await evaluate(`window.familyToggle('mcp').click()`)
+  await frame()
+  assert.equal(await evaluate(`window.familyToggle('mcp').getAttribute('aria-expanded')`), 'true', 'the disclosure opens the individual grants')
+  await evaluate(`window.toolBox('mcp').click()`)
+  await frame()
+  assert.equal(await evaluate(`window.familyState('mcp')`), 'mixed', 'a partial family reads mixed')
+  assert.equal(await evaluate(`window.familyCount('mcp')`), '5/6', 'with an honest count')
+  await evaluate(`window.familyBox('mcp').click()`)
+  await frame()
+  assert.equal(await evaluate(`window.familyCount('mcp')`), '6/6', 'clicking a mixed box completes the selection')
+  await evaluate(`document.querySelector('[data-subagent-tools-save]').click()`)
+  await frame()
+  assert.deepEqual(
+    (await evaluate(`window.calls.filter((c) => c[0] === 'setSubagentProfileTools').map((c) => c[1])`)).at(-1),
+    { filePath: '/proj/.pi/agents/explore.md', tools: ['read', 'grep', 'find', 'ls', 'mcp', 'mcpScript', 'list_mcp_resources', 'mcp__beui', 'mcp__beui__get_component', 'mcp__context7__resolve_library_id', 'legacy-tool'] },
+    'the whole MCP family reaches the saved CSV in canonical order'
+  )
+  assert.equal(await evaluate(`window.checkedTools().join(',')`), 'read,grep,find,ls,legacy-tool', 'the save clears the draft back to the saved set')
+
+  // The debugger grant is an ordinary tool row: checking it (or All tools)
+  // is the whole switch, with the parent session still the real ceiling.
+  assert.equal(await evaluate(`window.boxState('debug')`), 'false', 'debug starts as an ordinary unchecked row')
+  await evaluate(`window.toolBox('debug').click()`)
+  await frame()
+  assert.equal(await evaluate(`window.boxState('debug')`), 'true', 'debug checks like any other tool')
+  await evaluate(`document.querySelector('[data-subagent-tools-save]').click()`)
+  await frame()
+  assert.deepEqual(
+    (await evaluate(`window.calls.filter((c) => c[0] === 'setSubagentProfileTools').map((c) => c[1])`)).at(-1),
+    { filePath: '/proj/.pi/agents/explore.md', tools: ['debug', 'read', 'grep', 'find', 'ls', 'legacy-tool'] },
+    'the debug grant rides the tools: line in canonical order'
+  )
+
   // Unchecking everything blocks the save.
   for (const name of await evaluate(`window.checkedTools()`)) {
     await evaluate(`window.toolBox(${JSON.stringify(name)}).click()`)
@@ -538,7 +548,7 @@ app.on('window-all-closed',()=>app.quit());`
   assert.deepEqual(families.extension, ['ctx', 'pi-lens'], 'the extension section groups a declared family by its key and one extension as one family')
   assert.deepEqual(families.builtin, ['browser'], 'a namespaced app tool family groups under the built-ins')
   assert.deepEqual(families.unknown, [], 'the unknown group has no family of its own')
-  assert.deepEqual(families.mcp, [], 'MCP tools have individual grants, with no select-all family')
+  assert.deepEqual(families.mcp, ['mcp'], 'the MCP section is one collapsible family row')
   assert.deepEqual(await evaluate(`window.familyMembers('pi-lens')`), ['lens_diagnostics', 'read_symbol'], 'an extension whose tool names share no prefix is ONE family row')
   assert.deepEqual(
     await evaluate(`[...document.querySelector('[data-subagent-tool-family="pi-lens"] [data-subagent-tool-family-toggle]').querySelectorAll('span')].map((s) => s.textContent)`),
@@ -546,7 +556,7 @@ app.on('window-all-closed',()=>app.quit());`
     'a family named after its extension does not repeat that name as a source chip'
   )
   assert.equal(await evaluate(`!!document.querySelector('[data-subagent-tool="ffgrep"]').closest('[data-subagent-tool-family]')`), false, 'a lone prefix member stays a plain row')
-  assert.equal(await evaluate(`!!document.querySelector('[data-subagent-tool="mcp__beui__get_component"]').closest('[data-subagent-tool-family]')`), false, 'an MCP tool row is not nested in a family')
+  assert.deepEqual(await evaluate(`window.familyMembers('mcp')`), ['mcp', 'mcpScript', 'list_mcp_resources', 'mcp__beui', 'mcp__beui__get_component', 'mcp__context7__resolve_library_id'], 'the MCP family holds every grant in section order')
   assert.deepEqual(await evaluate(`window.familyMembers('ctx')`), ['ctx_one', 'ctx_two'], 'the family holds its members')
   assert.deepEqual(await evaluate(`window.familyMembers('browser')`), ['browser_click', 'browser_navigate', 'browser_type'], 'in the section sort order, not reshuffled')
   assert.equal(
@@ -662,7 +672,6 @@ app.on('window-all-closed',()=>app.quit());`
   assert.deepEqual(formFacts.sizes, ['14px'], `create form titles share the form type scale: ${JSON.stringify(formFacts.sizes)}`)
   assert.equal(formFacts.colors.length, 1, `create form titles share one colour: ${JSON.stringify(formFacts.colors)}`)
   assert.ok(formFacts.gaps.length === 1 && formFacts.gaps[0] === 10, `every create form title sits 10px above its control: ${JSON.stringify(formFacts.gaps)}`)
-  assert.deepEqual(formFacts.controls, ['14px'], `create form controls carry the form type scale: ${JSON.stringify(formFacts.controls)}`)
   assert.ok(formFacts.itemGaps.every(gap => gap >= 16) && formFacts.itemGaps.includes(20), `create form items keep the 20px rhythm: ${JSON.stringify(formFacts.itemGaps)}`)
   assert.equal(formFacts.columns, 2, `the create form lays out in two columns: ${formFacts.columns}`)
 
@@ -705,7 +714,7 @@ app.on('window-all-closed',()=>app.quit());`
   )
   assert.equal(await evaluate(`!!document.querySelector('[data-subagent-create-form]')`), false, 'success closes the form')
   assert.equal(await evaluate(`document.querySelectorAll('[data-subagent-profile]').length`), 4, 'the project file shadows the same-name global row, exactly as the loader does')
-  assert.ok(await evaluate(`document.querySelector('[data-subagents-section]').textContent.includes('/proj/.pi/agents/preset-agent.md')`), 'the new profile becomes the selected detail')
+  assert.ok(await evaluate(`document.querySelector('[data-subagents-section]').textContent.includes('Writes and polishes docs.')`), 'the new profile becomes the selected detail')
   assert.equal(await evaluate(`document.querySelector('[data-subagent-tools-source]')?.dataset.subagentToolsSource`), 'default', 'a new profile starts least-privileged (no tools: line)')
   await screenshot('subagents-created')
 
@@ -741,14 +750,12 @@ app.on('window-all-closed',()=>app.quit());`
   assert.ok(await evaluate(`document.querySelector('[data-subagents-section]').textContent.includes('主-子代理通信')`), 'the communications switch label is localized')
   assert.ok(await evaluate(`document.querySelector('[data-subagent-turn-limit-override-row]').textContent.includes('允许父代理设置轮数上限')`), 'the turn-limit grant is localized')
   assert.equal(await evaluate(`document.querySelector('input[aria-label="默认轮数上限"]').placeholder`), '不限制', 'unlimited is localized')
-  await evaluate(`document.querySelector('[data-subagent-edit-defaults]').click()`)
-  await pause(250)
-  assert.ok(await evaluate(`document.querySelector('[role=dialog]').textContent.includes('子代理默认值')`))
-  assert.ok(await evaluate(`document.querySelector('[data-subagent-defaults-form]').textContent.includes('使用父代理模型')`))
-  assert.ok(!await evaluate(`document.querySelector('[data-subagent-defaults-form]').textContent.includes('轮次上限')`), 'the editor has no per-role turn setting in either locale')
+  assert.equal(await evaluate(`!!document.querySelector('[data-subagents-section] dl')`), false, 'no field list renders in Chinese either')
+  const zhText = await evaluate(`document.querySelector('[data-subagents-section]').textContent`)
+  // (No label sweep here: the delegation prose legitimately contains 模型.)
+  assert.ok(!zhText.includes('继承父会话上下文') && !zhText.includes('思考等级'), 'the defaults labels stay hidden in Chinese')
+  assert.equal(await evaluate(`!!document.querySelector('[data-subagent-debug]')`), false, 'no dedicated debug switch in Chinese either')
   await screenshot('subagent-defaults-zh')
-  await evaluate(`document.querySelector('[role=dialog] button[aria-label="取消"]').click()`)
-  await pause(200)
   await evaluate(`window.profileRow('explore').click()`)
   await frame()
   assert.ok(await evaluate(`document.querySelector('[data-subagents-section]').textContent.includes('内置工具')`), 'the built-in group title is localized')
@@ -762,7 +769,7 @@ app.on('window-all-closed',()=>app.quit());`
   await screenshot('subagents-dark-zh')
 
   assert.deepEqual(exceptions, [], 'no renderer exceptions')
-  console.log('PASS: subagent settings — profiles grant MCP tools individually, preserve unknowns, and keep codemode separate in both locales')
+  console.log('PASS: subagent settings — defaults stay hidden, debug is an ordinary tool grant, the MCP family collapses beside its individual grants, unknowns preserved in both locales')
 } finally {
   try {
     ws?.close()

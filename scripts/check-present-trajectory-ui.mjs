@@ -22,7 +22,6 @@ import React from 'react'; import {createRoot} from 'react-dom/client';
 import '/src/styles.css';
 import {I18nProvider,useI18n} from '/src/i18n/index.tsx';
 import {TrajectoryPane} from '/src/components/app/TrajectoryPane.tsx';
-import {TrajectoryTimeline} from '/src/components/app/TrajectoryTimeline.tsx';
 import {TrajectoryRecordRow} from '/src/components/app/TrajectoryRecordRow.tsx';
 import {ToolResult} from '/src/components/agents/tool-result.tsx';
 import {ToolIcon} from '/src/lib/tool-icons.tsx';
@@ -36,8 +35,6 @@ function App(){const {setLocale}=useI18n();window.setLocale=setLocale;return h('
  h('div',{id:'trajectory-wrap',style:{width:'400px',height:'100%',flexShrink:0}},h(TrajectoryPane,{store,agentRuns:new Map([['/fixture/child',{description:'Child agent',profile:'researcher'}]])})),
  h('div',{style:{width:'460px'}},h(FileNavigationProvider,{cwd:'/fixture',openFile:target=>window.previewPaths.push(target.path)},h(PresentedFiles,{files:window.files}))))}
 window.mount=files=>{window.files=files;window.root=createRoot(document.getElementById('root'));window.root.render(h(I18nProvider,null,h(App)))};
-function TimelineFixture(){const [records,setRecords]=React.useState(window.timelineRecords),[selected,setSelected]=React.useState(null);window.setTimelineRecords=setRecords;const {setLocale}=useI18n();window.setLocale=setLocale;return h('div',{id:'timeline-wrap',style:{width:'900px',padding:'12px'}},h(TrajectoryTimeline,{records,selectedId:selected?.id,onSelect:record=>{window.timelineSelected=record.id;setSelected(record)}}),h('div',{'data-timeline-following':true,style:{height:'20px'}}))}
-window.mountTimeline=records=>{window.timelineRecords=records;window.root=createRoot(document.getElementById('root'));window.root.render(h(I18nProvider,null,h(TimelineFixture)))};
 function RecordFixture(){const [selected,setSelected]=React.useState(null);const {setLocale}=useI18n();window.setLocale=setLocale;return h('div',{id:'record-wrap',style:{width:'400px'}},
  h('div',{id:'tool-reference',style:{display:'none'}},window.rowRecords.map(record=>h('div',{key:record.id,'data-reference':record.id},h(ToolResult,{title:record.name,status:record.status==='running'?'running':record.status==='completed'?'success':record.status==='failed'?'error':'cancelled',icon:h(ToolIcon,{name:record.name})})))),
  window.rowRecords.map(record=>h(TrajectoryRecordRow,{key:record.id,record,selected:selected===record.id,reduce:false,onSelect:record=>setSelected(record.id),onToolSelect:call=>{window.lastToolJump=call;setSelected(window.rowRecords.find(record=>record.parentId===call.recordId&&record.toolCallId===call.callId)?.id)}}))) }
@@ -120,7 +117,7 @@ await win.loadURL(${JSON.stringify(url)}+'?session='+encodeURIComponent(f.manage
   assert(summaries.items.some(record => record.kind==='request' && record.preview?.startsWith('Completed round')), 'real model output accompanies the existing record page')
   assert(summaries.items.every(record => !record.preview || record.preview.length<=512), 'list excerpts are bounded at the IPC boundary')
   await page.waitForSelector('[data-trajectory-preview]')
-  assert.equal(await page.locator('[data-trajectory-timing] p').count(),1,'the timeline retains its overview label without either explanatory line')
+  assert.equal(await page.locator('[data-trajectory-timing], [data-trajectory-axis], [data-trajectory-zoom-in], [data-trajectory-zoom-out], [data-trajectory-zoom-reset]').count(), 0, 'trajectory shows no timeline or zoom controls')
   assert(await page.locator('[data-trajectory-preview]').first().textContent(), 'list rows render their content excerpts')
   await assert.rejects(page.evaluate(sessionPath => window.pi.trajectoryNode({ sessionPath, recordId: 'bad', trail: ['0'.repeat(64)] }), sessionPath))
   // Both appearance presets preserve controls, status marks and focusability.
@@ -192,9 +189,12 @@ await win.loadURL(${JSON.stringify(url)}+'?session='+encodeURIComponent(f.manage
   await page.getByText('此分支和筛选条件下暂无记录。', { exact: true }).waitFor()
   await page.getByPlaceholder('搜索工具、模型或供应商').fill('')
   await page.waitForSelector('[data-trajectory-fields] button')
-  // Timeline clicks reveal/select the matching row; document selection is a
-  // separate persistent choice, including while inspecting a nested field.
-  await page.locator('[data-trajectory-span][data-trajectory-kind=request]').first().click()
+  // Record selection opens its detail; document selection persists while
+  // inspecting a nested field.
+  const requestRow = page.locator('[data-trajectory-record]:has([data-trajectory-content-icon=request])').first()
+  const requestId = await requestRow.getAttribute('data-trajectory-record')
+  await requestRow.click()
+  await page.waitForFunction(id => document.querySelector('[data-trajectory-inspector]')?.dataset.trajectoryInspector === id, requestId)
   await page.waitForSelector('[data-trajectory-document=context]:not(:disabled)')
   const contextDocument = page.locator('[data-trajectory-document=context]')
   await contextDocument.click()
@@ -203,12 +203,12 @@ await win.loadURL(${JSON.stringify(url)}+'?session='+encodeURIComponent(f.manage
   await page.waitForSelector('[data-trajectory-document=context]:not(:disabled)')
   assert.equal(await contextDocument.getAttribute('aria-pressed'), 'true', 'a nested SDK field keeps its document selected')
   const selectedId = await page.locator('[data-trajectory-record][aria-pressed=true]').getAttribute('data-trajectory-record')
-  assert.equal(await page.locator('[data-trajectory-span][aria-pressed=true]').getAttribute('data-trajectory-span'), selectedId)
+  assert.equal(await page.locator('[data-trajectory-inspector]').getAttribute('data-trajectory-inspector'), selectedId, 'the inspector belongs to the selected list record')
   const revealed = await page.locator('[data-trajectory-record][aria-pressed=true]').evaluate(row => {
     const bounds = row.closest('[data-trajectory-list]').getBoundingClientRect(), item = row.getBoundingClientRect()
     return {visible:item.top >= bounds.top-1 && item.bottom <= bounds.bottom+1,top:item.top,bottom:item.bottom,viewportTop:bounds.top,viewportBottom:bounds.bottom,scrollTop:row.closest('[data-trajectory-list]').scrollTop}
   })
-  assert(revealed.visible, `a timeline click reveals its selected row without scrolling the inspector: ${JSON.stringify(revealed)}`)
+  assert(revealed.visible, `the selected record remains visible in the list: ${JSON.stringify(revealed)}`)
   // A different record loads its first parameter node before replacing the
   // inspector. There must be no empty frame between the old and new details.
   await page.waitForSelector('[data-trajectory-inspector] [data-trajectory-fields], [data-trajectory-inspector] [data-trajectory-value]')
@@ -294,21 +294,21 @@ await win.loadURL(${JSON.stringify(url)}+'?session='+encodeURIComponent(f.manage
             const inspector = document.querySelector('[data-trajectory-inspector]').getBoundingClientRect()
             const toolbar = document.querySelector('[data-trajectory-toolbar]')
             const list = document.querySelector('[data-trajectory-list]')
-            const timing = document.querySelector('[data-trajectory-timing]').getBoundingClientRect()
+            const workspace = document.querySelector('[data-trajectory-workspace]').getBoundingClientRect()
             const choice = document.querySelector('[data-trajectory-record][aria-pressed=true]')
             const other = document.querySelector('[data-trajectory-record][aria-pressed=false]')
             const doc = document.querySelector('[data-trajectory-document][aria-pressed=true]')
-            const colors = [...pane.querySelectorAll('[data-trajectory-legend] [data-trajectory-kind]')].map(el => getComputedStyle(el).backgroundColor)
             const previews = [...pane.querySelectorAll('[data-trajectory-preview]')].map(el => ({
               clipped:el.scrollWidth>el.clientWidth+1,mask:getComputedStyle(el).maskImage,height:el.getBoundingClientRect().height,
               whitespace:getComputedStyle(el).whiteSpace,text:el.textContent,rowHeight:el.closest('[data-trajectory-record]').getBoundingClientRect().height
             }))
             return { master: {x:master.x,y:master.y,width:master.width,height:master.height},
               inspector: {x:inspector.x,y:inspector.y,width:inspector.width,height:inspector.height},
-              timing: {x:timing.x,bottom:timing.bottom,width:timing.width},
+              workspace: {y:workspace.y,height:workspace.height,width:workspace.width},
+              toolbarBottom:toolbar.getBoundingClientRect().bottom,paneBottom:pane.getBoundingClientRect().bottom,
               choiceFill:getComputedStyle(choice).backgroundColor,otherFill:getComputedStyle(other).backgroundColor,
               docFill:getComputedStyle(doc).backgroundColor,choiceBorderWidth:getComputedStyle(choice).borderTopWidth,
-              docBorderWidth:getComputedStyle(doc).borderTopWidth,colors,previews,
+              docBorderWidth:getComputedStyle(doc).borderTopWidth,previews,
               overflow: [pane, toolbar, list, ...pane.querySelectorAll('[data-trajectory-fields], [data-trajectory-pagination]')].some(el => el.scrollWidth > el.clientWidth+1),
               listHeight:list.clientHeight,toolbarHeight:toolbar.clientHeight,
               sameInspector:window.inspectorBefore===document.querySelector('[data-trajectory-inspector]'),
@@ -324,11 +324,9 @@ await win.loadURL(${JSON.stringify(url)}+'?session='+encodeURIComponent(f.manage
             assert(preview.height<=18 && preview.rowHeight<=48,'contentful rows remain compact')
           }
           assert(geometry.sameInspector && geometry.sameSelected, 'resizing preserves the selected record and inspector DOM')
-          assert(geometry.timing.bottom <= geometry.master.y+1 && geometry.timing.bottom <= geometry.inspector.y+1, 'timeline is above the records and inspector')
-          assert.equal(Math.round(geometry.timing.width), width, 'timeline spans the full pane')
-          assert.equal(new Set(geometry.colors).size, geometry.colors.length, 'each visible record type has a distinct legend color')
-          assert(geometry.colors.length>=2, 'timeline includes messages and requests')
-          assert.equal(await page.locator('[data-trajectory-timing] [data-trajectory-kind=run]').count(), 0, 'run has no axis block or legend')
+          assert(Math.abs(geometry.workspace.y-geometry.toolbarBottom)<1, 'list and detail begin directly below the filters')
+          assert(Math.abs(geometry.workspace.y+geometry.workspace.height-geometry.paneBottom)<1, 'list and detail fill the remaining pane height')
+          assert.equal(Math.round(geometry.workspace.width), width, 'list and detail workspace spans the full pane')
           assert.notEqual(geometry.choiceFill, geometry.otherFill, 'selected record has a persistent background')
           assert.equal(geometry.docFill, geometry.choiceFill, 'record and document choices share their selected background')
           assert.equal(geometry.choiceBorderWidth, '0px', 'selected record has no border')
@@ -464,10 +462,9 @@ await win.loadURL(${JSON.stringify(url)}+'?session='+encodeURIComponent(f.manage
   }
   const wheelStart=await page.evaluate(()=>{const wrap=document.getElementById('record-wrap'),links=document.querySelector('[data-trajectory-tool-calls]');wrap.style.height='200px';wrap.style.overflowY='auto';wrap.scrollTop=0;links.scrollLeft=0;links.dispatchEvent(new WheelEvent('wheel',{deltaX:40,deltaY:4,bubbles:true,cancelable:true}));return {x:links.scrollLeft,y:wrap.scrollTop}})
   const wheelNoise=await page.evaluate(()=>{const wrap=document.getElementById('record-wrap'),links=document.querySelector('[data-trajectory-tool-calls]');links.dispatchEvent(new WheelEvent('wheel',{deltaX:2,deltaY:60,bubbles:true,cancelable:true}));return {x:links.scrollLeft,y:wrap.scrollTop}})
-  assert(wheelStart.x>0&&wheelNoise.x>wheelStart.x&&wheelNoise.y===0,'a diagonal horizontal gesture scrolls wrench actions and ignores vertical noise')
-  await page.waitForTimeout(220)
+  assert(wheelStart.x>0&&wheelStart.y>0&&wheelNoise.x>wheelStart.x&&wheelNoise.y>wheelStart.y,'diagonal input scrolls both wrench actions and the containing list')
   const wheelVertical=await page.evaluate(()=>{const wrap=document.getElementById('record-wrap'),links=document.querySelector('[data-trajectory-tool-calls]');links.dispatchEvent(new WheelEvent('wheel',{deltaX:4,deltaY:40,bubbles:true,cancelable:true}));return {x:links.scrollLeft,y:wrap.scrollTop}})
-  assert(wheelVertical.y>0&&wheelVertical.x===wheelNoise.x,'a new vertical gesture scrolls the containing list without moving the wrench line')
+  assert(wheelVertical.y>wheelNoise.y&&wheelVertical.x>wheelNoise.x,'both axes continue without an idle gap when the dominant direction changes')
   await page.evaluate(()=>{const wrap=document.getElementById('record-wrap');wrap.style.height='';wrap.style.overflowY='';wrap.scrollTop=0;document.querySelector('[data-trajectory-tool-calls]').scrollLeft=0})
   await page.locator('[data-trajectory-tool-call=row-call-1]').focus()
   await page.keyboard.press('Enter')
@@ -475,206 +472,9 @@ await win.loadURL(${JSON.stringify(url)}+'?session='+encodeURIComponent(f.manage
   assert.equal(await page.locator('[data-trajectory-record=row-1]').getAttribute('aria-pressed'),'true')
   if(screenshots)await page.locator('#record-wrap').screenshot({path:join(screenshots,'trajectory-model-tool-calls.png')})
   await page.evaluate(() => window.root.unmount())
-  // Deterministic dense timings and day-long gaps, independent of how quickly
-  // the offline SDK fixture happens to execute on this machine.
-  const timed = (id, kind, turnId, startedAt, elapsed = 1) => ({id,kind,turnId,startedAt,finishedAt:startedAt+elapsed,seq:0,name:id,status:'completed',captured:true})
-  const base = 1700000000000
-  const timelineRecords = [
-    timed('run-a','run',undefined,base,3000),timed('user-a','user','a',base,0),
-    ...Array.from({length:20},(_,i)=>timed(`request-${i}`,'request','a',base+i*2)),
-    ...Array.from({length:20},(_,i)=>timed(`tool-${i}`,'tool','a',base+100+i*2)),
-    timed('assistant-a','assistant','a',base+150,0),
-    timed('run-b','run',undefined,base+86400000,3000),
-    {...timed('request-b','request','b',base+86400000,3000),firstTokenAt:base+86401000},
-    timed('parallel-a','tool','b',base+86400200,2000),timed('parallel-b','tool','b',base+86400400,1000),
-    timed('retry','retry','b',base+86402600,0),timed('compact','compaction','b',base+86402800,100),timed('notice','notification','b',base+86403000,0)
-  ].map((record,seq)=>({...record,seq}))
-  await page.evaluate(records=>window.mountTimeline(records),timelineRecords)
-  const axis = page.locator('[data-trajectory-axis]')
-  await axis.waitFor()
-  const model = await axis.evaluate(el=>({width:el.scrollWidth,viewport:el.clientWidth,zoom:Number(el.dataset.trajectoryZoom),scrollbar:getComputedStyle(el).scrollbarWidth,
-    turns:document.querySelectorAll('[data-trajectory-turn]').length,separators:document.querySelectorAll('[data-trajectory-separator]').length,
-    widths:[...document.querySelectorAll('[data-trajectory-span]')].map(el=>el.getBoundingClientRect().width)}))
-  assert(model.width>model.viewport*1.5, 'dense records scroll instead of shrinking to fit')
-  assert.equal(model.turns,2)
-  assert.equal(model.separators,1)
-  assert.equal(model.scrollbar,'none')
-  assert(model.widths.every(width=>width>=24), 'real buttons retain 24px hit width')
-  assert.equal(await page.locator('[data-trajectory-span][title]').count(),0,'timeline blocks do not use native title tooltips')
-  const tooltipTarget=page.locator('[data-trajectory-span=request-0]')
-  await tooltipTarget.hover()
-  const tooltip=page.getByRole('tooltip')
-  await tooltip.waitFor()
-  assert.equal(await tooltip.textContent(),await tooltipTarget.getAttribute('aria-label'),'beUI tooltip displays the complete localized block description')
-  assert.equal(await tooltipTarget.getAttribute('aria-describedby'),await tooltip.getAttribute('id'),'the visual tooltip describes its keyboard-accessible block')
-  const tooltipBox=await tooltip.boundingBox(),viewport=await page.evaluate(()=>({width:window.innerWidth,height:window.innerHeight}))
-  assert(tooltipBox.x>=0&&tooltipBox.x+tooltipBox.width<=viewport.width&&tooltipBox.width<=320,'the wrapped tooltip stays within the window near a timeline edge')
-  if(screenshots)await page.screenshot({path:join(screenshots,'trajectory-tooltip.png')})
-  await page.mouse.move(0,0)
-  await tooltip.waitFor({state:'hidden'})
-  await page.keyboard.press('Tab');await tooltipTarget.focus()
-  await tooltip.waitFor()
-  await page.locator('[data-trajectory-axis]').focus()
-  await tooltip.waitFor({state:'hidden'})
-  assert.equal(await page.locator('[data-trajectory-kind=run]').count(),0)
-  assert.equal(await page.locator('[data-trajectory-span=assistant-a]').getAttribute('data-trajectory-kind'),'request','historical model output uses the request tone')
-  assert.equal(await page.locator('[data-trajectory-span=assistant-a]').evaluate(el=>el.closest('[data-trajectory-lane]').dataset.trajectoryLane),'request','historical model output shares the request lane')
-  assert.equal(await page.locator('[data-trajectory-legend] [data-trajectory-kind=request]').count(),1,'the legend has one model-request category')
-  const laneLabels=await page.locator('[data-trajectory-timing]').evaluate(timing=>{
-    const center=key=>{const box=timing.querySelector('[data-trajectory-lane-label="'+key+'"] span').getBoundingClientRect();return box.y+box.height/2}
-    const tool=timing.querySelector('[data-trajectory-lane=tool]')
-    return {request:center('request'),tool:center('tool'),events:center('events'),toolHeight:tool.getBoundingClientRect().height}
-  })
-  assert(laneLabels.toolHeight>28,'the fixture has overlapping tools on multiple tracks')
-  assert(Math.abs((laneLabels.tool-laneLabels.request)-(laneLabels.events-laneLabels.tool))<0.5,'messages/events and tools have the same apparent label spacing as requests and tools')
-  const extent = model.width
-  await page.evaluate(records=>window.setTimelineRecords(records.map(record=>record.startedAt>=1700086400000 ? {...record,startedAt:record.startedAt+29*86400000,finishedAt:record.finishedAt+29*86400000,firstTokenAt:record.firstTokenAt===undefined?undefined:record.firstTokenAt+29*86400000}:record)),timelineRecords)
-  await page.waitForFunction(()=>Number(document.querySelector('[data-trajectory-separator]').dataset.trajectoryGap)>29*86400000)
-  assert.equal(await axis.evaluate(el=>el.scrollWidth),extent,'a 30-day turn gap has exactly the same horizontal extent')
-  await axis.evaluate(el=>el.scrollLeft=400)
-  const anchoredBlock=page.locator('[data-trajectory-span=tool-10]')
-  const anchorBefore=await anchoredBlock.boundingBox()
-  await page.mouse.move(anchorBefore.x+anchorBefore.width/2,anchorBefore.y+anchorBefore.height/2)
-  const beforeWheel=await axis.evaluate(el=>({zoom:Number(el.dataset.trajectoryZoom),top:window.scrollY}))
-  await page.mouse.wheel(0,-180)
-  await page.waitForFunction(()=>Number(document.querySelector('[data-trajectory-axis]').dataset.trajectoryZoom)>1.5)
-  const afterZoom=await axis.evaluate(el=>({zoom:Number(el.dataset.trajectoryZoom),left:el.scrollLeft,top:window.scrollY,width:el.scrollWidth}))
-  const anchorAfter=await anchoredBlock.boundingBox()
-  assert(Math.abs(anchorBefore.x+anchorBefore.width/2-anchorAfter.x-anchorAfter.width/2)<1.5,'wheel zoom holds the pointed short block under the cursor')
-  assert(afterZoom.width>extent,'vertical wheel expands dense blocks')
-  assert.equal(afterZoom.top,beforeWheel.top,'zoom does not scroll the surrounding pane')
-  await page.waitForTimeout(250) // a new horizontal gesture after zoom inertia
-  await page.mouse.wheel(200,0)
-  await page.waitForFunction(left=>document.querySelector('[data-trajectory-axis]').scrollLeft>left+100,afterZoom.left)
-  const afterPan=await axis.evaluate(el=>({left:el.scrollLeft,zoom:Number(el.dataset.trajectoryZoom)}))
-  assert.equal(afterPan.zoom,afterZoom.zoom,'horizontal wheel pans without changing scale')
-  await page.keyboard.down('Shift');await page.mouse.wheel(0,160);await page.keyboard.up('Shift')
-  await page.waitForFunction(left=>document.querySelector('[data-trajectory-axis]').scrollLeft>left+80,afterPan.left)
-  assert.equal(await axis.getAttribute('data-trajectory-zoom'),String(afterZoom.zoom),'Shift + wheel pans without zoom')
-  await page.locator('[data-trajectory-zoom-reset]').click()
-  const request=page.locator('[data-trajectory-span=request-b]')
-  const requestColors=()=>request.evaluate(el=>({body:getComputedStyle(el).backgroundColor,wait:getComputedStyle(el.querySelector('.trajectory-wait')).backgroundColor}))
-  for(const theme of ['light','dark']){
-    await page.evaluate(theme=>document.documentElement.classList.toggle('dark',theme==='dark'),theme)
-    for(const selected of [false,true]){
-      if(selected)await request.click()
-      await page.mouse.move(5,5);await page.waitForTimeout(200)
-      const resting=await requestColors()
-      await request.hover();await page.waitForTimeout(200)
-      const hovered=await requestColors()
-      assert.notEqual(hovered.body,resting.body,`${theme}: request body responds to hover`)
-      assert.notEqual(hovered.wait,resting.wait,`${theme}: first-output wait responds to hover with the body`)
-      assert.notEqual(hovered.body,hovered.wait,'hover retains the two timing segments')
-    }
-    await page.locator('[data-trajectory-span=tool-10]').click()
-  }
-  await page.locator('[data-trajectory-zoom-reset]').click()
-  await axis.evaluate(el=>el.scrollLeft=400)
-  const gestureBox=await axis.boundingBox()
-  await page.mouse.move(gestureBox.x+gestureBox.width/2,gestureBox.y+35)
-  await page.waitForTimeout(250)
-  const beforeDiagonalPan=await axis.evaluate(el=>({zoom:Number(el.dataset.trajectoryZoom),left:el.scrollLeft}))
-  for(const [x,y] of [[18,12],[12,20],[8,90]])await page.mouse.wheel(x,y)
-  await page.waitForFunction(left=>document.querySelector('[data-trajectory-axis]').scrollLeft>left+20,beforeDiagonalPan.left)
-  assert.equal(Number(await axis.getAttribute('data-trajectory-zoom')),beforeDiagonalPan.zoom,'a horizontal diagonal swipe never switches to zoom')
-  await page.waitForTimeout(250)
-  for(const [x,y] of [[12,-18],[20,-12],[70,-6]]){
-    const before=Number(await axis.getAttribute('data-trajectory-zoom'))
-    await page.mouse.wheel(x,y)
-    await page.waitForFunction(before=>Number(document.querySelector('[data-trajectory-axis]').dataset.trajectoryZoom)!==before,before)
-  }
-  assert(Math.abs(Number(await axis.getAttribute('data-trajectory-zoom'))-beforeDiagonalPan.zoom*Math.exp(36*0.003))<0.001,'a vertical diagonal swipe zooms using only its locked axis')
-  await page.locator('[data-trajectory-zoom-reset]').click()
-  await page.waitForFunction(()=>document.querySelector('[data-trajectory-axis]').dataset.trajectoryZoom==='1')
-  await axis.focus();await page.keyboard.press('+')
-  await page.waitForFunction(()=>Number(document.querySelector('[data-trajectory-axis]').dataset.trajectoryZoom)>1)
-  await page.keyboard.press('0');await page.keyboard.press('End')
-  await page.waitForFunction(()=>{const el=document.querySelector('[data-trajectory-axis]');return el.scrollLeft>=el.scrollWidth-el.clientWidth-1})
-  assert((await axis.evaluate(el=>getComputedStyle(el).maskImage)).includes('to right'),'horizontal fade marks hidden content')
-  await page.keyboard.press('Home')
-  await page.locator('[data-trajectory-span=tool-10]').click()
-  assert.equal(await page.evaluate(()=>window.timelineSelected),'tool-10','short blocks can select their exact record')
-  assert.equal(await page.locator('[data-trajectory-span=tool-10]').getAttribute('aria-pressed'),'true')
-  assert.equal(await page.locator('[data-trajectory-span=tool-10]').evaluate(el=>getComputedStyle(el).borderTopWidth),'0px')
-  const parallelBoxes=await page.locator('[data-trajectory-span^=parallel-]').evaluateAll(els=>els.map(el=>el.getBoundingClientRect().y))
-  assert.notEqual(parallelBoxes[0],parallelBoxes[1],'overlapping tool blocks have separate rows')
-  await axis.focus()
-  await axis.evaluate(el=>el.dispatchEvent(new WheelEvent('wheel',{deltaY:-10000,clientX:el.getBoundingClientRect().x+40,bubbles:true,cancelable:true})))
-  await page.waitForFunction(()=>Number(document.querySelector('[data-trajectory-axis]').dataset.trajectoryZoom)===8)
-  assert(await page.locator('[data-trajectory-zoom-in]').isDisabled(),'zoom has an upper bound')
-  await axis.evaluate(el=>el.dispatchEvent(new WheelEvent('wheel',{deltaY:10000,clientX:el.getBoundingClientRect().x+40,bubbles:true,cancelable:true})))
-  await page.waitForFunction(()=>Number(document.querySelector('[data-trajectory-axis]').dataset.trajectoryZoom)===0.25)
-  assert(await page.locator('[data-trajectory-zoom-out]').isDisabled(),'zoom has a lower bound')
-  assert((await page.locator('[data-trajectory-span]').evaluateAll(els=>els.map(el=>el.getBoundingClientRect().width))).every(width=>width>=24),'zoom-out keeps every block clickable')
-  await page.locator('[data-trajectory-zoom-reset]').click()
-  for(const locale of ['en','zh-CN']){
-    await page.evaluate(locale=>window.setLocale(locale),locale)
-    await page.locator('[data-trajectory-zoom-in]').click()
-    await page.locator('[data-trajectory-zoom-out]').click()
-    for(const width of [260,900]){
-      await page.evaluate(width=>document.getElementById('timeline-wrap').style.width=width+'px',width)
-      assert(await axis.evaluate(el=>el.clientWidth>80),'axis remains usable in a narrow pane')
-      assert(!(await page.locator('#timeline-wrap').evaluate(el=>el.scrollWidth>el.clientWidth+1)),'scroll extent is contained in the axis')
-      if(screenshots)await page.locator('#timeline-wrap').screenshot({path:join(screenshots,`trajectory-dense-${width}-${locale}.png`)})
-    }
-  }
-  // Adjacent intervals and identical-timestamp message markers reproduce the
-  // fractional-scale row flicker. Sample actual frames during native wheels,
-  // including the content below the overview, so intermediate jumps fail too.
-  const jitterRecords=[
-    timed('point-user','user','jitter',base,0),
-    ...Array.from({length:24},(_,i)=>timed(`point-assistant-${i}`,'assistant','jitter',base,0)),
-    timed('point-notice','notification','jitter',base,0),
-    ...Array.from({length:24},(_,i)=>timed(`adjacent-tool-${i}`,'tool','jitter',base+100+i,1)),
-    timed('overlap-tool-a','tool','jitter',base+500,2000),timed('overlap-tool-b','tool','jitter',base+600,1000)
-  ].map((record,seq)=>({...record,seq}))
-  await page.evaluate(records=>window.setTimelineRecords(records),jitterRecords)
-  await page.locator('[data-trajectory-span=point-user]').waitFor()
-  const wheelDeltas=[...Array.from({length:4},()=>[-8,-12,8,12]).flat(),-180,-180,200,300,-160,120,-80,80,-140,140]
-  for(const locale of ['en','zh-CN']){
-    await page.evaluate(locale=>window.setLocale(locale),locale)
-    for(const width of [400,900]){
-      await page.evaluate(width=>document.getElementById('timeline-wrap').style.width=width+'px',width)
-      await page.locator('[data-trajectory-zoom-reset]').click()
-      await page.waitForFunction(()=>document.querySelector('[data-trajectory-axis]').dataset.trajectoryZoom==='1')
-      await page.evaluate(()=>{
-        window.timelineZoomFrames=[]
-        let active=true
-        const sample=()=>{
-          const selectors=['[data-trajectory-timing]','[data-trajectory-axis]','[data-timeline-following]','[data-trajectory-lane-label]','[data-trajectory-lane]','[data-trajectory-span]']
-          const geometry=selectors.flatMap(selector=>[...document.querySelectorAll(selector)].map(el=>{
-            const rect=el.getBoundingClientRect();return {selector,id:el.dataset.trajectorySpan??el.dataset.trajectoryLaneLabel??el.dataset.trajectoryLane??'',y:rect.y,height:rect.height}
-          }))
-          window.timelineZoomFrames.push({zoom:Number(document.querySelector('[data-trajectory-axis]').dataset.trajectoryZoom),geometry})
-          if(active)requestAnimationFrame(sample)
-        }
-        window.stopTimelineZoomFrames=()=>{active=false}
-        sample()
-      })
-      const box=await axis.boundingBox()
-      await page.mouse.move(box.x+box.width/2,box.y+34)
-      for(const delta of wheelDeltas){
-        const before=Number(await axis.getAttribute('data-trajectory-zoom'))
-        await page.mouse.wheel(0,delta)
-        await page.waitForFunction(before=>Number(document.querySelector('[data-trajectory-axis]').dataset.trajectoryZoom)!==before,before)
-      }
-      const frames=await page.evaluate(()=>{window.stopTimelineZoomFrames();return window.timelineZoomFrames})
-      assert(frames.length>=wheelDeltas.length,'continuous zoom samples rendered frames')
-      assert(Math.max(...frames.map(frame=>frame.zoom))>2 && Math.min(...frames.map(frame=>frame.zoom))<0.8,'regression exercises both sides of minimum-width scaling')
-      const baseline=frames[0].geometry
-      for(const frame of frames){
-        assert.equal(frame.geometry.length,baseline.length,'zoom keeps the same tracks and buttons')
-        frame.geometry.forEach((rect,index)=>{
-          assert.equal(rect.id,baseline[index].id)
-          assert(Math.abs(rect.y-baseline[index].y)<0.1 && Math.abs(rect.height-baseline[index].height)<0.1,`${locale}/${width}px: ${rect.selector} ${rect.id} moves vertically at ${frame.zoom}x`)
-        })
-      }
-    }
-  }
-  await page.evaluate(() => window.root.unmount())
   assert.deepEqual(errors, [])
   await app.evaluate(async () => { await globalThis.fixture.close() })
-  console.log('PASS UI/IPC: 120 SDK turns, exact same-name tool-use jumps through filters/paging, compact wrench hover/keyboard/dividers, bounded records/fields, paging/search/export, 30-day idle folding, dense/parallel hit targets, continuous wheel zoom with stable overview/track/button/content heights, pan, invisible horizontal scrollbar/fade, persistent selection, 260–1800px layouts, both locales/themes/corners')
+  console.log('PASS UI/IPC: 120 SDK turns, list/detail workspace without a timeline, exact same-name tool-use jumps through filters/paging, compact wrench hover/keyboard/dividers, bounded records/fields, paging/search/export, nested wheel scrolling, persistent selection, 260–1800px layouts, both locales/themes/corners')
 } finally {
   await app?.close()
   await server?.close()

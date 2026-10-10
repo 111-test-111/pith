@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useId, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { ChevronDown, Diff } from '@/lib/icons'
 import { getCachedAgentCodeTokens, prefetchAgentCodeTokens } from '@/components/agents/agent-code'
+import { useCodeThemes } from '@/lib/code-theme-settings'
 import { FileDiff, type FileDiffLine } from '@/components/agents/file-diff'
 import { Button } from '@/components/motion/button'
 import { MorphPopover, MorphPopoverContent } from '@/components/motion/popover-morph'
@@ -43,6 +44,11 @@ function previewData(file: WrittenFile): PreviewData {
   return data
 }
 
+/** Resolve on interaction, keeping full patch parsing out of collapsed rows. */
+function hasPreview(file: WrittenFile): boolean {
+  return Boolean(file.patch?.trim() && previewData(file).lines.length)
+}
+
 /**
  * A diff stat whose digits roll: file edits stream in one call at a time, so
  * the turn's +N/−N counts grow while the user watches them.
@@ -75,10 +81,11 @@ function LineStats({ added, removed, className }: { added: number; removed: numb
 
 /** Snapshot ready tokens on entry: a cold preview stays plain for this visit. */
 const WrittenFileDiff = memo(function WrittenFileDiff({ file }: { file: WrittenFile }) {
-  const { t } = useI18n()
   const [{ lines, code }] = useState(() => previewData(file))
-  const [tokens] = useState(() => code ? getCachedAgentCodeTokens(code, PREVIEW_LANGUAGE) ?? null : null)
-  if (!file.patch) return <p className="px-3 py-2 text-xs text-muted-foreground">{t('tool.noDiff')}</p>
+  const [themes] = useCodeThemes()
+  // A theme change starts a new snapshot; a cold visit still stays plain.
+  const tokens = useMemo(() => code ? getCachedAgentCodeTokens(code, PREVIEW_LANGUAGE, themes) ?? null : null, [code, themes])
+  if (!lines.length) return null
   return (
     <FileDiff
       headerless
@@ -86,6 +93,7 @@ const WrittenFileDiff = memo(function WrittenFileDiff({ file }: { file: WrittenF
       highlight={false}
       tokenLines={tokens}
       virtualize
+      edgeFade={false}
       file={file.displayPath}
       lines={lines}
       additions={file.added}
@@ -123,6 +131,7 @@ const WrittenFileRow = memo(function WrittenFileRow({
   const slash = file.displayPath.lastIndexOf('/')
   const dir = slash >= 0 ? file.displayPath.slice(0, slash) : ''
   const name = file.displayPath.slice(slash + 1)
+  const canPreview = Boolean(file.patch?.trim())
   return (
     <li
       className="min-w-0"
@@ -141,8 +150,8 @@ const WrittenFileRow = memo(function WrittenFileRow({
         className="h-8 w-full justify-start gap-2 rounded-none px-3 font-normal"
         // beUI's transition-colors otherwise trails an instant preview swap.
         style={{ transition: 'none' }}
-        aria-haspopup="dialog"
-        aria-expanded={active}
+        aria-haspopup={canPreview ? 'dialog' : undefined}
+        aria-expanded={canPreview ? active : undefined}
         aria-controls={active ? contentId : undefined}
         onClick={(event) => onClick(file, event.currentTarget)}
         onFocus={(event) => onFocus(file, event.currentTarget)}
@@ -200,8 +209,13 @@ export const TurnWrittenFiles = memo(function TurnWrittenFiles({
 
   const show = useCallback((file: WrittenFile, anchor: HTMLButtonElement) => {
     clearTimers()
+    if (!hasPreview(file)) {
+      closeActivePreview?.()
+      close()
+      return false
+    }
     const current = previewRef.current
-    if (current?.file.filePath === file.filePath && current.file.patch === file.patch && current.anchor === anchor) return
+    if (current?.file.filePath === file.filePath && current.file.patch === file.patch && current.anchor === anchor) return true
     if (closeActivePreview && closeActivePreview !== close) closeActivePreview()
     closeActivePreview = close
     const rect = listRef.current?.getBoundingClientRect()
@@ -220,6 +234,7 @@ export const TurnWrittenFiles = memo(function TurnWrittenFiles({
     pinned.current = false
     previewRef.current = next
     setPreview(next)
+    return true
   }, [clearTimers, close])
 
   const scheduleClose = useCallback(() => {
@@ -275,10 +290,15 @@ export const TurnWrittenFiles = memo(function TurnWrittenFiles({
   const onEnter = useCallback((file: WrittenFile, anchor: HTMLButtonElement) => {
     rowOver.current = true
     clearTimers()
+    if (!hasPreview(file)) {
+      closeActivePreview?.()
+      close()
+      return
+    }
     warm(file)
     if (closeActivePreview) show(file, anchor)
     else openTimer.current = window.setTimeout(() => show(file, anchor), PREVIEW_OPEN_DELAY_MS)
-  }, [clearTimers, show, warm])
+  }, [clearTimers, close, show, warm])
   const onLeave = useCallback(() => {
     rowOver.current = false
     scheduleClose()
@@ -286,8 +306,7 @@ export const TurnWrittenFiles = memo(function TurnWrittenFiles({
   const onFocus = useCallback((file: WrittenFile, anchor: HTMLButtonElement) => {
     // Pointer focus is followed by click; keyboard focus opens immediately.
     if (anchor.matches(':focus-visible')) {
-      warm(file)
-      show(file, anchor)
+      if (show(file, anchor)) warm(file)
     }
   }, [show, warm])
   const onBlur = useCallback(() => {
@@ -295,10 +314,7 @@ export const TurnWrittenFiles = memo(function TurnWrittenFiles({
   }, [scheduleClose])
   const onClick = useCallback((file: WrittenFile, anchor: HTMLButtonElement) => {
     if (previewRef.current?.file.filePath === file.filePath && pinned.current) close()
-    else {
-      show(file, anchor)
-      pinned.current = true
-    }
+    else if (show(file, anchor)) pinned.current = true
   }, [close, show])
 
   useEffect(() => () => {
@@ -367,14 +383,14 @@ export const TurnWrittenFiles = memo(function TurnWrittenFiles({
         </ul>
       </div>
       {/* Keep the content component mounted while closed so its client-only
-          portal gate is ready before the first hover. The portal DOM itself is
-          still absent whenever `open` is false, so it cannot intercept input. */}
-      <MorphPopoverContent side={preview?.side ?? 'bottom'} align="center" sideOffset={0} radius="var(--app-radius-card)" instant>
+          portal gate is ready before the first hover. The exiting portal is
+          inert immediately. Changing the active row reuses the open surface. */}
+      <MorphPopoverContent side={preview?.side ?? 'bottom'} align="center" sideOffset={0} radius="var(--app-radius-card)">
         {preview ? (
           <div
             className="bg-muted/80"
-            // FileDiff owns the height cap; a short diff or the no-diff message
-            // must not inherit a full-height empty frame from this wrapper.
+            // FileDiff owns the height cap; a short diff must not inherit a
+            // full-height empty frame from this wrapper.
             style={{ width: preview.width }}
             onPointerEnter={() => { panelOver.current = true; clearTimers() }}
             onPointerLeave={() => { panelOver.current = false; scheduleClose() }}

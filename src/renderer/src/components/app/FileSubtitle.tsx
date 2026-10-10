@@ -107,14 +107,14 @@ export function FileSubtitle({ text, format = 'srt' }: { text: string; format?: 
   const cues = useMemo(() => parseCues(text, format), [text, format])
   const lyrics = format === 'lrc'
   const truncated = cues.length >= MAX_CUES
-  if (cues.length === 0) return <div role="status" data-file-subtitle-empty className="flex min-h-0 flex-1 items-center justify-center p-5 text-center text-xs leading-5 text-muted-foreground">{t(lyrics ? 'files.lyrics.empty' : 'files.subtitle.empty')}</div>
+  if (cues.length === 0) return <div role="status" data-file-subtitle-empty className="flex min-h-0 flex-1 items-center justify-center p-5 text-center text-xs leading-ui text-muted-foreground">{t(lyrics ? 'files.lyrics.empty' : 'files.subtitle.empty')}</div>
   return <div data-file-subtitle className="flex min-h-0 flex-1 flex-col">
-    <div data-file-subtitle-bar role="status" className="flex h-9 shrink-0 items-center border-b border-border/40 px-3 text-[11px] tabular-nums text-muted-foreground">{t(lyrics ? 'files.lyrics.count' : 'files.subtitle.count', { count: cues.length })}</div>
+    <div data-file-subtitle-bar role="status" className="flex h-9 shrink-0 items-center border-b border-border/40 px-3 text-caption tabular-nums text-muted-foreground">{t(lyrics ? 'files.lyrics.count' : 'files.subtitle.count', { count: cues.length })}</div>
     <FadeScroll className="min-h-0 flex-1 py-1">
       <ol className="m-0 list-none p-0">
         {cues.map((cue, index) => <li key={`${index}:${cue.start}`} data-subtitle-cue={index + 1} className={cn('grid items-baseline gap-3 px-3 py-1.5 hover:bg-primary/5', lyrics ? 'grid-cols-[6.5rem_minmax(0,1fr)]' : 'grid-cols-[13.5rem_minmax(0,1fr)]')}>
-          <span aria-hidden className="select-none text-right font-mono text-[10px] leading-5 tabular-nums text-muted-foreground/60">{cue.start}{cue.end !== null ? ` → ${cue.end}` : ''}</span>
-          <span className="whitespace-pre-wrap break-words text-sm leading-5">{cue.text}</span>
+          <span aria-hidden className="select-none text-right font-mono text-micro leading-ui tabular-nums text-muted-foreground/60">{cue.start}{cue.end !== null ? ` → ${cue.end}` : ''}</span>
+          <span className="whitespace-pre-wrap break-words text-content-tight">{cue.text}</span>
         </li>)}
       </ol>
       {truncated ? <p role="status" className="px-3 py-2 text-xs text-muted-foreground">{t(lyrics ? 'files.lyrics.truncated' : 'files.subtitle.truncated', { count: MAX_CUES })}</p> : null}

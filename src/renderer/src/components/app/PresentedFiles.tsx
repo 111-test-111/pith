@@ -1,4 +1,4 @@
-import { memo, useState } from 'react'
+import { memo, useState, type ReactNode } from 'react'
 import { Button } from '@/components/motion/button'
 import { Download, Eye, SquareArrowOutUpRight } from '@/lib/icons'
 import { basename, formatBytes } from '@/lib/format'
@@ -6,6 +6,11 @@ import { useFileNavigation } from '@/lib/file-navigation'
 import { useI18n } from '@/i18n'
 import type { PresentedFile } from '../../../../shared/types'
 import { FileTypeIcon } from './FileTypeIcon'
+import { ImageGenerationResult } from './ImageGenerationResult'
+import { useImageReplays } from '@/lib/image-replays'
+import type { ImageReplayRecord } from '../../../../shared/image-replay'
+import { ImagePreviewGroup, type PreviewImage } from './ImagePreview'
+import { generationPreviewImages } from '@/lib/image-preview-images'
 
 const PresentedFileCard = memo(function PresentedFileCard({ file }: { file: PresentedFile }) {
   const { t } = useI18n()
@@ -41,8 +46,52 @@ const PresentedFileCard = memo(function PresentedFileCard({ file }: { file: Pres
 
 export const PresentedFiles = memo(function PresentedFiles({ files }: { files: PresentedFile[] }) {
   const { t } = useI18n()
-  return <section data-presented-files className="w-full space-y-2">
+  const replays = useImageReplays()
+  const groups = new Map<string, PresentedFile[]>()
+  for (const file of files) if (file.generation) {
+    const group = groups.get(file.generation.id) ?? []
+    group.push(file); groups.set(file.generation.id, group)
+  }
+  const seen = new Set<string>()
+  const blocks: ReactNode[] = []
+  const previews: PreviewImage[] = []
+  let gallery: ReactNode[] = []
+  const flushGallery = () => {
+    if (!gallery.length) return
+    blocks.push(<div key={`images-${blocks.length}`} className="flex min-w-0 flex-wrap items-start gap-4">{gallery}</div>)
+    gallery = []
+  }
+  for (const file of files) {
+    if (!file.generation) {
+      flushGallery()
+      blocks.push(<PresentedFileCard key={file.path} file={file} />)
+      continue
+    }
+    const generation = file.generation
+    if (seen.has(generation.id)) continue
+    seen.add(generation.id)
+    const group = groups.get(generation.id)!
+    const replayMap = new Map<string, ImageReplayRecord[]>()
+    for (const item of replays?.items ?? []) if (item.generationId === generation.id) {
+      const history = replayMap.get(item.sourcePath) ?? []
+      history.push(item); replayMap.set(item.sourcePath, history)
+    }
+    const result = { ...generation.result, files: group.map(delivered => delivered.generation!.result.files.find(image => image.path === delivered.path)!) }
+    previews.push(...generationPreviewImages({ files: result.files, savedFiles: true, replays: replayMap,
+      imageLabel: index => t('chat.imageAlt', { index: index + 1 }) }))
+    gallery.push(<div key={generation.id} data-presented-generation={generation.id} className="contents">
+      <ImageGenerationResult call={{ type: 'toolCall', name: 'image', id: generation.id,
+        arguments: { aspect_ratio: generation.aspectRatio } }}
+        result={{ role: 'toolResult', toolName: 'image', toolCallId: generation.id, content: [], details: result,
+          isError: Boolean(result.error), timestamp: 0 }}
+        images={[]} output="" savedFiles groupedPreview={false} replays={replayMap} retryDisabled={!replays || replays.disabled}
+        onCancel={replay => replays?.cancel(replay)}
+        onRetry={(image, restoreId) => replays?.retry(group.find(delivered => delivered.path === image.path)!, restoreId)} />
+    </div>)
+  }
+  flushGallery()
+  return <ImagePreviewGroup images={previews}><section data-presented-files className="w-full space-y-2">
     <p className="text-xs font-medium text-muted-foreground">{t('present.title', { count: files.length })}</p>
-    {files.map(file => <PresentedFileCard key={file.path} file={file} />)}
-  </section>
+    {blocks}
+  </section></ImagePreviewGroup>
 })

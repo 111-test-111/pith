@@ -260,18 +260,18 @@ function UsageAreaChart({
           {yTicks.map((v) => (
             <g key={v}>
               <line className="stroke-border/50" x1={MARGIN.left} x2={width - MARGIN.right} y1={y(v)} y2={y(v)} strokeWidth={1} />
-              <text className="fill-muted-foreground text-[10px]" x={MARGIN.left - 8} y={y(v) + 3} textAnchor="end">
+              <text className="fill-muted-foreground text-micro" x={MARGIN.left - 8} y={y(v) + 3} textAnchor="end">
                 {formatCompactTokens(Math.round(v), locale)}
               </text>
             </g>
           ))}
           <line className="stroke-border" x1={MARGIN.left} x2={width - MARGIN.right} y1={y(0)} y2={y(0)} strokeWidth={1} />
-          <text className="fill-muted-foreground text-[10px]" x={MARGIN.left - 8} y={y(0) + 3} textAnchor="end">0</text>
+          <text className="fill-muted-foreground text-micro" x={MARGIN.left - 8} y={y(0) + 3} textAnchor="end">0</text>
 
           {/* x labels */}
           {days.map((day, i) =>
             xTickIdx.has(i) ? (
-              <text key={day} className="fill-muted-foreground text-[10px]" x={x(i)} y={CHART_HEIGHT - 8} textAnchor={xTickTextAnchor(i, days.length - 1)}>
+              <text key={day} className="fill-muted-foreground text-micro" x={x(i)} y={CHART_HEIGHT - 8} textAnchor={xTickTextAnchor(i, days.length - 1)}>
                 {formatDay(day)}
               </text>
             ) : null
@@ -292,7 +292,7 @@ function UsageAreaChart({
           {todayIdx >= 0 && (
             <g>
               <line className="stroke-muted-foreground/70" x1={x(todayIdx)} x2={x(todayIdx)} y1={MARGIN.top - 6} y2={y(0)} strokeWidth={1} strokeDasharray="4 3" />
-              <text className="fill-muted-foreground text-[10px]" x={x(todayIdx)} y={11.5} textAnchor="middle">
+              <text className="fill-muted-foreground text-micro" x={x(todayIdx)} y={11.5} textAnchor="middle">
                 {todayLabel}
               </text>
             </g>
@@ -343,7 +343,7 @@ function UsageAreaChart({
 
       {hover !== null && (
         <ChartReadout anchor={anchor} show={readoutShown}>
-          <div className="mb-1 text-[11px] text-muted-foreground">{formatDay(days[hover])}</div>
+          <div className="mb-1 text-caption text-muted-foreground">{formatDay(days[hover])}</div>
           {model.legend.map((l) =>
             l.cum[hover] > 0 ? (
               <div key={l.key} className="flex items-center gap-2 py-px">
@@ -421,7 +421,7 @@ function UsageRecordsTable({
           <col className="w-[14%]" />
         </colgroup>
         <thead>
-          <tr className="border-b border-border/70 text-left text-[11px] font-medium text-muted-foreground">
+          <tr className="border-b border-border/70 text-left text-caption font-medium text-muted-foreground">
             <th className="px-1 py-1.5">{t('settings.usage.col.date')}</th>
             <th className="px-1 py-1.5">{t('settings.usage.col.model')}</th>
             <th className="px-1 py-1.5 text-right">{t('settings.usage.col.tokens')}</th>
@@ -448,7 +448,7 @@ function UsageRecordsTable({
         </tbody>
       </table>
       <div className="mt-2 flex items-center justify-end gap-2">
-        <span className="mr-auto text-[11px] tabular-nums text-muted-foreground">
+        <span className="mr-auto text-caption tabular-nums text-muted-foreground">
           {rangeLabel(from + 1, from + visible.length, records.length)}
         </span>
         <RecordsPageButton label={prevLabel} direction="prev" disabled={current === 0} onClick={() => setPage(current - 1)} />
@@ -556,7 +556,7 @@ export function UsageTrendsPanel({ stats, today }: { stats: UsageStatsDTO; today
             <Select value={groupBy} onValueChange={(value) => setGroupBy(value as UsageGroupBy)}>
               <SelectTrigger
                 aria-label={t('settings.usage.groupBy')}
-                className="h-7 gap-1.5 rounded-control px-2.5 text-[11px]"
+                className="h-7 gap-1.5 rounded-control px-2.5 text-caption"
               >
                 {groupBy === 'model' ? t('settings.usage.groupBy.model') : t('settings.usage.groupBy.provider')}
               </SelectTrigger>
@@ -568,7 +568,7 @@ export function UsageTrendsPanel({ stats, today }: { stats: UsageStatsDTO; today
             <Tabs value={range} onValueChange={(value) => setRange(value as UsageRangeKey)} variant="segment" className="min-w-0">
               <TabsList className="h-7 bg-transparent p-0">
                 {RANGE_KEYS.map((key) => (
-                  <TabsTrigger key={key} value={key} className="min-h-0 px-2.5 py-1 text-[11px]">
+                  <TabsTrigger key={key} value={key} className="min-h-0 px-2.5 py-1 text-caption">
                     {t(RANGE_LABELS[key])}
                   </TabsTrigger>
                 ))}
@@ -592,7 +592,7 @@ export function UsageTrendsPanel({ stats, today }: { stats: UsageStatsDTO; today
             />
             <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1.5">
               {model.legend.map((l) => (
-                <div key={l.key} className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground" title={`${l.label} · ${formatTokenCount(l.total)}`}>
+                <div key={l.key} className="flex min-w-0 items-center gap-1.5 text-caption text-muted-foreground" title={`${l.label} · ${formatTokenCount(l.total)}`}>
                   <span className="size-2 shrink-0 rounded-full" style={{ background: l.color }} />
                   <span className="max-w-40 truncate">{l.label}</span>
                 </div>
@@ -618,7 +618,7 @@ export function UsageTrendsPanel({ stats, today }: { stats: UsageStatsDTO; today
             size="sm"
             disabled={rangeRecords.length === 0}
             onClick={exportCsv}
-            className="h-7 gap-1.5 px-2.5 text-[11px]"
+            className="h-7 gap-1.5 px-2.5 text-caption"
           >
             <Download className="size-3.5" />
             {t('settings.usage.exportCsv')}

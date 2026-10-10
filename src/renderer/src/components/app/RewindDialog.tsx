@@ -68,7 +68,7 @@ function HistoryRow({ operation, selected, disabled, dates, onPreview }: {
       </span>
       {available ? <span className="shrink-0 text-primary">{t(operation.canRedo ? 'rewind.historyCanRedo' : 'rewind.historyCanUndo')}</span> : null}
     </span>
-    <time dateTime={new Date(operation.timestamp).toISOString()} className="text-[11px] tabular-nums text-muted-foreground">{timestamp}</time>
+    <time dateTime={new Date(operation.timestamp).toISOString()} className="text-caption tabular-nums text-muted-foreground">{timestamp}</time>
   </>
   const rowClass = 'flex h-auto w-full flex-col items-stretch gap-1.5 px-3 py-2.5 text-left font-normal'
   return <li data-rewind-history-entry={operation.id} className={cn('rounded-control border border-transparent', selected && 'bg-primary/10')}>
@@ -374,7 +374,7 @@ export function RewindDialog({ sessionPath, messageTimestamp, messageEntryId, in
       <div data-rewind-panel className="flex h-[min(760px,calc(100dvh-96px))] min-h-0 flex-col">
         <div className="shrink-0 border-b border-border px-5 py-4 pr-14">
           <h2 className="flex items-center gap-2 text-base font-semibold"><ArrowLeftFromLine className="size-4" />{t('rewind.title')}</h2>
-          <p id={descriptionId} className="mt-1.5 text-xs leading-5 text-muted-foreground">{t('rewind.description')}</p>
+          <p id={descriptionId} className="mt-1.5 text-xs leading-ui text-muted-foreground">{t('rewind.description')}</p>
         </div>
         <div className="flex min-h-0 flex-1 max-sm:flex-col">
           <div data-rewind-sidebar className="w-64 shrink-0 space-y-4 overflow-auto border-r border-border p-3 max-sm:max-h-36 max-sm:w-full max-sm:border-r-0 max-sm:border-b">
@@ -384,12 +384,12 @@ export function RewindDialog({ sessionPath, messageTimestamp, messageEntryId, in
                 <h3 className="px-2 text-xs font-medium text-muted-foreground">{t('rewind.checkpoints')}</h3>
                 {!checkpoints?.length ? <p className="p-2 text-xs text-muted-foreground">{t(messageTimestamp === undefined ? (list?.error ? 'rewind.emptyFailed' : 'rewind.empty') : 'rewind.noMessageCheckpoint')}</p> : checkpoints.map(cp => <Button key={cp.id} data-rewind-checkpoint variant="ghost" disabled={loading || fileLoading || executing} aria-pressed={preview?.checkpointId === cp.id} onClick={() => void select(cp.id)} className={cn('h-auto w-full flex-col items-stretch gap-2.5 border border-transparent px-3 py-3 text-left', preview?.checkpointId === cp.id && 'bg-primary/10')}>
                   <span className="flex items-start gap-2">
-                    <span data-rewind-checkpoint-title className="min-w-0 flex-1 line-clamp-2 break-words text-sm font-medium leading-5 text-foreground">{cp.description || t('rewind.untitledTurn')}</span>
+                    <span data-rewind-checkpoint-title className="min-w-0 flex-1 line-clamp-2 break-words text-sm font-medium leading-ui text-foreground">{cp.description || t('rewind.untitledTurn')}</span>
                     {preview?.checkpointId === cp.id ? <Check aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-primary" /> : null}
                   </span>
                   <span className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-xs font-normal text-muted-foreground">
                     <time dateTime={new Date(cp.timestamp).toISOString()}>{dates.format(cp.timestamp)}</time>
-                    {!cp.legacy ? <span className="text-[11px] tabular-nums">{t('rewind.backupFileCount', { count: cp.files })}</span> : null}
+                    {!cp.legacy ? <span className="text-caption tabular-nums">{t('rewind.backupFileCount', { count: cp.files })}</span> : null}
                   </span>
                   {cp.legacy ? <span className="text-xs text-muted-foreground">{t('rewind.legacy')}</span> : null}
                 </Button>)}
@@ -418,14 +418,14 @@ export function RewindDialog({ sessionPath, messageTimestamp, messageEntryId, in
                   fileWarning={!!preview?.changes.length || !!preview?.blocked || !!preview?.uncovered?.length} infoDisabled={!preview || confirming}
                   information={<>
                     {preview?.scopeRoot ? <p className="break-all font-medium text-foreground">{t('rewind.scopeRoot', { path: preview.scopeRoot })}</p> : null}
-                    <p className="leading-5">{t('rewind.coverageDescription')}</p>
+                    <p className="leading-ui">{t('rewind.coverageDescription')}</p>
                     <div className="space-y-1.5">
                       <p className="font-medium text-foreground">{t('rewind.coveragePaths')} ({excluded.length})</p>
-                      <p className="leading-5">{t('rewind.coverageDynamic')}</p>
+                      <p className="leading-ui">{t('rewind.coverageDynamic')}</p>
                       {!excluded.length ? <p>{t('rewind.coverageEmpty')}</p> : excluded.slice(0, 200).map((item, index) => <p key={index} className="break-all">{item.path} · {t(`rewind.excluded.${item.reason}`)}</p>)}
                       {excluded.length > 200 ? <p>{t('rewind.moreExcluded', { count: excluded.length - 200 })}</p> : null}
                     </div>
-                    <p className="leading-5">{t('rewind.totalExplanation')}</p>
+                    <p className="leading-ui">{t('rewind.totalExplanation')}</p>
                   </>} />
               </div>
             </div>
@@ -438,7 +438,7 @@ export function RewindDialog({ sessionPath, messageTimestamp, messageEntryId, in
                 {list?.error && !error ? <ErrorMessage error={list.error} /> : null}
                 {success ? <p role="status" className="flex items-center gap-2 text-sm"><Check className="size-4 shrink-0 text-primary" />{success.status === 'committed' && success.skipped?.length ? t('rewind.partialSuccess', { count: success.skipped.length }) : t('rewind.success')}</p> : null}
                 {list?.pending.map(op => <div key={op.id} className="space-y-3 rounded-card border border-destructive/30 p-4">
-                  <p className="text-sm font-medium">{t('rewind.recovery')}</p><p className="text-xs leading-5 text-muted-foreground">{t('rewind.recoveryDescription')}</p>
+                  <p className="text-sm font-medium">{t('rewind.recovery')}</p><p className="text-xs leading-ui text-muted-foreground">{t('rewind.recoveryDescription')}</p>
                   {op.conflicts?.length ? <p className="break-all text-xs">{op.conflicts.join('\n')}</p> : null}
                   {op.recoveryPath ? <Button variant="ghost" size="sm" onClick={() => void window.pi.openPath(op.recoveryPath!)}>{t('rewind.openRecovery')}</Button> : null}
                   <Button variant="outline" size="sm" disabled={executing} onClick={() => void commit(op.id)}>{t('rewind.recover')}</Button>
@@ -447,10 +447,10 @@ export function RewindDialog({ sessionPath, messageTimestamp, messageEntryId, in
               </div> : null}
               {preview && !loading ? <>
                 <div className="space-y-3 px-4 py-3">
-                  <p className="text-xs leading-5 text-muted-foreground">{preview.file ? t('rewind.explain.singleFile', { path: preview.file }) : t(`rewind.explain.${mode}`)}</p>
+                  <p className="text-xs leading-ui text-muted-foreground">{preview.file ? t('rewind.explain.singleFile', { path: preview.file }) : t(`rewind.explain.${mode}`)}</p>
                   {!!preview.uncovered?.length ? <div data-rewind-uncovered role="alert" className="space-y-2 rounded-card border border-destructive/25 bg-destructive/5 p-3 text-sm">
                     <p className="flex items-center gap-2 font-medium"><AlertTriangle className="size-4 shrink-0 text-destructive" />{t('rewind.uncoveredTitle', { count: preview.uncovered.length })}</p>
-                    <p className="text-xs leading-5 text-muted-foreground">{t('rewind.uncoveredDescription')}</p>
+                    <p className="text-xs leading-ui text-muted-foreground">{t('rewind.uncoveredDescription')}</p>
                     <UncoveredFiles paths={preview.uncovered} />
                   </div> : null}
                   {blocked && blocked.code !== 'uncovered' && blocked.code !== error?.code && blocked.code !== list?.error?.code ? <ErrorMessage error={blocked} message={busyReason ? t(`rewind.busy.${busyReason}`) : undefined} /> : null}
@@ -473,9 +473,9 @@ export function RewindDialog({ sessionPath, messageTimestamp, messageEntryId, in
       <CenterMorphModalContent ariaLabel={t(confirmTitle)} ariaDescribedBy={confirmDescriptionId} closeButtonLabel={t('rewind.close')} initialFocusRef={cancelConfirmRef} className="max-w-lg">
       <div className="p-6">
         <h2 className="flex items-center gap-2 text-base font-semibold"><AlertTriangle className="size-5 text-destructive" />{t(confirmTitle)}</h2>
-        <p id={confirmDescriptionId} className="mt-3 text-sm leading-6 text-muted-foreground">{filePreview ? t('rewind.forceFileDescription') : t('rewind.forceDescription', { count: preview?.changes.length ?? 0 })}</p>
+        <p id={confirmDescriptionId} className="mt-3 text-sm leading-ui-loose text-muted-foreground">{filePreview ? t('rewind.forceFileDescription') : t('rewind.forceDescription', { count: preview?.changes.length ?? 0 })}</p>
         {partialPaths.length ? <div data-rewind-partial-confirm className="mt-3 space-y-3 text-sm">
-          <p className="text-xs leading-5 text-muted-foreground">{t(`rewind.explain.${mode}`)}</p>
+          <p className="text-xs leading-ui text-muted-foreground">{t(`rewind.explain.${mode}`)}</p>
           <p className="font-medium">{t('rewind.partialDescription', { count: partialPaths.length })}</p>
           <UncoveredFiles paths={partialPaths} />
         </div> : null}

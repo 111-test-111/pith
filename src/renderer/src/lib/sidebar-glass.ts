@@ -1,20 +1,23 @@
 import { useSyncExternalStore } from 'react'
 
 /**
- * Translucent (frosted-glass) session sidebar — Settings → Appearance.
+ * Translucent (frosted-glass) title row and session sidebar — Settings → Appearance.
  *
- * When on, the sidebar panel's surface goes translucent with a backdrop blur,
- * and a static accent-tinted wash is painted behind it (the `backdrop` slot
- * Workspace passes to `AnimatedSidebar`, styled by the `.sidebar-glass-wash`
- * rule in `styles.css`), so the column reads as glass over a soft glow instead
- * of a flat opaque slab. When off, the panel is the plain opaque
+ * When on, both regions become real glass: on macOS the window itself is
+ * a vibrancy surface (window-chrome.ts) and the page background steps aside,
+ * so windows behind the app show through; a theme-gradient wash tints whatever
+ * comes through (the `backdrop` slot Workspace passes to `AnimatedSidebar`,
+ * styled by the `.window-glass-wash` rule in `styles.css`), and a light
+ * translucent veil keeps the list readable. On platforms without a vibrancy
+ * surface the same layers sit over the app's own background and read as a
+ * soft tinted column. When off, the panel is the plain opaque
  * `bg-background` column and the wash is not mounted at all.
  *
  * A renderer preference like locale/accent/typefaces: localStorage plus a
  * subscribable store, so flipping it in Settings re-renders the sidebar with
- * no session involvement. Only the workspace sidebar consumes it, and its
- * first render already reads the stored value, so there is no boot hook to
- * call from `main.tsx`. Default: on.
+ * no session involvement. The workspace sidebar and every WindowTitlebar
+ * consume it; their first render reads the stored value, so no boot hook is
+ * needed in `main.tsx`. Keep the existing storage key. Default: on.
  */
 
 const STORAGE_KEY = 'pi-app:sidebar-glass'

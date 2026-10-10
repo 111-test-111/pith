@@ -1,71 +1,115 @@
 #!/usr/bin/env node
 /**
- * Regenerates the flat filename/extension → icon lookup used by every file row:
- * `file-icons.map.json` from Catppuccin Icons, the app's only file-type family.
+ * Imports Bearded Icons' file associations and original SVG artwork from a
+ * pinned upstream release. Only available file artwork is vendored; folder
+ * and toolbar glyphs stay with the UI adapter.
  *
- * The artwork package ships drawings and names, but not the VS Code theme's
- * associations, so the table is derived from the upstream theme source.
- * `scripts/prepare-file-icons.mjs` then writes only the referenced artwork.
- *
- * This script needs network access; it is NOT part of install/dev/build. Run it
- * by hand (`npm run icons:file-types`) when you want to pick up upstream
- * additions, then commit the regenerated JSON — including `source`, which
- * records the exact revision the table came from.
+ * This networked maintenance command is NOT part of install/dev/build. Run
+ * `npm run icons:file-types`, then commit the map and upstream source files in
+ * `resources/bearded-icons/`. Preparation copies them into the ignored public
+ * directory, so ordinary builds and the packaged app need no network access.
  */
-import { writeFile } from 'node:fs/promises'
-import { resolve } from 'node:path'
+import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { bundledLanguagesInfo } from 'shiki'
 
-const CATPPUCCIN_RAW = 'https://raw.githubusercontent.com/catppuccin/vscode-icons'
-const CATPPUCCIN_REF = process.env.CATPPUCCIN_ICONS_REF || 'main'
-const OUT = resolve('src/renderer/src/lib/file-icons.map.json')
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+const REF = process.env.BEARDED_ICONS_REF || '8807eb4562da44eeaf0a6b24e028d67d4e461d7b'
+const BASE = `https://raw.githubusercontent.com/BeardedBear/bearded-icons/${REF}`
+const OUT = join(root, 'src/renderer/src/lib/file-icons.map.json')
+const SOURCE_DIR = join(root, 'resources/bearded-icons')
 
-/** Catppuccin source ids whose Iconify names use kebab case instead. */
-const ICONIFY_ALIASES = { deno_lock: 'deno-lock' }
-
-const cleanExtension = (value) => value.replace(/^\./, '').toLowerCase()
-
-async function fetchText(base, ref, path) {
-  const response = await fetch(`${base}/${ref}/${path}`)
+async function fetchText(path) {
+  const response = await fetch(`${BASE}/${path}`, { signal: AbortSignal.timeout(30_000) })
   if (!response.ok) throw new Error(`${path}: HTTP ${response.status}`)
-  const etag = response.headers.get('etag')
-  const revision = etag?.replace(/^W\//, '').replace(/^"|"$/g, '').slice(0, 8) || ref
-  return { text: await response.text(), revision }
+  return response.text()
 }
 
-const sorted = (object) => Object.fromEntries(Object.entries(object).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+const [theme, pkg, license] = await Promise.all([
+  fetchText('icons.json').then(JSON.parse),
+  fetchText('package.json').then(JSON.parse),
+  fetchText('LICENSE')
+])
 
-const source = await fetchText(CATPPUCCIN_RAW, CATPPUCCIN_REF, 'src/defaults/fileIcons.ts')
-const objectSource = /const fileIcons: FileIcons = (\{[\s\S]*?\n\})\n\nconst \{ languageIds/.exec(source.text)?.[1]
-if (!objectSource) throw new Error('Could not find Catppuccin fileIcons object')
-const icons = new Function(`return (${objectSource})`)()
+// Resolve definition IDs to original asset names rather than assuming they
+// match (the generic file, for example, is defined as `_file`). Upstream also
+// declares some IDs without artwork: omit those associations so a filename
+// can still fall through to its extension instead of displaying a broken SVG.
+const unavailable = new Set()
+function iconName(id) {
+  const path = theme.iconDefinitions[id]?.iconPath
+  const name = /^\.\/icons\/([\w-]+)\.svg$/.exec(path ?? '')?.[1]
+  if (!name) unavailable.add(id)
+  return name
+}
+
+function associations(raw) {
+  const result = {}
+  for (const [key, id] of Object.entries(raw)) {
+    const icon = iconName(id)
+    if (icon) result[key.toLowerCase().replace(/^\./, '')] = icon
+  }
+  return result
+}
 
 const names = {}
-const extensions = {}
-const languageExtensions = {}
-for (const [sourceIcon, associations] of Object.entries(icons)) {
-  const icon = ICONIFY_ALIASES[sourceIcon] ?? sourceIcon
-  // Catppuccin's reducer lets later definitions win; assignment in source
-  // order mirrors that behavior for contested names and extensions.
-  for (const name of associations.fileNames ?? []) names[name.toLowerCase()] = icon
-  for (const extension of associations.fileExtensions ?? []) extensions[cleanExtension(extension)] = icon
-  // The renderer has a path but no VS Code language service. A few upstream
-  // icons (notably `diff`) are associated only through languageIds, whose
-  // literal value is also the conventional extension. Keep these as a lower-
-  // priority fallback so every explicit fileExtension still wins.
-  for (const languageId of associations.languageIds ?? []) languageExtensions[cleanExtension(languageId)] = icon
+for (const [name, id] of Object.entries(theme.fileNames)) {
+  const icon = iconName(id)
+  if (icon) names[name.toLowerCase()] = icon
 }
 
+// VS Code supplies language detection; file rows only have a path. Translate
+// language IDs and Shiki's conventional aliases into lower-priority extension
+// fallbacks. Explicit Bearded associations (tests, definitions, JSX, etc.) win.
+const languageExtensions = associations(theme.languageIds)
+for (const language of bundledLanguagesInfo) {
+  const id = theme.languageIds[language.id]
+  if (!id) continue
+  const icon = iconName(id)
+  if (!icon) continue
+  for (const alias of language.aliases ?? []) languageExtensions[alias.toLowerCase()] = icon
+}
+
+const sorted = object => Object.fromEntries(Object.entries(object).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0))
+const defaultIcon = iconName(theme.file)
+if (!defaultIcon) throw new Error('Bearded Icons has no generic file definition')
 const table = {
-  source: `Catppuccin vscode-icons ${CATPPUCCIN_REF} (${source.revision}), MIT`,
+  source: `Bearded Icons ${pkg.version} (${REF}), GPL-3.0`,
   generated: new Date().toISOString().slice(0, 10),
-  default: 'file',
+  default: defaultIcon,
   names: sorted(names),
   globs: [],
-  extensions: sorted({ ...languageExtensions, ...extensions })
+  extensions: sorted({ ...languageExtensions, ...associations(theme.fileExtensions) })
 }
+const wanted = [...new Set([table.default, ...Object.values(table.names), ...Object.values(table.extensions)])].sort()
 
-await writeFile(OUT, JSON.stringify(table, null, 0) + '\n')
-console.log(
-  `file-icons.map.json: ${Object.keys(table.names).length} names, ` +
-    `${Object.keys(table.extensions).length} extensions (${(JSON.stringify(table).length / 1024).toFixed(0)} KiB)`
-)
+// Fetch before changing the snapshot. A failed download must leave the current
+// map and source artwork usable. Bound concurrency for upstream requests.
+const artwork = new Map()
+let next = 0
+await Promise.all(Array.from({ length: 8 }, async () => {
+  while (next < wanted.length) {
+    const name = wanted[next++]
+    artwork.set(name, await fetchText(`icons/${name}.svg`))
+  }
+}))
+
+await mkdir(SOURCE_DIR, { recursive: true })
+for (const name of wanted) {
+  const path = join(SOURCE_DIR, `${name}.svg`)
+  const svg = artwork.get(name)
+  if (await readFile(path, 'utf8').catch(() => null) !== svg) await writeFile(path, svg)
+}
+for (const name of await readdir(SOURCE_DIR)) {
+  if (name.endsWith('.svg') && !artwork.has(name.slice(0, -4))) await rm(join(SOURCE_DIR, name))
+}
+await writeFile(join(SOURCE_DIR, 'LICENSE.txt'), license)
+await writeFile(join(SOURCE_DIR, 'NOTICE.txt'),
+  `Bearded Icons by BeardedBear\nVersion: ${pkg.version}\nRevision: ${REF}\n` +
+  `Source: https://github.com/BeardedBear/bearded-icons/tree/${REF}\n` +
+  'Original file-type SVGs from icons/ are vendored unchanged.\n' +
+  'Filename and extension associations are adapted from icons.json.\n' +
+  'Distributed under GPL-3.0; see LICENSE.txt.\n')
+await writeFile(OUT, JSON.stringify(table) + '\n')
+console.log(`file-icons.map.json: ${Object.keys(table.names).length} names, ${Object.keys(table.extensions).length} extensions, ${wanted.length} Bearded SVGs (${unavailable.size} unavailable upstream IDs omitted)`)

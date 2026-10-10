@@ -181,7 +181,7 @@ export function ShortcutsSection() {
 
   return (
     <div className="space-y-6">
-      <p className="px-1 text-xs leading-5 text-muted-foreground">{t('shortcuts.intro')}</p>
+      <p className="px-1 text-xs leading-ui text-muted-foreground">{t('shortcuts.intro')}</p>
       <div className="flex items-center gap-2">
         <div className="min-w-0 flex-1">
           <Input
@@ -222,8 +222,8 @@ export function ShortcutsSection() {
                 // relative: the floating error note anchors to the row's
                 // bottom-right (the buttons' right edge), never to the page.
                 <div key={id} className="relative px-4 py-3">
-                  <div className="flex items-center justify-between gap-4">
-                    <div className="min-w-0">
+                  <div className="flex flex-wrap items-center justify-between gap-4">
+                    <div className="min-w-0 flex-1 basis-44">
                       <p
                         className={cn(
                           'text-sm font-medium text-foreground',
@@ -232,7 +232,7 @@ export function ShortcutsSection() {
                       >
                         {name(id)}
                       </p>
-                      <p className="mt-0.5 text-xs leading-4 text-muted-foreground">
+                      <p className="mt-0.5 text-xs leading-ui-tight text-muted-foreground">
                         {t(`shortcuts.${id}.hint` as MessageKey)}
                       </p>
                     </div>
@@ -256,7 +256,7 @@ export function ShortcutsSection() {
                           // Same outer box in both states, so the recording
                           // frame's left edge lands exactly where the idle
                           // caps start (idle has no frame: flush padding).
-                          'flex h-7 w-44 items-center justify-start rounded-lg outline-none',
+                          'flex min-h-7 w-[calc(var(--app-text-ui-keycap)*9+6rem)] items-center justify-start rounded-control outline-none',
                           editing
                             ? 'border border-ring bg-transparent px-1.5'
                             : 'px-0',
@@ -325,7 +325,7 @@ export function ShortcutsSection() {
                   {(editing && error) || (!editing && rowIssue?.id === id) ? (
                     <p
                       role="alert"
-                      className="pointer-events-none absolute right-0 top-full z-20 mt-1.5 w-max max-w-72 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs leading-4 text-destructive shadow-lg"
+                      className="pointer-events-none absolute right-0 top-full z-20 mt-1.5 w-max max-w-72 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs leading-ui-tight text-destructive shadow-lg"
                     >
                       {editing ? error : rowIssue?.message}
                     </p>
@@ -339,7 +339,7 @@ export function ShortcutsSection() {
       {matches.length === 0 ? (
         <p className="px-1 text-xs text-muted-foreground">{t('shortcuts.noResults')}</p>
       ) : null}
-      <p className="px-1 text-xs leading-5 text-muted-foreground/70">{t('shortcuts.footnote')}</p>
+      <p className="px-1 text-xs leading-ui text-muted-foreground/70">{t('shortcuts.footnote')}</p>
     </div>
   )
 }

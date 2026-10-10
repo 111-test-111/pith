@@ -4,7 +4,7 @@
  *
  * The small circle at the right of a tool row — and of every row in the task
  * strip (background tasks, Q&A records, subagents) — is one mark per outcome.
- * A settled row draws Hugeicons' own success / error / cancellation marks through
+ * A settled row draws the active family's success / error / cancellation marks through
  * the icon adapter, and only the waiting row is drawn app-side in
  * `lib/status-ring.tsx`, because no glyph carries the spinning 3/4 arc. The task
  * panel's rows split the same way: awaiting uses the pack's dashed circle,
@@ -49,7 +49,10 @@ import {AskUserRecordList} from '/src/components/app/AskUserRecordList.tsx';
 import {BashTaskList} from '/src/components/app/BashTaskView.tsx';
 import {Checkbox} from '/src/components/motion/checkbox.tsx';
 import {I18nProvider} from '/src/i18n/index.tsx';
+import {setUiStyle} from '/src/lib/ui-style.ts';
 import '/src/styles.css';
+window.setUiStyle=setUiStyle;
+setUiStyle('squircle');
 const now = Date.now();
 const STATUSES = ['running','success','error','cancelled'];
 const records = [
@@ -194,6 +197,7 @@ app.on('window-all-closed',()=>app.quit());`)
       box:[box.x,box.y,box.width,box.height].join(' '),
       side:Math.max(box.width,box.height)*(24/view[2]),
       stroke:svg.getAttribute('stroke-width'),
+      family:svg.dataset.iconFamily,fill:svg.getAttribute('fill'),outline:svg.getAttribute('stroke'),
       ring:ring?[ring.getAttribute('cx'),ring.getAttribute('cy'),ring.getAttribute('r'),ring.getAttribute('stroke-width')].join(' '):null,
       dash:ring?.getAttribute('stroke-dasharray') ?? null,
       paths:svg.querySelectorAll('path').length,
@@ -306,6 +310,27 @@ app.on('window-all-closed',()=>app.quit());`)
   }
   assert.equal(await evaluate(`getComputedStyle(document.querySelector('#todo [data-todo-progress]')).transform`), 'none',
     'a running todo row stops spinning under reduced motion')
+  // A live interface switch replaces settled artwork on every surface while
+  // preserving the waiting owner and reduced-motion state.
+  await evaluate("window.setUiStyle('square')")
+  await pause(100)
+  for (const surface of ['rows','bash','qa']) {
+    for (const mark of await marks(surface)) {
+      if (isArc(mark)) { assertArc(mark, surface + ': Remix waiting arc'); continue }
+      assert.equal(mark.glyph, SETTLED[mark.status], surface + ': shared semantic status')
+      assert.equal(mark.family, 'remix', surface + ': live Remix status')
+      assert.equal(mark.fill, 'currentColor', surface + ': native filled outline')
+      assert.equal(mark.outline, 'none', surface + ': no doubled stroke')
+      assert.equal(mark.stroke, null, surface + ': stroke-family weight does not leak')
+      assert.ok(mark.paths > 0, surface + ': real settled geometry')
+      assert.equal(mark.spin, false, surface + ': reduced motion survives switching')
+    }
+  }
+  assert.equal(await evaluate(`Array.from(document.querySelectorAll('#todo [data-app-icon="CircleCheck"],#todo [data-app-icon="Ban"]')).every(svg=>svg.dataset.iconFamily==='remix')`),true,'todo outcomes switch with the other surfaces')
+  if (process.env.PI_STATUS_RING_SCREENSHOT_DIR) {
+    const capture = await send('Page.captureScreenshot')
+    await writeFile(join(process.env.PI_STATUS_RING_SCREENSHOT_DIR, 'square-status-rings.png'), Buffer.from(capture.data, 'base64'))
+  }
   await evaluate('window.checkRoot.unmount()')
   log('waiting arcs spin, hold still under reduced motion, and settled marks are adapter artwork')
 } finally {

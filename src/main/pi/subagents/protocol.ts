@@ -139,6 +139,7 @@ function parseWrittenFiles(value: unknown): SubagentWrittenFileDTO[] | undefined
     files.push({
       filePath,
       displayPath: asString(record!.displayPath) ?? filePath,
+      ...(record!.kind === 'generated-image' ? { kind: 'generated-image' as const } : {}),
       added: asNumber(record!.added),
       removed: asNumber(record!.removed),
       patch: asString(record!.patch)
@@ -252,6 +253,7 @@ export function slimRunForRoster(run: SubagentRunDTO): SubagentRunDTO {
     writtenFiles: run.writtenFiles.map((file) => ({
       filePath: file.filePath,
       displayPath: file.displayPath,
+      ...(file.kind === 'generated-image' ? { kind: file.kind } : {}),
       ...(file.added !== undefined ? { added: file.added } : {}),
       ...(file.removed !== undefined ? { removed: file.removed } : {})
     }))

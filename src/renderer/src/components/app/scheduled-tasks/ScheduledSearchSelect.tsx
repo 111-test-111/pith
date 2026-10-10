@@ -34,8 +34,8 @@ export const ScheduledSearchSelect = memo(function ScheduledSearchSelect({
 
   return (
     <Combobox value={value} onValueChange={onChange} query={query} onQueryChange={setQuery}>
-      <ComboboxTrigger className={`h-9 min-w-0 text-sm ${invalid ? 'text-destructive hover:bg-destructive/10' : ''}`}>
-        <ComboboxInput aria-label={label} placeholder={label} className="text-sm" />
+      <ComboboxTrigger className={`min-w-0 text-sm ${invalid ? 'text-destructive hover:bg-destructive/10' : ''}`}>
+        <ComboboxInput aria-label={label} placeholder={label}  />
       </ComboboxTrigger>
       <ComboboxContent>
         <ComboboxList ariaLabel={label}>

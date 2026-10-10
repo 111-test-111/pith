@@ -1,14 +1,11 @@
 /**
- * Provider model discovery uses beUI's `MultiSelect`: the fetched /models list
- * is a searchable multi-select listbox instead of a wall of checkboxes. This
- * runs the real dialog in isolated Electron with a stub provider endpoint and
- * asserts selection, chip display, the already-added guard, filtering,
- * keyboard toggling and the resulting ModelsConfig mutation. No model calls,
- * no user data.
+ * The real discovery dialog supports direct keyboard selection, cross-search
+ * selections, searching beyond the display cap and duplicate-safe imports.
+ * Runs in isolated Electron with synthetic provider responses.
  */
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { mkdtemp, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -29,10 +26,10 @@ import '/src/styles.css';
 localStorage.setItem('pi-app:locale','en');
 window.closeCount=0;window.flushCalls=0;window.imported=null;
 window.pi={discoverModels:async()=>[
-  {id:'alpha-1',name:'Alpha One'},{id:'beta-2',name:'Beta Two'},{id:'gamma-3'},{id:'added-4',name:'Added Four'}
+  {id:'alpha-1',name:'Alpha One'},{id:'beta-2',name:'Beta Two'},{id:'gamma-3'},{id:'added-4',name:'Added Four'},...Array.from({length:310},(_,i)=>({id:'catalog-'+i,name:'Catalog '+i}))
 ]};
 window.mutate=(updater,immediate)=>{window.imported={result:updater({providers:{}},false),immediate}};
-function Fixture(){const {setLocale}=useI18n();window.setLocale=setLocale;return React.createElement(DiscoverDialog,{open:true,providerId:'acme',providerName:'Acme',entry:{models:[{id:'added-4'}]},flush:async()=>{window.flushCalls++},mutate:window.mutate,onClose:()=>{window.closeCount++}})}
+function Fixture(){const {setLocale}=useI18n();window.setLocale=setLocale;return React.createElement(DiscoverDialog,{open:true,providerId:'acme',providerName:'Acme',entry:{models:[{id:'added-4'}]},flush:async()=>{window.flushCalls++;return true},mutate:window.mutate,onClose:()=>{window.closeCount++}})}
 createRoot(document.getElementById('root')).render(React.createElement(I18nProvider,null,React.createElement(Fixture)));
 window.fixtureReady=true;
 </script></body></html>`
@@ -74,32 +71,49 @@ try {
   await send('Runtime.enable')
   const waitFor = async (expression) => { for (let i = 0; i < 150; i++) { if (await evaluate(`Boolean(${expression})`)) return; await pause(100) } throw new Error('Timed out: ' + expression + '\n' + JSON.stringify(exceptions)) }
 
-  await waitFor('window.fixtureReady && document.querySelectorAll("[role=option]").length === 4')
-  assert.equal(await evaluate('window.flushCalls'), 1, 'opening flushes pending edits before fetching')
-  const options = () => evaluate(`Array.from(document.querySelectorAll('[role=option]')).map(o=>({label:o.textContent.trim(),disabled:o.disabled,selected:o.getAttribute('aria-selected')}))`)
-  const before = await options()
-  assert.ok(before.some((o) => o.label.includes('Alpha One')), 'the fetched models are listed')
-  assert.equal(before.every((o) => o.selected === 'false'), true, 'nothing starts selected')
-  assert.equal(before.find((o) => o.label.includes('Added Four')).disabled, true, 'an already-added model cannot be selected again')
-
-  // The trigger opens the listbox; selecting a row shows a chip and updates the
-  // import count, and the search input filters the options.
-  assert.equal(await evaluate(`Boolean(document.querySelector('[data-multi-select-content]'))`), true, 'the listbox portal exists')
-  await evaluate(`(()=>{const trigger=document.querySelector('.cursor-text');trigger.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,cancelable:true,pointerId:1,pointerType:'mouse'}))})()`)
-  await waitFor(`document.querySelector('[data-multi-select-content]')?.getAttribute('aria-hidden')==='false'`)
-  await evaluate(`[...document.querySelectorAll('[role=option]')].find(o=>o.textContent.includes('Alpha One')).click()`)
+  await waitFor('window.fixtureReady && document.querySelectorAll("[data-discovered-model]").length === 300')
+  assert.equal(await evaluate('window.flushCalls'), 1, 'opening flushes pending connection edits')
+  assert.equal(await evaluate('document.querySelector("[data-discovered-model=added-4] [role=checkbox]").disabled'), true, 'an already-added ID cannot be selected')
+  const toggle = async id => {
+    await evaluate(`document.querySelector('[data-discovered-model="' + ${JSON.stringify(id)} + '"] [role=checkbox]').click()`)
+    await pause(100)
+  }
+  const search = async value => {
+    await evaluate('(()=>{const input=document.querySelector("input");Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,"value").set.call(input,' + JSON.stringify(value) + ');input.dispatchEvent(new Event("input",{bubbles:true}))})()')
+    await pause(100)
+  }
+  await toggle('alpha-1')
+  assert.equal(await evaluate('document.querySelector("[data-discovered-model=alpha-1] [role=checkbox]").getAttribute("aria-checked")'), 'true')
+  await evaluate('document.querySelector("[data-discovered-model=gamma-3] [role=checkbox]").focus()')
+  await send('Input.dispatchKeyEvent', { type:'keyDown', key:' ', code:'Space', windowsVirtualKeyCode:32 })
+  await send('Input.dispatchKeyEvent', { type:'keyUp', key:' ', code:'Space', windowsVirtualKeyCode:32 })
+  await pause(100)
+  assert.equal(await evaluate('document.querySelector("[data-discovered-model=gamma-3] [role=checkbox]").getAttribute("aria-checked")'), 'true', 'Space selects a focused model')
+  await search('Beta')
+  assert.equal(await evaluate('document.querySelectorAll("[data-discovered-model]").length'), 1, 'search filters by display name')
+  await toggle('beta-2')
+  await search('catalog-309')
+  assert.equal(await evaluate('document.querySelector("[data-discovered-model]").dataset.discoveredModel'), 'catalog-309', 'search reaches models beyond the display cap')
+  await toggle('catalog-309')
+  await search('')
+  assert.equal(await evaluate('document.querySelector("[data-discovered-model=alpha-1] [role=checkbox]").getAttribute("aria-checked")'), 'true', 'changing search retains selections')
+  if (process.env.PI_PROVIDER_SCREENSHOT_DIR) {
+    await mkdir(process.env.PI_PROVIDER_SCREENSHOT_DIR, {recursive:true})
+    const shot=await send('Page.captureScreenshot',{format:'png'})
+    await writeFile(join(process.env.PI_PROVIDER_SCREENSHOT_DIR,'discover-models.png'),Buffer.from(shot.data,'base64'))
+  }
+  const importButton = await evaluate('[...document.querySelectorAll("button")].find(button=>button.textContent.includes("Import 4"))?.textContent')
+  assert(importButton, 'the import action counts all selections across searches')
+  await evaluate('[...document.querySelectorAll("button")].find(button=>button.textContent.includes("Import 4")).click()')
   await pause(150)
-  assert.equal(await evaluate(`[...document.querySelectorAll('[role=option]')].find(o=>o.textContent.includes('Alpha One')).getAttribute('aria-selected')`), 'true', 'clicking a row selects it')
-  assert.equal(await evaluate(`[...document.querySelectorAll('button')].some(b=>b.textContent.includes('Import 1'))`), true, 'the import count follows the selection')
-  await evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent.includes('Import 1')).click()`)
-  await pause(150)
-  assert.equal(await evaluate('window.closeCount'), 1, 'importing closes the dialog')
-  const models = await evaluate('window.imported.result.providers.acme.models')
-  assert.deepEqual(models, [{ id: 'alpha-1', name: 'Alpha One' }], 'import appends the selected model with its name')
-  assert.equal(await evaluate('window.imported.immediate'), true, 'the import persists immediately')
+  assert.equal(await evaluate('window.closeCount'), 1, 'a saved import dismisses the dialog')
+  assert.equal(await evaluate('window.flushCalls'), 2, 'import waits for persistence')
+  assert.deepEqual(await evaluate('window.imported.result.providers.acme.models'), [
+    {id:'alpha-1',name:'Alpha One'}, {id:'gamma-3'}, {id:'beta-2',name:'Beta Two'}, {id:'catalog-309',name:'Catalog 309'}
+  ], 'imports include only selected new IDs and preserve provider names')
 
   assert.deepEqual(exceptions, [], 'no uncaught renderer exceptions')
-  console.log('PASS: provider discovery — searchable multi-select, already-added guard, chip count, immediate import')
+  console.log('PASS: provider discovery — keyboard selection, cross-search retention, capped search and duplicate-safe saved import')
 } finally {
   ws?.close()
   if (child && child.exitCode === null) { const exited = new Promise((r) => child.once('exit', r)); child.kill(); await exited }

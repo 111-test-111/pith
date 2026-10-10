@@ -11,7 +11,6 @@ import type { PiStore } from '@/state/pi-store'
 import type { TrajectoryDetail, TrajectoryNodePage, TrajectoryPage, TrajectoryQuery, TrajectoryRecord, TrajectoryStatus, SubagentRunDTO } from '../../../../shared/types'
 import { FadeScroll } from './FadeScroll'
 import { PanelResizeHandle } from './PanelResizeHandle'
-import { TrajectoryTimeline } from './TrajectoryTimeline'
 import { TrajectoryRecordRow } from './TrajectoryRecordRow'
 import type { TrajectoryPresentationKind } from '../../../../shared/trajectory'
 
@@ -153,12 +152,12 @@ function RecordInspector({ path, record, revision, initial }: { path: string; re
       {busy && !view ? <p className="py-2 text-xs text-muted-foreground">{t('trajectory.loading')}</p> : null}
       {error ? <p role="alert" className="py-2 text-xs text-destructive">{t('trajectory.error')}</p> : null}
       {node && location ? <>
-        {node.text !== null ? <pre data-trajectory-value className="whitespace-pre-wrap break-all rounded-control bg-muted px-1 py-1.5 font-mono text-xs">{node.text}</pre> :
+        {node.text !== null ? <pre data-trajectory-value className="whitespace-pre-wrap break-all rounded-control bg-muted px-1 py-1.5 font-mono text-code">{node.text}</pre> :
           <div className="space-y-0.5" data-trajectory-fields>
             {node.children.map((child, index) => <Button key={`${location.offset}:${index}`} variant="ghost" size="sm" className="h-auto w-full justify-start gap-2 px-1 py-1.5 text-xs"
               onClick={() => navigate({ trail: [...location.trail, child.node.id], keys: [...location.keys, child.key], offset: 0 })}>
-              <ChevronRight className="size-3 shrink-0" /><span className="max-w-[40%] truncate font-mono" title={child.key}>{child.key}</span>
-              <span className="min-w-0 flex-1 truncate text-left font-mono text-muted-foreground">{child.node.preview}</span>
+              <ChevronRight className="size-3 shrink-0" /><span className="max-w-[40%] truncate font-mono text-code-inline" title={child.key}>{child.key}</span>
+              <span className="min-w-0 flex-1 truncate text-left font-mono text-code-inline text-muted-foreground">{child.node.preview}</span>
               <span className="shrink-0 text-muted-foreground">{formatBytes(child.node.bytes)}</span>
             </Button>)}
           </div>}
@@ -267,7 +266,7 @@ export function TrajectoryPane({ store, agentRuns }: { store: PiStore; agentRuns
     })().catch(() => { if (active) setInspected({ path, record: selected, detail: null, view: null, error: true }) })
     return () => { active = false }
   }, [path, selected?.id, t])
-  // A timeline selection must reveal its row inside this list only. Never
+  // A tool-call jump must reveal its row inside this list only. Never
   // scroll the inspector or the covered chat along with it.
   useLayoutEffect(() => {
     const row = paneRef.current?.querySelector<HTMLElement>('[data-trajectory-record][aria-pressed="true"]')
@@ -330,7 +329,7 @@ export function TrajectoryPane({ store, agentRuns }: { store: PiStore; agentRuns
         {parentPath ? <SelectItem value={parentPath}>{t('trajectory.currentSession')}</SelectItem> : null}
         {[...agentRuns].map(([path, run]) => <SelectItem key={path} value={path}>{run.description || run.profile}</SelectItem>)}
       </SelectContent></Select></div> : null}
-      <div className="trajectory-search flex items-center gap-2"><Input value={search} onChange={setSearch} maxLength={200} aria-label={t('trajectory.search')} placeholder={t('trajectory.search')} className="min-w-0 flex-1" classNames={{ field: 'h-8', input: 'px-2 text-xs' }} />
+      <div className="trajectory-search flex items-center gap-2"><Input value={search} onChange={setSearch} maxLength={200} aria-label={t('trajectory.search')} placeholder={t('trajectory.search')} className="min-w-0 flex-1"  />
         <Button variant="ghost" size="icon" className="size-7 shrink-0" aria-label={t('trajectory.refresh')} title={t('trajectory.refresh')} disabled={busy} onClick={() => setEpoch(value => value + 1)}><RefreshCw className="size-4" /></Button>
       </div>
       <div className="trajectory-filters flex items-center gap-2">
@@ -338,7 +337,6 @@ export function TrajectoryPane({ store, agentRuns }: { store: PiStore; agentRuns
         <Select value={status} onValueChange={value => setStatus(value as TrajectoryStatus | 'all')}><SelectTrigger className="h-8 min-w-0 flex-1 text-xs" aria-label={t('trajectory.status')}><SelectValue /></SelectTrigger><SelectContent portal><SelectItem value="all">{t('trajectory.allStatuses')}</SelectItem>{STATUSES.map(status => <SelectItem key={status} value={status}>{t(`trajectory.status.${status}`)}</SelectItem>)}</SelectContent></Select>
       </div>
     </div>
-    {page ? <TrajectoryTimeline records={page.items} selectedId={selected?.id} onSelect={setSelected} /> : null}
     <div ref={workspaceRef} data-trajectory-workspace data-has-detail={hasInspector} className="pane-workspace">
     <div data-trajectory-master className="pane-master">
     <FadeScroll data-trajectory-list className="min-h-0 flex-1 px-2 py-1">

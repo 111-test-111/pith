@@ -6,7 +6,8 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type ClipboardEvent as ReactClipboardEvent,
-  type DragEvent as ReactDragEvent
+  type DragEvent as ReactDragEvent,
+  type ReactNode
 } from 'react'
 import { CalendarCheck, Check, Subagent, ImagePlus, LinkSimple, Loader2, NotebookPen, X } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
@@ -31,7 +32,7 @@ import type {
 } from '../../../../shared/types'
 import { DEFAULT_SANDBOX_MODE, type SandboxMode, type SandboxStatusDTO, type SessionSnapshotDTO } from '../../../../shared/types'
 import { FileMention, type MentionState } from './FileMention'
-import { PreviewThumb } from './ImagePreview'
+import { ImagePreviewGroup, PreviewThumb } from './ImagePreview'
 import { FileAttachmentCard } from './FileAttachmentCard'
 import { ModelPicker } from './ModelPicker'
 import { parsePlanCommand, planErrorKey } from '@/lib/plan-submissions'
@@ -61,6 +62,8 @@ export interface FileAttachment {
 
 interface ComposerProps {
   start?: NewSessionContext
+  /** Permission cards share the editor's fitted width and stay above it. */
+  approval?: ReactNode
   models: ModelDTO[]
   model: ModelDTO | null
   thinkingLevel: ThinkingLevel
@@ -70,6 +73,10 @@ interface ComposerProps {
   initializing?: boolean
   /** A read-only session view: typing and submit are disabled. */
   readOnly?: boolean
+  /** Settings → General: keep the model and permission pickers usable while a
+   * run streams. Off (the default) freezes both until the run settles; main
+   * refuses a mid-run switch either way, so this only governs the gates. */
+  allowMidRunChanges?: boolean
   readOnlyKind?: 'subagent' | 'scheduled'
   /** Parent session file of a read-only child view, for the banner's action. */
   readOnlyParentPath?: string | null
@@ -91,6 +98,7 @@ interface ComposerProps {
   /** Apply the snapshot a mode switch returns; the store owns that state. */
   onSandboxSnapshot?: (snapshot: SessionSnapshotDTO) => void
   queued: { steering: QueuedItemDTO[]; followUp: QueuedItemDTO[] }
+  compactionQueued?: boolean
   onSend: (payload: { text: string; images: ImageContent[]; files: string[] }) => void
   /** Queue the draft against the running turn — steer interrupts before the
    * next model call, followUp waits for the run to finish. */
@@ -121,6 +129,7 @@ const IS_MAC = typeof navigator !== 'undefined' && /mac/i.test(navigator.platfor
 
 export function Composer({
   start,
+  approval,
   models,
   model,
   thinkingLevel,
@@ -128,6 +137,7 @@ export function Composer({
   busy,
   initializing = false,
   readOnly = false,
+  allowMidRunChanges = false,
   readOnlyKind = 'subagent',
   readOnlyParentPath = null,
   onOpenSession,
@@ -141,6 +151,7 @@ export function Composer({
   sessionPath = null,
   onSandboxSnapshot,
   queued,
+  compactionQueued = false,
   onSend,
   onQueue,
   onRecallQueue,
@@ -527,12 +538,13 @@ export function Composer({
   // ---- queued messages ----------------------------------------------------
 
   return (
-    <div className={cn('relative isolate shrink-0 bg-background px-3 pb-3', start && '@container flex min-h-0 flex-1 flex-col overflow-y-auto px-6')}>
-      {start ? <ShaderBackdrop /> : null}
+    <div className={cn('relative isolate shrink-0 bg-background px-3 pb-3', start && '@container flex min-h-0 flex-1 flex-col overflow-hidden px-6')}>
+      {start ? <ShaderBackdrop variant="dithering" /> : null}
       {/* Keep the composer in one tree position when the first turn begins;
           moving it between landing/transcript branches discards draft state. */}
-      <div className={cn('mx-auto w-full max-w-3xl', start && 'my-auto max-w-2xl py-8')}>
+      <div className={cn('mx-auto w-full min-w-0 max-w-3xl', start && 'my-auto max-w-2xl py-8')}>
         {start ? <NewSessionHeader {...start} /> : null}
+        {approval}
         <div ref={inputContainerRef} className="relative w-full" onDragOver={(e) => { e.preventDefault(); setDragOver(true) }} onDragLeave={() => setDragOver(false)} onDrop={handleDrop}>
           {mention ? (
             <FileMention
@@ -548,6 +560,7 @@ export function Composer({
           <QueuePanel
             steering={queued.steering}
             followUp={queued.followUp}
+            compactionQueued={compactionQueued}
             onPromote={handlePromoteQueued}
             onRemove={handleRemoveQueued}
             onRecall={() => void handleRecall()}
@@ -594,7 +607,7 @@ export function Composer({
               maxRows={8}
               attachments={
                 images.length || files.length ? (
-                  <>
+                  <ImagePreviewGroup>
                     {images.map((attachment) => (
                       <span key={attachment.id} className="group relative">
                         <PreviewThumb
@@ -608,7 +621,7 @@ export function Composer({
                           type="button"
                           aria-label={t('workspace.removeAttachment', { name: attachment.name })}
                           onClick={() => removeImage(attachment.id)}
-                          className="absolute -right-1.5 -top-1.5 grid size-5 place-items-center rounded-capsule text-destructive opacity-0 transition-[opacity,color,background-color] group-hover:opacity-100 hover:bg-destructive/10 focus-visible:opacity-100"
+                          className="absolute -right-1.5 -top-1.5 grid size-5 place-items-center rounded-icon text-destructive opacity-0 transition-[opacity,color,background-color] group-hover:opacity-100 hover:bg-destructive/10 focus-visible:opacity-100"
                         >
                           <X className="size-3" />
                         </button>
@@ -623,7 +636,7 @@ export function Composer({
                         onRemove={() => removeFile(attachment.id)}
                       />
                     ))}
-                  </>
+                  </ImagePreviewGroup>
                 ) : undefined
               }
               placeholder={
@@ -642,7 +655,7 @@ export function Composer({
                     availableThinkingLevels={availableThinkingLevels}
                     onChange={onModelChange}
                     onThinkingLevelChange={onThinkingLevelChange}
-                    disabled={busy || initializing || readOnly}
+                    disabled={(busy && !allowMidRunChanges) || initializing || readOnly}
                   />
                   {effectiveMode === 'plan' ? (
                     <Button
@@ -681,7 +694,7 @@ export function Composer({
                     mode={plan?.configuredSandboxMode ?? sandboxMode}
                     status={sandbox}
                     sessionPath={sessionPath}
-                    disabled={busy || initializing || readOnly}
+                    disabled={(busy && !allowMidRunChanges) || initializing || readOnly}
                     planRestricted={effectiveMode === 'plan'}
                     onSnapshot={(snapshot) => onSandboxSnapshot?.(snapshot)}
                   />

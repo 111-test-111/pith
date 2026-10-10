@@ -7,9 +7,6 @@ import { Input } from '@/components/motion/input'
 import { Checkbox } from '@/components/motion/checkbox'
 import { RadioGroup, RadioGroupItem } from '@/components/motion/radio'
 import { useI18n } from '@/i18n'
-import { useShowReasoning } from '@/lib/show-reasoning'
-import { useSpinnerVerbs } from '@/lib/spinner-verbs'
-import { useToolGrouping } from '@/lib/tool-grouping'
 import { useStreamingBehavior, type StreamingBehavior } from '@/lib/streaming-behavior'
 import { SettingsGroup, SettingsRow } from './SettingsRow'
 
@@ -23,7 +20,7 @@ function sanitizeSeconds(raw: string) {
   return rest.length ? `${head}.${rest.join('')}` : head
 }
 
-/** Storage & install facts. Future startup/behavior prefs go here. */
+/** App behavior and data: session behavior, timeouts, security, storage, about. */
 export function GeneralSection() {
   const { t } = useI18n()
   const [waitSeconds, setWaitSeconds] = useState(formatSeconds(BASH_DEFAULT_MAX_WAIT_MS))
@@ -138,27 +135,26 @@ export function GeneralSection() {
       }, () => setSandboxError(true))
       .finally(() => setSavingSandbox(false))
   }
+  // Mid-run switches: the composer's model and permission pickers stay usable
+  // while a run streams. Persisted app-wide and read live by main's guards.
+  const [allowMidRunChanges, setAllowMidRunChanges] = useState(false)
+  const [savingMidRunChanges, setSavingMidRunChanges] = useState(false)
+  const [midRunChangesError, setMidRunChangesError] = useState(false)
   // Subagent delegation settings (switch + concurrency) live in the
   // Subagents section, beside the profiles they govern.
   // Same module store the Composer reads — a change here applies immediately.
   const [behavior, setBehavior] = useStreamingBehavior()
-  // Display preference of the transcript, shared with the message rows.
-  const [showReasoning, setShowReasoning] = useShowReasoning()
-  // Folds consecutive same-category tool calls into one group row when on.
-  const [toolGrouping, setToolGrouping] = useToolGrouping()
-  // Plays a status sentence on the turn-in-progress row instead of a bare spinner.
-  const [spinnerVerbs, setSpinnerVerbs] = useSpinnerVerbs()
 
   useEffect(() => {
     void window.pi
       .appInfo()
-      .then((info) => { setVersion(info.version); setCheckpoints(info.checkpointsEnabled); setDebugEnabled(info.debugEnabled); setStartup(info.startup); setWaitSeconds(formatSeconds(info.bashMaxWaitMs)); setSavedWait(info.bashMaxWaitMs); setSandboxMode(info.sandboxMode); setSandbox(info.sandbox); setAskTimeout(String(info.askUserTimeoutSeconds ?? ASK_USER_DEFAULT_TIMEOUT_S)); setSavedAskTimeout(info.askUserTimeoutSeconds ?? ASK_USER_DEFAULT_TIMEOUT_S); setResponseTimeout(String(info.responseTimeoutSeconds ?? RESPONSE_TIMEOUT_DEFAULT_S)); setSavedResponseTimeout(info.responseTimeoutSeconds ?? RESPONSE_TIMEOUT_DEFAULT_S) })
+      .then((info) => { setVersion(info.version); setCheckpoints(info.checkpointsEnabled); setDebugEnabled(info.debugEnabled); setStartup(info.startup); setWaitSeconds(formatSeconds(info.bashMaxWaitMs)); setSavedWait(info.bashMaxWaitMs); setSandboxMode(info.sandboxMode); setSandbox(info.sandbox); setAskTimeout(String(info.askUserTimeoutSeconds ?? ASK_USER_DEFAULT_TIMEOUT_S)); setSavedAskTimeout(info.askUserTimeoutSeconds ?? ASK_USER_DEFAULT_TIMEOUT_S); setResponseTimeout(String(info.responseTimeoutSeconds ?? RESPONSE_TIMEOUT_DEFAULT_S)); setSavedResponseTimeout(info.responseTimeoutSeconds ?? RESPONSE_TIMEOUT_DEFAULT_S); setAllowMidRunChanges(info.allowMidRunChanges === true) })
       .catch(() => {})
   }, [])
 
   return (
     <div className="space-y-6">
-      <SettingsGroup title={t('settings.startupGroup')}>
+      <SettingsGroup title={t('settings.sessionGroup')}>
         <SettingsRow
           label={t('settings.startupSession')}
           description={t('settings.startupSessionDesc')}
@@ -186,9 +182,6 @@ export function GeneralSection() {
             {t('settings.startupFailed')}
           </p>
         ) : null}
-      </SettingsGroup>
-
-      <SettingsGroup title={t('settings.behaviorGroup')}>
         <SettingsRow label={t('settings.behavior')} description={t('settings.behaviorDesc')}>
           <RadioGroup
             orientation="horizontal"
@@ -201,41 +194,30 @@ export function GeneralSection() {
           </RadioGroup>
         </SettingsRow>
         <SettingsRow
-          label={t('settings.showReasoning')}
-          description={t('settings.showReasoningDesc')}
+          label={t('settings.allowMidRunChanges')}
+          description={t('settings.allowMidRunChangesDesc')}
         >
           <Checkbox
             mark="square"
-            checked={showReasoning}
-            onCheckedChange={setShowReasoning}
-            aria-label={t('settings.showReasoning')}
+            checked={allowMidRunChanges}
+            disabled={savingMidRunChanges}
+            aria-label={t('settings.allowMidRunChanges')}
+            onCheckedChange={(value) => {
+              setSavingMidRunChanges(true)
+              setMidRunChangesError(false)
+              void window.pi.setAllowMidRunChanges(value === true)
+                .then((saved) => setAllowMidRunChanges(saved))
+                .catch(() => setMidRunChangesError(true))
+                .finally(() => setSavingMidRunChanges(false))
+            }}
           />
         </SettingsRow>
-        <SettingsRow
-          label={t('settings.toolGrouping')}
-          description={t('settings.toolGroupingDesc')}
-        >
-          <Checkbox
-            mark="square"
-            checked={toolGrouping}
-            onCheckedChange={setToolGrouping}
-            aria-label={t('settings.toolGrouping')}
-          />
-        </SettingsRow>
-        <SettingsRow
-          label={t('settings.spinnerVerbs')}
-          description={t('settings.spinnerVerbsDesc')}
-        >
-          <Checkbox
-            mark="square"
-            checked={spinnerVerbs}
-            onCheckedChange={setSpinnerVerbs}
-            aria-label={t('settings.spinnerVerbs')}
-          />
-        </SettingsRow>
+        {midRunChangesError ? <p role="alert" className="px-4 text-xs text-destructive">{t('settings.allowMidRunChangesFailed')}</p> : null}
       </SettingsGroup>
 
-      <SettingsGroup title={t('bashTask.settingsGroup')}>
+      {/* Three knobs of the same kind — how long something may go unanswered
+          before the app moves on — share one group instead of one card each. */}
+      <SettingsGroup title={t('settings.timeoutGroup')}>
         <SettingsRow label={t('bashTask.maxWait')} description={t('bashTask.maxWaitDesc')}>
           <Input
             value={waitSeconds}
@@ -246,15 +228,12 @@ export function GeneralSection() {
             disabled={savingWait}
             aria-label={t('bashTask.waitSeconds')}
             className="w-20"
-            classNames={{ field: 'h-8', input: 'px-2 text-center text-sm' }}
+            classNames={{ input: 'text-center' }}
           />
           <span className="text-xs text-muted-foreground">{t('bashTask.secondsUnit')}</span>
           <Button variant="ghost" size="sm" disabled={!validWait || waitMs === savedWait || savingWait} onClick={() => void saveWait()}>{t('bashTask.save')}</Button>
         </SettingsRow>
         {waitError ? <p className="px-4 text-xs text-destructive" role="status">{t('bashTask.saveFailed')}</p> : null}
-      </SettingsGroup>
-
-      <SettingsGroup title={t('askUser.settingsGroup')}>
         <SettingsRow label={t('askUser.timeoutLabel')} description={t('askUser.timeoutDesc')}>
           <Input
             value={askTimeout}
@@ -265,15 +244,12 @@ export function GeneralSection() {
             disabled={savingAskTimeout}
             aria-label={t('askUser.timeoutSeconds')}
             className="w-20"
-            classNames={{ field: 'h-8', input: 'px-2 text-center text-sm' }}
+            classNames={{ input: 'text-center' }}
           />
           <span className="text-xs text-muted-foreground">{t('askUser.secondsUnit')}</span>
           <Button variant="ghost" size="sm" disabled={!validAskTimeout || askTimeoutValue === savedAskTimeout || savingAskTimeout} onClick={() => void saveAskTimeout()}>{t('askUser.save')}</Button>
         </SettingsRow>
         {askTimeoutError ? <p className="px-4 text-xs text-destructive" role="status">{t('askUser.saveFailed')}</p> : null}
-      </SettingsGroup>
-
-      <SettingsGroup title={t('settings.timeoutGroup')}>
         <SettingsRow
           label={t('settings.responseTimeoutLabel')}
           description={t('settings.responseTimeoutDesc')}
@@ -287,7 +263,7 @@ export function GeneralSection() {
             disabled={savingResponseTimeout}
             aria-label={t('settings.responseTimeoutSeconds')}
             className="w-20"
-            classNames={{ field: 'h-8', input: 'px-2 text-center text-sm' }}
+            classNames={{ input: 'text-center' }}
           />
           <span className="text-xs text-muted-foreground">{t('settings.timeoutSecondsUnit')}</span>
           <Button variant="ghost" size="sm" disabled={!validResponseTimeout || responseTimeoutValue === savedResponseTimeout || savingResponseTimeout} onClick={() => void saveResponseTimeout()}>{t('settings.timeoutSave')}</Button>
@@ -295,7 +271,7 @@ export function GeneralSection() {
         {responseTimeoutError ? <p className="px-4 text-xs text-destructive" role="status">{t('settings.timeoutSaveFailed')}</p> : null}
       </SettingsGroup>
 
-      <SettingsGroup title={t('sandbox.group')}>
+      <SettingsGroup title={t('settings.securityGroup')}>
         <SettingsRow label={t('sandbox.modeLabel')} description={t('sandbox.modeDesc')}>
           <RadioGroup
             orientation="horizontal"
@@ -317,9 +293,6 @@ export function GeneralSection() {
           </div>
         ) : null}
         {sandboxError ? <p className="px-4 text-xs text-destructive" role="alert">{t('sandbox.saveFailed')}</p> : null}
-      </SettingsGroup>
-
-      <SettingsGroup title={t('debug.settingsGroup')}>
         <SettingsRow label={t('debug.settingsEnable')} description={t('debug.settingsEnableDesc')}>
           <Checkbox
             mark="square"

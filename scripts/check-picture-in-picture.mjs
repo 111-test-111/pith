@@ -1,7 +1,7 @@
 /** Built renderer + real Electron picture-in-picture window, isolated profile. */
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -17,6 +17,8 @@ let child
 const sockets = []
 
 try {
+  // External production dependencies resolve from the isolated fixture entry.
+  await symlink(join(repo, 'node_modules'), join(temporary, 'node_modules'))
   const fixturePreload = join(temporary, 'preload.mjs')
   await writeFile(fixturePreload, `import ${JSON.stringify(preload)};
 import {contextBridge,ipcRenderer} from 'electron';

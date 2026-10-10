@@ -9,6 +9,7 @@
 import { waitForEscalation } from './pending'
 import { isSandboxMode, type SandboxMode } from './mode'
 import { Type } from 'typebox'
+import type { SandboxEscalationOperationDTO } from '../../shared/types'
 
 /** A call may only ever ask to move wider, never narrower or sideways. */
 const WIDER_MODES: Readonly<Record<SandboxMode, readonly SandboxMode[]>> = {
@@ -62,6 +63,7 @@ export interface EscalationRuntime {
   toolCallId: string
   toolName: string
   currentMode: SandboxMode
+  operation: SandboxEscalationOperationDTO
   sandboxPermissions?: unknown
   justification?: unknown
   signal?: AbortSignal
@@ -97,6 +99,7 @@ export async function resolveEscalatedMode(runtime: EscalationRuntime): Promise<
       toolName: runtime.toolName,
       currentMode: runtime.currentMode,
       requestedMode: parsed.requestedMode,
+      operation: runtime.operation,
       justification: parsed.justification,
       ...(runtime.signal ? { signal: runtime.signal } : {})
     },

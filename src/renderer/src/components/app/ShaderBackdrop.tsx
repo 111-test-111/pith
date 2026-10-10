@@ -38,6 +38,8 @@ function buildPalette(): string[] {
   )
 }
 
+type ShaderBackdropVariant = 'warp' | 'dithering'
+
 /**
  * A soft, theme-aware wash behind the welcome and new-chat landing surfaces.
  * The palette follows the live theme tokens (`class`/`data-accent` on <html>,
@@ -46,13 +48,17 @@ function buildPalette(): string[] {
  * the layer is pointer-transparent and hidden from assistive tech, and a radial
  * mask keeps it reading as light rather than as an image.
  *
+ * Each landing surface picks its own beUI shader: the welcome screen keeps the
+ * `warp` wash, while the new-session page asks for `dithering`. Dither uses
+ * the primary mix for its dots and the background token for its base.
+ *
  * Two independent signals freeze the shader's `speed`, because a WebGL effect is
  * neither motion's nor CSS's to stop: the OS preference (the vendored wrapper
  * reads `useReducedMotion()`) and reduced motion, which this component reads itself
  * and passes as `speed={0}` — a preference flip has to freeze the running shader
  * without waiting for the component to remount.
  */
-export function ShaderBackdrop({ className }: { className?: string }) {
+export function ShaderBackdrop({ className, variant = 'warp' }: { className?: string; variant?: ShaderBackdropVariant }) {
   const { resolvedTheme } = useTheme()
   const reduceMotion = useReduceMotion()
   const [colors, setColors] = useState<string[]>(() => buildPalette())
@@ -75,13 +81,28 @@ export function ShaderBackdrop({ className }: { className?: string }) {
       data-shader-motion={reduceMotion ? 'frozen' : 'live'}
       className={`pointer-events-none absolute inset-0 -z-10 overflow-hidden ${className ?? ''}`}
     >
-      {colors.length >= 2 ? (
+      {variant === 'dithering' ? (
+        colors.length >= 3 ? (
+          <ShaderBackground
+            variant="dithering"
+            colorFront={colors[0]}
+            colorBack={colors[2]}
+            shape="sphere"
+            speed={reduceMotion ? 0 : 0.8}
+            className="h-full w-full opacity-40 [mask-image:radial-gradient(120%_95%_at_50%_38%,#000_30%,transparent_100%)] dark:opacity-30"
+          />
+        ) : null
+      ) : colors.length >= 2 ? (
         <ShaderBackground
-          variant="mesh-gradient"
+          variant="warp"
           colors={colors}
-          distortion={0.9}
-          swirl={0.5}
-          grainOverlay={0.04}
+          proportion={0.45}
+          softness={1}
+          distortion={0.25}
+          swirl={0.8}
+          swirlIterations={10}
+          shape="checks"
+          shapeScale={0.1}
           speed={reduceMotion ? 0 : 0.6}
           scale={1.4}
           className="h-full w-full opacity-55 [mask-image:radial-gradient(120%_95%_at_50%_38%,#000_30%,transparent_100%)] dark:opacity-40"

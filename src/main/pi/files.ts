@@ -1,6 +1,7 @@
 import { readFile, readdir, stat } from 'node:fs/promises'
-import { extname, join, relative, resolve, basename, dirname, isAbsolute } from 'node:path'
+import { extname, join, relative, basename, dirname } from 'node:path'
 import type { FileHitDTO, FileKind, FilePreviewDTO } from '../../shared/types'
+import { resolveFilePath } from '../file-path'
 
 const IMAGE_EXTENSIONS = new Set([
   '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.avif', '.svg'
@@ -130,7 +131,7 @@ export class FileIndex {
   }
 
   resolve(relOrAbs: string): string {
-    return isAbsolute(relOrAbs) ? relOrAbs : resolve(this.cwd, relOrAbs)
+    return resolveFilePath({ cwd: this.cwd, path: relOrAbs })
   }
 }
 

@@ -4,7 +4,7 @@
 
 // local patch (pi-app): use the shared UI icon adapter.
 import { X } from "@/lib/icons";
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { AnimatePresence, motion } from "motion/react";
 import {
   cloneElement,
   createContext,
@@ -21,7 +21,8 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
-import { EASE_OUT } from "@/lib/ease";
+// local patch (pi-app): dialogs use the shared floating-surface motion.
+import { useOverlayMotion } from "@/lib/overlay-motion";
 import { PresenceGate } from "@/lib/presence-gate";
 import { cn } from "@/lib/utils";
 // local patch (pi-app): share scroll ownership with nested beUI modal families.
@@ -178,16 +179,6 @@ const FOCUSABLE_SELECTOR = [
   '[tabindex]:not([tabindex="-1"])',
 ].join(",");
 
-// local patch (pi-app): animate the native surface as one piece. An inset(...
-// round ...) mask uses circular arcs even when the border is a squircle, and
-// removing that mask only at rest produces a visible last-frame shape change.
-// A small uniform scale keeps the border, child clipping and shadow identical
-// throughout entry/exit without per-frame layout or a second corner geometry.
-const CENTER_SURFACE_TRANSITION = {
-  duration: 0.22,
-  ease: EASE_OUT,
-} as const;
-
 function getFocusableElements(root: HTMLElement | null) {
   if (!root) return [];
   return Array.from(
@@ -209,7 +200,8 @@ export function CenterMorphModalContent({
   backdropClassName,
 }: CenterMorphModalContentProps) {
   const context = useCenterMorphModalContext("CenterMorphModalContent");
-  const reduce = useReducedMotion() ?? false;
+  const overlay = useOverlayMotion();
+  const backdrop = useOverlayMotion("backdrop");
   const [mounted, setMounted] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
   // local patch (pi-app): suspension must not restart the initial-focus effect
@@ -278,15 +270,9 @@ export function CenterMorphModalContent({
                 aria-label="Dismiss modal"
                 tabIndex={-1}
                 disabled={!dismissible || suspended}
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
+                {...backdrop}
                 {...gate}
                 aria-hidden={suspended || !isPresent ? true : undefined}
-                transition={{
-                  duration: reduce ? 0.1 : 0.28,
-                  ease: EASE_OUT,
-                }}
                 onClick={() => context.setOpen(false)}
                 className={cn(
                   "pointer-events-auto fixed inset-0 z-[100] h-full w-full cursor-default bg-background/10 backdrop-blur-sm",
@@ -316,15 +302,8 @@ export function CenterMorphModalContent({
                     aria-describedby={ariaDescribedBy}
                     data-shortcut-passthrough={shortcutPassthrough}
                     tabIndex={-1}
-                    initial={{ opacity: 0, scale: reduce ? 1 : 0.96 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    exit={{ opacity: 0, scale: reduce ? 1 : 0.98 }}
+                    {...overlay}
                     {...gate}
-                    transition={
-                      reduce
-                        ? { duration: 0.14, ease: EASE_OUT }
-                        : CENTER_SURFACE_TRANSITION
-                    }
                     className={cn(
                       "pointer-events-auto relative w-full max-w-[26rem] origin-center overflow-hidden rounded-window border border-border bg-background shadow-overlay",
                       className,
@@ -333,31 +312,15 @@ export function CenterMorphModalContent({
                     {children}
 
                     {showCloseButton ? (
-                      <motion.button
+                      <button
                         type="button"
                         aria-label={closeButtonLabel}
                         onClick={() => context.setOpen(false)}
-                        initial={
-                          reduce
-                            ? { opacity: 0 }
-                            : { opacity: 0, scale: 0.8 }
-                        }
-                        animate={{ opacity: 1, scale: 1 }}
-                        exit={{
-                          opacity: 0,
-                          scale: reduce ? 1 : 0.88,
-                          transition: { duration: 0.1, ease: EASE_OUT },
-                        }}
-                        transition={{
-                          delay: reduce ? 0 : 0.16,
-                          duration: reduce ? 0.12 : 0.2,
-                          ease: EASE_OUT,
-                        }}
                         // local patch (pi-app): the close control shares icon geometry.
                         className="absolute right-4 top-4 inline-flex h-8 w-8 items-center justify-center rounded-icon bg-foreground/[0.05] text-muted-foreground transition-colors hover:bg-foreground/[0.08] hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                       >
                         <X className="h-4 w-4" aria-hidden="true" />
-                      </motion.button>
+                      </button>
                     ) : null}
                   </motion.div>
                 </div>

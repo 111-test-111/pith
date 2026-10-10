@@ -96,7 +96,7 @@ export function FileDiffPreview({ text, displayPath }: { text: string; displayPa
     return next
   })
 
-  if (sections.length === 0) return <div role="status" className="flex min-h-0 flex-1 items-center justify-center p-5 text-center text-xs leading-5 text-muted-foreground">{t('files.diffPreview.empty')}</div>
+  if (sections.length === 0) return <div role="status" className="flex min-h-0 flex-1 items-center justify-center p-5 text-center text-xs leading-ui text-muted-foreground">{t('files.diffPreview.empty')}</div>
   return <div ref={scroll} data-file-diff-preview className="min-h-0 flex-1 overflow-auto">
     {sections.map((section, index) => <section key={`${index}:${section.path}`} data-diff-file={section.path || undefined}>
       {section.path ? <ReviewFileHeader

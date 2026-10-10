@@ -1,3 +1,4 @@
+// local patch (pi-app): shared scalable typography for UI line metrics.
 // local patch (pi-app): keep UI frames and focus rings in this component at 1px.
 "use client";
 // beui.dev/components/agents/chat-app
@@ -299,7 +300,8 @@ export function TodoList({
         className="group flex h-11 w-full items-center gap-2.5 rounded-2xl px-3.5 text-left outline-none transition-colors hover:bg-muted/50 focus-visible:ring-1 focus-visible:ring-ring"
       >
         <TodoHeaderIcon complete={allComplete} />
-        <h3 className="min-w-0 flex-1 truncate text-sm font-medium text-foreground/90">
+        {/* local patch (pi-app): task headings keep primary text contrast. */}
+        <h3 className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
           {title}
         </h3>
         <span
@@ -371,9 +373,9 @@ export function TodoList({
                     <span className="sr-only">{statusLabel(status)}: </span>
                     <span
                       className={cn(
-                        "min-w-0 flex-1 truncate text-sm leading-5",
-                        status === "pending" && "text-muted-foreground/65",
-                        status === "in-progress" && "text-foreground",
+                        "min-w-0 flex-1 truncate text-sm leading-ui",
+                        // local patch (pi-app): unfinished task titles use primary text contrast.
+                        (status === "pending" || status === "in-progress") && "text-foreground",
                         status === "completed" && "text-muted-foreground/60",
                         status === "cancelled" && "text-muted-foreground/55",
                       )}

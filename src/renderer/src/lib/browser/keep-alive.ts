@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react'
 
-/** Keep browser pages alive while the rail is folded: localStorage, default off; only true enables. SidebarPanel retains a zero-width/transparent aside with full-sized guests, preserving actions and layout. Closing the browser tab or disabling the preference still unmounts and restores from snapshots. */
+/** Keep browser pages alive while the rail is folded: localStorage, default off; only true enables. SidebarPanel retains a zero-width/transparent aside with full-sized guests, preserving actions and layout. Disabling it unmounts and reconstructs from snapshots; explicit tab closure follows the separate restore-tabs preference. */
 
 const KEEP_ALIVE_PREF_KEY = 'pi-app:browser-keep-alive'
 

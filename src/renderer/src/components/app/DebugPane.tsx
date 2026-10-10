@@ -25,6 +25,8 @@ import { useFileNavigation } from '@/lib/file-navigation'
 import type { PiStore } from '@/state/pi-store'
 import type { DebugStore } from '@/state/debug-store'
 import { useDebugTargets } from '@/lib/hooks/use-debug-targets'
+import { useWidePaneSplit } from '@/lib/hooks/use-wide-pane-split'
+import { PanelResizeHandle } from './PanelResizeHandle'
 
 /**
  * The right-rail debug surface. It mirrors the DebugManager's DTO stream and
@@ -34,6 +36,13 @@ import { useDebugTargets } from '@/lib/hooks/use-debug-targets'
  */
 
 const LIVE = new Set<DebugSessionDTO['status']>(['starting', 'running', 'stopped'])
+const SPLIT_STORAGE_KEY = 'pi-app:debug-split'
+function readSplitWidth(): number | undefined {
+  try {
+    const value: unknown = JSON.parse(localStorage.getItem(SPLIT_STORAGE_KEY) ?? 'null')
+    return typeof value === 'number' && Number.isFinite(value) && value > 0 && value <= 10000 ? value : undefined
+  } catch { return undefined }
+}
 
 function statusTone(status: DebugSessionDTO['status']): string {
   switch (status) {
@@ -50,6 +59,12 @@ export function DebugPane({ store, debug }: { store: PiStore; debug: DebugStore 
   const shell = useSyncExternalStore(store.subscribe, store.getShell)
   const { sessionPath } = shell
   const { sessions, session, select } = useDebugTargets(debug, shell)
+  const [splitWidth, setSplitWidth] = useState(readSplitWidth)
+  const split = useWidePaneSplit({ preferred: splitWidth, scope: 'debug', onCommit: width => {
+    width = Math.round(width)
+    setSplitWidth(width)
+    try { localStorage.setItem(SPLIT_STORAGE_KEY, JSON.stringify(width)) } catch { /* Keep the current layout when storage is unavailable. */ }
+  } })
   const children = new Map(shell.subagents.map(run => [run.sessionPath, run]))
   const ownerLabel = (target: DebugSessionDTO): string => {
     const child = children.get(target.sessionPath)
@@ -70,11 +85,11 @@ export function DebugPane({ store, debug }: { store: PiStore; debug: DebugStore 
         </SelectItem>)}</FadeScroll></SelectContent>
       </Select>
     </div>
-    <DebugDetails key={`${session.id}:${session.stopId}:${session.status}`} session={session} debug={debug} cwd={shell.cwd ?? ""} />
+    <DebugDetails key={`${session.id}:${session.stopId}:${session.status}`} session={session} debug={debug} cwd={shell.cwd ?? ""} split={split} />
   </div>
 }
 
-function DebugDetails({ session, debug, cwd }: { session: DebugSessionDTO; debug: DebugStore; cwd: string }) {
+function DebugDetails({ session, debug, cwd, split }: { session: DebugSessionDTO; debug: DebugStore; cwd: string; split: ReturnType<typeof useWidePaneSplit> }) {
   const { t } = useI18n()
   const navigation = useFileNavigation()
   useSyncExternalStore(debug.subscribe, debug.getSnapshot)
@@ -194,7 +209,7 @@ function DebugDetails({ session, debug, cwd }: { session: DebugSessionDTO; debug
       if (!variables.has(reference)) loadVariables(reference)
     }
   }
-  const moreVariables = (reference: number) => truncatedRefs.has(reference) ? <Button variant="ghost" className="h-6 px-2 text-[11px]" disabled={pendingVariables.has(reference)} onClick={() => loadVariables(reference, variables.get(reference)?.length ?? 0)}>{t('debug.loadMoreVariables')}</Button> : null
+  const moreVariables = (reference: number) => truncatedRefs.has(reference) ? <Button variant="ghost" className="h-6 px-2 text-caption" disabled={pendingVariables.has(reference)} onClick={() => loadVariables(reference, variables.get(reference)?.length ?? 0)}>{t('debug.loadMoreVariables')}</Button> : null
 
   // Watch expressions evaluate at every stop (and right after being added
   // while stopped). The store's list identity drives re-evaluation.
@@ -236,7 +251,7 @@ function DebugDetails({ session, debug, cwd }: { session: DebugSessionDTO; debug
       <div key={`${variable.variablesReference}:${variable.name}`}>
         <div className="flex min-w-0 items-center">
         <Button variant="ghost" aria-expanded={expandable ? isOpen : undefined} disabled={!expandable}
-          className={cn('h-auto w-full justify-start disabled:opacity-100', 'flex min-w-0 items-center gap-1 rounded-control px-1 py-0.5 font-mono text-xs', expandable && 'cursor-pointer hover:bg-muted/60')}
+          className={cn('h-auto w-full justify-start disabled:opacity-100', 'flex min-w-0 items-center gap-1 rounded-control px-1 py-0.5 font-mono text-code', expandable && 'cursor-pointer hover:bg-muted/60')}
           style={{ paddingLeft: `${depth * 12 + 4}px` }}
           onClick={expandable ? () => toggleVariables(variable.variablesReference) : undefined}
         >
@@ -249,7 +264,7 @@ function DebugDetails({ session, debug, cwd }: { session: DebugSessionDTO; debug
             {variable.value}{variable.type ? ` : ${variable.type}` : ''}
           </span>
         </Button>
-        {variable.memoryReference && session.capabilities?.supportsReadMemoryRequest ? <Button variant="ghost" className="h-6 shrink-0 px-1 text-[11px]" aria-label={t('debug.variableMemory', { name: variable.name })} onClick={() => setMemorySelection({ reference: variable.memoryReference!, serial: Date.now() })}>{t('debug.memory')}</Button> : null}
+        {variable.memoryReference && session.capabilities?.supportsReadMemoryRequest ? <Button variant="ghost" className="h-6 shrink-0 px-1 text-caption" aria-label={t('debug.variableMemory', { name: variable.name })} onClick={() => setMemorySelection({ reference: variable.memoryReference!, serial: Date.now() })}>{t('debug.memory')}</Button> : null}
         </div>
         {isOpen && children ? children.map((child) => renderVariable(child, depth + 1, new Set(ancestors).add(variable.variablesReference))) : null}
         {isOpen ? moreVariables(variable.variablesReference) : null}
@@ -351,8 +366,8 @@ function DebugDetails({ session, debug, cwd }: { session: DebugSessionDTO; debug
       {session.error ? <p role="alert" className="shrink-0 whitespace-pre-wrap px-3 py-1 text-xs text-destructive">{session.error}</p> : null}
 
       <FadeScroll className="min-h-0 flex-1 p-1">
-        <div data-debug-columns className="pane-columns">
-        <div data-debug-navigation className="pane-master">
+        <div ref={split.ref} data-debug-columns data-resizable="true" className="pane-columns">
+        <div data-debug-navigation data-pane-master className="pane-master">
         {core ? <p className="px-3 py-2 text-xs text-muted-foreground">{t('debug.coreHint')}</p> : null}
         {stopped && (session.stopDescription || session.stopText || session.stopDiagnostics) ? (
           <div className="space-y-1 px-3 py-2 text-xs" role={session.conditionError ? 'alert' : undefined}>
@@ -368,10 +383,10 @@ function DebugDetails({ session, debug, cwd }: { session: DebugSessionDTO; debug
             onClick={() => { setSelectedThread(activeThreadId ?? selectedThread); setSelectedFrame(frames[0]?.id); setMemorySelection(undefined); setFrameVisit(visit => visit + 1); openSource(session.location?.file, session.location?.line) }}
             className="h-auto justify-start flex w-full min-w-0 items-center gap-2 border-b border-border/60 px-3 py-1.5 text-left hover:bg-muted/50"
           >
-            <span className="shrink-0 rounded-item bg-amber-500/15 px-1.5 py-0.5 text-[11px] text-amber-600 dark:text-amber-400">
+            <span className="shrink-0 rounded-item bg-amber-500/15 px-1.5 py-0.5 text-caption text-amber-600 dark:text-amber-400">
               {session.stopReason ?? t('debug.status.stopped')}
             </span>
-            <span className="min-w-0 truncate font-mono text-xs text-foreground">
+            <span className="min-w-0 truncate font-mono text-code-inline text-foreground">
               {session.location.name ?? ''}
             </span>
             <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
@@ -394,11 +409,11 @@ function DebugDetails({ session, debug, cwd }: { session: DebugSessionDTO; debug
                     <span aria-hidden="true" className={cn('size-2 shrink-0 rounded-full', bp.verified ? 'bg-destructive' : 'bg-muted-foreground/40')} />
                     <MiddleEllipsis name={bp.file} className="min-w-0 flex-1 font-mono text-xs text-foreground" />
                     <span className="shrink-0 font-mono text-xs text-muted-foreground">{bp.line}</span>
-                    {!bp.verified ? <span className="shrink-0 text-[11px] text-muted-foreground/70">{t('debug.unverified')}</span> : null}
+                    {!bp.verified ? <span className="shrink-0 text-caption text-muted-foreground/70">{t('debug.unverified')}</span> : null}
                   </Button>
                   {bp.message ? <p className="whitespace-pre-wrap break-words px-1 text-xs text-muted-foreground">{bp.message}</p> : null}
-                  {bp.condition ? <p className="break-words px-1 font-mono text-xs text-muted-foreground">{bp.condition}</p> : null}
-                  {bp.conditionStatus ? <p className={cn('px-1 text-[11px]', bp.conditionStatus === 'error' ? 'text-destructive' : 'text-muted-foreground')}>
+                  {bp.condition ? <p className="break-words px-1 font-mono text-code text-muted-foreground">{bp.condition}</p> : null}
+                  {bp.conditionStatus ? <p className={cn('px-1 text-caption', bp.conditionStatus === 'error' ? 'text-destructive' : 'text-muted-foreground')}>
                     {t(bp.conditionStatus === 'error' ? 'debug.conditionError' : 'debug.conditionUnvalidated')}
                   </p> : null}
                   {bp.conditionError ? <p className="whitespace-pre-wrap break-words px-1 text-xs text-destructive">{bp.conditionError}</p> : null}
@@ -435,8 +450,8 @@ function DebugDetails({ session, debug, cwd }: { session: DebugSessionDTO; debug
                     onClick={() => { setSelectedFrame(frame.id); setMemorySelection(undefined); setFrameVisit(visit => visit + 1); openSource(frame.file, frame.line) }}
                     className={cn('h-auto justify-start flex w-full min-w-0 items-center gap-2 rounded-control px-1 py-0.5 text-left',
                       frame.id === selectedFrame ? 'bg-accent' : 'hover:bg-muted/50')}>
-                    <span className="shrink-0 font-mono text-xs text-foreground">{frame.name}</span>
-                    <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground">
+                    <span className="shrink-0 font-mono text-code-inline text-foreground">{frame.name}</span>
+                    <span className="min-w-0 flex-1 truncate font-mono text-caption text-muted-foreground">
                       {frame.file ? `${frame.file}${frame.line !== undefined ? `:${frame.line}` : ''}` : frame.instructionPointerReference ?? frame.source?.name ?? ''}
                     </span>
                   </Button>
@@ -447,6 +462,7 @@ function DebugDetails({ session, debug, cwd }: { session: DebugSessionDTO; debug
         ) : null}
 
         </div>
+        <PanelResizeHandle {...split.handleProps} label={t('debug.resizeSplit')} />
         <div data-debug-inspection className="pane-detail">
         <div className="pane-data">
         {stopped && selectedFrame !== undefined ? <DebugNativeView key={`${selectedFrame}:${session.sourceVersion ?? 0}:${frameVisit}`} session={session} frame={frames.find(frame => frame.id === selectedFrame)} cwd={cwd} memorySelection={memorySelection} /> : null}
@@ -489,7 +505,7 @@ function DebugDetails({ session, debug, cwd }: { session: DebugSessionDTO; debug
               placeholder={t('debug.watchPlaceholder')}
               aria-label={t('debug.watchPlaceholder')}
               className="min-w-0 flex-1"
-              classNames={{ field: 'h-7', input: 'px-2 font-mono text-xs' }}
+              classNames={{ input: 'font-mono' }}
             />
             <Button type="submit" variant="ghost" size="icon" className="size-7 shrink-0" aria-label={t('debug.watchAdd')} disabled={!watchDraft.trim()}>
               <Plus aria-hidden="true" className="size-4" />
@@ -501,8 +517,8 @@ function DebugDetails({ session, debug, cwd }: { session: DebugSessionDTO; debug
                 const result = watchResults.get(expression)
                 return (
                   <li key={expression} className="group flex min-w-0 items-center gap-1.5 rounded-control px-1 py-0.5">
-                    <span className="shrink-0 font-mono text-xs text-foreground">{expression}</span>
-                    <span className={cn('min-w-0 flex-1 truncate font-mono text-xs', result?.error ? 'text-destructive' : 'text-muted-foreground')}>
+                    <span className="shrink-0 font-mono text-code-inline text-foreground">{expression}</span>
+                    <span className={cn('min-w-0 flex-1 truncate font-mono text-code-inline', result?.error ? 'text-destructive' : 'text-muted-foreground')}>
                       {result?.result ?? (stopped ? '…' : '—')}
                     </span>
                     <Button
@@ -524,10 +540,10 @@ function DebugDetails({ session, debug, cwd }: { session: DebugSessionDTO; debug
         <section aria-label={t('debug.output')} className="px-3 py-2">
           <h3 className="mb-1 text-xs font-medium text-muted-foreground">{t('debug.output')}</h3>
           {outputTruncated ? (
-            <p className="mb-1 text-[11px] text-muted-foreground/70">{t('debug.outputTruncated')}</p>
+            <p className="mb-1 text-caption text-muted-foreground/70">{t('debug.outputTruncated')}</p>
           ) : null}
           {output ? (
-            <pre className="whitespace-pre-wrap break-all rounded-item bg-muted/40 p-2 font-mono text-[11px] leading-relaxed text-foreground">{output}</pre>
+            <pre className="whitespace-pre-wrap break-all rounded-item bg-muted/40 p-2 font-mono text-code text-foreground">{output}</pre>
           ) : (
             <p className="text-xs text-muted-foreground/70">{t('debug.noOutput')}</p>
           )}

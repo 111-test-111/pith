@@ -1,3 +1,4 @@
+// local patch (pi-app): shared scalable typography for UI annotations.
 "use client";
 // beui.dev/components/motion/multi-select
 
@@ -83,7 +84,7 @@ export function MultiSelectLabel({
   const groupId = useContext(MultiSelectGroupContext);
   const labelClassName = cn(
     // local patch (pi-app): use the shared compact-label step.
-    "w-full px-2 py-1.5 text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground",
+    "w-full px-2 py-1.5 text-caption font-medium uppercase tracking-[0.12em] text-muted-foreground",
     className,
   );
   return groupId ? (

@@ -26,7 +26,7 @@ export function Welcome({ onPickFolder }: WelcomeProps) {
           <h1 className="text-2xl font-semibold tracking-tight text-foreground">
             {t('welcome.title')}
           </h1>
-          <p className="mt-2 text-sm leading-6 text-muted-foreground">{t('welcome.body')}</p>
+          <p className="mt-2 text-sm leading-ui-loose text-muted-foreground">{t('welcome.body')}</p>
         </div>
         <Button
           size="lg"

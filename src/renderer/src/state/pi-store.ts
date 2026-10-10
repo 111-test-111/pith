@@ -1,4 +1,5 @@
 import { isNothingToCompactError } from '../../../shared/compaction-errors'
+import type { CompactionProcessStateDTO, CompactionQueueStateDTO } from '../../../shared/compaction'
 import type {
   AssistantMsg,
   ChatMessage,
@@ -68,6 +69,14 @@ export interface PiState {
    * children's questions included — they arrive under this owner path). */
   pendingAskUser: PendingAskUserDTO[]
   isStreaming: boolean
+  /**
+   * A prompt was echoed locally and no run has been announced for it yet.
+   * The transcript paints its waiting row (spinner + sentence) from this flag,
+   * so the row cannot trail the user's own bubble by an IPC round trip;
+   * `agent_start` (or a settling/error event) hands the row over to
+   * `isStreaming`.
+   */
+  awaitingRun: boolean
   /** True while the visible session is itself a subagent child (read-only). */
   subagentChild: boolean
   /** The visible conversation belongs to a scheduled task (read-only). */
@@ -86,6 +95,8 @@ export interface PiState {
   toolRuns: Record<string, ToolRun>
   /** Queued steer/follow-up messages with payload counts (mirror-fed). */
   queue: { steering: QueuedItemDTO[]; followUp: QueuedItemDTO[] }
+  compactionQueue: CompactionQueueStateDTO
+  compactionProcess: CompactionProcessStateDTO
   notice: Notice | null
   error: string | RewindErrorDTO | null
 }
@@ -119,6 +130,7 @@ export interface PiShellState {
   contextUsage: ContextUsageDTO | null
   /** Pending steering/follow-up messages (SDK queue state) for the composer. */
   queue: { steering: QueuedItemDTO[]; followUp: QueuedItemDTO[] }
+  compactionQueue: CompactionQueueStateDTO
   /** True while the visible session is a subagent child (composer disabled). */
   subagentChild: boolean
   scheduledTaskSession: boolean
@@ -189,6 +201,9 @@ function insertByTimestamp(messages: ChatMessage[], incoming: ChatMessage): void
   messages.splice(index, 0, incoming)
 }
 
+const EMPTY_COMPACTION_QUEUE: CompactionQueueStateDTO = { queued: false, revision: 0 }
+const EMPTY_COMPACTION_PROCESS: CompactionProcessStateDTO = { process: null, revision: 0 }
+
 const initialState: PiState = {
   initializing: false,
   todos: null,
@@ -211,12 +226,15 @@ const initialState: PiState = {
   escalations: [],
   pendingAskUser: [],
   isStreaming: false,
+  awaitingRun: false,
   contextUsage: null,
   eventSequence: 0,
   messages: [],
   streaming: null,
   toolRuns: {},
   queue: { steering: [], followUp: [] },
+  compactionQueue: EMPTY_COMPACTION_QUEUE,
+  compactionProcess: EMPTY_COMPACTION_PROCESS,
   notice: null,
   error: null
 }
@@ -239,6 +257,7 @@ function shellOf(state: PiState, availableThinkingLevels: ThinkingLevel[]): PiSh
     isStreaming: state.isStreaming,
     contextUsage: state.contextUsage,
     queue: state.queue,
+    compactionQueue: state.compactionQueue,
     subagentChild: state.subagentChild,
     scheduledTaskSession: state.scheduledTaskSession,
     subagentParentPath: state.subagentParentPath,
@@ -257,10 +276,8 @@ function sameShell(a: PiShellState, b: PiShellState): boolean {
 type Listener = () => void
 
 /**
- * Context usage only "changed" when one of its numbers moved: the main process
- * re-pushes the same payload on a fixed cadence, and a fresh object with equal
- * numbers must not re-render the workspace. `===` on the nullable halves keeps
- * a null → null transition free.
+ * Equal numbers and an equal metadata revision are unchanged. A new request or
+ * branch must still refresh detail when its numeric usage happens to be equal.
  */
 function sameUsage(a: ContextUsageDTO | null, b: ContextUsageDTO | null): boolean {
   if (a === b) return true
@@ -270,7 +287,8 @@ function sameUsage(a: ContextUsageDTO | null, b: ContextUsageDTO | null): boolea
     a.contextWindow === b.contextWindow &&
     a.percent === b.percent &&
     a.sessionCost === b.sessionCost &&
-    a.cacheHitRate === b.cacheHitRate
+    a.cacheHitRate === b.cacheHitRate &&
+    a.revision === b.revision
   )
 }
 
@@ -291,6 +309,22 @@ export class PiStore {
    * rendering and replay only those newer than the returned snapshot. */
   private planStates = new Map<string, PlanStateDTO>()
   private jevStates = new Map<string, { seq: number; state: JevWorkflowDTO | null }>()
+  private compactionQueues = new Map<string, CompactionQueueStateDTO>()
+  private compactionProcesses = new Map<string, CompactionProcessStateDTO>()
+  private mergeCompactionProcess(path: string | null, next?: CompactionProcessStateDTO): CompactionProcessStateDTO {
+    if (!path) return EMPTY_COMPACTION_PROCESS
+    const previous = this.compactionProcesses.get(path)
+    const merged = next && (!previous || next.revision > previous.revision) ? next : previous
+    if (merged) this.compactionProcesses.set(path, merged)
+    return merged ?? EMPTY_COMPACTION_PROCESS
+  }
+  private mergeCompactionQueue(path: string | null, next?: CompactionQueueStateDTO): CompactionQueueStateDTO {
+    if (!path) return EMPTY_COMPACTION_QUEUE
+    const previous = this.compactionQueues.get(path)
+    const merged = next && (!previous || next.revision > previous.revision) ? next : previous
+    if (merged) this.compactionQueues.set(path, merged)
+    return merged ?? EMPTY_COMPACTION_QUEUE
+  }
   private mergeJevState(path: string | null, state: JevWorkflowDTO | null | undefined, seq = 0): JevWorkflowDTO | null {
     if (!path) return null
     const previous = this.jevStates.get(path)
@@ -341,12 +375,14 @@ export class PiStore {
     const sessionPath = snapshot.sessionPath ?? null
     const plan = this.mergePlanState(sessionPath, snapshot.plan)
     const jevWorkflow = this.mergeJevState(sessionPath, snapshot.jevWorkflow, snapshot.jevWorkflowSeq)
+    const compactionQueue = this.mergeCompactionQueue(sessionPath, snapshot.compactionQueue)
+    const compactionProcess = this.mergeCompactionProcess(sessionPath, snapshot.compactionProcess)
     const previousCached = sessionPath ? this.sessionStates.get(sessionPath) : undefined
     const snapshotSequence = snapshot.eventSequence ?? 0
     // Roster revisions are independent of transcript revisions, and belong
     // only to this session. Never merge the outgoing chat into an incoming one.
     const subagents = mergeRoster(previousCached?.subagents ?? [], snapshot.subagents ?? [])
-    const cached = previousCached ? { ...previousCached, subagents, plan, jevWorkflow } : undefined
+    const cached = previousCached ? { ...previousCached, subagents, plan, jevWorkflow, compactionQueue, compactionProcess } : undefined
     if (cached) this.sessionStates.set(sessionPath!, cached)
     // A readiness/event push can overtake an IPC snapshot of a cached session.
     // Keep the newer projection (including its sequence), then replay any
@@ -383,6 +419,10 @@ export class PiStore {
       sandboxMode: snapshot.sandboxMode ?? cached?.sandboxMode ?? DEFAULT_SANDBOX_MODE,
       sandbox: snapshot.sandbox ?? cached?.sandbox ?? null,
       isStreaming: snapshot.isStreaming,
+      // The echo's pending run is a fact about THIS view: a snapshot for the
+      // same session cannot disprove it (it was taken before the run started),
+      // while another session's snapshot must not inherit it.
+      awaitingRun: this.state.sessionPath === sessionPath ? this.state.awaitingRun : false,
       subagentChild: snapshot.subagentChild === true,
       scheduledTaskSession: snapshot.scheduledTaskSession === true,
       subagentParentPath: snapshot.subagentParentPath ?? null,
@@ -396,6 +436,8 @@ export class PiStore {
       streaming: unchanged ? cached.streaming : (snapshot.streaming ?? null),
       toolRuns: unchanged ? cached.toolRuns : (snapshot.toolRuns ?? {}),
       queue: unchanged ? cached.queue : (snapshot.queue ?? { steering: [], followUp: [] }),
+      compactionQueue,
+      compactionProcess,
       notice: unchanged ? cached.notice : null,
       error: unchanged ? cached.error : null
     })
@@ -488,7 +530,12 @@ export class PiStore {
     const cached = this.sessionStates.get(sessionPath)
     if (!cached) return false
     const prev = this.state
-    this.state = { ...cached, plan: this.mergePlanState(sessionPath, cached.plan) }
+    this.state = {
+      ...cached,
+      plan: this.mergePlanState(sessionPath, cached.plan),
+      compactionQueue: this.mergeCompactionQueue(sessionPath, cached.compactionQueue),
+      compactionProcess: this.mergeCompactionProcess(sessionPath, cached.compactionProcess)
+    }
     this.shellState = shellOf(this.state, this.availableThinkingLevels)
     for (const listener of this.listeners) listener()
 
@@ -502,16 +549,36 @@ export class PiStore {
 
   /** Immediately show the outgoing prompt; replaced by the real message_end. */
   appendOptimisticUser(text: string, images: UserMsg['content'] extends string ? never : any[]): void {
+    // SAFETY: the echo is a renderer-only row; `__optimistic` marks it for the
+    // message_end swap and `UserMsg` carries no such field, so a cast is the
+    // only way to keep the placeholder inside the transcript's message list.
     const optimistic = {
       role: 'user',
       content: images.length ? [{ type: 'text', text }, ...images] : text,
       timestamp: Date.now(),
       __optimistic: true
     } as unknown as UserMsg
-    this.set({ messages: [...this.state.messages, optimistic] })
+    // The waiting row rides the echo: the run this prompt opens is already a
+    // fact in the UI, so the spinner and its sentence appear in the same
+    // commit as the bubble instead of waiting for `agent_start`.
+    this.set({ messages: [...this.state.messages, optimistic], awaitingRun: true })
   }
 
   dispatch(event: PiEvent): void {
+    if (event.type === 'compaction_process_update' && event.sessionPath && event.compactionProcess) {
+      const compactionProcess = this.mergeCompactionProcess(event.sessionPath, event.compactionProcess)
+      const cached = this.sessionStates.get(event.sessionPath)
+      if (cached) this.sessionStates.set(event.sessionPath, { ...cached, compactionProcess })
+      if (event.sessionPath === this.state.sessionPath && compactionProcess !== this.state.compactionProcess) this.set({ compactionProcess })
+      return
+    }
+    if (event.type === 'compaction_queue_update' && event.sessionPath && event.compactionQueue) {
+      const compactionQueue = this.mergeCompactionQueue(event.sessionPath, event.compactionQueue)
+      const cached = this.sessionStates.get(event.sessionPath)
+      if (cached) this.sessionStates.set(event.sessionPath, { ...cached, compactionQueue })
+      if (event.sessionPath === this.state.sessionPath && compactionQueue !== this.state.compactionQueue) this.set({ compactionQueue })
+      return
+    }
     if (event.type === 'jev_workflow_update' && event.sessionPath) {
       const jevWorkflow = this.mergeJevState(event.sessionPath, event.jevWorkflow, event.jevWorkflowSeq)
       const cached = this.sessionStates.get(event.sessionPath)
@@ -554,11 +621,12 @@ export class PiStore {
       case 'session_initialized':
         this.setAvailableThinkingLevels(event.availableThinkingLevels)
         this.set({ initializing: false, model: event.model, thinkingLevel: event.thinkingLevel,
-          contextUsage: event.contextUsage ?? null })
+          contextUsage: event.contextUsage ?? null, awaitingRun: false })
         break
 
       case 'agent_start':
-        this.set({ isStreaming: true, activeChangeScopeId: event.changeScopeId ?? null, notice: null, error: null })
+        // The announced run owns the waiting row from here on (`isStreaming`).
+        this.set({ isStreaming: true, awaitingRun: false, activeChangeScopeId: event.changeScopeId ?? null, notice: null, error: null })
         break
 
       case 'message_start': {
@@ -722,7 +790,9 @@ export class PiStore {
         break
 
       case 'agent_settled':
-        this.set({ isStreaming: Boolean(event.continuing), streaming: null })
+        // A settled run (or one that never announced itself) releases the
+        // echo's waiting row too, so a prompt main dropped cannot spin forever.
+        this.set({ isStreaming: Boolean(event.continuing), streaming: null, awaitingRun: false })
         // The run is over: nothing can still be executing, so a run without an
         // end is one that never got to finish (Stop, provider error, a crash).
         this.settleToolRuns()
@@ -804,7 +874,7 @@ export class PiStore {
       }
 
       case 'pi_error':
-        this.set({ error: event.rewindError ?? event.message, isStreaming: false, streaming: null })
+        this.set({ error: event.rewindError ?? event.message, isStreaming: false, streaming: null, awaitingRun: false })
         break
 
       default:

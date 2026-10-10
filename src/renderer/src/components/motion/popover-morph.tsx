@@ -1,6 +1,6 @@
 "use client";
 
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { AnimatePresence, motion } from "motion/react";
 import {
   cloneElement,
   createContext,
@@ -19,12 +19,14 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { usePopoverPortalPosition } from "@/components/motion/popover-position";
-import { SPRING_PANEL } from "@/lib/ease";
+// local patch (pi-app): use the same entrance and exit as pickers and menus.
+import { useOverlayMotion } from "@/lib/overlay-motion";
 // local patch (pi-app): release focus/pointer ownership as soon as exit starts.
 import { PresenceGate } from "@/lib/presence-gate";
 import { cn } from "@/lib/utils";
 
-type Side = "top" | "bottom";
+// local patch (pi-app): image information can sit beside its shared anchor.
+type Side = "top" | "right" | "bottom" | "left";
 // local patch (pi-app): "center" anchors the panel on the trigger's midpoint
 // (the turn's hover-preview pops out of the middle of its row).
 type Align = "start" | "end" | "center";
@@ -43,7 +45,9 @@ type MorphContextValue = {
 
 const MorphContext = createContext<MorphContextValue | null>(null);
 
-function useMorphContext(component: string) {
+// local patch (pi-app): composed parts (date-range-picker's content) reach
+// the panel through this hook because the app MorphPopoverContent owns its ref.
+export function useMorphContext(component: string) {
   const ctx = useContext(MorphContext);
   if (!ctx) throw new Error(`${component} must be used within <MorphPopover>`);
   return ctx;
@@ -120,7 +124,7 @@ export function MorphPopover({
     const restore = anchor ?? trigger ?? (root && root.tabIndex >= 0 ? root : null);
     // local patch (pi-app): focus before dismissal, so a focus-to-preview handler
     // cannot reopen the panel in response to restoring keyboard focus on Escape.
-    if (inPanel) restore?.focus();
+    if (inPanel) restore?.focus({ preventScroll: true });
     setOpen(false);
   }, [anchor, root, setOpen, trigger]);
 
@@ -207,11 +211,9 @@ export function MorphPopoverTrigger({ children }: MorphPopoverTriggerProps) {
 }
 
 const originFor = (side: Side, align: Align) =>
-  `${side === "bottom" ? "top" : "bottom"} ${align === "end" ? "right" : align === "center" ? "center" : "left"}`;
-
-// local patch (pi-app): retain the anchored spring, but let the native border
-// own the silhouette. Circular inset masks cut the continuous corners off;
-// scaling one surface also keeps its child clipping and shadow in agreement.
+  side === "right" || side === "left"
+    ? `${side === "right" ? "left" : "right"} ${align === "end" ? "bottom" : align === "center" ? "center" : "top"}`
+    : `${side === "bottom" ? "top" : "bottom"} ${align === "end" ? "right" : align === "center" ? "center" : "left"}`;
 
 export interface MorphPopoverContentProps {
   children: ReactNode;
@@ -225,6 +227,8 @@ export interface MorphPopoverContentProps {
    * unmounts at rest, for a preview handing over to another one in the same
    * frame (a hover moving from one file to the next). */
   instant?: boolean;
+  /** local patch (pi-app): keep a parent mounted while a confirmation owns focus. */
+  inert?: boolean;
   className?: string;
 }
 
@@ -235,10 +239,10 @@ export function MorphPopoverContent({
   sideOffset = 8,
   radius = "var(--app-radius-window)",
   instant = false,
+  inert = false,
   className,
 }: MorphPopoverContentProps) {
   const ctx = useMorphContext("MorphPopoverContent");
-  const reduce = useReducedMotion() ?? false;
   const [portalReady, setPortalReady] = useState(false);
   const layout = usePopoverPortalPosition(
     ctx.triggerRef,
@@ -247,7 +251,7 @@ export function MorphPopoverContent({
   );
 
   useEffect(() => setPortalReady(true), []);
-  const left = layout
+  let left = layout
     ? align === "end"
       ? layout.trigger.left + layout.trigger.width - layout.content.width
       : align === "center"
@@ -256,23 +260,28 @@ export function MorphPopoverContent({
           layout.content.width / 2
         : layout.trigger.left
     : 0;
-  const top = layout
+  let top = layout
     ? side === "bottom"
       ? layout.trigger.top + layout.trigger.height + sideOffset
       : layout.trigger.top - layout.content.height - sideOffset
     : 0;
-
-  // Both directions travel between the exact same hidden/show states. Exit
-  // targets "hidden" directly instead of introducing separate choreography.
-  // `instant` skips the morph on both ends: no variants and no initial/animate/
-  // exit state, so the panel is at rest the moment it mounts.
-  const still = reduce || instant;
-  const wrap = still
-    ? undefined
-    : {
-        hidden: { opacity: 0, scale: 0.96, transition: SPRING_PANEL },
-        show: { opacity: 1, scale: 1, transition: SPRING_PANEL },
-      };
+  let placement = side;
+  // local patch (pi-app): lateral panels flip to the roomier side and clamp to
+  // the viewport, using resting dimensions rather than animated rectangles.
+  if (layout && (side === "right" || side === "left")) {
+    const rightRoom = window.innerWidth - layout.trigger.left - layout.trigger.width - sideOffset - 8;
+    const leftRoom = layout.trigger.left - sideOffset - 8;
+    if (side === "right" && rightRoom < layout.content.width && leftRoom > rightRoom) placement = "left";
+    if (side === "left" && leftRoom < layout.content.width && rightRoom > leftRoom) placement = "right";
+    left = placement === "right"
+      ? layout.trigger.left + layout.trigger.width + sideOffset
+      : layout.trigger.left - layout.content.width - sideOffset;
+    top = align === "center" ? layout.trigger.top + (layout.trigger.height - layout.content.height) / 2
+      : align === "end" ? layout.trigger.top + layout.trigger.height - layout.content.height : layout.trigger.top;
+    left = Math.max(8, Math.min(left, window.innerWidth - layout.content.width - 8));
+    top = Math.max(8, Math.min(top, window.innerHeight - layout.content.height - 8));
+  }
+  const overlay = useOverlayMotion(placement, instant);
 
   // Keep the server and first client render identical, then mount the portal.
   if (!portalReady) return null;
@@ -284,18 +293,19 @@ export function MorphPopoverContent({
           {({ gate }) => (
             <motion.div
               data-morph-popover-portal=""
-              variants={wrap}
-              initial={instant ? false : reduce ? { opacity: 0 } : "hidden"}
-              animate={instant ? undefined : reduce ? { opacity: 1 } : "show"}
-              exit={instant ? undefined : reduce ? { opacity: 0 } : "hidden"}
-              transition={instant || !reduce ? undefined : { duration: 0.12 }}
+              {...overlay}
               {...gate}
+              // local patch (pi-app): suspend the whole parent's hit target and
+              // paint it below the modal layer while a confirmation owns input.
+              inert={inert || gate.inert}
               style={{
                 ...gate.style,
+                pointerEvents: inert ? "none" : gate.style?.pointerEvents,
+                zIndex: inert ? 99 : undefined,
                 left,
                 top,
                 visibility: layout ? "visible" : "hidden",
-                transformOrigin: originFor(side, align),
+                transformOrigin: originFor(placement, align),
               }}
               className="fixed z-[9999]"
             >
@@ -303,6 +313,8 @@ export function MorphPopoverContent({
                 ref={ctx.contentRef}
                 id={ctx.contentId}
                 role="dialog"
+                inert={inert || undefined}
+                aria-hidden={inert || undefined}
                 aria-labelledby={ctx.triggerId}
                 style={{ borderRadius: radius }}
                 className={cn(

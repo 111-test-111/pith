@@ -27,6 +27,7 @@ export { buildSandboxPolicy, writableRoots } from './src/main/sandbox/policy';
 export { resolveSandboxPath, isSandboxPathWithin } from './src/main/sandbox/paths';
 export { sandboxModeFromBranch, SANDBOX_MODE_ENTRY_TYPE } from './src/main/sandbox/mode';
 export { createSandboxFileTools } from './src/main/pi/file-tools';
+export { createManagedBashTools } from './src/main/pi/bash-tools';
 export { listPendingEscalations, respondToEscalation } from './src/main/sandbox/pending';
 export { resolveEscalatedMode } from './src/main/sandbox/escalation';
 export { localSandboxProvider, resetLocalSandboxProvider } from './src/main/sandbox/local';
@@ -68,6 +69,7 @@ const {
   sandboxModeFromBranch,
   SANDBOX_MODE_ENTRY_TYPE,
   createSandboxFileTools,
+  createManagedBashTools,
   listPendingEscalations,
   respondToEscalation,
   resolveEscalatedMode
@@ -261,6 +263,10 @@ const canonicalWorkspace = await realpath(workspace)
   assert.equal(queued[0].requestedMode, 'danger-full-access', 'the question names the requested mode')
   assert.equal(queued[0].currentMode, 'read-only', 'the question names the mode it is wider than')
   assert.equal(queued[0].toolName, 'edit', 'the question names the tool asking')
+  assert.deepEqual(queued[0].operation, {
+    cwd,
+    parameters: { path: outside, edits: [{ oldText: 'one', newText: 'edited' }], sandbox_permissions: 'danger-full-access', justification: 'needs to touch this file' }
+  }, 'approval carries the complete edit and execution directory')
   assert.equal(respondToEscalation(queued[0].requestId, sessionPath, 'approve'), true, 'the question is answered')
   assert.equal(await approving, 'ok', 'the approved call ran')
   assert.match(await readFile(outside, 'utf8'), /edited/, 'the approved call wrote the file')
@@ -323,6 +329,33 @@ const canonicalWorkspace = await realpath(workspace)
     'read-only is never a valid escalation target'
   )
   mode = 'read-only'
+
+  const writeParams = { path: outside, content: 'complete write content 中文\n'.repeat(2000), sandbox_permissions: 'danger-full-access', justification: 'review the complete write' }
+  const writing = tools[1].execute('write-call', writeParams, undefined, undefined, context).catch(error => error)
+  const [writeRequest] = listPendingEscalations(sessionPath)
+  assert.deepEqual(writeRequest.operation, { cwd, parameters: writeParams }, 'write approvals retain the full path and content without truncation')
+  const originalContent = writeParams.content
+  writeParams.content = 'changed caller data'
+  assert.equal(writeRequest.operation.parameters.content, originalContent, 'pending details are a snapshot, independent of the caller')
+  respondToEscalation(writeRequest.requestId, sessionPath, 'deny')
+  assert.match(String((await writing).message), /rejected/)
+
+  const commandPrefix = 'export APPROVAL_FIXTURE=1'
+  const bashParams = { command: `printf '%s\\n' '${'complete-command-'.repeat(500)}'\nprintf done`, timeout: 20, sandbox_permissions: 'danger-full-access', justification: 'review the complete command' }
+  const bash = createManagedBashTools({
+    tasks: { start: () => assert.fail('a denied command must never launch') },
+    services: { cwd: '/fallback', settingsManager: { getShellPath: () => '/bin/bash', getShellCommandPrefix: () => commandPrefix } },
+    sessionId: 'escalation', sessionPath, maxWaitMs: () => 100, sandboxMode: () => mode, canStart: () => true,
+    escalate: input => resolveEscalatedMode({ sessionId: 'escalation', sessionPath, currentMode: mode, onChanged: () => {}, ...input })
+  })[0]
+  const commanding = bash.execute('bash-call', bashParams, undefined, undefined, context).catch(error => error)
+  const [bashRequest] = listPendingEscalations(sessionPath)
+  assert.deepEqual(bashRequest.operation, {
+    cwd,
+    parameters: { ...bashParams, command: `${commandPrefix}\n${bashParams.command}` }
+  }, 'bash approvals retain the full effective command, configured prefix, options and actual cwd')
+  respondToEscalation(bashRequest.requestId, sessionPath, 'deny')
+  assert.match(String((await commanding).message), /rejected/)
 }
 
 // ------------------------------------------------------------- real enforcement

@@ -445,7 +445,7 @@ function BrowserDevicePanel({
             <Button
               key={row.id}
               variant="ghost"
-              className={cn('h-7 justify-start px-2 text-xs', selected && 'bg-primary/5 text-primary')}
+              className={cn('h-7 justify-start px-2 text-xs', selected && 'bg-primary/15 text-foreground hover:bg-primary/25')}
               role="radio"
               aria-checked={selected}
               onClick={() => {
@@ -477,7 +477,7 @@ function BrowserDevicePanel({
             inputMode="numeric"
             aria-label={t('browser.deviceWidth')}
             className="w-16 shrink-0"
-            classNames={{ field: 'h-8', input: 'px-2 text-center text-sm' }}
+            classNames={{ input: 'text-center' }}
           />
           <label htmlFor={heightId} className="shrink-0 text-xs text-muted-foreground">
             {t('browser.deviceHeight')}
@@ -493,7 +493,7 @@ function BrowserDevicePanel({
             inputMode="numeric"
             aria-label={t('browser.deviceHeight')}
             className="w-16 shrink-0"
-            classNames={{ field: 'h-8', input: 'px-2 text-center text-sm' }}
+            classNames={{ input: 'text-center' }}
           />
         </div>
       ) : null}
@@ -625,14 +625,14 @@ function BrowserHistoryPanel({
           >
             <HistoryFavicon url={entry.url} favicon={entry.favicon} />
             <span className="min-w-0 flex-1">
-              <span className="block truncate text-xs leading-4 text-foreground">
+              <span className="block truncate text-xs leading-ui-tight text-foreground">
                 {entry.title || entry.url}
               </span>
-              <span className="block truncate text-[11px] leading-4 text-muted-foreground">
+              <span className="block truncate text-caption leading-ui-tight text-muted-foreground">
                 {entry.url}
               </span>
             </span>
-            <span className="shrink-0 text-[10px] leading-4 tabular-nums text-muted-foreground/80">
+            <span className="shrink-0 text-micro leading-ui-tight tabular-nums text-muted-foreground/80">
               {formatRelativeTime(entry.at, locale, now)}
             </span>
           </Button>

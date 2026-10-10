@@ -10,6 +10,7 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { checkContinueUi } from './lib/check-continue-ui.mjs'
 import { checkTurnFoldUi } from './lib/check-turn-fold-ui.mjs'
+import { checkCompactionUi } from './lib/check-compaction-ui.mjs'
 
 const repo = resolve('.')
 const temporary = await mkdtemp(join(tmpdir(), 'pith-bash-ui-'))
@@ -67,11 +68,14 @@ window.startStartupFixture=()=>{
    queued:{steering:[],followUp:[]},onSend:p=>window.startupSends.push(p),onQueue:()=>{throw Error('unexpected queue')},onRecallQueue:async()=>[],onModelChange:()=>{},onThinkingLevelChange:()=>{}});}
  flushSync(()=>window.checkRoot.render(React.createElement(I18nProvider,{key:'startup'},React.createElement(ImagePreviewProvider,null,React.createElement('div',{id:'startup-fixture',style:{width:800,margin:'20px auto'}},React.createElement(Startup))))));
 };
-window.startQueueFixture=()=>{
+window.startQueueFixture=(initialCompaction=false)=>{
  window.turnStore=null;window.queueActions=[];
- function Queued(){const {setLocale}=useI18n();window.setLocale=setLocale;return React.createElement(QueuePanel,{
-  steering:[{text:'current steer',imageCount:1,filePaths:['a.ts','b.ts']}],
-  followUp:[{text:'duplicate draft',imageCount:0,filePaths:[]},{text:'duplicate draft',imageCount:0,filePaths:[]}],
+ function Queued(){const {setLocale}=useI18n();window.setLocale=setLocale;
+  const [compactionQueued,setCompactionQueued]=React.useState(initialCompaction),[queue,setQueue]=React.useState({
+   steering:[{text:'current steer',imageCount:1,filePaths:['a.ts','b.ts']}],
+   followUp:[{text:'duplicate draft',imageCount:0,filePaths:[]},{text:'duplicate draft',imageCount:0,filePaths:[]}]});
+  window.setQueueCompaction=setCompactionQueued;window.setQueueMessages=setQueue;
+  return React.createElement(QueuePanel,{...queue,compactionQueued,
   onPromote:index=>window.queueActions.push({action:'promote',index}),
   onRemove:(kind,index)=>window.queueActions.push({action:'remove',kind,index}),
   onRecall:()=>window.queueActions.push({action:'recall'})});}
@@ -107,15 +111,22 @@ window.startForegroundFixture=()=>{
  const liveTask={...task,id:'live-task',toolCallId:liveCall.id,status:'running',revision:1};
  const run={toolCallId:liveCall.id,toolName:'bash',args:liveCall.arguments,status:'running',startedAt:Date.now(),partial:{content:[{type:'text',text:'streaming stdout'}],details:{bashTask:liveTask}}};
  window.promoteForeground=()=>listener?.({...liveTask,background:true,reason:'wait_threshold',revision:2});
+ // A command longer than the expansion's header cap: it has to scroll inside
+ // the header instead of pushing the output's fold down.
+ const longCommand=Array.from({length:14},(_,i)=>'echo step '+(i+1)).join('\\n');
+ const longCall={...call,id:'foreground-long',arguments:{command:longCommand}};
+ const longTask={...task,id:'foreground-long',toolCallId:longCall.id,command:longCommand};
+ const longResult={...result,toolCallId:longCall.id,details:{bashTask:longTask},content:[{type:'text',text:JSON.stringify({...envelope,id:'foreground-long',toolCallId:longCall.id,command:longCommand,output:'long stdout'})}]};
  const row=(id,props)=>React.createElement('div',{id},React.createElement(ToolCallView,props));
  flushSync(()=>window.checkRoot.render(React.createElement(I18nProvider,{key:'foreground-fixture'},React.createElement('div',{id:'foreground-fixture',style:{width:800,margin:'20px auto'}},
   React.createElement(BashTasksProvider,{sessionPath:'/ui/session'},
    row('foreground-success',{call,result}),row('foreground-error',{call:errorCall,result:errorResult}),
    row('foreground-timeout',{call:timeoutCall,result:timeoutResult}),row('foreground-json',{call:plainCall,result:plainResult}),
+   row('foreground-long',{call:longCall,result:longResult}),
    row('foreground-live',{call:liveCall,run}))))));
 };
-window.startTurnFixture=()=>{
- localStorage.setItem('pi-app:locale','en');
+window.startTurnFixture=(locale='en')=>{
+ localStorage.setItem('pi-app:locale',locale);
  window.turnStore=new PiStore();window.turnSequence=0;window.frameFailures=[];window.frameCount=0;window.expectedCards=0;
  const user={role:'user',timestamp:10,content:'original request'};
  window.round=(timestamp,content,scope='scope-a')=>({role:'assistant',timestamp,content,changeScopeId:scope,stopReason:content.some(c=>c.type==='toolCall')?'toolUse':'stop'});
@@ -123,11 +134,15 @@ window.startTurnFixture=()=>{
  window.result=(id)=>({role:'toolResult',toolCallId:id,toolName:'write',timestamp:21,content:[],isError:false});
  window.prose=value=>[{type:'text',text:value}];
  window.notice=(timestamp)=>({role:'custom',customType:'bash_task_completion',timestamp,display:true,content:'MODEL_ONLY_NOTICE',details:{bashTask:{...window.task,id:'notice-'+timestamp,status:'succeeded',background:true}}});
+ // A command long enough to out-measure the transcript column, with and
+ // without spaces, so the notice row must truncate instead of widening.
+ const longCommand='git log --oneline --decorate --graph --all --pretty=format:%h_%ad_%an_%s --date=iso-strict src/main/pi/manager.ts src/renderer/src/components/app/BashTaskView.tsx | head -n 200 | grep -v merge | sort | uniq -c | sort -rn | head -n 50';
+ window.longNotice=(timestamp)=>({...window.notice(timestamp),details:{bashTask:{...window.task,id:'notice-long-'+timestamp,command:longCommand,status:'succeeded'}}});
  window.initialTurnMessages=[user,window.round(20,[window.writeCall('write-a','a.ts')]),window.result('write-a')];
  window.turnSnapshot=(messages,isStreaming=true)=>({sessionId:'ui-session',sessionPath:'/ui/session',cwd:'/ui',projectless:false,messages,isStreaming,activeChangeScopeId:'scope-a',model:null,thinkingLevel:'off',eventSequence:++window.turnSequence});
  window.resetTurn=()=>{window.expectedCards=0;flushSync(()=>window.turnStore.applySnapshot(window.turnSnapshot(window.initialTurnMessages.map(m=>({...m})))))};
  window.resetTurn();
- flushSync(()=>window.checkRoot.render(React.createElement(I18nProvider,{key:'turn-fixture'},React.createElement(ImagePreviewProvider,null,
+ flushSync(()=>window.checkRoot.render(React.createElement(I18nProvider,{key:'turn-fixture:'+locale},React.createElement(ImagePreviewProvider,null,
   React.createElement('div',{id:'turn-fixture',style:{height:900,display:'flex',flexDirection:'column'}},React.createElement(ChatView,{store:window.turnStore,onDismissError:()=>{},onResend:m=>window.menuResends.push(m),onContinue:m=>window.menuContinues.push(m),onEditMessage:m=>window.menuEdits.push(m),onRewindMessage:m=>window.menuRewinds.push(m),onFork:m=>window.menuForks.push(m),onReview:()=>{}}))))));
  window.menuResends=[];window.menuEdits=[];window.menuRewinds=[];window.menuForks=[];window.menuContinues=[];
  window.turnStep=(event,count=0)=>{window.expectedCards=count;flushSync(()=>window.turnStore.dispatch({...event,sessionPath:'/ui/session',eventSequence:++window.turnSequence}));};
@@ -703,7 +718,8 @@ try {
   await pause(150)
   await evaluate(`document.querySelector('#silent-task button[aria-expanded]').click()`)
   await pause(150)
-  assert.match(await evaluate(`document.querySelector('#silent-task').innerText`),/65.5s elapsed/)
+  assert.match(await evaluate(`document.querySelector('#silent-task').innerText`),/65s elapsed/)
+  assert.doesNotMatch(await evaluate(`document.querySelector('#silent-task').innerText`),/65\.5s elapsed/,'elapsed time reads whole seconds only')
   assert.match(await evaluate(`document.querySelector('#silent-task').innerText`),/Cancelled/)
   assert.doesNotMatch(await evaluate(`document.querySelector('#silent-task').innerText`),/Failed|Output .* ago/,'legacy empty decoder timestamps are not displayed as output')
   assert.match(await evaluate(`document.querySelector('#controls-group').innerText`),/4 completed, 0 failed/)
@@ -717,13 +733,14 @@ try {
   assert.match(await evaluate(`document.querySelector('#control-status').innerText`),/查看状态/)
   assert.match(await evaluate(`document.querySelector('#control-output').innerText`),/读取输出/)
   assert.match(await evaluate(`document.querySelector('#control-stop').innerText`),/停止任务/)
-  assert.match(await evaluate(`document.querySelector('#silent-task').innerText`),/已运行 65.5 秒/)
+  assert.match(await evaluate(`document.querySelector('#silent-task').innerText`),/已运行 65 秒/)
+  assert.doesNotMatch(await evaluate(`document.querySelector('#silent-task').innerText`),/65\.5/,'elapsed time reads whole seconds only')
   assert.doesNotMatch(await evaluate(`document.querySelector('#silent-task').innerText`),/秒前有输出/)
   console.log('PASS: stopped tasks remain cancelled with their full runtime, empty output has no invented timestamp, and successful control calls retain their own action/status/duration.')
   await evaluate('window.startForegroundFixture()')
   await pause(100)
   const foregroundReads = await evaluate('window.outputReads')
-  for (const id of ['success', 'error', 'timeout', 'json', 'live']) {
+  for (const id of ['success', 'error', 'timeout', 'json', 'long', 'live']) {
     await evaluate(`document.querySelector('#foreground-${id} button[aria-expanded]').click()`)
   }
   await pause(200)
@@ -741,6 +758,29 @@ try {
   assert.equal(await evaluate(`document.querySelector('#foreground-live [data-bash-task-id]')?.dataset.bashTaskId`), 'live-task')
   assert.match(await evaluate(`document.querySelector('#foreground-live').innerText`), /Running in background/)
   assert.equal(await evaluate(`document.querySelectorAll('#foreground-success [data-bash-task-id]').length`), 0)
+  // The expansion's command header is bounded: a command that fits gets no
+  // ramp at all, and a longer one scrolls inside the header with the shared
+  // 12px ramp on the edge that really hides lines — bottom at the top, both
+  // mid-scroll, top once the reader reaches the end.
+  const commandHeader = () => evaluate(`(() => {
+    const header = document.querySelector('#foreground-long [data-bash-command]');
+    if (!header) return null;
+    return { fade: header.dataset.fade, cap: Math.round(header.getBoundingClientRect().height), max: Number.parseFloat(getComputedStyle(header).maxHeight), scroll: header.scrollHeight, short: document.querySelector('#foreground-success [data-bash-command]').dataset.fade };
+  })()`)
+  const scrollHeader = (top) => evaluate(`document.querySelector('#foreground-long [data-bash-command]').scrollTop = ${top}`)
+  const header = await commandHeader()
+  assert.equal(header.cap, Math.round(header.max), `the command header stops at its cap: ${JSON.stringify(header)}`)
+  assert.ok(header.scroll > header.max * 1.5, `a long command genuinely overflows the header: ${JSON.stringify(header)}`)
+  assert.equal(header.short, 'none', 'a command that fits gets no ramp')
+  assert.equal(header.fade, 'bottom', 'the hidden bottom edge fades while the header sits at its top')
+  await scrollHeader(Math.round((header.scroll - header.cap) / 2))
+  await pause(100)
+  const midHeader = await commandHeader()
+  assert.equal(midHeader.fade, 'both', 'mid-scroll both edges fade')
+  await scrollHeader(1e6)
+  await pause(100)
+  const endHeader = await commandHeader()
+  assert.equal(endHeader.fade, 'top', 'the top edge fades once the command is scrolled to its end')
   console.log('PASS: foreground bash uses ordinary tool rows and stdout/errors without task metadata/log reads; only actual background promotion switches to task UI.')
   // Drive the real store/transcript one IPC event at a time, with a painted
   // frame between every event. A final-state-only assertion misses flashing
@@ -763,6 +803,38 @@ try {
   assert.equal(turnState.groups, 1, 'task steer stays inside one fold')
   assert.equal(turnState.notices, 1, 'task completion belongs inside folded process')
   assert.match(turnState.paths[0], /a.ts/)
+
+  // The "Task finished · <command>" row is fit-width inside an `items-start`
+  // column, so a long command used to give the ROW a max-content width: it
+  // grew past the column and the transcript's horizontal clip cut its trailing
+  // status mark and disclosure off with the overflow. Every row is capped at
+  // the column now, and the title absorbs the length by truncating.
+  await evaluate('window.resetTurn()')
+  await step(`{type:'agent_start',changeScopeId:'scope-a'}`)
+  await step(`{type:'message_end',message:window.longNotice(30)}`)
+  const longRow = await evaluate(`(()=>{
+    const root=document.querySelector('#turn-fixture [data-bash-task-id]');
+    const trigger=root.querySelector('[data-agent-trigger]');
+    const column=trigger.closest('.overflow-x-clip');
+    const title=root.querySelector('[data-tool-result-title]');
+    const marks=[...trigger.children].filter(node=>node!==trigger.firstElementChild&&/shrink-0/.test(String(node.className)));
+    const box=(node)=>{const r=node.getBoundingClientRect();return {right:Math.round(r.right*10)/10,width:Math.round(r.width*10)/10}};
+    return {column:box(column),row:box(trigger),titleTruncated:title.scrollWidth>title.clientWidth+1,
+      marks:marks.map(node=>({...(box(node)),text:node.textContent.slice(0,10)}))};
+  })()`)
+  assert.ok(longRow.row.width <= longRow.column.width + 0.5, 'a long completion title does not widen the row: ' + JSON.stringify(longRow))
+  assert.equal(longRow.titleTruncated, true, 'the command truncates inside the row: ' + JSON.stringify(longRow))
+  assert.ok(longRow.marks.length >= 2, 'the row keeps its status mark and disclosure: ' + JSON.stringify(longRow))
+  assert.ok(
+    longRow.marks.every((mark) => mark.width > 0 && mark.right <= longRow.column.right + 0.5),
+    'and both stay inside the clipped column: ' + JSON.stringify(longRow)
+  )
+  await finish(40)
+  turnState = await evaluate('window.turnRead()')
+  assert.equal(turnState.notices, 1, 'the long notice settles into the fold')
+  await evaluate('window.resetTurn()')
+  await step(`{type:'message_end',message:window.notice(30)}`)
+  await finish(40)
 
   // Transcript context menu: one menu for the whole surface, its target
   // resolved from the row marker under the pointer, so no row owns a trigger.
@@ -986,7 +1058,7 @@ try {
   assert.equal(settled.open, 'false', 'a summary stays collapsed until it is asked for')
   assert.equal(settled.hasBody, false, 'the summary body is not mounted while collapsed')
   assert.match(settled.text, /Summarize context/, `the row names the job: ${settled.text}`)
-  assert.match(settled.text, /120\.0k tokens summarized/, `the row carries the size it summarized: ${settled.text}`)
+  assert.match(settled.text, /120\.0k tokens before summarization/, `the row carries the preceding context size: ${settled.text}`)
   assert.ok(settled.height < 60, `the row is one tool row tall: ${settled.height}`)
   assert.ok(
     settled.lowestTurn !== null && settled.top > settled.lowestTurn,
@@ -1050,12 +1122,77 @@ try {
   ]}`, 0)
   assert.equal(await rowCount(summaryRows('branch', 'success')), 1, 'a branch summary renders a row of the same shape')
 
+  // Compaction is an ordinary process row immediately before the live spinner,
+  // both between tool rounds and before the first assistant response exists.
+  const compactionPlacement = () => evaluate(`(() => {
+    const root = document.querySelector('#turn-fixture');
+    const summary = root.querySelector('[data-summary-row="compaction"]');
+    const spinners = [...root.querySelectorAll('[data-spinner-loader]')];
+    const spinner = spinners[0];
+    const title = summary?.querySelector('[data-tool-result-title]');
+    const toolTitle = [...root.querySelectorAll('[data-tool-result-title]')].find(node => !node.closest('[data-summary-row]'));
+    const geometry = node => {
+      if (!node) return null;
+      const box = node.closest('[data-agent-trigger]').getBoundingClientRect();
+      const style = getComputedStyle(node);
+      return { width:box.width, height:box.height, left:box.left, font:style.fontSize, weight:style.fontWeight, color:style.color };
+    };
+    return { spinners:spinners.length, summary:Boolean(summary), hosted:Boolean(summary?.closest('[data-assistant-group]')),
+      before:!!summary&&!!spinner&&summary.getBoundingClientRect().bottom<=spinner.getBoundingClientRect().top,
+      summaryGeometry:geometry(title), toolGeometry:geometry(toolTitle), text:summary?.innerText };
+  })()`)
+  await evaluate(`window.turnStore.applySnapshot(window.turnSnapshot([
+    {role:'user',timestamp:10,content:'inspect before compaction'},
+    window.round(20,[{type:'toolCall',name:'bash',id:'compaction-bash',arguments:{command:'true'}}]),
+    {role:'toolResult',toolCallId:'compaction-bash',toolName:'bash',timestamp:21,content:[{type:'text',text:'done'}],isError:false}
+  ]))`)
+  await step(`{type:'compaction_start',reason:'manual'}`)
+  let placement = await compactionPlacement()
+  assert.equal(placement.spinners, 1, 'compaction keeps exactly one live spinner')
+  assert.equal(placement.hosted, true, 'between-round compaction belongs to the live assistant group')
+  assert.equal(placement.before, true, 'the compaction row sits above the live spinner')
+  assert.deepEqual(placement.summaryGeometry, placement.toolGeometry, 'compaction shares ordinary tool width, height and title styling')
+  assert.equal(await rowCount('#turn-fixture [data-turn-process]'), 0, 'compaction does not fold the live process')
+  if (process.env.PI_BASH_SCREENSHOT_DIR) {
+    await pause(300)
+    await writeFile(join(process.env.PI_BASH_SCREENSHOT_DIR, 'compaction-before-spinner.png'), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'))
+  }
+  await step(`{type:'compaction_end',errorMessage:'summary provider failed'}`)
+  placement = await compactionPlacement()
+  assert.equal(placement.before, true, 'an error row also stays above the live spinner')
+  assert.match(placement.text, /summary provider failed/, 'changing from running to failure opens the reason')
+  await step(`{type:'compaction_end'}`)
+  assert.equal((await compactionPlacement()).summary, false, 'completion clears the transient process row')
+  assert.equal((await compactionPlacement()).spinners, 1, 'completion keeps the ongoing turn spinner')
+  await step(`{type:'message_start',message:window.round(30,[])}`)
+  assert.equal((await compactionPlacement()).spinners, 1, 'the next streaming response retains one spinner')
+  await step(`{type:'agent_settled'}`)
+  assert.equal((await compactionPlacement()).spinners, 0, 'settlement removes the live spinner')
+
+  await evaluate(`window.turnStore.applySnapshot(window.turnSnapshot([{role:'user',timestamp:40,content:'compact before a response'}]))`)
+  await step(`{type:'compaction_start',reason:'manual'}`)
+  placement = await compactionPlacement()
+  assert.equal(placement.hosted, false, 'before a response the compaction uses the standalone slot')
+  assert.equal(placement.spinners, 1)
+  assert.equal(placement.before, true, 'the standalone compaction also precedes the spinner')
+  await step(`{type:'compaction_end'}`)
+  await step(`{type:'agent_settled'}`)
+  await step(`{type:'compaction_start',reason:'manual'}`)
+  assert.equal((await compactionPlacement()).spinners, 0, 'idle compaction does not invent an agent turn spinner')
+  assert.equal((await compactionPlacement()).summary, true, 'idle compaction retains its ordinary tool row')
+  await step(`{type:'compaction_end'}`)
+  console.log('PASS: compaction uses ordinary tool geometry above one spinner in live and standalone paths, with readable errors and clean continuation.')
+
   assert((await evaluate('window.frameCount')) > 20)
   assert.deepEqual(await evaluate('window.frameFailures'), [], 'no painted frame may expose an intermediate file list')
   assert.equal(exceptions.length, 0, JSON.stringify(exceptions))
   console.log('PASS: real ChatView/PiStore frame-by-frame steer, idle server continuation, cumulative files/review, distinct user folds and snapshot restoration without flashing cards.')
   await checkContinueUi(evaluate, pause)
   await checkTurnFoldUi(evaluate, pause, async name => {
+    if (!process.env.PI_BASH_SCREENSHOT_DIR) return
+    await writeFile(join(process.env.PI_BASH_SCREENSHOT_DIR, name + '.png'), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'))
+  })
+  await checkCompactionUi(evaluate, pause, clickSelector, async name => {
     if (!process.env.PI_BASH_SCREENSHOT_DIR) return
     await writeFile(join(process.env.PI_BASH_SCREENSHOT_DIR, name + '.png'), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'))
   })
@@ -1147,6 +1284,25 @@ try {
   assert.deepEqual(await evaluate(`Array.from(document.querySelectorAll('#queue-fixture [data-queue-row]')[1].querySelectorAll('button')).map(button=>button.getAttribute('aria-label'))`), ['立即发送', '移出队列'])
   assert.equal(exceptions.length, 0, JSON.stringify(exceptions))
   console.log('PASS: queued message removal, promotion, recall and duplicate indices in both locales.')
+  await evaluate('window.startQueueFixture(true)')
+  await evaluate(`window.setLocale('en')`); await pause(250)
+  assert.equal(await evaluate(`document.querySelectorAll('#queue-fixture [data-queue-row]').length`), 3, 'pending compaction does not become a user message row')
+  assert.match(await evaluate(`document.querySelector('#queue-fixture').textContent`), /Queued · 4/)
+  assert.match(await evaluate(`document.querySelector('[data-queue-compaction]').textContent`), /Context compaction queued.*Runs after the current reply and tool calls finish/)
+  assert.equal(await evaluate(`document.querySelector('[data-queue-compaction] svg[data-app-icon]').dataset.appIcon`), 'Minimize2', 'the action has its own compaction glyph')
+  assert.equal(await evaluate(`document.querySelector('[data-queue-compaction]').querySelectorAll('button').length`), 0, 'system action has no message controls')
+  await evaluate(`document.querySelector('#queue-fixture button[aria-label="Recall to input"]').click();window.setQueueMessages({steering:[],followUp:[]})`)
+  await pause(250)
+  assert.deepEqual(await evaluate('window.queueActions'), [{action:'recall'}])
+  assert.match(await evaluate(`document.querySelector('#queue-fixture').textContent`), /Queued · 1/)
+  assert.equal(await evaluate(`document.querySelector('#queue-fixture').querySelectorAll('button').length`), 0, 'after message recall the action stays without an empty recall control')
+  await evaluate(`window.setLocale('zh-CN')`); await pause(100)
+  assert.match(await evaluate(`document.querySelector('[data-queue-compaction]').textContent`), /等待压缩上下文.*当前回复与工具调用完成后执行/)
+  await evaluate(`window.setLocale('zh-TW')`); await pause(100)
+  assert.match(await evaluate(`document.querySelector('[data-queue-compaction]').textContent`), /等待壓縮上下文.*目前回覆與工具呼叫完成後執行/)
+  await evaluate('window.setQueueCompaction(false)'); await pause(300)
+  assert.equal(await evaluate(`document.querySelector('[data-queue-panel]')===null`), true, 'clearing the last pending action removes the queue panel')
+  console.log('PASS: specialized compaction row coexists with messages, survives message recall, clears on execution and renders all three locales.')
   console.log('PASS: native beUI background rows/group status, completion localization, bounded incremental output, stop action, threshold settings, themes and invisible scrollbars.')
 } finally {
   ws?.close()

@@ -120,7 +120,7 @@ export function SubagentActionDialog({
       >
         <div data-subagent-action-dialog={target.action} className="p-6">
           <h2 className="pr-10 text-base font-semibold text-foreground">{title}</h2>
-          <p id={descriptionId} className="mt-1.5 text-sm leading-5 text-muted-foreground">
+          <p id={descriptionId} className="mt-1.5 text-sm leading-ui text-muted-foreground">
             {description}
           </p>
 
@@ -143,7 +143,7 @@ export function SubagentActionDialog({
           </div>
 
           {feedback ? (
-            <p id={feedbackId} role="alert" className="mt-2 text-xs leading-5 text-destructive">
+            <p id={feedbackId} role="alert" className="mt-2 text-xs leading-ui text-destructive">
               {feedback}
             </p>
           ) : null}

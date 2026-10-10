@@ -26,6 +26,7 @@ import { buildSandboxPolicy, writableRoots } from '../sandbox/policy'
 import { isSandboxPathWithin, resolveSandboxPath } from '../sandbox/paths'
 import { escalationHintMarker, PLAN_ESCALATION_REFUSED, planFileDenialMarker, SANDBOX_ESCALATION_PROPERTIES, sandboxDenialMarker } from '../sandbox/escalation'
 import { SandboxFileDeniedError, type SandboxMode } from '../sandbox/types'
+import type { SandboxEscalationOperationDTO } from '../../shared/types'
 
 export const APP_FILE_TOOL_NAMES = ['edit', 'write'] as const
 
@@ -49,6 +50,7 @@ export interface SandboxFileToolOptions {
   escalate?: (input: {
     toolCallId: string
     toolName: 'edit' | 'write'
+    operation: SandboxEscalationOperationDTO
     sandboxPermissions: unknown
     justification: unknown
     signal?: AbortSignal
@@ -57,7 +59,7 @@ export interface SandboxFileToolOptions {
 
 /** Flat object schema: `Type.Intersect` serializes as allOf, which some model
  * adapters discard, leaving the tool looking parameterless. */
-type EscalationInput = { sandbox_permissions?: unknown; justification?: unknown }
+type EscalationInput = Record<string, unknown> & { sandbox_permissions?: unknown; justification?: unknown }
 
 function denial(mode: SandboxMode, path: string): SandboxFileDeniedError {
   return new SandboxFileDeniedError(mode, path)
@@ -78,6 +80,22 @@ function writablePath(path: string, cwd: string, mode: SandboxMode): string {
   const roots = writableRoots(buildSandboxPolicy(mode, cwd))
   if (!roots.some((root) => isSandboxPathWithin(canonical, root))) throw denial(mode, path)
   return canonical
+}
+
+/**
+ * The same check for an app-owned tool that writes its own bytes.
+ *
+ * `edit`/`write` pass these operations into the SDK; a tool that produces files
+ * itself (for example `image`) must resolve every target here first, so it
+ * honours the session's file policy instead of being a way around it. Returns
+ * the canonical path the write must use, and raises the same hinted denial.
+ */
+export function writableTarget(path: string, cwd: string, mode: SandboxMode): string {
+  try {
+    return writablePath(path, cwd, mode)
+  } catch (error) {
+    withHint(error, mode)
+  }
 }
 
 function editOperations(cwd: string, mode: SandboxMode): EditOperations {
@@ -144,6 +162,7 @@ export function createSandboxFileTools(options: SandboxFileToolOptions): ToolDef
     return escalate({
       toolCallId,
       toolName,
+      operation: { cwd, parameters: input },
       sandboxPermissions: input.sandbox_permissions,
       justification: input.justification,
       ...(signal ? { signal } : {})
@@ -151,6 +170,10 @@ export function createSandboxFileTools(options: SandboxFileToolOptions): ToolDef
   }
 
   const editBase = createEditToolDefinition(cwd)
+  // SAFETY: every field but `description`/`parameters`/`execute` is spread from
+  // the SDK's own definition, so the runtime shape is the SDK's. The schema
+  // cannot be expressed in `ToolDefinition` because it is *widened* with the
+  // escalation properties, and the SDK's parameter schema is invariant.
   const edit = {
     ...editBase,
     description: `${editBase.description} If a file-effect denial says escalation is available, retry that exact operation once with sandbox_permissions and justification.`,
@@ -175,6 +198,8 @@ export function createSandboxFileTools(options: SandboxFileToolOptions): ToolDef
   } as unknown as EditToolDefinition
 
   const writeBase = createWriteToolDefinition(cwd)
+  // SAFETY: as for `edit` above — the base is the SDK's own write definition
+  // and only the schema is widened, so the assertion cannot hide a shape drift.
   const write = {
     ...writeBase,
     description: `${writeBase.description} If a file-effect denial says escalation is available, retry that exact operation once with sandbox_permissions and justification.`,

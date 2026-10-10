@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { AlertCircle, CheckCircle2, Copy, ExternalLink, Loader2, PlugZap, Sparkles } from '@/lib/icons'
-import { MorphingModal } from '@/components/motion/morphing-modal'
+import { Copy, Loader2, PlugZap, Sparkles } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
 import { Input } from '@/components/motion/input'
 import { Checkbox } from '@/components/motion/checkbox'
@@ -16,9 +15,12 @@ import type {
   TestModelResultDTO
 } from '../../../../../../shared/types'
 import type { ModelsConfigMutate } from './use-models-config'
-import { FORM_FIELD_HEADING, FORM_INPUT_LABEL, FORM_PANEL_TITLE } from '@/lib/form-standard'
 import { applyCatalogFill, applyConfigCopy, type CopyExtras, type FormSnapshot } from './model-editor-form'
 import { CopyConfigDialog } from './CopyConfigDialog'
+import {
+  ProviderDialog, ProviderNotice,
+  PROVIDER_CHOICE_TEXT, PROVIDER_FIELD_HEADING, PROVIDER_INPUT_CLASS_NAMES
+} from './ProviderUi'
 
 export type EditingTarget =
   | { kind: 'new' }
@@ -31,7 +33,7 @@ interface ModelEditorDialogProps {
   /** Current models.json entry for the provider (undefined when none). */
   entry: CustomProviderDTO | undefined
   mutate: ModelsConfigMutate
-  flush: () => Promise<void>
+  flush: () => Promise<boolean>
   onClose: () => void
 }
 
@@ -105,6 +107,12 @@ export function ModelEditorDialog({
   const [testResult, setTestResult] = useState<TestModelResultDTO | null>(null)
   const [catalogLoading, setCatalogLoading] = useState(false)
   const [copyOpen, setCopyOpen] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const cancelDeleteRef = useRef<HTMLButtonElement>(null)
+  const targetEpoch = useRef(0)
+  const stagedIndex = useRef<number | null>(null)
+  const removalStaged = useRef(false)
   /** Shared status row for catalog fill / config copy; last action wins. */
   const [fillStatus, setFillStatus] = useState<{ text: string; error?: boolean; undo: FormSnapshot | null } | null>(null)
   /** thinkingLevelMap/compat a copy applied — merged into the saved entry. */
@@ -119,7 +127,14 @@ export function ModelEditorDialog({
   existingRef.current = existing
 
   useEffect(() => {
+    targetEpoch.current++
     if (!target) return
+    setSaving(false)
+    setTesting(false)
+    setCatalogLoading(false)
+    setConfirmDelete(false)
+    stagedIndex.current = target.kind === 'carrier' ? target.index : null
+    removalStaged.current = false
     setFormError(null)
     setTestResult(null)
     setFillStatus(null)
@@ -223,11 +238,13 @@ export function ModelEditorDialog({
 
   const handleCatalogFill = async () => {
     if (!idTrimmed || catalogLoading) return
+    const epoch = targetEpoch.current
     setCatalogLoading(true)
     setFillStatus(null)
     try {
       const snapshot = formSnapshot()
       const recommendation = await window.pi.catalogPreset(providerId, idTrimmed)
+      if (epoch !== targetEpoch.current) return
       const { next, appliedCount } = applyCatalogFill(snapshot, recommendation.preset)
       if (appliedCount > 0) {
         restoreSnapshot(next)
@@ -236,9 +253,9 @@ export function ModelEditorDialog({
         setFillStatus({ text: catalogSummary(appliedCount, recommendation), undo: null })
       }
     } catch (error) {
-      setFillStatus({ text: error instanceof Error ? error.message : String(error), error: true, undo: null })
+      if (epoch === targetEpoch.current) setFillStatus({ text: error instanceof Error ? error.message : String(error), error: true, undo: null })
     } finally {
-      setCatalogLoading(false)
+      if (epoch === targetEpoch.current) setCatalogLoading(false)
     }
   }
 
@@ -317,6 +334,7 @@ export function ModelEditorDialog({
 
   const validate = (): string | null => {
     if (target.kind !== 'override' && !idTrimmed) return t('settings.modelIdRequired')
+    if (target.kind !== 'override' && entry?.models?.some((model, index) => model.id?.trim() === idTrimmed && index !== stagedIndex.current)) return t('settings.modelIdExists')
     if (costParsed.partial) return t('settings.costAllOrNothing')
     if (costParsed.invalid) return t('settings.costInvalid')
     for (const [label, value] of [
@@ -330,7 +348,8 @@ export function ModelEditorDialog({
     return null
   }
 
-  const save = () => {
+  const save = async () => {
+    if (saving) return
     const error = validate()
     if (error) {
       setFormError(error)
@@ -352,20 +371,26 @@ export function ModelEditorDialog({
               [providerId]: { ...provider, modelOverrides: overrides }
             }
           }
-        },
-        true
+        }
       )
-      onClose()
+      setSaving(true)
+      if (await flush()) onClose()
+      else setFormError(t('settings.providerSaveBeforeContinue'))
+      setSaving(false)
       return
     }
     const model = buildCarrierDraft()
-    const previousId = existing?.id?.trim()
+    const previousId = stagedIndex.current !== null
+      ? entry?.models?.[stagedIndex.current]?.id?.trim() : existing?.id?.trim()
     mutate(
       (draft) => {
         const provider = draft.providers[providerId] ?? {}
         const models = [...(provider.models ?? [])]
-        if (target.kind === 'carrier') models[target.index] = model
-        else models.push(model)
+        if (stagedIndex.current !== null) models[stagedIndex.current] = model
+        else {
+          stagedIndex.current = models.length
+          models.push(model)
+        }
         const overrides = { ...(provider.modelOverrides ?? {}) }
         // A renamed carrier takes its override along.
         if (previousId && previousId !== model.id && overrides[previousId] !== undefined) {
@@ -379,21 +404,25 @@ export function ModelEditorDialog({
             [providerId]: { ...provider, models, modelOverrides: overrides }
           }
         }
-      },
-      true
+      }
     )
-    onClose()
+    setSaving(true)
+    if (await flush()) onClose()
+    else setFormError(t('settings.providerSaveBeforeContinue'))
+    setSaving(false)
   }
 
-  const removeCarrier = () => {
+  const removeCarrier = async () => {
+    if (saving) return
     if (target.kind !== 'carrier') return
     const removedId = existing?.id?.trim()
     const index = target.index
-    mutate(
+    if (!removalStaged.current) mutate(
       (draft) => {
         const provider = draft.providers[providerId] ?? {}
         const models = [...(provider.models ?? [])]
         models.splice(index, 1)
+        removalStaged.current = true
         const overrides = { ...(provider.modelOverrides ?? {}) }
         if (removedId) delete overrides[removedId]
         return {
@@ -403,13 +432,16 @@ export function ModelEditorDialog({
             [providerId]: { ...provider, models, modelOverrides: overrides }
           }
         }
-      },
-      true
+      }
     )
-    onClose()
+    setSaving(true)
+    if (await flush()) onClose()
+    else setFormError(t('settings.providerSaveBeforeContinue'))
+    setSaving(false)
   }
 
-  const resetOverride = () => {
+  const resetOverride = async () => {
+    if (saving) return
     if (target.kind !== 'override') return
     const rowId = target.row.id
     mutate(
@@ -427,10 +459,12 @@ export function ModelEditorDialog({
             [providerId]: { ...provider, modelOverrides: overrides }
           }
         }
-      },
-      true
+      }
     )
-    onClose()
+    setSaving(true)
+    if (await flush()) onClose()
+    else setFormError(t('settings.providerSaveBeforeContinue'))
+    setSaving(false)
   }
 
   const runTest = async () => {
@@ -439,19 +473,21 @@ export function ModelEditorDialog({
       setFormError(error)
       return
     }
+    const epoch = targetEpoch.current
     setTesting(true)
     setTestResult(null)
     try {
-      await flush()
+      if (!await flush()) { setFormError(t('settings.providerSaveBeforeContinue')); return }
       const model: CustomModelDTO =
         target.kind === 'override'
           ? { ...buildOverride(), id: target.row.id, name: name.trim() || target.row.name }
           : buildCarrierDraft()
-      setTestResult(await window.pi.testModel(providerId, model))
+      const result = await window.pi.testModel(providerId, model)
+      if (epoch === targetEpoch.current) setTestResult(result)
     } catch (err) {
-      setTestResult({ ok: false, error: err instanceof Error ? err.message : String(err) })
+      if (epoch === targetEpoch.current) setTestResult({ ok: false, error: err instanceof Error ? err.message : String(err) })
     } finally {
-      setTesting(false)
+      if (epoch === targetEpoch.current) setTesting(false)
     }
   }
 
@@ -459,222 +495,117 @@ export function ModelEditorDialog({
     value > 0 ? String(value) : fallback
 
   return (
-    <MorphingModal viewId={target ? 'model-editor' : null} onClose={onClose} placement="center" className="w-[min(44rem,calc(100vw-3rem))] max-w-none">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h2 className={FORM_PANEL_TITLE}>
-            {target.kind === 'new' ? t('settings.addModel') : t('settings.editModel')}
-          </h2>
-          <p className="mt-0.5 truncate font-mono text-xs text-muted-foreground">
-            {providerId}/{idTrimmed || '…'}
-          </p>
-        </div>
-        {target.kind === 'override' ? (
-          <span className="shrink-0 rounded-control bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-            {t('settings.overrideBadge')}
-          </span>
-        ) : null}
-      </div>
-
-      {/* p-1 keeps the inputs' focus rings from being clipped by the scroll box. */}
-      <div data-form-items className="mt-4 grid max-h-[min(40rem,calc(100vh-3rem))] gap-5 overflow-y-auto p-1 md:grid-cols-2">
-        {target.kind === 'override' ? (
-          <div className="rounded-xl bg-muted/60 px-3 py-2">
-            <p className="font-mono text-sm text-foreground">{target.row.id}</p>
-            <p className="mt-0.5 text-xs text-muted-foreground">{t('settings.overrideHint')}</p>
+    <>
+      <ProviderDialog
+        open
+        busy={saving}
+        onClose={onClose}
+        suspended={copyOpen || confirmDelete}
+        title={t(target.kind === 'new' ? 'settings.addModel' : 'settings.editModel')}
+        description={<span className="font-mono">{providerId}/{idTrimmed || '…'}</span>}
+        className="max-w-2xl"
+        footer={
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center gap-1">
+              <Button variant="outline" size="sm" disabled={testing || saving} onClick={() => void runTest()}>
+                {testing ? <Loader2 className="size-3.5 animate-spin" /> : <PlugZap className="size-3.5" />}
+                {t(testing ? 'settings.testing' : 'settings.testConnection')}
+              </Button>
+              {target.kind === 'carrier' && existing ? <Button variant="destructive" size="sm" disabled={saving} onClick={() => setConfirmDelete(true)}>{t('settings.deleteModel')}</Button> : null}
+              {target.kind === 'override' ? <Button variant="ghost" size="sm" disabled={saving} onClick={() => void resetOverride()}>{t('settings.resetOverride')}</Button> : null}
+            </div>
+            <div className="flex items-center gap-2">
+              <Button variant="ghost" size="sm" disabled={saving} onClick={onClose}>{t('common.cancel')}</Button>
+              <Button variant="primary" size="sm" disabled={saving || catalogLoading || testing} onClick={() => void save()}>
+                {saving ? <Loader2 className="size-3.5 animate-spin" /> : null}{t('settings.saveModel')}
+              </Button>
+            </div>
           </div>
-        ) : (
-          <Input
-            label={t('settings.modelId')}
-            value={modelId}
-            onChange={(v) => {
-              setModelId(v)
-              setFormError(null)
-            }}
-            placeholder="qwen3-32b"
-            classNames={{ ...FORM_INPUT_LABEL, input: 'font-mono text-sm' }}
-            autoFocus={target.kind === 'new'}
-          />
-        )}
+        }
+      >
+        <div className="space-y-5">
+          <div data-form-items className="grid gap-5 md:grid-cols-2">
+            <Input label={t('settings.modelId')} value={modelId}
+              onChange={value => { setModelId(value); setFormError(null) }}
+              disabled={target.kind === 'override' || saving} placeholder={t('settings.modelIdPlaceholder')}
+              classNames={{ ...PROVIDER_INPUT_CLASS_NAMES, input: 'font-mono' }} />
+            <Input label={t('settings.modelName')} value={name} onChange={setName}
+              disabled={saving} placeholder={target.kind === 'override' ? base?.name ?? '' : t('settings.modelNamePlaceholder')}
+              classNames={PROVIDER_INPUT_CLASS_NAMES} />
+          </div>
+          {target.kind === 'override' ? <p className="text-caption text-muted-foreground">{t('settings.overrideHint')}</p> : null}
 
-        <Input
-          label={t('settings.modelName')}
-          value={name}
-          onChange={setName}
-          placeholder={target.kind === 'override' ? (base?.name ?? '') : t('settings.modelNamePlaceholder')}
-          classNames={FORM_INPUT_LABEL}
-        />
-
-        <div className="flex flex-wrap items-center gap-1.5">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="px-2"
-            disabled={!idTrimmed || catalogLoading}
-            onClick={() => void handleCatalogFill()}
-          >
-            {catalogLoading ? (
-              <Loader2 className="size-3.5 animate-spin" />
-            ) : (
-              <Sparkles className="size-3.5" />
-            )}
-            {catalogLoading ? t('settings.catalogFilling') : t('settings.fillFromCatalog')}
-          </Button>
-          <Button variant="ghost" size="sm" className="px-2" onClick={() => setCopyOpen(true)}>
-            <Copy className="size-3.5" />
-            {t('settings.copyFromModel')}
-          </Button>
-          <button
-            type="button"
-            className="ml-auto inline-flex items-center gap-1 rounded-control px-1 text-[11px] text-muted-foreground/70 transition-colors hover:bg-muted hover:text-muted-foreground"
-            onClick={() => void window.pi.openExternal('https://models.dev')}
-          >
-            {t('settings.catalogSource')}
-            <ExternalLink className="size-3" />
-          </button>
-        </div>
-
-        {fillStatus ? (
-          <div
-            aria-live="polite"
-            className={`flex min-h-5 items-center justify-between gap-2 text-xs ${
-              fillStatus.error ? 'text-destructive' : 'text-muted-foreground'
-            }`}
-          >
-            <span className="min-w-0 truncate">{fillStatus.text}</span>
-            {fillStatus.undo ? (
-              <button
-                type="button"
-                className="shrink-0 rounded-control px-1 text-primary transition-colors hover:bg-primary/10"
-                onClick={undoFill}
-              >
-                {t('settings.undo')}
-              </button>
+          <div className="rounded-item bg-muted/40 p-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <Button variant="outline" size="sm" disabled={!idTrimmed || catalogLoading || saving} onClick={() => void handleCatalogFill()}>
+                {catalogLoading ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}
+                {t(catalogLoading ? 'settings.catalogFilling' : 'settings.fillFromCatalog')}
+              </Button>
+              <Button variant="outline" size="sm" disabled={saving} onClick={() => setCopyOpen(true)}>
+                <Copy className="size-3.5" />{t('settings.copyFromModel')}
+              </Button>
+            </div>
+            {fillStatus ? (
+              <div role="status" className={'mt-2 flex items-start justify-between gap-2 text-xs leading-ui ' + (fillStatus.error ? 'text-destructive' : 'text-muted-foreground')}>
+                <span className="min-w-0 break-words">{fillStatus.text}</span>
+                {fillStatus.undo ? <Button variant="ghost" size="sm" className="shrink-0 text-primary" onClick={undoFill}>{t('settings.undo')}</Button> : null}
+              </div>
             ) : null}
           </div>
-        ) : null}
 
-        <div className="flex flex-wrap gap-x-6 gap-y-2">
-          <Checkbox mark="square" checked={reasoning} onCheckedChange={setReasoning} label={t('settings.reasoning')} />
-          <Checkbox mark="square" checked={image} onCheckedChange={setImage} label={t('settings.imageInput')} />
-        </div>
-
-        <div className="grid grid-cols-2 gap-5 md:col-span-2">
-          <Input
-            label={t('settings.contextWindow')}
-            value={contextWindow}
-            onChange={(v) => {
-              setContextWindow(v)
-              setFormError(null)
-            }}
-            inputMode="numeric"
-            placeholder={target.kind === 'override' ? placeholder(base?.contextWindow ?? 0, '—') : '131072'}
-            classNames={FORM_INPUT_LABEL}
-          />
-          <Input
-            label={t('settings.maxTokens')}
-            value={maxTokens}
-            onChange={(v) => {
-              setMaxTokens(v)
-              setFormError(null)
-            }}
-            inputMode="numeric"
-            placeholder={target.kind === 'override' ? placeholder(base?.maxTokens ?? 0, '—') : '16384'}
-            classNames={FORM_INPUT_LABEL}
-          />
-        </div>
-
-        <div className="md:col-span-2">
-          <p className={FORM_FIELD_HEADING}>{t('settings.pricing')}</p>
-          <div className="grid grid-cols-2 gap-5">
-            {COST_FIELDS.map(({ key, labelKey }) => (
-              <Input
-                key={key}
-                label={t(labelKey)}
-                value={cost[key]}
-                onChange={(v) => {
-                  setCost((prev) => ({ ...prev, [key]: v }))
-                  setFormError(null)
-                }}
-                inputMode="decimal"
-                placeholder={
-                  target.kind === 'override' && base?.cost ? String(base.cost[key]) : '0'
-                }
-                classNames={FORM_INPUT_LABEL}
-              />
-            ))}
+          <div data-form-items className="grid gap-5 md:grid-cols-2">
+            <div className="md:col-span-2">
+              <p className={PROVIDER_FIELD_HEADING}>{t('settings.modelCapabilities')}</p>
+              <div className="flex flex-wrap gap-x-5 gap-y-3">
+                <Checkbox mark="square" checked={reasoning} onCheckedChange={setReasoning} disabled={saving} label={t('settings.reasoning')} className={PROVIDER_CHOICE_TEXT} />
+                <Checkbox mark="square" checked={image} onCheckedChange={setImage} disabled={saving} label={t('settings.imageInput')} className={PROVIDER_CHOICE_TEXT} />
+              </div>
+            </div>
+              <Input label={t('settings.contextWindow')} value={contextWindow}
+                onChange={value => { setContextWindow(value); setFormError(null) }}
+                disabled={saving} inputMode="numeric"
+                placeholder={target.kind === 'override' ? placeholder(base?.contextWindow ?? 0, '—') : '131072'} classNames={PROVIDER_INPUT_CLASS_NAMES} />
+              <Input label={t('settings.maxTokens')} value={maxTokens}
+                onChange={value => { setMaxTokens(value); setFormError(null) }}
+                disabled={saving} inputMode="numeric"
+                placeholder={target.kind === 'override' ? placeholder(base?.maxTokens ?? 0, '—') : '16384'} classNames={PROVIDER_INPUT_CLASS_NAMES} />
           </div>
-        </div>
-      </div>
 
-      {formError ? (
-        <p className="mt-3 flex items-center gap-1.5 text-xs text-destructive">
-          <AlertCircle className="size-3.5 shrink-0" />
-          {formError}
-        </p>
-      ) : null}
-
-      {testResult ? (
-        <div
-          className={`mt-3 flex items-start gap-1.5 rounded-xl px-3 py-2 text-xs ${
-            testResult.ok
-              ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
-              : 'bg-destructive/10 text-destructive'
-          }`}
-        >
-          {testResult.ok ? (
-            <CheckCircle2 className="mt-0.5 size-3.5 shrink-0" />
-          ) : (
-            <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
-          )}
-          <span className="min-w-0 break-words">
-            {testResult.ok
-              ? `${t('settings.testOk', { ms: testResult.latencyMs ?? 0, status: testResult.status ?? 200 })}${
-                  testResult.responseText ? ` · ${testResult.responseText.slice(0, 60)}` : ''
-                }`
-              : (testResult.error ?? t('settings.testFailed'))}
-          </span>
-        </div>
-      ) : null}
-
-      <div className="mt-5 flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-1.5">
-          {target.kind === 'carrier' && existing ? (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="text-destructive hover:bg-destructive/10"
-              onClick={removeCarrier}
-            >
-              {t('settings.deleteModel')}
-            </Button>
-          ) : null}
-          {target.kind === 'override' ? (
-            <Button variant="ghost" size="sm" onClick={resetOverride}>
-              {t('settings.resetOverride')}
-            </Button>
+          <div className="border-t border-border/60 pt-4">
+            <p className="mb-3 text-sm font-medium text-foreground">{t('settings.pricing')}</p>
+            <div data-form-items className="grid grid-cols-2 gap-5">
+              {COST_FIELDS.map(({ key, labelKey }) => (
+                <Input key={key} label={t(labelKey)} value={cost[key]}
+                  onChange={value => { setCost(previous => ({ ...previous, [key]: value })); setFormError(null) }}
+                  disabled={saving} inputMode="decimal"
+                  placeholder={target.kind === 'override' && base?.cost ? String(base.cost[key]) : '0'} classNames={PROVIDER_INPUT_CLASS_NAMES} />
+              ))}
+            </div>
+          </div>
+          {formError ? <ProviderNotice tone="error">{formError}</ProviderNotice> : null}
+          {testResult ? (
+            <ProviderNotice tone={testResult.ok ? 'success' : 'error'}>
+              {testResult.ok
+                ? t('settings.testOk', { ms: testResult.latencyMs ?? 0 }) + (testResult.responseText ? ' · ' + testResult.responseText.slice(0, 60) : '')
+                : testResult.error ?? t('settings.testFailed')}
+            </ProviderNotice>
           ) : null}
         </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" disabled={testing} onClick={() => void runTest()}>
-            {testing ? <Loader2 className="size-3.5 animate-spin" /> : <PlugZap className="size-3.5" />}
-            {testing ? t('settings.testing') : t('settings.test')}
-          </Button>
-          <Button variant="ghost" size="sm" onClick={onClose}>
-            {t('common.cancel')}
-          </Button>
-          <Button variant="primary" size="sm" onClick={save}>
-            {t('settings.saveModel')}
-          </Button>
-        </div>
-      </div>
-      <CopyConfigDialog
-        open={copyOpen}
-        providerId={providerId}
+      </ProviderDialog>
+      <CopyConfigDialog open={copyOpen} providerId={providerId}
         excludeModelId={target.kind === 'override' ? target.row.id : idTrimmed || undefined}
-        onPick={handleCopyPick}
-        onClose={() => setCopyOpen(false)}
-      />
-    </MorphingModal>
+        onPick={handleCopyPick} onClose={() => setCopyOpen(false)} />
+      <ProviderDialog open={confirmDelete} onClose={() => setConfirmDelete(false)}
+        busy={saving}
+        title={t('settings.deleteModel')} initialFocusRef={cancelDeleteRef} className="max-w-md"
+        footer={<div className="flex justify-end gap-2">
+          <Button ref={cancelDeleteRef} variant="ghost" size="sm" disabled={saving} onClick={() => setConfirmDelete(false)}>{t('common.cancel')}</Button>
+          <Button variant="destructive" size="sm" disabled={saving} onClick={() => void removeCarrier()}>{t('common.delete')}</Button>
+        </div>}
+      >
+        <p className="text-xs leading-ui text-muted-foreground">{t('settings.confirmDeleteModelHint', { name: existing?.name || existing?.id || '' })}</p>
+        {formError ? <div className="mt-3"><ProviderNotice tone="error">{formError}</ProviderNotice></div> : null}
+      </ProviderDialog>
+    </>
   )
 }

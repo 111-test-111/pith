@@ -1,3 +1,4 @@
+// local patch (pi-app): shared scalable typography for UI annotations.
 // local patch (pi-app): keep UI frames and focus rings in this component at 1px.
 "use client";
 // local patch (pi-app): citation counts use item geometry; source avatars stay round.
@@ -69,7 +70,7 @@ export function Citation({
       aria-label={`View citation ${index}`}
       className={cn(
         // local patch (pi-app): citations use a fill on hover.
-        "mx-0.5 inline-flex min-w-4 -translate-y-0.5 items-center justify-center rounded-md bg-muted/60 px-1 py-0.5 text-[10px] font-semibold leading-none text-muted-foreground no-underline outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring",
+        "mx-0.5 inline-flex min-w-4 -translate-y-0.5 items-center justify-center rounded-md bg-muted/60 px-1 py-0.5 text-micro font-semibold leading-none text-muted-foreground no-underline outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring",
         className,
       )}
     >
@@ -147,7 +148,8 @@ function CitationRow({
     <>
       <CitationFavicon url={citation.url} />
       <span className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2 gap-y-0.5">
-        <span className="truncate text-sm font-medium text-foreground/80 transition-colors group-hover/citation:text-foreground">
+        {/* local patch (pi-app): source titles retain primary contrast at rest. */}
+        <span className="truncate text-sm font-medium text-foreground">
           {citation.title}
         </span>
         {citation.domain ? (
@@ -157,7 +159,7 @@ function CitationRow({
         ) : null}
       </span>
       <span className="flex shrink-0 items-center gap-1.5">
-        <span className="grid size-5 place-items-center rounded-md bg-foreground/[0.05] text-[10px] font-semibold tabular-nums text-muted-foreground">
+        <span className="grid size-5 place-items-center rounded-md bg-foreground/[0.05] text-micro font-semibold tabular-nums text-muted-foreground">
           {index}
         </span>
         {citation.url ? (
@@ -267,7 +269,7 @@ export function Citations({
       >
         <BookOpenText className="size-4" />
         <span className="font-medium">{title}</span>
-        <span className="rounded-item bg-muted px-1.5 py-0.5 text-[10px] font-semibold tabular-nums">
+        <span className="rounded-item bg-muted px-1.5 py-0.5 text-micro font-semibold tabular-nums">
           {citations.length}
         </span>
         <motion.span

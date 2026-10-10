@@ -9,42 +9,35 @@ import {
 } from 'react'
 import { isNothingToCompactError } from '../../../../shared/compaction-errors'
 import {
-  ArrowDown,
-  ArrowUp,
   ArrowsInLineHorizontal,
   ArrowsOutLineHorizontal,
   Chat01,
+  BookOpen,
   CalendarCheck,
   ChevronDown,
   ChevronRight,
-  Copy,
   Folder,
   FolderInput,
-  FolderOpen,
-  LoaderCircle,
-  type IconComponent,
-  MessageSquareDashed,
   MessageSquarePlus,
-  PanelLeft,
-  PanelRight,
-  Pencil,
-  PictureInPicture2,
+  PanelLeftClose,
+  PanelLeftOpen,
+  PanelRightClose,
+  PanelRightOpen,
   Pin,
   PinOff,
+  PictureInPicture2,
   Minimize2,
   RefreshCw,
   Settings as SettingsIcon,
   TextAlignCenter,
-  Trash2
 } from '@/lib/icons'
 import { ChatApp } from '@/components/agents/chat-app'
-import { AISidebar, type SidebarResource } from '@/components/agents/ai-sidebar'
+import { SessionsSidebar } from './SessionsSidebar'
 import {
   AnimatedSidebar,
   AnimatedSidebarContent,
   AnimatedSidebarGroup,
   AnimatedSidebarGroupContent,
-  AnimatedSidebarGroupLabel,
   AnimatedSidebarInset,
   AnimatedSidebarMenu,
   AnimatedSidebarMenuButton,
@@ -58,7 +51,6 @@ import { AskUserPanel } from './AskUserPanel'
 import { WindowTitlebar } from './WindowTitlebar'
 import { TitlebarOverflow } from './TitlebarOverflow'
 import { useOverflowFade } from '@/lib/hooks/use-overflow-fade'
-import { useScrollFade } from '@/lib/hooks/use-scroll-fade'
 import { Button } from '@/components/motion/button'
 import { Tooltip } from '@/components/motion/tooltip'
 import { basename } from '@/lib/format'
@@ -87,10 +79,11 @@ import { BROWSER_ANNOTATION_EVENT } from './BrowserAnnotate'
 import type { NewSessionContext } from './NewSession'
 import { EditMessageDialog, type EditMessagePayload } from './EditMessageDialog'
 import { SettingsPage } from './settings/SettingsPage'
+import { LibraryPage } from './LibraryPage'
 import { ScheduledTasksView } from './scheduled-tasks/ScheduledTasksView'
 import { useScheduledTasks } from '@/state/scheduled-tasks-store'
 import { SidebarPanel, agentTabId, fileTabId, filePathForTab, type SidebarTabKind, type SidebarTabId } from './SidebarPanel'
-import { SessionSearch, SessionSearchTrigger } from './SessionSearch'
+import { SessionSearch } from './SessionSearch'
 import { AppCommandPalette } from './CommandPalette'
 import {
   dispatchGuestIdentity,
@@ -103,14 +96,11 @@ import {
   type ShortcutHandlers
 } from '@/lib/shortcuts/use-shortcuts'
 import {
-  CHATS_GROUP, PINNED_GROUP, canReorderSession, forgetSidebarSessions,
-  loadSidebarPreferences, orderSessions, reorderSession, saveSidebarPreferences,
-  toggleSessionPin, type SessionSidebarPreferences
+  forgetSidebarSessions, loadSidebarPreferences, saveSidebarPreferences, setSessionUnread, type SessionSidebarPreferences
 } from '@/lib/session-sidebar'
 import { PanelResizeHandle } from './PanelResizeHandle'
 import {
   CHAT_MIN,
-  DEFAULT_PANEL_LAYOUT,
   LEFT_PANEL_MAX,
   LEFT_PANEL_MIN,
   RIGHT_PANEL_MAX,
@@ -125,13 +115,17 @@ import { SideChatStore } from '@/state/side-chat-store'
 import { TerminalStore } from '@/state/terminal-store'
 import { DebugStore } from '@/state/debug-store'
 import { FileBrowserStore } from '@/state/file-browser-store'
+import { GitStore } from '@/state/git-store'
 import { BrowserStore } from '@/lib/browser/store'
+import { closeOpenBrowserPages } from '@/lib/browser/session'
+import { getBrowserRestoreTabsPref } from '@/lib/browser/restore-tabs'
 import { subscribeBrowserPopups } from '@/lib/browser/popup'
 import { subscribeBrowserDownloads } from '@/lib/browser/downloads'
 import { BROWSER_OPEN_LINK_EVENT } from '@/lib/browser/open-link'
 import { HUMAN_OWNER } from '../../../../shared/browser'
 import { FileNavigationProvider, type FileTarget } from '@/lib/file-navigation'
 import { AuthBridge } from './AuthBridge'
+import { isInlineAuthClaimed } from '@/lib/inline-auth'
 import { AlertTriangle, ArrowLeftFromLine } from '@/lib/icons'
 import { RewindDialog } from './RewindDialog'
 import { ConfirmDialog } from './ConfirmDialog'
@@ -154,37 +148,31 @@ interface PendingDelete {
   label: string
 }
 
-/** Sessions revealed per folder expand step ("show more" adds one page). */
-const SESSION_PAGE_SIZE = 5
-const moreRowId = (cwd: string) => `more:${cwd}`
+/**
+ * Optimistic echo text for an outgoing user message: file references become the
+ * same `<file path>` blocks the main process inlines, so the pending row renders
+ * its file chips (and the message matches its persisted twin's prose) before the
+ * real message lands.
+ */
+function optimisticEchoText(text: string, files: readonly string[]): string {
+  if (!files.length) return text
+  const blocks = files
+    .map((file) => `<file path="${file.replace(/^\//, '')}">(pending)</file>`)
+    .join('\n\n')
+  return text ? `${text}\n\n${blocks}` : blocks
+}
 
-/** Menu row shown inside beUI's AISidebar row menu — mirrors the vendored
- * ResourceMenuAction styling, in the given tone. Every extra row the app adds
- * to that menu (pin, move, rename, delete) goes through here so they all read
- * alike; the ghost variant's muted text is overridden by `text-foreground`
- * (`cn` resolves the conflict in the caller's favor). */
-function SidebarRowMenuAction({ icon: Icon, label, tone = 'default', onSelect }: {
-  icon: IconComponent
-  label: string
-  tone?: 'default' | 'destructive'
-  onSelect: () => void
-}) {
-  return (
-    <Button
-      variant="ghost"
-      size="sm"
-      onClick={onSelect}
-      className={cn(
-        'flex h-8 w-full items-center justify-start gap-2 rounded-lg px-2.5 text-left text-xs outline-none transition-colors focus-visible:ring-1 focus-visible:ring-ring',
-        tone === 'destructive'
-          ? 'text-destructive hover:bg-destructive/10 focus-visible:bg-destructive/10'
-          : 'text-foreground hover:bg-muted focus-visible:bg-muted'
-      )}
-    >
-      <Icon aria-hidden="true" className="size-3.5 shrink-0" />
-      <span className="min-w-0 truncate">{label}</span>
-    </Button>
-  )
+/**
+ * Whether a resend's snapshot already carries the re-prompted user message.
+ * The rewind drops every entry at/after the target, so a user message newer
+ * than the target can only be the fresh one the snapshot happened to catch.
+ */
+function snapshotHasResentUser(snapshot: SessionSnapshotDTO, targetTimestamp: number): boolean {
+  for (let index = snapshot.messages.length - 1; index >= 0; index--) {
+    const message = snapshot.messages[index]
+    if (message.role === 'user') return message.timestamp > targetTimestamp
+  }
+  return false
 }
 
 export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleChange }: WorkspaceProps) {
@@ -211,14 +199,24 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
     []
   )
   const [sidebarPreferences, setSidebarPreferences] = useState(loadSidebarPreferences)
+  const sidebarPreferencesRef = useRef(sidebarPreferences)
   const [sidebarSaveError, setSidebarSaveError] = useState(false)
-  /** Frosted-glass session sidebar (Settings → Appearance, default on): only
-   * this column consumes it, and the setter lives in the settings row. */
+  /** Shared title-row/sidebar glass (Settings → Appearance, default on).
+   * WindowTitlebar subscribes separately; the setter lives in Settings. */
   const [sidebarGlass] = useSidebarGlass()
-  const persistSidebarPreferences = useCallback((next: SessionSidebarPreferences) => {
-    saveSidebarPreferences(next)
-    setSidebarPreferences(next)
-    setSidebarSaveError(false)
+  const persistSidebarPreferences = useCallback((update: (current: SessionSidebarPreferences) => SessionSidebarPreferences): boolean => {
+    try {
+      const next = update(sidebarPreferencesRef.current)
+      if (next === sidebarPreferencesRef.current) return true
+      saveSidebarPreferences(next)
+      sidebarPreferencesRef.current = next
+      setSidebarPreferences(next)
+      setSidebarSaveError(false)
+      return true
+    } catch {
+      setSidebarSaveError(true)
+      return false
+    }
   }, [])
   // Shell slice only: its identity is stable across streaming deltas, so the
   // sidebar/header/composer don't re-render while ChatView streams.
@@ -233,7 +231,13 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
   const [models, setModels] = useState<ModelDTO[]>([])
   const [sessions, setSessions] = useState<SessionSummaryDTO[]>([])
   const [folders, setFolders] = useState<string[]>([])
+  /** Settings → General decides whether the composer's model/permission
+   * pickers stay usable during a run; main reads the same persisted value. */
+  const [allowMidRunChanges, setAllowMidRunChanges] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [settingsSection, setSettingsSection] = useState<string | null>(null)
+  const [libraryOpen, setLibraryOpen] = useState(false)
+const [alwaysOnTop, setAlwaysOnTop] = useState(false)
   /** ⌘K palette and ⌘⇧F session search: controlled here so the shortcut
    * dispatcher owns their toggle keys (each surface re-admits its own key
    * through data-shortcut-passthrough to toggle closed). */
@@ -282,11 +286,6 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
    * a drag runs (see `applyPanelWidth`), and from the layout effect otherwise. */
   const leftPanelRef = useRef<HTMLElement | null>(null)
   const rightPanelRef = useRef<HTMLElement | null>(null)
-  /** The session list's own scrollport. It carries no bottom padding (the last
-   * row reaches the panel's bottom line), so the edge that hides content is
-   * marked with the shared ramp instead of chopping a row in half. */
-  const sessionListRef = useRef<HTMLDivElement>(null)
-  const { maskImage: sessionListMask } = useScrollFade(sessionListRef)
   /** Panes hosted by the right rail; state lives here so closing and
    * re-opening the rail restores the same tabs. */
   const [sidePanelTabs, setSidePanelTabs] = useState<SidebarTabId[]>([])
@@ -294,6 +293,8 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
   const [terminals] = useState(() => new TerminalStore())
   const [debugStore] = useState(() => new DebugStore())
   const [files] = useState(() => new FileBrowserStore())
+  const [git] = useState(() => new GitStore())
+  useEffect(() => () => git.dispose(), [git])
   useEffect(() => () => terminals.dispose(), [terminals])
   useEffect(() => () => debugStore.dispose(), [debugStore])
   // DAP runInTerminal: a debug adapter asks for a real terminal to host the
@@ -317,10 +318,10 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
   // pages survive those; closing the browser tab unmounts the pane and
   // destroys its guest pages, and so does folding the rail — unless the
   // keep-alive pref holds the folded aside mounted (SidebarPanel), in which
-  // case the guests simply live on. Either way, an unmounted pane is restored
-  // from the open-pages snapshot on its next mount: owner-carrying entries (an
-  // agent page re-registers under its `agent:<sessionId>`), strip repainted in
-  // the pane's first commit, only the content reloads.
+  // case the guests simply live on. Folds always reconstruct from the snapshot;
+  // explicit tab closes retain it only when restore-tabs is enabled. Saved
+  // entries retain their owners (including `agent:<sessionId>`), repainting
+  // the strip as the pane mounts while the content reloads.
   const [browserStore] = useState(() => new BrowserStore())
   /** The tab list as a ref: the browser-state subscription below registers
    * once and must read the open state without re-subscribing per change. */
@@ -433,8 +434,6 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
     return () => { cancelled = true; unsubscribe() }
   }, [shell.sessionPath])
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null)
-  /** How many sessions each folder currently reveals; default SESSION_PAGE_SIZE. */
-  const [folderLimits, setFolderLimits] = useState<Record<string, number>>({})
   /** Paths of sessions with a live agent run, tracked from pi events. The
    * event stream keeps a background turn's spinner after the user switches
    * to another session, when the session list itself is not re-read. */
@@ -480,10 +479,22 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
     }
   }, [])
 
+  /** The General section's mid-run switch is main-owned state, so the composer
+   * reads it from appInfo; Settings calls a distinct setter, hence the re-read
+   * when that surface closes (beside refreshModels). */
+  const refreshAppPreferences = useCallback(async () => {
+    try {
+      setAllowMidRunChanges((await window.pi.appInfo()).allowMidRunChanges === true)
+    } catch {
+      /* ignore */
+    }
+  }, [])
+
   useEffect(() => {
     void refreshModels()
     void refreshSessions()
     void refreshFolders()
+    void refreshAppPreferences()
     const offEvent = window.pi.onEvent((event) => {
       // Track agent runs per session from the event stream: they are emitted for
       // background sessions too, so the sidebar spinner survives switching away
@@ -514,7 +525,12 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
         void refreshSessions()
       }
     })
-    const offPrompt = window.pi.onAuthPrompt(setAuthPrompt)
+    const offPrompt = window.pi.onAuthPrompt((prompt) => {
+      // A provider detail page driving its own OAuth flow renders the
+      // interaction inline; the global overlay stays out of the way.
+      if (isInlineAuthClaimed(prompt.providerId)) return
+      setAuthPrompt(prompt)
+    })
     const offDismiss = window.pi.onAuthDismiss(({ requestId, providerId }) => {
       // The SDK settled a prompt out of band (or it timed out) — drop its dialog.
       setAuthPrompt((current) =>
@@ -526,9 +542,10 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
       if (providerId) setAuthNotify((current) => current.filter((n) => n.providerId !== providerId))
     })
     const offNotify = window.pi.onAuthNotify((notify) => {
-      setAuthNotify((current) => [...current.slice(-8), notify])
       // Bring the provider's page up immediately. Device-code flows get no
       // prompt but still need the browser (their URI often carries the code).
+      // This side effect also runs for flows rendered inline in a provider
+      // detail page; only the overlay's own state skips them.
       const target =
         notify.kind === 'auth_url'
           ? notify.url
@@ -536,6 +553,8 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
             ? notify.verificationUri
             : undefined
       if (target) void window.pi.openExternal(target)
+      if (isInlineAuthClaimed(notify.providerId)) return
+      setAuthNotify((current) => [...current.slice(-8), notify])
     })
     return () => {
       offEvent()
@@ -546,8 +565,12 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
   }, [refreshModels, refreshSessions, refreshFolders])
 
   useEffect(() => {
-    if (!settingsOpen) void refreshModels()
-  }, [settingsOpen, refreshModels])
+    if (settingsOpen) return
+    void refreshModels()
+    // A setting saved in Settings reaches the composer only through a fresh
+    // appInfo read; refreshModels covers the picker's catalog the same way.
+    void refreshAppPreferences()
+  }, [settingsOpen, refreshModels, refreshAppPreferences])
 
   useEffect(() => {
     if (!authPrompt) setAuthNotify([])
@@ -563,10 +586,7 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
   const handleSend = useCallback(
     ({ text, images, files }: { text: string; images: ImageContent[]; files: string[] }) => {
       // Mirror the main process's file blocks so chips render on the optimistic echo.
-      const blocks = files
-        .map((f) => `<file path="${f.replace(/^\//, '')}">(pending)</file>`)
-        .join('\n\n')
-      store.appendOptimisticUser(files.length ? `${text}\n\n${blocks}` : text, images)
+      store.appendOptimisticUser(optimisticEchoText(text, files), images)
       // Sending always returns to the live edge, even if the user was reading
       // history when they hit send.
       setScrollResetKey((value) => value + 1)
@@ -640,8 +660,17 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
       const { text, images } = extractUserParts(message.content)
       try {
         const snapshot = await window.pi.resendMessage({ timestamp: message.timestamp, text, images })
-        if (store.getShell().sessionPath === targetPath) store.applySnapshot(snapshot)
-        setScrollResetKey((value) => value + 1)
+        if (store.getShell().sessionPath === targetPath) {
+          store.applySnapshot(snapshot)
+          // The rewind drops the retried row before the SDK persists its
+          // replacement. Echo it now so the two land in the same paint; the
+          // persisted message_end swaps the echo out. Nothing to echo when the
+          // snapshot already carries the fresh message.
+          if (!snapshotHasResentUser(snapshot, message.timestamp)) {
+            store.appendOptimisticUser(text, images)
+          }
+          setScrollResetKey((value) => value + 1)
+        }
       } catch (error) {
         console.error('resend failed', error)
       }
@@ -697,8 +726,17 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
           files: payload.files,
           edited: true
         })
-        if (store.getShell().sessionPath === targetPath) store.applySnapshot(snapshot)
-        setScrollResetKey((value) => value + 1)
+        if (store.getShell().sessionPath === targetPath) {
+          store.applySnapshot(snapshot)
+          // Seamless edit: the rewind removes the old row before the SDK
+          // persists the edited one, so echo the edit now and let the row swap
+          // read as the message changing in place. Nothing to echo when the
+          // snapshot already carries the fresh message.
+          if (!snapshotHasResentUser(snapshot, target.timestamp)) {
+            store.appendOptimisticUser(optimisticEchoText(payload.text, payload.files), payload.images)
+          }
+          setScrollResetKey((value) => value + 1)
+        }
       } catch (error) {
         console.error('edit resend failed', error)
       } finally {
@@ -737,21 +775,16 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
     }
   }, [store])
 
-  /**
-   * Manual compaction — the CLI's `/compact`. The SDK's manual entry point
-   * aborts whatever is running first and never retries the interrupted turn,
-   * so a live run is refused here rather than silently killed: the user stops
-   * the turn deliberately, then compacts. Shared by the title row's pocket and
-   * the command palette, which must not drift apart.
-   */
+  /** Both title row and palette request main-owned compaction. Live requests
+   * wait for the completed response/tool boundary without stopping the run. */
   const handleCompact = useCallback(async () => {
     const targetPath = store.getShell().sessionPath
-    if (store.getShell().isStreaming) { toast.info({ title: t('palette.compactBusy') }); return }
     if (!targetPath) return
     try {
       const snapshot = await window.pi.compactSession(targetPath)
       if (store.getShell().sessionPath === targetPath) store.applySnapshot(snapshot)
     } catch (error) {
+      if (store.getShell().sessionPath !== targetPath) return
       // A brand-new / just-started session has nothing to summarize. Keep it
       // out of the transcript and report it as a transient toast instead.
       if (isNothingToCompactError(error)) {
@@ -866,6 +899,11 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
 
   /** Open a pane in the right rail (idempotent) and make it the active tab. */
   const openSidePanelTabId = useCallback((id: SidebarTabId) => {
+    // The setting may have changed while the browser was already closed.
+    // A folded browser still owns its rail tab and must retain its snapshot.
+    if (id === 'browser' && !sidePanelTabsRef.current.includes(id) && !getBrowserRestoreTabsPref()) {
+      closeOpenBrowserPages(false)
+    }
     setSidePanelTabs((current) => (current.includes(id) ? current : [...current, id]))
     setSidePanelTab(id)
     // A tab opened from the chat (a subagent session) must reveal the rail; the
@@ -915,6 +953,10 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
     files.open(store.getShell().cwd ?? '', target)
   }, [files, store])
 
+  useEffect(() => files.subscribeOpenError(() => {
+    toast.error({ title: t('files.error.unreadable') })
+  }), [files, toast, t])
+
   useEffect(() => files.subscribeOpen(path => {
     const id = fileTabId(path)
     setSidePanelTabs(current => {
@@ -936,6 +978,16 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
     (kind: SidebarTabId) => {
       const index = sidePanelTabs.indexOf(kind)
       if (index < 0) return
+      if (kind === 'browser') {
+        closeOpenBrowserPages(getBrowserRestoreTabsPref())
+        const browserState = browserStore.getState()
+        const ids = new Set([
+          ...(browserState.status?.pages ?? []).map(page => page.id),
+          ...(browserState.status?.pendingCreates ?? []).map(page => page.id),
+          ...browserState.optimistic.map(page => page.id)
+        ])
+        for (const id of ids) void window.pi.browserClosePage(id).catch(() => {})
+      }
       const next = sidePanelTabs.filter((tab) => tab !== kind)
       setSidePanelTabs(next)
       setSidePanelTab((active) =>
@@ -950,7 +1002,7 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
       // the header), so closing the last tab folds it away.
       if (next.length === 0) setSidePanelOpen(false)
     },
-    [sidePanelTabs, closeSideChat, terminals, files]
+    [sidePanelTabs, closeSideChat, terminals, files, browserStore]
   )
 
   /**
@@ -1144,9 +1196,10 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
       const snapshot: SessionSnapshotDTO = await opening
       if (request !== navigationRequest.current) return
       store.applySnapshot(snapshot)
+      persistSidebarPreferences((current) => current.unread.includes(path) ? setSessionUnread(current, path, false) : current)
       void refreshFolders()
     },
-    [store, refreshFolders]
+    [store, refreshFolders, persistSidebarPreferences]
   )
 
   /** History's View conversation navigates the main transcript. The task
@@ -1170,15 +1223,14 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
           : await window.pi.deleteFolder(target.id)
       if (snapshot && request === navigationRequest.current) store.applySnapshot(snapshot)
       const removed = new Set(target.kind === 'session' ? [target.id] : sessions.filter((s) => s.cwd === target.id).map((s) => s.path))
-      try { persistSidebarPreferences(forgetSidebarSessions(sidebarPreferences, removed)) }
-      catch { setSidebarSaveError(true) }
+      persistSidebarPreferences((current) => forgetSidebarSessions(current, removed))
     } catch (error) {
       console.error('delete failed', error)
     } finally {
       void refreshSessions()
       void refreshFolders()
     }
-  }, [pendingDelete, store, refreshSessions, refreshFolders, sessions, sidebarPreferences, persistSidebarPreferences])
+  }, [pendingDelete, store, refreshSessions, refreshFolders, sessions, persistSidebarPreferences])
 
   const deleteSessionCount = useMemo(
     () => (pendingDelete?.kind === 'folder' ? sessions.filter((s) => s.cwd === pendingDelete.id).length : 0),
@@ -1279,32 +1331,6 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
     }
   }, [isNewSession, shell.cwd, shell.projectless, newSessionProjects, newSession])
 
-  const pinnedPaths = useMemo(() => new Set(sidebarPreferences.pinned), [sidebarPreferences.pinned])
-  const sidebarGroups = useMemo(() => {
-    const ranks = new Map(sidebarPreferences.order.map((path, index) => [path, index]))
-    const pinned = orderSessions(sessions.filter((session) => pinnedPaths.has(session.path)), sidebarPreferences.pinned)
-    const chats = orderSessions(sessions.filter((session) => session.projectless && !pinnedPaths.has(session.path)), ranks)
-    return [
-      ...(pinned.length ? [{ id: PINNED_GROUP, label: t('workspace.pinnedSessions'), sessions: pinned }] : []),
-      ...folderGroups.map((group) => ({
-        id: `folder:${group.cwd}`, label: basename(group.cwd),
-        sessions: orderSessions(group.sessions.filter((session) => !pinnedPaths.has(session.path)), ranks)
-      })),
-      { id: CHATS_GROUP, label: t('workspace.projectlessSessions'), sessions: chats }
-    ]
-  }, [sessions, pinnedPaths, sidebarPreferences, folderGroups, t])
-  const sessionItems: SidebarResource[] = useMemo(() => sidebarGroups.map((group) => {
-    const visible = group.sessions.slice(0, folderLimits[group.id] ?? SESSION_PAGE_SIZE)
-    return {
-      id: group.id, label: group.label, kind: 'folder',
-      children: [
-        ...visible.map((session) => ({ id: session.path, label: session.label ?? t('workspace.newChat'), kind: 'file' as const })),
-        ...(visible.length < group.sessions.length
-          ? [{ id: moreRowId(group.id), label: t('workspace.showMore'), kind: 'file' as const }] : [])
-      ]
-    }
-  }), [sidebarGroups, folderLimits, t])
-  const folderKey = sidebarGroups.map((group) => group.id).join('|')
   /** Session paths whose live SDK session is currently streaming, so the
    * sidebar row shows the running spinner instead of the file glyph. The
    * visible session is included from the shell slice so the spinner appears
@@ -1356,6 +1382,7 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
       toggleSidebar: () => setSidebarOpen((open) => !open),
       toggleRail: () => setSidePanelOpen((open) => !open),
       openReview: () => toggleRailPane('review'),
+      openGit: () => toggleRailPane('git'),
       openTrajectory: () => toggleRailPane('trajectory'),
       openContext: () => toggleRailPane('context'),
       openTerminal: () => toggleRailPane('terminal'),
@@ -1384,7 +1411,9 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
     <FileNavigationProvider cwd={shell.cwd ?? ''} openFile={openFile}>
     <SessionSearch sessions={sessions} activePath={shell.sessionPath ?? null} runningPaths={runningPaths} onOpen={openSession} open={sessionSearchOpen} onOpenChange={setSessionSearchOpen}>
     <ChatApp
-      className="relative h-full flex-col rounded-none border-0"
+      // Let title-row/sidebar glass reach the native material through the
+      // shell; other platforms keep the body's opaque fallback background.
+      className="workspace-window relative h-full flex-col rounded-none border-0 bg-transparent"
       sidebarWidth={`${panelLayout.left}px`}
       open={sidebarOpen}
       onOpenChange={setSidebarOpen}
@@ -1394,10 +1423,10 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
       {/* The title row owns the shell's top rule: it spans the whole window,
           sidebar included, so the line under the header reaches the app's left
           edge. The content pane therefore carries no top border of its own. */}
-      <WindowTitlebar className="border-b border-border/50">
+      <WindowTitlebar className="border-b border-border/50" inert={libraryOpen || settingsOpen || scheduledOpen}>
         <Tooltip content={t('workspace.toggleSessions')}>
           <AnimatedSidebarTrigger aria-label={t('workspace.toggleSessions')} className="size-8 text-muted-foreground hover:bg-muted hover:text-foreground">
-            <PanelLeft className="size-[18px]" />
+            {sidebarOpen ? <PanelLeftClose className="size-4" /> : <PanelLeftOpen className="size-4" />}
           </AnimatedSidebarTrigger>
         </Tooltip>
         <div className="flex min-w-0 flex-1 items-center gap-2 text-sm">
@@ -1431,21 +1460,21 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
               {
                 id: 'compact',
                 label: t('palette.compact'),
-                icon: <Minimize2 className="size-[18px]" />,
+                icon: <Minimize2 className="size-4" />,
                 disabled: !shell.sessionPath || shell.scheduledTaskSession,
                 onSelect: () => void handleCompact()
               },
               {
                 id: 'reload',
                 label: t('palette.reload'),
-                icon: <RefreshCw className="size-[18px]" />,
+                icon: <RefreshCw className="size-4" />,
                 disabled: !shell.sessionPath || shell.scheduledTaskSession,
                 onSelect: () => void handleReload()
               },
               {
                 id: 'system-prompt',
                 label: t('workspace.systemPrompt'),
-                icon: <TextAlignCenter className="size-[18px]" />,
+                icon: <TextAlignCenter className="size-4" />,
                 // Always available: the manager falls back to the active
                 // session, so an unpersisted chat has a prompt to show too.
                 onSelect: () => void showSystemPrompt()
@@ -1453,7 +1482,7 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
               {
                 id: 'picture-in-picture',
                 label: t('pip.open'),
-                icon: <PictureInPicture2 className="size-[18px]" />,
+                icon: <PictureInPicture2 className="size-4" />,
                 disabled: !shell.sessionPath,
                 onSelect: () => {
                   if (!shell.sessionPath) return
@@ -1482,15 +1511,32 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
               ...(shell.scheduledTaskSession ? [] : [{
                 id: 'rewind',
                 label: t(rewindWarning ? 'rewind.captureWarning' : 'rewind.title'),
-                icon: rewindWarning ? <AlertTriangle className="size-4 text-destructive" /> : <ArrowLeftFromLine className="size-[18px]" />,
+                icon: rewindWarning ? <AlertTriangle className="size-4 text-destructive" /> : <ArrowLeftFromLine className="size-4" />,
                 disabled: !shell.sessionPath,
                 onSelect: () => { if (shell.sessionPath) setRewindTarget({ path: shell.sessionPath }) }
               }])
             ]}
           />
+          {/* Pin stays in the row rather than the pocket: a toggle whose only
+              visible state sits behind a collapsed chevron can never be read at
+              a glance, and whether the window is pinned is exactly the kind of
+              state a user checks without thinking. */}
+          <Tooltip content={t(alwaysOnTop ? 'workspace.unpinOnTop' : 'workspace.pinOnTop')}>
+            <Button
+              variant="ghost"
+              size="icon"
+              className={cn('size-8', alwaysOnTop && 'bg-muted text-foreground')}
+              aria-label={t(alwaysOnTop ? 'workspace.unpinOnTop' : 'workspace.pinOnTop')}
+              aria-pressed={alwaysOnTop}
+              data-titlebar-action="always-on-top"
+              onClick={() => void window.pi.setAlwaysOnTop(!alwaysOnTop).then(setAlwaysOnTop)}
+            >
+              {alwaysOnTop ? <Pin className="size-4" /> : <PinOff className="size-4" />}
+            </Button>
+          </Tooltip>
           <Tooltip content={t('workspace.settings')} className={settingsOpen ? 'hidden' : undefined}>
             <Button variant="ghost" size="icon" className="size-8" aria-label={t('workspace.settings')} onClick={() => setSettingsOpen(true)}>
-              <SettingsIcon className="size-[18px]" />
+              <SettingsIcon className="size-4" />
             </Button>
           </Tooltip>
           <ThemeButton />
@@ -1509,18 +1555,18 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
               disabled={!sidePanelOpen}
               onClick={() => setSidePanelMode((mode) => mode === 'closed' ? mode : mode === 'fullscreen' ? 'docked' : 'fullscreen')}
             >
-              {sidePanelFullscreen ? <ArrowsInLineHorizontal className="size-[18px]" /> : <ArrowsOutLineHorizontal className="size-[18px]" />}
+              {sidePanelFullscreen ? <ArrowsInLineHorizontal className="size-4" /> : <ArrowsOutLineHorizontal className="size-4" />}
             </Button>
           </Tooltip>
           <Tooltip content={t('workspace.sidebar')}>
             <Button variant="ghost" size="icon" aria-label={t('workspace.sidebar')} aria-pressed={sidePanelOpen}
-              onClick={() => setSidePanelOpen((open) => !open)} className={cn('size-8', sidePanelOpen && 'bg-primary/5 text-foreground')}>
-              <PanelRight className="size-[18px]" />
+              onClick={() => setSidePanelOpen((open) => !open)} className={cn('size-8', sidePanelOpen && 'bg-muted text-foreground')}>
+              {sidePanelOpen ? <PanelRightClose className="size-4" /> : <PanelRightOpen className="size-4" />}
             </Button>
           </Tooltip>
         </div>
       </WindowTitlebar>
-      <div className="flex min-h-0 flex-1">
+      <div className="flex min-h-0 flex-1" inert={libraryOpen}>
       <AnimatedSidebar
         ariaLabel={t('workspace.sessions')}
         collapsible="offcanvas"
@@ -1528,10 +1574,11 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
         // both panels read them — not just the one whose own strip is pulled.
         resizing={resizing !== null}
         className="min-h-0 data-[mobile=true]:pt-[var(--app-titlebar-height)]"
-        // Glass on: the panel surface goes translucent and frosted, and the
-        // accent wash painted behind it shows through (SidebarGlass.tsx builds
-        // both layers). Glass off is the plain opaque column, with no wash
-        // mounted at all.
+        // Glass on: the panel surface goes translucent and the theme-gradient
+        // wash behind it tints whatever the window itself shows through
+        // (SidebarGlass.tsx builds both layers; on macOS the window is a real
+        // vibrancy surface — see window-chrome.ts). Glass off is the plain
+        // opaque column, with no wash mounted at all.
         backdrop={sidebarGlass ? <SidebarGlassWash /> : undefined}
         panelClassName={cn(sidebarGlassPanelClassName(sidebarGlass), activeEdge.left && 'border-primary')}
       >
@@ -1568,210 +1615,41 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
                     {t('workspace.openFolder')}
                   </AnimatedSidebarMenuButton>
                 </AnimatedSidebarMenuItem>
+                <AnimatedSidebarMenuItem>
+                  <AnimatedSidebarMenuButton icon={<BookOpen className="size-4" />} onSelect={() => setLibraryOpen(true)} className="font-normal">
+                    {t('library.title')}
+                  </AnimatedSidebarMenuButton>
+                </AnimatedSidebarMenuItem>
               </AnimatedSidebarMenu>
             </AnimatedSidebarGroupContent>
           </AnimatedSidebarGroup>
 
-          <AnimatedSidebarGroup className="min-h-0 flex-1 px-1 py-0">
-            <div className="mb-1 flex h-8 shrink-0 items-center justify-between pr-1">
-              <AnimatedSidebarGroupLabel className="flex h-8 items-center px-2 text-xs font-medium normal-case tracking-normal">
-                {t('workspace.sessions')}
-              </AnimatedSidebarGroupLabel>
-              <div className="flex items-center gap-0.5">
-                <Tooltip content={t('scheduledTasks.open')}>
-                  <Button variant="ghost" size="icon" aria-label={t('scheduledTasks.open')} className="relative" onClick={() => setScheduledOpen(true)}>
-                    <CalendarCheck aria-hidden="true" className="size-4" />
-                    {scheduledUnread > 0 ? (
-                      <span
-                        aria-label={t('scheduledTasks.unread', { count: scheduledUnread })}
-                        className="absolute -right-0.5 -top-0.5 grid min-w-4 place-items-center rounded-capsule bg-primary px-1 text-[10px] font-semibold leading-4 text-primary-foreground"
-                      >
-                        {scheduledUnread}
-                      </span>
-                    ) : null}
-                  </Button>
-                </Tooltip>
-                <SessionSearchTrigger />
-              </div>
-            </div>
-            {sidebarSaveError ? <p role="alert" className="px-2 pb-2 text-xs text-destructive">{t('workspace.sidebarSaveError')}</p> : null}
-            <AnimatedSidebarGroupContent className="relative min-h-0 flex-1 overflow-hidden">
-              <div
-                ref={sessionListRef}
-                style={sessionListMask ? { maskImage: sessionListMask, WebkitMaskImage: sessionListMask } : undefined}
-                className={[
-                  'h-full overflow-y-auto overscroll-contain [overflow-anchor:none]',
-                  // “Show more” rows (identified by the [data-more-row] icon)
-                  // are plain text actions, not session rows: no hover box and
-                  // no row menu — hover only shifts the text color.
-                  '[&_[role=treeitem]:has(span[data-more-row])]:hover:bg-transparent',
-                  '[&_[role=treeitem]:has(span[data-more-row])]:hover:text-primary',
-                  '[&_[role=treeitem]:has(span[data-more-row])>div:last-child]:!hidden',
-                  '[&_[role=treeitem]:has(span[data-session-section])>div:last-child]:!hidden'
-                ].join(' ')}
-                onClickCapture={(event) => {
-                  // A click landing on an expanded folder row collapses it
-                  // (aria-expanded is still "true" at capture time). Reset its
-                  // reveal limit so the next expand starts from the first page.
-                  const row = (event.target as HTMLElement).closest?.('[role=treeitem][aria-expanded]')
-                  if (row?.getAttribute('aria-expanded') !== 'true') return
-                  const cwd = row.querySelector('[data-sidebar-group]')?.getAttribute('data-sidebar-group')
-                  if (!cwd) return
-                  setFolderLimits((current) => {
-                    if (!(cwd in current)) return current
-                    const next = { ...current }
-                    delete next[cwd]
-                    return next
-                  })
-                }}
-              >
-                <AISidebar
-                  key={folderKey}
-                  items={sessionItems}
-                  allowNesting={false}
-                  canDrag={(item) => sessionsByPath.has(item.id)}
-                  canMove={(move) => canReorderSession(move, sessionsByPath, pinnedPaths)}
-                  onMove={(move) => persistSidebarPreferences(reorderSession(sidebarPreferences, sessionsByPath, move))}
-                  onMoveError={() => setSidebarSaveError(true)}
-                  activeId={shell.sessionPath ?? null}
-                  defaultExpandedIds={sidebarGroups.map((group) => group.id)}
-                  ariaLabel={t('workspace.sessionsAria')}
-                  onActiveChange={(id) => {
-                    if (id.startsWith('more:')) {
-                      const cwd = id.slice('more:'.length)
-                      setFolderLimits((current) => ({
-                        ...current,
-                        [cwd]: (current[cwd] ?? SESSION_PAGE_SIZE) + SESSION_PAGE_SIZE
-                      }))
-                      return
-                    }
-                    const session = sessionsByPath.get(id)
-                    if (session) void openSession(id, session.cwd)
-                  }}
-                  renderIcon={(item) => {
-                    if (item.id.startsWith('more:')) {
-                      return (
-                        <span data-more-row className="grid place-items-center">
-                          <ChevronDown className="size-3.5" />
-                        </span>
-                      )
-                    }
-                    if (item.id === PINNED_GROUP || item.id === CHATS_GROUP) {
-                      const Icon = item.id === PINNED_GROUP ? Pin : MessageSquareDashed
-                      return <span data-session-section data-sidebar-group={item.id} className="grid place-items-center"><Icon className="size-4" /></span>
-                    }
-                    // Group identity lets collapse clicks reset the reveal limit. The glyph follows the
-                    // row's own `aria-expanded` (the row is `group/resource`),
-                    // since renderIcon only receives the item, not its state.
-                    if (item.kind === 'folder') {
-                      return (
-                        <span data-sidebar-group={item.id} className="grid place-items-center">
-                          <Folder className="size-4 group-aria-expanded/resource:hidden" />
-                          <FolderOpen className="hidden size-4 group-aria-expanded/resource:block" />
-                        </span>
-                      )
-                    }
-                    if (runningPaths.has(item.id)) {
-                      return (
-                        <LoaderCircle
-                          aria-hidden="true"
-                          className="size-4 animate-spin text-primary"
-                        />
-                      )
-                    }
-                    return <Chat01 aria-hidden="true" className="size-4" />
-                  }}
-                  renderActions={(item) => {
-                    // Only project (folder) rows get the shortcut; a session row
-                    // would just duplicate "new chat in its own project".
-                    if (!item.id.startsWith('folder:')) return null
-                    const cwd = item.id.slice('folder:'.length)
-                    return (
-                      <Tooltip
-                        content={t('workspace.newChatInFolder', { label: item.label })}
-                        wrapperClassName="absolute right-11 top-1/2 z-10 -translate-y-1/2"
-                      >
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          aria-label={t('workspace.newChatInFolder', { label: item.label })}
-                          onClick={(event) => {
-                            // Keep the row's expand/select click from firing too.
-                            event.stopPropagation()
-                            void newSession(cwd)
-                          }}
-                          className="grid size-7 place-items-center rounded-lg bg-background text-muted-foreground opacity-0 shadow-sm outline-none transition-[opacity,color,background-color] hover:bg-muted hover:text-foreground focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-ring group-hover/resource:opacity-100 group-data-[menu-open=true]/resource:opacity-100"
-                        >
-                          <MessageSquarePlus className="size-3.5" />
-                        </Button>
-                      </Tooltip>
-                    )
-                  }}
-                  renderMenu={(item, controls) =>
-                    item.id.startsWith('more:') || item.id.startsWith('section:') ? (
-                      <span className="hidden" />
-                    ) : item.kind === 'folder' ? (
-                      <SidebarRowMenuAction
-                        icon={Trash2}
-                        tone="destructive"
-                        label={t('workspace.deleteProject')}
-                        onSelect={() => {
-                          controls.close()
-                          setPendingDelete({
-                            kind: 'folder',
-                            id: item.id.slice('folder:'.length),
-                            label: item.label
-                          })
-                        }}
-                      />
-                    ) : (
-                      <>
-                        <SidebarRowMenuAction
-                          icon={pinnedPaths.has(item.id) ? PinOff : Pin}
-                          label={t(pinnedPaths.has(item.id) ? 'workspace.unpinSession' : 'workspace.pinSession')}
-                          onSelect={() => {
-                            controls.close()
-                            try { persistSidebarPreferences(toggleSessionPin(sidebarPreferences, item.id)) }
-                            catch { setSidebarSaveError(true) }
-                          }}
-                        />
-                        {controls.moves.up ? <SidebarRowMenuAction icon={ArrowUp} label={t('workspace.moveSessionUp')}
-                          onSelect={() => { controls.close(); controls.moves.up?.() }} /> : null}
-                        {controls.moves.down ? <SidebarRowMenuAction icon={ArrowDown} label={t('workspace.moveSessionDown')}
-                          onSelect={() => { controls.close(); controls.moves.down?.() }} /> : null}
-                        <SidebarRowMenuAction icon={ArrowLeftFromLine} label={t('rewind.title')} onSelect={() => {
-                          controls.close()
-                          const session = sessionsByPath.get(item.id)
-                          if (session) void openSession(session.path, session.cwd).then(() => setRewindTarget({ path: session.path }))
-                        }} />
-                        <SidebarRowMenuAction icon={Pencil} label={t('workspace.renameSession')}
-                          onSelect={() => controls.rename()} />
-                        <SidebarRowMenuAction icon={Copy} label={t('workspace.copySessionId')}
-                          onSelect={() => {
-                            controls.close()
-                            copySessionId(item.id)
-                          }} />
-                        <SidebarRowMenuAction icon={Trash2} tone="destructive" label={t('workspace.deleteSession')}
-                          onSelect={() => {
-                            controls.close()
-                            setPendingDelete({ kind: 'session', id: item.id, label: item.label })
-                          }} />
-                      </>
-                    )
-                  }
-                  onRename={(item, label) => {
-                    if (item.id.startsWith('more:') || item.kind === 'folder') return
-                    setSessions((current) =>
-                      current.map((session) =>
-                        session.path === item.id ? { ...session, label } : session
-                      )
-                    )
-                    void window.pi.renameSession(item.id, label)
-                  }}
-                />
-              </div>
-            </AnimatedSidebarGroupContent>
-          </AnimatedSidebarGroup>
+          <SessionsSidebar
+            sessions={sessions}
+            folders={folderGroups}
+            activePath={shell.sessionPath ?? null}
+            runningPaths={runningPaths}
+            preferences={sidebarPreferences}
+            onPreferencesChange={persistSidebarPreferences}
+            saveError={sidebarSaveError}
+            scheduledUnread={scheduledUnread}
+            onOpenScheduled={() => setScheduledOpen(true)}
+            onOpenSession={openSession}
+            onNewSession={(cwd) => { void newSession(cwd) }}
+            onOpenFolder={() => { void changeFolder() }}
+            onRenameSession={async (path, label) => {
+              await window.pi.renameSession(path, label)
+              setSessions((current) => current.map((session) => session.path === path ? { ...session, label } : session))
+            }}
+            onCopySessionId={copySessionId}
+            onRewindSession={(path, cwd) => {
+              void openSession(path, cwd).then(() => setRewindTarget({ path })).catch(() => {
+                toast.error({ title: t('sessionSidebar.openFailed') })
+              })
+            }}
+            onDeleteSession={(session) => setPendingDelete({ kind: 'session', id: session.path, label: session.label ?? t('workspace.newChat') })}
+            onDeleteFolder={(cwd, label) => setPendingDelete({ kind: 'folder', id: cwd, label })}
+          />
         </AnimatedSidebarContent>
       </AnimatedSidebar>
 
@@ -1816,18 +1694,6 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
               />
             ) : null}
 
-            {/* A pending escalation blocks one tool call in the running turn, so
-                it sits where the user's next action lives: above the composer. */}
-            {shell.escalations[0] ? (
-              <SandboxEscalationPanel
-                request={shell.escalations[0]}
-                onAnswer={(decision) => {
-                  const request = shell.escalations[0]
-                  if (request) void window.pi.respondEscalation(request.requestId, request.sessionPath, decision)
-                }}
-              />
-            ) : null}
-
             {/* A pending question set blocks the running turn on the user's
                 answer, so it lives where the next action is — above the
                 composer, after any escalation card. */}
@@ -1847,17 +1713,28 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
 
             <Composer
               start={newSessionStart}
+              approval={shell.escalations[0] ? (
+                <SandboxEscalationPanel
+                  key={shell.escalations[0].requestId}
+                  request={shell.escalations[0]}
+                  onAnswer={(decision) => {
+                    const request = shell.escalations[0]
+                    if (request) void window.pi.respondEscalation(request.requestId, request.sessionPath, decision)
+                  }}
+                />
+              ) : null}
               models={models}
               model={currentModel}
               thinkingLevel={shell.thinkingLevel}
               availableThinkingLevels={shell.availableThinkingLevels}
               busy={shell.isStreaming}
               initializing={shell.initializing}
+              allowMidRunChanges={allowMidRunChanges}
               readOnly={shell.subagentChild || shell.scheduledTaskSession}
               readOnlyKind={shell.scheduledTaskSession ? 'scheduled' : 'subagent'}
               readOnlyParentPath={shell.subagentParentPath}
               onOpenSession={(path) => void openSession(path)}
-              escapeStopsRun={!settingsOpen && !scheduledOpen && !authPrompt}
+              escapeStopsRun={!settingsOpen && !scheduledOpen && !libraryOpen && !authPrompt}
               plan={shell.plan}
               onPlanState={(path, plan) => store.dispatch({ type: 'plan_state_update', sessionPath: path, plan })}
               sandboxMode={shell.sandboxMode}
@@ -1867,6 +1744,7 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
               contextUsage={shell.contextUsage}
               onOpenContext={() => openSidePanelTab('context')}
               queued={shell.queue}
+              compactionQueued={shell.compactionQueue.queued}
               onSend={handleSend}
               onQueue={handleQueue}
               onRecallQueue={handleRecallQueue}
@@ -1908,6 +1786,7 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
             onCloseOtherTabs={closeOtherSidePanelTabs}
             onCloseAllTabs={closeAllSidePanelTabs}
             pane={{
+              git,
               files,
               terminals,
               debug: debugStore,
@@ -1933,9 +1812,14 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
       </AnimatedSidebarInset>
       </div>
 
+      <LibraryPage open={libraryOpen} onBack={() => setLibraryOpen(false)}
+        onSettings={() => { setLibraryOpen(false); setSettingsSection('library'); setSettingsOpen(true) }}
+        onOpenSession={async path => { await openSession(path); setLibraryOpen(false) }} />
+
       <SettingsPage
         open={settingsOpen}
-        onBack={() => setSettingsOpen(false)}
+        onBack={() => { setSettingsOpen(false); setSettingsSection(null) }}
+        requestedSection={settingsSection}
         accent={accent}
         onAccentChange={onAccentChange}
         uiStyle={uiStyle}

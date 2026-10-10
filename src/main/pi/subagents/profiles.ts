@@ -30,8 +30,6 @@ export interface SubagentProfile {
   systemPrompt: string
   /** 'all' resolves against the parent's active tools at dispatch time. */
   tools: 'all' | string[]
-  /** Separate opt-in; even tools: all never implicitly grants a debugger. */
-  debugEnabled: boolean
   /** Where `tools` came from — an unresolved preset is flagged so the tool
    * description can say why the set is only read-only. */
   toolsSource?: 'explicit' | 'preset' | 'unresolved-preset' | 'default'
@@ -143,10 +141,12 @@ function readPresetTools(): Map<string, string[]> {
 }
 
 function parseTools(value: string | undefined): 'all' | string[] | undefined {
-  const raw = value?.trim().toLowerCase()
+  // Keywords are case-insensitive; SDK tool identities (including MCP server
+  // and tool names) are not. Never rewrite an explicit permission's identity.
+  const raw = value?.trim()
   if (!raw) return undefined
-  if (raw === 'all' || raw === '*') return 'all'
-  if (raw === 'none' || raw === '') return []
+  if (raw.toLowerCase() === 'all' || raw === '*') return 'all'
+  if (raw.toLowerCase() === 'none') return []
   const tools = raw.split(',').map((tool) => tool.trim()).filter(Boolean)
   return tools.length ? tools : []
 }
@@ -196,7 +196,6 @@ function parseProfileSource(filePath: string, raw: string, scope: SubagentProfil
     description,
     systemPrompt: body.trim(),
     tools,
-    debugEnabled: data.debug === true,
     toolsSource,
     ...(toolPreset ? { toolPreset } : {}),
     model: asText(data.model) || undefined,
@@ -263,7 +262,7 @@ export function writeSubagentProfileTools(filePath: string, tools: 'all' | strin
   if (tools === 'all') {
     next = 'all'
   } else {
-    const names = [...new Set(tools.map((name) => name.trim().toLowerCase()).filter((name) => name.length > 0))]
+    const names = [...new Set(tools.map((name) => name.trim()).filter((name) => name.length > 0))]
     if (!names.length) throw new Error('A subagent profile needs at least one enabled tool')
     if (names.some((name) => /[\r\n,]/.test(name))) throw new Error('Invalid tool name in profile tools')
     next = names
@@ -278,25 +277,6 @@ export function writeSubagentProfileTools(filePath: string, tools: 'all' | strin
   }
   writeFileSync(filePath, updated, 'utf8')
   return reparsed
-}
-
-/** Dedicated opt-in, separate from the ordinary tool preset/ceiling. */
-export function writeSubagentProfileDebug(filePath: string, enabled: boolean): void {
-  if (typeof enabled !== 'boolean') throw new Error('Invalid debug flag')
-  const raw = readFileSync(filePath, 'utf8')
-  const before = parseProfileSource(filePath, raw, 'global')
-  const block = findFrontmatterBlock(raw)
-  if (!before || !block) throw new Error('Not a subagent profile')
-  const head = raw.slice(block.openingEnd, block.closingStart)
-  const key = /^(?:debug|"debug"|'debug')[ \t]*:[^\r\n]*/gm
-  // Reject duplicate keys; a malformed edit must never grant by accident.
-  const matches = [...head.matchAll(key)]
-  if (matches.length > 1) throw new Error('Duplicate debug keys in profile')
-  const nextHead = matches.length ? head.replace(key, `debug: ${enabled}`) : `debug: ${enabled}${block.newline}${head}`
-  const updated = raw.slice(0, block.openingEnd) + nextHead + raw.slice(block.closingStart)
-  const parsed = parseProfileSource(filePath, updated, before.scope)
-  if (!parsed || parsed.debugEnabled !== enabled || parsed.description !== before.description || parsed.systemPrompt !== before.systemPrompt) throw new Error('The debug edit did not round-trip')
-  writeFileSync(filePath, updated, 'utf8')
 }
 
 /** Edit only these four default keys; preserve tools, prompt, annotations and
@@ -402,7 +382,6 @@ export function toSubagentProfileDTO(profile: SubagentProfile): SubagentProfileD
     description: profile.description,
     systemPrompt: profile.systemPrompt,
     tools: profile.tools === 'all' ? 'all' : [...profile.tools],
-    debugEnabled: profile.debugEnabled,
     ...(profile.toolsSource ? { toolsSource: profile.toolsSource } : {}),
     ...(profile.toolPreset ? { toolPreset: profile.toolPreset } : {}),
     ...(profile.model ? { model: profile.model } : {}),
@@ -424,7 +403,6 @@ export function serializeProfile(profile: SubagentProfile): string {
     ...(profile.model ? [`model: ${profile.model}`] : []),
     ...(profile.thinking ? [`thinking: ${profile.thinking}`] : []),
     ...(profile.maxTurns !== undefined ? [`max_turns: ${profile.maxTurns}`] : []),
-    `debug: ${profile.debugEnabled === true}`,
     `inherit_context: ${profile.inheritContext}`,
     `run_in_background: ${profile.runInBackground}`,
     `enabled: ${profile.enabled}`
@@ -468,7 +446,6 @@ export function ensureDefaultProfiles(stateDir: string): void {
     if (existsSync(filePath)) continue
     writeFileSync(filePath, serializeProfile({
       ...template,
-      debugEnabled: false,
       inheritContext: true,
       runInBackground: false,
       enabled: true,

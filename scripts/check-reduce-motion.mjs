@@ -337,7 +337,7 @@ try {
   const dict = await evaluate(`window.__dict`)
 
   // ── 1. Both dictionaries carry the switch (and say different things) ───────
-  for (const key of ['settings.motion', 'settings.reduceMotion', 'settings.reduceMotionDesc']) {
+  for (const key of ['settings.interfaceGroup', 'settings.reduceMotion', 'settings.reduceMotionDesc']) {
     assert.ok(dict.en[key] && dict.zhCN[key], `${key} exists in both locales`)
     assert.notEqual(dict.en[key], dict.zhCN[key], `${key} is actually translated`)
   }
@@ -479,7 +479,7 @@ try {
   assert.equal(reduceBox.checked, 'true', 'the row renders the live preference: ' + json(reduceBox))
   assert.equal(reduceBox.transitionDuration, '0s', 'its own hover transition is collapsed too: ' + reduceBox.transitionDuration)
   assert.ok(
-    (await evaluate(`window.__text()`)).includes(dict.en['settings.motion']),
+    (await evaluate(`window.__text()`)).includes(dict.en['settings.interfaceGroup']),
     "the section is grouped under the locale's own heading"
   )
   reduceBox = await evaluate(`window.__reveal(${json(dict.en['settings.reduceMotion'])})`)
@@ -535,7 +535,7 @@ try {
     zhBoxes.some((box) => box.label === dict.zhCN['settings.reduceMotion']),
     'the row is localised (label): ' + json(zhBoxes)
   )
-  assert.ok((await evaluate(`window.__text()`)).includes(dict.zhCN['settings.motion']), 'the row is localised (heading)')
+  assert.ok((await evaluate(`window.__text()`)).includes(dict.zhCN['settings.interfaceGroup']), 'the row is localised (heading)')
   assert.ok((await evaluate(`window.__text()`)).includes(dict.zhCN['settings.reduceMotionDesc']), 'the row is localised (description)')
   assert.ok(
     (await evaluate(`window.__text()`)).includes(dict.zhCN['settings.compactToolsDesc']),

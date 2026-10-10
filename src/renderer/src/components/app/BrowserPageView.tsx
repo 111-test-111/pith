@@ -4,13 +4,14 @@ import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Download, Globe, PencilLine,
 import { Button } from '@/components/motion/button'
 import { Input } from '@/components/motion/input'
 import { Tooltip } from '@/components/motion/tooltip'
+import { LoaderProgress } from '@/components/motion/loader'
 import { useI18n } from '@/i18n'
 import {
   BROWSER_PARTITION,
   HUMAN_OWNER,
   buildMarkerUrl,
   isAllowedNavigationUrl,
-  normalizeNavigationUrl,
+  resolveBrowserInput,
   parseMarkerUrl,
   type BrowserDownloadInfo
 } from '../../../../shared/browser.ts'
@@ -33,6 +34,8 @@ import {
   subscribeBrowserZoom
 } from '@/lib/browser/zoom'
 import { cn } from '@/lib/utils'
+import { useBrowserSearchEngine } from '@/lib/browser/search-engine'
+import { useBrowserLoadingProgress } from '@/lib/browser/use-loading-progress'
 import { BrowserOverlays } from './BrowserOverlays'
 import { BrowserAnnotate } from './BrowserAnnotate'
 
@@ -262,7 +265,7 @@ function BrowserStartPage({ onOpen }: { onOpen: (raw: string) => boolean }): JSX
         />
         {recents.length > 0 ? (
           <div className="flex w-full max-w-md flex-col gap-1" role="list" aria-label={t('browser.openRecents')} data-browser-recents>
-            <p className="px-1 text-left text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">
+            <p className="px-1 text-left text-caption font-medium uppercase tracking-wide text-muted-foreground/70">
               {t('browser.recents')}
             </p>
             {recents.map((url) => {
@@ -308,6 +311,8 @@ function BrowserStartPage({ onOpen }: { onOpen: (raw: string) => boolean }): JSX
 export function BrowserPageView({ page, selected, displayUrl, onNavChange, onWebContentsId, bindPageActions, download, active, restart, spawnDelay }: BrowserPageViewProps) {
   const { t } = useI18n()
   const webviewRef = useRef<HTMLWebViewElement | null>(null)
+  const { browserSearchEngine } = useBrowserSearchEngine()
+  const loadingProgress = useBrowserLoadingProgress(webviewRef, restart)
   const wrapRef = useRef<HTMLDivElement>(null)
   // The device frame RING (T14): a sibling that draws the bezel AROUND the
   // pinned webview — never a border on the webview element itself, which
@@ -703,7 +708,7 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, onWeb
     if (queue.timer !== null) window.clearTimeout(queue.timer)
   }, [])
 
-  /** User-typed url → normalized → whitelist-gated → guest loadURL. Returns
+  /** User-typed URL or query → resolved → whitelist-gated → guest loadURL. Returns
    *  the normalized url, or null when it does not parse OR the navigation
    *  whitelist rejects the scheme (file:/view-source:/data:/javascript: …).
    *  The URL bar is one of the entries shared/browser.ts funnels through that
@@ -712,12 +717,12 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, onWeb
    *  toolbar Enter and the start-page input, route through this one call).
    *  The caller shows the error styling for null. */
   const loadUrl = useCallback((raw: string): string | null => {
-    const url = normalizeNavigationUrl(raw)
+    const url = resolveBrowserInput(raw, browserSearchEngine)
     const wv = webviewRef.current as unknown as BrowserWebviewElement | null
     if (!url || !isAllowedNavigationUrl(url) || !wv) return null
     void wv.loadURL(url).catch(() => { /* a failed load is the guest's to render */ })
     return url
-  }, [])
+  }, [browserSearchEngine])
 
   // Expose the selected page's find/print/navigation to the pane-level
   // shortcuts (⌘F/⌘P and the guest relay). Only the SELECTED view binds, so
@@ -917,7 +922,7 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, onWeb
       style={backgroundAgent ? { opacity: 0, pointerEvents: 'none' } : undefined}
     >
       {selected ? (
-        <div className="flex h-11 shrink-0 items-center gap-1 border-b border-border/40 px-2" data-browser-toolbar>
+        <div className="flex min-h-11 shrink-0 items-center gap-1 border-b border-border/40 px-2 py-0.5" data-browser-toolbar>
           <ToolButton label={t('browser.back')} icon={ArrowLeft} onClick={() => navigate('back')} disabled={!navFlags.back} />
           <ToolButton label={t('browser.forward')} icon={ArrowRight} onClick={() => navigate('forward')} disabled={!navFlags.forward} />
           <ToolButton label={t('browser.reload')} icon={RefreshCw} onClick={() => navigate('reload')} />
@@ -935,10 +940,11 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, onWeb
             value={urlDraft ?? prettyBrowserUrl(displayUrl)}
             onChange={setUrlDraft}
             placeholder={t('browser.urlPlaceholder')}
+            aria-label={t('browser.urlPlaceholder')}
             spellCheck={false}
             error={urlError}
             className="min-w-0 flex-1"
-            classNames={{ field: 'h-8', input: 'h-full px-2.5 text-xs' }}
+
             onKeyDown={(event) => {
               if (event.key !== 'Enter' || event.nativeEvent.isComposing) return
               const url = loadUrl(urlDraft ?? displayUrl)
@@ -950,6 +956,7 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, onWeb
               // clicks / redirects / Back-Forward again. A failed parse keeps
               // the draft — the user is still editing.
               if (url === null) flashUrlError()
+              else setUrlDraft(url)
             }}
             onFocus={() => {
               urlFieldFocusedRef.current = true
@@ -1053,6 +1060,11 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, onWeb
         {selected && displayUrl === 'about:blank' ? (
           <BrowserStartPage onOpen={(raw) => loadUrl(raw) !== null} />
         ) : null}
+        {selected && loadingProgress !== null ? (
+          <div data-browser-loading-progress className="pointer-events-none absolute inset-x-0 top-0 z-20">
+            <LoaderProgress value={loadingProgress} label={t('browser.loading')} className="h-0.5 w-full text-primary" />
+          </div>
+        ) : null}
         {selected && annotating ? (
           <BrowserAnnotate
             wv={webviewRef.current as unknown as BrowserWebviewElement}
@@ -1066,7 +1078,7 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, onWeb
         {findOpen ? (
           <div
             data-browser-find
-            className="absolute right-2 top-2 z-10 flex h-9 items-center gap-0.5 rounded-control border border-border bg-background px-1 shadow-overlay"
+            className="absolute right-2 top-2 z-10 flex min-h-9 items-center gap-0.5 rounded-control border border-border bg-background px-1 py-0.5 shadow-overlay"
             onKeyDown={(event) => {
               // Esc anywhere in the bar closes it; stopPropagation keeps the
               // window-level Esc handling (Esc-to-stop) out of the same
@@ -1086,7 +1098,7 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, onWeb
               spellCheck={false}
               autoComplete="off"
               className="w-44 shrink-0"
-              classNames={{ field: 'h-7', input: 'h-full px-2 text-xs' }}
+
               onKeyDown={(event) => {
                 if (event.nativeEvent.isComposing) return
                 if (event.key === 'Enter') {
@@ -1106,7 +1118,7 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, onWeb
               aria-live="polite"
               data-find-count
               data-find-final={findCount?.final ? 'true' : 'false'}
-              className="w-16 shrink-0 text-center text-[10px] tabular-nums text-muted-foreground"
+              className="w-16 shrink-0 text-center text-micro tabular-nums text-muted-foreground"
             >
               {findCount && findCount.matches > 0 ? t('browser.findCount', { x: findCount.ordinal, y: findCount.matches }) : ''}
             </span>

@@ -151,11 +151,10 @@ app.whenReady().then(()=>{
   await screenshot('editor')
 
   const modal = `[role="dialog"][aria-modal="true"]`
-  const layout = await evaluate(`(()=>{const d=document.querySelector(${JSON.stringify(modal)}),s=d.querySelector('[data-fade-scroll]'),r=d.getBoundingClientRect();return{width:r.width,height:r.height,scroll:s.scrollHeight,client:s.clientHeight,model:!!d.querySelector('button[aria-controls="scheduled-model-picker-panel"]'),sandbox:!!d.querySelector('button[aria-label="Sandbox mode"],button[aria-label="沙箱模式"]'),font:[...d.querySelectorAll('input,textarea,button[aria-haspopup="listbox"]')].map(e=>({label:e.getAttribute('aria-label'),size:getComputedStyle(e).fontSize})).filter(x=>x.size!=='14px')}})()`)
+  const layout = await evaluate(`(()=>{const d=document.querySelector(${JSON.stringify(modal)}),s=d.querySelector('[data-fade-scroll]'),r=d.getBoundingClientRect();return{width:r.width,height:r.height,scroll:s.scrollHeight,client:s.clientHeight,model:!!d.querySelector('button[aria-controls="scheduled-model-picker-panel"]'),sandbox:!!d.querySelector('button[aria-label="Sandbox mode"],button[aria-label="沙箱模式"]')}})()`)
   assert.ok(layout.width > 800 && layout.height < 700, `compact wide dialog: ${JSON.stringify(layout)}`)
   assert.ok(layout.scroll <= layout.client + 2, `default editor fits without body scrolling: ${JSON.stringify(layout)}`)
   assert.ok(layout.model && layout.sandbox, 'editor uses the shared composer model and permission controls')
-  assert.deepEqual(layout.font, [], `input and picker typography matches the 14px form scale: ${JSON.stringify(layout.font)}`)
   // Field titles sit flush with the control below them (no label inset of their
   // own), share one colour, and keep one gap to that control; edit items keep one
   // roomier rhythm, measured from each field wrapper to the next one that starts
@@ -182,12 +181,13 @@ app.whenReady().then(()=>{
 
   const recurringTrigger = `document.querySelector(${JSON.stringify(`${modal} [data-scheduled-time] button[aria-haspopup="dialog"]`)})`
   assert.equal(await evaluate(`getComputedStyle(${recurringTrigger}).fontSize`), '14px')
-  await evaluate(`(()=>{window.__timeFrames=[];const until=performance.now()+500;const sample=()=>{if(performance.now()>until)return;const p=[...document.querySelectorAll('[data-morph-popover-portal]')].find(e=>e.querySelector('[data-time-picker-grid]'));if(p){const r=p.getBoundingClientRect();window.__timeFrames.push({visible:getComputedStyle(p).visibility==='visible',width:r.width,height:r.height,opacity:getComputedStyle(p).opacity})}requestAnimationFrame(sample)};requestAnimationFrame(sample)})()`)
+  await evaluate(`(()=>{window.__timeFrames=[];const until=performance.now()+500;const sample=()=>{if(performance.now()>until)return;const p=[...document.querySelectorAll('[data-morph-popover-portal]')].find(e=>e.querySelector('[data-time-picker-grid]'));if(p){const surface=p.querySelector('[role=dialog]');window.__timeFrames.push({visible:getComputedStyle(p).visibility==='visible',width:surface.offsetWidth,height:surface.offsetHeight,populated:p.querySelectorAll('[data-time-picker-grid=hour] button').length,opacity:+getComputedStyle(p).opacity})}requestAnimationFrame(sample)};requestAnimationFrame(sample)})()`)
   await click(recurringTrigger)
   await waitFor(`document.querySelector('[data-time-picker-grid="hour"]')`)
   await pause(520)
   const timeFrames = await evaluate(`window.__timeFrames.filter(frame=>frame.visible)`)
-  assert.ok(timeFrames.length > 1 && timeFrames.every((frame) => Math.abs(frame.width-timeFrames[0].width)<1 && Math.abs(frame.height-timeFrames[0].height)<1 && frame.opacity==='1'), `time picker has a stable, opaque first visible frame: ${JSON.stringify(timeFrames.slice(0,3))}`)
+  assert.ok(timeFrames.length > 1 && timeFrames.every((frame) => frame.width===timeFrames[0].width && frame.height===timeFrames[0].height && frame.populated===24), `time picker has complete content and resting layout from its first frame: ${JSON.stringify(timeFrames.slice(0,3))}`)
+  assert.equal(timeFrames.at(-1).opacity, 1, 'the time picker finishes its shared entrance')
   assert.equal(await evaluate(`document.querySelectorAll('[data-time-picker-grid="hour"] button').length`), 24)
   const minuteStart = await evaluate('performance.now()')
   await click(`document.querySelectorAll('[data-time-picker-grid="hour"] button')[10]`)
@@ -200,7 +200,7 @@ app.whenReady().then(()=>{
   assert.ok(await evaluate(`!document.querySelector(${JSON.stringify(modal)}).querySelector('[data-scheduled-time] input,[data-scheduled-time] button[aria-haspopup="listbox"]')`), 'recurring time uses one dedicated picker')
 
   const menuFacts = async (trigger) => {
-    await evaluate(`(()=>{const t=${trigger},p=document.getElementById(t.getAttribute('aria-controls'));window.__scheduledMenuFrames=[];const until=performance.now()+550;const sample=()=>{if(performance.now()>until)return;const r=p.getBoundingClientRect(),inner=p.firstElementChild;window.__scheduledMenuFrames.push({visible:getComputedStyle(p).visibility!=='hidden'&&p.getAttribute('aria-hidden')==='false',width:r.width,naturalHeight:inner?.offsetHeight??0});requestAnimationFrame(sample)};requestAnimationFrame(sample)})()`)
+    await evaluate(`(()=>{const t=${trigger},p=document.getElementById(t.getAttribute('aria-controls'));window.__scheduledMenuFrames=[];const until=performance.now()+550;const sample=()=>{if(performance.now()>until)return;const inner=p.firstElementChild;window.__scheduledMenuFrames.push({visible:getComputedStyle(p).visibility!=='hidden'&&p.getAttribute('aria-hidden')==='false',width:p.offsetWidth,naturalHeight:inner?.offsetHeight??0});requestAnimationFrame(sample)};requestAnimationFrame(sample)})()`)
     await click(trigger)
     await pause(570)
     return evaluate(`(()=>{const t=${trigger},p=document.getElementById(t.getAttribute('aria-controls')),m=document.querySelector(${JSON.stringify(modal)}),r=p.getBoundingClientRect(),b=m?.getBoundingClientRect(),hit=document.elementFromPoint(r.left+Math.min(20,r.width/2),r.top+Math.min(20,r.height/2)),frames=window.__scheduledMenuFrames.filter(f=>f.visible);return{open:p.getAttribute('aria-hidden')==='false',outside:b?r.bottom>b.bottom||r.top<b.top:null,topmost:!!hit&&p.contains(hit),position:getComputedStyle(p).position,width:r.width,height:r.height,first:frames[0],last:frames.at(-1)}})()`)
@@ -247,7 +247,8 @@ app.whenReady().then(()=>{
   assert.ok(await evaluate(`!document.querySelector(${JSON.stringify(modal)}).querySelector('[data-scheduled-datetime] input,[data-scheduled-datetime] button[aria-haspopup="listbox"]')`), 'one-time date and HH:mm use one dedicated picker')
   await click(dateTimeTrigger)
   await waitFor(`document.querySelector('[data-scheduled-calendar]')`)
-  assert.equal(await evaluate(`document.querySelectorAll('[data-scheduled-calendar] button').length`), 42)
+  // The beUI calendar always renders a 6×7 grid of cells; only real dates get buttons.
+  assert.equal(await evaluate(`document.querySelectorAll('[data-scheduled-calendar] td[role="gridcell"]').length`), 42)
   await click(`document.querySelector('button[data-scheduled-datetime-tab="time"]')`)
   await waitFor(`document.querySelector('[data-time-picker-grid="hour"]')`)
   await click(`document.querySelectorAll('[data-time-picker-grid="hour"] button')[11]`)

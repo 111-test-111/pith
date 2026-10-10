@@ -3,11 +3,12 @@ import { ChevronDown, ChevronsDownUp, ChevronsUpDown, ExternalLink } from '@/lib
 import { FileDiff } from '@/components/agents/file-diff'
 import { Button } from '@/components/motion/button'
 import { Tooltip } from '@/components/motion/tooltip'
-import { parseUnifiedDiff } from '@/lib/diff'
+import { diffGutterColumns, parseUnifiedDiff } from '@/lib/diff'
 import { cn } from '@/lib/utils'
 import { useI18n } from '@/i18n'
 import { LabelTooltip } from './LabelTooltip'
 import { useWheelScroll } from '@/lib/hooks/use-wheel-scroll'
+import { codeLineHeight, useCodeFontSize } from '@/lib/typography'
 
 export function ReviewCollapseButton({ allCollapsed, onClick }: { allCollapsed: boolean; onClick: () => void }) {
   const { t } = useI18n()
@@ -41,7 +42,6 @@ export function ReviewFileHeader({ displayPath, fullPath, collapsed, onToggle, a
   </div>
 }
 
-const ROW_HEIGHT = 20
 const OVERSCAN = 24
 /** One page scrollport, even for a huge diff. Window rows against the owning
  * review's scroll position; no vendored edits and no nested vertical scroll. */
@@ -49,7 +49,10 @@ export const ReviewDiffBody = memo(function ReviewDiffBody({ patch, displayPath,
   patch: string; displayPath: string; scrollRootRef: RefObject<HTMLElement | null>; layoutKey?: unknown
 }) {
   const lines = useMemo(() => parseUnifiedDiff(patch), [patch])
+  const gutterColumns = useMemo(() => diffGutterColumns(lines), [lines])
   const virtual = lines.length > 400
+  const rowHeight = codeLineHeight(useCodeFontSize())
+  const anchor = useRef<{ first: number; rowHeight: number; patch: string } | null>(null)
   const ref = useRef<HTMLDivElement>(null)
   useWheelScroll(ref)
   const [range, setRange] = useState({ start: 0, end: 100 })
@@ -57,30 +60,45 @@ export const ReviewDiffBody = memo(function ReviewDiffBody({ patch, displayPath,
   const { t } = useI18n()
   useLayoutEffect(() => {
     if (!virtual) return
-    const root = scrollRootRef.current, body = ref.current
-    if (!root || !body) return
     let frame = 0
-    const update = () => {
+    let release = () => {}
+    const attach = () => {
       frame = 0
-      const first = Math.floor((root.getBoundingClientRect().top - body.getBoundingClientRect().top) / ROW_HEIGHT)
-      const start = Math.min(lines.length, Math.max(0, first - OVERSCAN))
-      const end = Math.min(lines.length, Math.max(start, first + Math.ceil(root.clientHeight / ROW_HEIGHT) + OVERSCAN))
-      setRange(previous => previous.start === start && previous.end === end ? previous : { start, end })
+      const root = scrollRootRef.current, body = ref.current
+      if (!root || !body) return
+      const previous = anchor.current
+      if (previous && previous.patch === patch && previous.rowHeight !== rowHeight && previous.first >= 0 && previous.first < lines.length) {
+        root.scrollTop += body.getBoundingClientRect().top - root.getBoundingClientRect().top + previous.first * rowHeight
+      }
+      const update = () => {
+        frame = 0
+        const position = (root.getBoundingClientRect().top - body.getBoundingClientRect().top) / rowHeight
+        anchor.current = { first: position, rowHeight, patch }
+        const first = Math.floor(position)
+        const start = Math.min(lines.length, Math.max(0, first - OVERSCAN))
+        const end = Math.min(lines.length, Math.max(start, first + Math.ceil(root.clientHeight / rowHeight) + OVERSCAN))
+        setRange(previous => previous.start === start && previous.end === end ? previous : { start, end })
+      }
+      const schedule = () => { if (!frame) frame = requestAnimationFrame(update) }
+      update(); root.addEventListener('scroll', schedule, { passive: true })
+      const observer = new ResizeObserver(schedule); observer.observe(root); observer.observe(body)
+      release = () => { root.removeEventListener('scroll', schedule); observer.disconnect() }
     }
-    const schedule = () => { if (!frame) frame = requestAnimationFrame(update) }
-    update(); root.addEventListener('scroll', schedule, { passive: true })
-    const observer = new ResizeObserver(schedule); observer.observe(root); observer.observe(body)
-    return () => { cancelAnimationFrame(frame); root.removeEventListener('scroll', schedule); observer.disconnect() }
+    // A parent's DOM ref attaches after its children's layout effects. A cold
+    // review mount gets one retry; later font/layout changes apply before paint.
+    if (scrollRootRef.current) attach()
+    else frame = requestAnimationFrame(attach)
+    return () => { cancelAnimationFrame(frame); release() }
     // Collapsing an earlier file moves this body without resizing it or
     // scrolling. Recalculate before paint instead of leaving a stale window.
-  }, [virtual, lines.length, scrollRootRef, layoutKey])
+  }, [virtual, lines.length, scrollRootRef, layoutKey, rowHeight, patch])
   // A stable width keeps distant long lines reachable without measuring DOM.
   const width = useMemo(() => virtual ? lines.reduce((max, line) => Math.max(max, Array.from(line.content).reduce((n, char) => char === '\t' ? n + 8 - n % 8 : n + (char.codePointAt(0)! > 127 ? 2 : 1), 0)), 0) : 0, [lines, virtual])
   const visible = useMemo(() => virtual ? lines.slice(range.start, range.end) : lines, [lines, virtual, range])
   return <div ref={ref} data-review-diff data-review-lines={lines.length} className="overflow-x-auto" aria-labelledby={labelId}>
     <span id={labelId} className="sr-only">{t('rewind.diffLabel', { path: displayPath })}</span>
-    <div style={virtual ? { minWidth: `calc(6.5rem + ${width}ch)`, paddingTop: range.start * ROW_HEIGHT, paddingBottom: (lines.length - range.end) * ROW_HEIGHT } : undefined}>
-      <FileDiff headerless open maxHeightOverride={null} bodyClassName="rounded-none" containRows file={displayPath} lines={visible} status="complete" highlight={!virtual && patch.length <= 32000} />
+    <div className="font-mono text-code" style={virtual ? { minWidth: `calc(2 * max(2.25rem, ${gutterColumns}ch + 0.5rem) + 2rem + ${width}ch)`, paddingTop: range.start * rowHeight, paddingBottom: (lines.length - range.end) * rowHeight } : undefined}>
+      <FileDiff headerless open maxHeightOverride={null} bodyClassName="rounded-none" containRows gutterColumns={gutterColumns} file={displayPath} lines={visible} status="complete" highlight={!virtual && patch.length <= 32000} />
     </div>
   </div>
 })

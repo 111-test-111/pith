@@ -8,7 +8,7 @@
  *   - option rows keep one geometry whichever option is picked (the vendored
  *     control's inline-flex baseline used to grow the selected row and push
  *     every row below it down),
- *   - the compact free-text field keeps its icon-aware left padding, so the
+ *   - the free-text field keeps its icon-aware left padding, so the
  *     placeholder never renders under the pencil glyph,
  *   - every question's `header` is rendered (the chip row) and usable to jump,
  *   - collapse/expand parks and reopens the set without settling it, while
@@ -107,6 +107,7 @@ window.probe = () => {
   let inputBox = null;
   if (input) {
     const rect = input.getBoundingClientRect();
+    const field = input.parentElement.getBoundingClientRect();
     const style = getComputedStyle(input);
     const icon = input.parentElement.querySelector('span');
     inputBox = {
@@ -115,7 +116,7 @@ window.probe = () => {
       paddingLeft: Math.round(parseFloat(style.paddingLeft)),
       textOrigin: Math.round(rect.left + parseFloat(style.paddingLeft)),
       iconRight: icon ? Math.round(icon.getBoundingClientRect().right) : null,
-      fieldHeight: Math.round(input.parentElement.getBoundingClientRect().height)
+      fullyVisible: rect.top >= field.top && rect.bottom <= field.bottom
     };
   }
   const rootRect = root.getBoundingClientRect();
@@ -428,9 +429,9 @@ app.on('window-all-closed',()=>app.quit());`
   assert.equal(state.rows.length, 2, 'the first question offers two options')
   assert.equal(state.rows[0].checked, 'false', 'and nothing is picked yet')
 
-  // --- the compact free-text field keeps its icon-aware padding
+  // --- free-text entry fits its visible frame and keeps icon-aware padding
   assert.ok(state.input, 'the free-text field is present')
-  assert.equal(state.input.fieldHeight, 32, 'the free-text field stays compact')
+  assert.ok(state.input.fullyVisible, 'the free-text entry is not clipped by its field')
   assert.ok(
     state.input.iconRight !== null && state.input.textOrigin >= state.input.iconRight + 2,
     `the placeholder cannot sit under the pencil glyph (icon ends at ${state.input.iconRight}, text starts at ${state.input.textOrigin})`

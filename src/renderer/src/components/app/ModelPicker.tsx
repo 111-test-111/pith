@@ -1,10 +1,12 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { motion, useReducedMotion } from 'motion/react'
+import { AnimatePresence, motion } from 'motion/react'
 import { Check } from '@/lib/icons'
+import { Button } from '@/components/motion/button'
 import { useI18n } from '@/i18n'
 import type { MessageKey } from '@/i18n/locales/en'
-import { EASE_OUT } from '@/lib/ease'
+import { useOverlayMotion } from '@/lib/overlay-motion'
+import { PresenceGate } from '@/lib/presence-gate'
 import { cn } from '@/lib/utils'
 import { ProviderIcon } from './ProviderIcon'
 import { ModelInputBadges } from './ModelInputBadges'
@@ -31,11 +33,12 @@ interface ModelPickerProps {
   models: readonly ModelDTO[]
   /** `providerId/modelId` of the active model, or null before a session. */
   value: string | null
-  thinkingLevel: ThinkingLevel | null
+  thinkingLevel?: ThinkingLevel | null
   /** Levels the ACTIVE model supports (SDK getAvailableThinkingLevels). */
-  availableThinkingLevels: readonly ThinkingLevel[]
+  availableThinkingLevels?: readonly ThinkingLevel[]
   onChange: (model: ModelDTO) => void | Promise<void>
-  onThinkingLevelChange: (level: ThinkingLevel) => void
+  /** Omit for preferences that select only a model, without a thinking submenu. */
+  onThinkingLevelChange?: (level: ThinkingLevel) => void
   /** Scheduled tasks can leave either override unset. Composer omits these. */
   onInheritModel?: () => void
   onInheritThinking?: () => void
@@ -47,22 +50,29 @@ interface ModelPickerProps {
   /** Trigger type scale. The composer keeps its 12px control type; the
    * scheduled-task form passes the form's own scale (14px). */
   textClassName?: string
+  /** Menu options can follow a settings surface's compact control scale. */
+  optionTextClassName?: string
   /** Portalled placement keeps this exact picker usable inside a modal scrollport. */
   portal?: boolean
   /** Separate simultaneous picker instances keep distinct ARIA panel targets. */
   panelId?: string
+  ariaLabel?: string
+  className?: string
+  triggerClassName?: string
   disabled?: boolean
 }
 
 const modelKey = (model: { providerId: string; id: string }) => `${model.providerId}/${model.id}`
 
-const ROW = 'flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm outline-none transition-colors disabled:pointer-events-none disabled:opacity-50'
+const NO_THINKING_LEVELS: readonly ThinkingLevel[] = []
+const ROW = 'flex h-auto w-full items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm font-normal outline-none transition-colors disabled:pointer-events-none disabled:opacity-50'
 
 /**
  * One trigger, two cascaded panels: the first lists the models, and picking a
  * reasoning model pops the thinking-level list out BESIDE it, so both choices
  * live in a single surface. The level panel hangs off the model panel with a
- * tight 4px gap — close enough to read as one menu. Layout-anchored like the
+ * tight 4px gap — close enough to read as one menu. It is anchored to one row,
+ * so scrolling the model list dismisses it rather than sliding it along. Layout-anchored like the
  * sandbox picker beside it (`absolute` against the trigger's own box, no
  * portal): the composer moves in ways no window resize or scroll reports
  * (see `check-composer-pickers.mjs`'s panel drag), and a portalled panel
@@ -80,8 +90,8 @@ const ROW = 'flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py
 export function ModelPicker({
   models,
   value,
-  thinkingLevel,
-  availableThinkingLevels,
+  thinkingLevel = null,
+  availableThinkingLevels = NO_THINKING_LEVELS,
   onChange,
   onThinkingLevelChange,
   onInheritModel,
@@ -90,18 +100,27 @@ export function ModelPicker({
   inheritThinkingLabel,
   unknownModelLabel,
   textClassName = 'text-xs',
+  optionTextClassName = 'text-sm',
   portal = false,
   panelId,
+  ariaLabel,
+  className,
+  triggerClassName,
   disabled
 }: ModelPickerProps) {
   const { t } = useI18n()
-  const reduce = useReducedMotion() ?? false
   const rootRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const submenuRef = useRef<HTMLDivElement>(null)
-  const [open, setOpen] = useState(false)
+  const [open, setInternalOpen] = useState(false)
+  const setOpen = useCallback((next: boolean) => {
+    if (!next && panelRef.current?.contains(document.activeElement)) {
+      triggerRef.current?.focus({ preventScroll: true })
+    }
+    setInternalOpen(next)
+  }, [])
   const [placement, setPlacement] = useState<'top' | 'bottom'>('bottom')
   const [panelHeight, setPanelHeight] = useState(0)
   /** Keep the row itself: it may scroll while the model snapshot is in flight. */
@@ -142,24 +161,15 @@ export function ModelPicker({
   )
 
   const switching = pendingModel !== null
-  const showLevel = Boolean((current?.reasoning || (onInheritModel && value === null)) && availableThinkingLevels.length > 1)
-  const showSubmenu = submenu !== null && submenu.key === value && !switching && showLevel
+  const showLevel = Boolean(onThinkingLevelChange && (current?.reasoning || (onInheritModel && value === null)) && availableThinkingLevels.length > 1)
+  const showSubmenu = open && submenu !== null && submenu.key === value && !switching && showLevel
   const submenuSide = submenuPosition.side
+  const overlay = useOverlayMotion(placement)
+  const submenuOverlay = useOverlayMotion(submenuSide)
 
-  // The panel animates its BORDER-box height (the inner list scrolls), so the
-  // measurement adds the panel's own borders — same accounting as the vendored
-  // SelectContent. The trigger usually sits near the window bottom, where the
-  // panel flips upward; the height decides while opening.
-  const measurePanel = () => {
-    const node = listRef.current
-    if (!node) return 0
-    const panel = node.parentElement
-    const styles = panel ? getComputedStyle(panel) : null
-    const border = styles
-      ? parseFloat(styles.borderTopWidth) + parseFloat(styles.borderBottomWidth)
-      : 0
-    return node.offsetHeight + (Number.isFinite(border) ? border : 0)
-  }
+  // Measure the full resting surface, including padding and borders. Scaling
+  // never changes offsetHeight, so placement stays steady during the entrance.
+  const measurePanel = () => panelRef.current?.offsetHeight ?? 0
 
   useLayoutEffect(() => {
     if (!open) return
@@ -218,7 +228,7 @@ export function ModelPicker({
       window.removeEventListener('keydown', onKey)
       window.removeEventListener('pointerdown', onPointer)
     }
-  }, [open])
+  }, [open, setOpen])
 
   // Measure the final level list before its first paint. Center on the actual
   // visible row, allowing the submenu to extend above/below the model panel;
@@ -249,21 +259,35 @@ export function ModelPicker({
     const observer = new ResizeObserver(measure)
     observer.observe(panel)
     observer.observe(sub)
-    const list = listRef.current
-    list?.addEventListener('scroll', measure)
     window.addEventListener('resize', measure)
     return () => {
       observer.disconnect()
-      list?.removeEventListener('scroll', measure)
       window.removeEventListener('resize', measure)
     }
   }, [submenu, switching, value, showLevel, placement])
 
+  // Scrolling the model list moves every row under the level panel's anchor.
+  // The cascade closes instead of drifting along: the panel is positioned
+  // against one row, and a scrolled list no longer says which one. The offset
+  // is compared rather than trusting the event itself, so a scroll event the
+  // list already had queued when the panel opened cannot dismiss it.
+  useEffect(() => {
+    if (!submenu) return
+    const list = listRef.current
+    if (!list) return
+    const openedAt = list.scrollTop
+    const onScroll = () => {
+      if (list.scrollTop !== openedAt) setSubmenu(null)
+    }
+    list.addEventListener('scroll', onScroll)
+    return () => list.removeEventListener('scroll', onScroll)
+  }, [submenu])
+
   const pickModel = (model: ModelDTO, row: HTMLButtonElement) => {
     const key = modelKey(model)
-    const hasLevels = model.reasoning && (key !== value || availableThinkingLevels.length > 1)
+    const hasLevels = Boolean(onThinkingLevelChange && model.reasoning && (key !== value || availableThinkingLevels.length > 1))
     if (key !== value) {
-      setPendingModel(key)
+      if (onThinkingLevelChange) setPendingModel(key)
       void Promise.resolve(onChange(model)).catch(() => setPendingModel(null))
     }
     if (!hasLevels) {
@@ -275,14 +299,14 @@ export function ModelPicker({
   }
 
   const pickLevel = (level: ThinkingLevel) => {
-    onThinkingLevelChange(level)
+    onThinkingLevelChange?.(level)
     setSubmenu(null)
     setOpen(false)
   }
 
   const pickInherited = (row: HTMLButtonElement) => {
     onInheritModel?.()
-    if (availableThinkingLevels.length > 1) setSubmenu({ key: null, row })
+    if (onThinkingLevelChange && availableThinkingLevels.length > 1) setSubmenu({ key: null, row })
     else { setSubmenu(null); setOpen(false) }
   }
 
@@ -296,13 +320,8 @@ export function ModelPicker({
         aria-label={t('model.listAria')}
         aria-hidden={!open}
         inert={!open}
-        initial={false}
-        animate={{
-          opacity: open ? 1 : 0,
-          y: open ? 0 : placement === 'top' ? 5 : -5,
-          scale: open ? 1 : 0.98
-        }}
-        transition={reduce ? { duration: 0.12 } : { duration: open ? 0.18 : 0.12, ease: EASE_OUT }}
+        {...overlay}
+        animate={open ? 'open' : 'closed'}
         style={{
           pointerEvents: open ? 'auto' : 'none',
           transformOrigin: placement === 'top' ? 'bottom left' : 'top left',
@@ -317,21 +336,21 @@ export function ModelPicker({
       >
         <div ref={listRef} className="max-h-80 overflow-y-auto">
           {onInheritModel ? (
-            <button
+            <Button variant="ghost"
               type="button"
               role="option"
               aria-selected={value === null}
               onClick={(event) => pickInherited(event.currentTarget)}
-              className={cn(ROW, value === null ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-muted')}
+              className={cn(ROW, optionTextClassName, value === null ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-muted')}
             >
               <span>{inheritLabel ?? t('model.choose')}</span>
               {value === null ? <Check className="h-3.5 w-3.5 shrink-0" /> : null}
-            </button>
+            </Button>
           ) : null}
           {grouped.map((group, index) => (
             <div key={group.providerId}>
               {index > 0 ? <div aria-hidden className="mx-1 my-1 h-px bg-border" /> : null}
-              <div className="flex items-center gap-1.5 px-2.5 pb-0.5 pt-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+              <div className="flex items-center gap-1.5 px-2.5 pb-0.5 pt-1.5 text-micro font-medium uppercase tracking-wide text-muted-foreground">
                 <ProviderIcon providerId={group.providerId} name={group.providerName} size={12} />
                 <span className="truncate">{group.providerName}</span>
                 <span className="ml-auto font-normal normal-case">{group.models.length}</span>
@@ -340,7 +359,7 @@ export function ModelPicker({
                 const key = modelKey(model)
                 const selected = key === value
                 return (
-                  <button
+                  <Button variant="ghost"
                     key={key}
                     type="button"
                     role="option"
@@ -349,6 +368,7 @@ export function ModelPicker({
                     onClick={(event) => pickModel(model, event.currentTarget)}
                     className={cn(
                       ROW,
+                      optionTextClassName,
                       selected
                         ? 'bg-muted text-foreground'
                         : 'text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:bg-muted'
@@ -357,8 +377,8 @@ export function ModelPicker({
                     {/* Name/meta column, with the inputs it accepts stated
                         in the meta line. */}
                     <span className="flex min-w-0 flex-1 flex-col">
-                      <span className="truncate text-sm text-foreground">{model.name}</span>
-                      <span className="flex min-w-0 items-center gap-1 text-[11px] text-muted-foreground">
+                      <span className={cn('truncate text-foreground', optionTextClassName)}>{model.name}</span>
+                      <span className="flex min-w-0 items-center gap-1 text-caption text-muted-foreground">
                         <span className="truncate">
                           {model.reasoning ? t('model.reasoning') : t('model.standard')}
                           {model.contextWindow
@@ -369,7 +389,7 @@ export function ModelPicker({
                       </span>
                     </span>
                     {selected ? <Check className="h-3.5 w-3.5 shrink-0" /> : null}
-                  </button>
+                  </Button>
                 )
               })}
             </div>
@@ -381,69 +401,74 @@ export function ModelPicker({
           ) : null}
         </div>
 
-        {showSubmenu ? (
-          <motion.div
-            key={submenu?.key}
-            ref={submenuRef}
-            role="menu"
-            aria-label={t('model.thinkingTitle')}
-            data-thinking-panel=""
-            initial={reduce ? { opacity: 0 } : { opacity: 0, x: submenuSide === 'right' ? -5 : 5, scale: 0.98 }}
-            animate={reduce ? { opacity: 1 } : { opacity: 1, x: 0, scale: 1 }}
-            transition={reduce ? { duration: 0.12 } : { duration: 0.18, ease: EASE_OUT }}
-            style={{ top: submenuPosition.top, transformOrigin: submenuSide === 'right' ? 'center left' : 'center right' }}
-            className={cn(
-              'absolute z-10 w-44 rounded-xl border border-border bg-background p-1 shadow-overlay',
-              submenuSide === 'right' ? 'left-full ml-1' : 'right-full mr-1'
-            )}
-          >
-            <div className="px-2.5 pb-0.5 pt-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-              {t('model.thinkingTitle')}
-            </div>
-            {onInheritThinking ? (
-              <button
-                type="button"
-                role="menuitem"
-                aria-checked={thinkingLevel === null}
-                onClick={() => { onInheritThinking(); setSubmenu(null); setOpen(false) }}
-                className={cn(ROW, thinkingLevel === null ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-muted')}
-              >
-                <span>{inheritThinkingLabel ?? inheritLabel ?? t('model.choose')}</span>
-                {thinkingLevel === null ? <Check className="h-3.5 w-3.5 shrink-0" /> : null}
-              </button>
-            ) : null}
-            {availableThinkingLevels.map((level) => (
-              <button
-                key={level}
-                type="button"
-                role="menuitem"
-                aria-checked={level === thinkingLevel}
-                data-thinking-option={level}
-                disabled={switching}
-                onClick={() => pickLevel(level)}
-                className={cn(
-                  ROW,
-                  level === thinkingLevel
-                    ? 'bg-muted text-foreground'
-                    : 'text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:bg-muted'
-                )}
-              >
-                <span className="truncate text-sm text-foreground">{levelLabel(t, level)}</span>
-                {level === thinkingLevel ? <Check className="h-3.5 w-3.5 shrink-0" /> : null}
-              </button>
-            ))}
-          </motion.div>
-        ) : null}
+        <AnimatePresence>
+          {showSubmenu ? (
+            <PresenceGate key={submenu?.key ?? '__inherit__'}>
+              {({ gate }) => (
+                <motion.div
+                  ref={submenuRef}
+                  role="menu"
+                  aria-label={t('model.thinkingTitle')}
+                  data-thinking-panel=""
+                  {...submenuOverlay}
+                  {...gate}
+                  style={{ ...gate.style, top: submenuPosition.top, transformOrigin: submenuSide === 'right' ? 'center left' : 'center right' }}
+                  className={cn(
+                    'absolute z-10 w-44 rounded-xl border border-border bg-background p-1 shadow-overlay',
+                    submenuSide === 'right' ? 'left-full ml-1' : 'right-full mr-1'
+                  )}
+                >
+                  <div className="px-2.5 pb-0.5 pt-1.5 text-micro font-medium uppercase tracking-wide text-muted-foreground">
+                    {t('model.thinkingTitle')}
+                  </div>
+                  {onInheritThinking ? (
+                    <Button variant="ghost"
+                      type="button"
+                      role="menuitem"
+                      aria-checked={thinkingLevel === null}
+                      onClick={() => { onInheritThinking(); setSubmenu(null); setOpen(false) }}
+                      className={cn(ROW, optionTextClassName, thinkingLevel === null ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-muted')}
+                    >
+                      <span>{inheritThinkingLabel ?? inheritLabel ?? t('model.choose')}</span>
+                      {thinkingLevel === null ? <Check className="h-3.5 w-3.5 shrink-0" /> : null}
+                    </Button>
+                  ) : null}
+                  {availableThinkingLevels.map((level) => (
+                    <Button variant="ghost"
+                      key={level}
+                      type="button"
+                      role="menuitem"
+                      aria-checked={level === thinkingLevel}
+                      data-thinking-option={level}
+                      disabled={switching}
+                      onClick={() => pickLevel(level)}
+                      className={cn(
+                        ROW,
+                        optionTextClassName,
+                        level === thinkingLevel
+                          ? 'bg-muted text-foreground'
+                          : 'text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:bg-muted'
+                      )}
+                    >
+                      <span className={cn('truncate text-foreground', optionTextClassName)}>{levelLabel(t, level)}</span>
+                      {level === thinkingLevel ? <Check className="h-3.5 w-3.5 shrink-0" /> : null}
+                    </Button>
+                  ))}
+                </motion.div>
+              )}
+            </PresenceGate>
+          ) : null}
+        </AnimatePresence>
       </motion.div>
   )
 
   return (
-    <div ref={rootRef} className="relative w-auto">
-      <button
+    <div ref={rootRef} className={cn('relative w-auto', className)}>
+      <Button variant="ghost"
         type="button"
         ref={triggerRef}
         disabled={disabled}
-        aria-label={t('model.choose')}
+        aria-label={ariaLabel ?? t('model.choose')}
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={listId}
@@ -451,7 +476,7 @@ export function ModelPicker({
           if (open) setSubmenu(null)
           setOpen(!open)
         }}
-        className={cn("relative z-10 flex h-8 w-auto items-center justify-between gap-2 rounded-control border-0 bg-transparent px-2.5 outline-none transition-colors hover:bg-muted focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50", textClassName)}
+        className={cn("relative z-10 flex h-8 w-auto items-center justify-between gap-2 rounded-control border-0 bg-transparent px-2.5 font-normal text-foreground outline-none transition-colors hover:bg-muted focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50", textClassName, triggerClassName)}
       >
         <span className="flex min-w-0 items-center gap-1.5 whitespace-nowrap">
           {current ? (
@@ -467,9 +492,9 @@ export function ModelPicker({
             </span>
           ) : null}
         </span>
-      </button>
+      </Button>
 
-      {portal ? (open ? createPortal(panel, document.body) : null) : panel}
+      {portal ? createPortal(panel, document.body) : panel}
     </div>
   )
 }

@@ -6,7 +6,17 @@ export function windowChromeOptions(): BrowserWindowConstructorOptions {
   return {
     titleBarStyle: 'hidden',
     ...(process.platform === 'darwin'
-      ? { trafficLightPosition: { x: 16, y: 19 } }
+      ? {
+          trafficLightPosition: { x: 16, y: 19 },
+          // Real under-window transparency for the glass title row/sidebar:
+          // the whole window is a vibrancy surface, and content regions paint
+          // their own opaque backgrounds. The material shows through the two
+          // translucent chrome regions (styles.css gates the page
+          // background on data-platform='darwin'). 'active' keeps the effect
+          // from dimming when the window loses focus.
+          vibrancy: 'under-window',
+          visualEffectState: 'active'
+        }
       : { titleBarOverlay: { color: '#00000000', symbolColor: symbolColor(), height: 52 } }),
     autoHideMenuBar: true
   }

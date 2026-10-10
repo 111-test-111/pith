@@ -1,14 +1,25 @@
 import type { TableSheet } from '../../../shared/table'
-import type { FileBrowserRequest, FileDirectoryDTO, FileDocumentDTO } from '../../../shared/types'
+import type { FileBrowserRequest, FileDirectoryDTO, FileDocumentDTO, FileGitDiffDTO } from '../../../shared/types'
 import { fileDirname } from '@/lib/file-navigation'
+import type { BinaryPreviewQuery, BinaryPreviewValue, PreviewResult } from '../../../shared/file-preview'
 
 const DIRECTORY_TTL = 10_000
 const DIRECTORY_LIMIT = 160
 const DIRECTORY_BYTES = 4 * 1024 * 1024
 const DOCUMENT_LIMIT = 16
 const DOCUMENT_BYTES = 8 * 1024 * 1024
+const DIFF_LIMIT = 16
+const DIFF_BYTES = 8 * 1024 * 1024
 const TABLE_LIMIT = 8
 const TABLE_BYTES = 16 * 1024 * 1024
+const BINARY_BYTES = 16 * 1024 * 1024
+
+function binaryBytes(value: BinaryPreviewValue): number {
+  if (value.type === 'archive-entry') return 256 + (value.text?.length ?? 0) * 2 + (value.image?.data.byteLength ?? 0)
+  if (value.type === 'archive-index') return value.entries.reduce((bytes, entry) => bytes + entry.name.length * 2 + 128, 256)
+  if (value.type === 'data-index') return value.tables.reduce((bytes, table) => bytes + table.name.length * 2 + table.columns.reduce((count, column) => count + (column.name.length + column.type.length) * 2 + 64, 128), 256)
+  return value.rows.reduce((bytes, row) => bytes + row.reduce((count, cell) => count + cell.length * 2 + 16, 32), 256)
+}
 
 /** Everything the grid needs to repaint, including where a delimited file's
  * next slice continues from — a revisited tab resumes instead of re-reading. */
@@ -44,12 +55,18 @@ function tableBytes(value: TableSnapshot): number {
 export class FileBrowserCache {
   private directories = new Map<string, { value: FileDirectoryDTO; time: number; bytes: number }>()
   private documents = new Map<string, FileDocumentDTO>()
+  private diffs = new Map<string, FileGitDiffDTO>()
   private tables = new Map<string, { value: TableSnapshot; bytes: number }>()
   private directoryRequests = new Map<string, Promise<FileDirectoryDTO>>()
   private documentRequests = new Map<string, Promise<FileDocumentDTO>>()
+  private diffRequests = new Map<string, Promise<FileGitDiffDTO>>()
   private directoryBytes = 0
   private documentBytes = 0
+  private diffBytes = 0
   private tableBytes = 0
+  private binaries = new Map<string, { path: string; value: BinaryPreviewValue; bytes: number }>()
+  private binaryRequests = new Map<string, { path: string; id: string; users: number; promise: Promise<PreviewResult> }>()
+  private binaryBytes = 0
   private readers = 0
   private waiting: Array<() => void> = []
 
@@ -75,8 +92,12 @@ export class FileBrowserCache {
     // the cache; late responses can only satisfy their already-obsolete caller.
     for (const path of this.directoryRequests.keys()) if (path === root || path.startsWith(root.replace(/\/$/, '') + '/')) this.directoryRequests.delete(path)
     for (const key of this.documentRequests.keys()) {
-      const path = key.slice(key.indexOf('\0') + 1)
+      const path = key.split('\0')[1]
       if (path === root || path.startsWith(root.replace(/\/$/, '') + '/')) this.documentRequests.delete(key)
+    }
+    for (const key of this.diffRequests.keys()) {
+      const path = key.split('\0')[1]
+      if (path === root || path.startsWith(root.replace(/\/$/, '') + '/')) this.diffRequests.delete(key)
     }
   }
   async readDirectory(request: FileBrowserRequest, append = false, displayed?: FileDirectoryDTO): Promise<FileDirectoryDTO> {
@@ -138,19 +159,19 @@ export class FileBrowserCache {
     return new Map(values)
   }
 
-  private documentKey(request: FileBrowserRequest) { return `${request.cwd}\0${request.path}` }
+  private documentKey(request: FileBrowserRequest) { return `${request.cwd}\0${request.path}${request.encoding && request.encoding !== 'auto' ? '\0' + request.encoding : ''}` }
   document(request: FileBrowserRequest) { return this.documents.get(this.documentKey(request)) }
   readDocument(request: FileBrowserRequest) {
     const key = this.documentKey(request)
     const pending = this.documentRequests.get(key)
     if (pending) return pending
-    const promise = window.pi.readFileDocument({ cwd: request.cwd, path: request.path })
+    const promise = window.pi.readFileDocument({ cwd: request.cwd, path: request.path, ...(request.encoding ? { encoding: request.encoding } : {}) })
       .catch((): FileDocumentDTO => ({ path: request.path, relativePath: request.path, gitRoot: null, size: 0, truncated: false, error: 'unreadable' }))
       .then(value => {
         if (this.documentRequests.get(key) !== promise) return value
         const previous = this.documents.get(key)
         // Preserve both the visible body and tokenization on unchanged reads.
-        if (previous && previous.text === value.text && previous.gitRoot === value.gitRoot && previous.relativePath === value.relativePath && previous.error === value.error && previous.size === value.size && previous.truncated === value.truncated) {
+        if (previous && previous.text === value.text && previous.encoding === value.encoding && previous.gitRoot === value.gitRoot && previous.relativePath === value.relativePath && previous.error === value.error && previous.size === value.size && previous.truncated === value.truncated) {
           this.documents.delete(key); this.documents.set(key, previous)
           return previous
         }
@@ -168,15 +189,90 @@ export class FileBrowserCache {
     this.documentRequests.set(key, promise)
     return promise
   }
+  private diffKey(request: FileBrowserRequest) { return `${request.cwd}\0${request.path}` }
+  gitDiff(request: FileBrowserRequest) { return this.diffs.get(this.diffKey(request)) }
+  /** Keep the last diff visible while validating HEAD and working-tree changes.
+   * Only the current request may publish; close/refresh/clear revoke old reads. */
+  readGitDiff(request: FileBrowserRequest) {
+    const key = this.diffKey(request)
+    const pending = this.diffRequests.get(key)
+    if (pending) return pending
+    const promise = window.pi.readFileGitDiff({ cwd: request.cwd, path: request.path })
+      .catch((): FileGitDiffDTO => ({ gitRoot: null, patch: '', binary: false, error: 'git' }))
+      .then(value => {
+        if (this.diffRequests.get(key) !== promise) return value
+        const previous = this.diffs.get(key)
+        if (previous && previous.patch === value.patch && previous.gitRoot === value.gitRoot && previous.binary === value.binary && previous.error === value.error) {
+          this.diffs.delete(key); this.diffs.set(key, previous)
+          return previous
+        }
+        this.diffBytes -= (previous?.patch.length ?? 0) * 2
+        this.diffs.delete(key); this.diffs.set(key, value)
+        this.diffBytes += value.patch.length * 2
+        while (this.diffs.size > DIFF_LIMIT || this.diffBytes > DIFF_BYTES) {
+          const oldest = this.diffs.entries().next().value!
+          this.diffBytes -= oldest[1].patch.length * 2
+          this.diffs.delete(oldest[0])
+        }
+        return value
+      }).finally(() => { if (this.diffRequests.get(key) === promise) this.diffRequests.delete(key) })
+    this.diffRequests.set(key, promise)
+    return promise
+  }
   closeDocument(path: string) {
-    for (const key of this.documentRequests.keys()) if (key.endsWith(`\0${path}`)) this.documentRequests.delete(key)
+    for (const key of this.documentRequests.keys()) if (key.split('\0')[1] === path) this.documentRequests.delete(key)
     for (const [key, value] of this.documents) if (value.path === path) {
       this.documentBytes -= (value.text?.length ?? 0) * 2
       this.documents.delete(key)
     }
+    for (const key of this.diffRequests.keys()) if (key.split('\0')[1] === path) this.diffRequests.delete(key)
+    for (const [key, value] of this.diffs) if (key.split('\0')[1] === path) {
+      this.diffBytes -= value.patch.length * 2
+      this.diffs.delete(key)
+    }
     this.dropTableFile(path)
+    for (const [key, entry] of this.binaries) if (entry.path === path) { this.binaryBytes -= entry.bytes; this.binaries.delete(key) }
+    for (const [key, entry] of this.binaryRequests) if (entry.path === path) { this.binaryRequests.delete(key); window.pi.cancelBinaryPreview(entry.id) }
   }
-  clear() { this.directories.clear(); this.documents.clear(); this.tables.clear(); this.directoryRequests.clear(); this.documentRequests.clear(); this.directoryBytes = 0; this.documentBytes = 0; this.tableBytes = 0 }
+  clear() {
+    for (const entry of this.binaryRequests.values()) window.pi.cancelBinaryPreview(entry.id)
+    this.binaries.clear(); this.binaryRequests.clear(); this.binaryBytes = 0
+    this.directories.clear(); this.documents.clear(); this.diffs.clear(); this.tables.clear(); this.directoryRequests.clear(); this.documentRequests.clear(); this.diffRequests.clear(); this.directoryBytes = 0; this.documentBytes = 0; this.diffBytes = 0; this.tableBytes = 0
+  }
+
+  binary(key: string) {
+    const entry = this.binaries.get(key)
+    if (!entry) return undefined
+    this.binaries.delete(key); this.binaries.set(key, entry)
+    return entry.value
+  }
+  readBinary(key: string, request: FileBrowserRequest, query: BinaryPreviewQuery) {
+    let entry = this.binaryRequests.get(key)
+    if (!entry) {
+      const id = crypto.randomUUID()
+      const promise = window.pi.binaryPreview({ cwd: request.cwd, path: request.path, id, query }).catch((): PreviewResult => ({ error: 'unreadable' })).then(result => {
+        if (this.binaryRequests.get(key)?.id !== id || !result.value) return result
+        const previous = this.binaries.get(key)
+        this.binaryBytes -= previous?.bytes ?? 0
+        const bytes = binaryBytes(result.value)
+        this.binaries.delete(key); this.binaries.set(key, { path: request.path, value: result.value, bytes }); this.binaryBytes += bytes
+        while (this.binaries.size > 16 || this.binaryBytes > BINARY_BYTES) {
+          const oldest = this.binaries.entries().next().value!
+          this.binaryBytes -= oldest[1].bytes; this.binaries.delete(oldest[0])
+        }
+        return result
+      }).finally(() => { if (this.binaryRequests.get(key)?.id === id) this.binaryRequests.delete(key) })
+      entry = { path: request.path, id, users: 0, promise }; this.binaryRequests.set(key, entry)
+    }
+    entry.users++
+    let released = false
+    const tracked = entry
+    return { promise: tracked.promise, cancel: () => {
+      if (released) return
+      released = true; tracked.users--
+      if (tracked.users === 0 && this.binaryRequests.get(key) === tracked) { this.binaryRequests.delete(key); window.pi.cancelBinaryPreview(tracked.id) }
+    } }
+  }
 
   /** Read moves an entry to the front, so an active tab is evicted last. */
   table(key: string) {

@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
-import { AlertCircle, Chart, RefreshCw } from '@/lib/icons'
+import { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { AlertCircle, Chart, ChevronRight, RefreshCw } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
+import { AgentDisclosure } from '@/components/agents/agent-disclosure'
 import { cn } from '@/lib/utils'
 import { useI18n } from '@/i18n'
 import type { MessageKey } from '@/i18n/locales/en'
-import type { ContextBreakdownDTO, ContextDetailDTO } from '../../../../shared/types'
+import type { ContextBreakdownDTO, ContextCategoryDTO, ContextCategoryKind, ContextDetailDTO } from '../../../../shared/types'
 import type { PiStore } from '@/state/pi-store'
 import { FadeScroll } from './FadeScroll'
 
@@ -18,13 +19,105 @@ const BUCKETS: Array<{ key: keyof Omit<ContextBreakdownDTO, 'total'>; labelKey: 
 ]
 
 /** One label-over-value cell of the responsive statistics grid. */
-function Stat({ label, value, className }: { label: string; value: ReactNode; className?: string }) {
+function Stat({ label, value, emphasis = false, className }: { label: string; value: ReactNode; emphasis?: boolean; className?: string }) {
   return (
-    <div data-context-stat={label} className={cn('min-w-0', className)}>
-      <p className="text-xs text-muted-foreground">{label}</p>
-      <p data-context-stat-value className="mt-0.5 truncate text-sm tabular-nums text-foreground">
+    <div data-context-stat={label} className={cn('flex min-w-0 flex-col', className)}>
+      <p className="flex-1 text-xs text-muted-foreground">{label}</p>
+      <p data-context-stat-value title={typeof value === 'string' ? value : undefined}
+        className={cn('mt-0.5 truncate tabular-nums text-foreground', emphasis ? 'text-xl font-medium leading-7' : 'text-sm')}>
         {value}
       </p>
+    </div>
+  )
+}
+
+const CATEGORY_GROUPS: Array<{ key: string; labelKey: MessageKey; kinds: ContextCategoryKind[] }> = [
+  { key: 'instructions', labelKey: 'contextDetail.instructions', kinds: ['system', 'projectFiles', 'skills', 'toolSchemas'] },
+  { key: 'conversation', labelKey: 'contextDetail.conversation', kinds: ['userText', 'images', 'assistantText', 'thinking',
+    'toolCalls', 'toolResults', 'summaries', 'extensions', 'bash', 'requestOnly', 'other'] }
+]
+
+/** Each category keeps its own expansion through polls and CSS-only resizing. */
+function CategoryRow({ category, total }: { category: ContextCategoryDTO; total: number }) {
+  const { t, locale } = useI18n()
+  const [open, setOpen] = useState(false)
+  const panelId = useId()
+  const label = t(`contextDetail.category.${category.kind}`)
+  const expandable = category.items.length > 0 || category.omittedItems > 0
+  const cells = <>
+    <span className="flex min-w-0 items-center gap-1.5 text-foreground">
+      {expandable ? <ChevronRight aria-hidden="true" className={cn('size-3 shrink-0 text-muted-foreground', open && 'rotate-90')} />
+        : <span aria-hidden="true" className="size-3 shrink-0" />}
+      <span className="min-w-0">{label}</span>
+    </span>
+    <span className="text-right tabular-nums text-foreground">~{formatCount(category.tokens, locale)}</span>
+    <span className="text-right tabular-nums text-muted-foreground">{formatEstimatePercent(percentOf(category.tokens, total))}</span>
+  </>
+  const rowClass = 'context-category-row grid h-auto min-h-9 w-full gap-2 px-1 py-2 text-left text-xs font-normal'
+  return (
+    <div data-context-category={category.kind} role="listitem" className="min-w-0 border-b border-border/50">
+      {expandable ? (
+        <Button variant="ghost" size="sm" className={rowClass} aria-expanded={open} aria-controls={panelId}
+          onClick={() => setOpen(value => !value)}>{cells}</Button>
+      ) : <div className={rowClass}>{cells}</div>}
+      {expandable ? (
+        <AgentDisclosure id={panelId} open={open} data-context-category-items>
+          <dl className="context-category-items mb-2 ml-2.5 border-l border-border pl-3">
+            {category.items.map(item => (
+              <div key={item.name} className="flex min-w-0 justify-between gap-3 py-1 text-xs text-muted-foreground">
+                <dt className="min-w-0 truncate" title={item.name}>{item.name}</dt>
+                <dd className="shrink-0 tabular-nums">~{formatCount(item.tokens, locale)}</dd>
+              </div>
+            ))}
+          </dl>
+          {category.omittedItems ? <p className="mb-2 pl-6 text-xs text-muted-foreground">{t('contextDetail.moreItems', { count: String(category.omittedItems) })}</p> : null}
+        </AgentDisclosure>
+      ) : null}
+    </div>
+  )
+}
+
+function CompositionCategories({ detail }: { detail: ContextDetailDTO }) {
+  const { t } = useI18n()
+  return (
+    <div className="context-category-grid mt-4" data-context-categories>
+      {CATEGORY_GROUPS.map(group => {
+        const categories = group.kinds.flatMap(kind => detail.categories.filter(category => category.kind === kind))
+        if (!categories.length) return null
+        return (
+          <section key={group.key} data-context-category-group={group.key} className="min-w-0">
+            <div className="context-category-row grid items-end gap-2 border-b border-border px-1 pb-2 text-caption text-muted-foreground">
+              <h3 className="font-medium text-foreground">{t(group.labelKey)}</h3>
+              <span className="text-right">{t('contextDetail.categoryTokens')}</span>
+              <span className="text-right">{t('contextDetail.categoryShare')}</span>
+            </div>
+            <div role="list">
+              {categories.map(category => <CategoryRow key={category.kind} category={category} total={detail.breakdown.total} />)}
+            </div>
+          </section>
+        )
+      })}
+    </div>
+  )
+}
+
+function EstimateNotes({ request }: { request: boolean }) {
+  const { t } = useI18n()
+  const [open, setOpen] = useState(false)
+  const panelId = useId()
+  return (
+    <div className="mt-3">
+      <Button variant="ghost" size="sm" className="h-auto min-h-8 justify-start px-1 py-1.5 font-normal"
+        aria-expanded={open} aria-controls={panelId} data-context-estimate-toggle onClick={() => setOpen(value => !value)}>
+        <ChevronRight aria-hidden="true" className={cn('size-3 shrink-0', open && 'rotate-90')} />
+        {t('contextDetail.estimateDetails')}
+      </Button>
+      <AgentDisclosure id={panelId} open={open} data-context-estimate-notes>
+        <div className="max-w-3xl space-y-1 pt-2 text-xs leading-ui text-muted-foreground">
+          <p>{t(request ? 'contextDetail.requestNote' : 'contextDetail.projectionNote')}</p>
+          <p>{t('contextDetail.breakdownNote')}</p>
+        </div>
+      </AgentDisclosure>
     </div>
   )
 }
@@ -146,7 +239,7 @@ export function ContextDetailPane({ store }: { store: PiStore }) {
   const reasoning = detail.tokens.reasoning
 
   return (
-    <div data-context-pane className="sidebar-pane-container h-full min-h-0 min-w-0">
+    <div data-context-pane data-context-session={sessionPath ?? undefined} className="sidebar-pane-container h-full min-h-0 min-w-0">
     <FadeScroll className="h-full p-4">
     <div className="pane-data mx-auto">
       <div className="flex items-center justify-between gap-2">
@@ -175,56 +268,28 @@ export function ContextDetailPane({ store }: { store: PiStore }) {
         </div>
       ) : null}
 
-      <div data-context-stats className="pane-stat-grid mt-4">
-        <Stat label={t('contextDetail.messages')} value={formatCount(detail.totalMessages, locale)} />
-        <Stat label={t('contextDetail.thinking')} value={detail.thinkingLevel ?? NONE} />
-        <Stat label={t('contextDetail.provider')} value={detail.provider ?? NONE} />
-        <Stat label={t('contextDetail.model')} value={detail.model ?? NONE} />
-        <Stat
-          label={t('contextDetail.contextLimit')}
-          value={usage.contextWindow > 0 ? formatCount(usage.contextWindow, locale) : NONE}
-        />
-        <Stat label={t('contextDetail.billedTokens')} value={formatCount(detail.tokens.total, locale)} />
-        <Stat label={t('contextDetail.usage')} value={usage.percent !== null ? formatEstimatePercent(usage.percent) : NONE} />
-        <Stat label={t('contextDetail.contextTokens')} value={used !== null ? `~${formatCount(used, locale)}` : NONE} />
-        <Stat label={t('contextDetail.inputTokens')} value={formatCount(detail.tokens.input, locale)} />
-        <Stat label={t('contextDetail.outputTokens')} value={formatCount(detail.tokens.output, locale)} />
-        <Stat
-          label={t('contextDetail.reasoningTokens')}
-          value={reasoning !== null ? formatCount(reasoning, locale) : NONE}
-        />
-        <Stat
-          label={t('contextDetail.cacheHitLabel')}
-          value={usage.cacheHitRate !== null ? formatRate(usage.cacheHitRate) : NONE}
-        />
-        <Stat
-          label={t('contextDetail.cachedTokens')}
-          value={`${formatCount(detail.tokens.cacheRead, locale)} / ${formatCount(detail.tokens.cacheWrite, locale)}`}
-        />
-        <Stat label={t('contextDetail.cost')} value={formatCost(detail.cost, locale)} />
-        <Stat label={t('contextDetail.userMessages')} value={formatCount(detail.userMessages, locale)} />
-        <Stat label={t('contextDetail.assistantMessages')} value={formatCount(detail.assistantMessages, locale)} />
-        <Stat label={t('contextDetail.toolCalls')} value={formatCount(detail.toolCalls, locale)} />
-        <Stat label={t('contextDetail.toolResults')} value={formatCount(detail.toolResults, locale)} />
-        <Stat label={t('contextDetail.createdAt')} value={detail.createdAt !== null ? formatStamp(detail.createdAt, locale) : NONE} />
-        <Stat label={t('contextDetail.lastActivity')} value={detail.lastActivity !== null ? formatStamp(detail.lastActivity, locale) : NONE} />
-      </div>
+      <section className="context-section" data-context-section="current">
+        <h2 className="text-sm font-medium text-foreground">{t('contextDetail.current')}</h2>
+        <div data-context-current className="pane-stat-grid context-primary-grid mt-3 rounded-item bg-muted/30 p-3">
+          <Stat emphasis label={t('contextDetail.usage')} value={usage.percent !== null ? formatEstimatePercent(usage.percent) : NONE} />
+          <Stat emphasis label={t('contextDetail.contextTokens')} value={used !== null ? `~${formatCount(used, locale)}` : NONE} />
+          <Stat emphasis label={t('contextDetail.contextLimit')} value={usage.contextWindow > 0 ? formatCount(usage.contextWindow, locale) : NONE} />
+          <Stat emphasis label={t('contextDetail.projectionEstimate')} value={`~${formatCount(detail.projectionEstimate, locale)}`} />
+        </div>
+        <div className="pane-stat-grid context-config-grid mt-4" data-context-config>
+          <Stat label={t('contextDetail.provider')} value={detail.provider ?? NONE} />
+          <Stat label={t('contextDetail.model')} value={detail.model ?? NONE} />
+          <Stat label={t('contextDetail.thinking')} value={detail.thinkingLevel ?? NONE} />
+        </div>
+      </section>
 
-      {/* The counts, tokens and cost above are the SDK's own SESSION-WIDE totals:
-          a resent, retried or forked session carries the abandoned branches in
-          its file, and those were really billed. Saying so is cheaper than
-          having a number quietly disagree with the transcript. */}
-      <p data-context-note className="mt-3 text-xs leading-5 text-muted-foreground">
-        {t('contextDetail.cumulativeNote')}
-      </p>
-
-      {/* Breakdown: the four buckets sum to the ring's own context size (the
-          residue is the system prompt plus the tool schemas), so the bar and the
-          ring can never disagree. Everything here is an estimate, and it says
-          so. */}
-      <section className="mt-6">
-        <h3 className="text-xs font-medium text-muted-foreground">{t('contextDetail.breakdown')}</h3>
-        <div data-context-breakdown className="mt-2 flex h-2 w-full overflow-hidden rounded-detail bg-muted">
+      <section className="context-section" data-context-section="composition">
+        <h2 className="text-sm font-medium text-foreground">{t('contextDetail.breakdown')}</h2>
+        <div className="pane-stat-grid context-source-grid mt-3" data-context-source>
+          <Stat label={t('contextDetail.source')} value={t(detail.request ? 'contextDetail.sourceRequest' : 'contextDetail.sourceProjection')} />
+          <Stat emphasis label={t('contextDetail.estimatedTotal')} value={`~${formatCount(breakdown.total, locale)}`} />
+        </div>
+        <div data-context-breakdown className="mt-4 flex h-2 w-full overflow-hidden rounded-detail bg-muted">
           {BUCKETS.map((bucket) => (
             <span
               key={bucket.key}
@@ -250,7 +315,54 @@ export function ContextDetailPane({ store }: { store: PiStore }) {
             </li>
           ))}
         </ul>
-        <p className="mt-2 text-xs leading-5 text-muted-foreground">{t('contextDetail.breakdownNote')}</p>
+        <CompositionCategories key={`categories:${sessionPath}`} detail={detail} />
+        <EstimateNotes key={`notes:${sessionPath}`} request={!!detail.request} />
+      </section>
+
+      {detail.request ? (
+        <section className="context-section" data-context-section="request">
+          <h2 className="text-sm font-medium text-foreground">{t('contextDetail.request')}</h2>
+          <div className="pane-stat-grid context-request-grid mt-3" data-context-request>
+            <Stat label={t('contextDetail.capturedAt')} value={formatStamp(detail.request.startedAt, locale)} />
+            <Stat label={t('contextDetail.requestModel')} value={`${detail.request.provider} / ${detail.request.model}`} />
+            <Stat label={t('contextDetail.requestId')} value={detail.request.id} />
+            <Stat label={t('contextDetail.reportedInput')} value={detail.request.inputTokens === null ? NONE : formatCount(detail.request.inputTokens, locale)} />
+            <Stat label={t('contextDetail.estimateDifference')} value={detail.request.inputTokens === null ? NONE
+              : `${breakdown.total > detail.request.inputTokens ? '+' : ''}${formatCount(breakdown.total - detail.request.inputTokens, locale)}`} />
+            <Stat label={t('contextDetail.payloadObserved')} value={t(detail.request.payloadCaptured ? 'contextDetail.observed' : 'contextDetail.unavailable')} />
+          </div>
+        </section>
+      ) : null}
+
+      <section className="context-section" data-context-section="session">
+        <h2 className="text-sm font-medium text-foreground">{t('contextDetail.session')}</h2>
+        <p data-context-note className="mt-1 max-w-3xl text-xs leading-ui text-muted-foreground">{t('contextDetail.cumulativeNote')}</p>
+        <div className="context-session-groups mt-4">
+          <section className="min-w-0" data-context-section="billing">
+            <h3 className="text-xs font-medium text-foreground">{t('contextDetail.billing')}</h3>
+            <div data-context-billing className="pane-stat-grid context-session-grid mt-3">
+              <Stat label={t('contextDetail.billedTokens')} value={formatCount(detail.tokens.total, locale)} />
+              <Stat label={t('contextDetail.cost')} value={formatCost(detail.cost, locale)} />
+              <Stat label={t('contextDetail.inputTokens')} value={formatCount(detail.tokens.input, locale)} />
+              <Stat label={t('contextDetail.outputTokens')} value={formatCount(detail.tokens.output, locale)} />
+              <Stat label={t('contextDetail.reasoningTokens')} value={reasoning !== null ? formatCount(reasoning, locale) : NONE} />
+              <Stat label={t('contextDetail.cacheHitLabel')} value={usage.cacheHitRate !== null ? formatRate(usage.cacheHitRate) : NONE} />
+              <Stat className="col-span-full" label={t('contextDetail.cachedTokens')} value={`${formatCount(detail.tokens.cacheRead, locale)} / ${formatCount(detail.tokens.cacheWrite, locale)}`} />
+            </div>
+          </section>
+          <section className="min-w-0" data-context-section="activity">
+            <h3 className="text-xs font-medium text-foreground">{t('contextDetail.activity')}</h3>
+            <div data-context-activity className="pane-stat-grid context-session-grid mt-3">
+              <Stat className="col-span-full" label={t('contextDetail.messages')} value={formatCount(detail.totalMessages, locale)} />
+              <Stat label={t('contextDetail.userMessages')} value={formatCount(detail.userMessages, locale)} />
+              <Stat label={t('contextDetail.assistantMessages')} value={formatCount(detail.assistantMessages, locale)} />
+              <Stat label={t('contextDetail.toolCalls')} value={formatCount(detail.toolCalls, locale)} />
+              <Stat label={t('contextDetail.toolResults')} value={formatCount(detail.toolResults, locale)} />
+              <Stat label={t('contextDetail.createdAt')} value={detail.createdAt !== null ? formatStamp(detail.createdAt, locale) : NONE} />
+              <Stat label={t('contextDetail.lastActivity')} value={detail.lastActivity !== null ? formatStamp(detail.lastActivity, locale) : NONE} />
+            </div>
+          </section>
+        </div>
       </section>
     </div>
     </FadeScroll>

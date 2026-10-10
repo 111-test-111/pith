@@ -4,6 +4,7 @@ import 'temml/dist/Temml-Local.css'
 import './math.css'
 import type { MarkdownMathProps } from '@/components/app/MarkdownMath'
 import { useScrollFade } from './hooks/use-scroll-fade'
+import { createMathMacros } from './math-compat'
 
 // Shared across chat, file tabs and remounts; bounded by count AND UTF-16
 // storage. Failures are cached too, so malformed formulas are not retried on
@@ -25,7 +26,7 @@ export function renderMath(source: string, display: boolean): string | null {
     try {
       value = temml.renderToString(source, {
         displayMode: display, annotate: true, throwOnError: true,
-        trust: false, maxExpand: 1000, maxSize: [20, 200], macros: {}
+        trust: false, maxExpand: 1000, maxSize: [20, 200], macros: createMathMacros()
       })
     } catch { /* Incomplete/unsupported TeX stays readable as source. */ }
   }

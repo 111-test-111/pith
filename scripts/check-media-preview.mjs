@@ -57,7 +57,8 @@ try {
   await mkdir(project)
   await copyFile(join(repo, 'resources/icons/64x64.png'), join(project, 'still.png'))
   await writeFile(join(project, 'vector.svg'), '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="24"><rect width="48" height="24" fill="#0f0"/></svg>')
-  await writeFile(join(project, 'tone.wav'), wavFixture())
+  await writeFile(join(project, 'tone.wav'), wavFixture(6))
+  await writeFile(join(project, 'broken.wav'), 'not a decodable wave file')
   await writeFile(join(project, 'large.png'), noisePng(1200, 1200))
   await writeFile(join(project, 'notes.txt'), 'plain text source\n')
   // A recognized medium Chromium cannot decode: never read as text, never mounted.
@@ -100,18 +101,19 @@ try {
   const fixture = `<!doctype html><html lang="en"><body><div id="root"></div><script type="module">
 import React from 'react';import {createRoot} from 'react-dom/client';
 import {FilesPane} from '/src/components/app/FilesPane.tsx';
-import {I18nProvider} from '/src/i18n/index.tsx';
+import {I18nProvider,useI18n} from '/src/i18n/index.tsx';
 import {PiStore} from '/src/state/pi-store.ts';import {FileBrowserStore} from '/src/state/file-browser-store.ts';import {DebugStore} from '/src/state/debug-store.ts';
-import en from '/src/i18n/locales/en.ts';import zh from '/src/i18n/locales/zh-CN.ts';
+import en from '/src/i18n/locales/en.ts';import zh from '/src/i18n/locales/zh-CN.ts';import tw from '/src/i18n/locales/zh-TW.ts';
+import {setUiStyle} from '/src/lib/ui-style.ts';import {setReduceMotion} from '/src/lib/reduce-motion.ts';
 import {mediaUrl as buildMediaUrl} from '/@fs${join(repo, 'src/shared/media.ts')}';
 import '/src/styles.css';
 localStorage.setItem('pi-app:locale','en');
 const cwd=${JSON.stringify(project)};
 const files=new FileBrowserStore(),pi=new PiStore(),debug=new DebugStore();
 pi.applySnapshot({cwd,sessionId:crypto.randomUUID(),messages:[],model:null,thinkingLevel:'off',availableThinkingLevels:['off'],isStreaming:false});
-const App=()=>{const state=React.useSyncExternalStore(files.subscribe,files.getSnapshot);return React.createElement(FilesPane,{files,store:pi,filePath:state.active,debug})};
+const App=()=>{window.setLocale=useI18n().setLocale;const state=React.useSyncExternalStore(files.subscribe,files.getSnapshot);return React.createElement(FilesPane,{files,store:pi,filePath:state.active,debug})};
 createRoot(document.getElementById('root')).render(React.createElement(React.StrictMode,null,React.createElement(I18nProvider,null,React.createElement(App))));
-window.cwd=cwd;window.files=files;window.en=en;window.zh=zh;
+window.cwd=cwd;window.files=files;window.en=en;window.zh=zh;window.tw=tw;window.setUiStyle=setUiStyle;window.setReduceMotion=setReduceMotion;
 window.openFile=name=>files.open(cwd,{path:cwd+'/'+name});
 window.mediaUrl=name=>buildMediaUrl(cwd+'/'+name);
 // Page JS must not be able to read local bytes through the scheme: the response
@@ -169,7 +171,9 @@ app.whenReady().then(async()=>{
   ipcMain.handle('files:gitDiff',()=>({gitRoot:null,patch:'',binary:false}));
   ipcMain.handle('files:saveCopy',()=>({status:'cancelled'}));ipcMain.handle('shell:showInFolder',()=>{});ipcMain.handle('shell:openPath',()=>'');
   setInterval(()=>console.log('[fd]',fs.readdirSync('/dev/fd').length,'[media]',mediaRequests),400);
-  const w=new BrowserWindow({show:false,width:1100,height:800,webPreferences:{preload:${JSON.stringify(join(repo, 'out/preload/index.mjs'))},contextIsolation:true,nodeIntegration:false,sandbox:false,backgroundThrottling:false}});
+  // Keep HTML Fullscreen real without starting a macOS Space transition for
+  // this hidden test window; its native transition cannot complete offscreen.
+  const w=new BrowserWindow({show:false,width:1100,height:800,webPreferences:{preload:${JSON.stringify(join(repo, 'out/preload/index.mjs'))},contextIsolation:true,nodeIntegration:false,sandbox:false,backgroundThrottling:false,disableHtmlFullscreenWindowResize:true}});
   w.loadURL(${JSON.stringify(`http://127.0.0.1:${server.httpServer.address().port}${fixturePath}`)});});
 app.on('window-all-closed',()=>app.quit());`, resolveDir: repo, loader: 'ts' }, bundle: true, platform: 'node', format: 'cjs', packages: 'external', outfile: main })
 
@@ -195,11 +199,23 @@ app.on('window-all-closed',()=>app.quit());`, resolveDir: repo, loader: 'ts' }, 
   const exceptions = []
   ws.addEventListener('message', (event) => { const m = JSON.parse(event.data); if (m.id) { pendingMessages.get(m.id)?.(m); pendingMessages.delete(m.id) } else if (m.method === 'Runtime.exceptionThrown') exceptions.push(m.params.exceptionDetails) })
   const send = (method, params = {}) => new Promise((resolve, reject) => { const id = ++seq; pendingMessages.set(id, (m) => m.error ? reject(m.error) : resolve(m.result)); ws.send(JSON.stringify({ id, method, params })) })
-  const evaluate = async (expression) => { const r = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true }); if (r.exceptionDetails) throw new Error(JSON.stringify(r.exceptionDetails)); return r.result?.value }
+  const evaluate = async (expression, userGesture = false) => { const r = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true, userGesture }); if (r.exceptionDetails) throw new Error(JSON.stringify(r.exceptionDetails)); return r.result?.value }
   await send('Runtime.enable')
-  const waitFor = async (expression, label) => { const end = Date.now() + 20000; while (Date.now() < end) { if (await evaluate(`Boolean(${expression})`)) return; await pause(50) } throw new Error('Timeout: ' + label + ' :: ' + await evaluate('document.body.innerText') + ' ' + JSON.stringify(exceptions)) }
+  const waitFor = async (expression, label) => { const end = Date.now() + 20000; while (Date.now() < end) { if (await evaluate(`Boolean(${expression})`)) return; await pause(50) } await shot('failure'); throw new Error('Timeout: ' + label + ' :: ' + await evaluate(`JSON.stringify({text:document.body.innerText,media:Array.from(document.querySelectorAll('audio,video')).map(m=>({time:m.currentTime,volume:m.volume,paused:m.paused,error:m.error?.message})),controls:Array.from(document.querySelectorAll('[data-media-controls] [role="slider"]')).map(s=>{const r=s.parentElement.getBoundingClientRect();return {label:s.getAttribute('aria-label'),value:s.getAttribute('aria-valuenow'),rect:{x:r.x,y:r.y,w:r.width,h:r.height},hit:document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)?.outerHTML.slice(0,300)}})})`) + ' ' + JSON.stringify(exceptions)) }
   const open = async (name) => { await evaluate(`window.openFile(${JSON.stringify(name)})`); await pause(150) }
-  const click = async (selector) => { await evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`); await pause(120) }
+  const click = async (selector) => { await evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`, true); await pause(120) }
+  const sliderKey = async (label, key, code) => {
+    await evaluate(`document.querySelector('[data-media-controls] [role="slider"][aria-label=${JSON.stringify(label)}]').focus()`)
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key, code: key, windowsVirtualKeyCode: code })
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key, code: key, windowsVirtualKeyCode: code })
+  }
+  const dragSlider = async (label, from, to) => {
+    const rect = await evaluate(`(()=>{const r=document.querySelector('[data-media-controls] [role="slider"][aria-label=${JSON.stringify(label)}]').parentElement.getBoundingClientRect();return {x:r.x,y:r.y,w:r.width,h:r.height}})()`)
+    const at = ratio => ({ x: rect.x + rect.w * ratio, y: rect.y + rect.h / 2 })
+    await send('Input.dispatchMouseEvent', { type: 'mousePressed', button: 'left', clickCount: 1, ...at(from) })
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', button: 'left', buttons: 1, ...at(to) })
+    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', button: 'left', clickCount: 1, ...at(to) })
+  }
   const shot = async (name) => { const dir = process.env.PI_MEDIA_SCREENSHOT_DIR; if (!dir) return; await mkdir(dir, { recursive: true }); const image = await send('Page.captureScreenshot', { format: 'png' }); await writeFile(join(dir, name + '.png'), Buffer.from(image.data, 'base64')) }
 
   await waitFor('window.__ready', 'fixture ready')
@@ -288,8 +304,7 @@ app.on('window-all-closed',()=>app.quit());`, resolveDir: repo, loader: 'ts' }, 
   await evaluate(originalCorners ? `document.documentElement.dataset.corners=${JSON.stringify(originalCorners)}` : `delete document.documentElement.dataset.corners`)
   console.log('PASS: image decodes over the scheme, mounts no view tabs, zoom in/reset/shrink-to-50% drive the transform, corners follow the interface style')
 
-  // A fitted large image can pan on both axes. A diagonal swipe keeps its
-  // initial axis and remains a pan even when momentum becomes notch-sized.
+  // Diagonal swipes pan both axes, including accelerated trackpad momentum.
   await open('large.png')
   await waitFor(`document.querySelector('[data-file-media=image] img')?.naturalWidth===1200`, 'large image decoded for gesture checks')
   await click('[data-file-media=image] [aria-label="Zoom in"]')
@@ -303,21 +318,21 @@ app.on('window-all-closed',()=>app.quit());`, resolveDir: repo, loader: 'ts' }, 
   const horizontalSwipe=await imageView()
   assert.equal(horizontalSwipe.percent,beforeSwipe.percent,'horizontal image swipe never turns into zoom during momentum')
   assert(horizontalSwipe.x<beforeSwipe.x-90,'horizontal image swipe pans')
-  assert(Math.abs(horizontalSwipe.y-beforeSwipe.y)<0.1,'image swipe ignores its vertical noise')
+  assert(horizontalSwipe.y<beforeSwipe.y-90,'the same image swipe also pans vertically')
   await imageWheel([{deltaX:6,deltaY:8},{deltaX:9,deltaY:6},{deltaX:100,deltaY:90}])
   await pause(600)
   const verticalSwipe=await imageView()
   assert.equal(verticalSwipe.percent,horizontalSwipe.percent,'vertical swipe retains pan mode while accelerating')
   assert(verticalSwipe.y<horizontalSwipe.y-90,'vertical image swipe pans')
-  assert(Math.abs(verticalSwipe.x-horizontalSwipe.x)<0.1,'image swipe ignores its horizontal noise')
+  assert(verticalSwipe.x<horizontalSwipe.x-90,'the same image swipe also pans horizontally')
   await imageWheel([{deltaX:100,deltaY:-10,ctrlKey:true}])
   await pause(600)
   const pinched=await imageView()
   assert(pinched.scale>verticalSwipe.scale,'pinch overrides scrolling and zooms the image')
-  await imageWheel([{deltaX:2,deltaY:-120}])
+  await imageWheel([{deltaX:0,deltaY:-120}])
   await pause(600)
   assert((await imageView()).scale>pinched.scale,'a vertical notched mouse wheel still zooms')
-  console.log('PASS: image diagonal direction lock, momentum pan-mode lock, pinch and notched wheel zoom')
+  console.log('PASS: image free diagonal panning, accelerated momentum, pinch and notched wheel zoom')
 
   // 3. Another decodable image format, and a recognized format with no decoder.
   await open('vector.svg')
@@ -344,23 +359,112 @@ app.on('window-all-closed',()=>app.quit());`, resolveDir: repo, loader: 'ts' }, 
   await open('tone.wav')
   await waitFor(`document.querySelector('[data-file-media=audio] audio')?.duration > 0`, 'wav metadata')
   const audio = await evaluate(`(()=>{const a=document.querySelector('[data-file-media=audio] audio');return {duration:a.duration,seekable:a.seekable.length?a.seekable.end(0):null,controls:a.controls}})()`)
-  assert.ok(Math.abs(audio.duration - 1) < 0.05, 'wav duration: ' + audio.duration)
+  assert.ok(Math.abs(audio.duration - 6) < 0.05, 'wav duration: ' + audio.duration)
   assert.ok(audio.seekable !== null && Math.abs(audio.seekable - audio.duration) < 0.05, 'wav is fully seekable')
-  assert.equal(audio.controls, true, 'native controls are mounted')
+  assert.equal(audio.controls, false, 'the native control bar is replaced')
+  const audioElement = 'document.querySelector("[data-file-media=audio] audio")'
+  await waitFor(`document.querySelector('[data-media-controls] [aria-label="Play"]')?.disabled === false`, 'audio play control ready')
+  await sliderKey('Playback position', 'ArrowRight', 39)
+  await waitFor(`${audioElement}.currentTime > 0.05`, 'keyboard seek changes the media time')
+  await dragSlider('Playback position', 0.2, 0.65)
+  await waitFor(`Math.abs(${audioElement}.currentTime - 3.9) < 0.15`, 'pointer dragging seeks the audio')
+  assert.equal(await evaluate(`${audioElement}.paused`), true, 'seeking a paused player leaves it paused')
+  await dragSlider('Volume', 0.9, 0.5)
+  await waitFor(`Math.abs(${audioElement}.volume - 0.5) < 0.02`, 'pointer volume control changes the media volume')
+  await click('[data-media-controls] [aria-label="Mute"]')
+  assert.equal(await evaluate(`${audioElement}.muted`), true, 'mute controls the media element')
+  await click('[data-media-controls] [aria-label="Unmute"]')
+  assert.equal(await evaluate(`${audioElement}.volume`), 0.5, 'unmute retains the previous volume')
+  await sliderKey('Volume', 'Home', 36)
+  await waitFor(`${audioElement}.volume === 0 && ${audioElement}.muted`, 'zero volume is muted')
+  await click('[data-media-controls] [aria-label="Unmute"]')
+  assert.equal(await evaluate(`${audioElement}.volume`), 0.5, 'unmute from zero restores the last audible volume')
+  await click('[data-media-controls] [aria-label="Playback speed"]')
+  await evaluate(`Array.from(document.querySelectorAll('[role="listbox"] [role="option"]')).find(n=>n.textContent.trim()==='1.5×').click()`, true)
+  await waitFor(`${audioElement}.playbackRate === 1.5`, 'speed picker changes the playback rate')
+
+  // An admission failure from play() remains recoverable, with no false
+  // playing indicator or unhandled rejection.
+  await evaluate(`window.realPlay=${audioElement}.play;${audioElement}.play=()=>Promise.reject(new DOMException('Denied','NotAllowedError'))`)
+  await click('[data-media-controls] [aria-label="Play"]')
+  await waitFor(`document.querySelector('[data-media-controls] [role="alert"]')?.textContent === window.en['files.media.playFailed']`, 'play rejection is visible')
+  assert.equal(await evaluate(`${audioElement}.paused`), true, 'a rejected play does not show a playing state')
+  await evaluate(`${audioElement}.play=window.realPlay`)
+  await sliderKey('Playback position', 'Home', 36)
+  await click('[data-media-controls] [aria-label="Play"]')
+  await waitFor(`${audioElement}.currentTime > 0.1 && !${audioElement}.paused`, 'play button starts actual audio playback')
+  await click('[data-media-controls] [aria-label="Pause"]')
+  assert.equal(await evaluate(`${audioElement}.paused`), true, 'pause stops playback')
+  assert.equal(await evaluate(`document.querySelector('[data-media-controls] [role="alert"]')`), null, 'successful retry clears the play failure')
+  await evaluate(`${audioElement}.currentTime=5.9`)
+  await click('[data-media-controls] [aria-label="Play"]')
+  await waitFor(`${audioElement}.ended && document.querySelector('[data-media-controls] [aria-label="Play"]')`, 'completion returns to the play control')
+  await click('[data-media-controls] [aria-label="Play"]')
+  await waitFor(`${audioElement}.currentTime < 2 && !${audioElement}.paused`, 'play after the end restarts from zero')
+  await click('[data-media-controls] [aria-label="Pause"]')
+
+  // Query the pane width through CSS while retaining the exact media element.
+  await evaluate(`window.retainedMedia=${audioElement};window.retainedTime=${audioElement}.currentTime;window.originalPaneStyle=document.querySelector('[data-files-pane]').getAttribute('style');document.querySelector('[aria-label="Hide file tree"]')?.click()`)
+  const controlsFit = async () => evaluate(`(()=>{const c=document.querySelector('[data-media-controls]'),r=c.getBoundingClientRect();return Array.from(c.querySelectorAll('button,[role="slider"]')).filter(n=>!n.closest('[aria-hidden="true"]')).every(n=>{const b=n.getBoundingClientRect();return b.width>0&&b.x>=r.x-1&&b.right<=r.right+1})})()`)
+  for (const width of [220, 320, 720]) {
+    await evaluate(`document.querySelector('[data-files-pane]').style.width='${width}px';document.querySelector('[data-files-pane]').style.height='620px'`)
+    await pause(150)
+    assert.ok(await controlsFit(), `every playback control fits a ${width}px pane`)
+    assert.equal(await evaluate(`${audioElement}===window.retainedMedia`), true, 'resize retains the audio element')
+    assert.ok(await evaluate(`Math.abs(${audioElement}.currentTime-window.retainedTime)<0.01`), 'resize retains the paused position')
+    await shot('audio-' + width)
+  }
+  for (const locale of ['zh-CN', 'zh-TW', 'en']) {
+    const dictionary = locale === 'en' ? 'en' : locale === 'zh-CN' ? 'zh' : 'tw'
+    await evaluate(`window.setLocale(${JSON.stringify(locale)})`)
+    await waitFor(`document.querySelector('[data-media-controls] [role="slider"]').getAttribute('aria-label')===window.${dictionary}['files.media.seek']`, 'live localized controls: ' + locale)
+    assert.equal(await evaluate(`${audioElement}===window.retainedMedia`), true, 'locale changes retain the media element')
+    await shot('audio-' + locale)
+  }
+  for (const style of ['square', 'squircle']) {
+    await evaluate(`window.setUiStyle(${JSON.stringify(style)});document.documentElement.classList.toggle('dark',${style === 'squircle'});window.setReduceMotion(true)`)
+    await pause(150)
+    assert.ok(await controlsFit(), 'controls remain reachable in ' + style)
+    await shot('audio-' + style)
+  }
+  await evaluate(`window.setUiStyle('square');window.setReduceMotion(false);document.documentElement.classList.remove('dark');const pane=document.querySelector('[data-files-pane]');if(window.originalPaneStyle===null)pane.removeAttribute('style');else pane.setAttribute('style',window.originalPaneStyle)`)
   await shot('audio')
-  console.log('PASS: audio metadata and a seekable range over the scheme')
+  console.log('PASS: audio metadata, real play/pause/replay, pointer and keyboard seeking/volume, mute restoration, speed, recoverable play rejection, responsive controls and live locales/themes')
+
+  await open('broken.wav')
+  await waitFor(`document.querySelector('[data-file-preview] [role="status"]')?.textContent.includes(window.en['files.media.failed'])`, 'decode failure notice')
+  assert.equal(await evaluate(`document.querySelector('[data-media-controls]')`), null, 'decode failure removes unusable controls')
 
   if (hasFfmpeg) {
     await open('clip.mp4')
     await waitFor(`document.querySelector('[data-file-media=video] video')?.readyState >= 1`, 'mp4 metadata')
-    const video = await evaluate(`(()=>{const v=document.querySelector('[data-file-media=video] video');return {duration:v.duration,seekable:v.seekable.length?v.seekable.end(0):null,w:v.videoWidth,h:v.videoHeight}})()`)
+    const video = await evaluate(`(()=>{const v=document.querySelector('[data-file-media=video] video');return {duration:v.duration,seekable:v.seekable.length?v.seekable.end(0):null,w:v.videoWidth,h:v.videoHeight,controls:v.controls}})()`)
     assert.ok(Math.abs(video.duration - 6) < 0.5, 'mp4 duration: ' + video.duration)
     assert.ok(video.seekable !== null && Math.abs(video.seekable - video.duration) < 0.5, 'mp4 is fully seekable, not a zero-length range')
     assert.deepEqual([video.w, video.h], [320, 180], 'mp4 metadata decodes')
+    assert.equal(video.controls, false, 'video uses the shared beUI control bar')
     const seeked = await evaluate(`(async()=>{const v=document.querySelector('[data-file-media=video] video');v.currentTime=4;await new Promise(r=>{v.onseeked=r;setTimeout(r,8000)});await new Promise(r=>setTimeout(r,500));return {time:v.currentTime,frames:v.webkitDecodedFrameCount,readyState:v.readyState}})()`)
     assert.ok(Math.abs(seeked.time - 4) < 0.5, 'the seek lands where it was asked instead of snapping to 0: ' + seeked.time)
     assert.ok(seeked.readyState >= 2, 'the sought frame is available')
     assert.ok(seeked.frames > 0, 'the decoder produced frames: ' + seeked.frames)
+    await sliderKey('Playback position', 'Home', 36)
+    await click('[data-media-controls] [aria-label="Mute"]')
+    await click('[data-media-controls] [aria-label="Play"]')
+    await waitFor(`document.querySelector('video').currentTime>0.1&&!document.querySelector('video').paused`, 'beUI video play control starts playback')
+    await click('[data-media-controls] [aria-label="Pause"]')
+    await evaluate(`window.retainedVideo=document.querySelector('video');window.videoPosition=window.retainedVideo.currentTime`)
+    await click('[data-media-controls] [aria-label="Full screen"]')
+    await waitFor(`document.fullscreenElement?.classList.contains('file-media-player')`, 'full screen includes the controls')
+    await click('[data-media-controls] [aria-label="Playback speed"]')
+    assert.equal(await evaluate(`document.fullscreenElement.contains(document.querySelector('.file-media-speed [role="listbox"]'))`), true, 'full-screen speed options remain in the visible surface')
+    await evaluate(`Array.from(document.fullscreenElement.querySelectorAll('[role="option"]')).find(n=>n.textContent.trim()==='2×').click()`, true)
+    await waitFor(`document.querySelector('video').playbackRate===2`, 'full-screen speed picker works')
+    await shot('video-fullscreen')
+    await click('[data-media-controls] [aria-label="Exit full screen"]')
+    await waitFor(`document.fullscreenElement===null`, 'exit full screen')
+    assert.equal(await evaluate(`document.querySelector('video')===window.retainedVideo`), true, 'full-screen transitions retain the video element')
+    assert.ok(await evaluate(`Math.abs(document.querySelector('video').currentTime-window.videoPosition)<0.01`), 'full-screen transitions retain the paused position')
+    assert.ok(await controlsFit(), 'video controls fit after exiting full screen')
     await shot('video')
     console.log('PASS: video is seekable and decodes over the scheme (seek to 4s, ' + seeked.frames + ' frames)')
   } else {
@@ -371,9 +475,9 @@ app.on('window-all-closed',()=>app.quit());`, resolveDir: repo, loader: 'ts' }, 
   await waitFor(`document.querySelector('[data-file-media=image] img')?.complete`, 'large png decoded')
   assert.deepEqual(await evaluate(`(()=>{const img=document.querySelector('[data-file-media=image] img');return [img.naturalWidth,img.naturalHeight]})()`), [1200, 1200], 'a multi-megabyte image streams through the scheme')
   // 6. Locale parity, and descriptors after an abort storm.
-  const locale = await evaluate(`(()=>{const keys=Object.keys(window.en).filter(k=>k.startsWith('files.media.'));return {keys,missing:keys.filter(k=>typeof window.zh[k]!=='string'),translated:keys.filter(k=>window.zh[k]!==window.en[k]).length}})()`)
-  assert.deepEqual(locale.missing, [], 'every media string exists in zh-CN')
-  assert.equal(locale.translated, 3, 'media strings are translated, not copied: ' + locale.keys.join(', '))
+  const locale = await evaluate(`(()=>{const keys=Object.keys(window.en).filter(k=>k.startsWith('files.media.'));return {keys,missing:keys.filter(k=>typeof window.zh[k]!=='string'||typeof window.tw[k]!=='string'),translated:keys.filter(k=>window.zh[k]!==window.en[k]&&window.tw[k]!==window.en[k]).length}})()`)
+  assert.deepEqual(locale.missing, [], 'every media string exists in both Chinese dictionaries')
+  assert.equal(locale.translated, locale.keys.length, 'media strings are translated, not copied: ' + locale.keys.join(', '))
   assert.ok(samples.length > 2, 'the main process reports its descriptor count')
   const before = samples[samples.length - 1]
   const storm = await evaluate('window.__storm(300)')

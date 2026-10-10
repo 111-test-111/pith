@@ -20,7 +20,13 @@ try {
   // Only the former enables micromark's token assertions. Check BOTH with
   // the real shared plugin stack, including every possible streaming prefix.
   const commandFirst = String.raw`行内 \(\frac{\partial u}{\partial t}=\alpha\nabla^2 u\)，求和 \(\sum_{k=1}^{n}k^2\)。`
-  const tokenizerCases = [commandFirst, String.raw`\(\)`, String.raw`\[\]`,
+  const quantumMessage = String.raw`1. **Part 1** distributes the product into the four tensor-operator terms, proves the polarisation identity $\ketbra{x}{y} = \frac14\sum_k \ii^k \proj{x+\ii^k y}$ by expanding and using $\sum_k \ii^k = 0$ and $\sum_k \ii^{2k} = 0$ (the hint), applies it to both cross terms, and boxes the full decomposition in the compact $\frac18\sum_{k,l}\cos((k+l)\pi/2)\,P_k\otimes Q_l$ form.`
+  const quantumSources = [
+    String.raw`\ketbra{x}{y} = \frac14\sum_k \ii^k \proj{x+\ii^k y}`,
+    String.raw`\sum_k \ii^k = 0`, String.raw`\sum_k \ii^{2k} = 0`,
+    String.raw`\frac18\sum_{k,l}\cos((k+l)\pi/2)\,P_k\otimes Q_l`
+  ]
+  const tokenizerCases = [commandFirst, quantumMessage, String.raw`\(\)`, String.raw`\[\]`,
     String.raw`\[\alpha + \frac12\]`, String.raw`$\alpha$`, String.raw`\(\\x\)`,
     String.raw`\(x\q+\frac12\)`, String.raw`\(\]x\)`, String.raw`\[\)x\]`,
     '$5 and $x$ and $10', '$x$5', '$x $', '$\\$10$',
@@ -67,12 +73,13 @@ import React from 'react';
 import {createRoot} from 'react-dom/client';
 import {flushSync} from 'react-dom';
 import {Markdown} from '@/lib/markdown';
+import {FileMarkdown} from '@/components/app/FileMarkdown';
 import {REMARK_PLUGINS} from '@/lib/markdown-plugins';
 import {FileNotebook} from '@/components/app/FileNotebook';
 import {ImagePreviewProvider} from '@/components/app/ImagePreview';
 import {splitMarkdownBlocks} from '@/lib/markdown-blocks';
 import {normalizeQuotedMath} from '@/lib/markdown-quoted-math';
-import {I18nProvider} from '@/i18n';
+import {I18nProvider,useI18n} from '@/i18n';
 import './fixture.css';
 window.caughtErrors = [];
 const root = createRoot(document.getElementById('root'), {onCaughtError: error => window.caughtErrors.push(error.message)});
@@ -82,9 +89,14 @@ REMARK_PLUGINS.push(() => (_tree, file) => {
 window.pi = {openExternal: async()=>{}, openPath: async()=>{}};
 window.splitMarkdownBlocks = splitMarkdownBlocks;
 window.normalizeQuotedMath = normalizeQuotedMath;
+function LocaleBridge({children}) { window.setFixtureLocale = useI18n().setLocale; return children; }
+const localized = child => React.createElement(I18nProvider,null,React.createElement(LocaleBridge,null,child));
 window.renderFixture = (text, streaming = false, width = 640) => flushSync(() => root.render(
-  React.createElement(I18nProvider,null,React.createElement('main',{id:'fixture',style:{width,padding:24}},
+  localized(React.createElement('main',{id:'fixture',style:{width,padding:24}},
     React.createElement(Markdown,{streaming},text)))));
+window.renderFileFixture = (text, copies = 1) => flushSync(() => root.render(localized(
+  React.createElement('main',{id:'fixture',style:{display:'flex',gap:24}},
+    Array.from({length:copies},(_,index)=>React.createElement('div',{key:index,'data-file-markdown':true,style:{width:400,height:520,padding:24,overflow:'auto'}},React.createElement(FileMarkdown,{text})))))));
 window.renderNotebook = (text, width = 540) => flushSync(() => root.render(
   React.createElement(I18nProvider,null,React.createElement(ImagePreviewProvider,null,React.createElement('main',{id:'fixture',style:{width,height:850,display:'flex',flexDirection:'column'}},
     React.createElement(FileNotebook,{text,truncated:false,tab:{path:'/fixture/example.ipynb',cwd:'/fixture'},store:{open:()=>{}}}))))));
@@ -183,6 +195,204 @@ $$
   }
   console.log('PASS: all delimiters, CJK, tables/lists/quotes, native MathML, light/dark, packaged fonts')
 
+  // This exact paragraph previously rendered only its fourth formula. The
+  // first three depend on common document macros absent from the math engine.
+  await render(quantumMessage)
+  await count(4)
+  assert.equal(await page.locator('[data-math-fallback]').count(), 0)
+  assert.deepEqual(await page.locator('annotation').allTextContents(), quantumSources)
+  const quantumHTML = await page.locator('math').evaluateAll(nodes => nodes.map(node => node.outerHTML))
+  await page.evaluate(source => {
+    for (let i = 0; i <= source.length; i++) window.renderFixture(source.slice(0, i), true)
+  }, quantumMessage)
+  await count(4)
+  assert.deepEqual(await page.locator('math').evaluateAll(nodes => nodes.map(node => node.outerHTML)), quantumHTML, 'all four reported quantum formulas agree after streaming')
+  assert.deepEqual(await page.evaluate(() => window.caughtErrors), [], 'quantum macros do not introduce transient streaming failures')
+  await page.reload()
+  await page.waitForFunction(() => !!window.renderFixture)
+  await render(quantumMessage)
+  await count(4)
+  assert.deepEqual(await page.locator('math').evaluateAll(nodes => nodes.map(node => node.outerHTML)), quantumHTML, 'all four quantum formulas render after a cold reopen')
+  await page.evaluate(text => window.renderFileFixture(text), quantumMessage)
+  await count(4)
+  assert.equal(await page.locator('[data-math-fallback]').count(), 0, 'file Markdown shares the quantum defaults')
+  await page.evaluate(source => window.renderNotebook(JSON.stringify({
+    nbformat: 4, nbformat_minor: 5, metadata: {},
+    cells: [{cell_type: 'markdown', metadata: {}, source: [source]}]
+  })), quantumMessage)
+  await count(4)
+  assert.equal(await page.locator('[data-math-fallback]').count(), 0, 'notebook Markdown shares the quantum defaults')
+  if (process.env.PI_MATH_SCREENSHOT_DIR) {
+    await render(quantumMessage, false, 1040)
+    await count(4)
+    for (const dark of [false, true]) {
+      await page.evaluate(dark => document.documentElement.classList.toggle('dark', dark), dark)
+      await page.locator('#fixture').screenshot({path:join(process.env.PI_MATH_SCREENSHOT_DIR, `quantum-${dark?'dark':'light'}.png`)})
+    }
+    await page.evaluate(() => document.documentElement.classList.remove('dark'))
+  }
+  console.log('PASS: exact reported quantum paragraph renders all four formulas during streaming, cold reopen, file and notebook previews')
+
+  // The reported historical message uses mathtools' compact fenced matrix,
+  // not a code span. Preserve the original annotation and every matrix cell.
+  const reportedMatrix = String.raw`\frac12\begin{psmallmatrix} p&0&p&0\\ 0&0&0&0\\ p&0&1&-(1-p)\\ 0&0&-(1-p)&1-p \end{psmallmatrix}`
+  const reportedMessage = `已改为正确矩阵 $${reportedMatrix}$ 并同步修正迹验证行。`
+  await render(reportedMessage)
+  await count(1)
+  assert.equal(await page.locator('[data-math-fallback]').count(), 0)
+  assert.equal(await page.locator('mtable > mtr').count(), 4)
+  assert.equal(await page.locator('mtable > mtr > mtd').count(), 16)
+  assert.equal(await page.locator('annotation').textContent(), reportedMatrix, 'compatibility retains original TeX for copying/accessibility')
+  const reportedHTML = await page.locator('math').evaluate(node => node.outerHTML)
+  await page.evaluate(source => {
+    for (let i = 0; i <= source.length; i++) window.renderFixture(source.slice(0, i), true)
+  }, reportedMessage)
+  await count(1)
+  assert.equal(await page.locator('math').evaluate(node => node.outerHTML), reportedHTML, 'streamed historical matrix matches the completed formula')
+  await page.reload()
+  await page.waitForFunction(() => !!window.renderFixture)
+  await render(reportedMessage)
+  await count(1)
+  assert.equal(await page.locator('math').evaluate(node => node.outerHTML), reportedHTML, 'a cold reopen renders the historical matrix')
+  await page.evaluate(text => window.renderFileFixture(text), reportedMessage)
+  await count(1)
+  assert.equal(await page.locator('[data-math-fallback]').count(), 0, 'file Markdown shares the compatibility layer')
+  await page.evaluate(source => window.renderNotebook(JSON.stringify({
+    nbformat: 4, nbformat_minor: 5, metadata: {},
+    cells: [{cell_type: 'markdown', metadata: {}, source: [source]}]
+  })), reportedMessage)
+  await count(1)
+  assert.equal(await page.locator('[data-math-fallback]').count(), 0, 'notebook Markdown shares the compatibility layer')
+
+  const fences = [
+    ['p', '(', ')'], ['b', '[', ']'], ['B', '{', '}'],
+    ['v', '|', '|'], ['V', '‖', '‖']
+  ]
+  for (const [prefix, left, right] of fences) {
+    for (const align of [null, 'c', 'l', 'r']) {
+      const environment = `${prefix}smallmatrix${align ? '*' : ''}`
+      const source = `\\begin{${environment}}${align ? `[${align}]` : ''}1&22\\\\[2pt]333&4\\end{${environment}}`
+      await render(`$${source}$`)
+      await count(1)
+      assert.equal(await page.locator('[data-math-fallback]').count(), 0, environment)
+      assert.equal(await page.locator('mtable > mtr > mtd').count(), 4)
+      assert.deepEqual(await page.locator('math mo[fence=true][stretchy=true]').evaluateAll(nodes => nodes.map(node => node.textContent)), [left, right])
+      assert.equal(await page.locator('annotation').textContent(), source)
+      if (align === 'l' || align === 'r') {
+        const expected = align === 'l' ? 'left' : 'right'
+        assert.ok((await page.locator('mtable > mtr > mtd').evaluateAll(nodes => nodes.map(node => getComputedStyle(node).textAlign))).every(value => value.includes(expected)), 'starred compact matrices align every column')
+      }
+    }
+  }
+  await render(String.raw`$\begin{smallmatrix*}[r]1&22\\333&4\end{smallmatrix*}$ $\begin{pmatrix}1&22\\333&4\end{pmatrix}$`)
+  await count(2)
+  const matrixSizes = await page.locator('math').evaluateAll(nodes => nodes.map(node => ({
+    height: node.querySelector('mtable').getBoundingClientRect().height,
+    font: parseFloat(getComputedStyle(node.querySelector('mn')).fontSize)
+  })))
+  assert.ok(matrixSizes[0].font < matrixSizes[1].font && matrixSizes[0].height < matrixSizes[1].height, 'aligned smallmatrix retains compact glyphs and rows')
+  const nestedMatrix = String.raw`\begin{bsmallmatrix*}[r]\begin{psmallmatrix}1&2\\3&4\end{psmallmatrix}&5\\6&7\end{bsmallmatrix*}`
+  await render(`$${nestedMatrix}$`)
+  await count(1)
+  assert.equal(await page.locator('mtable').count(), 2)
+  assert.equal(await page.locator('mtable > mtr > mtd').count(), 8, 'nested matrices retain their own row/cell separators')
+  const commentedMatrix = '\\begin{bsmallmatrix*}[r]1&2% \\end{bsmallmatrix*}\n\\\\3&\\text{a\\&b}\\end{bsmallmatrix*}'
+  await render(`$$\n${commentedMatrix}\n$$`)
+  await count(1)
+  assert.equal(await page.locator('mtable > mtr > mtd').count(), 4, 'comments cannot close an environment or create cells')
+  assert.equal(await page.locator('mtext').textContent(), 'a&b', 'braced text retains escaped ampersands')
+  assert.equal(await page.locator('annotation').textContent(), commentedMatrix)
+
+  for (const environment of ['cases*', 'dcases*', 'rcases*', 'drcases*']) {
+    const source = `\\begin{${environment}}\\frac12&if $x>0$\\\\[2pt]0&otherwise\\end{${environment}}`
+    await render(`$$\n${source}\n$$`)
+    await count(1)
+    assert.equal(await page.locator('[data-math-fallback]').count(), 0)
+    const cells = page.locator('mtable > mtr > mtd')
+    assert.equal(await cells.count(), 4)
+    assert.ok((await cells.nth(1).textContent()).replace(/\u00a0/g, ' ').startsWith('if '), 'starred cases retain prose spacing')
+    assert.equal(await cells.nth(1).locator('mi').textContent(), 'x', 'text columns can contain inline math')
+    assert.equal(await cells.nth(3).locator('mtext').textContent(), 'otherwise', 'starred cases use a text condition column')
+    assert.equal(await page.locator('annotation').textContent(), source)
+  }
+  for (const environment of ['eqnarray', 'eqnarray*']) {
+    const source = `\\begin{${environment}}a&=&b+c\\\\d&\\le&e\\end{${environment}}`
+    await render(`$$\n${source}\n$$`)
+    await count(1)
+    assert.equal(await page.locator('mtable > mtr').count(), 2)
+    assert.equal(await page.locator('[data-math-fallback]').count(), 0)
+    assert.equal(await page.locator('annotation').textContent(), source)
+    assert.ok((await page.locator('math > semantics > :first-child').textContent()).includes('a=b+c'))
+  }
+  if (process.env.PI_MATH_SCREENSHOT_DIR) {
+    const family = fences.map(([prefix]) => `$\\begin{${prefix}smallmatrix}1&2\\\\3&4\\end{${prefix}smallmatrix}$`).join('　')
+    const aligned = ['l','c','r'].map(align => `$\\begin{psmallmatrix*}[${align}]1&22\\\\333&4\\end{psmallmatrix*}$`).join('　')
+    await render(`# Math compatibility\n\n${reportedMessage}\n\nCompact fences: ${family}\n\nLeft / center / right: ${aligned}\n\n` + String.raw`$$
+f(x)=\begin{dcases*}\frac12&if $x>0$\\0&otherwise\end{dcases*}
+$$
+
+$\mathds{1}+\mathbbm{R},\quad\diag A,\quad\Cov(X,Y),\quad\esssup_x f(x)$
+
+$$
+\begin{eqnarray*}a&=&b+c\\d&\le&e\end{eqnarray*}
+$$`, false, 820)
+    await count(12)
+    for (const dark of [false, true]) {
+      await page.evaluate(dark => document.documentElement.classList.toggle('dark', dark), dark)
+      await page.locator('#fixture').screenshot({path:join(process.env.PI_MATH_SCREENSHOT_DIR, `compatibility-${dark?'dark':'light'}.png`)})
+    }
+    await page.evaluate(() => document.documentElement.classList.remove('dark'))
+  }
+  console.log('PASS: historical matrix streaming/reopen/file/notebook; compact fences and l/c/r columns, nesting, starred text cases and legacy equation arrays')
+
+  const mathBody = () => page.locator('math').evaluate(node => {
+    const copy = node.cloneNode(true)
+    copy.querySelector('annotation')?.remove()
+    return copy.outerHTML
+  })
+  const aliases = [
+    [String.raw`\mathds{1}+\mathbbm{R}`, String.raw`\mathbb{1}+\mathbb{R}`],
+    [String.raw`\ii^{2k}`, String.raw`i^{2k}`],
+    [String.raw`\proj{x+\ii^k y}`, String.raw`\ket{x+i^k y}\!\bra{x+i^k y}`],
+    [String.raw`\newcommand{\ii}{\mathrm{i}}\ii^2`, String.raw`\mathrm{i}^2`],
+    [String.raw`\newcommand{\proj}[1]{\operatorname{proj}(#1)}\proj{x}`, String.raw`\operatorname{proj}(x)`],
+    [String.raw`\providecommand{\proj}[1]{\ketbra{#1}{#1}}\proj{x}`, String.raw`\ketbra{x}{x}`],
+    [String.raw`\mspace{2mu}x`, String.raw`\mskip{2mu}x`],
+    [String.raw`\esssup_x f+\essinf_y g`, String.raw`\operatorname*{ess\,sup}_x f+\operatorname*{ess\,inf}_y g`],
+    ...['diag','Diag','nullity','Var','Cov','cov','Corr','corr','Span','sech','csch','arccot','arcsec','arccsc','arcsinh','arccosh','arctanh','arsinh','arcosh','artanh','erfc']
+      .map(name => [`\\${name}(x)`, `\\operatorname{${name}}(x)`]),
+    [String.raw`\DeclareMathOperator{\custom}{custom}\custom(x)`, String.raw`\operatorname{custom}(x)`],
+    [String.raw`\DeclareMathOperator*{\custom}{custom}\custom_x f(x)`, String.raw`\operatorname*{custom}_x f(x)`],
+    [String.raw`\newcommand{\diag}{\text{custom}}\diag A`, String.raw`\text{custom}A`],
+    [String.raw`\providecommand{\Cov}{\text{custom}}\Cov(X,Y)`, String.raw`\text{custom}(X,Y)`],
+    [String.raw`\newcommand*{\custom}[1]{#1^2}\custom{x}`, String.raw`x^2`],
+    [String.raw`\def\env{psmallmatrix}\begin{\env}1\end{psmallmatrix}`, String.raw`\begin{psmallmatrix}1\end{psmallmatrix}`]
+  ]
+  for (const [source, equivalent] of aliases) {
+    await render(`$$\n${source}\n$$`)
+    await count(1)
+    assert.equal(await page.locator('[data-math-fallback]').count(), 0, source)
+    assert.equal(await page.locator('annotation').textContent(), source)
+    const actual = await mathBody()
+    await render(`$$\n${equivalent}\n$$`)
+    await count(1)
+    assert.equal(await mathBody(), actual, 'compatible commands retain the equivalent native MathML')
+  }
+  await render(String.raw`$\gdef\Cov{\text{custom}}\Cov(X,Y)$`)
+  await count(1)
+  assert.equal(await page.locator('mtext').textContent(), 'custom')
+  await render(String.raw`$\Cov(X,Y)$`)
+  await count(1)
+  assert.equal(await page.locator('mtext').count(), 0, 'a formula cannot redefine the next formula’s aliases')
+  assert.equal(await page.locator('mi').first().textContent(), 'Cov')
+  await render(String.raw`$\verb|\begin{psmallmatrix}|+\begin{psmallmatrix}1\end{psmallmatrix}$`)
+  await count(1)
+  assert.equal(await page.locator('mtext').textContent(), String.raw`\begin{psmallmatrix}`, 'verbatim TeX retains literal environment syntax')
+  await render('`$' + reportedMatrix + '$`\n\n```tex\n' + reportedMatrix + '\n```')
+  assert.equal(await page.locator('math').count(), 0, 'compatibility only applies to parser-produced formulas')
+  assert.equal(await page.locator('[data-inline-code]').textContent(), `$${reportedMatrix}$`)
+  console.log('PASS: double-struck font/spacing/operator aliases, declared operators, explicit macro precedence, formula isolation and literal code/verb')
+
   const syntax = `Tutor<br>Email<br />Date<BR/>Place
 
 2. Second step
@@ -222,6 +432,104 @@ $$x^2$$
   assert.equal(await page.locator('[data-notebook-markdown] br').count(), 2, 'notebook cells use the same safe breaks')
   assert.deepEqual(await page.locator('[data-notebook-markdown] ol').evaluateAll(nodes => nodes.map(node => node.start)), [1, 2], 'notebook list numbering survives intervening math')
   console.log('PASS: Markdown/notebook breaks and list starts; GFM table alignment, task markers, titles and inert HTML')
+
+  await render('X<sup>2</sup> H<sub>2</sub>O <mark>**key** <sup>3</sup></mark> <kbd>Ctrl</kbd> <ins>new</ins> <del>old</del> <u>under</u> <s>gone</s>')
+  assert.equal(await page.locator('#fixture sup').first().textContent(), '2')
+  assert.equal(await page.locator('#fixture sub').textContent(), '2')
+  assert.equal(await page.locator('#fixture mark strong').textContent(), 'key', 'safe tags retain their parsed Markdown children')
+  assert.equal(await page.locator('#fixture mark sup').textContent(), '3', 'safe inline tags nest')
+  for (const [tag, text] of [['kbd','Ctrl'],['ins','new'],['del','old'],['u','under'],['s','gone']]) {
+    assert.equal(await page.locator(`#fixture ${tag}`).textContent(), text)
+  }
+  await render('`<sup>2</sup>` &lt;sub&gt;3&lt;/sub&gt; \\<sup>escaped\\</sup> <sup onclick="window.injected=true">4</sup> <sup><sub>5</sup>6</sub>')
+  assert.equal(await page.locator('#fixture sup,#fixture sub').count(), 0, 'code, escaped tags, attributes and crossed tags remain literal')
+  assert.ok((await page.locator('#fixture').textContent()).includes('<sup onclick="window.injected=true">'))
+  await render('x <script>window.injected=true</script> <img src="x" onerror="window.injected=true"> y')
+  assert.equal(await page.locator('#fixture script,#fixture img').count(), 0, 'unsupported raw HTML remains inert')
+  assert.equal(await page.evaluate(() => window.injected), undefined)
+  const inlineStreaming = '<mark>left <sup>2</sup> **right**</mark>'
+  await page.evaluate(source => { for(let i=0;i<=source.length;i++) window.renderFixture(source.slice(0,i),true) }, inlineStreaming)
+  assert.equal(await page.locator('#fixture mark sup').textContent(), '2')
+  assert.equal(await page.locator('[data-markdown-fallback]').count(), 0, 'unfinished inline tags are safe while streaming')
+  console.log('PASS: balanced inline sup/sub/mark/kbd/ins/del/u/s; nested Markdown, code/attribute isolation and streaming')
+
+  const quotes = ['NOTE','TIP','IMPORTANT','WARNING','CAUTION'].map(kind => `> [!${kind}]\n> **Body** with $x$ and [link](https://example.com)\n>\n> - item`).join('\n\n')
+  await render(quotes)
+  await count(5)
+  assert.deepEqual(await page.locator('[data-markdown-alert]').evaluateAll(nodes=>nodes.map(node=>node.dataset.markdownAlert)), ['note','tip','important','warning','caution'])
+  assert.equal(await page.locator('[data-markdown-alert] strong').count(), 5)
+  assert.equal(await page.locator('[data-markdown-alert] li').count(), 5, 'alerts retain their block children')
+  await page.evaluate(() => window.setFixtureLocale('zh-CN'))
+  await page.waitForFunction(() => document.querySelector('[data-markdown-alert-title]')?.textContent === '提示')
+  await page.evaluate(() => window.setFixtureLocale('zh-TW'))
+  await page.waitForFunction(() => document.querySelector('[data-markdown-alert-title]')?.textContent === '提示')
+  await page.evaluate(() => window.setFixtureLocale('en'))
+  await page.waitForFunction(() => document.querySelector('[data-markdown-alert-title]')?.textContent === 'Note')
+  await render('> \\[!NOTE]\n> Literal\n\n> [!UNKNOWN]\n> Literal\n\n`[!TIP]`')
+  assert.equal(await page.locator('[data-markdown-alert]').count(), 0, 'escaped, unknown and code markers remain ordinary content')
+  console.log('PASS: five GitHub alert kinds, localized titles, Markdown/math children and literal markers')
+
+  const softQuote = '> **arXiv**: 1706.03762\n> **会议**: NIPS 2017\n> **版权说明**: Attribution.'
+  await render(softQuote)
+  assert.equal(await page.locator('#fixture blockquote br').count(), 0, 'chat keeps CommonMark soft breaks')
+  await page.evaluate(text => window.renderFileFixture(text), softQuote)
+  assert.equal(await page.locator('#fixture blockquote br').count(), 2, 'file prose keeps each source line')
+  await page.evaluate(text => window.renderFileFixture(text), 'first<br>\nsecond\nthird\n\n`code\nline`\n\n```text\nkeep\nlines\n```\n\n$$\nx\n=\ny\n$$')
+  await count(1)
+  assert.equal(await page.locator('#fixture p').first().locator('br').count(), 2, 'explicit br followed by newline does not duplicate a break')
+  assert.equal(await page.locator('#fixture [data-inline-code]').textContent(), 'code line', 'inline code follows parser whitespace rules')
+  await page.evaluate(() => {
+    window.originalClipboardWrite = navigator.clipboard.writeText
+    navigator.clipboard.writeText = async text => { window.copiedCode = text }
+  })
+  await page.getByRole('button',{name:'Copy code',exact:true}).click()
+  assert.equal(await page.evaluate(()=>window.copiedCode), 'keep\nlines', 'copying fenced code retains its original bytes')
+  await page.evaluate(() => { navigator.clipboard.writeText = window.originalClipboardWrite })
+  console.log('PASS: file-only soft breaks, explicit break deduplication and code/math isolation')
+
+  const paper = '# Paper\n\n[Methods](#methods)\n\n| Author | Unit |\n| --- | --- |\n| Ashish<sup>∗</sup>[^equal] | Brain |\n| Aidan<sup>∗ †</sup>[^affil] | Toronto |\n\n' + softQuote + '\n\n## Methods\n\nAgain[^equal].\n\n' + Array.from({length:22},(_,index)=>`Paragraph ${index}: read the paper.`).join('\n\n') + '\n\n[^equal]: Equal contribution.\n\n    Second paragraph with $q_k$.\n\n[^affil]: Work at Brain.'
+  await page.evaluate(text => window.renderFileFixture(text,2), paper)
+  await count(2)
+  assert.equal(await page.locator('[data-file-markdown]').first().locator('td sup').count(), 4, 'author marks and footnote references both render as superscripts')
+  const ids = await page.locator('#fixture [id]').evaluateAll(nodes=>nodes.map(node=>node.id))
+  assert.equal(new Set(ids).size, ids.length, 'separate Markdown regions use unique footnote IDs')
+  assert.equal(await page.locator('[data-footnote-ref]').count(), 6)
+  assert.equal(await page.locator('[data-footnote-backref]').count(), 6, 'repeated references retain every backlink')
+  const heading = page.locator('[data-footnotes] h2').first()
+  assert.equal(await heading.textContent(), 'Footnotes')
+  assert.ok(await heading.evaluate(node => node.getBoundingClientRect().width <= 1 && node.getBoundingClientRect().height <= 1), 'the accessibility label is visually hidden')
+  assert.equal(await page.locator('[data-footnotes]').first().evaluate(node=>parseFloat(getComputedStyle(node).fontSize) < parseFloat(getComputedStyle(node.closest('[data-markdown]')).fontSize)), true, 'footnotes have an annotation scale')
+  assert.equal(await page.locator('[data-footnotes]').first().locator('li').first().locator('p').count(), 2, 'multi-paragraph footnotes retain block boundaries')
+  assert.equal(await page.locator('[data-footnote-ref]').first().getAttribute('aria-describedby'), await heading.getAttribute('id'))
+  const second = page.locator('[data-file-markdown]').nth(1)
+  await second.locator('[data-footnote-ref]').first().focus()
+  await second.locator('[data-footnote-ref]').first().press('Enter')
+  assert.ok(await second.evaluate(node=>node.scrollTop > 0), 'a reference scrolls its own file pane to the footnote')
+  assert.equal(await page.locator('[data-file-markdown]').first().evaluate(node=>node.scrollTop), 0, 'the neighboring pane does not scroll')
+  const activeFootnote = await page.evaluate(()=>document.activeElement.id)
+  assert.equal(activeFootnote, await second.locator('[data-footnotes] li').first().getAttribute('id'))
+  await second.locator('[data-footnote-backref]').first().focus()
+  await second.locator('[data-footnote-backref]').first().press('Enter')
+  assert.equal(await page.evaluate(()=>document.activeElement.id), await second.locator('[data-footnote-ref]').first().getAttribute('id'), 'a backlink restores focus to its exact reference')
+  await second.locator('a[href="#methods"]').click()
+  assert.equal(await page.evaluate(()=>document.activeElement.textContent), 'Methods', 'table-of-contents heading navigation still works')
+  for (const [locale,label,back] of [['zh-CN','脚注','返回引用'],['zh-TW','註腳','返回引用'],['en','Footnotes','Back to reference']]) {
+    await page.evaluate(locale=>window.setFixtureLocale(locale),locale)
+    await page.waitForFunction(label=>document.querySelector('[data-footnotes] h2')?.textContent===label,label)
+    assert.ok((await page.locator('[data-footnote-backref]').first().getAttribute('aria-label')).startsWith(back))
+  }
+  if (process.env.PI_MATH_SCREENSHOT_DIR) {
+    for (const dark of [false,true]) {
+      await page.evaluate(dark=>document.documentElement.classList.toggle('dark',dark),dark)
+      await second.screenshot({path:join(process.env.PI_MATH_SCREENSHOT_DIR,`file-markdown-${dark?'dark':'light'}.png`)})
+    }
+  }
+  await page.evaluate(text=>window.renderFileFixture(text),paper.replaceAll('[^equal]','[^共同贡献]'))
+  await page.locator('[data-footnote-ref]').first().click()
+  assert.equal(await page.evaluate(()=>document.activeElement.id),await page.locator('[data-footnotes] li').first().getAttribute('id'),'encoded non-ASCII footnote IDs resolve without losing their literal form')
+  await page.locator('[data-footnote-backref]').first().click()
+  assert.equal(await page.evaluate(()=>document.activeElement.id),await page.locator('[data-footnote-ref]').first().getAttribute('id'),'non-ASCII footnote backlinks return to the reference')
+  console.log('PASS: file author marks, footnote scale/hidden labels/localization, unique IDs, repeated references and scoped keyboard navigation')
 
   await page.evaluate(source => {
     for (let i = 0; i <= source.length; i++) window.renderFixture(source.slice(0, i), true)
@@ -426,7 +734,9 @@ $$
   }
   console.log('PASS: narrow/wide scrollports, hidden scrollbars and edge fades')
 
-  for (const source of [String.raw`\notARealCommand{x}`, String.raw`\def\x{\x}\x`, 'x'.repeat(16_385)]) {
+  for (const source of [String.raw`\notARealCommand{x}`, String.raw`\def\x{\x}\x`, 'x'.repeat(16_385),
+    String.raw`\begin{psmallmatrix}1\end{bsmallmatrix}`, String.raw`\begin{psmallmatrix}1`,
+    String.raw`\begin{psmallmatrix*}[z]1\end{psmallmatrix*}`, String.raw`\begin{cases*}1&a&b\end{cases*}`]) {
     await render(`$${source}$`)
     await page.waitForSelector('[data-math-fallback]')
     assert.ok((await page.locator('#fixture').textContent()).includes(source))

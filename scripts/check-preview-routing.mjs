@@ -1,12 +1,12 @@
 /** The file pane's preview routing table and the families it gained: one
  * `previewKindOf` decides the reader, patch files render as diffs, notebooks,
- * subtitles and fonts get their own bodies, and no non-text kind can reach
- * `files:document`. Isolated data, no model calls, no network.
+ * JSON documents, subtitles and fonts get their own bodies, and no non-text
+ * kind can reach `files:document`. Isolated data, no model calls, no network.
  * Run after building: node scripts/check-preview-routing.mjs
  * `PI_PREVIEW_SCREENSHOT_DIR` retains screenshots. */
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { mkdtemp, mkdir, writeFile, copyFile, readFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, copyFile, readFile, symlink } from 'node:fs/promises'
 import { gzipSync } from 'node:zlib'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -98,12 +98,42 @@ function notebook() {
   }, null, 1)
 }
 
+/** The JSON fixture exercises every value kind, a folded long string, a
+ * paginated wide array and a depth-2 container — and it carries a BOM, which
+ * the pane must strip before `JSON.parse` can read the document at all. */
+const DATA_JSON = '\uFEFF' + JSON.stringify({
+  name: 'preview-fixture',
+  version: 1.5,
+  stable: true,
+  archived: false,
+  meta: null,
+  tags: ['alpha', 'beta'],
+  empty_object: {},
+  empty_array: [],
+  nested: { deep: { deeper: { value: 'bottom' } } },
+  long_string: 'x'.repeat(600),
+  wide: Array.from({ length: 150 }, (_, index) => ({ index })),
+  unicode: '结构化预览 🌳'
+}, null, 2)
+
+/** A bushy three-level document (~100k values, kept compact): even the
+ * default view exceeds the full-render limit, and "expand all" flattens past
+ * the row budget — so a huge file gets the virtual window and the cutoff row
+ * instead of an unbounded DOM. Shared references serialize per occurrence. */
+const HUGE_LEAF = Array.from({ length: 10 }, (_, n) => n)
+const HUGE_BRANCH = Object.fromEntries(Array.from({ length: 100 }, (_, m) => [`m${m}`, HUGE_LEAF]))
+const HUGE_JSON = JSON.stringify(Object.fromEntries(Array.from({ length: 100 }, (_, k) => [`k${k}`, HUGE_BRANCH])))
+
 let server, child, ws
 const docPaths = []
 try {
   await mkdir(project)
+  await symlink(join(repo, 'node_modules'), join(temporary, 'node_modules'))
   await writeFile(join(project, 'changes.patch'), PATCH)
   await writeFile(join(project, 'notes.ipynb'), notebook())
+  await writeFile(join(project, 'data.json'), DATA_JSON)
+  await writeFile(join(project, 'broken.json'), '{ "cut": ')
+  await writeFile(join(project, 'huge.json'), HUGE_JSON)
   await writeFile(join(project, 'captions.srt'), SRT)
   await writeFile(join(project, 'captions.vtt'), VTT)
   await writeFile(join(project, 'lyrics.lrc'), LRC)
@@ -124,7 +154,7 @@ try {
   //    place the pane, the document reader and the protocol agree.
   await build({ entryPoints: [join(repo, 'src/shared/preview.ts')], outfile: join(temporary, 'preview.mjs'), bundle: true, platform: 'node', format: 'esm' })
   const preview = await import(pathToFileURL(join(temporary, 'preview.mjs')).href)
-  const { previewKindOf, isMediaKind, readsAsText, hasPreviewView, isInlineOnly, textReadLimit, opensOnPreview, opensInFilePane, TEXT_READ_BYTES, NOTEBOOK_READ_BYTES } = preview
+  const { previewKindOf, isMediaKind, readsAsText, hasPreviewView, isInlineOnly, textReadLimit, opensOnPreview, opensInFilePane, TEXT_READ_BYTES, JSON_READ_BYTES } = preview
   // [kind, opens on the rendered view, read as text, takes the pane alone].
   // `hasPreviewView(kind)` is asserted to agree with the second column in every
   // row, which is what keeps "owns a preview view" a single fact.
@@ -141,7 +171,11 @@ try {
     '/a/b.cur': inline('image'), '/a/b.svgz': inline('image'), '/a/b.mkv': inline('video'),
     '/a/b.m4b': inline('audio'), '/a/b.flac': inline('audio'),
     '/a/b.patch': rendered('diff'), '/a/b.diff': rendered('diff'),
-    '/a/b.ipynb': rendered('notebook'), '/a/b.srt': rendered('subtitle'), '/a/b.vtt': rendered('subtitle'),
+    '/a/b.ipynb': rendered('notebook'), '/a/b.json': rendered('json'), '/a/b.JSON': rendered('json'), '/a/b.srt': rendered('subtitle'), '/a/b.vtt': rendered('subtitle'),
+    '/a/b.jsonc': rendered('structured'), '/a/b.jsonl': rendered('structured'), '/a/b.ndjson': rendered('structured'),
+    '/a/b.yaml': rendered('structured'), '/a/b.yml': rendered('structured'), '/a/b.toml': rendered('structured'), '/a/b.xml': rendered('structured'),
+    '/a/b.zip': inline('archive'), '/a/b.tar': inline('archive'), '/a/b.tar.gz': inline('archive'), '/a/b.tgz': inline('archive'), '/a/b.gz': inline('archive'),
+    '/a/b.parquet': inline('data'), '/a/b.sqlite': inline('data'), '/a/b.sqlite3': inline('data'), '/a/b.db': inline('data'),
     '/a/b.lrc': rendered('subtitle'), '/a/b.LRC': rendered('subtitle'),
     '/a/b.ttf': inline('font'), '/a/b.otf': inline('font'), '/a/b.woff': inline('font'), '/a/b.woff2': inline('font'),
     '/a/b.heic': inline('unplayable'), '/a/b.avi': inline('unplayable')
@@ -157,10 +191,12 @@ try {
   // the text reader, which is what reports "binary" for bytes it cannot decode.
   assert.equal(previewKindOf('/a/thing'), 'text')
   assert.equal(previewKindOf('/a/.gitignore'), 'text')
+  for (const path of ['/a/b.jsonl', '/a/b.jsonc']) assert.equal(previewKindOf(path), 'structured', `${path} has a structured preview and source`)
   assert.equal(previewKindOf('/a/b.PNG'), 'image', 'matching stays case-insensitive')
   assert.equal(isMediaKind(previewKindOf('/a/b.mp4')), true)
   assert.equal(isMediaKind(previewKindOf('/a/b.pdf')), false)
-  assert.equal(textReadLimit('notebook'), NOTEBOOK_READ_BYTES, 'a notebook is read whole')
+  assert.equal(textReadLimit('notebook'), JSON_READ_BYTES, 'a notebook is read whole')
+  assert.equal(textReadLimit('json'), JSON_READ_BYTES, 'a JSON document is read whole')
   assert.equal(textReadLimit('text'), TEXT_READ_BYTES)
   // The unplayable list must never claim an extension that is also source.
   for (const path of ['/a/b.ts', '/a/b.mts', '/a/b.dts', '/a/b.tif.psd.txt']) assert.equal(previewKindOf(path), 'text', 'never unplayable: ' + path)
@@ -363,7 +399,79 @@ app.on('window-all-closed',()=>app.quit());`, resolveDir: repo, loader: 'ts' }, 
   assert.equal(await evaluate(`document.querySelector('[data-notebook-cell="2"] [data-notebook-outputs]') === null`), true, 'a cell without outputs renders none')
   console.log('PASS: .ipynb renders Markdown, code, stream/result/error outputs and a decoded image')
 
-  // 5. Subtitle cues: both formats, tags stripped, VTT header/NOTE skipped and
+  // 5. A JSON file renders as a collapsible tree: typed values, folded
+  //    containers and strings, paged children — and a broken file gets its own
+  //    notice instead of a parse error.
+  await open('data.json')
+  await waitFor('document.querySelector("[data-file-json]")', 'json preview')
+  assert.equal(await evaluate(`document.querySelector('[data-file-view-tabs] [role=tab][aria-selected=true]').textContent`), await evaluate('window.en["files.preview"]'), 'a JSON file opens on its preview')
+  assert.equal(await evaluate(`document.querySelector('[data-json-summary]').textContent`), await evaluate(`window.en['files.json.keys'].replace('{count}','12')`), 'the summary counts the root keys')
+  // Every value kind is rendered, typed for its colour. The fixture's BOM
+  // would have killed `JSON.parse`, so this tree existing already proves it
+  // was stripped.
+  assert.ok(await evaluate(`[...document.querySelectorAll('[data-json-value="string"]')].some(n=>n.textContent.includes('preview-fixture'))`), 'a string value is shown')
+  assert.ok(await evaluate(`[...document.querySelectorAll('[data-json-value="number"]')].some(n=>n.textContent.trim()==='1.5')`), 'a number value is shown')
+  assert.ok(await evaluate(`document.querySelectorAll('[data-json-value="boolean"]').length >= 2`), 'both booleans are shown')
+  assert.equal(await evaluate(`document.querySelector('[data-json-value="null"]')?.textContent`), 'null', 'null is shown')
+  assert.ok((await paneText()).includes('结构化预览 🌳'), 'a unicode string survives')
+  // Depth: the root and its children start open, a grandchild container stays
+  // folded, and an empty container renders inline.
+  assert.ok(!(await paneText()).includes('bottom'), 'a depth-2 container starts folded')
+  assert.ok(await evaluate(`[...document.querySelectorAll('[data-json-entry]')].some(n=>n.textContent.includes('{}'))`), 'an empty object renders inline')
+  // A long string folds behind its button and unfolds on demand.
+  assert.ok(!(await paneText()).includes('x'.repeat(600)), 'a long string is folded')
+  await click('[data-json-string]')
+  assert.ok((await paneText()).includes('x'.repeat(600)), 'the string unfolds on demand')
+  // A wide container pages its children, 100 at a time: the 2 tags plus the
+  // first page of the wide array.
+  assert.equal(await evaluate(`document.querySelectorAll('[data-json-index]').length`), 102, 'arrays page their children')
+  assert.ok(await evaluate(`document.querySelector('[data-json-more]')?.textContent.includes('50')`), 'the pager names the next page')
+  await click('[data-json-more]')
+  assert.equal(await evaluate(`document.querySelectorAll('[data-json-index]').length`), 152, 'the next page is revealed')
+  assert.equal(await evaluate(`document.querySelectorAll('[data-json-more]').length`), 0, 'no pager past the end')
+  // Folding one container removes its children from the DOM, not just the screen.
+  await evaluate(`[...document.querySelectorAll('[data-json-toggle]')].find(b=>b.textContent.startsWith('tags'))?.click()`)
+  await pause(120)
+  assert.equal(await evaluate(`[...document.querySelectorAll('[data-json-toggle]')].find(b=>b.textContent.startsWith('tags'))?.getAttribute('aria-expanded')`), 'false', 'a container folds')
+  assert.equal(await evaluate(`document.querySelectorAll('[data-json-index]').length`), 150, 'folded children leave the DOM')
+  // Expand-all reaches every depth; collapse-all folds the root itself.
+  await click('[data-json-expand-all]')
+  await waitFor(`[...document.querySelectorAll('[data-json-entry]')].some(n=>n.textContent.includes('bottom'))`, 'expand all reaches the deepest value')
+  assert.ok(await evaluate(`[...document.querySelectorAll('[data-json-toggle]')].every(b=>b.getAttribute('aria-expanded')==='true')`), 'every container is open')
+  await click('[data-json-collapse-all]')
+  await pause(150)
+  assert.equal(await evaluate(`document.querySelectorAll('[data-json-entry]').length`), 0, 'collapse all folds the root')
+  assert.equal(await evaluate(`document.querySelectorAll('[data-json-toggle]').length`), 1, 'only the root toggle remains')
+  // A broken JSON file gets its own notice, and stays readable in source.
+  await open('broken.json')
+  await waitFor('document.querySelector("[data-file-json-invalid]")', 'invalid json notice')
+  assert.equal(await evaluate(`document.querySelector('[data-file-json-invalid]').textContent`), await evaluate(`window.en['files.json.invalid']`), 'the invalid notice is shown')
+  console.log('PASS: .json renders as a collapsible typed tree with paging, folding and an invalid-file notice')
+
+  // A huge document stays usable: even its default view is past the
+  // full-render limit, so the virtual window must keep the DOM small — and
+  // expand-all is stopped by the row budget instead of eating memory.
+  await open('huge.json')
+  await waitFor('document.querySelector("[data-file-json]")', 'huge json preview')
+  const initialEntries = await evaluate(`document.querySelectorAll('[data-json-entry]').length`)
+  assert.ok(initialEntries > 0 && initialEntries < 300, `the window renders only what is on screen: ${initialEntries}`)
+  // Scrolling reaches deep into the document without mounting it.
+  await evaluate(`(()=>{const el=document.querySelector('[data-file-json-tree]');el.scrollTop=el.scrollHeight/2})()`)
+  await pause(200)
+  const midEntries = await evaluate(`document.querySelectorAll('[data-json-entry]').length`)
+  assert.ok(midEntries > 0 && midEntries < 300, `scrolling keeps the window small: ${midEntries}`)
+  await click('[data-json-expand-all]')
+  await waitFor(`document.querySelector('[data-file-json-tree]').scrollHeight > 500000`, 'expand all flattens to the budget')
+  assert.ok(await evaluate(`document.querySelectorAll('[data-json-entry]').length < 300`), 'expand all still renders only a window')
+  await evaluate(`(()=>{const el=document.querySelector('[data-file-json-tree]');el.scrollTop=el.scrollHeight})()`)
+  await waitFor('document.querySelector("[data-json-cutoff]")', 'the budget cutoff row')
+  assert.equal(await evaluate(`document.querySelector('[data-json-cutoff]').textContent`), await evaluate(`window.en['files.json.capped'].replace('{count}','50000')`), 'the cutoff names the budget')
+  await click('[data-json-collapse-all]')
+  await pause(150)
+  assert.equal(await evaluate(`document.querySelectorAll('[data-json-entry]').length`), 0, 'collapse recovers from the budget')
+  console.log('PASS: a huge .json stays in a small virtual window and expand-all is budget-capped')
+
+  // 6. Subtitle cues: both formats, tags stripped, VTT header/NOTE skipped and
   //    the times normalized.
   await open('captions.srt')
   await waitFor('document.querySelector("[data-file-subtitle]")', 'srt preview')
@@ -381,8 +489,11 @@ app.on('window-all-closed',()=>app.quit());`, resolveDir: repo, loader: 'ts' }, 
 
   // The preview inherits the interface face, including live preference edits;
   // its 14px text and 12px/medium controls intentionally have different metrics.
+  // Application is debounced (fonts.ts collapses a typing burst into one
+  // document-wide recalc), so the read waits out the trailing edge.
   for (const ui of ['', 'serif']) {
     await evaluate(`window.setFonts({ui:${JSON.stringify(ui)}})`)
+    await pause(250)
     const fonts = await evaluate(`(()=>{const text=getComputedStyle(document.querySelector('[data-subtitle-cue] > span:last-child'));const bar=getComputedStyle(document.querySelector('[data-file-subtitle-bar]'));return [text.fontFamily,bar.fontFamily,getComputedStyle(document.body).fontFamily,text.fontSize,text.fontWeight]})()`)
     assert.equal(fonts[0], fonts[1], 'subtitle and interface label share the font stack')
     assert.equal(fonts[0], fonts[2], 'subtitle follows the interface preference')
@@ -415,7 +526,7 @@ app.on('window-all-closed',()=>app.quit());`, resolveDir: repo, loader: 'ts' }, 
   assert.equal((await parseLrc('[00:01]' + '字'.repeat(4001)))[0].text.length, 4000, 'LRC text stays bounded')
   console.log('PASS: .lrc opens on timed lyrics, retains source, bounds output and explains untimed files')
 
-  // 6. A font preview takes the pane, loads the real face and renders with it.
+  // 7. A font preview takes the pane, loads the real face and renders with it.
   {
     await open('Temml.woff2')
     await waitFor('document.querySelector("[data-file-font]")', 'font preview')
@@ -445,9 +556,9 @@ app.on('window-all-closed',()=>app.quit());`, resolveDir: repo, loader: 'ts' }, 
     console.log('PASS: font preview loads the real face, zooms, edits its sample and unregisters on close')
   }
 
-  // 7. No non-text family may reach `files:document` — the guard is the main
+  // 8. No non-text family may reach `files:document` — the guard is the main
   //    process's, not a renderer convention.
-  for (const name of ['notes.ipynb', 'captions.srt', 'changes.patch']) {
+  for (const name of ['notes.ipynb', 'captions.srt', 'changes.patch', 'data.json', 'huge.json']) {
     assert.ok(docPaths.some(path => path.endsWith('/' + name)), name + ' is read as a document')
   }
   for (const name of ['Temml.woff2', 'audiobook.m4b', 'still.apng', 'cursor.cur', 'diagram.svgz', 'still.heic']) {
@@ -461,10 +572,10 @@ app.on('window-all-closed',()=>app.quit());`, resolveDir: repo, loader: 'ts' }, 
   assert.equal(refused[1], false, 'and carries no bytes')
   console.log('PASS: non-text families never reach files:document, and the reader refuses them by itself')
 
-  // 8. Both locales carry every new string (the Messages type covers the
+  // 9. Both locales carry every new string (the Messages type covers the
   //    compile-time half; this is the rendered half).
   for (const key of [...Object.keys(await evaluate('window.en')), ...Object.keys(await evaluate('window.zh'))]) {
-    if (!key.startsWith('files.notebook') && !key.startsWith('files.subtitle') && !key.startsWith('files.lyrics') && !key.startsWith('files.font') && !key.startsWith('files.diffPreview')) continue
+    if (!key.startsWith('files.notebook') && !key.startsWith('files.json') && !key.startsWith('files.subtitle') && !key.startsWith('files.lyrics') && !key.startsWith('files.font') && !key.startsWith('files.diffPreview')) continue
     assert.ok(await evaluate(`Object.prototype.hasOwnProperty.call(window.en,${JSON.stringify(key)})`), 'en has ' + key)
     assert.ok(await evaluate(`Object.prototype.hasOwnProperty.call(window.zh,${JSON.stringify(key)})`), 'zh has ' + key)
   }
@@ -477,16 +588,23 @@ app.on('window-all-closed',()=>app.quit());`, resolveDir: repo, loader: 'ts' }, 
   await open('lyrics.lrc')
   await waitFor('document.querySelector("[data-file-subtitle]")', 'Chinese LRC preview')
   assert.equal(await evaluate(`document.querySelector('[data-file-subtitle-bar]').textContent`), '共 5 行歌词')
-  if (process.env.PI_PREVIEW_SCREENSHOT_DIR) {
+  /** Light/dark captures of the current view, when a screenshot dir is set. */
+  const shoot = async (name) => {
+    if (!process.env.PI_PREVIEW_SCREENSHOT_DIR) return
     await mkdir(process.env.PI_PREVIEW_SCREENSHOT_DIR, { recursive: true })
     for (const dark of [false, true]) {
       await evaluate(`document.documentElement.classList.toggle('dark',${dark})`)
       await pause(100)
       const shot = await send('Page.captureScreenshot', { format: 'png' })
-      await writeFile(join(process.env.PI_PREVIEW_SCREENSHOT_DIR, `lyrics-${dark ? 'dark' : 'light'}.png`), Buffer.from(shot.data, 'base64'))
+      await writeFile(join(process.env.PI_PREVIEW_SCREENSHOT_DIR, `${name}-${dark ? 'dark' : 'light'}.png`), Buffer.from(shot.data, 'base64'))
     }
     await evaluate(`document.documentElement.classList.remove('dark')`)
   }
+  await shoot('lyrics')
+  await open('data.json')
+  await waitFor('document.querySelector("[data-file-json]")', 'Chinese json preview')
+  assert.equal(await evaluate(`document.querySelector('[data-json-summary]').textContent`), await evaluate(`window.zh['files.json.keys'].replace('{count}','12')`), 'the JSON summary is localized')
+  await shoot('json')
   await open('changes.patch')
   await waitFor('document.querySelector("[data-file-diff-preview]")', 'Chinese patch preview')
   assert.ok(await evaluate(`document.querySelector('[data-file-view-tabs] [role=tab][aria-selected=true]').textContent === window.zh['files.preview']`), 'the preview tab is localized')

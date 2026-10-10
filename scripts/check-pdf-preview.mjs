@@ -4,9 +4,9 @@
  * `PI_PDF_SCREENSHOT_DIR` retains the rendered views. */
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { mkdtemp, mkdir, writeFile, stat, symlink } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { copyFile, mkdtemp, mkdir, writeFile, stat, symlink } from 'node:fs/promises'
+import { homedir, tmpdir } from 'node:os'
+import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
 import { createServer } from 'vite'
@@ -42,7 +42,7 @@ function buildPdf(pages) {
   }
   // Page 1 carries the two links the preview has to handle: an in-document
   // destination (jump to page 5) and an external URI.
-  const dest = add(`<< /Type /Annot /Subtype /Link /Rect [56 700 260 724] /Border [0 0 0] /Dest [${kids[4]} 0 R /Fit] >>`)
+  const dest = add(`<< /Type /Annot /Subtype /Link /Rect [56 700 260 724] /Border [0 0 0] /Dest [${kids[Math.min(4, kids.length - 1)]} 0 R /Fit] >>`)
   const uri = add('<< /Type /Annot /Subtype /Link /Rect [56 660 260 684] /Border [0 0 0] /A << /S /URI /URI (https://example.invalid/doc) >> >>')
   objects[kids[0] - 1] = objects[kids[0] - 1].replace(' /Contents', ` /Annots [${dest} 0 R ${uri} 0 R] /Contents`)
   objects[catalog - 1] = `<< /Type /Catalog /Pages ${pagesRef} 0 R >>`
@@ -59,6 +59,8 @@ function buildPdf(pages) {
 
 const PAGES = 200
 const docPath = join(project, 'doc.pdf')
+const homePdfPath = join(project, 'Assignment 1.pdf')
+const homePdfHref = encodeURI('~/' + relative(homedir(), homePdfPath).replaceAll('\\', '/'))
 let server, child, ws
 /** `[range] calls bytes max` samples and every rejected range. */
 const samples = []
@@ -67,26 +69,45 @@ const docPaths = []
 try {
   await mkdir(project)
   await writeFile(docPath, buildPdf(PAGES))
+  await writeFile(join(project, 'single-page.pdf'), buildPdf(1))
+  await copyFile(docPath, homePdfPath)
   await writeFile(join(project, 'broken.pdf'), Buffer.from('this is not a pdf at all, not even close', 'latin1'))
   await writeFile(join(project, 'notes.txt'), 'plain text source\n')
+  await writeFile(join(project, 'notes.md'), '# Markdown delivery\n\nThe preview stays inside the file pane.\n')
   const pdfSize = (await stat(docPath)).size
 
   const fixturePath = '/__pdf_check.html'
   const fixture = `<!doctype html><html lang="en"><body><div id="root"></div><script type="module">
 import React from 'react';import {createRoot} from 'react-dom/client';
 import {FilesPane} from '/src/components/app/FilesPane.tsx';
+import {SidebarPanel, fileTabId, filePathForTab} from '/src/components/app/SidebarPanel.tsx';
+import {BrowserStore} from '/src/lib/browser/store.ts';
+import {localFileTarget} from '/src/lib/file-navigation.tsx';
 import {I18nProvider} from '/src/i18n/index.tsx';
 import {PiStore} from '/src/state/pi-store.ts';import {FileBrowserStore} from '/src/state/file-browser-store.ts';import {DebugStore} from '/src/state/debug-store.ts';
 import en from '/src/i18n/locales/en.ts';import zh from '/src/i18n/locales/zh-CN.ts';
 import '/src/styles.css';
 localStorage.setItem('pi-app:locale','en');
 const cwd=${JSON.stringify(project)};
-const files=new FileBrowserStore(),pi=new PiStore(),debug=new DebugStore();
+const files=new FileBrowserStore(),pi=new PiStore(),debug=new DebugStore(),browserStore=new BrowserStore();
 pi.applySnapshot({cwd,sessionId:crypto.randomUUID(),messages:[],model:null,thinkingLevel:'off',availableThinkingLevels:['off'],isStreaming:false});
-const App=()=>{const state=React.useSyncExternalStore(files.subscribe,files.getSnapshot);return React.createElement(FilesPane,{files,store:pi,filePath:state.active,debug})};
+const App=()=>{
+  const state=React.useSyncExternalStore(files.subscribe,files.getSnapshot);
+  const [rail,setRail]=React.useState(null);window.showRail=setRail;
+  if(!rail)return React.createElement(FilesPane,{files,store:pi,filePath:state.active,debug});
+  // Clipped sibling content makes the workspace scrollable to scripts, as
+  // retained/overflowing chat content can do in the real workspace. The PDF
+  // must keep its own scroll boundary even when that ancestor can scroll.
+  return React.createElement('div',{'data-pdf-workspace':true,className:'relative flex h-full min-h-0 overflow-hidden'},
+    React.createElement('div',{className:'min-w-0 flex-1'},React.createElement('div',{style:{height:2000}})),
+    React.createElement(SidebarPanel,{open:true,width:rail.width,fullscreen:rail.fullscreen,tabs:state.tabs.map(tab=>fileTabId(tab.path)),activeTab:state.active?fileTabId(state.active):null,
+      onSelectTab:id=>files.select(filePathForTab(id)),onOpenTab:()=>{},onCloseTab:id=>files.close(filePathForTab(id)),onCloseOtherTabs:()=>{},onCloseAllTabs:()=>{},
+      pane:{files,store:pi,debug,browserStore,agentRuns:new Map(),reviewTurnId:null,sideChat:null}}));
+};
 createRoot(document.getElementById('root')).render(React.createElement(React.StrictMode,null,React.createElement(I18nProvider,null,React.createElement(App))));
 window.en=en;window.zh=zh;window.cwd=cwd;
 window.openFile=name=>files.open(cwd,{path:cwd+'/'+name});
+window.openPdfHref=href=>files.open(cwd,localFileTarget(href,cwd));window.files=files;
 window.__frames=[];window.__collectScrollFrames=async(ms)=>{
   const scroller=document.querySelector('[data-pdf-scroller]');
   const frames=[];let last=performance.now();const start=performance.now();
@@ -110,6 +131,7 @@ window.__ready=true;</script></body></html>`
   await build({ stdin: { contents: `import {app,BrowserWindow,ipcMain} from 'electron';
 import {listFileDirectory,readFileDocument} from ${JSON.stringify(join(repo, 'src/main/file-browser.ts'))};
 import {readPdfStat,readPdfRange} from ${JSON.stringify(join(repo, 'src/main/pdf.ts'))};
+import {resolveFilePath} from ${JSON.stringify(join(repo, 'src/main/file-path.ts'))};
 app.setPath('userData',${JSON.stringify(join(temporary, 'profile'))});app.commandLine.appendSwitch('remote-debugging-port','0');
 const io={ranges:[],violations:[],documents:[],external:[]};globalThis.pdfIo=io;
 app.whenReady().then(()=>{
@@ -119,6 +141,7 @@ app.whenReady().then(()=>{
   ipcMain.handle('files:gitDiff',()=>({gitRoot:null,patch:'',binary:false}));
   ipcMain.handle('shell:openExternal',(_e,url)=>{io.external.push(url)});
   ipcMain.handle('files:pdfStat',(_,r)=>readPdfStat(r));
+  ipcMain.handle('files:resolvePath',(_,r)=>resolveFilePath(r));
   ipcMain.handle('files:pdfRange',async(_,r,begin,end)=>{
     // Record the contract: end must be exclusive, in range, and chunk-aligned.
     io.ranges.push({begin,end,length:end-begin});
@@ -162,7 +185,8 @@ app.on('window-all-closed',()=>app.quit());`, resolveDir: repo, loader: 'ts' }, 
   await waitFor('window.__ready', 'fixture ready')
 
   // 1. The document streams: pdf.js pulls chunks, never the whole file at once.
-  await evaluate(`window.openFile('doc.pdf')`)
+  await evaluate(`window.openPdfHref(${JSON.stringify(homePdfHref)})`)
+  await waitFor(`files.getSnapshot().active===${JSON.stringify(homePdfPath)}`, 'home PDF tab resolves to its absolute path')
   await pause(1500)
   const containerState = await evaluate(`(()=>{const el=document.querySelector('[data-pdf-scroller]');return {position:getComputedStyle(el).position,error:document.querySelector('[data-file-pdf]').dataset.pdfError??''}})()`)
   assert.equal(containerState.position, 'absolute', `the pdf.js container must be absolutely positioned: ${JSON.stringify(containerState)}`)
@@ -253,15 +277,14 @@ app.on('window-all-closed',()=>app.quit());`, resolveDir: repo, loader: 'ts' }, 
   const pdfBefore=await pdfPosition()
   await pdfWheel([{deltaX:8,deltaY:6},{deltaX:6,deltaY:9},{deltaX:5,deltaY:80}])
   const pdfHorizontal=await pdfPosition()
-  assert.equal(pdfHorizontal.left,pdfBefore.left+19,'PDF uses the horizontal gesture delta')
-  assert.equal(pdfHorizontal.top,pdfBefore.top,'PDF suppresses vertical noise')
-  await pause(250)
-  await pdfWheel([{deltaX:6,deltaY:8},{deltaX:9,deltaY:6},{deltaX:90,deltaY:5}])
+  assert.equal(pdfHorizontal.left,pdfBefore.left+19,'PDF retains horizontal diagonal motion')
+  assert.equal(pdfHorizontal.top,pdfBefore.top+95,'PDF retains vertical diagonal motion')
+  await pdfWheel([{deltaX:-6,deltaY:8},{deltaX:-9,deltaY:6},{deltaX:-10,deltaY:5}])
   const pdfVertical=await pdfPosition()
-  assert.equal(pdfVertical.top,pdfHorizontal.top+19,'PDF allows a fresh vertical gesture')
-  assert.equal(pdfVertical.left,pdfHorizontal.left,'PDF suppresses horizontal noise')
+  assert.equal(pdfVertical.top,pdfHorizontal.top+19,'PDF continues vertical motion without an idle gap')
+  assert.equal(pdfVertical.left,pdfHorizontal.left-25,'PDF immediately reverses horizontal direction')
   await evaluate(`document.querySelector('[data-pdf-scroller]').style.removeProperty('width')`)
-  console.log('PASS: PDF diagonal axis lock and idle gesture reset')
+  console.log('PASS: PDF free diagonal scrolling and immediate direction changes')
 
   // 5. A file that is not a PDF at all fails with the localized notice.
   await evaluate(`window.openFile('broken.pdf')`)
@@ -272,6 +295,12 @@ app.on('window-all-closed',()=>app.quit());`, resolveDir: repo, loader: 'ts' }, 
   await shot('pdf-failed')
   console.log('PASS: an unreadable PDF shows the localized failure notice')
 
+  await evaluate(`window.openFile('missing.pdf')`)
+  await waitFor(`document.querySelector('[data-file-pdf]')?.dataset.pdfError==='missing'`, 'missing PDF is distinguished from a decoding failure')
+  assert.ok(await evaluate(`document.querySelector('[data-file-pdf]').innerText.includes(window.en['files.error.missing'])`))
+  assert.ok(!await evaluate(`document.querySelector('[data-file-pdf]').innerText.includes(window.en['files.pdf.failed'])`),'missing files do not suggest a PDF decoder failure')
+  console.log('PASS: missing PDFs show the file-not-found notice')
+
   // 6. Text and media tabs still behave (regression guard for the PDF branch).
   await evaluate(`window.openFile('notes.txt')`)
   await waitFor(`document.querySelectorAll('[data-file-preview] [role=tab]').length > 0`, 'text tabs')
@@ -281,6 +310,63 @@ app.on('window-all-closed',()=>app.quit());`, resolveDir: repo, loader: 'ts' }, 
   for (let attempt = 0; attempt < 30 && documentsRead < 1; attempt++) { await pause(150); documentsRead = samples[samples.length - 1]?.documents ?? 0 }
   assert.ok(documentsRead >= 1, 'a text file is still read as a document')
   console.log('PASS: text files still open in the text pane')
+
+  // A short PDF fits the docked pane. Its initial scale, zoom and links must
+  // never scroll the containing workspace and move the rail chrome offscreen.
+  const assertRailChrome = async label => {
+    const geometry = await evaluate(`(()=>{
+      const workspace=document.querySelector('[data-pdf-workspace]').getBoundingClientRect();
+      const rail=document.querySelector('[data-panel=right]').getBoundingClientRect();
+      const scroller=document.querySelector('[data-pdf-scroller]');
+      const chrome=['[data-sidebar-tabs]','[data-file-toolbar]','[data-file-pdf-toolbar]'].map(selector=>{
+        const rect=document.querySelector(selector).getBoundingClientRect();return {selector,top:rect.top,bottom:rect.bottom,height:rect.height};
+      });
+      const outsideScroll=[];for(let node=scroller.parentElement;node;node=node.parentElement){
+        if(node.scrollTop||node.scrollLeft)outsideScroll.push({tag:node.tagName,classes:node.className,top:node.scrollTop,left:node.scrollLeft});
+      }
+      return {workspaceTop:workspace.top,workspaceBottom:workspace.bottom,railTop:rail.top,chrome,outsideScroll};
+    })()`)
+    assert.deepEqual(geometry.outsideScroll,[],label+': only the PDF viewport may scroll')
+    assert.equal(geometry.railTop,geometry.workspaceTop,label+': the rail stays aligned with the workspace')
+    assert.equal(geometry.chrome[0].top,geometry.railTop,label+': the tab strip stays at the top of the panel')
+    for(const bar of geometry.chrome)assert.ok(bar.height>0&&bar.top>=geometry.workspaceTop&&bar.bottom<=geometry.workspaceBottom,label+': toolbar remains visible: '+JSON.stringify(bar))
+  }
+  await evaluate(`window.showRail({width:400,fullscreen:false});window.openFile('notes.md')`)
+  await waitFor(`document.querySelector('[data-file-markdown]')?.textContent.includes('Markdown delivery')`, 'Markdown in the docked rail')
+  await evaluate(`window.openFile('single-page.pdf')`)
+  await waitFor(`document.querySelector('[data-pdf-scroller] canvas')?.width > 0`, 'single-page PDF in the docked rail')
+  await pause(600)
+  assert.ok(await evaluate(`document.querySelector('[data-pdf-scroller] .page').clientHeight < document.querySelector('[data-pdf-scroller]').clientHeight`),'the regression PDF fits entirely inside the docked viewport')
+  await assertRailChrome('opening a single-page PDF from Markdown')
+  await shot('pdf-docked-single-page')
+  for(const label of ['Zoom in','Zoom out','Fit page','Fit width']){
+    await click('[data-file-pdf-toolbar] button[aria-label='+JSON.stringify(label)+']')
+    await pause(250)
+    await assertRailChrome('docked '+label)
+  }
+  await click('[data-pdf-scroller] .annotationLayer a')
+  await pause(350)
+  await assertRailChrome('a short PDF internal destination')
+  await evaluate(`window.showRail({width:500,fullscreen:false})`)
+  await pause(350)
+  await click('[data-file-pdf-toolbar] button[aria-label="Fit width"]')
+  await assertRailChrome('resizing the docked PDF pane')
+  await evaluate(`window.showRail({width:500,fullscreen:true})`)
+  await pause(350)
+  await click('[data-file-pdf-toolbar] button[aria-label="Fit page"]')
+  await assertRailChrome('fullscreen Fit page')
+  await shot('pdf-fullscreen-single-page')
+  await evaluate(`window.showRail({width:400,fullscreen:false})`)
+  await pause(350)
+  await click('[data-file-pdf-toolbar] button[aria-label="Fit width"]')
+  await assertRailChrome('returning to the docked PDF pane')
+  await click('[data-sidebar-tab='+JSON.stringify('file:'+join(project,'notes.md'))+'] [role=tab]')
+  await waitFor(`document.querySelector('[data-file-markdown]')?.textContent.includes('Markdown delivery')`, 'switching back to Markdown through the rail tab strip')
+  await click('[data-sidebar-tab='+JSON.stringify('file:'+join(project,'single-page.pdf'))+'] [role=tab]')
+  await waitFor(`document.querySelector('[data-pdf-scroller] canvas')?.width > 0`, 'returning to the PDF through the rail tab strip')
+  await pause(350)
+  await assertRailChrome('returning to the PDF tab')
+  console.log('PASS: short PDF opening, zoom, fit, links, resize, fullscreen and Markdown tab switches keep rail chrome visible and confine scrolling to the PDF viewport')
 
   const locale = await evaluate(`(()=>{const keys=Object.keys(window.en).filter(k=>k.startsWith('files.pdf.'));return {keys,missing:keys.filter(k=>typeof window.zh[k]!=='string'),translated:keys.filter(k=>window.zh[k]!==window.en[k]).length}})()`)
   assert.deepEqual(locale.missing, [], 'every PDF string exists in zh-CN')

@@ -5,11 +5,9 @@ import '@xterm/xterm/css/xterm.css'
 import { terminalTheme } from './terminal-theme'
 import { TerminalColorSchemeAddon } from './terminal-color-scheme'
 import { TerminalFit } from './terminal-fit'
+import { getFontSizes, terminalFontSize } from './typography'
 
 /** One emulator survives DOM detach/reattach. React only renders its chrome. */
-/** Terminal body font size (px) — shared with the pane's status text. */
-export const TERMINAL_FONT_PX = 14
-
 export class TerminalRuntime {
   readonly element = document.createElement('div')
   readonly terminal: Terminal
@@ -25,7 +23,7 @@ export class TerminalRuntime {
   constructor(private id: string, onTitle: (title: string) => void) {
     this.element.className = 'h-full w-full min-w-0 min-h-0'
     this.terminal = new Terminal({
-      cols: 80, rows: 24, fontSize: TERMINAL_FONT_PX, lineHeight: 1.2,
+      cols: 80, rows: 24, fontSize: terminalFontSize(getFontSizes().code), lineHeight: 1.2,
       fontFamily: getComputedStyle(document.documentElement).getPropertyValue('--app-font-mono').trim(),
       theme: this.theme, scrollback: 10_000, smoothScrollDuration: 100,
       cursorBlink: true, cursorStyle: 'bar', macOptionIsMeta: true, minimumContrastRatio: 4.5,
@@ -102,6 +100,8 @@ export class TerminalRuntime {
     if (this.disposed) return
     const font = getComputedStyle(document.documentElement).getPropertyValue('--app-font-mono').trim()
     if (this.terminal.options.fontFamily !== font) this.terminal.options.fontFamily = font
+    const fontSize = terminalFontSize(getFontSizes().code)
+    if (this.terminal.options.fontSize !== fontSize) this.terminal.options.fontSize = fontSize
     const theme = terminalTheme()
     if (theme !== this.theme) {
       this.theme = theme

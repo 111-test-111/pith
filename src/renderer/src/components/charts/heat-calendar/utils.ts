@@ -14,9 +14,6 @@ export const MONTH_ROW = 12;
 
 export const DAYS = Array.from({ length: 7 }, (_, d) => ({ id: `d${d}`, d }));
 
-/** How far a cell rises when it is the hovered one, its neighbour, or two away. */
-export const LIFT = [1.3, 1.08, 1.03];
-
 export const startOfDay = (d: Date) => {
   const x = new Date(d);
   x.setUTCHours(0, 0, 0, 0);

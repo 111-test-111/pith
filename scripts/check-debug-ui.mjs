@@ -86,6 +86,33 @@ try {
       }
     }
   }
+  // Wide dividers share drag/keyboard behavior without changing stopped state.
+  await page.evaluate(()=>{setLocale('en');document.documentElement.classList.remove('dark');document.getElementById('root').style.width='1200px'})
+  const split=page.getByRole('separator',{name:'Resize debug navigation and inspection',exact:true}),navigation=page.locator('[data-debug-navigation]'),inspection=page.locator('[data-debug-inspection]'),inspectionNode=await inspection.elementHandle()
+  const splitWidth=async()=> (await navigation.boundingBox()).width
+  const dragSplit=async delta=>{const box=await split.boundingBox();assert(box);await page.mouse.move(box.x+box.width/2,box.y+20);await page.mouse.down();await page.mouse.move(box.x+box.width/2+delta,box.y+20,{steps:3})}
+  const requestsBeforeSplit=await page.evaluate(()=>calls.length),startWidth=await splitWidth()
+  await dragSplit(90);assert(Math.abs(await splitWidth()-startWidth-90)<2)
+  assert.equal(await page.evaluate(()=>localStorage.getItem('pi-app:debug-split')),null,'drag frames do not save a preference')
+  await page.mouse.up();await split.focus();const beforeKey=await splitWidth();await split.press('ArrowLeft');assert(Math.abs(await splitWidth()-beforeKey+10)<2)
+  await split.press('Shift+ArrowRight');assert(Math.abs(await splitWidth()-beforeKey-30)<2)
+  await dragSplit(-2000);await page.mouse.up();assert(Math.abs(await splitWidth()-Number(await split.getAttribute('aria-valuemin')))<2)
+  await dragSplit(2000);await page.mouse.up();assert(Math.abs(await splitWidth()-Number(await split.getAttribute('aria-valuemax')))<2)
+  await dragSplit(600-await splitWidth());await page.mouse.up();const preferredSplit=await page.evaluate(()=>Number(localStorage.getItem('pi-app:debug-split')))
+  // A plain press must not leave the sizing observer stuck or save a fitted size.
+  await split.click()
+  for(const width of [768,400,1200]){
+    await page.evaluate(width=>document.getElementById('root').style.width=width+'px',width)
+    await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))))
+    assert.equal(await split.isVisible(),width>=768)
+    if(width===768){assert(await splitWidth()<preferredSplit);assert.equal(Number(await split.getAttribute('aria-valuenow')),Math.round(await splitWidth()),'the breakpoint follows the named container despite scrollport padding')}
+    if(width===1200)assert(Math.abs(await splitWidth()-preferredSplit)<2)
+    assert.equal(await page.evaluate(()=>Number(localStorage.getItem('pi-app:debug-split'))),preferredSplit)
+    assert.equal(await inspectionNode.evaluate(node=>node===document.querySelector('[data-debug-inspection]')),true)
+    assert.equal(await page.evaluate(()=>calls.length),requestsBeforeSplit,'dragging and fitting never query the debug adapter')
+    assert.equal(await page.locator('[data-debug-inspection] input').inputValue(),'draft.member')
+  }
+  for(const [locale,label] of [['zh-CN','调整调试导航与详情宽度'],['zh-TW','調整除錯導覽與詳細資料寬度'],['en','Resize debug navigation and inspection']]){await page.evaluate(locale=>setLocale(locale),locale);assert.equal(await page.getByRole('separator',{name:label,exact:true}).count(),1)}
   if(screenshots)await page.locator('#root').screenshot({path:join(screenshots,'responsive-wide.png')})
   await page.evaluate(()=>{document.getElementById('root').style.width='';setLocale('en');document.documentElement.classList.remove('dark')})
   await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].setSize(700,900))

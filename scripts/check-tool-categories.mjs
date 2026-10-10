@@ -49,6 +49,11 @@ try {
   assert.equal(toolCategory('tool_search'), undefined, 'tool search owns a standalone transcript row')
   assert.equal(toolCategory('other_tool'), undefined)
 
+  assert.deepEqual(splitByToolCategory(['edit', 'write', 'image', 'image', 'write', 'edit'].map(name => ({ name })))
+    .map(run => [run.category?.id, run.items.map(call => call.name)]), [
+      ['changes', ['edit', 'write']], [undefined, ['image']], [undefined, ['image']], ['changes', ['write', 'edit']]
+    ], 'image calls remain independent and separate neighbouring Changes groups')
+
   const calls = [
     { id: 'c1', name: 'ctx_execute' },
     { id: 'c2', name: 'ctx_search' },
@@ -85,7 +90,7 @@ try {
     ]
   )
 
-  console.log('PASS: native and historical MCP calls share a transcript category; codemode and tool search stay separate.')
+  console.log('PASS: declared tool families group adjacent calls; image, codemode and tool search stay independent.')
 } finally {
   await rm(scratch, { recursive: true, force: true })
 }

@@ -4,8 +4,8 @@ import assert from 'node:assert/strict'
 import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import { mkdtemp, mkdir, writeFile, readFile, symlink, rm, realpath, readdir } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { homedir, tmpdir } from 'node:os'
+import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { build } from 'esbuild'
 import { createServer } from 'vite'
@@ -16,6 +16,7 @@ const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const temporary = await mkdtemp(join(tmpdir(), 'pith-files-'))
 const project = join(temporary, 'project 中文')
 const outside = join(temporary, 'outside')
+const homePath = path => '~/' + relative(homedir(), path).replaceAll('\\', '/')
 const perfOnly = process.env.PI_FILES_PERF_ONLY === '1'
 const deepRelative = Array.from({length:10}, (_,i)=>'level'+i).join('/') + '/deep.ts'
 const deepPath = join(project, deepRelative)
@@ -36,6 +37,9 @@ try {
   }
   await writeFile(join(project, 'src/AuthenticationProviderWithAVeryLongName.tsx'), 'export const authentication = true;\n')
   await writeFile(join(project, 'src/App.tsx'), 'export const original = true;\n')
+  const longDiffPath=join(project,'long-diff.ts')
+  const longDiffText=prefix=>Array.from({length:1200},(_,i)=>`export const ${prefix}${i} = ${i};`).join('\n')+'\n'
+  await writeFile(longDiffPath,longDiffText('original'))
   await writeFile(join(project, 'README.md'), '# File preview\n\n**中文粗体**\n\n[Open source](src/App.tsx:2)\n\n[Guide](docs/guide.md)\n\n```python\nprint("hello")\n```\n')
   const skillFrontmatter = 'name: preview-example\ndescription: |\n  Use the preview to read a longer description that wraps naturally within the narrow sidebar while keeping the YAML block scalar indentation and all original line breaks.\n  Second line.'
   const skillPreview = `---\n${skillFrontmatter}\n---\n\n# Preview example\n\n<outer>\n  <inner>\n    Keep the original indentation.\n  </inner>\n</outer>\n\n**Rendered Markdown**\n\n\`\`\`xml\n<code-tag>\n  remains code\n</code-tag>\n\`\`\`\n`
@@ -45,12 +49,14 @@ try {
   await writeFile(join(project, 'data.json'), '{}\n')
   await writeFile(join(project, 'docs/guide.md'), '# Guide\n\n[Relative source](../src/App.tsx#L2)\n\n[New relative source](../src/new.ts)\n')
   await writeFile(join(project, 'src/new.ts'), 'export const followLink = true;\n')
+  await writeFile(join(project, 'My Notes.md'), '# Spaced name\n\n**带空格的文件**\n')
   await writeFile(join(project, 'literal[1].txt'), 'before literal\n')
   await writeFile(join(project, 'literal1.txt'), 'unchanged sibling\n')
   await writeFile(join(project, 'deleted.txt'), 'deleted text\n')
   await git(['init', '-q']); await git(['add', '.']); await git(['-c', 'user.name=File Check', '-c', 'user.email=files@example.invalid', 'commit', '-qm', 'fixture'])
   await writeFile(join(project, 'src/App.tsx'), 'export const staged = true;\n'); await git(['add', 'src/App.tsx'])
   await writeFile(join(project, 'src/App.tsx'), 'export const updated = true;\nexport const secondLine = "中文";\n')
+  await writeFile(longDiffPath,longDiffText('updated'))
   await writeFile(join(project, 'literal[1].txt'), 'after literal\n')
   await rm(join(project, 'deleted.txt'))
   await writeFile(join(project, 'untracked.py'), 'print("new file")\n')
@@ -62,10 +68,28 @@ try {
   await writeFile(join(project, 'large.ts'), Array.from({length:14000}, (_,i) => `export const line${i+1} = "${i}";`).join('\n'))
   await writeFile(join(project, 'truncated.txt'), '中'.repeat(180000))
   await writeFile(join(outside, 'plain.md'), '# Outside project\n')
+  await mkdir(join(project, '~'))
+  await writeFile(join(project, '~/literal.txt'), 'literal tilde directory\n')
   await Promise.all(Array.from({length:305}, (_,i)=>writeFile(join(project, 'many', `${i}.txt`), 'x')))
   await symlink(project, join(project, 'cycle'))
-  await build({ entryPoints: [join(repo, 'src/main/file-browser.ts')], outfile: join(temporary,'files.mjs'), bundle:true, platform:'node',format:'esm' })
-  const { listFileDirectory, readFileDocument, readFileGitDiff } = await import(pathToFileURL(join(temporary,'files.mjs')))
+  await build({ stdin: { contents: `export * from './src/main/file-browser';export {resolveFilePath} from './src/main/file-path';export {FileIndex,readAttachment} from './src/main/pi/files';`, resolveDir: repo, loader: 'ts' }, outfile: join(temporary,'files.mjs'), bundle:true, platform:'node',format:'esm' })
+  const { listFileDirectory, readFileDocument, readFileGitDiff, resolveFilePath, FileIndex, readAttachment } = await import(pathToFileURL(join(temporary,'files.mjs')))
+  assert.equal(resolveFilePath({cwd:'/project',path:'~/资料/Assignment 1#%.pdf'},{homeDir:'/home/user',platform:'linux'}),'/home/user/资料/Assignment 1#%.pdf')
+  assert.equal(resolveFilePath({cwd:'/project',path:'~'},{homeDir:'/home/user',platform:'linux'}),'/home/user')
+  assert.equal(resolveFilePath({cwd:'/project',path:'~/../other/file.txt'},{homeDir:'/home/user',platform:'linux'}),'/home/other/file.txt')
+  assert.equal(resolveFilePath({cwd:'/project',path:'./~/literal.txt'},{homeDir:'/home/user',platform:'linux'}),'/project/~/literal.txt')
+  assert.equal(resolveFilePath({cwd:'/project',path:'~other/file.txt'},{homeDir:'/home/user',platform:'linux'}),'/project/~other/file.txt')
+  assert.equal(resolveFilePath({cwd:'C:\\project',path:'~\\资料\\Assignment 1.pdf'},{homeDir:'C:\\Users\\Test User',platform:'win32'}),'C:/Users/Test User/资料/Assignment 1.pdf')
+  assert.equal(resolveFilePath({cwd:'C:\\project',path:'\\\\server\\share\\file.txt'},{homeDir:'C:\\Users\\Test User',platform:'win32'}),'//server/share/file.txt')
+  assert.throws(()=>resolveFilePath({cwd:'relative',path:'~/file.txt'}))
+  assert.throws(()=>resolveFilePath({cwd:project,path:'~/bad\0.txt'}))
+  const outsideHome={cwd:project,path:homePath(join(outside,'plain.md'))}
+  assert.equal((await readFileDocument(outsideHome)).text,'# Outside project\n','home text paths resolve outside the active workspace')
+  assert.equal((await listFileDirectory({cwd:project,path:homePath(outside)})).path,outside)
+  assert.ok((await readFileGitDiff({cwd:project,path:homePath(join(project,'src/App.tsx'))})).patch.includes('+export const updated'))
+  const attachment=await readAttachment(new FileIndex(project),outsideHome.path)
+  assert.equal(attachment.path,join(outside,'plain.md'));assert.equal(attachment.text,'# Outside project\n')
+  assert.equal((await readFileDocument({cwd:project,path:'./~/literal.txt'})).text,'literal tilde directory\n')
   await build({ entryPoints: [join(repo, 'src/renderer/src/lib/file-markdown.ts')], outfile: join(temporary,'file-markdown.mjs'), bundle:true, platform:'node',format:'esm' })
   const { splitFileMarkdown } = await import(pathToFileURL(join(temporary,'file-markdown.mjs')))
   assert.equal(splitFileMarkdown(skillPreview).frontmatter, skillFrontmatter)
@@ -139,7 +163,7 @@ localStorage.setItem('pi-app:locale','en');localStorage.setItem('pi-app:panel-la
 const LocaleBridge=()=>{window.setLocale=useI18n().setLocale;return null};
 window.resolveFile=localFileTarget;window.store=new PiStore();
 const open=FileBrowserStore.prototype.open;FileBrowserStore.prototype.open=function(...args){window.files=this;return open.apply(this,args)};
-window.setSession=cwd=>store.applySnapshot({cwd,sessionId:crypto.randomUUID(),messages:[{role:'user',timestamp:0,content:'<file path="'+cwd+'/file#25%.txt">literal attachment path</file>'},{role:'assistant',timestamp:1,content:[{type:'text',text:'[Deep source](${deepRelative}) · [Open README](README.md) · [Open source](src/App.tsx:2) · [URL file](file://'+cwd+'/README.md)'}]}],model:null,thinkingLevel:'off',availableThinkingLevels:['off'],isStreaming:false});
+window.setSession=cwd=>store.applySnapshot({cwd,sessionId:crypto.randomUUID(),messages:[{role:'user',timestamp:0,content:'<file path="'+cwd+'/file#25%.txt">literal attachment path</file>'},{role:'assistant',timestamp:1,content:[{type:'text',text:'[Deep source](${deepRelative}) · [Open README](README.md) · [Open source](src/App.tsx:2) · [URL file](file://'+cwd+'/README.md) · [Spaced note](My Notes.md) · '+${JSON.stringify('[Home file]('+encodeURI(homePath(join(outside,'plain.md')))+')')}}]}],model:null,thinkingLevel:'off',availableThinkingLevels:['off'],isStreaming:false});
 window.escalate=(requests)=>store.dispatch({type:'sandbox_escalation',requests});
 setSession(${JSON.stringify(project)});window.root=createRoot(document.getElementById('root'));
 root.render(React.createElement(React.StrictMode,null,React.createElement(ThemeProvider,{attribute:'class',defaultTheme:'light'},React.createElement(I18nProvider,null,React.createElement(LocaleBridge),React.createElement(ImagePreviewProvider,null,React.createElement(ToastProvider,null,React.createElement(Workspace,{store,accent:'indigo',onAccentChange:()=>{}})))))));
@@ -149,9 +173,12 @@ window.fixtureReady=true;</script></body></html>`
   await symlink(join(repo,'node_modules'),join(temporary,'node_modules'))
   const main=join(temporary,'main.cjs')
   await build({stdin:{contents:`import {app,BrowserWindow,ipcMain} from 'electron';import {listFileDirectory,readFileDocument,readFileGitDiff} from ${JSON.stringify(join(repo,'src/main/file-browser.ts'))};
+import {resolveFilePath} from ${JSON.stringify(join(repo,'src/main/file-path.ts'))};
 app.setPath('userData',${JSON.stringify(join(temporary,'profile'))});app.commandLine.appendSwitch('remote-debugging-port','0');
-const io={directories:[],documents:[],opened:[],saved:[],revealed:[],escalationAnswers:[]};app.whenReady().then(async()=>{ipcMain.handle('app:info',()=>({fileIo:io,cwd:${JSON.stringify(project)},folders:[${JSON.stringify(project)}],contextFiles:true,version:'test'}));ipcMain.handle('pi:models',()=>[]);ipcMain.handle('pi:listSessions',()=>[]);
-ipcMain.handle('files:directory',async(_,r,offset)=>{io.directories.push({path:r.path,offset,time:Date.now()});if(${perfOnly})await new Promise(r=>setTimeout(r,30));return listFileDirectory(r,offset)});ipcMain.handle('files:document',(_,r)=>{io.documents.push({path:r.path,time:Date.now()});return readFileDocument(r)});ipcMain.handle('files:gitDiff',(_,r)=>readFileGitDiff(r));
+const io={directories:[],documents:[],diffs:[],opened:[],saved:[],revealed:[],escalationAnswers:[]};let diffGate,releaseDiff;app.whenReady().then(async()=>{ipcMain.handle('app:info',()=>({fileIo:io,cwd:${JSON.stringify(project)},folders:[${JSON.stringify(project)}],contextFiles:true,version:'test'}));ipcMain.handle('pi:models',()=>[]);ipcMain.handle('pi:listSessions',()=>[]);
+ipcMain.handle('files:directory',async(_,r,offset)=>{io.directories.push({path:r.path,offset,time:Date.now()});if(${perfOnly})await new Promise(r=>setTimeout(r,30));return listFileDirectory(r,offset)});ipcMain.handle('files:document',(_,r)=>{io.documents.push({path:r.path,time:Date.now()});return readFileDocument(r)});
+ipcMain.handle('files:gitDiff',async(_,r)=>{if(r.path==='__hold_diff__'){diffGate=new Promise(resolve=>releaseDiff=resolve);return {gitRoot:null,patch:'',binary:false}}if(r.path==='__release_diff__'){releaseDiff?.();diffGate=null;return {gitRoot:null,patch:'',binary:false}}io.diffs.push(r);if(diffGate)await diffGate;return readFileGitDiff(r)});
+ipcMain.handle('files:resolvePath',(_,request)=>resolveFilePath(request));
 ipcMain.handle('files:saveCopy',(_,path)=>{io.saved.push(path);return {status:'cancelled'}});ipcMain.handle('shell:showInFolder',(_,path)=>{io.revealed.push(path)});ipcMain.handle('shell:openPath',(_,path)=>{io.opened.push(path);return io.opened.length===1?'failed to open':''});ipcMain.handle('shell:openExternal',()=>{});
 ipcMain.handle('sandbox:respondEscalation',(_,requestId,sessionPath,decision)=>{io.escalationAnswers.push({requestId,sessionPath,decision});return true});
 ipcMain.handle('browser:theme',()=>{});
@@ -169,6 +196,11 @@ const w=new BrowserWindow({show:false,width:1500,height:950,webPreferences:{prel
   const click=async selector=>{await evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`);await pause(80)}
   const view=async name=>{await evaluate(`Array.from(document.querySelectorAll('[data-file-preview] [role=tab]')).find(b=>b.textContent===${JSON.stringify(name)}).click()`);await pause(80)}
   const selectTab=async name=>{await evaluate(`Array.from(document.querySelectorAll('[data-sidebar-tabs] [role=tab]')).find(b=>b.textContent===${JSON.stringify(name)}).click()`);await pause(80)}
+  const holdDiff=()=>evaluate(`window.pi.readFileGitDiff({cwd:${JSON.stringify(project)},path:'__hold_diff__'})`)
+  const releaseDiff=()=>evaluate(`window.pi.readFileGitDiff({cwd:${JSON.stringify(project)},path:'__release_diff__'})`)
+  // Observe every frame while real Git IPC is deliberately pending. Warm
+  // switches must paint rows immediately, including a restored virtual window.
+  const diffFrames=action=>evaluate(`new Promise(resolve=>{const samples=[];const tick=()=>{const viewport=document.querySelector('[data-file-diff]'),bounds=viewport?.getBoundingClientRect();samples.push({present:!!viewport,top:viewport?.scrollTop,rows:viewport?[...viewport.querySelectorAll('[data-slot="file-diff-viewport"] .grid')].filter(row=>{const r=row.getBoundingClientRect();return r.bottom>bounds.top&&r.top<bounds.bottom}).length:0});if(samples.length<12)requestAnimationFrame(tick);else resolve(samples)};${action};requestAnimationFrame(tick)})`)
   const press=async(key,code)=>{await send('Input.dispatchKeyEvent',{type:'keyDown',key,code:key,windowsVirtualKeyCode:code,...(key==='Enter'?{text:'\r'}:{})});await send('Input.dispatchKeyEvent',{type:'keyUp',key,code:key,windowsVirtualKeyCode:code});await pause(80)}
   const selectedTreeVisible=`(()=>{const tree=document.querySelector('[data-file-tree]'),row=tree?.querySelector('[aria-selected=true]');if(!tree||!row)return false;const viewport=tree.getBoundingClientRect(),bounds=row.getBoundingClientRect();return bounds.top>=viewport.top&&bounds.bottom<=viewport.bottom})()`
   await send('Runtime.enable');await send('Emulation.setFocusEmulationEnabled',{enabled:true});await waitFor('document.querySelector("a[href=\\"README.md\\"]")','workspace')
@@ -194,6 +226,14 @@ const w=new BrowserWindow({show:false,width:1500,height:950,webPreferences:{prel
   assert.deepEqual(await evaluate('resolveFile("README.md:12", "/project")'),{path:'/project/README.md',line:12})
   assert.deepEqual(await evaluate('resolveFile("file:///project/file%23name.md#L2", "/project")'),{path:'/project/file#name.md',line:2})
   assert.equal(await evaluate('resolveFile("https://example.com/page", "/project")'),null)
+  await click(`a[href=${JSON.stringify(encodeURI(homePath(join(outside,'plain.md'))))}]`)
+  await waitFor('document.querySelector("[data-file-markdown]")?.textContent.includes("Outside project")','home link opens the actual file')
+  assert.equal(await evaluate('files.getSnapshot().active'),join(outside,'plain.md'),'home link stores the absolute host path')
+  assert.equal(await evaluate('files.getSnapshot().tabs.find(tab=>tab.path===files.getSnapshot().active).cwd'),project,'home link retains its originating workspace')
+  console.log('PASS: actual Markdown home link resolves through production preload IPC')
+  // The sent file chip wears the file's own artwork rather than a generic glyph,
+  // at the compact tree size, and its public URL decodes inside the transcript.
+  assert.deepEqual(await evaluate(`(()=>{const image=document.querySelector('[data-from="user"] [data-file-icon]');return image?{path:image.dataset.fileIcon,kind:image.dataset.fileIconKind,side:image.getBoundingClientRect().width,decoded:image.complete&&image.naturalWidth>0}:null})()`),{path:join(project,'file#25%.txt'),kind:'tree',side:16,decoded:true},'the sent attachment chip shows the file-type artwork')
   await evaluate(`Array.from(document.querySelectorAll('button')).find(button=>button.textContent==='file#25%.txt').click()`)
   await waitFor('document.querySelector("[data-file-source]")?.textContent.includes("literal attachment path")','literal attachment path in sidebar')
   await click('a[href="README.md"]')
@@ -203,10 +243,18 @@ const w=new BrowserWindow({show:false,width:1500,height:950,webPreferences:{prel
   assert.equal(await evaluate('!!document.querySelector("[data-file-tabs]")'),false,'no nested file tabs')
   assert.ok(await evaluate('Array.from(document.querySelectorAll("[data-sidebar-tabs] [role=tab]")).some(tab=>tab.textContent==="README.md")'))
   assert.ok(await evaluate('!Array.from(document.querySelectorAll("[data-sidebar-tabs] [role=tab]")).some(tab=>tab.textContent==="Files")'))
+  // A conversation link whose path contains a space is bracketed before parsing,
+  // so it is a real link here and opens the file its author named — the href
+  // carries the encoded space and the click path decodes it back.
+  assert.deepEqual(await evaluate('resolveFile("My%20Notes.md", "/project")'),{path:'/project/My Notes.md'})
+  assert.equal(await evaluate(`document.querySelector('a[href="My%20Notes.md"]').textContent`),'Spaced note','spaced destination renders as a link')
+  await click('a[href="My%20Notes.md"]')
+  await waitFor(`files.getSnapshot().active===${JSON.stringify(join(project,'My Notes.md'))}`,'spaced-name link opens its file')
+  assert.equal(await evaluate('document.querySelector("[data-file-markdown] strong").textContent'),'带空格的文件'); console.log('PASS: spaced link destination opens its file')
   assert.equal(await evaluate(`getComputedStyle(document.querySelector('[data-file-preview] [role=tab][aria-selected=true]')).backgroundColor`),'rgba(0, 0, 0, 0)','view switch uses underline with no filled segment')
   assert.equal(await evaluate(`document.querySelector('[data-file-preview] [role=tab][aria-selected=true] > span').getBoundingClientRect().height`),1,'native beUI underline indicator')
   await waitFor('document.querySelector("[data-file-tree] [data-file-icon$=\\"package.json\\"]")','file type icons')
-  assert.equal(await evaluate(`new Set(['README.md','package.json','data.json','file#25%.txt'].map(name=>document.querySelector('[data-file-tree] [data-file-icon$="'+name+'"]').getAttribute('src'))).size`),4,'file-type icons distinguish extensions and special filenames')
+  assert.deepEqual(await evaluate(`['README.md','package.json','data.json','file#25%.txt'].map(name=>document.querySelector('[data-file-tree] [data-file-icon$="'+name+'"]').getAttribute('src').split('/').pop())`),['markdown.svg','json.svg','json.svg','text.svg'],'file rows render the selected Pierre filename and extension associations')
   // The icons are separate SVG files in the public directory, so this also
   // proves the relative URL resolves in the packaged file:// renderer.
   assert.equal(await evaluate(`Array.from(document.querySelectorAll('[data-file-tree] [data-file-icon]')).filter(img=>!(img.complete&&img.naturalWidth>0)).length`),0,'file-type icons decode')
@@ -220,6 +268,34 @@ const w=new BrowserWindow({show:false,width:1500,height:950,webPreferences:{prel
   assert.equal(await evaluate('files.getSnapshot().tabs.find(t=>t.path===files.getSnapshot().active).line'),2)
   await view('Diff');await waitFor('document.querySelector("[data-file-diff]")','source diff')
   assert.ok(await evaluate('document.querySelector("[data-file-diff]").innerText.includes("original")'))
+  await waitFor('document.querySelector("[data-file-diff] [data-agent-code-token]")','diff highlighting')
+  await view('Source');await holdDiff()
+  const warmFrames=await diffFrames(`Array.from(document.querySelectorAll('[data-file-view-tabs] [role=tab]')).find(tab=>tab.textContent==='Diff').click()`)
+  assert.ok(warmFrames.every(frame=>frame.present&&frame.rows>0),'each warm Diff frame paints the cached rows while validating')
+  const unchangedBody=await evaluate(`document.querySelector('[data-file-diff]').innerHTML`)
+  await releaseDiff();await pause(100)
+  assert.equal(await evaluate(`document.querySelector('[data-file-diff]').innerHTML`),unchangedBody,'unchanged validation preserves highlighted diff content')
+  await holdDiff()
+  await writeFile(join(project,'src/App.tsx'),'export const updated = true;\nexport const secondLine = "中文";\nexport const refreshedDiff = true;\n')
+  const refreshFrames=await diffFrames(`document.querySelector('[aria-label="Refresh files"]').click()`)
+  assert.ok(refreshFrames.every(frame=>frame.present&&frame.rows>0),'refresh keeps diff rows painted while the read is pending')
+  await releaseDiff();await waitFor('document.querySelector("[data-file-diff]")?.textContent.includes("refreshedDiff")','diff refresh discovers disk edits')
+  await selectTab('README.md');await holdDiff()
+  const revisitFrames=await diffFrames(`Array.from(document.querySelectorAll('[data-sidebar-tabs] [role=tab]')).find(tab=>tab.textContent==='App.tsx').click()`)
+  assert.ok(revisitFrames.every(frame=>frame.present&&frame.rows>0),'revisiting a file tab paints its cached diff before Git responds')
+  await releaseDiff()
+
+  await evaluate(`files.open(${JSON.stringify(project)},{path:${JSON.stringify(longDiffPath)}})`)
+  await waitFor('document.querySelector("[data-file-source]")?.textContent.includes("updated0")','long diff source')
+  await view('Diff');await waitFor('Number(document.querySelector("[data-review-diff]")?.dataset.reviewLines)>400','virtual diff')
+  await evaluate(`document.querySelector('[data-file-diff]').scrollTop=32000`)
+  await waitFor('document.querySelector("[data-file-diff]")?.textContent.includes("updated400")','distant diff rows')
+  const diffTop=await evaluate(`document.querySelector('[data-file-diff]').scrollTop`)
+  await view('Source');await holdDiff()
+  const distantFrames=await diffFrames(`Array.from(document.querySelectorAll('[data-file-view-tabs] [role=tab]')).find(tab=>tab.textContent==='Diff').click()`)
+  assert.ok(distantFrames.every(frame=>frame.present&&frame.rows>0&&frame.top===diffTop),'restored distant diffs never paint an empty virtual window: '+JSON.stringify(distantFrames))
+  await releaseDiff();await selectTab('App.tsx');await click('[aria-label="Close long-diff.ts"]')
+  console.log('PASS: cached diff frames survive source switches, pending refreshes, rail revisits and distant virtual scroll restoration')
   await view('Source');await waitFor('document.querySelector("[data-file-source]")','source')
   await waitFor('document.querySelector(\'[aria-label="Open in default app"]\')','default-open toolbar button')
   assert.equal(await evaluate(`!!document.querySelector('[data-file-open-menu]')`),false,'open-with menu removed')
@@ -253,7 +329,7 @@ const w=new BrowserWindow({show:false,width:1500,height:950,webPreferences:{prel
   // A pending escalation renders as beUI's approval card right above the
   // composer, and answering it goes back through IPC carrying the question's own
   // identity — never a bare "approve" anyone could replay.
-  await evaluate(`window.escalate([{requestId:'req-1',sessionId:'fixture',sessionPath:'/ui/fixture',toolCallId:'call',toolName:'edit',currentMode:'workspace-write',requestedMode:'danger-full-access',justification:'needs to write outside the workspace',createdAt:Date.now()}])`)
+  await evaluate(`window.escalate([{requestId:'req-1',sessionId:'fixture',sessionPath:'/ui/fixture',toolCallId:'call',toolName:'edit',currentMode:'workspace-write',requestedMode:'danger-full-access',justification:'needs to write outside the workspace',createdAt:Date.now(),operation:{cwd:${JSON.stringify(project)},parameters:{path:${JSON.stringify(join(outside,'plain.md'))},edits:[{oldText:'Outside project',newText:'Edited outside project'}]}}}])`)
   await waitFor('!!document.querySelector("[data-sandbox-escalation]")','the escalation card appears')
   const escalationText = await evaluate(`document.querySelector('[data-sandbox-escalation]').textContent`)
   assert.match(escalationText, /Sandbox escalation/, `the card names the request: ${escalationText}`)
@@ -456,8 +532,8 @@ const w=new BrowserWindow({show:false,width:1500,height:950,webPreferences:{prel
   const countSlot=await evaluate(`document.querySelector('[data-file-find-count]').getBoundingClientRect().width`)
   const findInputWidth=async()=>evaluate(`document.querySelector('[data-file-find] input').getBoundingClientRect().width`)
   const initialInputWidth=await findInputWidth()
-  const geometry=await evaluate(`(()=>{const bar=document.querySelector('[data-file-find]'),input=bar.querySelector('input'),mode=bar.querySelector('[aria-label="Match case"]');return {height:bar.offsetHeight,input:input.offsetHeight,field:input.parentElement.offsetHeight,modeVisible:mode.getBoundingClientRect().width,overflow:bar.scrollWidth>bar.clientWidth}})()`)
-  assert.equal(geometry.height,36);assert.equal(geometry.input,26);assert.equal(geometry.field,28);assert.equal(geometry.overflow,false);assert.ok(geometry.modeVisible>0)
+  const geometry=await evaluate(`(()=>{const bar=document.querySelector('[data-file-find]'),input=bar.querySelector('input'),mode=bar.querySelector('[aria-label="Match case"]'),b=bar.getBoundingClientRect(),f=input.parentElement.getBoundingClientRect(),i=input.getBoundingClientRect();return {height:bar.offsetHeight,fullyVisible:i.top>=f.top&&i.bottom<=f.bottom&&f.top>=b.top&&f.bottom<=b.bottom,modeVisible:mode.getBoundingClientRect().width,overflow:bar.scrollWidth>bar.clientWidth}})()`)
+  assert.ok(geometry.fullyVisible,'find input fits its field and toolbar');assert.equal(geometry.overflow,false);assert.ok(geometry.modeVisible>0)
   const firstMatch=await activeMatch();assert.equal(firstMatch.text,'SDK')
   await evaluate('document.querySelector("[data-file-find] input").focus()');await press('Enter',13);await findCount('2 / 8')
   assert.equal(await findInputWidth(),initialInputWidth,'count digits never resize the input')
@@ -477,7 +553,7 @@ const w=new BrowserWindow({show:false,width:1500,height:950,webPreferences:{prel
   assert.equal(await evaluate('document.querySelector("[data-file-source]").scrollLeft'),0,'return to first match restores line-number gutter')
   await click('[aria-label="Use regular expression"]');await setQuery('^SDK$');await findCount('1 / 1')
   await setQuery('[');await waitFor('document.querySelector("[data-file-find] input").getAttribute("aria-invalid")==="true"','invalid regex stays compact')
-  assert.equal(await evaluate('document.querySelector("[data-file-find]").offsetHeight'),36)
+  assert.equal(await evaluate('document.querySelector("[data-file-find]").offsetHeight'),geometry.height,'invalid expressions do not move the find toolbar')
   await setQuery('SDK');await findCount('1 / 7')
   await evaluate(`window.searchFrames=[];window.searchLast=performance.now();window.searchSampling=true;function sampleSearch(now){searchFrames.push(now-searchLast);searchLast=now;if(searchSampling)requestAnimationFrame(sampleSearch)}requestAnimationFrame(sampleSearch)`)
   await setQuery('(a+)+$');await pause(180);await setQuery('SDK');await findCount('1 / 7')
@@ -487,7 +563,7 @@ const w=new BrowserWindow({show:false,width:1500,height:950,webPreferences:{prel
   await click('[aria-label="Use regular expression"]');await findCount('1 / 7')
   if(process.env.PI_FILES_SCREENSHOT_DIR)for(const dark of [false,true]){await evaluate(`document.documentElement.classList.toggle('dark',${dark})`);await pause(150);const shot=await send('Page.captureScreenshot',{format:'png'});await writeFile(join(process.env.PI_FILES_SCREENSHOT_DIR,`files-find-${dark?'dark':'light'}.png`),Buffer.from(shot.data,'base64'))}
   await evaluate("document.documentElement.classList.remove('dark');files.setTreeWidth(480)");await pause(100)
-  assert.equal(await evaluate('document.querySelector("[data-file-find]").offsetHeight'),36)
+  assert.equal(await evaluate('document.querySelector("[data-file-find]").offsetHeight'),geometry.height,'narrow search controls preserve the toolbar height')
   assert.ok(await evaluate('document.querySelector("[data-file-find]").scrollWidth<=document.querySelector("[data-file-find]").clientWidth'),'narrow find row stays within the preview')
   await click('[aria-label="Search options"]');await waitFor('Array.from(document.querySelectorAll("[role=dialog] button")).some(b=>b.textContent.includes("Match whole word"))','narrow toolbar exposes all options')
   await press('Escape',27);assert.ok(await evaluate('!!document.querySelector("[data-file-find]")'),'Escape closes nested options before find')

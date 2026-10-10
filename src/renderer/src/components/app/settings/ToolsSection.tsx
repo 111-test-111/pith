@@ -135,7 +135,7 @@ export function ToolsSection() {
                   >
                     {entry.prefix}
                   </span>
-                  <span className="ml-auto shrink-0 rounded-item bg-muted px-1.5 text-[10px] font-medium tabular-nums text-muted-foreground" data-tool-group-count>
+                  <span className="ml-auto shrink-0 rounded-item bg-muted px-1.5 text-micro font-medium tabular-nums text-muted-foreground" data-tool-group-count>
                     {entry.tools.length}
                   </span>
                 </Button>
@@ -151,7 +151,7 @@ export function ToolsSection() {
         {/* One line, because the list is genuinely incomplete on a fresh launch:
             an extension's tools can be registered on its first agent turn
             (`before_agent_start`), so nothing here can list them yet. */}
-        <p data-tools-lazy-hint className="px-1 text-[11px] leading-4 text-muted-foreground/70">
+        <p data-tools-lazy-hint className="px-1 text-caption leading-ui-tight text-muted-foreground/70">
           {t('settings.toolsLazyHint')}
         </p>
       </div>
@@ -221,13 +221,13 @@ function ToolDetail({ tool }: { tool: ToolInfoDTO }) {
         >
           {tool.name}
         </code>
-        <span className="rounded-control bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+        <span className="rounded-control bg-muted px-2 py-0.5 text-caption font-medium text-muted-foreground">
           {sourceLabel}
         </span>
         <span
           data-tool-access={access.state}
           className={cn(
-            'rounded-control px-2 py-0.5 text-[11px] font-medium',
+            'rounded-control px-2 py-0.5 text-caption font-medium',
             access.available ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'
           )}
         >
@@ -248,7 +248,7 @@ function ToolDetail({ tool }: { tool: ToolInfoDTO }) {
             className="rounded-xl border border-border/70 bg-card px-3 py-2.5"
           >
             <FadeScroll className="max-h-44">
-              <p className="text-sm leading-5 text-muted-foreground">{description}</p>
+              <p className="text-sm leading-ui text-muted-foreground">{description}</p>
             </FadeScroll>
           </div>
         </section>
@@ -259,7 +259,7 @@ function ToolDetail({ tool }: { tool: ToolInfoDTO }) {
           <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
             {t('settings.toolParameters')}
           </p>
-          <span className="text-[11px] text-muted-foreground/70">
+          <span className="text-caption text-muted-foreground/70">
             {t('settings.toolParameterCount', { count: fields.length })}
           </span>
         </div>
@@ -276,7 +276,7 @@ function ToolDetail({ tool }: { tool: ToolInfoDTO }) {
                   </code>
                   <p
                     className={cn(
-                      'mt-0.5 text-[10px]',
+                      'mt-0.5 text-micro',
                       field.required ? 'text-primary' : 'text-muted-foreground'
                     )}
                   >
@@ -284,20 +284,20 @@ function ToolDetail({ tool }: { tool: ToolInfoDTO }) {
                   </p>
                 </div>
                 <div className="min-w-0 space-y-1">
-                  <code className="block break-words font-mono text-[11px] text-foreground/80">
+                  <code className="block break-words font-mono text-caption text-foreground/80">
                     {field.type}
                   </code>
                   {field.description ? (
-                    <p className="text-xs leading-4 text-muted-foreground">{field.description}</p>
+                    <p className="text-xs leading-ui-tight text-muted-foreground">{field.description}</p>
                   ) : null}
                   {field.allowedValues ? (
-                    <p className="text-[11px] text-muted-foreground/70">
+                    <p className="text-caption text-muted-foreground/70">
                       {t('settings.toolAllowedValues')}:{' '}
                       <code className="font-mono">{field.allowedValues}</code>
                     </p>
                   ) : null}
                   {field.defaultValue !== undefined ? (
-                    <p className="text-[11px] text-muted-foreground/70">
+                    <p className="text-caption text-muted-foreground/70">
                       {t('settings.toolDefaultValue')}:{' '}
                       <code className="font-mono">{field.defaultValue}</code>
                     </p>
@@ -316,7 +316,7 @@ function ToolDetail({ tool }: { tool: ToolInfoDTO }) {
           <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
             {t('settings.toolGuidelines')}
           </p>
-          <ul className="list-disc space-y-1 pl-5 text-xs leading-4 text-muted-foreground">
+          <ul className="list-disc space-y-1 pl-5 text-xs leading-ui-tight text-muted-foreground">
             {tool.promptGuidelines.map((guideline, index) => (
               <li key={`${tool.name}:${index}`}>{guideline}</li>
             ))}

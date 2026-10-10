@@ -40,7 +40,10 @@ export function checkoutRoot(cwd: string): string {
  * A shell can cd, so open interactive terminals conservatively block restores. */
 export class CheckoutCoordinator {
   private leases = new Set<Lease>()
-  private exclusive = new Map<string, 'snapshot' | 'restore'>()
+  private exclusive = new Map<string, 'snapshot' | 'restore' | 'git'>()
+  /** An owned process whose cleanup could not be proved fences this app lifetime. */
+  private uncertain = new Set<string>()
+  fence(cwd: string): void { this.uncertain.add(checkoutRoot(cwd)) }
   private closed = false
   private terminalHostLost = false
   markTerminalHostLost(): void { this.terminalHostLost = true }
@@ -71,7 +74,7 @@ export class CheckoutCoordinator {
     const root = checkoutRoot(cwd)
     const operationId = this.recovery.get(root) ?? (kind === 'terminal' ? this.recovery.values().next().value : undefined)
     if (operationId) throw new RewindFailure('recovery', [], operationId)
-    if (this.closed || this.exclusive.has(root) || (kind === 'terminal' && [...this.exclusive.values()].includes('restore'))) throw new RewindFailure('busy')
+    if (this.closed || this.uncertain.has(root) || this.exclusive.has(root) || (kind === 'terminal' && (this.uncertain.size > 0 || [...this.exclusive.values()].some(purpose => purpose !== 'snapshot')))) throw new RewindFailure('busy')
     const lease: Lease = { root, kind, sessionPath }; this.leases.add(lease)
     return () => { this.leases.delete(lease) }
   }
@@ -87,7 +90,7 @@ export class CheckoutCoordinator {
     return {
       terminal: this.terminalHostLost || [...this.leases].some(lease => lease.kind === 'terminal'),
       recovery: this.recovery.has(root),
-      exclusive: this.exclusive.has(root),
+      exclusive: this.exclusive.has(root) || this.uncertain.has(root),
       runs,
       writers,
       closing: this.closed
@@ -104,12 +107,12 @@ export class CheckoutCoordinator {
    * executing tool, a managed process, or a whole subagent run. Another
    * session's in-flight model turn (a plain 'run' lease) must not starve
    * pre-turn capture — its tools queue behind the snapshot window instead. */
-  async withExclusive<T>(cwd: string, purpose: 'snapshot' | 'restore', operation: () => Promise<T>, recovering = false): Promise<T> {
-    if (purpose === 'restore' && this.terminalHostLost) throw new RewindFailure('terminal')
+  async withExclusive<T>(cwd: string, purpose: 'snapshot' | 'restore' | 'git', operation: () => Promise<T>, recovering = false): Promise<T> {
+    if (purpose !== 'snapshot' && this.terminalHostLost) throw new RewindFailure('terminal')
     const pending = this.recovery.get(checkoutRoot(cwd))
     if (pending && !recovering) throw new RewindFailure('recovery', [], pending)
     const blockers = this.restoreBlockers(cwd)
-    const blocked = blockers.closing || blockers.exclusive || blockers.writers > 0 || (purpose === 'restore' && (blockers.terminal || blockers.runs > 0))
+    const blocked = blockers.closing || blockers.exclusive || blockers.writers > 0 || (purpose !== 'snapshot' && (blockers.terminal || blockers.runs > 0))
     if (blocked) throw new RewindFailure('busy')
     const root = checkoutRoot(cwd); this.exclusive.set(root, purpose)
     try { return await operation() } finally { this.exclusive.delete(root); for (const wake of [...this.waiters]) wake() }
@@ -118,6 +121,6 @@ export class CheckoutCoordinator {
     if (operationId) this.recovery.set(checkoutRoot(cwd), operationId)
     else this.recovery.delete(checkoutRoot(cwd))
   }
-  canStart(cwd: string): boolean { return !this.closed && !this.recovery.has(checkoutRoot(cwd)) && !this.exclusive.has(checkoutRoot(cwd)) }
+  canStart(cwd: string): boolean { return !this.closed && !this.uncertain.has(checkoutRoot(cwd)) && !this.recovery.has(checkoutRoot(cwd)) && !this.exclusive.has(checkoutRoot(cwd)) }
   close(): void { this.closed = true; for (const wake of [...this.waiters]) wake() }
 }

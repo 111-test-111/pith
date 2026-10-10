@@ -170,15 +170,23 @@ export function TabsTrigger({
   }
 
   return (
-    <div className="relative">
+    // local patch (pi-app): the wrapper is a flex container so its box IS the
+    // trigger's box. As a block it lined its inline-flex button up on a text
+    // baseline and added the strut's ~2px leading below it, so the absolute
+    // selected indicator (inset-0) painted a taller block than the hover fill
+    // the button itself paints — the selected 7d/30d pill sat 1px proud on each
+    // side of the hovered one.
+    <div className="relative flex">
       {active ? (
         <motion.span
           layoutId={layoutId}
           layout="position"
           // local patch (pi-app): CSS owns radius and shape for both the moving
           // indicator and its tab; inline numbers bypass the shared scale.
+          // local patch (pi-app): tabs and single-choice segments keep a theme
+          // tint for selection while their labels retain primary text contrast.
           className={cn(
-            "absolute inset-0 bg-primary",
+            "absolute inset-0 bg-primary/15",
             fillRadius,
             indicatorClassName,
           )}
@@ -193,7 +201,7 @@ export function TabsTrigger({
           "relative z-10 inline-flex items-center justify-center whitespace-nowrap bg-transparent px-3.5 py-1.5 text-sm font-medium outline-none",
           "transition-colors",
           active
-            ? "text-primary-foreground"
+            ? "text-foreground"
             : "text-muted-foreground hover:bg-muted hover:text-foreground",
           fillRadius,
           className,

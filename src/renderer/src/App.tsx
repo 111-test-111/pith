@@ -88,7 +88,7 @@ function AppInner() {
 
   if (!booted) {
     return (
-      <div className="flex h-full flex-col bg-background text-sm text-muted-foreground">
+      <div className="window-page flex h-full flex-col text-sm text-muted-foreground">
         <WindowTitlebar><span>{t('app.name')}</span></WindowTitlebar>
         <div className="grid flex-1 place-items-center">{t('app.starting')}</div>
       </div>
@@ -97,7 +97,7 @@ function AppInner() {
 
   if (!hasCwd) {
     return (
-      <div className="flex h-full flex-col">
+      <div className="window-page flex h-full flex-col">
         <WindowTitlebar><span className="text-sm text-muted-foreground">{t('app.name')}</span></WindowTitlebar>
         <div className="min-h-0 flex-1">
           {initError ? (

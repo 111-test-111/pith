@@ -42,7 +42,7 @@ export function ModelInputBadges({ input, className }: ModelInputBadgesProps) {
         return (
           <span
             key={kind}
-            className="inline-flex shrink-0 items-center gap-0.5 rounded-item bg-muted px-1 py-px text-[10px] font-medium leading-4 text-muted-foreground"
+            className="inline-flex shrink-0 items-center gap-0.5 rounded-item bg-muted px-1 py-px text-micro font-medium leading-ui-tight text-muted-foreground"
           >
             <Icon className="size-2.5 shrink-0" />
             {t(label)}

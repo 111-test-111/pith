@@ -135,7 +135,7 @@ export async function checkPromptEditor(page, locale) {
   assert.equal((await caret()).inside, true, 'the caret stays inside the editing host')
   near((await caret()).x, first.x, 'backspace at the draft start keeps the origin')
 
-  // Hit testing in the empty field must focus its inline editing host too.
+  // Hit testing in the empty field must focus its editing host too.
   await input.fill('\n1')
   await input.press('ArrowUp')
   near((await caret()).x, first.x, 'ArrowUp returns to the first line')
@@ -226,6 +226,29 @@ export async function checkPromptEditor(page, locale) {
   assert.equal(await page.evaluate(() => window.sent.length), 0)
   await cdp.send('Input.insertText', { text: '规划' })
   assert.equal(await text(), '规划')
+
+  // macOS Pinyin can retain "provid" as preedit while the English candidate
+  // for "provide" advances its selection one character beyond that text.
+  // An inline host resolves that offset into the next model-picker label,
+  // so the candidate commit leaves the draft and can rewrite UI text.
+  for (const prefix of ['', 'first\n']) {
+    await input.fill(prefix)
+    await input.press('ControlOrMeta+End')
+    for (const preedit of ['p', 'p r', 'pro', 'p ro v', 'provi', 'provid']) {
+      await cdp.send('Input.imeSetComposition', { text: preedit, selectionStart: preedit.length, selectionEnd: preedit.length })
+    }
+    await input.evaluate(node => { window.composingText = node.firstChild })
+    await cdp.send('Input.imeSetComposition', { text: 'provid', selectionStart: 7, selectionEnd: 7 })
+    assert.equal(await text(), `${prefix}provid`, 'a pending English candidate keeps its native preedit')
+    assert.ok(await input.evaluate(node => {
+      const selection = getSelection()
+      return node.contains(selection.anchorNode) && node.contains(selection.focusNode) && node === document.activeElement
+    }), 'the English-candidate selection and focus stay inside the draft')
+    assert.equal(await input.evaluate(node => node.firstChild === window.composingText), true, 'candidate updates preserve the native composition node')
+    await cdp.send('Input.insertText', { text: 'provider' })
+    assert.equal(await text(), `${prefix}provider`, 'the English candidate commits into the draft')
+    assert.equal(await input.evaluate(node => node === document.activeElement), true, 'candidate commit preserves composer focus')
+  }
   await page.evaluate(() => window.setPlan({ ...window.plan, seq: window.plan.seq + 1, mode: 'plan' }))
   await cdp.detach()
 

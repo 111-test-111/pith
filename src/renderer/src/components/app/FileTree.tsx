@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, memo, type ReactNode } from 'react'
-import { FileTree as BeUIFileTree, FileTreeFile, FileTreeFolder } from '@/components/motion/file-tree'
+import { FileTreeView, FileTreeFile, FileTreeFolder } from './FileTreeView'
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from '@/components/motion/context-menu'
 import { ChevronDown, LoaderCircle, RefreshCw } from '@/lib/icons'
 import { basename } from '@/lib/format'
@@ -8,8 +8,6 @@ import type { FileBrowserStore } from '@/state/file-browser-store'
 import { FileTypeIcon } from './FileTypeIcon'
 import { MiddleEllipsis } from './MiddleEllipsis'
 import { useToast } from './ToastProvider'
-
-const treeClasses = { item: 'h-8 gap-1.5 rounded-item text-xs font-normal aria-selected:bg-primary/10 aria-selected:text-primary [&>span.absolute]:hidden', pillContainer: 'h-8', label: 'flex' }
 
 /** IO and pagination stay app-owned; beUI owns the actual tree collection,
  * selection, branch motion, roving focus and Arrow/Home/End/Enter behaviour. */
@@ -129,8 +127,7 @@ export const FileTree = memo(function FileTree({ root, projectless, expanded, se
         setMenuPath(usable ? value : null)
         setMenuFolder(!!row?.hasAttribute('aria-expanded'))
       }}>
-    <BeUIFileTree instant value={selected} expandedIds={expanded} onExpandedChange={next => store.setExpanded(next)} ariaLabel={t('files.tree')} indent={12}
-      classNames={treeClasses}
+    <FileTreeView value={selected} expandedIds={expanded} onExpandedChange={next => store.setExpanded(next)} ariaLabel={t('files.tree')}
       onValueChange={value => {
         if (value.startsWith('retry:')) { void load(value.slice(6), false, true); return }
         if (value.startsWith('more:')) { void load(value.slice(5), true); return }
@@ -138,7 +135,7 @@ export const FileTree = memo(function FileTree({ root, projectless, expanded, se
         store.open(root, { path: value })
       }}>
       {children}
-    </BeUIFileTree>
+    </FileTreeView>
     </nav>
     </ContextMenuTrigger>
     <ContextMenuContent ariaLabel={t('files.treeMenu')}>

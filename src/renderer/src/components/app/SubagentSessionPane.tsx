@@ -85,7 +85,7 @@ export const SubagentSessionPane = memo(function SubagentSessionPane({
           <p className="truncate text-xs font-medium text-foreground" title={run?.description}>
             {run?.description ?? t('subagent.sessionTab')}
           </p>
-          <p className="truncate text-[11px] text-muted-foreground" title={meta}>
+          <p className="truncate text-caption text-muted-foreground" title={meta}>
             {meta || t('subagent.paneReadOnly')}
           </p>
         </div>

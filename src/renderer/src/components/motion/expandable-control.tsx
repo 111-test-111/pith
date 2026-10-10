@@ -246,9 +246,9 @@ export function ExpandableChip({
             aria-label={actionLabel}
             disabled={disabled || !isExpanded}
             className={cn(
-              // local patch (pi-app): capsule-by-design action, so the shape
-              // token follows the UI style.
-              "flex h-full w-8 shrink-0 items-center justify-center rounded-capsule text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none",
+              // local patch (pi-app): the action icon control keeps the shared
+              // control radius rather than a capsule.
+              "flex h-full w-8 shrink-0 items-center justify-center rounded-icon text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none",
               disabled && "opacity-50",
               actionClassName,
             )}

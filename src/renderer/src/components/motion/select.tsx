@@ -5,9 +5,7 @@
 import { Check, ChevronDown } from "@/lib/icons";
 import {
   motion,
-  type Transition,
   useReducedMotion,
-  type Variants,
 } from "motion/react";
 import {
   createContext,
@@ -24,26 +22,9 @@ import {
 // local patch (pi-app): let modal callers portal the same select panel above
 // clipped dialog and scroll surfaces without changing the ordinary layout path.
 import { createPortal } from "react-dom";
-import { EASE_OUT } from "@/lib/ease";
+// local patch (pi-app): all picker panels use the app's shared overlay motion.
+import { OVERLAY_ENTER, useOverlayMotion } from "@/lib/overlay-motion";
 import { cn } from "@/lib/utils";
-
-const INSTANT_TRANSITION: Transition = { duration: 0 };
-
-// Spring with bounce powers the unfold/separation; per-property timings in the
-// content choreograph it (see SelectContent). Mirrors bouncy-accordion's feel.
-const CHEVRON_TRANSITION: Transition = { type: "spring", duration: 0.4, bounce: 0.3 };
-
-// local patch (registry beui.dev/components/motion/select staggers 35ms per
-// item): long option lists (the model picker has 37) made the tail wait over
-// a second. 9ms keeps the cascade feel but lands ~37 items in <0.4s.
-const LIST_VARIANTS: Variants = {
-  hidden: {},
-  show: { transition: { staggerChildren: 0.009, delayChildren: 0.05 } },
-};
-const ITEM_VARIANTS: Variants = {
-  hidden: { opacity: 0, y: -6, filter: "blur(3px)" },
-  show: { opacity: 1, y: 0, filter: "blur(0px)" },
-};
 
 type Placement = "bottom" | "top";
 
@@ -122,10 +103,14 @@ export function Select({
 
   const setOpen = useCallback(
     (next: boolean) => {
+      // local patch (pi-app): return focus before the retained panel goes inert.
+      if (!next && panelRef.current?.contains(document.activeElement)) {
+        document.getElementById(`${baseId}-trigger`)?.focus({ preventScroll: true });
+      }
       if (!openControlled) setInternalOpen(next);
       onOpenChange?.(next);
     },
-    [onOpenChange, openControlled],
+    [baseId, onOpenChange, openControlled],
   );
 
   const select = useCallback(
@@ -220,20 +205,6 @@ export interface SelectTriggerProps {
 
 export function SelectTrigger({ className, "aria-label": ariaLabel, children }: SelectTriggerProps) {
   const ctx = useSelectContext("SelectTrigger");
-  const isTop = ctx.placement === "top";
-  // edge facing the panel flattens then rounds; the far edge stays rounded.
-  // All four corners are specified so none gets stranded when placement flips.
-  // local patch (pi-app): animate the corner flattening as a multiplier, not
-  // fixed pixel radii. Native CSS resolves the token throughout the motion,
-  // including live token changes and the reduced-motion path.
-  const radius = "var(--app-radius-control)";
-  const nearRadius = "calc(var(--app-radius-control) * var(--select-corner-progress, 1))";
-  const kf = ctx.open ? [0, 0, 1] : [1, 0, 1];
-  const kfT: Transition = ctx.reduce
-    ? { duration: 0 }
-    : ctx.open
-      ? { duration: 0.6, times: [0, 0.4, 1], ease: EASE_OUT }
-      : { duration: 0.42, times: [0, 0.5, 1], ease: EASE_OUT };
   return (
     <motion.button
       type="button"
@@ -244,17 +215,7 @@ export function SelectTrigger({ className, "aria-label": ariaLabel, children }: 
       aria-expanded={ctx.open}
       aria-controls={ctx.listId}
       onClick={() => ctx.setOpen(!ctx.open)}
-      // Gooey: the edge facing the panel snaps flat (panel attached) then rounds
-      // back once the panel pulls away — the two pinch apart.
-      initial={false}
-      style={{
-        borderTopLeftRadius: isTop ? nearRadius : radius,
-        borderTopRightRadius: isTop ? nearRadius : radius,
-        borderBottomLeftRadius: isTop ? radius : nearRadius,
-        borderBottomRightRadius: isTop ? radius : nearRadius,
-      }}
-      animate={{ "--select-corner-progress": kf }}
-      transition={{ "--select-corner-progress": kfT }}
+      // local patch (pi-app): opening a panel leaves its trigger geometry intact.
       className={cn(
         // local patch (pi-app): reserve the transparent border's layout space;
         // pointer hover fills the trigger, keyboard focus keeps a visible ring.
@@ -268,7 +229,7 @@ export function SelectTrigger({ className, "aria-label": ariaLabel, children }: 
       <motion.span
         aria-hidden
         animate={{ rotate: ctx.open ? 180 : 0 }}
-        transition={ctx.reduce ? { duration: 0 } : CHEVRON_TRANSITION}
+        transition={ctx.reduce ? { duration: 0 } : OVERLAY_ENTER}
         className="text-muted-foreground"
       >
         <ChevronDown className="h-4 w-4" />
@@ -311,14 +272,10 @@ export function SelectContent({ className, children, portal = false, portalAlign
   const [portalReady, setPortalReady] = useState(false);
   const open = ctx.open;
   const { setPlacement } = ctx;
+  const overlay = useOverlayMotion(ctx.placement);
 
-  // local patch (pi-app): the panel animates its BORDER-box height (Tailwind's
-  // preflight makes everything border-box) while `offsetHeight` is the inner
-  // content — so this panel's own 1px top/bottom borders have to be added to
-  // the measurement. Without them the panel settles 2px short of its content,
-  // `overflow: hidden` eats the difference at the BOTTOM, and every dropdown
-  // reads top-heavy (5px above the first row, 3px below the last instead of
-  // 5/5). Same fix in combobox/content and multi-select/content.
+  // local patch (pi-app): measure the full border box for placement only;
+  // natural height keeps every row and both padding edges visible during motion.
   const panelHeight = useCallback(() => {
     const node = innerRef.current;
     if (!node) return 0;
@@ -351,7 +308,7 @@ export function SelectContent({ className, children, portal = false, portalAlign
     const below = window.innerHeight - rect.bottom;
     const above = rect.top;
     setPlacement(below < h + 16 && above > below ? "top" : "bottom");
-  }, [open, portal, ctx.triggerId, setPlacement, panelHeight]);
+  }, [open, portal, ctx.triggerId, setPlacement, panelHeight, height]);
 
   // local patch (pi-app): set the real trigger width BEFORE measuring the
   // portalled list. Its initial fixed width is zero; measuring at that width
@@ -359,7 +316,8 @@ export function SelectContent({ className, children, portal = false, portalAlign
   // The first visible frame uses the final width, height and placement.
   useLayoutEffect(() => {
     if (!portal) return;
-    if (!open) { setPortalReady(false); return; }
+    // local patch (pi-app): keep the last placement visible through the exit.
+    if (!open) return;
     const update = () => {
       const trigger = document.getElementById(ctx.triggerId);
       const panel = ctx.panelRef.current;
@@ -396,22 +354,7 @@ export function SelectContent({ className, children, portal = false, portalAlign
     };
   }, [portal, open, ctx.triggerId, ctx.panelRef, setPlacement, panelHeight, portalAlign, portalWidth]);
 
-  // Specify EVERY corner + both margins each render. The near edge (facing the
-  // trigger) animates flat->round and the gap opens on that side; the far edge
-  // stays rounded and its margin pinned to 0. Setting all of them avoids a
-  // stranded square corner when the placement flips between opens.
   const isTop = ctx.placement === "top";
-  const nearGap = open ? 8 : 0;
-  // local patch (pi-app): share the trigger's semantic radius at animation rest.
-  const radius = "var(--app-radius-control)";
-  const nearRadius = "calc(var(--app-radius-control) * var(--select-corner-progress, 1))";
-
-  const gapT: Transition = open
-    ? { type: "spring", duration: 0.6, bounce: 0.5, delay: 0.12 }
-    : { type: "spring", duration: 0.3, bounce: 0.1 };
-  const radiusT: Transition = open
-    ? { duration: 0.3, ease: EASE_OUT, delay: 0.14 }
-    : { duration: 0.16, ease: EASE_OUT };
 
   // Items stay mounted (open just animates the panel) so each item's label
   // registration persists — otherwise the trigger would fall back to the
@@ -424,69 +367,26 @@ export function SelectContent({ className, children, portal = false, portalAlign
       aria-labelledby={ctx.triggerId}
       aria-hidden={!open}
       inert={!open}
-      initial={false}
+      {...overlay}
+      animate={open && (!portal || portalReady) ? "open" : "closed"}
       style={{
         transformOrigin: isTop ? "bottom" : "top",
         overflow: "hidden",
         pointerEvents: open ? "auto" : "none",
-        borderTopLeftRadius: isTop ? radius : nearRadius,
-        borderTopRightRadius: isTop ? radius : nearRadius,
-        borderBottomLeftRadius: isTop ? nearRadius : radius,
-        borderBottomRightRadius: isTop ? nearRadius : radius,
         ...(portal ? floatingPosition : {}),
         visibility: portal && !portalReady ? "hidden" : undefined,
       }}
-      animate={
-        ctx.reduce
-          ? {
-              opacity: open ? 1 : 0,
-              height: open ? height : 0,
-              "--select-corner-progress": open ? 1 : 0,
-            }
-          : {
-              opacity: open ? 1 : 0,
-              height: open ? height : 0,
-              // gap opens on the side facing the trigger
-              marginTop: portal || isTop ? 0 : nearGap,
-              marginBottom: portal || !isTop ? 0 : nearGap,
-              // near corners go flat->round; far corners stay rounded
-              "--select-corner-progress": open ? 1 : 0,
-            }
-      }
-      transition={
-        ctx.reduce
-          ? { duration: 0.12 }
-          : {
-              opacity: open
-                ? { duration: 0.18 }
-                : { duration: 0.16, delay: 0.12 },
-              height: open
-                ? { type: "spring", duration: 0.42, bounce: 0.14 }
-                : { duration: 0.26, ease: EASE_OUT, delay: 0.14 },
-              marginTop: isTop ? INSTANT_TRANSITION : gapT,
-              marginBottom: isTop ? gapT : INSTANT_TRANSITION,
-              "--select-corner-progress": radiusT,
-            }
-      }
-      // flush against the trigger, then separates into its own rounded pill;
-      // sits above or below depending on available space
       className={cn(
         // local patch (pi-app): all floating surfaces share themed elevation.
         portal ? "fixed z-[110]" : "absolute left-0 right-0 z-20",
         "rounded-xl border border-border bg-background shadow-overlay",
-        !portal && (isTop ? "bottom-full" : "top-full"),
+        !portal && (isTop ? "bottom-full mb-2" : "top-full mt-2"),
         className,
       )}
     >
-      <motion.div
-        ref={innerRef}
-        variants={ctx.reduce ? undefined : LIST_VARIANTS}
-        initial={false}
-        animate={open ? "show" : "hidden"}
-        className="p-1"
-      >
+      <div ref={innerRef} className="p-1">
         {children}
-      </motion.div>
+      </div>
     </motion.div>
   );
   return portal ? createPortal(panel, document.body) : panel;
@@ -515,7 +415,7 @@ export function SelectItem({
   }, [ctx.register, ctx.unregister, value, label]);
 
   return (
-    <motion.li variants={ctx.reduce ? undefined : ITEM_VARIANTS}>
+    <li>
       <button
         type="button"
         role="option"
@@ -524,8 +424,9 @@ export function SelectItem({
         onClick={() => ctx.select(value)}
         className={cn(
           "flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm outline-none transition-colors",
+          // local patch (pi-app): a committed single choice keeps its theme tint.
           selected
-            ? "bg-muted text-foreground"
+            ? "bg-primary/15 text-foreground"
             : "text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:bg-muted",
           "disabled:pointer-events-none disabled:opacity-50",
           className,
@@ -534,6 +435,6 @@ export function SelectItem({
         {children}
         {selected ? <Check className="h-3.5 w-3.5 shrink-0" /> : null}
       </button>
-    </motion.li>
+    </li>
   );
 }

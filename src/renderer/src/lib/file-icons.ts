@@ -1,17 +1,18 @@
-import map from './file-icons.map.json'
+import pierreMap from './pierre-file-icons.map.json'
+import pierreExtensions from './pierre-file-icons.extensions.json'
 import { basename } from './format'
+import type { UiStyle } from './ui-style'
 
 /**
- * File-type artwork is Catppuccin Icons for the whole app: the interface style
- * preference changes corners, not icons, so square and squircle draw the same set.
+ * Square uses app-owned Pierre adaptations; squircle uses the native artwork.
+ * Both share @pierre/trees' complete associations and the document/media additions.
  *
- * `scripts/prepare-file-icons.mjs` writes only the SVGs this map can reach into
+ * `scripts/prepare-file-icons.mjs` writes only the SVGs these maps can reach into
  * the generated, gitignored `src/renderer/public/file-icons/`; the renderer
  * loads them as relative-URL images instead of bundling the collection.
  */
 type IconMap = {
   source: string
-  generated: string
   default: string
   names: Record<string, string>
   globs?: { n: string[]; e: string[]; i: string }[]
@@ -37,16 +38,20 @@ function prepareMap(raw: unknown): PreparedMap {
   return { icons, globsByName }
 }
 
-const { icons, globsByName } = prepareMap(map)
+const pierre = prepareMap({
+  ...pierreMap,
+  extensions: { ...pierreMap.extensions, ...pierreExtensions.extensions }
+})
 
 /**
  * The most specific match wins: an exact file name, then a known name pattern,
  * then the longest extension (`tar.gz` before `gz`), and finally the generic
  * file icon.
  */
-export function fileIconName(path: string): string {
+export function fileIconName(path: string, _style: UiStyle = 'square'): string {
+  const { icons, globsByName } = pierre
   const name = basename(path).toLowerCase()
-  const named = icons.names[name]
+  const named = Object.hasOwn(icons.names, name) ? icons.names[name] : undefined
   if (named) return named
 
   const parts = name.split('.')
@@ -58,7 +63,7 @@ export function fileIconName(path: string): string {
     }
     for (let index = 1; index < parts.length; index++) {
       const candidate = parts.slice(index).join('.')
-      const found = icons.extensions[candidate]
+      const found = Object.hasOwn(icons.extensions, candidate) ? icons.extensions[candidate] : undefined
       if (found) return found
     }
   }
@@ -67,6 +72,7 @@ export function fileIconName(path: string): string {
 
 /** Relative on purpose: the packaged renderer is loaded from `file://`, where
  * an absolute path would resolve against the filesystem root instead of the app. */
-export function fileIconSource(path: string): string {
-  return `./file-icons/${fileIconName(path)}.svg`
+export function fileIconSource(path: string, style: UiStyle = 'square'): string {
+  const directory = style === 'squircle' ? 'pierre/' : 'pierre-square/'
+  return `./file-icons/${directory}${fileIconName(path, style)}.svg`
 }

@@ -8,7 +8,7 @@ import { Tooltip } from '@/components/motion/tooltip'
 import { useI18n } from '@/i18n'
 import { cn } from '@/lib/utils'
 import { createBrowserPageId, HUMAN_OWNER, buildMarkerUrl, parseMarkerUrl } from '../../../../shared/browser.ts'
-import { readOpenBrowserPages, snapshotOpenPages, writeOpenBrowserPages, type OpenBrowserPageEntry } from '@/lib/browser/session'
+import { getOpenBrowserPagesRevision, readOpenBrowserPages, snapshotOpenPages, writeOpenBrowserPages, type OpenBrowserPageEntry } from '@/lib/browser/session'
 import { BROWSER_OPEN_LINK_EVENT, drainPendingBrowserOpenLinks } from '@/lib/browser/open-link'
 import { getBrowserZoom, nextBrowserZoom, setBrowserZoom } from '@/lib/browser/zoom'
 import { dispatchGuestIdentity } from '@/lib/shortcuts/shortcut-dispatcher'
@@ -153,6 +153,8 @@ export function BrowserPane({
   /** Set while our createPage round trip is in flight: the first fresh
    *  pendingCreate row that shows up is ours to select. */
   const awaitingCreateRef = useRef(false)
+  // Human selection/close and newer + clicks supersede an older create receipt.
+  const createSelectionRevisionRef = useRef(0)
   // ---- Task 8: first-status latch / open-pages restore / empty transition ----
   // Status snapshot that predates THIS mount: the workspace-owned store keeps
   // its last value across a rail collapse (which unmounts this pane and kills
@@ -163,6 +165,9 @@ export function BrowserPane({
   // snapshot reading as non-empty must never suppress a restore, and its dead
   // rows must never render.
   const staleStatusRef = useRef(status)
+  /** A tab close invalidates this instance even while its exit animation
+   * keeps it mounted. A fold retains the snapshot for reconstruction. */
+  const openPagesRevisionRef = useRef(getOpenBrowserPagesRevision())
   /** First-status latch: fired (or deliberately skipped) once per mount. */
   const autoFilledRef = useRef(false)
   /** A restore sits between its ensure-call and its row materialization: the
@@ -180,7 +185,11 @@ export function BrowserPane({
    *  after the unmount must not write its optimistic row for a pane that will
    *  never mount it. */
   const aliveRef = useRef(true)
-  useEffect(() => () => { aliveRef.current = false }, [])
+  useEffect(() => {
+    // StrictMode replays setup after cleanup without replacing this ref.
+    aliveRef.current = true
+    return () => { aliveRef.current = false }
+  }, [])
 
   const { resolvedTheme } = useTheme()
   // Guest pages follow the app theme: main injects Emulation.setEmulatedMedia
@@ -427,8 +436,8 @@ export function BrowserPane({
   }, [pages])
 
   // First fresh pendingCreate after our + click is ours: select the row as
-  // soon as it materializes (createPage's own resolution re-selects the same
-  // id a moment later — the reconcile upgrade needs a beat).
+  // soon as it materializes. A later human selection cancels this latch and
+  // supersedes createPage's eventual receipt, so it cannot steal focus back.
   useEffect(() => {
     if (!awaitingCreateRef.current || !status) return
     const fresh = status.pendingCreates.find((entry) => !closedIds.has(entry.id))
@@ -440,8 +449,10 @@ export function BrowserPane({
   // onEmpty at most once per pane mount: closePage's direct call and the
   // empty-after-first-status transition share this guard.
   const fireEmpty = useCallback(() => {
-    if (emptyFiredRef.current) return
+    if (emptyFiredRef.current || openPagesRevisionRef.current !== getOpenBrowserPagesRevision()) return
     emptyFiredRef.current = true
+    // Closing the last page must not leave a restorable page behind.
+    writeOpenBrowserPages([], openPagesRevisionRef.current)
     onEmptyRef.current()
   }, [])
 
@@ -481,6 +492,7 @@ export function BrowserPane({
     void window.pi.browserEnsureService()
       .catch(() => { /* rows still materialize; the TTL sweep reaps unregistered ones */ })
       .then(() => {
+        if (!aliveRef.current || openPagesRevisionRef.current !== getOpenBrowserPagesRevision()) return
         const saved = readOpenBrowserPages()
         const targets: ReadonlyArray<OpenBrowserPageEntry> =
           saved.length > 0 ? saved : [{ owner: HUMAN_OWNER }]
@@ -587,23 +599,25 @@ export function BrowserPane({
           }
         }),
         effectiveSelectedId
-      )
+      ),
+      openPagesRevisionRef.current
     )
   }, [localNav, pages, status, effectiveSelectedId])
 
   const newPage = useCallback(() => {
+    const selectionRevision = ++createSelectionRevisionRef.current
     awaitingCreateRef.current = true
     // Pull once right away: the pendingCreate enqueue does not push state, so
     // the poll alone would add up to one BROWSER_POLL_MS of dead air.
     void window.pi.browserStatus().then((next) => store.applyStatus(next)).catch(() => {})
     void window.pi.browserCreatePage()
       .then((meta) => {
-        awaitingCreateRef.current = false
+        if (selectionRevision === createSelectionRevisionRef.current) awaitingCreateRef.current = false
         // The pane unmounted mid-round-trip (rail fold / tab close): the store
         // outlives this instance, so without the guard the resolved page's
         // optimistic row would leak into a pane that never mounts it.
-        if (!aliveRef.current) return
-        setSelectedPageId(meta.id)
+        if (!aliveRef.current || openPagesRevisionRef.current !== getOpenBrowserPagesRevision()) return
+        if (selectionRevision === createSelectionRevisionRef.current) setSelectedPageId(meta.id)
         // Round trip done — the registry has the page. If the push is still
         // in flight, an optimistic row keeps the strip from flashing; the
         // self-heal above drops it once the server list covers the id.
@@ -612,7 +626,9 @@ export function BrowserPane({
           store.resolveOptimistic(meta.id)
         }
       })
-      .catch(() => { awaitingCreateRef.current = false })
+      .catch(() => {
+        if (selectionRevision === createSelectionRevisionRef.current) awaitingCreateRef.current = false
+      })
   }, [store])
 
   const grantConsent = useCallback(() => {
@@ -622,6 +638,10 @@ export function BrowserPane({
   }, [store])
 
   const closePage = useCallback((id: string) => {
+    if (selectedIdRef.current === id) {
+      createSelectionRevisionRef.current++
+      awaitingCreateRef.current = false
+    }
     // Closing the last page closes the whole browser tab (terminal-tab
     // behaviour); the server close is idempotent either way.
     const wasLast = pagesRef.current.length <= 1
@@ -852,7 +872,11 @@ export function BrowserPane({
         <div ref={stripScrollRef} data-browser-strip-scroll className="min-w-0 flex-1 overflow-x-auto p-1">
           <Tabs
             value={effectiveSelectedId ?? ''}
-            onValueChange={setSelectedPageId}
+            onValueChange={(id) => {
+              createSelectionRevisionRef.current++
+              awaitingCreateRef.current = false
+              setSelectedPageId(id)
+            }}
             variant="segment"
             className="w-max"
           >
@@ -920,7 +944,7 @@ export function BrowserPane({
         <div className="flex min-h-0 flex-1 items-center justify-center p-6">
           <div className="w-full max-w-sm rounded-card border border-border p-5 text-center" data-browser-consent>
             <p className="text-sm font-medium text-foreground">{t('browser.consentTitle')}</p>
-            <p className="mt-2 text-sm leading-6 text-muted-foreground">{t('browser.consentBody')}</p>
+            <p className="mt-2 text-sm leading-ui-loose text-muted-foreground">{t('browser.consentBody')}</p>
             <Button className="mt-4" onClick={grantConsent}>{t('browser.consentGrant')}</Button>
           </div>
         </div>

@@ -23,6 +23,7 @@ async function execute({ id, command }: Job): Promise<void> {
       case 'write': storage.write(command.value); break
       case 'page': await storage.history(command.access, yieldWrites); result = storage.page(command.access, command.query); break
       case 'detail': await storage.history(command.access, yieldWrites); result = storage.detail(command.access, command.recordId); break
+      case 'context': await storage.history(command.access, yieldWrites); result = storage.context(command.access); break
       case 'node': await storage.history(command.access, yieldWrites); result = storage.readNode(command.access, command.request); break
       case 'export': await storage.history(command.access, yieldWrites); await storage.export(command.access, command.recordId, command.path, yieldWrites); break
       case 'settle': storage.settle(command.sessionId); break

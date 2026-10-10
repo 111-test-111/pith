@@ -1,7 +1,7 @@
 import { open } from 'node:fs/promises'
-import { isAbsolute, resolve, sep } from 'node:path'
 import { isPdfPath } from '../shared/pdf'
 import type { FileBrowserRequest, PdfStatDTO } from '../shared/types'
+import { resolveFilePath } from './file-path'
 
 /**
  * Byte-range reads for the PDF preview. pdf.js parses in its own worker and
@@ -18,11 +18,10 @@ import type { FileBrowserRequest, PdfStatDTO } from '../shared/types'
 const MAX_RANGE_BYTES = 32 * 1024 * 1024
 
 function pdfPath(request: FileBrowserRequest): string {
-  if (!request || typeof request.cwd !== 'string' || !isAbsolute(request.cwd) || typeof request.path !== 'string' || request.path.includes('\0')) throw new Error('Invalid PDF request')
-  const path = resolve(request.cwd, request.path)
+  const path = resolveFilePath(request)
   // The reader serves PDFs only, so it can never become a general file reader.
   if (!isPdfPath(path)) throw new Error('Not a PDF file')
-  return path.split(sep).join('/')
+  return path
 }
 
 export async function readPdfStat(request: FileBrowserRequest): Promise<PdfStatDTO> {

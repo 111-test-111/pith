@@ -66,15 +66,15 @@ export const ToolGroupView = memo(function ToolGroupView({
           the smaller mono names floating above the label's baseline. The text
           run shares one baseline instead, and the icon alone stays centred. */}
       <span className="inline-flex min-w-0 items-baseline gap-2">
-        <span className="shrink-0 font-medium">{t(category.labelKey)}</span>
-        <span className="shrink-0 text-xs text-muted-foreground/60">
+        <span className="transcript-label shrink-0 font-medium text-foreground">{t(category.labelKey)}</span>
+        <span className="transcript-label shrink-0 text-xs text-muted-foreground/60">
           {t('tool.groupCount', { count: calls.length })}
         </span>
-        <span className="min-w-0 truncate font-mono text-[11px] text-muted-foreground/55">
+        <span className="transcript-label min-w-0 truncate font-mono text-caption text-muted-foreground/55">
           {names}
         </span>
         {settled ? (
-          <span className="shrink-0 text-xs text-muted-foreground/60">
+          <span className="transcript-label shrink-0 text-xs text-muted-foreground/60">
             · {t('tool.groupStats', { completed, failed })}
             {cancelled ? ` · ${t('tool.groupCancelled', { count: cancelled })}` : ''}
             {unavailable ? ` · ${t('bashTask.groupUnavailable', { count: unavailable })}` : ''}

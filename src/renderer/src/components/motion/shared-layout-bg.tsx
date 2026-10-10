@@ -105,8 +105,9 @@ export const SharedLayoutBg = forwardRef<HTMLElement, SharedLayoutBgProps>(
                     <motion.div
                       layoutId={`shared-bg-${uid}`}
                       transition={reduce ? { duration: 0 } : SPRING_LAYOUT}
+                      // local patch (pi-app): pane action rows share the neutral button fill.
                       className={cn(
-                        "pointer-events-none h-full w-full rounded-2xl bg-primary/[0.06]",
+                        "pointer-events-none h-full w-full rounded-2xl bg-muted",
                         pillClassName,
                       )}
                     />

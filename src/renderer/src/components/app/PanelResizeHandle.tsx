@@ -22,6 +22,8 @@ interface PanelResizeHandleProps {
   inset?: boolean
   /** Optional keyboard support for a nested split. */
   value?: number
+  minValue?: number
+  maxValue?: number
   onStep?: (delta: number) => void
 }
 
@@ -47,6 +49,8 @@ export function PanelResizeHandle({
   className,
   inset = true,
   value,
+  minValue,
+  maxValue,
   onStep
 }: PanelResizeHandleProps) {
   const vertical = grow === 'right' || grow === 'left'
@@ -93,6 +97,8 @@ export function PanelResizeHandle({
       data-panel-handle-dragging={drag.dragging}
       tabIndex={onStep ? 0 : -1}
       aria-valuenow={value === undefined ? undefined : Math.round(value)}
+      aria-valuemin={minValue === undefined ? undefined : Math.round(minValue)}
+      aria-valuemax={maxValue === undefined ? undefined : Math.round(maxValue)}
       onKeyDown={event => {
         if (!onStep || !(vertical ? ['ArrowLeft', 'ArrowRight'] : ['ArrowUp', 'ArrowDown']).includes(event.key)) return
         event.preventDefault()

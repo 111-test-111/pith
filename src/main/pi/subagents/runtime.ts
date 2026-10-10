@@ -342,8 +342,7 @@ export class SubagentRuntime {
       const ceiling = (request.profile.tools === 'all'
         ? [...parentAvailable]
         : request.profile.tools.filter((tool) => parentAvailable.has(tool)))
-        .filter((tool) => tool !== 'debug' && !(SUBAGENT_EXCLUDED_TOOLS as readonly string[]).includes(tool))
-      if (request.profile.debugEnabled && parentAvailable.has('debug')) ceiling.push('debug')
+        .filter((tool) => !(SUBAGENT_EXCLUDED_TOOLS as readonly string[]).includes(tool))
       if (!ceiling.length) throw new SubagentError(`Profile "${request.profile.name}" resolves to an empty tool set for this session`)
       // Communications are a primitive, not a workspace capability: while
       // subagent communications are enabled, every child can message its

@@ -6,6 +6,8 @@ import { ASK_USER_DEFAULT_TIMEOUT_S, clampAskUserTimeoutSeconds } from '../share
 import { RESPONSE_TIMEOUT_DEFAULT_S, clampResponseTimeoutSeconds } from '../shared/response-timeout'
 import { DEFAULT_SANDBOX_MODE, isSandboxMode } from './sandbox/mode'
 import type { SandboxMode } from './sandbox/types'
+import { DEFAULT_LIBRARY_PREFERENCES, normalizeLibraryPreferences, type LibraryPreferences } from '../shared/library'
+import { DEFAULT_BROWSER_SEARCH_ENGINE, isBrowserSearchEngine, type BrowserSearchEngine } from '../shared/browser'
 
 /** Persisted geometry of the main window. `width`/`height` are the window's
  * normal (restored) size, so maximizing or going full screen does not clobber
@@ -20,6 +22,7 @@ export interface WindowBounds {
 }
 
 export interface AppSettings {
+  library: LibraryPreferences
   pictureInPicture: PictureInPicturePreferencesDTO
   /** Last native small-window location and scale relative to its source. */
   pictureInPictureLast: { x: number; y: number; scale: number } | null
@@ -71,6 +74,11 @@ export interface AppSettings {
    * injected into sessions in memory, never written to the SDK's global
    * settings file). */
   responseTimeoutSeconds: number
+  /** Allow the composer's model and permission selectors to change while a
+   * run is streaming (Settings → General). Off, both wait for the run to
+   * settle; the manager refuses a mid-run change too, so the rule holds for
+   * every caller. */
+  allowMidRunChanges: boolean
   /** DSH file-sandbox mode for this app: which file effects the first-party
    * `bash`, `edit` and `write` may perform. Reads, network, MCP and extensions
    * are outside it, and there is no approval gate — the mode is the policy. */
@@ -80,11 +88,14 @@ export interface AppSettings {
   browserConsent: boolean
   /** The model's browser_* tools are registered into sessions at build time. */
   browserAgentToolsEnabled: boolean
+  /** Search provider for human address-bar and start-page queries. */
+  browserSearchEngine: BrowserSearchEngine
   /** Settings → General: the DAP `debug` tool joins the active tool set. */
   debugEnabled: boolean
 }
 
 const defaults: AppSettings = {
+  library: DEFAULT_LIBRARY_PREFERENCES,
   pictureInPicture: DEFAULT_PICTURE_IN_PICTURE_PREFERENCES,
   pictureInPictureLast: null,
   jev: { mode: 'off', choice: true, score: true, noul: true },
@@ -105,9 +116,11 @@ const defaults: AppSettings = {
   subagentMaxConcurrent: 4,
   askUserTimeoutSeconds: ASK_USER_DEFAULT_TIMEOUT_S,
   responseTimeoutSeconds: RESPONSE_TIMEOUT_DEFAULT_S,
+  allowMidRunChanges: false,
   sandboxMode: DEFAULT_SANDBOX_MODE,
   browserConsent: false,
   browserAgentToolsEnabled: false,
+  browserSearchEngine: DEFAULT_BROWSER_SEARCH_ENGINE,
   debugEnabled: false
 }
 
@@ -146,9 +159,11 @@ export function loadSettings(): AppSettings {
       Number.isFinite(pictureInPictureLast.x) && Number.isFinite(pictureInPictureLast.y) &&
       Number.isFinite(pictureInPictureLast.scale) && pictureInPictureLast.scale > 0 && pictureInPictureLast.scale <= 6
       ? { x: pictureInPictureLast.x, y: pictureInPictureLast.y, scale: pictureInPictureLast.scale } : null
-    return { ...defaults, ...raw, jev, bashMaxWaitMs, startup, startupSession, subagentMaxConcurrent, askUserTimeoutSeconds,
+    return { ...defaults, ...raw, library: normalizeLibraryPreferences(raw.library), jev, bashMaxWaitMs, startup, startupSession, subagentMaxConcurrent, askUserTimeoutSeconds,
       subagentTurnLimitOverrideEnabled: raw.subagentTurnLimitOverrideEnabled === true, subagentMaxTurns,
       responseTimeoutSeconds,
+      allowMidRunChanges: raw.allowMidRunChanges === true,
+      browserSearchEngine: isBrowserSearchEngine(raw.browserSearchEngine) ? raw.browserSearchEngine : DEFAULT_BROWSER_SEARCH_ENGINE,
       pictureInPicture: normalizePictureInPicturePreferences(raw.pictureInPicture), pictureInPictureLast: validLast,
       sandboxMode: isSandboxMode(raw.sandboxMode) ? raw.sandboxMode : DEFAULT_SANDBOX_MODE }
   } catch {

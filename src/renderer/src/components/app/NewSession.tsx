@@ -56,7 +56,7 @@ export function NewSessionHeader({ projectName, cwd, projects, onProjectChange, 
   return (
     <div className="mb-6 flex flex-col items-start text-left">
       <div className="mb-5 flex max-w-full items-center gap-2 text-xs text-muted-foreground">
-        <PithIcon variant="square" className="mr-1 size-9" />
+        <PithIcon variant="mark" className="mr-1 size-9 text-primary" />
         <span className="shrink-0">{t('newSession.label')}</span>
         <span aria-hidden="true" className="h-3 w-px shrink-0 bg-border" />
         <Select
@@ -104,7 +104,7 @@ export function NewSessionHeader({ projectName, cwd, projects, onProjectChange, 
                 <SelectItem key={project.cwd} value={project.cwd} className="py-1.5">
                   <span className="flex min-w-0 flex-1 flex-col">
                     <span className="truncate text-sm text-foreground">{project.label}</span>
-                    <span dir="ltr" className="truncate text-[11px] text-muted-foreground">
+                    <span dir="ltr" className="truncate text-caption text-muted-foreground">
                       {project.cwd}
                     </span>
                   </span>

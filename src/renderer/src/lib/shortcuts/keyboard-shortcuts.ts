@@ -22,6 +22,7 @@ export const SHORTCUTS = [
   { id: 'toggleRail', group: 'navigation', defaults: ['Mod+Alt+KeyB'] },
   // right rail panes (the picker's advertised keys) and tab management
   { id: 'openReview', group: 'panes', defaults: ['Control+Shift+KeyG'] },
+  { id: 'openGit', group: 'panes', defaults: ['Mod+Alt+KeyG'] },
   { id: 'openTrajectory', group: 'panes', defaults: ['Control+Shift+KeyT'] },
   { id: 'openContext', group: 'panes', defaults: ['Control+Shift+KeyC'] },
   { id: 'openTerminal', group: 'panes', defaults: ['Control+Backquote'] },

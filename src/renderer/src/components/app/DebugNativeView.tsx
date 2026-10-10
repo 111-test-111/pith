@@ -134,13 +134,15 @@ export function DebugNativeView({ session, frame, cwd, memorySelection }: {
   )
   return <section className="min-w-0 space-y-2 border-b border-border/60 px-3 py-2" aria-label={t('debug.nativeInspection')} data-debug-native>
     {pc ? <p className="break-all font-mono text-xs text-muted-foreground">{t('debug.pc', { address: pc })}</p> : null}
-    {frame?.moduleId !== undefined ? <p className="break-all font-mono text-[11px] text-muted-foreground">{t('debug.moduleIdentity', { id: String(frame.moduleId) })}</p> : null}
-    <Tabs value={tab} onValueChange={value => { setError(false); setLoading(false); setTab(value) }} variant="segment">
-      <TabsList className="flex min-w-0 flex-wrap gap-0.5">
-        {source ? <TabsTrigger value="source" className="min-w-0 px-2 py-1 text-xs">{t('debug.source')}</TabsTrigger> : null}
-        {canDisassemble ? <TabsTrigger value="assembly" className="min-w-0 px-2 py-1 text-xs">{t('debug.assembly')}</TabsTrigger> : null}
-        {capabilities?.supportsReadMemoryRequest ? <TabsTrigger value="memory" className="min-w-0 px-2 py-1 text-xs">{t('debug.memory')}</TabsTrigger> : null}
-        {capabilities?.supportsModulesRequest ? <TabsTrigger value="modules" className="min-w-0 px-2 py-1 text-xs">{t('debug.modules')}</TabsTrigger> : null}
+    {frame?.moduleId !== undefined ? <p className="break-all font-mono text-code-inline text-muted-foreground">{t('debug.moduleIdentity', { id: String(frame.moduleId) })}</p> : null}
+    <Tabs value={tab} onValueChange={value => { setError(false); setLoading(false); setTab(value) }} variant="underline">
+      {/* The strip hugs its tabs: a block-level list stretched the rail across
+          the pane and left a card-coloured blank to the right of the last tab. */}
+      <TabsList className="min-w-0 flex-wrap p-0">
+        {source ? <TabsTrigger value="source" className="min-h-0 min-w-0 px-2 py-1 text-xs">{t('debug.source')}</TabsTrigger> : null}
+        {canDisassemble ? <TabsTrigger value="assembly" className="min-h-0 min-w-0 px-2 py-1 text-xs">{t('debug.assembly')}</TabsTrigger> : null}
+        {capabilities?.supportsReadMemoryRequest ? <TabsTrigger value="memory" className="min-h-0 min-w-0 px-2 py-1 text-xs">{t('debug.memory')}</TabsTrigger> : null}
+        {capabilities?.supportsModulesRequest ? <TabsTrigger value="modules" className="min-h-0 min-w-0 px-2 py-1 text-xs">{t('debug.modules')}</TabsTrigger> : null}
       </TabsList>
     </Tabs>
     {sourceMissing ? <p className="text-xs text-muted-foreground">{t('debug.sourceUnavailable')}</p> : null}
@@ -151,7 +153,7 @@ export function DebugNativeView({ session, frame, cwd, memorySelection }: {
       <FadeScroll className="max-h-64 overflow-x-auto p-1">
         {visibleLines.map((line, index) => {
           const lineNumber = source?.kind === 'adapter' ? (document.startLine ?? 1) + index : (sourceOffset ?? 0) + index + 1
-          return <div key={lineNumber} className={cn('flex min-w-max gap-3 font-mono text-[11px] leading-5', lineNumber === frame?.line && 'bg-accent')} data-debug-source-line={lineNumber}>
+          return <div key={lineNumber} className={cn('flex min-w-max gap-3 font-mono text-code', lineNumber === frame?.line && 'bg-accent')} data-debug-source-line={lineNumber}>
           <span className="w-8 shrink-0 text-right text-muted-foreground">{lineNumber}{source?.kind === 'adapter' && index === 0 && document.continuedLine ? '↪' : ''}</span><AgentCodeLine code={line} />
         </div>})}
       </FadeScroll>
@@ -176,13 +178,13 @@ export function DebugNativeView({ session, frame, cwd, memorySelection }: {
             const offset = point.boundInstructionReference ? point.boundOffset ?? 0 : point.offset ?? 0
             return /^0x[\da-f]+$/i.test(reference) ? sameAddress(`0x${(BigInt(reference) + BigInt(offset)).toString(16)}`, instruction.address) : offset === 0 && sameAddress(reference, instruction.address)
           })
-          return <div key={`${instruction.address}:${index}`} data-debug-pc={sameAddress(instruction.address, pc) || undefined} className={cn('flex min-w-max items-start gap-1 font-mono text-[11px] leading-6', sameAddress(instruction.address, pc) && 'bg-accent')}>
+          return <div key={`${instruction.address}:${index}`} data-debug-pc={sameAddress(instruction.address, pc) || undefined} className={cn('flex min-w-max items-start gap-1 font-mono text-code', sameAddress(instruction.address, pc) && 'bg-accent')}>
             <Button variant="ghost" size="icon" className="size-6 shrink-0" disabled={core || busy || !capabilities?.supportsInstructionBreakpoints || instruction.presentationHint === 'invalid'}
               aria-label={t(bound ? 'debug.removeInstructionBreakpoint' : 'debug.addInstructionBreakpoint', { address: instruction.address })}
               onClick={() => mutate(() => window.pi.debugAction({ ...target, action: 'breakpoints.instruction.toggle', instructionReference: instruction.address }))}>
               <span className={cn('size-2 rounded-full', bound?.verified ? 'bg-destructive' : bound ? 'bg-muted-foreground' : 'border border-border')} />
             </Button>
-            <Button variant="ghost" className="h-6 shrink-0 px-1 font-mono text-[11px]" disabled={!capabilities?.supportsReadMemoryRequest || instruction.presentationHint === 'invalid'} onClick={() => selectMemory(instruction.address)} aria-label={t('debug.inspectAddress', { address: instruction.address })}>{instruction.address}</Button>
+            <Button variant="ghost" className="h-auto min-h-6 shrink-0 px-1 font-mono text-code" disabled={!capabilities?.supportsReadMemoryRequest || instruction.presentationHint === 'invalid'} onClick={() => selectMemory(instruction.address)} aria-label={t('debug.inspectAddress', { address: instruction.address })}>{instruction.address}</Button>
             <span className="text-muted-foreground">{instruction.instructionBytes}</span><AgentCodeLine code={instruction.instruction} />
             {instruction.symbol ? <span className="text-muted-foreground">{instruction.symbol}</span> : null}
           </div>
@@ -192,12 +194,12 @@ export function DebugNativeView({ session, frame, cwd, memorySelection }: {
     </div> : null}
     {tab === 'memory' ? <div data-debug-memory>
       <form className="flex min-w-0 items-center gap-1" onSubmit={event => { event.preventDefault(); selectMemory(referenceDraft.trim()) }}>
-        <Input value={referenceDraft} onChange={setReferenceDraft} aria-label={t('debug.memoryReference')} placeholder={t('debug.memoryReference')} classNames={{ input: 'font-mono text-xs', field: 'h-7' }} />
+        <Input value={referenceDraft} onChange={setReferenceDraft} aria-label={t('debug.memoryReference')} placeholder={t('debug.memoryReference')} classNames={{ input: 'font-mono' }} />
         <Button type="submit" variant="ghost" className="h-7 shrink-0 px-2 text-xs" disabled={!referenceDraft.trim() || loading}>{t('debug.readMemory')}</Button>
       </form>
       {memory ? <>
-        <p className="my-1 break-all font-mono text-xs text-muted-foreground">{memory.address}</p>
-        <FadeScroll className="max-h-52 overflow-x-auto p-1"><pre className="font-mono text-[11px] leading-5 text-foreground">{memory.hex.split(' ').filter(Boolean).reduce<string[]>((rows, byte, index) => {
+        <p className="my-1 break-all font-mono text-code-inline text-muted-foreground">{memory.address}</p>
+        <FadeScroll className="max-h-52 overflow-x-auto p-1"><pre className="font-mono text-code text-foreground">{memory.hex.split(' ').filter(Boolean).reduce<string[]>((rows, byte, index) => {
           if (index % 16 === 0) rows.push(`${index.toString(16).padStart(4, '0')}  `)
           rows[rows.length - 1] += `${byte} `; return rows
         }, []).join('\n')}</pre></FadeScroll>
@@ -210,7 +212,7 @@ export function DebugNativeView({ session, frame, cwd, memorySelection }: {
         {modules.modules.map(module => <li key={module.id} className="min-w-0 text-xs">
           <p className="break-all font-medium text-foreground">{module.name}</p>
           <p className="break-all text-muted-foreground">{module.path}</p>
-          <p className="break-all font-mono text-[11px] text-muted-foreground">{module.addressRange}</p>
+          <p className="break-all font-mono text-code-inline text-muted-foreground">{module.addressRange}</p>
           <p className="break-all text-muted-foreground">{module.symbolStatus ?? t('debug.symbolStatusUnknown')}</p>
           {module.symbolFilePath ? <p className="break-all text-muted-foreground">{module.symbolFilePath}</p> : null}
         </li>)}
@@ -220,20 +222,20 @@ export function DebugNativeView({ session, frame, cwd, memorySelection }: {
     {!core && (capabilities?.supportsInstructionBreakpoints || capabilities?.supportsFunctionBreakpoints) ? <div className="space-y-1" data-debug-native-breakpoints>
       <h3 className="text-xs font-medium text-muted-foreground">{t('debug.nativeBreakpoints')}</h3>
       {points.instruction.map(point => <div key={`${point.instructionReference}:${point.offset ?? 0}`} className="flex min-w-0 items-start gap-1">
-        <div className="min-w-0 flex-1 break-all font-mono text-xs text-foreground"><span>{point.instructionReference}{point.offset ? ` + ${point.offset}` : ''}</span>
+        <div className="min-w-0 flex-1 break-all font-mono text-code-inline text-foreground"><span>{point.instructionReference}{point.offset ? ` + ${point.offset}` : ''}</span>
           <p className="text-muted-foreground">{point.message ?? (!point.verified ? t('debug.unverified') : '')}</p>
           {point.condition ? <p className="text-muted-foreground">{point.condition} · {t(point.conditionStatus === 'error' ? 'debug.conditionError' : 'debug.conditionUnvalidated')}</p> : null}
         </div>
         <Button variant="ghost" size="icon" className="size-6 shrink-0" disabled={busy} aria-label={t('debug.removeInstructionBreakpoint', { address: point.instructionReference })} onClick={() => mutate(() => window.pi.debugAction({ ...target, action: 'breakpoints.instruction.update', instructionReference: point.instructionReference, offset: point.offset, enabled: false }))}><X aria-hidden="true" className="size-3" /></Button>
       </div>)}
       {points.function.map(point => <div key={point.name} className="flex min-w-0 items-start gap-1">
-        <div className="min-w-0 flex-1 break-all text-xs text-foreground"><span className="font-mono">{point.name}</span><p className="text-muted-foreground">{point.message ?? (!point.verified ? t('debug.unverified') : '')}</p>
+        <div className="min-w-0 flex-1 break-all text-xs text-foreground"><span className="font-mono text-code-inline">{point.name}</span><p className="text-muted-foreground">{point.message ?? (!point.verified ? t('debug.unverified') : '')}</p>
           {point.condition ? <p className="text-muted-foreground">{point.condition} · {t(point.conditionStatus === 'error' ? 'debug.conditionError' : 'debug.conditionUnvalidated')}</p> : null}
         </div>
         <Button variant="ghost" size="icon" className="size-6 shrink-0" disabled={busy} aria-label={t('debug.removeFunctionBreakpoint', { name: point.name })} onClick={() => mutate(() => window.pi.debugAction({ ...target, action: 'breakpoints.function.update', name: point.name, enabled: false }))}><X aria-hidden="true" className="size-3" /></Button>
       </div>)}
       {capabilities?.supportsFunctionBreakpoints ? <form className="flex min-w-0 items-center gap-1" onSubmit={event => { event.preventDefault(); const name = functionDraft.trim(); if (!name || points.function.some(point => point.name === name)) return; mutate(() => window.pi.debugAction({ ...target, action: 'breakpoints.function.update', name, enabled: true })); setFunctionDraft('') }}>
-        <Input value={functionDraft} onChange={setFunctionDraft} aria-label={t('debug.functionName')} placeholder={t('debug.functionName')} classNames={{ field: 'h-7', input: 'font-mono text-xs' }} />
+        <Input value={functionDraft} onChange={setFunctionDraft} aria-label={t('debug.functionName')} placeholder={t('debug.functionName')} classNames={{ input: 'font-mono' }} />
         <Button variant="ghost" type="submit" size="icon" className="size-7 shrink-0" disabled={busy || !functionDraft.trim()} aria-label={t('debug.addFunctionBreakpoint')}><Plus aria-hidden="true" className="size-3" /></Button>
       </form> : null}
     </div> : null}

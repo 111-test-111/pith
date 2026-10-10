@@ -49,7 +49,9 @@ app.whenReady().then(()=>{
  ipcMain.handle('fixture:calls',()=>calls);
  ipcMain.handle('fixture:resize',(_,width,height)=>w.setBounds({width,height}));
  ipcMain.handle('pi:models',()=>[model]);ipcMain.handle('bash:list',()=>[]);ipcMain.handle('pi:providers',()=>[]);
- ipcMain.handle('files:read',(_,path)=>({path,relPath:path,kind:'text',size:12}));
+ // Real reads label a workspace file relatively; the attachment card must
+ // still show where the file actually lives.
+ ipcMain.handle('files:read',(_,path)=>({path,relPath:'samples/'+path.split('/').pop(),kind:'text',size:12}));
  ipcMain.handle('pi:searchSessions',()=>({sessions:[],groups:[],total:0,hasMore:false}));
  const w=new BrowserWindow({...windowChromeOptions(),width:1320,height:880,minWidth:760,minHeight:560,title:'Pith picker check',backgroundColor:'#0b0b0d',webPreferences:{preload:${JSON.stringify(preload)},contextIsolation:true,nodeIntegration:false,sandbox:false,backgroundThrottling:false}});
  ipcMain.on('window:setTheme',(event,theme)=>setWindowTheme(BrowserWindow.fromWebContents(event.sender),theme));
@@ -197,12 +199,13 @@ app.whenReady().then(()=>{
   await screenshot('new-project')
 
   // The landing wears the shader backdrop: present, behind the content,
-  // pointer-transparent, and actually animating. A clip over an empty corner
-  // isolates the shader from the (static) landing content.
+  // pointer-transparent, and actually animating. Sample above the landing
+  // controls so centered effects (such as a sphere) are included, without
+  // capturing the composer's caret or controls.
   assert.equal(await evaluate(`Boolean(document.querySelector('[data-shader-backdrop][aria-hidden="true"]'))`), true, 'the landing shader backdrop is mounted and hidden from assistive tech')
   assert.equal(await evaluate(`document.querySelectorAll('[data-shader-backdrop] canvas').length > 0`), true, 'the shader canvas renders')
   const shaderShot = async () => {
-    const clip = await evaluate(`(()=>{const b=document.querySelector('[data-shader-backdrop]').getBoundingClientRect();return{x:Math.round(b.x+b.width*0.08),y:Math.round(b.y+12),width:280,height:180,scale:1}})()`)
+    const clip = await evaluate(`(()=>{const b=document.querySelector('[data-shader-backdrop]').getBoundingClientRect();return{x:Math.round(b.x+b.width/2-140),y:Math.round(b.y+b.height*0.25),width:280,height:120,scale:1}})()`)
     return (await send('Page.captureScreenshot', { format: 'png', clip })).data
   }
   const shaderHit = await evaluate(`(()=>{const b=document.querySelector('[data-shader-backdrop]').getBoundingClientRect();const el=document.elementFromPoint(b.x+b.width/2,b.y+b.height/2);return el?.closest('[data-shader-backdrop]')?'backdrop':'content'})()`)
@@ -226,7 +229,7 @@ app.whenReady().then(()=>{
   const card = () => evaluate(`(()=>{const root=document.querySelector('[data-attachment-card]');const open=root.querySelector('button');const texts=[...open.querySelectorAll('[data-middle-ellipsis]')].map(n=>n.textContent);const close=root.querySelectorAll('button')[1];const form=root.closest('form');return{name:texts[0]??'',dir:texts[1]??'',height:open.getBoundingClientRect().height,insideFrame:Boolean(form&&form.contains(document.querySelector('[data-prompt-editor]'))),closeLabel:close?.getAttribute('aria-label')??''}})()`)
   const cardBefore = await card()
   assert.match(cardBefore.name, /attachment-sample/, 'the card names the attached file')
-  assert.ok(cardBefore.dir.length > 0, 'the card shows the containing directory')
+  assert.equal(cardBefore.dir, dirname(attachmentFile), 'the card shows the absolute directory, not the mentioned relative spelling')
   assert.equal(cardBefore.height, 56, 'the card matches the image thumbs (h-14)')
   assert.equal(cardBefore.insideFrame, true, 'the card renders inside the input frame')
   assert.match(cardBefore.closeLabel, /attachment-sample/, 'the corner control removes the card')

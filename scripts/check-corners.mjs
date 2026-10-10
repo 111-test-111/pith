@@ -247,10 +247,10 @@ app.on('window-all-closed',()=>app.quit());`)
       }
       assert.equal(await style('#status-dot', 'corner-shape'), 'superellipse(1)', '#status-dot: true circles stay circular')
       assert.equal(await evaluate('getComputedStyle(document.getElementById("pseudo"),"::before").cornerShape'), 'superellipse(1)', 'pseudo-element full-round utility')
-      // The composer's send control is capsule-by-design: the shape token
-      // collapses to 0px in the square style, so it stays hard-edged while
-      // carrying the round corner shape that the squircle style needs.
-      assert.equal(await evaluate(`(()=>{const e=document.querySelector('[aria-label="Send prompt"]'),s=getComputedStyle(e),r=e.getBoundingClientRect();return s.cornerShape==='superellipse(1)'&&parseFloat(s.borderTopLeftRadius)===0&&r.height>0})()`), true, 'composer send control collapses to a hard edge')
+      // The composer's send control is an ordinary icon control: it takes the
+      // shared icon radius, so the square style collapses it to a hard edge and
+      // the squircle style rounds it by the same step as every other icon button.
+      assert.equal(await evaluate(`(()=>{const e=document.querySelector('[aria-label="Send prompt"]'),s=getComputedStyle(e),r=e.getBoundingClientRect();return s.cornerShape==='superellipse(2)'&&parseFloat(s.borderTopLeftRadius)===0&&r.height>0})()`), true, 'composer send control collapses to a hard edge')
       assert.equal(await evaluate('getComputedStyle(document.documentElement).getPropertyValue("--app-radius-capsule").trim()'), '0px', '--app-radius-capsule collapses in the square style')
       // Inline code carries its corner on the markdown element itself, so an
       // ancestor's descendant utility wins on specificity: the vendored bubble
@@ -297,11 +297,12 @@ app.on('window-all-closed',()=>app.quit());`)
           )
         }
         const sendRadius = parseFloat(await style('[aria-label="Send prompt"]', 'border-top-left-radius'))
-        assert.ok(
-          preset === 'square' ? sendRadius === 0 : sendRadius >= 16,
-          preset + ': the capsule site ' + (preset === 'square' ? 'stays a right angle' : 'is a full capsule') + ' (got ' + sendRadius + ')'
+        assert.equal(
+          sendRadius,
+          parseFloat(expected.item),
+          preset + ': the composer send control takes the shared icon step, never the capsule step (got ' + sendRadius + ', expected ' + parseFloat(expected.item) + ')'
         )
-        assert.equal(await style('[aria-label="Send prompt"]', 'corner-shape'), 'superellipse(1)', preset + ': the capsule keeps a round corner shape')
+        assert.equal(await style('[aria-label="Send prompt"]', 'corner-shape'), 'superellipse(2)', preset + ': the send control keeps the continuous corner shape')
         // Defect 1: the pill LIST takes the scale's card step, never the capsule.
         // A tall vertical pill list (the Settings nav, the Tools/Skills/
         // Subagents/Extensions section lists) is much taller than it is wide, so

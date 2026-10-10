@@ -6,7 +6,7 @@ import {
   Clock3,
   FolderKanban,
   MessageSquarePlus,
-  PanelLeft,
+  PanelLeftClose,
   Paperclip,
   Search,
   User,
@@ -395,7 +395,7 @@ export function ChatAppExample({
         <header className="flex h-14 shrink-0 items-center justify-between border-border border-b px-4">
           <div className="flex min-w-0 items-center gap-2.5">
             <AnimatedSidebarTrigger className="text-muted-foreground hover:bg-muted hover:text-foreground">
-              <PanelLeft className="size-4" />
+              <PanelLeftClose className="size-4" />
             </AnimatedSidebarTrigger>
             <div className="min-w-0">
               <p className="truncate text-sm font-medium text-foreground">

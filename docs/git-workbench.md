@@ -1,0 +1,46 @@
+# Git workbench
+
+The right rail's Git pane operates on the whole repository containing the active workspace, including linked worktrees. The pane always displays the repository root; a workspace opened below that root does not silently restrict repository operations. Projectless and read-only child/scheduled conversations cannot mutate repositories.
+
+## Ownership and admission
+
+`main/git/` owns Git processes, repository snapshots, mutation receipts and discard previews. `shared/git.ts` is the IPC contract; renderer state owns only views, selection, drafts and cached readouts. No Git command runs in renderer or through an agent tool.
+
+Every mutation pins the originating cwd, a fresh repository revision and an operation id. Main validates inputs and acquires the checkout coordinator's exclusive Git lease before checking the revision and running Git. Active turns, tools, background commands, subagents, interactive terminals, Rewind snapshots/recovery and another Git operation block writes. Opening the pane and reading status/history never acquire a writing lease. Unexpected process-tree cleanup failure fences the checkout for the remaining app lifetime. Quit stops Git admission and terminates owned processes.
+
+Revisions include HEAD/status, index contents, Git configuration and dirty-file identities. Destructive discard previews additionally bind exact working bytes and expire; changed files require a new preview. Discard restores tracked working files from the index, preserving staging. Untracked files and symlink entries are moved to the system trash. Conflicts, submodules and directories are not discarded by this operation. A Cancel-focused confirmation lists every selected path. Git's own locks and nonzero exits remain authoritative; failures never become success or trigger automatic mutation retries.
+
+## Supported workflow
+
+- Repository discovery, initialization, staged/unstaged/untracked/conflict sections and bounded text/binary diffs.
+- Per-file and section added/deleted line counts, plus an overall total of the displayed staged and working layers. A file changed in both layers contributes both comparisons. Tracked counts come from NUL-delimited batched `numstat`; rename totals include the old and new paths to match the preview's no-renames patches. Untracked text counts include a final line without a newline and are cached by file identity/metadata. Binary entries are labelled; conflicts, submodules, untracked symlinks and oversized previews have unavailable counts, explicitly excluded from numeric totals.
+- Stage/unstage individual files or an entire section; unborn repositories can unstage while retaining working files.
+- Commit exactly the existing index with a user-written message; never implicitly stage files or allow empty commits.
+- List/create/switch local branches; the branch control opens an anchored searchable dropdown and choosing a branch switches immediately. Current and other-worktree branches are disabled. Switching requires a clean repository and cannot move a branch already checked out elsewhere.
+- HEAD-pinned paginated commit history, first-parent commit file lists and per-file diffs, including root commits. History keeps its commit list mounted while selection opens a separate inspector; another commit can be selected directly, and pagination does not replace the inspector.
+- Fetch remotes, fast-forward-only pull, ordinary push and explicit first-push upstream selection. No force push, automatic stash or reset-hard. Repository facts expose remote names rather than credential-bearing configuration. Reads have a 15-second deadline; write and network commands allow two minutes and remain cancellable. Terminal authentication/editor prompts are disabled.
+- Manual refresh plus visible-pane polling/focus refresh. Superseded requests cannot replace another workspace or file's result. Pane reopening and width changes preserve the selected view, selection, drafts and read state.
+
+Changes and History use the named sidebar container for their layout. At 48rem and wider, the source list stays left and the selected file diff or commit inspector opens right. The Changes composer occupies the left column while the diff spans its full height. Narrow panes stack list and inspector and keep the composer at the bottom. The inspector combines commit metadata/files with an independently scrollable diff, shares its composition with the graph, and has its own loading/error state. Closing it preserves history pagination/scroll; changing width retains the same list, editor and diff nodes without new reads.
+
+All three Git views use the shared `PanelResizeHandle` for their wide divider, with pointer dragging and Left/Right keys (Shift steps farther). Each workspace remembers a preferred width per view across pane mounts. CSS fits that preference to 16rem list and 20rem detail floors; shrinking the rail does not overwrite the saved preference. Narrow layouts hide the vertical handle. Drag frames write only the content grid's CSS variable; GitStore receives the preference on release, without fetching data or rebuilding the selected diff.
+
+Ahead/behind indicators compare the current branch with its configured upstream's locally fetched tracking ref. Tooltips name that upstream and clarify that the comparison reflects the last fetch. Branches with no upstream display an explicit label instead of misleading zero counts.
+
+Repository inspection runs independent Git and filesystem reads with bounded concurrency while retaining revision validation before/after diff reads and mutations. Status statistics are bounded and cached by repository revision, with a fresh inspection validating their snapshot on first computation. Renderer diff reads share in-flight requests and keep at most 32 previews/8 MiB of patch text, keyed by workspace, revision, path, layer and commit. Revision changes invalidate cached readouts; rejected or superseded revisions never enter the cache. Reopening a cached diff publishes it synchronously without a loading flash.
+
+Each selection records its preview revision independently of the repository receipt. A file selected while a mutation is running is read again at the resulting snapshot, preserving newer navigation. If staging moves that file into another visible layer, the preview follows the remaining layer instead of retaining a removed working diff. Branch dropdowns publish their cached list immediately and refresh in the background. Current/own-worktree flags are reconciled against each status or mutation receipt, and superseded branch reads cannot restore the previous checkout. Creation lives in a separate dropdown group, with an inline name form that creates and switches through the same main admission policy.
+
+All paths are exact literal repository-relative paths obtained from Git's NUL-delimited output. Changes outside an open subfolder remain visible. Symlinks are treated as entries, path traversal and Git metadata targets are rejected, and previews/output are bounded with an explicit limit error rather than silent partial operations.
+
+## Multi-branch graph
+
+The graph toggle is in the repository-directory row immediately before Refresh. Its selected state replaces everything below that row with a graph, hiding the checkout toolbar, Changes/History tabs and commit composer. Turning it off returns to the preceding Changes or History view and preserves the draft. The checkout branch does not act as a graph filter. HEAD, local branches, remote branches and commit tags decorate graph nodes; browsing nodes never checks out a branch.
+
+Main traverses explicit public tips in topological order, including detached HEAD and annotated/nested commit tags, excluding private checkpoint refs. Each 50-row page pins the full ref frontier, HEAD, traversal configuration and shallow/graft boundaries. A before/after validation rejects ref changes even when the checkout remains unchanged. Offset requests cannot append rows from another frontier. Main keeps eight bounded pages; renderer keeps at most 5,000 commits and 8 MiB of metadata, preserves unchanged layout/page identity on polling, and reloads rather than combining stale pages. Bodies and first-parent file lists load only when a commit is selected; existing immutable-commit diff reads are reused.
+
+The pure lane calculation and SVG path geometry are adapted from ZCode under Apache-2.0, with attribution and the original license shipped in `src/renderer/public/licenses/zcode-git-graph.txt`. The pane itself composes beUI and the shared icon adapter. Rows, nodes and path segments share a virtual window, narrow panes show summaries/ref badges, and a wider pane places commit details beside the graph using the named sidebar container. Missing parents have a dashed boundary mark; no fabricated edges join unrelated commits. View, request and selection ownership remain in GitStore across width changes and pane mounts.
+
+## Verification
+
+Run `npm run typecheck && npm run build`, then `npm test -- --no-prepare --suite git --suite git-ui --suite rewind-sdk --suite rewind --suite window-chrome --suite command-palette --strict-skips`. The Git integration suite uses disposable real repositories and a local bare remote; UI checks exercise the real pane, preload and IPC. No model or public-network access is required.

@@ -13,9 +13,16 @@ const temp = await mkdtemp(join(tmpdir(), 'pith-sdk-patch-'))
 try {
   await writeFile(join(temp, 'package.json'), JSON.stringify({ version: '0.99.2' }))
   await assert.rejects(preparePiSdk(temp), /Review pi-app SDK patches/)
-  await writeFile(join(temp, 'package.json'), JSON.stringify({ version: '0.99.1' }))
+  await writeFile(join(temp, 'package.json'), JSON.stringify({ version: '1.0.0' }))
+  // The patcher validates every affected SDK file before writing any change.
+  // Include the core boundary-compaction adapter in this pinned-SDK fixture.
+  for (const relative of ['dist/core/agent-session.js', 'dist/core/agent-session.d.ts']) {
+    await mkdir(dirname(join(temp, relative)), { recursive: true })
+    await writeFile(join(temp, relative), await readFile(join(sdkRoot, relative)))
+  }
   const dir = join(temp, 'dist/extensions/mcp')
   await mkdir(dir, { recursive: true })
+  await writeFile(join(dir, 'index.d.ts'), await readFile(join(sdkRoot, 'dist/extensions/mcp/index.d.ts')))
   const original = await readFile(join(sdkRoot, 'dist/extensions/mcp/index.js'), 'utf8')
   await writeFile(join(dir, 'index.js'), original.replace('unavailableReason: (name)', 'upstreamChanged: (name)'))
   await assert.rejects(preparePiSdk(temp), /patch drift/)

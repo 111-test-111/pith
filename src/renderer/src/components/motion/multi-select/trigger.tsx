@@ -14,6 +14,8 @@ import type {
 } from "react";
 import { EASE_OUT, SPRING_LAYOUT, SPRING_SWAP } from "@/lib/ease";
 import { cn } from "@/lib/utils";
+// local patch (pi-app): searchable fields share the sidebar filter style.
+import { SINGLE_LINE_INPUT_PADDING, SINGLE_LINE_INPUT_TEXT } from "@/lib/input-style";
 import { mergeRefs, useMultiSelectContext } from "./context";
 
 export interface MultiSelectTriggerProps {
@@ -48,7 +50,10 @@ export function MultiSelectTrigger({
       className={cn(
         // local patch (pi-app): pointer hover fills the picker without a
         // highlighted frame; focus remains visible for keyboard entry.
-        "relative z-20 flex min-h-11 w-full min-w-52 cursor-text items-center gap-2 rounded-xl border border-transparent bg-transparent px-2.5 py-1.5 text-sm text-foreground transition-colors",
+        // local patch (pi-app): match single-line field insets, including empty pickers.
+        "relative z-20 flex w-full min-w-52 cursor-text items-center gap-2 rounded-xl border border-transparent bg-transparent text-foreground transition-colors",
+        SINGLE_LINE_INPUT_TEXT,
+        SINGLE_LINE_INPUT_PADDING,
         "hover:bg-muted focus-within:ring-1 focus-within:ring-ring",
         context.disabled && "pointer-events-none opacity-50",
         className,
@@ -255,7 +260,9 @@ export function MultiSelectInput({
         }}
         onKeyDown={handleKeyDown}
         className={cn(
-          "h-7 min-w-12 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed",
+          // local patch (pi-app): chips may wrap; the input itself keeps one natural line.
+          "min-w-12 flex-1 bg-transparent py-0 text-foreground outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed",
+          SINGLE_LINE_INPUT_TEXT,
           className,
         )}
       />

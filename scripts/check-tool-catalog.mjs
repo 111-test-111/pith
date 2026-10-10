@@ -14,7 +14,7 @@
  * Pure: synthetic loader/session tools, no SDK host, no Electron.
  */
 import assert from 'node:assert/strict'
-import { mkdir, rm } from 'node:fs/promises'
+import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
@@ -35,11 +35,11 @@ try {
   })
   const { buildToolCatalog } = await import(bundle)
 
-  const extension = (id, tools) => ({
+  const extension = (id, tools, sourceInfo = {}) => ({
     path: id,
     resolvedPath: id,
     hidden: false,
-    sourceInfo: { path: id, source: `npm:${id}`, scope: 'global', origin: 'package', baseDir: join(repo, 'src') },
+    sourceInfo: { path: id, source: `npm:${id}`, scope: 'user', origin: 'package', baseDir: dirname(id), ...sourceInfo },
     tools: new Map(
       [...tools].map((name) => [
         name,
@@ -66,12 +66,43 @@ try {
       sessionTools,
       options.activeToolNames ?? sessionTools.map((tool) => tool.name),
       options.disabledExtensions ?? new Set(),
-      new Map(),
+      options.packages ?? new Map(),
       options.knownTools ?? new Map()
     )
 
   const names = (catalog) => catalog.tools.map((tool) => tool.name)
   const rows = (catalog, name) => catalog.tools.filter((tool) => tool.name === name)
+
+  // --- Local entries use their own names, never the configuration root ------
+  const agentDir = join(scratch, 'agent')
+  const projectDir = join(scratch, 'project')
+  await mkdir(projectDir, { recursive: true })
+  await writeFile(join(projectDir, 'package.json'), JSON.stringify({ name: 'unrelated-project', version: '9.9.9' }))
+  const local = (path, scope, baseDir, tools = []) => extension(path, tools, {
+    source: 'auto', scope, origin: 'top-level', baseDir
+  })
+  const rtk = local(join(agentDir, 'extensions/rtk.ts'), 'user', agentDir)
+  const formatter = local(join(agentDir, 'extensions/formatter.mjs'), 'user', agentDir, ['format_output'])
+  const reviewer = local(join(agentDir, 'extensions/reviewer/index.ts'), 'user', agentDir)
+  const guard = local(join(agentDir, 'extensions/guard/src/index.ts'), 'user', agentDir)
+  const projectHook = local(join(projectDir, '.pi/extensions/project-hook.ts'), 'project', join(projectDir, '.pi'))
+  const locals = catalogOf([rtk, formatter, reviewer, guard, projectHook], [live('format_output', formatter.path)])
+  const localInfo = (entry) => locals.extensions.find((info) => info.id === entry.path)
+  assert.equal(localInfo(rtk).name, 'rtk', 'an event-only user extension is named after its entry file')
+  assert.deepEqual(localInfo(rtk).toolNames, [], 'event-only extensions remain visible without declaring tools')
+  assert.equal(localInfo(formatter).name, 'formatter', 'extensions sharing one configuration root keep distinct names')
+  assert.equal(rows(locals, 'format_output')[0].source.label, 'formatter', 'tool source labels use the same extension name')
+  assert.equal(localInfo(reviewer).name, 'reviewer', 'directory index entries use the extension directory')
+  assert.equal(localInfo(guard).name, 'guard', 'generic source directories do not become extension names')
+  assert.equal(localInfo(projectHook).name, 'project-hook', 'a local extension does not inherit its enclosing project name')
+  assert.equal(localInfo(projectHook).version, undefined, 'project package versions do not describe local extensions')
+
+  const packageExtension = extension('/pkg/vendor-extension/src/index.ts', [])
+  const packaged = catalogOf([packageExtension], [], {
+    packages: new Map([[packageExtension.sourceInfo.source, { packageName: '@vendor/extension', version: '1.2.3', resources: [] }]])
+  })
+  assert.equal(packaged.extensions[0].name, '@vendor/extension', 'installed package metadata keeps precedence over entry names')
+  assert.equal(packaged.extensions[0].version, '1.2.3')
 
   // --- Two extensions override the same two built-ins -----------------------
   const fff = extension('/pkg/pi-fff/src/index.ts', ['grep', 'find', 'multi_grep'])
@@ -148,7 +179,7 @@ try {
     ['tool_search', 'tool_search'], ['third_party', 'inline']
   ], 'only the exact hidden SDK factories gain meaningful native source labels')
 
-  console.log('PASS: the tool catalog keeps one live row per name and preserves callable exposure separately from model activity.')
+  console.log('PASS: the tool catalog names local extensions correctly, keeps one live row per tool and preserves callable exposure separately from model activity.')
 } finally {
   await rm(scratch, { recursive: true, force: true })
 }

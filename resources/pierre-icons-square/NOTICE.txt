@@ -1,0 +1,10 @@
+Pith square file icons — adaptations of Pierre Icons
+Derived from @pierre/trees 1.0.0-beta.4, Pierre Computer Company, Apache-2.0.
+Modified by Pith contributors (2026): square outer geometry, flat-ended
+lettering, angular symbols, square nodes, document folds and media marks.
+The upstream light/dark palette and file associations are retained.
+Includes square adaptations of the six Pith document/media additions.
+Six already angular upstream drawings retain their original geometry.
+Native artwork retained without changes: astro, biome, browserslist, claude, docker, json, python, react, svelte, svgo, swift.
+Sass uses a new Pith angular S monogram.
+See LICENSE.txt; upstream attribution also ships as UPSTREAM-NOTICE.txt.

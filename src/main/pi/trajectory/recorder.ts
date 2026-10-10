@@ -3,6 +3,10 @@ import type { AgentSession, AgentSessionEvent } from '@earendil-works/pi-coding-
 import type { TrajectoryDocumentKind, TrajectoryRecord } from '../../../shared/trajectory'
 import type { TraceWrite } from './protocol'
 import type { TrajectoryClient } from './client'
+import type { ContextRequestDTO } from '../../../shared/types'
+import type { CompactionRequestDTO } from '../../../shared/compaction'
+import { contextComposition } from '../context-composition'
+import { currentSystemPrompt } from '../transcript-context'
 
 type StreamFn = AgentSession['agent']['streamFunction']
 type Stream = Awaited<ReturnType<StreamFn>>
@@ -25,12 +29,44 @@ export class TrajectoryRecorder {
   private maintenance: PendingRecord | null = null
   private retry: PendingRecord | null = null
   private latestRequest: string | undefined
+  private contextRecord: PendingRecord | null = null
+  private contextVersion = 0
+  private promptSnapshot: { anchor: string; text: string } | null = null
   private disposed = false
 
-  constructor(private session: AgentSession, private client: TrajectoryClient) {
+  constructor(private session: AgentSession, private client: TrajectoryClient,
+    private compactionRequest?: (request: CompactionRequestDTO) => void) {
     this.previous = session.agent.streamFunction
     this.wrapper = (model, context, options) => this.stream(model, context, options)
     session.agent.streamFunction = this.wrapper
+  }
+
+  get contextRevision(): number { return this.contextVersion }
+
+  /** The SDK clears per-turn prompt overrides at settlement. Retain the latest
+   * ordinary request's text for the viewer, while its branch anchor is valid. */
+  systemPrompt(): string | null {
+    const snapshot = this.promptSnapshot
+    if (!snapshot) return null
+    return snapshot.anchor === `session:${this.session.sessionId}` || this.session.sessionManager.getBranch().some(entry => entry.id === snapshot.anchor)
+      ? snapshot.text : null
+  }
+
+  resetSystemPrompt(): void { this.promptSnapshot = null }
+
+  contextStats(): ContextRequestDTO | null {
+    const record = this.contextRecord
+    if (!record) return null
+    const manager = this.session.sessionManager
+    if (record.anchor !== `session:${this.session.sessionId}` && !manager.getBranch().some(entry => entry.id === record.anchor)) return null
+    return record.record.contextStats ?? null
+  }
+
+  private updateContext(record: PendingRecord, update: Partial<ContextRequestDTO>): void {
+    if (!record.record.contextStats) return
+    record.record.contextStats = { ...record.record.contextStats, ...update }
+    this.contextRecord = record
+    this.contextVersion++
   }
 
   private create(kind: TrajectoryRecord['kind'], name: string): PendingRecord {
@@ -40,8 +76,15 @@ export class TrajectoryRecorder {
   }
 
   private save(record: PendingRecord, documents?: Partial<Record<TrajectoryDocumentKind, unknown>>): Promise<void> {
+    if (record.record.kind === 'request' && this.maintenance && record.record.parentId === this.maintenance.record.id) {
+      const { id, startedAt, finishedAt, status, provider, model, usage, stopReason } = record.record
+      this.compactionRequest?.({ id, startedAt, endedAt: finishedAt, provider: provider?.slice(0, 256), model: model?.slice(0, 256),
+        status: status === 'running' ? 'running' : status === 'cancelled' ? 'cancelled'
+          : status === 'completed' && stopReason !== 'length' ? 'success' : 'error',
+        ...(usage ? { inputTokens: usage.input + usage.cacheRead + usage.cacheWrite, outputTokens: usage.output, cost: usage.cost } : {}) })
+    }
     // Clone metadata now: a later settlement must not change an earlier queued
-    // write. Bodies are posted once and never kept in recorder state.
+    // write. Full request bodies are posted once, not kept in recorder state.
     const job = this.client.write({ ...record, record: { ...record.record }, ...(documents ? { documents } : {}) })
       .catch(() => { record.record.captureError = true /* A disk failure cannot fail agent work. */ })
     this.jobs.add(job)
@@ -76,6 +119,16 @@ export class TrajectoryRecorder {
         ...(tool.constrainedSampling !== undefined ? { constrainedSampling: tool.constrainedSampling } : {})
       })) }
       : message) }
+    // Auxiliary compaction/tree-summary calls do not replace the last agent
+    // request. The same sanitized model-facing definitions back both capture
+    // documents and composition estimates.
+    if (this.run && !this.maintenance) {
+      this.promptSnapshot = { anchor: record.anchor, text: currentSystemPrompt(context) }
+      record.record.contextStats = { id: record.record.id, startedAt: record.record.startedAt,
+        provider: model.provider, model: model.id, payloadCaptured: false, inputTokens: null,
+        ...contextComposition(capturedContext.messages, this.session.sessionManager.buildSessionProjection().messages) }
+      this.updateContext(record, {})
+    }
     await this.save(record, { context: capturedContext, options: requestOptions })
     const attempts = [record]
     let payloads = 0
@@ -88,6 +141,8 @@ export class TrajectoryRecorder {
       record.record.stopReason = message.stopReason
       record.record.usage = { input: message.usage.input, output: message.usage.output,
         cacheRead: message.usage.cacheRead, cacheWrite: message.usage.cacheWrite, cost: message.usage.cost.total }
+      const input = message.usage.input + message.usage.cacheRead + message.usage.cacheWrite
+      this.updateContext(record, { inputTokens: input > 0 || record.record.status === 'completed' ? input : null })
       if (this.run) {
         const usage = this.run.record.usage ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 }
         for (const key of ['input', 'output', 'cacheRead', 'cacheWrite', 'cost'] as const) usage[key] += record.record.usage[key]
@@ -116,10 +171,13 @@ export class TrajectoryRecorder {
             record = next
             attempts.push(record)
             this.latestRequest = record.record.id
+            this.updateContext(record, { id: record.record.id, startedAt: record.record.startedAt,
+              inputTokens: null, payloadCaptured: false })
             await this.save(record, { context: capturedContext, options: requestOptions })
           }
           record.record.provider = requestModel.provider
           record.record.model = requestModel.id
+          this.updateContext(record, { provider: requestModel.provider, model: requestModel.id, payloadCaptured: true })
           await this.save(record, { payload: actual })
           return replacement
         },
@@ -280,6 +338,7 @@ export class TrajectoryRecorder {
 
   async dispose(): Promise<void> {
     this.disposed = true
+    this.resetSystemPrompt()
     if (this.session.agent.streamFunction === this.wrapper) this.session.agent.streamFunction = this.previous
     await this.flush()
     await this.client.settle(this.session.sessionId).catch(() => {})

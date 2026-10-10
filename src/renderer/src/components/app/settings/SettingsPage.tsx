@@ -1,6 +1,6 @@
-import { useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
-import { ArrowLeft, Bell, Chart, Flask, Globe, Keyboard, KeyRound, Palette, PictureInPicture2, Plug, Puzzle, Settings2, Skills, Subagent, TextAlignCenter, Wrench } from '@/lib/icons'
+import { ArrowLeft, Bell, BookOpen, Chart, Gavel, Globe, Keyboard, KeyRound, Monitor, Palette, PictureInPicture2, Plug, Puzzle, Settings2, Skills, Subagent, TextAlignCenter, Wrench } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/motion/tabs'
 import { EASE_OUT } from '@/lib/ease'
@@ -23,8 +23,11 @@ import { BrowserSection } from './BrowserSection'
 import { UsageSection } from './UsageSection'
 import { JevSection } from './JevSection'
 import { WindowTitlebar } from '../WindowTitlebar'
+import { LibrarySection } from './LibrarySection'
+import { ResourcesSection } from './ResourcesSection'
 
 interface SectionProps {
+  active: boolean
   accent: string
   onAccentChange: (accent: string) => void
   uiStyle: UiStyle
@@ -43,29 +46,19 @@ const SECTIONS: {
   descriptionKey: MessageKey
   /** Optional rail tag (e.g. Beta) shown at the end of the tab row. */
   badgeKey?: MessageKey
+  /** A section with sub-pages supplies its own current heading. */
+  ownsHeading?: boolean
   icon: ReactNode
   render: (props: SectionProps) => ReactNode
 }[] = [
+  // App basics first, then app features, then the agent stack, with reports
+  // and the beta surface at the end.
   {
     id: 'general',
     labelKey: 'settings.general',
     descriptionKey: 'settings.generalDesc',
     icon: <Settings2 className="size-[18px]" />,
     render: () => <GeneralSection />
-  },
-  {
-    id: 'notifications',
-    labelKey: 'settings.notifications',
-    descriptionKey: 'settings.notificationsDesc',
-    icon: <Bell className="size-[18px]" />,
-    render: () => <NotificationsSection />
-  },
-  {
-    id: 'prompt',
-    labelKey: 'settings.prompt',
-    descriptionKey: 'settings.promptDesc',
-    icon: <TextAlignCenter className="size-[18px]" />,
-    render: () => <PromptSection />
   },
   {
     id: 'appearance',
@@ -82,11 +75,18 @@ const SECTIONS: {
     )
   },
   {
-    id: 'picture-in-picture',
-    labelKey: 'settings.pictureInPicture',
-    descriptionKey: 'settings.pictureInPictureDesc',
-    icon: <PictureInPicture2 className="size-[18px]" />,
-    render: () => <PictureInPictureSection />
+    id: 'notifications',
+    labelKey: 'settings.notifications',
+    descriptionKey: 'settings.notificationsDesc',
+    icon: <Bell className="size-[18px]" />,
+    render: () => <NotificationsSection />
+  },
+  {
+    id: 'prompt',
+    labelKey: 'settings.prompt',
+    descriptionKey: 'settings.promptDesc',
+    icon: <TextAlignCenter className="size-[18px]" />,
+    render: () => <PromptSection />
   },
   {
     id: 'shortcuts',
@@ -96,7 +96,29 @@ const SECTIONS: {
     render: () => <ShortcutsSection />
   },
   {
+    id: 'library',
+    labelKey: 'library.title',
+    descriptionKey: 'library.settingsDesc',
+    icon: <BookOpen className="size-[18px]" />,
+    render: () => <LibrarySection />
+  },
+  {
+    id: 'browser',
+    labelKey: 'settings.browserTitle',
+    descriptionKey: 'settings.browserDesc',
+    icon: <Globe className="size-[18px]" />,
+    render: () => <BrowserSection />
+  },
+  {
+    id: 'picture-in-picture',
+    labelKey: 'settings.pictureInPicture',
+    descriptionKey: 'settings.pictureInPictureDesc',
+    icon: <PictureInPicture2 className="size-[18px]" />,
+    render: () => <PictureInPictureSection />
+  },
+  {
     id: 'providers',
+    ownsHeading: true,
     labelKey: 'settings.providers',
     descriptionKey: 'settings.providersDesc',
     icon: <KeyRound className="size-[18px]" />,
@@ -138,13 +160,6 @@ const SECTIONS: {
     render: () => <SkillsSection />
   },
   {
-    id: 'browser',
-    labelKey: 'settings.browserTitle',
-    descriptionKey: 'settings.browserDesc',
-    icon: <Globe className="size-[18px]" />,
-    render: () => <BrowserSection />
-  },
-  {
     id: 'usage',
     labelKey: 'settings.usage',
     descriptionKey: 'settings.usageDesc',
@@ -152,27 +167,35 @@ const SECTIONS: {
     render: () => <UsageSection />
   },
   {
+    id: 'resources',
+    labelKey: 'resources.title',
+    descriptionKey: 'resources.description',
+    icon: <Monitor className="size-[18px]" />,
+    render: (props) => <ResourcesSection active={props.active} />
+  },
+  {
     id: 'jev',
     labelKey: 'jev.title',
     descriptionKey: 'jev.description',
     badgeKey: 'settings.beta',
-    icon: <Flask className="size-[18px]" />,
+    icon: <Gavel className="size-[18px]" />,
     render: () => <JevSection />
   }
 ]
 
-interface SettingsPageProps extends SectionProps {
+interface SettingsPageProps extends Omit<SectionProps, 'active'> {
   open: boolean
   onBack: () => void
+  requestedSection?: string | null
 }
 
 /**
  * Full-page Settings — back button top-left, beUI Tabs turned into a vertical
  * rail (the pill indicator glides between sections). Rendered above the
  * workspace instead of unmounting it, so composer drafts and scroll positions
- * survive the round-trip; the opaque background keeps it reading as a page.
+ * survive the round-trip; content stays opaque below the shared glass title row.
  */
-export function SettingsPage({ open, onBack, ...sectionProps }: SettingsPageProps) {
+export function SettingsPage({ open, onBack, requestedSection, ...sectionProps }: SettingsPageProps) {
   const { t } = useI18n()
   const [section, setSection] = useState(SECTIONS[0].id)
   // Sections mount lazily: a panel's content renders on first activation and
@@ -191,6 +214,9 @@ export function SettingsPage({ open, onBack, ...sectionProps }: SettingsPageProp
     setSection(id)
     setMounted((previous) => (previous.has(id) ? previous : new Set(previous).add(id)))
   }
+  useEffect(() => {
+    if (open && requestedSection && SECTIONS.some(entry => entry.id === requestedSection)) selectSection(requestedSection)
+  }, [open, requestedSection])
 
   return (
     <AnimatePresence initial={false}>
@@ -200,7 +226,7 @@ export function SettingsPage({ open, onBack, ...sectionProps }: SettingsPageProp
           animate={{ opacity: 1, x: 0 }}
           exit={{ opacity: 0, x: reduce ? 0 : 24 }}
           transition={reduce ? { duration: 0 } : { duration: 0.22, ease: EASE_OUT }}
-          className="absolute inset-0 z-40 flex flex-col bg-background"
+          className="window-page absolute inset-0 z-40 flex flex-col"
           // A full-page surface: the shortcut dispatcher's layer. Only its
           // own ⌘, toggle passes through to close it.
           data-shortcut-layer
@@ -229,12 +255,10 @@ export function SettingsPage({ open, onBack, ...sectionProps }: SettingsPageProp
                   {entry.icon}
                   {t(entry.labelKey)}
                   {entry.badgeKey ? (
-                    // A rail tag has to read on the idle row and on the selected
-                    // one, where the tab itself is the primary surface — hence
-                    // the `group-aria-selected` pair rather than one palette.
+                    // Keep the tag readable on the selected tab's theme tint.
                     <span
                       data-tab-badge
-                      className="ml-auto shrink-0 rounded-control bg-muted px-1.5 py-px text-[10px] font-medium leading-3.5 text-muted-foreground group-aria-selected:bg-primary-foreground/20 group-aria-selected:text-primary-foreground"
+                      className="ml-auto shrink-0 rounded-control bg-muted px-1.5 py-px text-micro font-medium leading-3.5 text-muted-foreground group-aria-selected:bg-muted-foreground/10 group-aria-selected:text-foreground"
                     >
                       {t(entry.badgeKey)}
                     </span>
@@ -244,16 +268,16 @@ export function SettingsPage({ open, onBack, ...sectionProps }: SettingsPageProp
             </TabsList>
             {SECTIONS.map((entry) => (
               <TabsContent key={entry.id} value={entry.id} className="mt-0 min-h-0 flex-1">
-                <div className="h-full overflow-y-auto overscroll-contain px-6 py-7 md:px-10">
+                <div data-settings-scrollport className="h-full overflow-y-auto overscroll-contain px-6 py-7 md:px-10">
                   <div className="mx-auto w-full max-w-5xl">
-                    <h2 className="text-base font-semibold tracking-tight text-foreground">
+                    {!entry.ownsHeading ? <><h2 className="text-base font-semibold tracking-tight text-foreground">
                       {t(entry.labelKey)}
                     </h2>
-                    <p className="mt-1.5 text-sm leading-5 text-muted-foreground">
+                    <p className="mt-1.5 text-sm leading-ui text-muted-foreground">
                       {t(entry.descriptionKey)}
-                    </p>
-                    <div className="mt-7">
-                      {mounted.has(entry.id) ? entry.render(sectionProps) : null}
+                    </p></> : null}
+                    <div className={entry.ownsHeading ? undefined : 'mt-7'}>
+                      {mounted.has(entry.id) ? entry.render({ ...sectionProps, active: open && section === entry.id }) : null}
                     </div>
                   </div>
                 </div>

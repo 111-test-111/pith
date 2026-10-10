@@ -1,10 +1,11 @@
-import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { AgentCodeLine, type AgentCodeToken } from '@/components/agents/agent-code'
 import { Button } from '@/components/motion/button'
 import { useFileTokens } from '@/lib/hooks/use-file-tokens'
 import { useDiffWindow } from '@/lib/hooks/use-diff-window'
 import { fileLanguage } from '@/lib/file-language'
 import { cn } from '@/lib/utils'
+import { codeLineHeight, useCodeFontSize } from '@/lib/typography'
 import { useI18n } from '@/i18n'
 import { EMPTY_FILE_SEARCH, type FileSearchResult } from '@/lib/file-search'
 import { useFileSearchHighlights } from '@/lib/hooks/use-file-search-highlights'
@@ -19,7 +20,7 @@ const WRAP_SETTLE_MS = 120
 /** Break one line at `columns` display columns. The metric mirrors the
  * unwrapped width calculation (tab → next 8-column stop, wide code point →
  * 2ch), so a segment rendered with whitespace-pre never exceeds the measured
- * width and its row is exactly one 20px line tall. */
+ * width and its row is exactly one code line tall. */
 function segmentLine(line: string, columns: number, out: number[]) {
   let column = 0, start = 0, index = 0
   while (index < line.length) {
@@ -88,18 +89,20 @@ function displayRow(wrapped: WrappedSource | null, line: number, offset = 0) {
 }
 
 /** BeUI token rows composed into a full-height, windowed source viewport.
- * Soft wrap re-segments lines into fixed 20px display rows, so the fixed-row
+ * Soft wrap re-segments lines into display rows at the configured code height, so the fixed-row
  * virtualizer, line anchors and search Highlights stay exact with no DOM
  * measurement. Even one huge logical line mounts only its visible segments. */
 export function FileSource({ text, tab, store, search, wrap, debugBreakpoints, onToggleBreakpoint }: { text: string; tab: FileTab; store: FileBrowserStore; search?: { result: FileSearchResult; current: number }; wrap: boolean; debugBreakpoints?: DebugBreakpointDTO[]; onToggleBreakpoint?: (line: number) => void }) {
   const { t } = useI18n()
+  const rowHeight = codeLineHeight(useCodeFontSize())
   const ref = useRef<HTMLDivElement>(null)
   const ruler = useRef<HTMLSpanElement>(null)
   const [columns, setColumns] = useState(0)
   const scrollTop = useRef(0)
-  const previousLayout = useRef<{ wrapped: WrappedSource | null; lines: string[]; path: string } | null>(null)
+  const previousLayout = useRef<{ wrapped: WrappedSource | null; lines: string[]; path: string; rowHeight: number } | null>(null)
   const positioned = useRef<{ store: FileBrowserStore; path: string; visit: number; line?: number } | null>(null)
   const lines = useMemo(() => text.split('\n'), [text])
+  const gutterColumns = Math.max(3, String(lines.length).length)
   const tokens = useFileTokens(text, fileLanguage(tab.path))
   const lineStarts = useMemo(() => { let offset = 0; return lines.map(line => { const start = offset; offset += line.length + 1; return start }) }, [lines])
   const active = search?.result.matches[search.current]
@@ -113,8 +116,8 @@ export function FileSource({ text, tab, store, search, wrap, debugBreakpoints, o
     }
     return { prefix, boundaries, rows: boundaries.length >> 1 }
   }, [wrap, columns, lines])
-  const rowTop = (line: number, offset = 0) => displayRow(wrapped, line - 1, offset) * 20
-  const { start, end, onScroll: measureWindow } = useDiffWindow(ref, wrapped ? wrapped.rows : lines.length, true, 800)
+  const rowTop = (line: number, offset = 0) => displayRow(wrapped, line - 1, offset) * rowHeight
+  const { start, end, onScroll: measureWindow } = useDiffWindow(ref, wrapped ? wrapped.rows : lines.length, true, 800, rowHeight, false)
   const onScroll = useCallback(() => {
     if (ref.current) scrollTop.current = ref.current.scrollTop
     measureWindow()
@@ -127,7 +130,8 @@ export function FileSource({ text, tab, store, search, wrap, debugBreakpoints, o
     if (!wrap || !viewport || !probe) return
     const measure = () => {
       const chWidth = probe.getBoundingClientRect().width / 100
-      if (chWidth > 0 && viewport.clientWidth > 0) setColumns(Math.max(8, Math.floor((viewport.clientWidth - CODE_INSET - 1) / chWidth)))
+      const inset = Math.max(CODE_INSET, gutterColumns * chWidth + 40)
+      if (chWidth > 0 && viewport.clientWidth > 0) setColumns(Math.max(8, Math.floor((viewport.clientWidth - inset - 1) / chWidth)))
     }
     measure()
     let timer: ReturnType<typeof setTimeout> | undefined
@@ -138,21 +142,21 @@ export function FileSource({ text, tab, store, search, wrap, debugBreakpoints, o
     observer.observe(viewport)
     observer.observe(probe)
     return () => { observer.disconnect(); clearTimeout(timer) }
-  }, [wrap])
+  }, [wrap, rowHeight, gutterColumns])
   // Preserve the reading position across wrap/width changes, using the old
   // character anchor rather than a pixel offset in a different row layout.
   useLayoutEffect(() => {
     const previous = previousLayout.current
-    if (previous && previous.lines === lines && previous.path === tab.path && previous.wrapped !== wrapped) {
-      const top = Math.max(0, scrollTop.current - 8), row = Math.floor(top / 20)
+    if (previous && previous.lines === lines && previous.path === tab.path && (previous.wrapped !== wrapped || previous.rowHeight !== rowHeight)) {
+      const top = Math.max(0, scrollTop.current - 8), row = Math.floor(top / previous.rowHeight)
       const line = previous.wrapped ? lineAtRow(previous.wrapped.prefix, row) : Math.min(row, lines.length - 1)
       const offset = previous.wrapped ? previous.wrapped.boundaries[Math.min(row, previous.wrapped.rows - 1) * 2] : 0
-      ref.current!.scrollTop = displayRow(wrapped, line, offset) * 20 + top % 20 + (scrollTop.current > 0 ? 8 : 0)
+      ref.current!.scrollTop = displayRow(wrapped, line, offset) * rowHeight + (top % previous.rowHeight) / previous.rowHeight * rowHeight + (scrollTop.current > 0 ? 8 : 0)
       if (wrapped) ref.current!.scrollLeft = 0
     }
-    previousLayout.current = { wrapped, lines, path: tab.path }
+    previousLayout.current = { wrapped, lines, path: tab.path, rowHeight }
     onScroll()
-  }, [wrapped, lines, tab.path, onScroll])
+  }, [wrapped, lines, tab.path, rowHeight, onScroll])
   useLayoutEffect(() => {
     // A cold wrapped mount first measures its columns. Consume the navigation
     // only when its actual display rows exist, then leave later reflows alone.
@@ -167,13 +171,13 @@ export function FileSource({ text, tab, store, search, wrap, debugBreakpoints, o
     viewport.scrollLeft = saved?.left ?? 0
     onScroll()
     store.saveScroll(tab.path, 'source', viewport.scrollTop, viewport.scrollLeft)
-  }, [store, tab.path, tab.visit, tab.line, wrap, wrapped, onScroll])
+  }, [store, tab.path, tab.visit, tab.line, wrap, wrapped, rowHeight, onScroll])
   useLayoutEffect(() => {
     if (!active) return
     ref.current!.scrollTop = Math.max(0, rowTop(active.line, active.start - lineStarts[active.line - 1]) - ref.current!.clientHeight / 3)
     onScroll()
-  }, [active, wrapped, lineStarts, onScroll])
-  const highlightVersion = useMemo(() => ({ tokens, wrapped }), [tokens, wrapped])
+  }, [active, wrapped, lineStarts, rowHeight, onScroll])
+  const highlightVersion = useMemo(() => ({ tokens, wrapped, rowHeight }), [tokens, wrapped, rowHeight])
   useFileSearchHighlights(ref, lineStarts, search?.result.matches ?? EMPTY_FILE_SEARCH.matches, search?.current ?? 0, highlightVersion, start, end)
   /** The gutter cell: a red dot for a bound breakpoint (hollow when unbound),
    * and the line number as a toggle button while a debug session is live. */
@@ -193,7 +197,7 @@ export function FileSource({ text, tab, store, search, wrap, debugBreakpoints, o
             aria-pressed={!!breakpoint}
             aria-label={t('debug.toggleBreakpoint', { line: number })}
             onClick={() => onToggleBreakpoint(number)}
-            className={cn('h-5 min-w-0 rounded-control px-1 py-0 align-top font-mono text-xs leading-5 hover:text-foreground focus-visible:ring-inset', breakpoint && 'text-foreground/80')}
+            className={cn('h-[var(--app-line-code)] min-w-0 rounded-control px-1 py-0 align-top font-mono text-code hover:text-foreground focus-visible:ring-inset', breakpoint && 'text-foreground/80')}
           >
             {number}
           </Button>
@@ -202,10 +206,11 @@ export function FileSource({ text, tab, store, search, wrap, debugBreakpoints, o
     )
   }
   return <div ref={ref} data-file-source role="region" aria-label={t('files.source')} tabIndex={0} className="min-h-0 flex-1 overflow-auto outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
+    style={{ overflowAnchor: 'none', '--source-gutter': `max(3.5rem, calc(${gutterColumns}ch + 1.5rem))` } as CSSProperties}
     onScroll={() => { onScroll(); if (ref.current) store.saveScroll(tab.path, 'source', ref.current.scrollTop, ref.current.scrollLeft) }}>
-    <span ref={ruler} aria-hidden className="pointer-events-none invisible fixed m-0 font-mono text-xs" style={{ width: '100ch' }} />
-    <pre className="m-0 min-w-full py-2 font-mono text-xs leading-5 text-foreground/85" style={wrapped ? undefined : { width: `calc(4.5rem + ${width}ch)` }}>
-      <code className="block" style={{ paddingTop: start * 20, paddingBottom: ((wrapped?.rows ?? lines.length) - end) * 20 }}>
+    <span ref={ruler} aria-hidden className="pointer-events-none invisible fixed m-0 font-mono text-code-inline" style={{ width: '100ch' }} />
+    <pre className="m-0 min-w-full py-2 font-mono text-code text-foreground/85" style={wrapped ? undefined : { width: `calc(var(--source-gutter) + 1rem + ${width}ch)` }}>
+      <code className="block" style={{ paddingTop: start * rowHeight, paddingBottom: ((wrapped?.rows ?? lines.length) - end) * rowHeight }}>
         {wrapped
           ? lines.slice(firstLine, lastLine + 1).map((line, index) => {
               const number = firstLine + index + 1
@@ -213,17 +218,17 @@ export function FileSource({ text, tab, store, search, wrap, debugBreakpoints, o
               const lastSegment = Math.min(end, wrapped.prefix[number])
               const offset = wrapped.boundaries[firstSegment * 2]
               const lineTokens = tokens?.[firstLine + index]
-              return <span key={number} data-source-line={number} data-source-offset={offset} className={cn('grid grid-cols-[3.5rem_minmax(0,1fr)]', !search && tab.line === number && 'bg-primary/10')}>
+              return <span key={number} data-source-line={number} data-source-offset={offset} className={cn('grid grid-cols-[var(--source-gutter)_minmax(0,1fr)]', !search && tab.line === number && 'bg-primary/10')}>
                 {gutterCell(number, firstSegment === wrapped.prefix[number - 1])}
                 <span className="min-w-0 pr-4">
                   {Array.from({ length: lastSegment - firstSegment }, (_, segment) => {
                     const from = wrapped.boundaries[(firstSegment + segment) * 2], to = wrapped.boundaries[(firstSegment + segment) * 2 + 1]
-                    return <AgentCodeLine key={from} code={line.slice(from, to)} tokens={sliceTokens(lineTokens, lineStarts[number - 1] + from, lineStarts[number - 1] + to)} className="block h-5 whitespace-pre" />
+                    return <AgentCodeLine key={from} code={line.slice(from, to)} tokens={sliceTokens(lineTokens, lineStarts[number - 1] + from, lineStarts[number - 1] + to)} className="block h-[var(--app-line-code)] whitespace-pre" />
                   })}
                 </span>
               </span>
             })
-          : lines.slice(start, end).map((line, index) => <span key={start + index} data-source-line={start + index + 1} className={cn('grid h-5 grid-cols-[3.5rem_minmax(0,1fr)]', !search && tab.line === start + index + 1 && 'bg-primary/10')}>
+          : lines.slice(start, end).map((line, index) => <span key={start + index} data-source-line={start + index + 1} className={cn('grid h-[var(--app-line-code)] grid-cols-[var(--source-gutter)_minmax(0,1fr)]', !search && tab.line === start + index + 1 && 'bg-primary/10')}>
               {gutterCell(start + index + 1, true)}
               <AgentCodeLine code={line} tokens={tokens?.[start + index]} className="whitespace-pre pr-4" />
             </span>)}

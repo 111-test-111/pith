@@ -131,7 +131,7 @@ export function TokenActivityPanel({ stats, today }: { stats: UsageStatsDTO; tod
             <div className="whitespace-nowrap text-base font-medium leading-tight tabular-nums text-foreground">
               {metric.value}
             </div>
-            <div className="mt-1 min-h-[30px] text-[11px] leading-[1.35] text-muted-foreground">{metric.label}</div>
+            <div className="mt-1 min-h-[30px] text-caption leading-[1.35] text-muted-foreground">{metric.label}</div>
           </div>
         ))}
       </div>
@@ -140,7 +140,7 @@ export function TokenActivityPanel({ stats, today }: { stats: UsageStatsDTO; tod
         <h3 id="token-activity-title" className="text-sm font-semibold text-foreground">
           {t('settings.tokenActivity.title')}
         </h3>
-        <p className="mt-0.5 text-xs leading-4 text-muted-foreground">
+        <p className="mt-0.5 text-xs leading-ui-tight text-muted-foreground">
           {t('settings.tokenActivity.subtitle')}
         </p>
       </div>

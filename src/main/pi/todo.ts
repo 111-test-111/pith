@@ -88,12 +88,8 @@ export function createTodoTool(state: TodoState, canStart: () => boolean): ToolD
     description: 'Maintain a structured task list for this conversation. Each call replaces the entire list. Use for complex multi-step work or explicit task tracking; skip trivial tasks. Preserve returned IDs across updates.',
     promptSnippet: 'Track multi-step work with a persistent, structured task list.',
     promptGuidelines: [
-      'Use todo_write for non-trivial work with three or more distinct steps or when the user asks for task tracking. Send the FULL updated list each time.',
-      'Keep at most one todo_write item in_progress. Mark it when starting, completed as soon as verified, and cancelled when abandoned. Never batch-complete unfinished work.',
-      'A background bash tool returning a task ID is not completion. Keep the related todo unfinished until the result is known and verified; update after its completion notification.',
-      'Before your final response, call todo_write if status or scope changed. Keep stable task IDs when renaming or reordering. Do not make redundant updates.',
-      'Never restate, summarize or acknowledge the task list or its statuses in your reply. todo_write and the task UI are the only place task state appears; do not report that the list is accurate or unchanged.',
-      'Keep completed and cancelled tasks in the final todo_write list so the user can review them. Finishing work does not require clearing the list.'
+      'Use todo_write for 3+ steps or requested tracking. Replace the full list, preserving IDs and completed/cancelled items; update only when scope/status changes, including before the final reply.',
+      'Keep at most one item in_progress; complete only after verification, cancel abandoned work, and keep background dependencies unfinished. Task state is already in the UI: do not repeat or acknowledge the list in prose.'
     ],
     async execute(_id, args, signal) {
       if (signal?.aborted || !canStart()) throw new Error('Task update cancelled')

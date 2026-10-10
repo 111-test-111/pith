@@ -96,7 +96,7 @@ export function ExtensionsSection() {
             type="button"
             aria-label={t('settings.extensionDismissError')}
             onClick={clearActionError}
-            className="grid size-4 shrink-0 place-items-center rounded-capsule transition-colors hover:bg-destructive/10"
+            className="grid size-4 shrink-0 place-items-center rounded-icon transition-colors hover:bg-destructive/10"
           >
             <X className="size-3" />
           </button>
@@ -194,12 +194,12 @@ function ExtensionDetail({
             {extension.name}
           </span>
           {extension.version ? (
-            <span className="shrink-0 rounded-control bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+            <span className="shrink-0 rounded-control bg-muted px-2 py-0.5 text-caption font-medium text-muted-foreground">
               v{extension.version}
             </span>
           ) : null}
           {extension.configuredVersion && extension.configuredVersion !== extension.version ? (
-            <span className="shrink-0 rounded-control bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+            <span className="shrink-0 rounded-control bg-muted px-2 py-0.5 text-caption font-medium text-muted-foreground">
               {t('settings.extensionConfiguredVersion', { version: extension.configuredVersion })}
             </span>
           ) : null}
@@ -245,13 +245,13 @@ function ExtensionDetail({
           </Tooltip>
         </MetaRow>
         <MetaRow label={t('settings.extensionSource')}>
-          <code className="break-all font-mono text-[11px] text-muted-foreground">
+          <code className="break-all font-mono text-caption text-muted-foreground">
             {extension.source}
           </code>
         </MetaRow>
         {extension.installedPath ? (
           <MetaRow label={t('settings.extensionPath')}>
-            <span className="break-all font-mono text-[11px] text-muted-foreground">
+            <span className="break-all font-mono text-caption text-muted-foreground">
               {extension.installedPath}
             </span>
           </MetaRow>
@@ -267,7 +267,7 @@ function ExtensionDetail({
             {extension.toolNames.map((name) => (
               <code
                 key={name}
-                className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-[11px] text-foreground"
+                className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-caption text-foreground"
               >
                 {name}
               </code>
@@ -289,7 +289,7 @@ function ExtensionDetail({
               if (items.length === 0) return null
               return (
                 <div key={kind}>
-                  <p className="mb-1 text-[11px] font-medium text-muted-foreground/70">
+                  <p className="mb-1 text-caption font-medium text-muted-foreground/70">
                     {t(RESOURCE_LABEL[kind])}
                   </p>
                   <ul className="space-y-0.5">
@@ -377,7 +377,7 @@ function InstallDialog({ open, onClose }: { open: boolean; onClose: () => void }
         <h2 className="text-base font-semibold text-foreground">
           {t('settings.extensionInstallTitle')}
         </h2>
-        <p className="mt-1 text-sm leading-5 text-muted-foreground">
+        <p className="mt-1 text-sm leading-ui text-muted-foreground">
           {t('settings.extensionInstallDesc')}
         </p>
         <div className="mt-3">

@@ -169,12 +169,14 @@ try {
     assert.equal(row.messageCount, info.messageCount, `messageCount parity for ${path}`)
     assert.equal(row.firstMessage, info.firstMessage, `firstMessage parity for ${path}`)
     assert.equal(row.modified, info.modified.getTime(), `modified parity for ${path}`)
+    assert.equal(row.created, info.created.getTime(), `created parity for ${path}`)
     assert.equal(row.parentSessionPath ?? undefined, info.parentSessionPath ?? undefined, `parentSessionPath parity for ${path}`)
   }
   const normalRow = rows.get(normal)
   assert.equal(normalRow.messageCount, 4)
   assert.equal(normalRow.firstMessage, 'first question')
   assert.equal(normalRow.modified, Date.parse('2026-09-01T10:05:00.000Z'), 'activity ignores the contentless toolResult')
+  assert.equal(normalRow.created, Date.parse('2026-09-01T10:00:00.000Z'), 'creation uses the header rather than last activity or filesystem time')
   assert.equal(rows.get(fresh).messageCount, 0)
   assert.equal(rows.get(fresh).firstMessage, '(no messages)')
   assert.equal(rows.get(named).name, 'A kept name')
@@ -245,6 +247,7 @@ try {
   const afterAppend = new Map(index.list().map((row) => [row.path, row]))
   assert.equal(afterAppend.get(normal).messageCount, 5, 'an appended message is re-read')
   assert.equal(afterAppend.get(normal).modified, Date.parse('2026-09-01T10:20:00.000Z'))
+  assert.equal(afterAppend.get(normal).created, normalRow.created, 'new activity never changes creation sorting')
   assert.equal(afterAppend.get(named).messageCount, rows.get(named).messageCount, 'other files keep their cached rows')
 
   // Deletion drops the row; a new file gains one.

@@ -1,13 +1,14 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type RefObject
 } from 'react'
-import { createWheelGesture, wheelPixels, WHEEL_NOTCH_PX } from '@/lib/wheel-gesture'
+import { wheelPixels, WHEEL_GESTURE_IDLE, WHEEL_NOTCH_PX } from '@/lib/wheel-gesture'
 
 /**
  * Zoom/pan interaction for an image that is laid out to fit its viewport.
@@ -54,15 +55,22 @@ interface ImageZoomOptions {
   /** The clipping box the image is centred in. */
   viewportRef: RefObject<HTMLDivElement | null>
   imageRef: RefObject<HTMLImageElement | null>
+  /** Vector images resize their painted box on zoom. Their pan limits still
+   * use this fixed fit size, rather than multiplying that resized box again. */
+  getFitSize?: () => { width: number; height: number } | null
   /**
    * Where the +/-/arrow shortcuts are heard. The overlay owns the whole window,
    * so it listens on `window`; the file pane shares the window with the
    * composer, so it only listens while its own viewport has focus.
    */
   keyboard?: 'window' | 'element'
+  /** A different group image starts at fit without remounting its controls. */
+  resetKey?: string
+  /** Group navigation owns horizontal arrows; vertical arrows still pan. */
+  onNavigate?: (direction: -1 | 1) => void
 }
 
-export function useImageZoom({ viewportRef, imageRef, keyboard = 'window' }: ImageZoomOptions) {
+export function useImageZoom({ viewportRef, imageRef, getFitSize, keyboard = 'window', resetKey, onNavigate }: ImageZoomOptions) {
   const dragRef = useRef<{
     pointerId: number
     startX: number
@@ -72,6 +80,11 @@ export function useImageZoom({ viewportRef, imageRef, keyboard = 'window' }: Ima
   } | null>(null)
   const [view, setView] = useState<ImageZoomView>(REST)
   const [dragging, setDragging] = useState(false)
+  useLayoutEffect(() => {
+    dragRef.current = null
+    setDragging(false)
+    setView(REST)
+  }, [resetKey])
   /** Off the fit view: shrunk, enlarged, or panned away from the centre. */
   const zoomed = view.scale !== 1 || view.x !== 0 || view.y !== 0
   /** Grown past fit. At or below fit the scaled image is no bigger than its
@@ -87,15 +100,16 @@ export function useImageZoom({ viewportRef, imageRef, keyboard = 'window' }: Ima
       const img = imageRef.current
       // `offsetWidth/Height` is the fit-sized layout box: CSS transforms don't
       // affect it, so it is the right basis for the pan limits.
-      const limitX = box && img ? Math.max(0, (img.offsetWidth * scale - box.clientWidth) / 2) : 0
-      const limitY = box && img ? Math.max(0, (img.offsetHeight * scale - box.clientHeight) / 2) : 0
+      const fit = getFitSize?.()
+      const limitX = box && img ? Math.max(0, ((fit?.width ?? img.offsetWidth) * scale - box.clientWidth) / 2) : 0
+      const limitY = box && img ? Math.max(0, ((fit?.height ?? img.offsetHeight) * scale - box.clientHeight) / 2) : 0
       return {
         scale,
         x: clampNumber(next.x, -limitX, limitX),
         y: clampNumber(next.y, -limitY, limitY)
       }
     },
-    [imageRef, viewportRef]
+    [getFitSize, imageRef, viewportRef]
   )
 
   /** Zoom by `factor`, keeping the point `anchor` (viewport-centred px, the
@@ -130,8 +144,8 @@ export function useImageZoom({ viewportRef, imageRef, keyboard = 'window' }: Ima
   useEffect(() => {
     const box = viewportRef.current
     if (!box) return
-    const gesture = createWheelGesture((input, axis) => input.ctrlKey ? 'pinch'
-      : axis === 'y' && (input.deltaMode !== 0 || Math.abs(input.deltaY) >= WHEEL_NOTCH_PX) ? 'zoom' : 'pan')
+    let mode: 'pan' | 'zoom' | null = null
+    let lastWheel = -Infinity
     const zoomAtPointer = (event: WheelEvent, delta: number, gain: number) => {
       const rect = box.getBoundingClientRect()
       zoomAt(Math.exp(-delta * gain), {
@@ -141,28 +155,39 @@ export function useImageZoom({ viewportRef, imageRef, keyboard = 'window' }: Ima
     }
     const onWheel = (event: WheelEvent) => {
       event.preventDefault()
-      const input = gesture.read(wheelPixels(event, box))
-      if (!input) return
-      if (input.mode === 'pinch' || input.mode === 'zoom') {
-        zoomAtPointer(event, input.deltaY, input.mode === 'pinch' ? PINCH_GAIN : WHEEL_GAIN)
+      const input = wheelPixels(event, box)
+      if (!input.deltaX && !input.deltaY) return
+      const now = performance.now()
+      if (now - lastWheel > WHEEL_GESTURE_IDLE || input.ctrlKey || input.shiftKey) mode = null
+      lastWheel = now
+      if (input.ctrlKey) {
+        zoomAtPointer(event, input.deltaY, PINCH_GAIN)
         return
       }
-      // Keep the gesture's direction through cross-axis noise and momentum.
-      // Pointer dragging remains free to move the image in both dimensions.
+      // A trackpad pan stays a pan as it accelerates. Horizontal/diagonal
+      // input always permits panning, including immediately after wheel zoom.
+      if (mode === null || input.deltaX) {
+        mode = !input.deltaX && (input.deltaMode !== 0 || Math.abs(input.deltaY) >= WHEEL_NOTCH_PX) ? 'zoom' : 'pan'
+      }
+      if (mode === 'zoom') {
+        zoomAtPointer(event, input.deltaY, WHEEL_GAIN)
+        return
+      }
       panBy(-input.deltaX, -input.deltaY)
     }
     box.addEventListener('wheel', onWheel, { passive: false })
     return () => {
       box.removeEventListener('wheel', onWheel)
     }
-  }, [panBy, viewportRef, zoomAt])
+  }, [panBy, resetKey, viewportRef, zoomAt])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null
       if (
-        target &&
-        (target.isContentEditable || target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')
+        event.defaultPrevented || event.isComposing || event.ctrlKey || event.metaKey || event.altKey ||
+        viewportRef.current?.closest('[inert]') ||
+        (target && (target.isContentEditable || target.tagName === 'INPUT' || target.tagName === 'TEXTAREA'))
       ) {
         return
       }
@@ -179,10 +204,12 @@ export function useImageZoom({ viewportRef, imageRef, keyboard = 'window' }: Ima
           reset()
           break
         case 'ArrowLeft':
-          panBy(PAN_STEP, 0)
+          if (onNavigate) onNavigate(-1)
+          else panBy(PAN_STEP, 0)
           break
         case 'ArrowRight':
-          panBy(-PAN_STEP, 0)
+          if (onNavigate) onNavigate(1)
+          else panBy(-PAN_STEP, 0)
           break
         case 'ArrowUp':
           panBy(0, PAN_STEP)
@@ -203,7 +230,7 @@ export function useImageZoom({ viewportRef, imageRef, keyboard = 'window' }: Ima
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [keyboard, panBy, reset, viewportRef, zoomAt])
+  }, [keyboard, onNavigate, panBy, reset, viewportRef, zoomAt])
 
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (!pannable) return

@@ -5,6 +5,7 @@ import { SANDBOX_ESCALATION_PROPERTIES } from '../sandbox/escalation'
 import type { DebugManager } from './manager'
 import { ToolFailure } from '../pi/tool-result'
 import { debugResults } from './result-schema'
+import { debugActionGuidance } from './usage'
 
 const string = () => Type.String({ minLength: 1, maxLength: 8192 })
 const int = () => Type.Integer({ minimum: 0 })
@@ -62,7 +63,9 @@ function define<S extends TObject, Result>(schema: S, policy: ActionPolicy, run:
 }
 
 export const debugActions = {
-  help: define(actionSchema('help', {}), none, debugHelp),
+  help: define(actionSchema('help', {
+    topic: optional(Type.String({ minLength: 1, maxLength: 80, description: 'Action name for focused schemas and usage; omit to list all actions.' }))
+  }), none, (_context, request) => debugHelp(request.topic)),
   sessions: define(actionSchema('sessions', {}), none, c => c.manager.list(c.sessionPath)),
   adapters: define(actionSchema('adapters', { cwd: optional(string()) }), { ...none, access: 'execute' }, (c, r) => {
     if (!c.adapters) throw new Error('Adapter discovery requires a model tool context')
@@ -143,9 +146,12 @@ export const debugActions = {
   output: define(actionSchema('output', { cursor: optional(int()), maxChars: optional(Type.Integer({ minimum: 1, maximum: 65_536 })) }), read,
     (c, r) => c.manager.output(c.sessionPath, r.cursor, r.maxChars, c.debugId))
 }
-function debugHelp(): unknown[] {
-  return Object.entries(debugActions).map(([action, entry]) => ({ action, ...entry.policy,
-    inputSchema: entry.schema, resultSchema: debugResults[action as DebugActionName].schema }))
+function debugHelp(topic?: string): unknown[] {
+  if (topic !== undefined && !Object.hasOwn(debugActions, topic)) throw new Error(`Unknown debug help topic: ${topic}`)
+  return Object.entries(debugActions).filter(([action]) => topic === undefined || action === topic)
+    .map(([action, entry]) => ({ action, ...entry.policy, inputSchema: entry.schema,
+      resultSchema: debugResults[action as DebugActionName].schema,
+      guidelines: debugActionGuidance(action as DebugActionName) }))
 }
 export type DebugActionName = keyof typeof debugActions
 export const debugParameters = Type.Object({

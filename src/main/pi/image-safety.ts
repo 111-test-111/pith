@@ -15,7 +15,7 @@ const TEXT_ONLY_IMAGE_NOTE = '[Image omitted from this request: the selected mod
 const MAX_BASE64_LENGTH = 64 * 1024 * 1024
 const MAX_CACHE_ENTRIES = 128
 
-function imageBytes(image: Image): Buffer | null {
+export function imageBytes(image: Image): Buffer | null {
   if (typeof image.data !== 'string' || typeof image.mimeType !== 'string') return null
   // MCP image blocks may use unpadded base64; only a remainder of one is
   // impossible to decode. Padded payloads still need complete quartets.

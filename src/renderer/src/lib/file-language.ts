@@ -5,7 +5,7 @@ const extensions: Record<string, string> = {
   ts: 'typescript', mts: 'typescript', cts: 'typescript', js: 'javascript', mjs: 'javascript', cjs: 'javascript',
   md: 'markdown', mdown: 'markdown', mkd: 'markdown', mdx: 'mdx', py: 'python', rb: 'ruby', rs: 'rust',
   sh: 'bash', zsh: 'bash', yml: 'yaml', h: 'c', hpp: 'cpp', cc: 'cpp', cxx: 'cpp', cs: 'csharp', kt: 'kotlin',
-  gql: 'graphql', txt: 'text', lock: 'text', env: 'dotenv', conf: 'ini'
+  gql: 'graphql', txt: 'text', lock: 'text', env: 'dotenv', conf: 'ini', jsonl: 'json', ndjson: 'json'
 }
 export function codeLanguage(language?: string): AgentCodeLanguage {
   const value = (language ?? '').toLowerCase().split(/[\s:,]/)[0]

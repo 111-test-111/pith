@@ -7,7 +7,6 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/motion/tabs'
 import { Tooltip } from '@/components/motion/tooltip'
 import { LabelTooltip } from './LabelTooltip'
 import { useI18n } from '@/i18n'
-import { TERMINAL_FONT_PX } from '@/lib/terminal-runtime'
 import { cn } from '@/lib/utils'
 import type { TerminalStore } from '@/state/terminal-store'
 
@@ -104,12 +103,10 @@ export function TerminalPane({ terminals, onNew, onEmpty }: {
               tone: a clean exit is neutral, a failure is destructive. The starting
               phase renders no row — the surface attaches in well under a second,
               and a text line that flashes for a few frames reads as a glitch. The
-              message sits at the terminal's own body size (TERMINAL_FONT_PX), not
-              the badge's 11px chrome. */}
+              message follows the terminal's own body size. */}
           <AnimatedBadge
             size="sm"
-            className="max-w-full"
-            style={{ fontSize: TERMINAL_FONT_PX }}
+            className="h-auto min-h-6 max-w-full py-1 text-terminal leading-normal"
             status={tab.status === 'exited' && !tab.exitCode ? 'neutral' : 'danger'}
           >
             {tab.status === 'exited'

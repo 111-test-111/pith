@@ -22,9 +22,11 @@ Conversation selection appends/fsyncs `pith_rewind_selection` before commitment.
 
 ## Coverage and limits
 
-`coverage.ts` diagnoses successful committed `edit`/`write` paths from the complete selected branch, including recorded nested writes. Child paths are collected from parent terminal records or readable child branches and classified under the same workspace/exclusion rules. Successful writes remain evidence even when an outer script or child run fails. Never infer bash writes from prose or reconstruct missing originals from tool output.
+`coverage.ts` diagnoses successful committed `edit`/`write` paths and validated `image` file receipts from the complete selected branch, including recorded nested writes. Child paths are collected from parent terminal records or readable child branches and classified under the same workspace/exclusion rules. Successful writes remain evidence even when an outer script or child run fails. Never infer bash writes from prose or reconstruct missing originals from tool output.
 
 Known outside-workspace or excluded writes are listed explicitly. Partial restore requires consent to the main-owned skip list; persist paths/reasons in the transaction and Undo/Redo history. Neither skipped files, ancestors nor intersecting index entries may be touched. Conversation-only and independent single-file actions do not authorize skipping unrelated paths.
+
+UI image retries retain validated committed files in private `pith_image_replay_v1` branch entries. Coverage consumes settled receipts (including partial successes), never queued destinations or error text. The main-owned retry holds a checkout tool lease through provider wait/save/receipt persistence and remains cancellable during teardown.
 
 Exclusions include ignored/dependency/build paths, oversized or dense untracked content, submodules, hardlinks and special files. Ordinary tracked files are not excluded by untracked-size thresholds. Unsaved buffers, external services, ACL/xattrs/ownership/timestamps and arbitrary outside-workspace effects are not restored. App coordination is not a system-wide atomic filesystem lock.
 

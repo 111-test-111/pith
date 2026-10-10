@@ -1,7 +1,9 @@
 import { open, stat as statPath } from 'node:fs/promises'
-import { isAbsolute, resolve, sep } from 'node:path'
 import { TABLE_DELIMITERS, SLICE_BYTES, expectedDelimiter, isXlsxPath, tableFormatOf } from '../shared/table'
 import type { FileBrowserError, FileBrowserRequest, TableSliceDTO, TableStatDTO } from '../shared/types'
+import { resolveFilePath } from './file-path'
+import { sniffTextEncoding } from './text-decoding'
+import type { TextEncoding } from '../shared/file-preview'
 
 /**
  * Main-process reads for the table preview: the format and delimiter of a
@@ -36,8 +38,7 @@ const sniffs = new Map<string, Sniff>()
 
 /** The absolute path of a request that really is a table of this kind. */
 function tablePath(request: FileBrowserRequest, kind: 'delimited' | 'xlsx' | null): string {
-  if (!request || typeof request.cwd !== 'string' || !isAbsolute(request.cwd) || typeof request.path !== 'string' || request.path.includes('\0')) throw new Error('Invalid table request')
-  const path = resolve(request.cwd, request.path).split(sep).join('/')
+  const path = resolveFilePath(request)
   const format = tableFormatOf(path)
   if (!format || (kind && format !== kind)) throw new Error('Not a table file')
   return path
@@ -75,21 +76,7 @@ async function readRange(path: string, begin: number, end: number): Promise<Buff
 
 /** BOM first (never guesses over an explicit marker), then the NUL density of
  * the head, which is what distinguishes UTF-16 from UTF-8 in practice. */
-function detectEncoding(buffer: Buffer): Pick<Sniff, 'encoding' | 'unit' | 'bom'> {
-  if (buffer.length >= 3 && buffer[0] === 0xef && buffer[1] === 0xbb && buffer[2] === 0xbf) return { encoding: 'utf-8', unit: 1, bom: 3 }
-  if (buffer.length >= 2 && buffer[0] === 0xff && buffer[1] === 0xfe) return { encoding: 'utf-16le', unit: 2, bom: 2 }
-  if (buffer.length >= 2 && buffer[0] === 0xfe && buffer[1] === 0xff) return { encoding: 'utf-16be', unit: 2, bom: 2 }
-  let even = 0
-  let odd = 0
-  for (let index = 0; index + 1 < buffer.length; index += 2) {
-    if (buffer[index] === 0) even++
-    else if (buffer[index + 1] === 0) odd++
-  }
-  const pairs = Math.max(1, buffer.length >> 1)
-  if (even / pairs > 0.25) return { encoding: 'utf-16be', unit: 2, bom: 0 }
-  if (odd / pairs > 0.25) return { encoding: 'utf-16le', unit: 2, bom: 0 }
-  return { encoding: 'utf-8', unit: 1, bom: 0 }
-}
+const detectEncoding = (buffer: Buffer, requested: TextEncoding = 'auto'): Pick<Sniff, 'encoding' | 'unit' | 'bom'> => sniffTextEncoding(buffer, requested)
 
 /** Fields a line would split into, ignoring separators inside quotes. */
 function countFields(line: string, delimiter: string): number {
@@ -132,16 +119,17 @@ function decode(bytes: Buffer, sniff: Pick<Sniff, 'encoding'>): string {
 }
 
 /** Cached by path, invalidated by the file's own size and mtime. */
-async function sniffFile(path: string): Promise<Sniff> {
+async function sniffFile(path: string, requested: TextEncoding = 'auto'): Promise<Sniff> {
   const info = await statPath(path)
-  const cached = sniffs.get(path)
+  const key = `${path}\0${requested}`
+  const cached = sniffs.get(key)
   if (cached && cached.size === info.size && cached.mtimeMs === info.mtimeMs) return cached
   const head = await readRange(path, 0, Math.min(info.size, SNIFF_BYTES) || 1).catch(() => Buffer.alloc(0))
-  const encoding = detectEncoding(head)
+  const encoding = detectEncoding(head, requested)
   const text = decode(head.subarray(encoding.bom), encoding)
   const sniff: Sniff = { size: info.size, mtimeMs: info.mtimeMs, ...encoding, delimiter: sniffDelimiter(text, expectedDelimiter(path)) }
-  sniffs.delete(path)
-  sniffs.set(path, sniff)
+  sniffs.delete(key)
+  sniffs.set(key, sniff)
   while (sniffs.size > MAX_SNIFF_CACHE) sniffs.delete(sniffs.keys().next().value!)
   return sniff
 }
@@ -186,7 +174,7 @@ export async function readTableStat(request: FileBrowserRequest): Promise<TableS
     if (!info.isFile()) return { path, format, size: 0, error: info.isDirectory() ? 'directory' : 'unreadable' }
     if (!format) return { path, format: null, size: info.size }
     if (format === 'xlsx') return { path, format, size: info.size }
-    const sniff = await sniffFile(path)
+    const sniff = await sniffFile(path, request.encoding)
     return { path, format, size: sniff.size, delimiter: sniff.delimiter }
   } catch (error) {
     return { path, format, size: 0, error: errorCode(error) }
@@ -200,7 +188,7 @@ export async function readTableSlice(request: FileBrowserRequest, offset: number
   const start = Number.isSafeInteger(offset) && offset > 0 ? offset : 0
   try {
     path = tablePath(request, 'delimited')
-    const sniff = await sniffFile(path)
+    const sniff = await sniffFile(path, request.encoding)
     if (start >= sniff.size) return { path, offset: start, nextOffset: start, eof: true, text: '' }
     const budget = Math.max(4096, Math.min(SLICE_BYTES, maxBytes))
     const buffer = await readRange(path, start, Math.min(sniff.size, start + budget + SLICE_SLACK))

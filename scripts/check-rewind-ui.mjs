@@ -301,8 +301,8 @@ try {
   const scrolled = await send('Page.captureScreenshot',{format:'png'})
   await writeFile(join(temporary,'rewind-scrolled.png'),Buffer.from(scrolled.data,'base64'))
 
-  // Horizontal diff motion and its owning vertical page share one intent;
-  // cross-axis momentum must never leak into the other nested scrollport.
+  // A diagonal swipe moves the inner diff and its owning vertical page;
+  // changes of direction take effect without an idle gap.
   await evaluate(`(()=>{const diff=document.querySelector('[data-review-diff]');diff.style.width='80px';diff.scrollLeft=10})()`)
   await pause(250)
   const diffPosition=()=>evaluate(`(()=>{const diff=document.querySelector('[data-review-diff]');return {left:diff.scrollLeft,top:document.querySelector('[data-rewind-scroll]').scrollTop}})()`)
@@ -310,15 +310,14 @@ try {
   const diffBefore=await diffPosition()
   await diffWheel([{deltaX:8,deltaY:6},{deltaX:6,deltaY:9},{deltaX:5,deltaY:80}])
   const diffHorizontal=await diffPosition()
-  assert.equal(diffHorizontal.left,diffBefore.left+19,'diff scroll follows the locked horizontal axis')
-  assert.equal(diffHorizontal.top,diffBefore.top,'diff horizontal momentum cannot move the outer page')
-  await pause(250)
-  await diffWheel([{deltaX:6,deltaY:8},{deltaX:9,deltaY:6},{deltaX:90,deltaY:5}])
+  assert.equal(diffHorizontal.left,diffBefore.left+19,'diagonal input scrolls the inner diff horizontally')
+  assert.equal(diffHorizontal.top,diffBefore.top+95,'the same input scrolls the owning review vertically')
+  await diffWheel([{deltaX:-6,deltaY:8},{deltaX:-9,deltaY:6},{deltaX:-10,deltaY:5}])
   const diffVertical=await diffPosition()
-  assert.equal(diffVertical.top,diffHorizontal.top+19,'a vertical gesture scrolls the owning review page')
-  assert.equal(diffVertical.left,diffHorizontal.left,'vertical page motion cannot move the inner diff')
+  assert.equal(diffVertical.top,diffHorizontal.top+19,'vertical scrolling continues when horizontal direction reverses')
+  assert.equal(diffVertical.left,diffHorizontal.left-25,'horizontal direction reverses immediately')
   await evaluate(`document.querySelector('[data-review-diff]').style.removeProperty('width')`)
-  console.log('PASS: nested Review diff direction lock and same-axis page scrolling')
+  console.log('PASS: nested Review diff scrolls both axes and changes direction immediately')
 
   await evaluate(`document.querySelector('button[aria-label="Collapse all files"]').click()`)
   await until(`document.querySelectorAll('[data-review-diff]').length===0`)

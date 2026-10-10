@@ -26,8 +26,8 @@
 }
 .markdown-math math {
   /* The Settings math family leads this stack through --app-font-math; the
-   * bundled Latin Modern Math face below stays the default and the fallback
-   * for any family the machine does not have. */
+   * bundled TeX Gyre DejaVu Math face below stays the default and the
+   * fallback for any family the machine does not have. */
   font-family: var(--app-font-math, 'Pith Math', math);
   overflow-wrap: normal;
 }
@@ -39,11 +39,11 @@
 .markdown-math math *, .markdown-math math *::before, .markdown-math math *::after {
   corner-shape: round;
 }
-/* Latin Modern Math is bundled for identical offline layout on macOS,
- * Windows and Linux; see public/licenses/latin-modern-math.txt. */
+/* TeX Gyre DejaVu Math is bundled for identical offline layout on macOS,
+ * Windows and Linux; see public/licenses/tex-gyre-dejavu-math.txt. */
 @font-face {
   font-family: 'Pith Math';
-  src: url('../assets/math/latinmodernmath.woff2') format('woff2');
+  src: url('../assets/math/texgyredejavu-math.woff2') format('woff2');
   font-style: normal;
   font-weight: normal;
   font-display: swap;

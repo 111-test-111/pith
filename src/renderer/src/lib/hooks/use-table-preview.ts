@@ -35,8 +35,8 @@ const EMPTY: TableSnapshot = {
 }
 
 export function useTablePreview(tab: FileTab, format: TableFormat, generation: number, store: FileBrowserStore): TablePreview {
-  const request = useMemo(() => ({ cwd: tab.cwd, path: tab.path }), [tab.cwd, tab.path])
-  const key = `${tab.cwd}\0${tab.path}\0${generation}`
+  const request = useMemo(() => ({ cwd: tab.cwd, path: tab.path, encoding: tab.encoding }), [tab.cwd, tab.path, tab.encoding])
+  const key = `${tab.cwd}\0${tab.path}\0${generation}${tab.encoding && tab.encoding !== 'auto' ? ':' + tab.encoding : ''}`
   const [snapshot, setSnapshot] = useState<TableSnapshot | null>(() => store.cache.table(key) ?? null)
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>(() => (store.cache.table(key) ? 'ready' : 'loading'))
   const [error, setError] = useState<FileBrowserError>()

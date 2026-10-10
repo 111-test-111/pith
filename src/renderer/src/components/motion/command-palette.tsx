@@ -1,3 +1,4 @@
+// local patch (pi-app): shared scalable typography; shortcut labels use the interface font.
 "use client";
 // beui.dev/components/blocks/command-palette
 
@@ -15,12 +16,14 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
-import { EASE_OUT } from "@/lib/ease";
+// local patch (pi-app): the palette shares dialog entrance/exit and backdrop timing.
+import { useOverlayMotion } from "@/lib/overlay-motion";
 import { useOnOpen } from "@/lib/hooks/use-on-open";
 import { useRowCursor } from "@/lib/hooks/use-row-cursor";
-import { useTouchCapable } from "@/lib/hooks/use-touch-capable";
 import { PresenceGate } from "@/lib/presence-gate";
 import { cn } from "@/lib/utils";
+// local patch (pi-app): desktop search uses the shared single-line field style.
+import { SINGLE_LINE_INPUT_PADDING_X, SINGLE_LINE_INPUT_PADDING_Y, SINGLE_LINE_INPUT_TEXT } from "@/lib/input-style";
 import { searchCommands } from "@/lib/command-search";
 
 export type CommandItem = {
@@ -45,15 +48,6 @@ export interface CommandPaletteProps {
   onOpenChange?: (open: boolean) => void;
 }
 
-// Opened via a keyboard shortcut many times a day — entrance must read as
-// instant. Tight spring, even faster exit.
-const PANEL_SPRING = {
-  type: "spring",
-  stiffness: 560,
-  damping: 40,
-  mass: 0.5,
-} as const;
-
 export function CommandPalette({
   items,
   shortcut = "k",
@@ -62,6 +56,8 @@ export function CommandPalette({
   open: controlledOpen,
   onOpenChange,
 }: CommandPaletteProps) {
+  const overlay = useOverlayMotion();
+  const backdrop = useOverlayMotion("backdrop");
   const [internalOpen, setInternalOpen] = useState(false);
   const controlled = controlledOpen !== undefined;
   const open = controlled ? controlledOpen : internalOpen;
@@ -79,7 +75,6 @@ export function CommandPalette({
   useEffect(() => setMounted(true), []);
   const uid = useId();
   const reduce = useReducedMotion();
-  const canTouch = useTouchCapable();
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -197,13 +192,7 @@ export function CommandPalette({
             <motion.button
               type="button"
               aria-label="Close command palette"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{
-                opacity: 0,
-                transition: { duration: 0.12, ease: EASE_OUT },
-              }}
-              transition={{ duration: 0.18, ease: EASE_OUT }}
+              {...backdrop}
               {...gate}
               onClick={() => setOpen(false)}
               className="pointer-events-auto fixed inset-0 z-[100] bg-background/5 [backdrop-filter:blur(12px)_saturate(140%)] [-webkit-backdrop-filter:blur(12px)_saturate(140%)]"
@@ -228,24 +217,12 @@ export function CommandPalette({
                 // local patch (pi-app): the app-level shortcut dispatcher
                 // re-admits its own toggle key through the open layer.
                 data-shortcut-passthrough="commandPalette"
-                initial={{
-                  opacity: 0,
-                  y: reduce ? 0 : -8,
-                  scale: reduce ? 1 : 0.97,
-                }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{
-                  opacity: 0,
-                  y: reduce ? 0 : -8,
-                  scale: reduce ? 1 : 0.97,
-                  transition: { duration: 0.12, ease: EASE_OUT },
-                }}
-                transition={reduce ? { duration: 0.1 } : PANEL_SPRING}
+                {...overlay}
                 {...gate}
                 onKeyDown={onKeyDown}
-                className="pointer-events-auto w-full max-w-xl overflow-hidden rounded-2xl border border-border bg-card shadow-2xl will-change-transform"
+                className="pointer-events-auto w-full max-w-xl overflow-hidden rounded-2xl border border-border bg-card shadow-overlay"
               >
-                <div className="flex items-center gap-3 border-b border-border px-4">
+                <div className={cn("flex items-center gap-2 border-b border-border", SINGLE_LINE_INPUT_PADDING_X)}>
                   <Search className="h-4 w-4 text-muted-foreground" />
                   <input
                     ref={inputRef}
@@ -261,16 +238,14 @@ export function CommandPalette({
                     }
                     aria-autocomplete="list"
                     className={cn(
-                      "h-12 flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground outline-none",
-                      // The palette focuses this field the moment it opens, and iOS
-                      // zooms the page in on a focused field under 16px: the fixed
-                      // overlay is magnified off-center — clipped leading edge, half
-                      // an icon column — and the zoom outlives the palette. 16px on
-                      // touch keeps the page at scale 1; pointer devices keep 14px.
-                      canTouch && "text-base",
+                      // local patch (pi-app): the header supplies horizontal
+                      // padding; the field shares the sidebar's text and inset.
+                      "min-w-0 flex-1 bg-transparent text-foreground placeholder:text-muted-foreground outline-none",
+                      SINGLE_LINE_INPUT_TEXT,
+                      SINGLE_LINE_INPUT_PADDING_Y,
                     )}
                   />
-                  <kbd className="hidden rounded border border-border bg-background px-1.5 py-0.5 text-[10px] text-muted-foreground sm:inline-block">
+                  <kbd className="hidden rounded border border-border bg-background px-1.5 py-0.5 font-sans text-micro text-muted-foreground sm:inline-block">
                     ESC
                   </kbd>
                 </div>
@@ -290,7 +265,7 @@ export function CommandPalette({
                       <div key={group} className="mb-1 last:mb-0">
                         <div
                           aria-hidden
-                          className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"
+                          className="px-2 py-1.5 text-micro font-semibold uppercase tracking-wider text-muted-foreground"
                         >
                           {group}
                         </div>
@@ -350,7 +325,7 @@ export function CommandPalette({
                                 </span>
                               ) : null}
                               {it.hint ? (
-                                <kbd className="relative z-10 rounded border border-border bg-background px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                                <kbd className="relative z-10 rounded border border-border bg-background px-1.5 py-0.5 text-micro text-muted-foreground">
                                   {it.hint}
                                 </kbd>
                               ) : null}

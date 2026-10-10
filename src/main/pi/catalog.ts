@@ -1,6 +1,7 @@
 import { APP_BASH_TOOL_NAMES } from './bash-tools'
 import { APP_BROWSER_TOOL_NAMES } from '../browser/tools'
 import { TODO_TOOL_NAME } from './todo-protocol'
+import { IMAGE_TOOL_NAME } from '../../shared/image'
 import { JEV_TOOL_NAME } from './jev/protocol'
 
 import {
@@ -23,7 +24,7 @@ import type {
   ToolInfoDTO
 } from '../../shared/types'
 
-const APP_TOOL_NAMES: readonly string[] = [...APP_BASH_TOOL_NAMES, 'debug', 'present', TODO_TOOL_NAME, JEV_TOOL_NAME, ...APP_BROWSER_TOOL_NAMES]
+const APP_TOOL_NAMES: readonly string[] = [...APP_BASH_TOOL_NAMES, 'debug', 'present', IMAGE_TOOL_NAME, TODO_TOOL_NAME, JEV_TOOL_NAME, ...APP_BROWSER_TOOL_NAMES]
 /** Hidden SDK factories are not listed as user-managed extensions, but their
  * tools still need a useful source name in Settings → Tools. Match their exact
  * factory identity so third-party inline extensions keep their own source. */
@@ -67,9 +68,8 @@ function readPackageJson(packageRoot: string): { name?: string; version?: string
 }
 
 /**
- * Walk up from an extension entry's directory to the enclosing package.json —
- * `sourceInfo.baseDir` points at the entry file's dir, which for `src/index.ts`
- * is one level below the package root.
+ * Recover package metadata when configured package details are unavailable.
+ * Package sources may point at their root or an entry subdirectory.
  */
 function findPackageMeta(baseDir?: string): { name?: string; version?: string } {
   if (!baseDir) return {}
@@ -82,12 +82,6 @@ function findPackageMeta(baseDir?: string): { name?: string; version?: string } 
     dir = parent
   }
   return {}
-}
-
-function fallbackName(extension: Extension): string {
-  const fromBase = extension.sourceInfo.baseDir ? basename(extension.sourceInfo.baseDir) : ''
-  const candidate = fromBase || basename(extensionId(extension))
-  return candidate.replace(/\.(ts|js|mjs|cjs)$/i, '') || candidate
 }
 
 /** Version pinned in the configured source spec (`npm:pkg@1.2.3`, `git:…#tag`). */
@@ -191,7 +185,14 @@ export async function loadPackageResources(
 
 /** Drop functions/symbols (TypeBox schemas carry a `Kind` symbol) before IPC. */
 function plain(value: unknown): any {
-  return JSON.parse(JSON.stringify(value ?? {}))
+  try {
+    return JSON.parse(JSON.stringify(value ?? {}))
+  } catch {
+    // Serialization fails only for structures JSON cannot represent (a cycle,
+    // a BigInt). One unrepresentable tool schema must not fail the whole
+    // catalog response, so report that entry as empty instead.
+    return {}
+  }
 }
 
 interface ToolLike {
@@ -275,8 +276,12 @@ export function buildToolCatalog(
     const id = extensionId(extension)
     const source = extension.sourceInfo.source
     const pkg = packages.get(source)
-    const fallback = pkg?.packageName ? undefined : findPackageMeta(extension.sourceInfo.baseDir)
-    const name = pkg?.packageName ?? fallback?.name ?? fallbackName(extension)
+    // Auto-discovered baseDir is the configuration root (agent or .pi), not
+    // the extension's directory. Only package sources inherit package metadata.
+    const fallback = !pkg?.packageName && extension.sourceInfo.origin === 'package'
+      ? findPackageMeta(extension.sourceInfo.baseDir)
+      : undefined
+    const name = pkg?.packageName ?? fallback?.name ?? resourceName(id, 'extension')
     labels.set(id, name)
     infos.set(id, {
       id,

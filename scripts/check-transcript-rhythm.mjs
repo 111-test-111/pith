@@ -85,16 +85,21 @@ import {PiStore} from '/src/state/pi-store.ts';
 import {I18nProvider} from '/src/i18n/index.tsx';
 import {initReduceMotion, setReduceMotion} from '/src/lib/reduce-motion.ts';
 import {initCompactTools, setCompactTools} from '/src/lib/compact-tools.ts';
+import {initFontSizes} from '/src/lib/typography.ts';
+import {initFonts} from '/src/lib/fonts.ts';
 import '/src/styles.css';
-localStorage.setItem('pi-app:locale','en');
 const params = new URLSearchParams(location.search);
+localStorage.setItem('pi-app:locale', params.get('locale') ?? 'en');
+localStorage.setItem('pi-app:font-sizes', JSON.stringify({ui:Number(params.get('ui') ?? 14),content:14,code:12}));
+initFontSizes();initFonts();
+if (params.has('font')) document.documentElement.style.setProperty('--app-font-ui', params.get('font')+', sans-serif');
 const caseName = params.get('case') ?? 'invisible';
 document.documentElement.classList.toggle('dark', params.has('dark'));
 document.documentElement.dataset.corners = params.get('style') ?? 'square';
 // The reported turn had "show reasoning blocks" off, so a round's reasoning is
 // not a row; the third case turns it back on to prove the same rhythm holds
 // when reasoning rows alternate with tool rows.
-localStorage.setItem('pi-app:show-reasoning', caseName === 'reasoning' || caseName === 'images' || caseName === 'compact' ? 'on' : 'off');
+localStorage.setItem('pi-app:show-reasoning', caseName === 'reasoning' || caseName === 'images' || caseName === 'compact' || caseName === 'compaction' ? 'on' : 'off');
 // Compact consecutive tool calls is read from storage at boot; the fixture boots it the
 // way main.tsx does, so the real html[data-compact-tools] CSS is what runs.
 localStorage.setItem('pi-app:compact-tools', params.get('compact') === '1' ? 'on' : 'off');
@@ -258,12 +263,27 @@ const boundaryTurn = [
   { role: 'user', timestamp: 40, content: 'Continue.' },
   round(50, [call('e1', 'edit')]), result('e1', 'edit', 51)
 ];
-const turns = { boundary: boundaryTurn, leadingProse: [visibleTurn[0], round(5, [{ type: 'text', text: 'Starting with a plan.' }]), ...visibleTurn.slice(1)], invisible: invisibleTurn, visible: visibleTurn, reasoning: invisibleTurn, mixed: mixedTurn, images: imageTurn, failure: imageFailureTurn, long: longTurn, compact: compactTurn, notice: noticeTurn, groupOpen: groupOpenTurn };
+// A long process followed by a short reply: the real tool statuses include
+// positioned screen-reader text, which must stay inside the closed fold's
+// clip even when reduced motion removes the disclosure's transform.
+const longFoldTurn = [
+  { role: 'user', timestamp: 1, content: 'Verify all steps.' },
+  ...Array.from({ length: 40 }, (_, index) => {
+    const timestamp = 10 + index;
+    const id = 'fold-' + index;
+    return [
+      round(timestamp, [{ type: 'text', text: 'Verifying step ' + index + '.' }, call(id, 'bash', { command: 'echo step-' + index })]),
+      result(id, 'bash', timestamp + 0.5)
+    ];
+  }).flat()
+];
+const turns = { longFold: longFoldTurn, boundary: boundaryTurn, leadingProse: [visibleTurn[0], round(5, [{ type: 'text', text: 'Starting with a plan.' }]), ...visibleTurn.slice(1)], invisible: invisibleTurn, visible: visibleTurn, reasoning: invisibleTurn, mixed: mixedTurn, images: imageTurn, failure: imageFailureTurn, long: longTurn, compact: compactTurn, compaction: compactTurn, notice: noticeTurn, groupOpen: groupOpenTurn };
 const messages = turns[caseName] ?? invisibleTurn;
 if (params.has('settled')) messages.push(round(60, [{ type: 'text', text: 'All done.' }]));
 
 window.store = new PiStore();
 window.store.applySnapshot({ sessionId: 'rhythm', sessionPath: '/ui/rhythm', cwd: '/ui', projectless: false, messages, isStreaming: !params.has('settled'), activeChangeScopeId: 'scope-a', model: null, thinkingLevel: 'off', eventSequence: 1 });
+if (caseName === 'compaction') window.store.dispatch({type:'compaction_start',sessionPath:'/ui/rhythm',eventSequence:2,reason:'manual'});
 flushSync(() => createRoot(document.getElementById('root')).render(
   React.createElement(I18nProvider, null, React.createElement(ImagePreviewProvider, null,
     React.createElement('div', { id: 'fixture', style: { height: 900, display: 'flex', flexDirection: 'column' } },
@@ -352,6 +372,32 @@ window.rows = () => {
       };
     })
   };
+};
+/** Measure the visible type centre against the leading glyph's canvas, and
+ * verify that truncation retains the complete CJK/descender ink bounds. */
+window.labelAlignment = () => {
+  const ctx = document.createElement('canvas').getContext('2d');
+  const marker = () => { const span = document.createElement('span'); span.style.cssText = 'display:inline-block;width:0;height:0;vertical-align:baseline'; return span; };
+  return [...document.querySelectorAll('#fixture [data-agent-trigger], #fixture [data-spinner-verb]')]
+    .filter(row => !row.closest('[aria-hidden="true"]'))
+    .flatMap(row => {
+      const labels = [...row.querySelectorAll('.transcript-label')];
+      const label = labels.sort((a,b) => parseFloat(getComputedStyle(b).fontSize)-parseFloat(getComputedStyle(a).fontSize))[0];
+      const icon = row.hasAttribute('data-spinner-verb') ? row.querySelector('[role="status"]') : row.querySelector('svg');
+      if (!label || !icon) return [];
+      const probe = marker(); label.append(probe);
+      const style = getComputedStyle(label), baseline = probe.getBoundingClientRect().top;
+      ctx.font = [style.fontStyle,style.fontWeight,style.fontSize,style.fontFamily].join(' ');
+      const capital = ctx.measureText('H'), ink = ctx.measureText(label.textContent);
+      const box = label.getBoundingClientRect(), glyph = icon.getBoundingClientRect();
+      const center = baseline+(capital.actualBoundingBoxDescent-capital.actualBoundingBoxAscent)/2;
+      const sample = {text:label.textContent,offset:glyph.top+glyph.height/2-center,
+        clipped:baseline-ink.actualBoundingBoxAscent < box.top-0.1 || baseline+ink.actualBoundingBoxDescent > box.bottom+0.1,
+        baselineOffsets:[...label.parentElement.children].filter(el => el !== label && el.classList.contains('transcript-label')).map(el => {
+          const probe = marker(); el.append(probe); const delta = probe.getBoundingClientRect().top-baseline; probe.remove(); return delta;
+        })};
+      probe.remove(); return [sample];
+    });
 };
 /** Compare the two boundaries around an expanded card. */
 window.openBodyFrame = (needle) => {
@@ -553,10 +599,12 @@ window.bodyFrame = (needle) => {
   if (!frame) return null;
   // The padding lives ON the content div, so the INK below it is what shows the
   // card's top-to-bottom symmetry.
-  const viewport = frame.firstElementChild;
+  // The pinned bash command is a separate header above the output viewport.
+  // Measure the output's own padding rather than including that header.
+  const viewport = frame.querySelector('[role="log"]') || frame.firstElementChild;
   const content = viewport ? viewport.firstElementChild : null;
   const ink = content && content.firstElementChild ? content.firstElementChild : content;
-  const frameBox = frame.getBoundingClientRect();
+  const frameBox = viewport.getBoundingClientRect();
   const inkBox = ink ? ink.getBoundingClientRect() : frameBox;
   return {
     top: Math.round((inkBox.top - frameBox.top) * 10) / 10,
@@ -799,6 +847,49 @@ app.on('window-all-closed',()=>app.quit());`
         `${label}: the text of rows ${index - 1} and ${index} is ${ROW_HEIGHT + ROW_GAP}px apart, got ${pitch}px (${state.items[index - 1].text} → ${row.text})`
       )
     })
+  }
+
+  // A closed long process must not create a scrollable blank tail. Opening a
+  // saved session follows its real reply, and expanding/collapsing the process
+  // or changing the motion preference must preserve that live edge.
+  const foldScroll = () => evaluate(`(() => {
+    const log = document.querySelector('[role="log"]');
+    const viewport = log.parentElement;
+    const reply = [...log.querySelectorAll('[data-row="text"]')].at(-1);
+    const box = reply.getBoundingClientRect();
+    const view = viewport.getBoundingClientRect();
+    return { height: log.offsetHeight, scrollHeight: log.scrollHeight,
+      overflow: viewport.scrollHeight > viewport.clientHeight + 1,
+      atEnd: viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight <= 1,
+      replyVisible: box.bottom > view.top && box.top < view.bottom,
+      processHeight: log.querySelector('[data-turn-process]').offsetHeight };
+  })()`);
+  for (const compact of [0, 1]) {
+    await load('?case=longFold&settled=1&instant=1&compact=' + compact);
+    await pause(250);
+    const closed = await foldScroll();
+    assert.ok(closed.processHeight > 900, 'the folded process exceeds the viewport');
+    assert.ok(closed.scrollHeight <= closed.height + 1,
+      'closed tool statuses cannot extend the transcript scroll range: ' + JSON.stringify(closed));
+    assert.equal(closed.overflow, false, 'the short reply has no phantom scroll range');
+    assert.equal(closed.replyVisible, true, 'opening the session shows its reply');
+    await evaluate(`window.openRow('Took')`);
+    await pause(250);
+    const expanded = await foldScroll();
+    assert.equal(expanded.overflow, true, 'opening the process creates real scrollable content');
+    assert.equal(expanded.atEnd && expanded.replyVisible, true, 'the expanded process follows the reply');
+    await evaluate(`window.openRow('Took')`);
+    await pause(250);
+    const collapsed = await foldScroll();
+    assert.equal(collapsed.overflow, false, 'collapsing removes the process scroll range');
+    assert.equal(collapsed.replyVisible, true, 'collapsing keeps the reply visible');
+    await evaluate(`window.setInstant(false)`);
+    await pause(250);
+    await evaluate(`window.setInstant(true)`);
+    await pause(250);
+    const toggled = await foldScroll();
+    assert.equal(toggled.overflow, false, 'disabling animations cannot restore a hidden scroll range');
+    assert.equal(toggled.replyVisible, true, 'motion changes keep the reply visible');
   }
 
   if (!process.env.PI_RHYTHM_INSTANT_ONLY) {
@@ -1174,7 +1265,7 @@ app.on('window-all-closed',()=>app.quit());`
   for (const compact of [false, true]) {
     const gap = compact ? 4 : ROW_GAP
     const query = '&compact=' + Number(compact)
-    for (const name of ['compact', 'notice', 'groupOpen', 'long']) {
+    for (const name of ['compact', 'compaction', 'notice', 'groupOpen', 'long']) {
       await load('?case=' + name + query)
       await pause(250)
       const state = await evaluate('window.rows()')
@@ -1182,6 +1273,12 @@ app.on('window-all-closed',()=>app.quit());`
         const prev = state.items[index - 1], row = state.items[index]
         const expected = prev.process && row.process && !row.roomyBefore ? gap : ROW_GAP
         assert.equal(row.top - prev.bottom, expected, `${name}/${compact}: ${prev.text} → ${row.text}`)
+      }
+      if (name === 'compaction') {
+        assert.match(state.items.at(-2).text, /^Summarize context/, 'the last process row is compaction')
+        assert.equal(state.items.at(-2).height, ROW_HEIGHT, 'compaction is one ordinary tool row tall')
+        assert.equal(await evaluate(`document.querySelectorAll('#fixture [data-spinner-loader]').length`), 1, 'compaction has one turn spinner after it')
+        await screenshot('compaction-before-spinner-' + Number(compact))
       }
     }
     await evaluate(`window.openRow('bash ·')`)
@@ -1361,8 +1458,24 @@ app.on('window-all-closed',()=>app.quit());`
   await assertInstantToggle('Exploration', 1)
   await assertInstantToggle('Exploration', 1)
 
+  for (const [locale,ui,font] of [['en',14,''],['zh-CN',14,''],['zh-TW',14,''],['zh-CN',12,''],['zh-CN',20,'Arial'],['en',20,'Times New Roman']]) {
+    const query = '&instant=1&compact=1&locale='+locale+'&ui='+ui+(font?'&font='+encodeURIComponent(font):'');
+    for (const caseName of ['reasoning','groupOpen']) {
+      await load('?case='+caseName+query)
+      await pause(100)
+      const samples = await evaluate('window.labelAlignment()')
+      assert.ok(samples.length >= 3, 'actual tool/group/reasoning/waiting labels render')
+      for (const sample of samples) {
+        assert.ok(Math.abs(sample.offset) < 0.4, 'leading glyph shares the label type centre: '+JSON.stringify({locale,ui,font,...sample}))
+        assert.equal(sample.clipped,false,'label keeps CJK glyphs and descenders visible: '+JSON.stringify({locale,ui,font,...sample}))
+        assert.ok(sample.baselineOffsets.every(delta=>Math.abs(delta)<0.1),'title and metadata keep one baseline: '+JSON.stringify(sample))
+      }
+      await screenshot('label-alignment-'+locale+'-'+ui+'-'+caseName)
+    }
+  }
+
   assert.deepEqual(exceptions, [], 'no renderer exceptions')
-  console.log('transcript rhythm check ok: shared positive gaps in both densities, nested groups and cards, prose boundaries, instant frame stability, live preferences, images and output caps')
+  console.log('transcript rhythm check ok: shared positive gaps in both densities, nested groups and cards, prose boundaries, instant frame stability, live preferences, images, output caps and multilingual type alignment')
 } finally {
   try { ws?.close() } catch {}
   child?.kill('SIGTERM')

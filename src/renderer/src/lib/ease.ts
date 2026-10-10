@@ -27,7 +27,7 @@ export const SPRING_SWAP = {
   mass: 0.55,
 } as const;
 
-/** Overlay panel entrances — modals and sheets summoned by pointer. */
+/** Small state marks. Floating-surface entrances live in overlay-motion.ts. */
 export const SPRING_PANEL = {
   type: "spring",
   stiffness: 420,
@@ -83,8 +83,7 @@ export const SPRING_GLIDE = {
 /**
  * Content duration scale. Use `fast` for rows/notices appearing in the
  * transcript, `base` for disclosures and completion-action rows, `slow` for
- * overlay panels. (Vendored beUI components keep their own literals; these are
- * the values the app standardises on so new code has one place to look.)
+ * longer content changes. Floating surfaces use overlay-motion.ts instead.
  */
 export const DURATION = {
   fast: 0.15,

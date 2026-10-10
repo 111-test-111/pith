@@ -6,7 +6,7 @@
 
 Input space is the declared model window minus the reply reserve and a 4096-token safety margin. An explicit request `maxTokens` determines the reserve; otherwise it is the smaller of the model reply limit and the SDK's model-specific compaction reserve. Recent context uses the SDK's `keepRecentTokens`. Unknown windows produce diagnostics without shortening.
 
-Token estimates use SDK `estimateTokens`, character/schema estimates and approximate framing. They are heuristic, separate from provider usage and the composer's authoritative context value. SDK compaction and overflow recovery remain responsible for requests that cannot fit.
+Token estimates use SDK `estimateTokens`, character/schema estimates and approximate framing. They are heuristic, separate from provider usage and the composer's SDK context approximation. [Context statistics](context-statistics-implementation.md) measures the budgeted request separately from the complete session projection. SDK compaction and overflow recovery remain responsible for requests that cannot fit.
 
 Under pressure, shorten older tool-result text only, in creation order:
 

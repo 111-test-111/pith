@@ -39,6 +39,10 @@ interface Delivery {
  *   is appended quietly, because the user walked away and the model's own turn
  *   already moved on. While the session is streaming, either one steers into
  *   the live turn instead.
+ * - **A wake reopens the asking turn.** An idle wake fires `onWake` (the
+ *   manager continues the settled change scope), so the answer's rounds join
+ *   the turn that asked instead of opening a new one — the same continuation
+ *   a background bash completion gets.
  */
 export class AskUserNotifications {
   private pending = new Map<string, Delivery>()
@@ -60,6 +64,8 @@ export class AskUserNotifications {
 
   /** Pending-set changes: the app's Plan metadata reads them as live facts. */
   onPendingChanged?: () => void
+  /** An idle answer is about to wake the session: reopen the settled turn. */
+  onWake?: () => void
   /**
    * App-owned admission for this owner's wake/steer work (Plan submission seal,
    * mode transition). Unset means ungated — the session has no Plan owner.
@@ -137,6 +143,9 @@ export class AskUserNotifications {
         if (!this.session.isStreaming && delivery.wantsWake) {
           if (delivery.wakeAttempts >= 3) continue
           delivery.wakeAttempts++
+          // The wake reopens the settled turn's scope: the answer's rounds
+          // join the asking turn, never a separate one.
+          this.onWake?.()
         }
         delivery.queued = true
         const answered = delivery.details.status === 'answered'

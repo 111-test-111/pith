@@ -247,7 +247,7 @@ export function AskUserPanel({
             <span className="min-w-0 flex-1 truncate text-xs font-semibold text-foreground">
               {questions[qi]!.question}
             </span>
-            <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+            <span className="shrink-0 text-caption tabular-nums text-muted-foreground">
               {qi + 1} / {questions.length}
             </span>
             <Button
@@ -303,7 +303,7 @@ export function AskUserPanel({
 
   const question = questions[qi]!
   const sourceBadge = request.source?.kind === 'subagent' ? (
-    <span className="rounded-control border border-border bg-muted px-1.5 py-0.5 text-[11px] font-semibold text-muted-foreground">
+    <span className="rounded-control border border-border bg-muted px-1.5 py-0.5 text-caption font-semibold text-muted-foreground">
       {request.source.profile
         ? t('askUser.sourceSubagentNamed', { profile: request.source.profile })
         : t('askUser.sourceSubagent')}
@@ -348,7 +348,7 @@ export function AskUserPanel({
           {countdown !== null ? (
             <span
               data-ask-user-countdown={countdown}
-              className="ml-auto inline-flex shrink-0 items-center gap-1 text-[11px] font-medium tabular-nums text-muted-foreground/70"
+              className="ml-auto inline-flex shrink-0 items-center gap-1 text-caption font-medium tabular-nums text-muted-foreground/70"
             >
               <Clock aria-hidden="true" className="size-3" />
               {t('askUser.countdown', { time: formatCountdown(countdown) })}
@@ -370,7 +370,7 @@ export function AskUserPanel({
                 data-ask-user-chip={index}
                 aria-current={index === qi ? 'true' : undefined}
                 aria-label={item.header ?? `${index + 1}`}
-                className={`h-6 min-w-0 max-w-40 gap-1 px-2 text-[11px] font-semibold ${index === qi ? 'bg-muted' : ''}`}
+                className={`h-6 min-w-0 max-w-40 gap-1 px-2 text-caption font-semibold ${index === qi ? 'bg-muted' : ''}`}
                 onClick={() => goTo(index)}
               >
                 {answers[index]?.length || custom[index]?.trim() ? (
@@ -396,7 +396,7 @@ export function AskUserPanel({
               exit="exit"
               transition={slideTransition}
             >
-              <p className="mb-3 pr-7 text-sm font-semibold leading-6 text-foreground">
+              <p className="mb-3 pr-7 text-sm font-semibold leading-ui-loose text-foreground">
                 {question.question}
               </p>
 
@@ -444,13 +444,11 @@ export function AskUserPanel({
                     aria-label={t('askUser.customPlaceholder')}
                     leftIcon={<PencilLine aria-hidden="true" className="size-3.5" />}
                     className="border-0 bg-transparent p-0 focus-visible:ring-0 focus-visible:ring-offset-0"
-                    // The field is compact, but it keeps the input's own
+                    // The field keeps the input's shared
                     // icon-aware left padding — a blanket `px-*` put the
                     // placeholder under the pencil glyph.
                     classNames={{
-                      field: 'h-8 rounded-control bg-muted/50',
-                      leftIcon: 'left-2.5',
-                      input: 'py-0 pl-8 pr-2 text-sm'
+                      field: 'rounded-control bg-muted/50'
                     }}
                   />
                 </div>
@@ -528,14 +526,14 @@ export function AskUserResultCard({ details }: { details: AskUserToolDetails }) 
       <div className="flex items-center gap-2">
         <span className="text-sm font-semibold text-foreground">{t('askUser.resultTitle')}</span>
         {details.mode === 'async' ? (
-          <span className="rounded-control border border-border px-1.5 py-0.5 text-[11px] font-semibold text-muted-foreground">
+          <span className="rounded-control border border-border px-1.5 py-0.5 text-caption font-semibold text-muted-foreground">
             {t('askUser.asyncBadge')}
           </span>
         ) : null}
         {statusLabel ? (
           <span
             data-ask-user-status={pending ? 'pending' : details.reason ?? 'dismissed'}
-            className="rounded-control bg-muted px-1.5 py-0.5 text-[11px] font-semibold text-muted-foreground"
+            className="rounded-control bg-muted px-1.5 py-0.5 text-caption font-semibold text-muted-foreground"
           >
             {statusLabel}
           </span>
@@ -547,7 +545,7 @@ export function AskUserResultCard({ details }: { details: AskUserToolDetails }) 
           // would claim the user skipped something they never saw.
           if (pending) {
             return (
-              <span key={`${index}:${question.question}`} className="text-sm leading-6 text-muted-foreground">
+              <span key={`${index}:${question.question}`} className="text-sm leading-ui-loose text-muted-foreground">
                 {index + 1}. {question.question}
               </span>
             )
@@ -555,16 +553,16 @@ export function AskUserResultCard({ details }: { details: AskUserToolDetails }) 
           const text = askUserAnswerText(details.answers?.[index])
           return (
             <div key={`${index}:${question.question}`} className="flex flex-col gap-0.5">
-              <span className="text-sm font-medium leading-6 text-foreground">
+              <span className="text-sm font-medium leading-ui-loose text-foreground">
                 {index + 1}. {question.question}
               </span>
               {text !== null ? (
                 <span className="flex items-start gap-1.5 pl-1">
                   <Check aria-hidden="true" className="mt-1 size-3 shrink-0 text-emerald-600 dark:text-emerald-400" />
-                  <span className="text-sm leading-6 text-muted-foreground">{text}</span>
+                  <span className="text-sm leading-ui-loose text-muted-foreground">{text}</span>
                 </span>
               ) : (
-                <span className="pl-1 text-sm italic leading-6 text-muted-foreground/80">
+                <span className="pl-1 text-sm italic leading-ui-loose text-muted-foreground/80">
                   {t('askUser.noAnswer')}
                 </span>
               )}

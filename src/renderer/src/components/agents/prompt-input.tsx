@@ -1,9 +1,10 @@
+// local patch (pi-app): shared scalable typography for content and code.
 // local patch (pi-app): keep UI frames and focus rings in this component at 1px.
 "use client";
 // beui.dev/components/agents/chat-app
 
 // local patch (pi-app): use the shared Hugeicons icon adapter and size scale.
-import { CircleOff, Plus, Send } from "@/lib/icons";
+import { Ban, Plus, Send } from "@/lib/icons";
 import { UI_ICON_SIZE } from "@/lib/icon-metrics";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
@@ -200,7 +201,7 @@ export function PromptInput({
         ref={editor.viewportRef}
         data-prompt-viewport=""
         onMouseDown={editor.onMouseDown}
-        className="w-full overflow-y-auto bg-transparent px-2 pt-1.5 text-sm leading-6 text-foreground"
+        className="w-full overflow-y-auto bg-transparent px-2 pt-1.5 text-content text-foreground"
         style={{ maskImage, ...(appReduceMotion ? null : { transition: "height 120ms ease-out" }) }}
       >
         <div ref={editor.contentRef} className="whitespace-pre-wrap [overflow-wrap:anywhere]">
@@ -225,7 +226,10 @@ export function PromptInput({
             onCompositionStart={editor.onCompositionStart}
             onCompositionEnd={editor.onCompositionEnd}
             onKeyDown={handleKeyDown}
-            className="pr-px outline-none"
+            // local patch (pi-app): macOS Pinyin's English candidates can put
+            // the selection past the preedit text. A block editing host keeps
+            // Chromium from resolving that position into the next control.
+            className="block pr-px outline-none"
           />
         </div>
       </div>
@@ -240,9 +244,9 @@ export function PromptInput({
                 size="icon"
                 disabled={disabled || loading}
                 aria-label="Add to prompt"
-                // local patch (pi-app): capsule-by-design, so the shape token
-                // follows the UI style (see --app-radius-capsule in styles.css).
-                className="size-8 rounded-capsule"
+                // local patch (pi-app): the icon control keeps the shared
+                // control radius rather than a capsule; only the size is overridden.
+                className="size-8"
               >
                 <motion.span
                   aria-hidden="true"
@@ -342,10 +346,9 @@ export function PromptInput({
               send doubles as queue-while-busy, like pi's TUI. */}
           {/* local patch (pi-app): the send control is a quiet glyph button, not
               a filled primary square — the shape only appears as a faded wash on
-              hover, so the composer's corner stays calm. Glyph and wash both
-              follow the state: the accent while it sends, the error red while it
-              stops. It is capsule-by-design, so its shape token follows the UI
-              style. */}
+              hover, so the composer's corner stays calm. Send uses an accent
+              glyph on the neutral button fill; stop uses the error red for both.
+              It keeps the shared icon-control radius, not a capsule. */}
           <Button
             type={loading && !canQueue ? "button" : "submit"}
             variant="ghost"
@@ -354,13 +357,13 @@ export function PromptInput({
             aria-label={loading ? (canQueue ? "Queue message" : "Stop generating") : "Send prompt"}
             onClick={loading && !canQueue ? onStop : undefined}
             className={cn(
-              "size-8 rounded-capsule disabled:opacity-40",
+              "size-8 disabled:opacity-40",
               // local patch (pi-app): the stop state wears the error red —
               // glyph and frame wash alike — so the control never flashes the
               // accent under a red glyph, in either theme.
               loading && !canQueue
                 ? "text-destructive hover:bg-destructive/10 hover:text-destructive"
-                : "text-primary hover:bg-primary/10 hover:text-primary",
+                : "text-primary hover:bg-muted hover:text-primary",
             )}
           >
             <AnimatePresence initial={false} mode="popLayout">
@@ -374,8 +377,9 @@ export function PromptInput({
               >
                 {loading && !canQueue ? (
                   // local patch (pi-app): send/stop share the 20px primary-action
-                  // canvas. Keep the stop stroked so its off slash stays visible.
-                  <CircleOff size={UI_ICON_SIZE.primary} />
+                  // canvas. The stop wears the ban mark, stroked so it stays
+                  // legible in the error red.
+                  <Ban size={UI_ICON_SIZE.primary} />
                 ) : (
                   <Send size={UI_ICON_SIZE.primary} />
                 )}

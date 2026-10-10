@@ -1,3 +1,4 @@
+// local patch (pi-app): shared scalable typography for UI annotations.
 "use client";
 
 import { AnimatePresence, motion } from "motion/react";
@@ -5,16 +6,15 @@ import type { ReactNode } from "react";
 import { EASE_OUT, SPRING_PRESS } from "@/lib/ease";
 import { cn } from "@/lib/utils";
 import { useHeatCalendar } from "./context";
-import { DAYS, fmtDay, GAP, LIFT, MONTH_ROW, PITCH } from "./utils";
+import { DAYS, fmtDay, GAP, MONTH_ROW, PITCH } from "./utils";
 
 export function HeatCalendarGrid({ children, className }: { children?: ReactNode; className?: string }) {
   const {
     weeks,
     reduce,
-    canHover,
     pinned,
     step,
-    settled,
+    hover,
     level,
     bucket,
     fill,
@@ -51,7 +51,7 @@ export function HeatCalendarGrid({ children, className }: { children?: ReactNode
           <span
             key={c.id}
             className={cn(
-              "whitespace-nowrap text-[10px] leading-none transition-colors duration-200",
+              "whitespace-nowrap text-micro leading-none transition-colors duration-200",
               hotMonth === c.m ? "text-foreground" : "text-muted-foreground",
             )}
             style={{ gridColumn: c.w + 1, gridRow: 1 }}
@@ -68,13 +68,9 @@ export function HeatCalendarGrid({ children, className }: { children?: ReactNode
           const b = bucket(v);
           const i = w * 7 + d;
           const on = hot?.w === w && hot?.d === d;
+          const hovered = hover?.w === w && hover?.d === d;
           const isEnd = span ? i === span.lo || i === span.hi : pinned?.w === w && pinned?.d === d;
           const dim = (step !== null && step !== b) || (span !== null && (i < span.lo || i > span.hi));
-          // local patch (pi-app): the hover animation belongs to the hovered cell
-          // alone. The vendored ripple also scaled the cells around it, which read
-          // as the pointer deforming the particles it passed over.
-          const dist = hot ? Math.max(Math.abs(hot.w - w), Math.abs(hot.d - d)) : 9;
-          const lift = reduce || !canHover ? 1 : dist === 0 ? LIFT[0] : 1;
           return (
             // the outer span owns the legend dim so it never fights the transforms inside
             <span
@@ -84,12 +80,12 @@ export function HeatCalendarGrid({ children, className }: { children?: ReactNode
                 gridColumn: w + 1,
                 gridRow: d + 2,
                 opacity: dim ? 0.25 : 1,
-                zIndex: lift > 1 ? LIFT.length - dist : 0,
+                zIndex: on || isEnd ? 1 : 0,
               }}
             >
               {/* the hit area is the cell plus half the gap on every side, so the grid
                     has no dead space between cells and a fast pointer never falls through;
-                    the visual inside never takes pointer events, so a lifted neighbour
+                    the visual inside never takes pointer events, so a neighbouring cell
                     cannot steal a click either */}
               <motion.button
                 type="button"
@@ -113,37 +109,28 @@ export function HeatCalendarGrid({ children, className }: { children?: ReactNode
                 <motion.span
                   className="pointer-events-none absolute inset-0.5 block rounded-capsule"
                   style={{
-                    background: fill(b),
+                    // local patch (pi-app): hover recolours the particle instead of
+                    // lifting it. The ring below carries the highlight, and because it
+                    // sits at inset-0 with borderRadius:inherit it hugs this shape
+                    // exactly however the cell is styled.
+                    background: hovered ? `color-mix(in srgb, var(--foreground) 16%, ${fill(b)})` : fill(b),
                     boxShadow: isEnd ? "0 0 0 2px var(--background), 0 0 0 3px var(--foreground)" : "none",
-                    transition: "box-shadow 150ms",
+                    transition: "background 150ms, box-shadow 150ms",
                   }}
-                  // the diagonal wave: each cell arrives (w + d) steps after the corner;
-                  // once settled, only the hovered cell springs up
+                  // the diagonal wave: each cell arrives (w + d) steps after the corner
                   initial={reduce ? false : { opacity: 0, scale: 0.4 }}
-                  animate={
-                    settled
-                      ? {
-                          opacity: 1,
-                          scale: lift,
-                          transition: { ...SPRING_PRESS, delay: Math.min(dist, 3) * 0.03 },
-                        }
-                      : {
-                          opacity: 1,
-                          scale: 1,
-                          transition: reduce ? { duration: 0 } : { ...SPRING_PRESS, delay: (w + d) * 0.018 },
-                        }
-                  }
+                  animate={{ opacity: 1, scale: 1 }}
+                  transition={reduce ? { duration: 0 } : { ...SPRING_PRESS, delay: (w + d) * 0.018 }}
                 >
                   {/* the ring lives INSIDE the cell: inset-0 fills its box and
-                        borderRadius:inherit copies its corner, so it always shares the
-                        cell's exact size, scale (hover lift included) and roundness and
-                        cannot drift however the cells are restyled */}
+                        `rounded-inherit` copies the cell's radius AND its
+                        `corner-shape: round`, so it draws a true circle on a round
+                        particle instead of a squircle-clamped one */}
                   <AnimatePresence>
                     {on && !isEnd ? (
                       <motion.span
-                        className="pointer-events-none absolute inset-0 block border"
+                        className="pointer-events-none absolute inset-0 block rounded-inherit border"
                         style={{
-                          borderRadius: "inherit",
                           borderColor: "color-mix(in srgb, var(--foreground) 55%, transparent)",
                         }}
                         initial={reduce ? false : { opacity: 0 }}

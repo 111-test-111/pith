@@ -1,3 +1,4 @@
+// local patch (pi-app): shared scalable typography for content and code.
 // local patch (pi-app): keep UI frames and focus rings in this component at 1px.
 "use client";
 // beui.dev/components/agents/chat-app
@@ -201,7 +202,8 @@ export function StreamingResponse({
           // the file viewer — the transcript's only oversized code. Guarding
           // it lets the block keep its own fixed step; a raw fence (no
           // CodeBlock) still gets the app's framing.
-          "text-sm leading-6 text-foreground/90 [&_a]:font-medium [&_a]:underline [&_a]:underline-offset-4 [&_code]:rounded-detail [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-xs [&_ol]:my-3 [&_ol]:list-decimal [&_ol]:space-y-1 [&_ol]:pl-5 [&_p+p]:mt-3 [&_pre:not([data-code-block-pre])]:my-3 [&_pre:not([data-code-block-pre])]:overflow-x-auto [&_pre:not([data-code-block-pre])]:rounded-xl [&_pre:not([data-code-block-pre])]:border [&_pre:not([data-code-block-pre])]:border-border [&_pre:not([data-code-block-pre])]:bg-muted/45 [&_pre:not([data-code-block-pre])]:p-3 [&_pre:not([data-code-block-pre])_code]:bg-transparent [&_pre:not([data-code-block-pre])_code]:p-0 [&_pre:not([data-code-block-pre])_code]:rounded-none [&_pre:not([data-code-block-pre])_code]:text-sm [&_ul]:my-3 [&_ul]:list-disc [&_ul]:space-y-1 [&_ul]:pl-5",
+          // local patch (pi-app): reply prose uses the full primary text contrast.
+          "text-content text-foreground [&_a]:font-medium [&_a]:underline [&_a]:underline-offset-4 [&_code]:rounded-detail [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-code-inline [&_ol]:my-3 [&_ol]:list-decimal [&_ol]:space-y-1 [&_ol]:pl-5 [&_p+p]:mt-3 [&_pre:not([data-code-block-pre])]:my-3 [&_pre:not([data-code-block-pre])]:overflow-x-auto [&_pre:not([data-code-block-pre])]:rounded-xl [&_pre:not([data-code-block-pre])]:border [&_pre:not([data-code-block-pre])]:border-border [&_pre:not([data-code-block-pre])]:bg-muted/45 [&_pre:not([data-code-block-pre])]:p-3 [&_pre:not([data-code-block-pre])_code]:bg-transparent [&_pre:not([data-code-block-pre])_code]:p-0 [&_pre:not([data-code-block-pre])_code]:rounded-none [&_pre:not([data-code-block-pre])_code]:text-code [&_ul]:my-3 [&_ul]:list-disc [&_ul]:space-y-1 [&_ul]:pl-5",
           contentClassName,
         )}
       >

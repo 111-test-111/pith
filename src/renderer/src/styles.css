@@ -13,6 +13,13 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* Transparent photo canvas: a faint alpha grid makes the edge of white and
+ * transparent images readable without giving every thumbnail a painted fill. */
+.library-image-gallery {
+  background-color: transparent;
+  background-image: repeating-conic-gradient(color-mix(in oklch, var(--foreground) 5%, transparent) 0% 25%, transparent 0% 50%);
+  background-size: 16px 16px;
+}
 @utility scrollbar-hide {
   -ms-overflow-style: none;
   scrollbar-width: none;
@@ -43,10 +50,11 @@
   --app-radius-icon: var(--app-radius-item);
   --app-radius-card: 0px;
   --app-radius-window: 0px;
-  /* Capsule-by-design surfaces (avatars, icon controls, chips, badges, pill
-   * tabs, selection marks) take their shape from the UI style: collapsed to a
-   * right angle in the square style, a true capsule in the squircle style.
-   * `rounded-full` remains the always-circular token. */
+  /* Capsule-by-design surfaces (avatars, chips, badges, pill tabs, selection
+   * marks) take their shape from the UI style: collapsed to a right angle in
+   * the square style, a true capsule in the squircle style. Single-icon buttons
+   * take the shared control radius instead. `rounded-full` remains the
+   * always-circular token. */
   --app-radius-capsule: 0px;
   --app-radius-full: 9999px;
   --radius: var(--app-radius-detail);
@@ -71,12 +79,38 @@
   --app-font-mono:
     ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New',
     monospace;
-  /* MathML formulas (lib/math.css): the bundled Latin Modern Math face,
+  /* MathML formulas (lib/math.css): the bundled TeX Gyre DejaVu Math face,
    * registered there as `Pith Math`, then the platform's generic math face.
    * The tail must keep an OpenType MATH table — MathML layout reads its
    * metrics — so this never resolves to a plain text family. */
   --app-font-math: 'Pith Math', math;
 
+  /* Independent text bases. lib/typography.ts also owns derived line metrics
+   * used by virtual source/diff rows and xterm. Keep rem-based geometry fixed. */
+  --app-text-ui-micro: 10px;
+  --app-text-ui-caption: 11px;
+  --app-text-ui-keycap: 14px;
+  --app-text-ui-xs: 12px;
+  --app-text-ui-sm: 14px;
+  --app-text-ui-base: 16px;
+  --app-text-ui-lg: 18px;
+  --app-text-ui-xl: 20px;
+  --app-text-ui-2xl: 24px;
+  --app-text-content: 14px;
+  --app-text-content-small: 12px;
+  --app-text-content-heading: 16px;
+  --app-text-code: 12px;
+  --app-text-terminal: 14px;
+  --app-line-ui: 20px;
+  --app-line-content: 24px;
+  --app-line-content-tight: 20px;
+  --app-line-code: 20px;
+
+}
+
+/* Code theme samples share the app palette but pin their own color mode. */
+:root,
+[data-code-theme-preview='light'] {
   --background: oklch(0.984 0.003 264);
   --foreground: oklch(0.216 0.02 264);
   --card: oklch(1 0 0);
@@ -132,24 +166,29 @@
   --app-radius-capsule: 9999px;
 }
 
-.dark {
+.dark,
+[data-code-theme-preview='dark'] {
   --app-elevation-contact: oklch(0 0 0 / 0.30);
   --app-elevation-ambient: oklch(0 0 0 / 0.40);
-  --background: oklch(0.168 0.012 264);
-  --foreground: oklch(0.93 0.008 264);
-  --card: oklch(0.208 0.014 264);
-  --card-foreground: oklch(0.93 0.008 264);
-  --popover: oklch(0.208 0.014 264);
-  --popover-foreground: oklch(0.93 0.008 264);
-  --muted: oklch(0.24 0.014 264);
-  --muted-foreground: oklch(0.68 0.014 264);
-  --secondary: oklch(0.24 0.014 264);
-  --secondary-foreground: oklch(0.93 0.008 264);
-  --accent: oklch(0.28 0.016 264);
-  --accent-foreground: oklch(0.93 0.008 264);
+  /* macOS Dark Aqua's window/control background (#1e1e1e) and under-page
+   * background (#282828) anchor neutral gray surfaces. Raised menus and
+   * interaction fills step up from them. Primary content and titles use
+   * bright white; secondary labels keep the muted hierarchy. */
+  --background: #1e1e1e;
+  --foreground: #ffffff;
+  --card: #282828;
+  --card-foreground: #ffffff;
+  --popover: #323232;
+  --popover-foreground: #ffffff;
+  --muted: #2c2c2c;
+  --muted-foreground: #a6a6a6;
+  --secondary: #2c2c2c;
+  --secondary-foreground: #ffffff;
+  --accent: #3a3a3a;
+  --accent-foreground: #ffffff;
   --destructive: oklch(0.65 0.19 25);
-  --border: oklch(0.29 0.014 264);
-  --input: oklch(0.29 0.014 264);
+  --border: #454545;
+  --input: #454545;
 
   --terminal-black: #1a202b;
   --terminal-red: #f07886;
@@ -159,7 +198,7 @@
   --terminal-magenta: #c69aef;
   --terminal-cyan: #6dcbd6;
   --terminal-white: #b7c0cd;
-  --terminal-bright-black: #788598;
+  --terminal-bright-black: #8e8e8e;
   --terminal-bright-red: #ff9aa6;
   --terminal-bright-green: #a3e5b5;
   --terminal-bright-yellow: #f2d48e;
@@ -170,6 +209,17 @@
   --terminal-selection-background: #9ebcff;
   --terminal-selection-foreground: #121826;
   --terminal-selection-inactive-background: #8793ac;
+}
+
+[data-code-theme-preview='light'] { color-scheme: light; }
+[data-code-theme-preview='dark'] { color-scheme: dark; }
+
+/* Explicit preview colors also work when a light sample is inside a dark app. */
+[data-code-theme-preview='light'] [data-agent-code-token] {
+  color: var(--agent-code-light);
+}
+[data-code-theme-preview='dark'] [data-agent-code-token] {
+  color: var(--agent-code-dark);
 }
 
 /* Accent presets: indigo (default) / violet / pink / rose / orange / amber /
@@ -345,6 +395,12 @@
   --font-sans: var(--app-font-ui);
   --font-mono: var(--app-font-mono);
   --font-math: var(--app-font-math);
+  --text-xs: var(--app-text-ui-xs);
+  --text-sm: var(--app-text-ui-sm);
+  --text-base: var(--app-text-ui-base);
+  --text-lg: var(--app-text-ui-lg);
+  --text-xl: var(--app-text-ui-xl);
+  --text-2xl: var(--app-text-ui-2xl);
   --radius-xs: var(--app-radius-detail);
   --radius-sm: var(--app-radius-detail);
   --radius-md: var(--app-radius-inner);
@@ -403,6 +459,32 @@
   @apply border-transparent ring-1 ring-ring/40;
 }
 
+/* Small UI annotations inherit their parent's leading, just like the former
+ * arbitrary pixel utilities. Code and prose opt into their own semantic base. */
+@utility text-micro { font-size: var(--app-text-ui-micro); }
+@utility text-caption { font-size: var(--app-text-ui-caption); }
+@utility text-keycap { font-size: var(--app-text-ui-keycap); }
+@utility text-content { font-size: var(--app-text-content); line-height: var(--app-line-content); }
+@utility text-content-tight { font-size: var(--app-text-content); line-height: var(--app-line-content-tight); }
+@utility text-content-small { font-size: var(--app-text-content-small); }
+@utility text-content-heading { font-size: var(--app-text-content-heading); line-height: var(--app-line-content); }
+@utility text-code { font-size: var(--app-text-code); line-height: var(--app-line-code); }
+@utility text-code-inline { font-size: var(--app-text-code); line-height: normal; }
+@utility text-terminal { font-size: var(--app-text-terminal); }
+@utility leading-content { line-height: var(--app-line-content); }
+@utility leading-content-tight { line-height: var(--app-line-content-tight); }
+@utility leading-code { line-height: var(--app-line-code); }
+@utility leading-ui-tight { line-height: calc(var(--app-line-ui) * 0.8); }
+@utility leading-ui { line-height: var(--app-line-ui); }
+@utility leading-ui-loose { line-height: calc(var(--app-line-ui) * 1.2); }
+
+/* The JSON tree borrows the terminal's chromatic palette: those hues already
+ * hold 4.5:1 on --background in both modes, and one source keeps them in step. */
+[data-file-json] [data-json-key] { color: var(--terminal-blue); }
+[data-file-json] [data-json-value='string'] { color: var(--terminal-green); }
+[data-file-json] [data-json-value='number'] { color: var(--terminal-cyan); }
+[data-file-json] [data-json-value='boolean'] { color: var(--terminal-magenta); }
+
 /* Action surfaces do not paint their own border. Selection controls and
  * attachment previews retain their frame so they remain visible at rest. */
 :where(button:not([role='checkbox']):not([role='radio']):not([data-attachment-frame]), a[href], [role='button'], [role='tab'], [role='option'], [role='menuitem'], [role='treeitem']) {
@@ -418,11 +500,29 @@ body,
 body {
   @apply bg-background text-foreground antialiased;
   font-family: var(--app-font-ui);
+  font-size: var(--app-text-ui-base);
   overflow: hidden;
 }
 
 :root[data-pip='true'] body {
   background: transparent;
+}
+
+/* On macOS the native vibrancy surface shows through the shared glass title
+ * row and sidebar. Content regions keep their own opaque backgrounds. */
+html[data-platform='darwin'] body {
+  background: transparent;
+}
+
+/* Full pages leave the title row clear for native glass, including while their
+ * motion container enters/exits. Keep the covered workspace title mounted but
+ * invisible until the page has left, so its text and controls cannot show
+ * through or accumulate another layer of the glass material. */
+.window-page {
+  background: linear-gradient(to bottom, transparent var(--app-titlebar-height), var(--background) var(--app-titlebar-height));
+}
+.workspace-window:has(> .window-page:not([hidden])) > .window-titlebar {
+  visibility: hidden;
 }
 
 [data-pip-drag] {
@@ -431,6 +531,12 @@ body {
 }
 [data-pip-drag] button {
   -webkit-app-region: no-drag;
+}
+
+/* The sidebar's "show more" row is a command, not content: a click must not
+ * leave its label text selected. */
+[data-resource-id^="more:"] {
+  user-select: none;
 }
 
 /* A single title row shared by the workspace, Settings and startup. Keep the
@@ -463,25 +569,95 @@ body:has([aria-modal="true"]:not([aria-hidden="true"])) .window-titlebar {
   background: color-mix(in oklch, var(--primary) 25%, transparent);
 }
 
-/* Session sidebar glass (Settings → Appearance, default on): the sidebar
- * panel goes translucent + frosted (Workspace passes the Tailwind utilities),
- * and this wash is painted behind it through AnimatedSidebar's backdrop slot.
- * The colors are accent-tinted mixes, so every accent preset and both themes
- * get a matched wash with no extra wiring; dark mode mixes a little deeper
- * because its primary is lighter against a near-black background and the same
- * share would all but vanish. The wash is static — no animation, so the
- * frosted panel costs nothing per frame at rest. */
-.sidebar-glass-wash {
-  background:
-    radial-gradient(125% 80% at 0% 0%, color-mix(in oklch, var(--primary) 46%, var(--background)) 0%, transparent 56%),
-    radial-gradient(115% 85% at 100% 100%, color-mix(in oklch, var(--primary) 30%, var(--background)) 0%, transparent 52%),
-    radial-gradient(85% 55% at 55% 42%, color-mix(in oklch, var(--primary) 18%, var(--background)) 0%, transparent 72%);
+/* Window chrome glass (Settings → Appearance, default on): native vibrancy
+ * and the panel's neutral translucent veil carry the material. A faint accent
+ * wash only touches the corners, leaving the middle clear. Mixing the accent
+ * with transparent lets the macOS material and window backdrop show through.
+ * The wash is static, so the sidebar costs nothing per frame at rest. */
+.window-glass-wash {
+  background-image:
+    radial-gradient(110% 65% at 0% 0%, color-mix(in oklch, var(--primary) 6%, transparent) 0%, transparent 48%),
+    radial-gradient(100% 60% at 100% 100%, color-mix(in oklch, var(--primary) 3%, transparent) 0%, transparent 48%);
 }
-.dark .sidebar-glass-wash {
-  background:
-    radial-gradient(125% 80% at 0% 0%, color-mix(in oklch, var(--primary) 38%, var(--background)) 0%, transparent 56%),
-    radial-gradient(115% 85% at 100% 100%, color-mix(in oklch, var(--primary) 24%, var(--background)) 0%, transparent 52%),
-    radial-gradient(85% 55% at 55% 42%, color-mix(in oklch, var(--primary) 14%, var(--background)) 0%, transparent 72%);
+.dark .window-glass-wash {
+  background-image:
+    radial-gradient(110% 65% at 0% 0%, color-mix(in oklch, var(--primary) 8%, transparent) 0%, transparent 48%),
+    radial-gradient(100% 60% at 100% 100%, color-mix(in oklch, var(--primary) 4%, transparent) 0%, transparent 48%);
+}
+
+/* Session organization uses the existing theme, corners and compact glyphs.
+ * The viewport stays flush with the sidebar's bottom edge; only obscured rows
+ * receive useScrollFade's shared edge ramps. */
+.session-sidebar .sessions-tree [role="treeitem"] {
+  border-radius: var(--app-radius-item);
+  /* Session and group titles retain primary contrast even when unselected. */
+  color: var(--foreground);
+}
+.session-sidebar[data-details="true"] .sessions-tree [role="treeitem"]:has([data-session-row]) {
+  min-height: calc(var(--app-line-ui) * 2 + 10px);
+  padding-block: 5px;
+}
+.session-sidebar .sessions-tree [role="treeitem"][aria-selected="true"] {
+  background: color-mix(in oklch, var(--primary) 12%, transparent);
+  color: var(--foreground);
+}
+/* Keep the menu control distinct from the row's muted hover fill. */
+.session-sidebar .sessions-tree [role="treeitem"] button[aria-haspopup="dialog"]:is(:hover, :focus-visible, [aria-expanded="true"]) {
+  background: color-mix(in oklch, var(--muted) 86%, var(--foreground));
+  color: var(--foreground);
+}
+.session-sidebar .sessions-tree [role="treeitem"]:has([data-session-group]) {
+  min-height: 32px;
+  font-size: var(--app-text-ui-xs);
+  font-weight: 500;
+}
+.session-sidebar .sessions-tree [role="treeitem"][aria-level="1"]:has([data-session-group]) {
+  margin-top: 8px;
+}
+.session-sidebar .sessions-tree [role="treeitem"]:first-child {
+  margin-top: 0;
+}
+.session-group-count {
+  flex-shrink: 0;
+  color: var(--muted-foreground);
+  font-weight: 400;
+}
+.session-group-action {
+  opacity: 0;
+  color: var(--muted-foreground);
+  transition: opacity 120ms ease-out, color 120ms ease-out;
+}
+.session-sidebar [role="treeitem"]:is(:hover, :focus-within, [data-menu-open="true"]) .session-group-action {
+  opacity: 1;
+}
+.session-sidebar [role="treeitem"]:is(:hover, :focus-within, [data-menu-open="true"]) .session-group-count {
+  visibility: hidden;
+}
+.session-sidebar [role="treeitem"]:has([data-more-row]) {
+  min-height: 28px;
+  font-size: var(--app-text-ui-xs);
+}
+.session-sidebar [role="treeitem"]:has([data-more-row]):hover {
+  background: transparent;
+  color: var(--primary);
+}
+.session-archive-count {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline-end: 0;
+  min-width: 12px;
+  padding-inline: 2px;
+  background: var(--background);
+  border-radius: var(--app-radius-capsule);
+  line-height: 1.2;
+  color: var(--muted-foreground);
+}
+@media (hover: none) {
+  .session-group-action { opacity: 1; }
+  .session-sidebar [role="treeitem"]:has(.session-group-action) .session-group-count { visibility: hidden; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .session-group-action { transition: none; }
 }
 
 /* App-wide scrollbars are invisible: scrolling keeps working, the chrome never
@@ -515,11 +691,108 @@ body:has([aria-modal="true"]:not([aria-hidden="true"])) .window-titlebar {
   contain-intrinsic-size: auto 400px;
 }
 
+/* The transcript's tail is the live edge, and that is the one place `auto` has
+ * nothing remembered to fall back on: a row mounts BELOW the fold (the scroller
+ * is still pinning to the end as it arrives), so the browser skipped it, painted
+ * the 400px fallback and only then replaced it with the real height. The pending
+ * row appeared far below where it belongs and snapped back a frame later — the
+ * visible bounce. The last two rows always lay out; every older row keeps the
+ * skip and its remembered size. `contain-intrinsic-size` deliberately stays:
+ * laying out here is what RECORDS that remembered size, so the rows can be
+ * skipped normally once newer rows push them up. */
+[data-slot="message-group"] > *:nth-last-child(-n + 2) {
+  content-visibility: visible;
+}
+
+/* A row stack (`data-transcript-rows`) is a column with `items-start` so a
+ * user bubble hugs its text instead of filling the column. That leaves every
+ * row at fit-content width, and a row whose content cannot wrap — a tool
+ * title, a task command — then grew PAST the column: the transcript clips
+ * horizontally (`overflow-x-clip`), so the row's trailing status mark and
+ * disclosure were cut off instead of the title truncating. Cap every row at
+ * the column width; a component's own narrower max-width (a bubble's 82%)
+ * still wins because this sits in `base`, under the utilities. */
+@layer base {
+  [data-transcript-rows] > * {
+    max-width: 100%;
+  }
+}
+
+/* Resolve this metric on the prose font BEFORE code switches to monospace.
+ * Registering the length makes descendants inherit its computed value;
+ * an unregistered 1cap would instead resolve against the code font. */
+@property --markdown-cap-height {
+  syntax: '<length>';
+  inherits: true;
+  initial-value: 0px;
+}
+[data-markdown], [data-markdown] :where(p, li, blockquote, th, td, h1, h2, h3, h4, h5, h6, strong, em, a) {
+  --markdown-cap-height: 1cap;
+}
+[data-markdown] [data-inline-code] {
+  /* Scale with the surrounding prose (including headings), while the body
+   * still uses the independent code preference. Align the two fonts' cap
+   * centres rather than aligning their unequal em boxes at the bottom.
+   * Keep native inline fragments so long code can wrap with its sentence. */
+  font-size: calc(1em * var(--app-text-code) / var(--app-text-content));
+  vertical-align: calc((var(--markdown-cap-height) - 1cap) / 2);
+}
+
+.mermaid-measure {
+  position: fixed;
+  top: 0;
+  left: -100000px;
+  width: 1200px;
+  visibility: hidden;
+  pointer-events: none;
+  contain: layout style;
+}
+
+[data-markdown] mark {
+  color: inherit;
+  background: color-mix(in oklch, var(--primary) 20%, transparent);
+}
+[data-markdown] kbd {
+  padding: 0.1em 0.35em;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-detail);
+  background: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+}
+[data-markdown] [data-footnotes] {
+  margin-block-start: 1.25rem;
+  padding-block-start: 0.75rem;
+  border-block-start: 1px solid var(--border);
+  color: var(--muted-foreground);
+  font-size: var(--app-text-content-small);
+  line-height: var(--app-line-content-tight);
+}
+[data-markdown] [data-footnotes] li > * + * {
+  margin-block-start: 0.5rem;
+}
+[data-markdown] [data-footnote-backref] {
+  white-space: nowrap;
+}
+[data-markdown-alert] {
+  border-color: var(--primary);
+}
+[data-markdown-alert-title] {
+  color: var(--primary);
+}
+[data-markdown-alert='warning'], [data-markdown-alert='caution'] {
+  border-color: var(--destructive);
+}
+[data-markdown-alert='warning'] > [data-markdown-alert-title],
+[data-markdown-alert='caution'] > [data-markdown-alert-title] {
+  color: var(--destructive);
+}
+
 /* Each transcript boundary owns one positive margin, with no flex gap to add
  * to it. This lets fixed divider/action spacing coexist with either density
  * without subtracting space or depending on the adjacent content's kind. */
 [data-transcript-rows] {
-  --transcript-row-height: 1.5rem;
+  --transcript-row-height: max(1.5rem, var(--app-line-ui));
   --transcript-roomy-gap: 1.5rem;
   --transcript-gap: var(--transcript-roomy-gap);
   display: flex;
@@ -565,6 +838,14 @@ html[data-compact-tools='true'] [data-transcript-rows] {
 .transcript-row {
   min-height: var(--transcript-row-height, 2.25rem);
 }
+.transcript-label {
+  /* Flex centres the label's visible type area, not its font's asymmetric
+   * ascent/descent and leading. Symmetric font-relative padding keeps CJK
+   * glyphs and Latin descenders inside truncated labels. */
+  text-box-trim: trim-both;
+  text-box-edge: cap alphabetic;
+  padding-block: 0.25em;
+}
 [data-transcript-rows] [data-agent-trigger] {
   height: var(--transcript-row-height);
   flex-shrink: 0;
@@ -608,6 +889,10 @@ html[data-compact-tools='true'] [data-transcript-rows] {
 /* Motion's global skip flag settles on its next frame. Disclosures must paint
  * their final state in the commit frame, including a live preference change. */
 [data-disclosure-instant] {
+  /* Removing the animated transform also removes its containing block.
+   * Keep positioned descendants (including sr-only tool statuses) inside the
+   * disclosure's clip so a closed process cannot extend the scroll range. */
+  position: relative;
   transform: none !important;
   clip-path: none !important;
   opacity: 1 !important;

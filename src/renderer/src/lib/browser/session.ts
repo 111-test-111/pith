@@ -193,7 +193,23 @@ export function readOpenBrowserPages(): OpenBrowserPageEntry[] {
   return readOpenPagesList()
 }
 
-export function writeOpenBrowserPages(entries: readonly OpenBrowserPageEntry[]): void {
+// Explicit tab closure ends this snapshot writer's lifetime. Rail folds do
+// not: the next pane still reconstructs the pages from the same snapshot.
+let openPagesRevision = 0
+
+export function getOpenBrowserPagesRevision(): number {
+  return openPagesRevision
+}
+
+/** Fence outgoing pane effects before teardown, retaining pages only when
+ * close/reopen restoration is enabled. */
+export function closeOpenBrowserPages(restoreTabs: boolean): void {
+  openPagesRevision += 1
+  if (!restoreTabs) writeOpenBrowserPages([])
+}
+
+export function writeOpenBrowserPages(entries: readonly OpenBrowserPageEntry[], revision = openPagesRevision): void {
+  if (revision !== openPagesRevision) return
   writeList(OPEN_PAGES_KEY, entries.slice(0, OPEN_BROWSER_PAGES_LIMIT))
 }
 

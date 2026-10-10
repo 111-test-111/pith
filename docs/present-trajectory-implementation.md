@@ -6,6 +6,8 @@
 
 Only a successful matching result with validated `pith-present-v1` details creates delivery cards. Cards appear at the settled change scope's final group and reconstruct from the selected branch on reopen/compaction/fork/Rewind. A child cannot deliver for the parent: the parent presents the file itself. Preview uses the file pane, Open the OS handler and Save As the native full-file copy route. References are not immutable snapshots.
 
+Generated `image` receipts receive app-stamped display metadata. Bottom delivery galleries reuse the image tool's pure-media view, with floating information and retry/cancel actions; the `present` tool's own disclosure keeps its original text result. Ordinary images keep the existing file cards. Exact replay parameters and UI execution receipts persist as private SDK custom entries; replays make no model request or conversation message. Standalone usage, Library extraction and Rewind coverage retain their billing and successful file effects. See [image generation](image-generation.md#generated-image-delivery-and-private-replay) for admission, persistence and renderer behavior.
+
 ## Capture boundary and durability
 
 `TrajectoryRecorder` wraps public `agent.streamFunction` inside the Plan/image/budget transforms. It records the transformed request, serializable public Tool fields, safe options, actual provider payload after the caller's replacement callback, selected response headers and finalized assistant output/usage. It never serializes handlers, authentication or cookies. Known credential fields are redacted.
@@ -15,6 +17,8 @@ Stream events pass through unchanged without retained deltas. First-output timin
 One logical run survives retry/compaction starts until `agent_settled`; each request/retry attempt settles separately. Tool records include actual arguments/output. Message linkage uses a later awaited agent subscription after persistence. Captured assistant output is not duplicated as historical fallback.
 
 A lazy worker owns `trajectory.sqlite` (0600), WAL, hashing and immutable SHA-256 JSON nodes. Repeated data is deduplicated. Diagnostics stay outside model history and transcript state. Capture failure does not fail execution, but is marked incomplete; worker failure backs off and restart marks unfinished records interrupted.
+
+Bounded [context statistics](context-statistics-implementation.md) share this request capture and durability boundary. The context pane reads only metadata through a dedicated selected-branch query; ordinary trajectory pages omit composition data and keep request bodies lazy.
 
 ## Branches and resource bounds
 
@@ -28,7 +32,7 @@ Historical messages load only when inspection opens and explicitly lack uncaptur
 - Search/capture notifications are coalesced; mounted UI reads at most once per second with one in-flight page. Hidden/unmounted panes release subscriptions.
 - Native export walks immutable nodes into the chosen file in bounded chunks without rebuilding a whole request in main/renderer memory.
 
-Pane/timeline geometry follows [sidebar layout](sidebar-pane-layout.md) and [wheel gestures](wheel-gestures.md).
+The pane contains a record list and detail inspector below its filters. Geometry follows [sidebar layout](sidebar-pane-layout.md); tool-call links follow [wheel gestures](wheel-gestures.md).
 
 ## Verification
 

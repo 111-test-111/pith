@@ -1,21 +1,38 @@
 import roundedIcon from '../../../../../resources/pith.svg'
 import squareIcon from '../../../../../resources/pith-square.svg'
+import markIcon from '../../../../../resources/pith-mark.svg'
 import { cn } from '@/lib/utils'
 
 /** Decorative brand artwork; the adjacent translated text supplies its name.
  *
- * Two variants exist: `rounded` (the packaging master, matching the Dock icon
- * and the welcome screen) and `square`, the renderer-only hard-edge mark the
- * square-style UI uses on the new-session landing. The Dock icon is generated
- * from `resources/pith.svg` by `scripts/generate-icons.mjs`, so it always stays
- * rounded — never point that master at the square file. */
+ * `rounded` is the packaging master used by the welcome screen and Dock;
+ * `square` is its hard-edge tile variant. The background-free `mark` inherits
+ * currentColor through an alpha mask, so the new-session header can use the
+ * live app accent in either UI style. Native icons are generated from the
+ * rounded master by `scripts/generate-icons.mjs`. */
 export function PithIcon({
   className,
   variant = 'rounded'
 }: {
   className?: string
-  variant?: 'rounded' | 'square'
+  variant?: 'rounded' | 'square' | 'mark'
 }) {
+  if (variant === 'mark') {
+    return (
+      <span
+        aria-hidden="true"
+        className={cn('inline-block shrink-0 bg-current', className)}
+        style={{
+          maskImage: `url("${markIcon}")`,
+          maskMode: 'alpha',
+          maskSize: 'contain',
+          maskRepeat: 'no-repeat',
+          maskPosition: 'center'
+        }}
+      />
+    )
+  }
+
   return (
     <img
       src={variant === 'square' ? squareIcon : roundedIcon}

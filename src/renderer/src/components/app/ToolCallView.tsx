@@ -1,7 +1,7 @@
 import { JEV_ERROR_CODES } from '../../../../shared/types'
 import { submittedPlanRef } from '@/lib/plan-submissions'
 import { useBashTask, bashTaskStatus } from '@/lib/bash-tasks'
-import { BashTaskRow } from './BashTaskView'
+import { BashCommandHeader, BashTaskRow } from './BashTaskView'
 import { memo, useMemo, useState, type ReactNode } from 'react'
 import { FileDiff } from '@/components/agents/file-diff'
 import { ToolResult, ToolResultOutput, type ToolResultStatus } from '@/components/agents/tool-result'
@@ -14,8 +14,11 @@ import { cn } from '@/lib/utils'
 import { TRANSCRIPT_ROW, TRANSCRIPT_ROW_WIDTH } from '@/lib/transcript-rhythm'
 import { firstAskUserQuestionText, isAskUserToolDetails, askUserRecordKind } from '../../../../shared/ask-user'
 import { AskUserKindChip } from './AskUserRecordList'
-import { PreviewThumb } from './ImagePreview'
-import type { ImageContent, ToolCallContent, ToolResultMsg } from '../../../../shared/types'
+import { ImagePreviewGroup, PreviewThumb } from './ImagePreview'
+import { ImageGenerationResult } from './ImageGenerationResult'
+import { ToolFileOutput } from './ToolFileOutput'
+import { searchRoot } from '@/lib/tool-output'
+import type { ImageContent, ToolCallContent, ToolResultMsg, ReadRangeDTO } from '../../../../shared/types'
 import type { DebugSessionDTO } from '../../../../shared/types'
 import type { ToolRun } from '@/state/pi-store'
 import { useI18n } from '@/i18n'
@@ -58,6 +61,7 @@ function ResultImages({
 }) {
   const { t } = useI18n()
   return (
+    <ImagePreviewGroup>
     <div className="flex flex-wrap gap-2">
       {images.map((image, index) => (
         <PreviewThumb
@@ -71,6 +75,7 @@ function ResultImages({
         />
       ))}
     </div>
+    </ImagePreviewGroup>
   )
 }
 
@@ -180,27 +185,37 @@ function metaOf(run: ToolRun | undefined): { live: boolean; seconds?: number } {
  * interactive element in the trigger would be invalid HTML — and swallows its
  * own click so opening the file never toggles the row.
  */
-function FileToolLabel({ tool, path, cwd }: { tool: string; path: string; cwd: string | null | undefined }) {
-  const navigation = useFileNavigation()
-  // A call that never named a file has nothing to open — no empty link.
-  if (!path) return <>{`${tool} · `}</>
-  const dir = displayToolDir(path, cwd)
-  return (
-    <>
-      {`${tool} · `}
-      <span
-        data-file-link
-        onClick={(event) => {
-          event.stopPropagation()
-          navigation.openPath(resolveFromCwd(path, cwd))
-        }}
-        className="cursor-pointer font-medium text-primary underline underline-offset-4 hover:opacity-80"
-      >
-        {basename(path)}
-      </span>
-      {dir ? ` — ${dir}` : ''}
-    </>
-  )
+function FileToolLabel({ tool, path, cwd, suffix, line }: { tool: string; path: string; cwd: string | null | undefined; suffix?: string; line?: number }) {
+ const navigation = useFileNavigation()
+ // A call that never named a file has nothing to open — no empty link.
+ if (!path) return <>{`${tool} · `}</>
+ const dir = displayToolDir(path, cwd)
+ return (
+ <>
+ {`${tool} · `}
+ <span
+ data-file-link
+ onClick={(event) => {
+ event.stopPropagation()
+ navigation.openPath(resolveFromCwd(path, cwd), line)
+ }}
+ className="cursor-pointer font-medium text-primary underline underline-offset-4 hover:opacity-80"
+ >
+ {basename(path)}{suffix ?? ''}
+ </span>
+ {dir ? ` — ${dir}` : ''}
+ </>
+ )
+}
+
+/** The ACTUAL 1-based line range a read call returned (details.piAppRead),
+ * since EOF and the byte/line caps can cut the requested window short. Absent
+ * for byte-paginated/image reads and for sessions persisted before the stamp
+ * existed. */
+function readResultRange(result: ToolResultMsg | undefined): ReadRangeDTO | undefined {
+ const range = (result?.details as { piAppRead?: ReadRangeDTO } | undefined)?.piAppRead
+ if (!range || typeof range.offset !== 'number' || typeof range.endLine !== 'number') return undefined
+ return range
 }
 
 /**
@@ -301,7 +316,7 @@ function askUserDetails(result: ToolResultMsg | undefined, run: ToolRun | undefi
  */
 export const ToolCallView = memo(function ToolCallView({ call, result, run, cwd }: ToolCallViewProps) {
   const { t } = useI18n()
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(call.name === 'image')
   const task = useBashTask(call.name === 'bash' ? call.id : undefined, result?.details?.bashTask ?? run?.partial?.details?.bashTask)
   const backgroundTask = call.name === 'bash' && task?.background ? task : undefined
   const status = backgroundTask ? bashTaskStatus(backgroundTask) : statusOf(result, run)
@@ -323,7 +338,7 @@ export const ToolCallView = memo(function ToolCallView({ call, result, run, cwd 
   // that text — so a failed result, or an image the browser cannot decode, keeps
   // it, and that is the whole reason this is a condition rather than a count.
   const [imageFailed, setImageFailed] = useState(false)
-  const imageOnly = images.length > 0 && result?.isError !== true && !imageFailed
+  const imageOnly = (call.name === 'read' || call.name === 'browser_screenshot') && images.length > 0 && result?.isError !== true && !imageFailed
   /** The file an image-reading tool read — the preview's "open file" target. */
   const imagePath =
     call.name === 'read' && typeof args.path === 'string' && args.path
@@ -342,10 +357,10 @@ export const ToolCallView = memo(function ToolCallView({ call, result, run, cwd 
     output = lines.filter(Boolean).join('\n')
   }
   // Text output, or the images a tool returned in its place.
-  const renderOutput = (children: string) => (
+  const renderOutput = (children: string, specialized?: ReactNode) => (
     <>
       {imageOnly ? null : (
-        <ToolResultOutput {...outputProps(status)}>{children}</ToolResultOutput>
+        specialized ?? <ToolResultOutput {...outputProps(status)}>{children}</ToolResultOutput>
       )}
       {images.length && !imageFailed ? (
         <ResultImages images={images} path={imagePath} onError={() => setImageFailed(true)} />
@@ -356,6 +371,12 @@ export const ToolCallView = memo(function ToolCallView({ call, result, run, cwd 
   if (submittedPlanRef(result)) return null
 
   switch (call.name) {
+    case 'image':
+      return <ToolResult animateChanges={false} lazyContent open={open} onOpenChange={setOpen}
+        title={t(args.action === 'edit' ? 'imageGeneration.edit' : 'imageGeneration.generate')}
+        status={status} icon={<ToolIcon name="image" />} meta={meta} collapseOnComplete={false} bare contentClassName={WRAP_OUTPUT}>
+        <ImageGenerationResult call={call} result={result} run={run} images={images} output={output} />
+      </ToolResult>
     case 'jev_decide': {
       const error = JEV_ERROR_CODES.find(code => output.trim() === `JEV_${code}` || output.trim() === `Error: JEV_${code}`)
       return <ToolResult animateChanges={false} lazyContent open={open} onOpenChange={setOpen}
@@ -383,10 +404,11 @@ export const ToolCallView = memo(function ToolCallView({ call, result, run, cwd 
         </div>
       )
     }
-    case 'present':
+    case 'present': {
       return <ToolResult animateChanges={false} lazyContent title={t('present.tool')} status={status} icon={<ToolIcon name="present" />} meta={meta} open={open} onOpenChange={setOpen} collapseOnComplete={false} contentClassName={WRAP_OUTPUT}>
         {renderOutput(output || placeholder(t('tool.noOutput')))}
       </ToolResult>
+    }
     case 'todo_write':
       return (
         <ToolResult animateChanges={false} lazyContent open={open} onOpenChange={setOpen}
@@ -449,11 +471,18 @@ export const ToolCallView = memo(function ToolCallView({ call, result, run, cwd 
           meta={meta}
           defaultOpen={false}
           collapseOnComplete={false}
+          // The expansion leads with the FULL command the title only previews,
+          // pinned above the output's scroll viewport.
+          header={<BashCommandHeader command={command} />}
           bare={imageOnly} contentClassName={WRAP_OUTPUT}
         >
           {renderOutput(
-            (status === 'running' ? output.slice(-4000) : output) ||
-              (status === 'running' ? '' : placeholder(t('tool.noOutput')))
+            status === 'running'
+              // Live output shows its most recent window; when earlier output
+              // was dropped from it, say so the way a settled envelope's own
+              // truncation line does.
+              ? (output.length > 4000 ? `${t('chat.bashTruncated')}\n${output.slice(-4000)}` : output)
+              : output || placeholder(t('tool.noOutput'))
           )}
         </ToolResult>
       )
@@ -554,13 +583,16 @@ export const ToolCallView = memo(function ToolCallView({ call, result, run, cwd 
 
     case 'read': {
       const path = String(args.path ?? '')
+      const range = readResultRange(result)
       return (
         <ToolResult
           animateChanges={false}
           lazyContent
           open={open}
           onOpenChange={setOpen}
-          title={<FileToolLabel tool="read" path={path} cwd={cwd} />}
+          title={<FileToolLabel tool="read" path={path} cwd={cwd}
+            suffix={range ? (range.endLine > range.offset ? `:${range.offset}-${range.endLine}` : `:${range.offset}`) : undefined}
+            line={range?.offset} />}
           status={status}
           icon={<ToolIcon name="read" />}
           meta={meta}
@@ -569,7 +601,8 @@ export const ToolCallView = memo(function ToolCallView({ call, result, run, cwd 
           bare={imageOnly} contentClassName={WRAP_OUTPUT}
         >
           {renderOutput(
-            status === 'running' ? t('tool.reading') : output.slice(0, 4000) || placeholder(t('tool.emptyFile'))
+            status === 'running' ? t('tool.reading') : output.slice(0, 4000) || placeholder(t('tool.emptyFile')),
+            status === 'success' && output && !imageOnly ? <ToolFileOutput tool="read" text={output} args={args} cwd={cwd} range={range} /> : undefined
           )}
         </ToolResult>
       )
@@ -606,7 +639,9 @@ export const ToolCallView = memo(function ToolCallView({ call, result, run, cwd 
           {renderOutput(
             status === 'running'
               ? t('tool.runningPlaceholder')
-              : output.slice(0, 4000) || placeholder(t('tool.noOutput'))
+              : output.slice(0, 4000) || placeholder(t('tool.noOutput')),
+            status === 'success' && output && (call.name === 'grep' || call.name === 'find' || call.name === 'ls')
+              ? <ToolFileOutput tool={call.name} text={output} args={args} cwd={cwd} root={searchRoot(result?.details)} /> : undefined
           )}
         </ToolResult>
       )

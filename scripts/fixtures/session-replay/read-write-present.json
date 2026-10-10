@@ -109,7 +109,7 @@
                   }
                 },
                 {
-                  "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. Usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
+                  "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. You MUST present every successfully saved generated image, including committed files from a partially failed image call; split batches across calls when needed. For other deliverables, usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
                   "name": "present",
                   "parameters": {
                     "properties": {
@@ -253,7 +253,7 @@
                     }
                   },
                   {
-                    "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. Usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
+                    "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. You MUST present every successfully saved generated image, including committed files from a partially failed image call; split batches across calls when needed. For other deliverables, usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
                     "name": "present",
                     "parameters": {
                       "properties": {
@@ -369,7 +369,7 @@
                     }
                   },
                   {
-                    "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. Usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
+                    "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. You MUST present every successfully saved generated image, including committed files from a partially failed image call; split batches across calls when needed. For other deliverables, usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
                     "name": "present",
                     "parameters": {
                       "properties": {
@@ -802,7 +802,7 @@
                   }
                 },
                 {
-                  "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. Usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
+                  "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. You MUST present every successfully saved generated image, including committed files from a partially failed image call; split batches across calls when needed. For other deliverables, usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
                   "name": "present",
                   "parameters": {
                     "properties": {
@@ -992,7 +992,7 @@
                     }
                   },
                   {
-                    "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. Usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
+                    "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. You MUST present every successfully saved generated image, including committed files from a partially failed image call; split batches across calls when needed. For other deliverables, usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
                     "name": "present",
                     "parameters": {
                       "properties": {
@@ -1154,7 +1154,7 @@
                     }
                   },
                   {
-                    "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. Usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
+                    "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. You MUST present every successfully saved generated image, including committed files from a partially failed image call; split batches across calls when needed. For other deliverables, usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
                     "name": "present",
                     "parameters": {
                       "properties": {
@@ -1639,7 +1639,7 @@
                   }
                 },
                 {
-                  "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. Usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
+                  "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. You MUST present every successfully saved generated image, including committed files from a partially failed image call; split batches across calls when needed. For other deliverables, usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
                   "name": "present",
                   "parameters": {
                     "properties": {
@@ -1876,7 +1876,7 @@
                     }
                   },
                   {
-                    "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. Usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
+                    "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. You MUST present every successfully saved generated image, including committed files from a partially failed image call; split batches across calls when needed. For other deliverables, usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
                     "name": "present",
                     "parameters": {
                       "properties": {
@@ -2085,7 +2085,7 @@
                     }
                   },
                   {
-                    "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. Usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
+                    "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. You MUST present every successfully saved generated image, including committed files from a partially failed image call; split batches across calls when needed. For other deliverables, usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
                     "name": "present",
                     "parameters": {
                       "properties": {
@@ -2641,7 +2641,7 @@
                   }
                 },
                 {
-                  "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. Usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
+                  "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. You MUST present every successfully saved generated image, including committed files from a partially failed image call; split batches across calls when needed. For other deliverables, usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
                   "name": "present",
                   "parameters": {
                     "properties": {
@@ -2939,7 +2939,7 @@
                     }
                   },
                   {
-                    "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. Usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
+                    "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. You MUST present every successfully saved generated image, including committed files from a partially failed image call; split batches across calls when needed. For other deliverables, usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
                     "name": "present",
                     "parameters": {
                       "properties": {
@@ -3209,7 +3209,7 @@
                     }
                   },
                   {
-                    "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. Usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
+                    "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. You MUST present every successfully saved generated image, including committed files from a partially failed image call; split batches across calls when needed. For other deliverables, usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
                     "name": "present",
                     "parameters": {
                       "properties": {
@@ -3747,7 +3747,7 @@
             }
           },
           {
-            "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. Usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
+            "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. You MUST present every successfully saved generated image, including committed files from a partially failed image call; split batches across calls when needed. For other deliverables, usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
             "name": "present",
             "parameters": {
               "properties": {
@@ -4244,7 +4244,7 @@
                     }
                   },
                   {
-                    "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. Usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
+                    "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. You MUST present every successfully saved generated image, including committed files from a partially failed image call; split batches across calls when needed. For other deliverables, usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
                     "name": "present",
                     "parameters": {
                       "properties": {
@@ -4399,7 +4399,7 @@
                     }
                   },
                   {
-                    "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. Usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
+                    "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. You MUST present every successfully saved generated image, including committed files from a partially failed image call; split batches across calls when needed. For other deliverables, usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
                     "name": "present",
                     "parameters": {
                       "properties": {
@@ -4565,7 +4565,7 @@
                     }
                   },
                   {
-                    "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. Usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
+                    "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. You MUST present every successfully saved generated image, including committed files from a partially failed image call; split batches across calls when needed. For other deliverables, usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
                     "name": "present",
                     "parameters": {
                       "properties": {
@@ -4767,7 +4767,7 @@
                     }
                   },
                   {
-                    "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. Usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
+                    "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. You MUST present every successfully saved generated image, including committed files from a partially failed image call; split batches across calls when needed. For other deliverables, usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
                     "name": "present",
                     "parameters": {
                       "properties": {
@@ -4980,7 +4980,7 @@
                     }
                   },
                   {
-                    "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. Usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
+                    "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. You MUST present every successfully saved generated image, including committed files from a partially failed image call; split batches across calls when needed. For other deliverables, usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
                     "name": "present",
                     "parameters": {
                       "properties": {
@@ -5233,7 +5233,7 @@
                     }
                   },
                   {
-                    "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. Usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
+                    "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. You MUST present every successfully saved generated image, including committed files from a partially failed image call; split batches across calls when needed. For other deliverables, usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
                     "name": "present",
                     "parameters": {
                       "properties": {
@@ -5507,7 +5507,7 @@
                     }
                   },
                   {
-                    "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. Usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
+                    "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. You MUST present every successfully saved generated image, including committed files from a partially failed image call; split batches across calls when needed. For other deliverables, usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
                     "name": "present",
                     "parameters": {
                       "properties": {
@@ -5812,7 +5812,7 @@
                     }
                   },
                   {
-                    "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. Usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
+                    "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. You MUST present every successfully saved generated image, including committed files from a partially failed image call; split batches across calls when needed. For other deliverables, usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
                     "name": "present",
                     "parameters": {
                       "properties": {

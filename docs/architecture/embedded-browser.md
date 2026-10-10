@@ -8,9 +8,9 @@ Owners are human or `agent:<SDK session ID>`. Agent tools resolve only owned pag
 
 Electron cannot create these guests through CDP Target.createTarget. Main queues a pending marker-page request; Workspace opens the host for agent requests; renderer mounts the webview and reports browser:seen. Reconcile discovers the marker and completes registration/navigation. Handshake retry/state-only fallback covers missed mount events and guests born before CDP discovery. Restored rows ensure service connection before spawning; bounded marker re-handshake/remount repairs dead guests.
 
-Close by registry removal and renderer unmount, never Playwright page.close. Selected guests are visible. Hidden agent guests retain full size with opacity zero/pointer-events none; display:none makes automation unreliable. Hidden human pages may display:none. Explicit element sizing follows pane/device viewport; no CDP device-metrics emulation.
+Close by registry removal and renderer unmount, never Playwright page.close. Closing an unregistered row cancels its pending creation without retrying; retired IDs reject late seen reports and marker discovery. Explicit browser rail-tab closure also closes its known registered/pending pages, preventing an abandoned handshake from rebuilding them on reopen. Selected guests are visible. Hidden agent guests retain full size with opacity zero/pointer-events none; display:none makes automation unreliable. Hidden human pages may display:none. Explicit element sizing follows pane/device viewport; no CDP device-metrics emulation.
 
-Rail tab switches keep browser mounted. Collapsing the rail normally destroys guests and restores bounded saved pages on reopen; the optional keep-alive preference retains the mounted guest layer. Restored pages preserve owner and saved destination/title, spawn in staggered order and must not suppress restoration based on stale status.
+Rail tab switches keep browser mounted. Collapsing the rail normally destroys guests and restores bounded saved pages on reopen; the optional keep-alive preference retains the mounted guest layer. Settings → Browser separately offers “Restore tabs after closing the browser” (localStorage, default on): disabling it clears the snapshot on explicit browser rail-tab closure, including close-other/close-all actions, so reopening starts with one blank page. Opening a closed browser also applies the preference, covering changes made while it was already closed. Folding and expanding always retain the snapshot independently of this preference. Explicit closure invalidates outgoing snapshot writers and pending restore callbacks before teardown; closing the final page clears the snapshot even when restoration is enabled. Restored pages preserve owner and saved destination/title, spawn in staggered order and must not suppress restoration based on stale status.
 
 ## Electron invariants
 
@@ -40,7 +40,13 @@ Upload validates existing regular files, at most 20, then uses input.setInputFil
 
 beUI/i18n chrome provides navigation, URL, find, zoom, history, device sizing, downloads and clear-data confirmation. Reapply zoom at every dom-ready independently of handshake. Find-next requests serialize with bounded retries; preserve Chromium ordinal semantics. True popups keep opener login protocols and never become model pages.
 
-Annotation retains an input-capture overlay through selection. Resolve current elements via guest executeJavaScript, not a stale service document. Forward wheel using the shared whole-gesture classifier, pixel conversion and Electron sign inversion; pointer geometry uses the webview rect. Submission inserts structured annotation data into the composer draft.
+The new-page handshake may complete after its row appears. User tab selection, closing the selected tab and later new-page requests supersede that receipt's automatic selection; a late receipt must not pull focus away from the chosen tab.
+
+Human address-bar and start-page input share `resolveBrowserInput`: domains, local development addresses and explicit allowed URLs navigate directly; other text opens the selected search provider with an encoded query. Domain classification uses tldts's Public Suffix List and special-use/IP detection, followed by the standard URL parser; search operators remain queries and a leading `?` forces search for ambiguous input. Settings → Browser selects Google (default), Bing, DuckDuckGo or Baidu, persisted in AppSettings and broadcast to mounted inputs. Agent navigation retains URL-only semantics and the HTTP/HTTPS/about:blank allowlist still applies.
+
+Each guest tracks progress once per main-document navigation through `did-start-navigation`, ignoring subframes and in-page changes. Blank pages and registration markers never show progress; later iframe loading cannot restart a completed document's bar. Reloads start a fresh estimate and server redirects share the active one. A thin, pointer-transparent beUI progress track overlays the top of the page viewport without taking layout space. Navigation commit and DOM readiness advance the estimate, bounded below completion until `did-stop-loading`; main-frame failures and guest teardown clear it. Timers are disposed on guest remount/unmount, and progress transitions respect app and system reduced motion.
+
+Annotation retains an input-capture overlay through selection. Resolve current elements via guest executeJavaScript, not a stale service document. Forward both wheel axes using shared pixel conversion and Electron sign inversion; pointer geometry uses the webview rect. Submission inserts structured annotation data into the composer draft.
 
 ## Chrome cookie import
 
@@ -57,4 +63,4 @@ node scripts/check-browser-import.mjs
 node scripts/check-codemode-contracts.mjs
 ```
 
-UI checks require a build and isolate browser profile/ports. They cover guest creation/close/visibility, popup/session ownership, consent, navigation, find/zoom/theme, restoration/keep-alive, annotation and upload. Preserve live-vs-source assertion distinctions; mock/protocol coverage is not arbitrary live-site compatibility.
+UI checks require a build and isolate browser profile/ports. They cover guest creation/close/visibility, popup/session ownership, consent, navigation/search/provider persistence, loading progress without layout shifts, find/zoom/theme, restoration/keep-alive, annotation and upload. Preserve live-vs-source assertion distinctions; mock/protocol coverage is not arbitrary live-site compatibility.

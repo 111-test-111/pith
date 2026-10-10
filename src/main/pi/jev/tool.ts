@@ -12,11 +12,9 @@ export function createJevTool(service: JevService, owner: string, canStart: () =
     // description refreshed by the app's existing tool materialization path.
     promptSnippet: 'Use Jev for bounded semantic judgments; consult its description for enabled question types.',
     promptGuidelines: [
-      'Use jev_decide when a bounded semantic judgment helps: classify intent, compare candidates, assess evidence, or choose among permitted workflows. Keep arithmetic, permissions, actual tests, code generation and execution in their existing tools.',
-      'If the typesafe-ai skill is listed in available skills, use its Pi native-tool guidance and examples for judgment workflows. Use this tool directly for the current task; SDK installation and live API docs are for building or changing a TypeSafe integration in a project, not prerequisites for an ordinary native call. Never read Pi credentials or use a shell/API workaround to bypass a disabled native capability.',
-      'Provide evidence and precise criteria; ask one question per item/dimension. Batch independent questions over the same state. Do not send secrets or unnecessary conversation history. Treat uncertainty as a reason to gather evidence, not as authorization.',
-      'Write the complete question in instructions: Jev never sees question IDs. Batched questions cannot see each other’s answers; use a later call only for dependent questions. For choices include a no-match option when appropriate; describe score levels concretely and in order. Noul near 0.5 means uncertainty about yes, not medium intensity. Confidence is distribution concentration, not a guarantee of correctness; there is no universal safe threshold.',
-      'If Jev is disabled, unavailable or inconclusive, continue reasoning with the existing tools; do not repeatedly retry or claim a successful judgment.'
+      'Jev judges supplied evidence; it cannot grant permissions or replace tests. Use enabled native types directly (typesafe-ai skill examples if available); never read credentials or bypass disabled capabilities. Send no secrets or unnecessary history.',
+      'Put complete questions in instructions: Jev never sees question IDs. Batch independent questions; sequence dependent ones. Use precise criteria, ordered score levels and a no-match choice when appropriate. Noul 0.5 means uncertainty, not medium intensity; confidence is not proof.',
+      'If unavailable or inconclusive, gather evidence with existing tools; do not repeatedly retry or claim success.'
     ],
     async execute(_id, args, signal) {
       const evaluation = await service.evaluate(args, { owner, signal, canStart })

@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ChevronRight, FileText, FolderOpen, Pencil, Plus, RefreshCw } from '@/lib/icons'
+import { ChevronRight, FileText, FolderOpen, Plus, RefreshCw } from '@/lib/icons'
 import { AgentDisclosure } from '@/components/agents/agent-disclosure'
 import { Button } from '@/components/motion/button'
 import { Input } from '@/components/motion/input'
 import { FORM_FIELD_TITLE, FORM_PANEL_TITLE } from '@/lib/form-standard'
 import { Checkbox } from '@/components/motion/checkbox'
 import { RadioGroup, RadioGroupItem } from '@/components/motion/radio'
+import { Tooltip } from '@/components/motion/tooltip'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/motion/tabs'
 import { useI18n } from '@/i18n'
 import { refreshCatalog, useToolCatalog } from '@/lib/extensions-catalog'
@@ -28,7 +29,6 @@ import {
   type SubagentProfilesDTO
 } from '../../../../../shared/types'
 import { SettingsGroup, SettingsRow } from './SettingsRow'
-import { SubagentDefaultsEditor } from './SubagentDefaultsEditor'
 
 /** Mirrors the main-process guard for `subagents:setMaxConcurrent`. */
 const SUBAGENT_MIN_CONCURRENT = 1
@@ -46,11 +46,14 @@ interface ToolsDraft {
  *
  * - the delegation switch and the per-parent concurrency limit (moved here
  *   from General, because this tab is the subagents' home);
- * - every profile as an ordinary editable file — prompt, frontmatter fields,
- *   file location — with the one thing worth editing in place: the enabled
- *   tool set, written back as a surgical `tools:` line. The picker lists SDK
- *   built-ins and every extension tool from the shared catalog, with the MCP
- *   family collapsed into a single whole.
+ * - every profile as an ordinary editable file — prompt and the enabled
+ *   tool set, the one thing edited in place (written back as a surgical
+ *   `tools:` line). Every other frontmatter field — model, thinking, even
+ *   the path — belongs to the file alone (the open-file button's tooltip
+ *   names the target), and granting the debugger rides the same tools list:
+ *   `all`, or an explicit `debug` entry. The picker lists SDK built-ins and
+ *   every extension tool from the shared catalog, with the whole MCP
+ *   section collapsed into one family row, exactly like an extension family.
  *
  * beUI-native: Tabs for the list/detail split, RadioGroup + Checkbox, Input
  * for the limit, Button rows, FadeScroll to bound the picker, and the app's
@@ -122,7 +125,6 @@ export function SubagentsSection() {
   const [profilesError, setProfilesError] = useState(false)
   const [selected, setSelected] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
-  const [defaultsTarget, setDefaultsTarget] = useState<SubagentProfileDTO | null>(null)
   const applyList = (next: SubagentProfilesDTO) => {
     setProfiles(next.profiles)
     setGlobalDir(next.globalDir)
@@ -141,8 +143,6 @@ export function SubagentsSection() {
   const [draft, setDraft] = useState<ToolsDraft | null>(null)
   const [savingTools, setSavingTools] = useState(false)
   const [toolsError, setToolsError] = useState(false)
-  const [savingDebug, setSavingDebug] = useState(false)
-  const [debugError, setDebugError] = useState<string | null>(null)
 
   useEffect(() => {
     void window.pi
@@ -168,7 +168,7 @@ export function SubagentsSection() {
     profiles?.find((profile) => profile.filePath === selected) ?? profiles?.[0] ?? null
   const { data: catalog } = useToolCatalog()
   const groups = useMemo(
-    () => (current ? subagentToolGroups(catalog.tools.filter(tool => tool.name !== 'debug'), current.tools === 'all' ? 'all' : current.tools.filter(name => name !== 'debug')) : null),
+    () => (current ? subagentToolGroups(catalog.tools, current.tools) : null),
     [catalog.tools, current]
   )
   // Switching profiles (or a save landing its fresh list) restarts the editor
@@ -283,7 +283,7 @@ export function SubagentsSection() {
             disabled={!subagentsEnabled || savingSubagents || savingConcurrent}
             aria-label={t('subagent.concurrency')}
             className="w-16"
-            classNames={{ field: 'h-8', input: 'px-2 text-center text-sm' }}
+            classNames={{ input: 'text-center' }}
           />
         </SettingsRow>
         {concurrentError ? (
@@ -301,7 +301,7 @@ export function SubagentsSection() {
               disabled={!subagentsEnabled || savingSubagents || savingMaxTurns}
               aria-label={t('subagent.maxTurns')}
               className="w-28"
-              classNames={{ field: 'h-8', input: 'px-2 text-center text-sm' }}
+              classNames={{ input: 'text-center' }}
             />
           </SettingsRow>
           {maxTurnsError ? (
@@ -371,7 +371,7 @@ export function SubagentsSection() {
             <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
               {t('subagent.profilesGroup')}
             </p>
-            <p className="mt-1 text-xs leading-4 text-muted-foreground/70">
+            <p className="mt-1 text-xs leading-ui-tight text-muted-foreground/70">
               {t('subagent.profilesDesc')}
             </p>
           </div>
@@ -470,14 +470,6 @@ export function SubagentsSection() {
               {createForm ?? (
                 <ProfileDetail
                   profile={current}
-                  onEditDefaults={() => setDefaultsTarget(current)}
-                  savingDebug={savingDebug}
-                  debugError={debugError === current.filePath}
-                  onDebug={(enabled) => {
-                    setSavingDebug(true); setDebugError(null)
-                    void window.pi.setSubagentProfileDebug(current.filePath, enabled)
-                      .then(applyList, () => setDebugError(current.filePath)).finally(() => setSavingDebug(false))
-                  }}
                   groups={groups}
                   universeEmpty={catalog.tools.length === 0}
                   active={active}
@@ -500,23 +492,12 @@ export function SubagentsSection() {
           )
         })()}
       </section>
-      {defaultsTarget ? (
-        <SubagentDefaultsEditor
-          key={defaultsTarget.filePath}
-          profile={defaultsTarget}
-          onClose={() => setDefaultsTarget(null)}
-          onSave={async defaults => {
-            applyList(await window.pi.setSubagentProfileDefaults(defaultsTarget.filePath, defaults))
-          }}
-        />
-      ) : null}
     </div>
   )
 }
 
 function ProfileDetail({
-  profile, savingDebug, debugError, onDebug,
-  onEditDefaults,
+  profile,
   groups,
   universeEmpty,
   active,
@@ -532,10 +513,6 @@ function ProfileDetail({
   onReset
 }: {
   profile: SubagentProfileDTO
-  onEditDefaults: () => void
-  savingDebug: boolean
-  debugError: boolean
-  onDebug: (enabled: boolean) => void
   groups: SubagentToolGroups
   universeEmpty: boolean
   active: ToolsDraft | null
@@ -568,68 +545,40 @@ function ProfileDetail({
           <span className="min-w-0 truncate text-sm font-semibold text-foreground">
             {profile.displayName}
           </span>
-          <code className="shrink-0 rounded-control bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
+          <code className="shrink-0 rounded-control bg-muted px-1.5 py-0.5 font-mono text-caption text-muted-foreground">
             {profile.name}
           </code>
-          <span className="shrink-0 rounded-control bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+          <span className="shrink-0 rounded-control bg-muted px-2 py-0.5 text-caption font-medium text-muted-foreground">
             {profile.scope === 'project' ? t('subagent.scopeProject') : t('subagent.scopeGlobal')}
           </span>
           <span
             data-subagent-enabled={profile.enabled}
             className={cn(
-              'shrink-0 rounded-control px-2 py-0.5 text-[11px] font-medium',
+              'shrink-0 rounded-control px-2 py-0.5 text-caption font-medium',
               profile.enabled ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'
             )}
           >
             {profile.enabled ? t('subagent.enabledOn') : t('subagent.enabledOff')}
           </span>
         </div>
-        <p className="text-sm leading-5 text-muted-foreground">{profile.description}</p>
+        <p className="text-sm leading-ui text-muted-foreground">{profile.description}</p>
       </div>
 
-      <dl className="grid gap-x-4 gap-y-1.5 text-xs sm:grid-cols-[minmax(0,9rem)_minmax(0,1fr)]">
-        <dt className="text-muted-foreground/70">{t('subagent.fieldFile')}</dt>
-        <dd className="min-w-0">
-          <code className="break-all font-mono text-[11px] text-muted-foreground">
-            {profile.filePath}
-          </code>
-        </dd>
-        <dt className="text-muted-foreground/70">{t('subagent.fieldModel')}</dt>
-        <dd className="min-w-0 text-foreground/90">{profile.model ?? t('subagent.notSet')}</dd>
-        <dt className="text-muted-foreground/70">{t('subagent.fieldThinking')}</dt>
-        <dd className="min-w-0 text-foreground/90">{profile.thinking ?? t('subagent.notSet')}</dd>
-        <dt className="text-muted-foreground/70">{t('subagent.fieldInheritContext')}</dt>
-        <dd className="min-w-0 text-foreground/90">
-          {profile.inheritContext ? t('subagent.yes') : t('subagent.no')}
-        </dd>
-        <dt className="text-muted-foreground/70">{t('subagent.fieldRunInBackground')}</dt>
-        <dd className="min-w-0 text-foreground/90">
-          {profile.runInBackground ? t('subagent.yes') : t('subagent.no')}
-        </dd>
-      </dl>
-
+      {/* Frontmatter fields — model, thinking, even the path — belong to
+          the file alone; the open-file button's tooltip names the target. */}
       <div className="flex flex-wrap items-center gap-2">
-        <Button variant="outline" size="sm" data-subagent-edit-defaults onClick={onEditDefaults}>
-          <Pencil className="size-3.5" />
-          {t('subagent.defaultsEdit')}
-        </Button>
-        <Button variant="outline" size="sm" onClick={() => void window.pi.openPath(profile.filePath)}>
-          <FileText className="size-3.5" />
-          {t('subagent.openFile')}
-        </Button>
+        <Tooltip content={profile.filePath} className="max-w-sm break-all">
+          <Button variant="outline" size="sm" onClick={() => void window.pi.openPath(profile.filePath)}>
+            <FileText className="size-3.5" />
+            {t('subagent.openFile')}
+          </Button>
+        </Tooltip>
         <Button variant="ghost" size="sm" onClick={() => void window.pi.showInFolder(profile.filePath)}>
           <FolderOpen className="size-3.5" />
           {t('subagent.reveal')}
         </Button>
       </div>
 
-      <div data-subagent-debug>
-        <SettingsRow label={t('subagent.debugTitle')} description={t('subagent.debugDesc')}>
-          <Checkbox mark="square" checked={profile.debugEnabled === true} disabled={savingDebug}
-            aria-label={t('subagent.debugTitle')} onCheckedChange={onDebug} />
-        </SettingsRow>
-        {debugError ? <p role="alert" className="text-xs text-destructive">{t('subagent.debugFailed')}</p> : null}
-      </div>
       <div data-subagent-tools-editor className="space-y-3 rounded-xl border border-border/70 bg-card px-4 py-3">
         <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
           {t('subagent.toolsTitle')}
@@ -638,7 +587,7 @@ function ProfileDetail({
           <p
             data-subagent-tools-source={source.kind}
             className={cn(
-              'text-xs leading-4',
+              'text-xs leading-ui-tight',
               source.tone === 'destructive' ? 'text-destructive' : 'text-muted-foreground'
             )}
           >
@@ -663,7 +612,7 @@ function ProfileDetail({
         {active?.mode === 'explicit' ? (
           <div className="space-y-3">
             {universeEmpty ? (
-              <p className="text-xs leading-4 text-muted-foreground/70">
+              <p className="text-xs leading-ui-tight text-muted-foreground/70">
                 {t('subagent.toolsBuiltinOnly')}
               </p>
             ) : null}
@@ -917,9 +866,9 @@ function CreateProfileForm({
  * beside a quiet disclosure that opens the individual checkboxes. Selecting
  * members one by one is the same path as before, one click deeper; the
  * collapsed form is what keeps a 14-tool family from burying the rest of the
- * picker. The MCP whole is deliberately NOT a family: the gateway alone
- * reaches every server, so per-server toggles would offer a distinction that
- * does not exist. */
+ * picker. The MCP section is ONE family row like any extension family — a
+ * tri-state checkbox for every server beside the disclosure of individual
+ * grants — rather than a flat list that buries the sections below it. */
 function ToolGroup({
   id,
   title,
@@ -943,7 +892,7 @@ function ToolGroup({
   if (!entries.length) return null
   return (
     <div data-subagent-tool-group={id}>
-      <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">
+      <p className="mb-1 text-caption font-medium uppercase tracking-wide text-muted-foreground/70">
         {title}
       </p>
       <div className="space-y-0.5">
@@ -965,7 +914,7 @@ function ToolGroup({
         )}
       </div>
       {meta ? (
-        <p className="mt-1 px-1 text-[11px] leading-4 text-muted-foreground/70">{meta}</p>
+        <p className="mt-1 px-1 text-caption leading-ui-tight text-muted-foreground/70">{meta}</p>
       ) : null}
     </div>
   )
@@ -1069,7 +1018,7 @@ function ToolFamily({
           ) : null}
           <span
             data-subagent-tool-family-count
-            className="ml-auto shrink-0 rounded-item bg-muted px-1.5 text-[10px] font-medium tabular-nums text-muted-foreground"
+            className="ml-auto shrink-0 rounded-item bg-muted px-1.5 text-micro font-medium tabular-nums text-muted-foreground"
           >
             {chosen}/{total}
           </span>

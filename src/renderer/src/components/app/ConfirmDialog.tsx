@@ -37,7 +37,7 @@ export function ConfirmDialog({
         </div>
         <div className="min-w-0">
           <h2 className="text-base font-semibold text-foreground">{title}</h2>
-          <p className="mt-1 text-sm leading-5 text-muted-foreground">{message}</p>
+          <p className="mt-1 text-sm leading-ui text-muted-foreground">{message}</p>
         </div>
       </div>
 

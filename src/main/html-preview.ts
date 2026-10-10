@@ -9,6 +9,7 @@ import { fileExtension } from '../shared/extension'
 import { isHtmlPreviewUrl } from '../shared/html-preview'
 import { mediaMimeType } from '../shared/media'
 import { previewKindOf } from '../shared/preview'
+import { resolveFilePath } from './file-path'
 
 const MAX_ROOTS = 128
 const MAX_HTML_BYTES = 16 * 1024 * 1024
@@ -68,9 +69,7 @@ export class HtmlPreviewService {
 
   async open(request: FileBrowserRequest): Promise<HtmlPreviewDTO> {
     try {
-      if (!request || typeof request.cwd !== 'string' || !isAbsolute(request.cwd) ||
-          typeof request.path !== 'string' || request.path.includes('\0')) return { error: 'unreadable' }
-      const requested = resolve(request.cwd, request.path)
+      const requested = resolveFilePath(request)
       if (previewKindOf(requested) !== 'html') return { error: 'unreadable' }
       const [path, cwd] = await Promise.all([realpath(requested), realpath(request.cwd)])
       if (previewKindOf(path) !== 'html') return { error: 'unreadable' }

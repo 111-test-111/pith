@@ -4,7 +4,7 @@ import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import {
   CalendarCheck,
   Chart,
-  ChatText,
+  ChatAdd,
   CheckSquareOffset,
   Folder,
   Subagent,
@@ -13,6 +13,7 @@ import {
   SquareTerminal,
   Bug,
   Waypoints,
+  GitFork,
   X,
   type IconComponent
 } from '@/lib/icons'
@@ -46,6 +47,8 @@ import { FilesPane } from './FilesPane'
 import { BrowserPane } from './BrowserPane'
 import { SubagentSessionPane } from './SubagentSessionPane'
 import { ScheduledSessionPane } from './ScheduledSessionPane'
+import { GitPane } from './git/GitPane'
+import type { GitStore } from '@/state/git-store'
 import type { FileBrowserStore } from '@/state/file-browser-store'
 import type { TerminalStore } from '@/state/terminal-store'
 import type { DebugStore } from '@/state/debug-store'
@@ -53,6 +56,7 @@ import type { SideChatStore } from '@/state/side-chat-store'
 import type { PiStore } from '@/state/pi-store'
 import type { BrowserStore } from '@/lib/browser/store'
 import { useBrowserKeepAlivePref } from '@/lib/browser/keep-alive'
+import { getOpenBrowserPagesRevision } from '@/lib/browser/session'
 import type { SubagentRunDTO } from '../../../../shared/types'
 
 /** Fallback width before the workspace has applied the user's panel layout. */
@@ -60,7 +64,7 @@ export const SIDEBAR_PANEL_WIDTH = 400
 
 /** The panes the right rail can host. Besides the fixed kinds, the rail hosts
  * one tab per open FILE and per open SUBAGENT SESSION (both keyed by path). */
-export type SidebarTabKind = 'review' | 'context' | 'terminal' | 'browser' | 'files' | 'chat' | 'debug' | 'trajectory'
+export type SidebarTabKind = 'review' | 'context' | 'terminal' | 'browser' | 'files' | 'chat' | 'debug' | 'trajectory' | 'git'
 export type SidebarTabId = SidebarTabKind | `file:${string}` | `agent:${string}` | `scheduled:${string}`
 export const fileTabId = (path: string): SidebarTabId => `file:${path}`
 export const filePathForTab = (id: SidebarTabId | null): string | null => id?.startsWith('file:') ? id.slice(5) : null
@@ -88,13 +92,15 @@ interface SidebarTabSpec {
  * don't need it ignore the argument (only the side chat does today).
  */
 export interface SidebarPaneProps {
+  git?: GitStore
   files: FileBrowserStore
   terminals: TerminalStore
   onNewTerminal: () => void
   onTerminalsEmpty: () => void
   /** The embedded browser's store, owned by the workspace (it outlives the
    *  pane: an unmount kills the guests and the open-pages snapshot restores
-   *  them on the next mount); only tab close folds the rail entry. */
+   *  them after a fold; explicit close follows the restore-tabs preference);
+   *  only tab close folds the rail entry. */
   browserStore: BrowserStore
   /** The browser's last page closed: the tab folds away (no extra teardown). */
   onBrowserEmpty: () => void
@@ -124,6 +130,7 @@ export interface SidebarPaneProps {
  * pane is one entry here plus its content component, never a shell change.
  */
 export const SIDEBAR_TABS: SidebarTabSpec[] = [
+  { id: 'git', labelKey: 'git.title', shortcutId: 'openGit', icon: GitFork, render: props => props.git ? <GitPane git={props.git} store={props.store} /> : null },
   { id: 'trajectory', labelKey: 'sidebar.trajectory', shortcutId: 'openTrajectory', icon: Waypoints, render: props => <TrajectoryPane store={props.store} agentRuns={props.agentRuns} /> },
   {
     id: 'review',
@@ -176,7 +183,7 @@ export const SIDEBAR_TABS: SidebarTabSpec[] = [
     id: 'chat',
     labelKey: 'sidebar.chat',
     shortcutId: 'openSideChat',
-    icon: ChatText,
+    icon: ChatAdd,
     render: (props) =>
       props.sideChat ? (
         <SideChatPane
@@ -343,7 +350,7 @@ function SidebarTabStrip({
           aria-label={t('sidebar.newTab')}
           aria-pressed={pickerOpen}
           onClick={onTogglePicker}
-          className={cn('shrink-0', pickerOpen && 'bg-primary/5 text-foreground')}
+          className={cn('shrink-0', pickerOpen && 'bg-muted text-foreground')}
         >
           <Plus aria-hidden="true" className="size-4" />
         </Button>
@@ -495,11 +502,24 @@ export function SidebarPanel({
               column's border box IS the aside's content box, so both states
               resolve to identical pixels, and a fold (or the kept-alive fold at
               width 0) clips the rule away with the panel — no animated border
-              width, and the theme token stays intact. */}
+              width, and the theme token stays intact.
+
+              FULLSCREEN is the one state where the rule goes invisible rather
+              than gone: the rail then anchors to the workspace inset, whose
+              left edge sits exactly on the session sidebar's right border (the
+              drag strip's 3px straddle is pulled back by the inset), so a
+              painted rule here stacked a second 1px line against that sidebar
+              rule — a 2px seam. The boundary belongs to the session sidebar,
+              exactly as it does against the chat when the rail is folded. The
+              1px stays TRANSPARENT rather than removed so this box keeps the
+              same border box in both states: dropping the width instead left
+              the pane a pixel wider in fullscreen than when docked. */}
           <div
             className={cn(
               'flex h-full flex-col border-l',
-              edgeActive ? 'border-primary' : 'border-border'
+              fullscreen
+                ? 'border-l-transparent'
+                : edgeActive ? 'border-primary' : 'border-border'
             )}
             style={{ width: fullscreen ? '100%' : resizing ? 'var(--panel-right)' : width }}
           >
@@ -543,7 +563,7 @@ export function SidebarPanel({
                   aria-hidden={!browserPaneLive || undefined}
                   className={cn('absolute inset-0', !browserPaneLive && 'pointer-events-none opacity-0')}
                 >
-                  <BrowserPane store={pane.browserStore} onEmpty={pane.onBrowserEmpty} active={browserPaneLive} />
+                  <BrowserPane key={getOpenBrowserPagesRevision()} store={pane.browserStore} onEmpty={pane.onBrowserEmpty} active={browserPaneLive} />
                 </div>
               ) : null}
               {!hasTabs || pickerOpen ? (

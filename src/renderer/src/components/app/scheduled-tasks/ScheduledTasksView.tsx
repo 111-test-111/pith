@@ -198,7 +198,7 @@ export const ScheduledTasksView = memo(function ScheduledTasksView({
               {selected.permissionMode ? ` · ${t(`scheduledTasks.mode.${selected.permissionMode}`)}` : ''}
               {selected.target.type === 'new_session' ? ` · ${t(selected.target.environment === 'worktree' ? 'scheduledTasks.editor.environmentWorktree' : 'scheduledTasks.editor.environmentLocal')}` : ''}
             </p>
-            <p className="mt-0.5 text-[11px] text-muted-foreground">
+            <p className="mt-0.5 text-caption text-muted-foreground">
               {t(`scheduledTasks.status.${selected.status}`)}
               {taskNextRunText(selected, t, locale) ? ` · ${taskNextRunText(selected, t, locale)}` : ''}
             </p>
@@ -270,12 +270,12 @@ export const ScheduledTasksView = memo(function ScheduledTasksView({
             <p className="mt-0.5 text-xs text-muted-foreground">
               {t(`scheduledTasks.run.status.${selectedRun.status}`)} · {t(`scheduledTasks.run.trigger.${selectedRun.trigger}`)}
             </p>
-            <p className="mt-0.5 text-[11px] tabular-nums text-muted-foreground">
+            <p className="mt-0.5 text-caption tabular-nums text-muted-foreground">
               {t('scheduledTasks.run.scheduledFor', { time: formatDateTime(selectedRun.scheduledFor, locale) })}
               {selectedRun.startedAt ? ` · ${t('scheduledTasks.run.startedAt', { time: formatDateTime(selectedRun.startedAt, locale) })}` : ''}
               {selectedRun.finishedAt ? ` · ${t('scheduledTasks.run.finishedAt', { time: formatDateTime(selectedRun.finishedAt, locale) })}` : ''}
             </p>
-            {selectedRun.cwd ? <p className="mt-0.5 break-all text-[11px] text-muted-foreground">{selectedRun.cwd}</p> : null}
+            {selectedRun.cwd ? <p className="mt-0.5 break-all text-caption text-muted-foreground">{selectedRun.cwd}</p> : null}
           </div>
           <div className="flex shrink-0 flex-wrap justify-end gap-1.5">
             {selectedRun.sessionPath ? (
@@ -300,7 +300,7 @@ export const ScheduledTasksView = memo(function ScheduledTasksView({
             ) : null}
           </div>
         </div>
-        {selectedRun.error ? <p role="alert" className="mt-2 whitespace-pre-wrap text-xs leading-5 text-destructive">{selectedRun.error}</p> : null}
+        {selectedRun.error ? <p role="alert" className="mt-2 whitespace-pre-wrap text-xs leading-ui text-destructive">{selectedRun.error}</p> : null}
       </div>
       <div className="flex min-h-0 flex-1 flex-col px-5 pb-4 pt-3">
         <h3 className="mb-2 shrink-0 text-xs font-medium text-foreground">{t('scheduledTasks.run.output')}</h3>
@@ -335,7 +335,7 @@ export const ScheduledTasksView = memo(function ScheduledTasksView({
           animate={{ opacity: 1, x: 0 }}
           exit={{ opacity: 0, x: reduce ? 0 : 24 }}
           transition={reduce ? { duration: 0 } : { duration: 0.22, ease: EASE_OUT }}
-          className="absolute inset-0 z-40 flex flex-col bg-background"
+          className="window-page absolute inset-0 z-40 flex flex-col"
           // A full-page surface: the shortcut dispatcher's layer (no command
           // of its own — nothing passes through).
           data-shortcut-layer
@@ -392,7 +392,7 @@ export const ScheduledTasksView = memo(function ScheduledTasksView({
             <div className="flex min-h-0 flex-1 flex-col md:flex-row">
               <div className={cn('flex min-h-0 w-full flex-col border-b border-border/60 md:w-72 md:shrink-0 md:border-b-0 md:border-r', mobileDetail && 'hidden md:flex')}>
                 <div className="flex shrink-0 flex-col gap-1.5 px-3 py-2.5">
-                  <Input value={query} onChange={(value) => { setQuery(value); setHistoryLimit(RUN_PAGE_SIZE) }} placeholder={t('scheduledTasks.history.search')} aria-label={t('scheduledTasks.history.search')} className="h-8 w-full min-w-0" classNames={{ input: 'text-xs' }} />
+                  <Input value={query} onChange={(value) => { setQuery(value); setHistoryLimit(RUN_PAGE_SIZE) }} placeholder={t('scheduledTasks.history.search')} aria-label={t('scheduledTasks.history.search')} className="w-full min-w-0"  />
                   <div className="flex gap-1.5">
                     <Select value={runFilter} onValueChange={(value) => { setRunFilter(value as RunFilter); setHistoryLimit(RUN_PAGE_SIZE) }} className="min-w-0 flex-1">
                       <SelectTrigger aria-label={t('scheduledTasks.history.filter')} className="h-8 min-w-0 flex-1 whitespace-nowrap text-xs"><SelectValue /></SelectTrigger>
@@ -415,7 +415,7 @@ export const ScheduledTasksView = memo(function ScheduledTasksView({
                   <div className="flex flex-col gap-0.5 px-2 pb-2">
                     {runGroups.length ? runGroups.map((group) => (
                       <section key={group.key} data-scheduled-run-group={group.key} aria-label={group.label}>
-                        <h3 className="px-2.5 pb-1 pt-3 text-[11px] font-medium text-muted-foreground">{group.label}</h3>
+                        <h3 className="px-2.5 pb-1 pt-3 text-caption font-medium text-muted-foreground">{group.label}</h3>
                         {group.runs.map((run) => (
                           <button
                             key={run.id}
@@ -430,7 +430,7 @@ export const ScheduledTasksView = memo(function ScheduledTasksView({
                                 <span className="truncate text-xs font-medium text-foreground">{run.taskName}</span>
                                 {!isScheduledTaskRunActive(run) && !run.readAt ? <span aria-label={t('scheduledTasks.unread', { count: 1 })} className="size-1.5 shrink-0 rounded-full bg-primary" /> : null}
                               </span>
-                              <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
+                              <span className="mt-0.5 block truncate text-caption text-muted-foreground">
                                 {formatDateTime(run.startedAt ?? run.scheduledFor, locale)} · {t(`scheduledTasks.run.status.${run.status}`)}
                               </span>
                             </span>
@@ -446,13 +446,13 @@ export const ScheduledTasksView = memo(function ScheduledTasksView({
             </div>
           ) : !tasks.length ? (
             <div className="grid flex-1 place-items-center px-6">
-              <div className="flex max-w-sm flex-col items-center gap-4 text-center">
+              <div className="flex w-full max-w-2xl flex-col items-center gap-4 text-center">
                 <CalendarCheck aria-hidden="true" className="size-8 text-muted-foreground/50" />
                 <div>
                   <h2 className="text-sm font-semibold text-foreground">{t('scheduledTasks.emptyTitle')}</h2>
-                  <p className="mt-1.5 text-xs leading-5 text-muted-foreground">{t('scheduledTasks.emptyBody')}</p>
+                  <p className="mt-1.5 text-xs leading-ui text-muted-foreground">{t('scheduledTasks.emptyBody')}</p>
                 </div>
-                <div className="flex flex-wrap justify-center gap-2">
+                <div className="flex items-center justify-center gap-2">
                   {exampleDrafts.map((example) => (
                     <Button key={example.key} variant="ghost" size="sm" onClick={() => openEditor(null, example.draft)}>
                       {example.draft.name}
@@ -475,8 +475,8 @@ export const ScheduledTasksView = memo(function ScheduledTasksView({
                     onChange={setQuery}
                     placeholder={t('scheduledTasks.search')}
                     aria-label={t('scheduledTasks.search')}
-                    className="h-8 flex-1"
-                    classNames={{ input: 'text-xs' }}
+                    className="flex-1"
+
                   />
                   <Select value={statusFilter} onValueChange={(value) => setStatusFilter(value as StatusFilter)}>
                     <SelectTrigger aria-label={t('scheduledTasks.filter.all')} className="h-8 w-24 text-xs">
@@ -515,14 +515,14 @@ export const ScheduledTasksView = memo(function ScheduledTasksView({
                                 <span className="truncate text-xs font-medium text-foreground">{task.name}</span>
                                 {unread ? <span aria-label={t('scheduledTasks.unread', { count: unread })} className="size-1.5 shrink-0 rounded-full bg-primary" /> : null}
                               </div>
-                              <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
+                              <p className="mt-0.5 truncate text-caption text-muted-foreground">
                                 {scheduleText(task.schedule, t)}
                                 {taskNextRunText(task, t, locale) ? ` · ${taskNextRunText(task, t, locale)}` : ''}
                               </p>
                             </div>
                             <span
                               className={cn(
-                                'mt-0.5 shrink-0 rounded-control px-1.5 py-px text-[10px] leading-4',
+                                'mt-0.5 shrink-0 rounded-control px-1.5 py-px text-micro leading-ui-tight',
                                 task.status === 'active'
                                   ? 'bg-primary/10 text-primary'
                                   : task.status === 'paused'

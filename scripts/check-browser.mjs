@@ -8,6 +8,7 @@ import { join } from 'node:path'
 import {
   BROWSER_MARKER_PREFIX, buildMarkerUrl, parseMarkerUrl,
   normalizeNavigationUrl, isAllowedNavigationUrl, agentOwner, HUMAN_OWNER,
+  BROWSER_SEARCH_ENGINES, DEFAULT_BROWSER_SEARCH_ENGINE, isBrowserSearchEngine, resolveBrowserInput,
 } from '../src/shared/browser.ts'
 // Registry and tool projections.
 import { createBrowserPageId as sharedPageId } from '../src/shared/browser.ts'
@@ -40,7 +41,7 @@ import { classifyGuestPopup, decideBrowserPermission, popupOpensWindow, popupWin
 // Renderer state, storage, zoom, device and popup helpers.
 import {
   BROWSER_RECENTS_LIMIT, BROWSER_HISTORY_LIMIT, OPEN_BROWSER_PAGES_LIMIT,
-  clearBrowserHistory, getBrowserHistory, getRecentUrls, isRecordableUrl,
+  clearBrowserHistory, closeOpenBrowserPages, getBrowserHistory, getOpenBrowserPagesRevision, getRecentUrls, isRecordableUrl,
   pushBrowserHistory, readOpenBrowserPages, recordBrowserHistory, recordRecentUrl,
   snapshotOpenPages, subscribeBrowserRecents, updateBrowserHistoryFavicon,
   updateBrowserHistoryTitle, updateBrowserHistoryTitleFor, upsertRecentUrl, writeOpenBrowserPages,
@@ -59,6 +60,7 @@ import {
   requestBrowserOpenLink, setOpenLinksInBrowser,
 } from '../src/renderer/src/lib/browser/open-link.ts'
 import { BROWSER_DOWNLOADS_LIMIT, BrowserStore } from '../src/renderer/src/lib/browser/store.ts'
+import { getBrowserRestoreTabsPref, setBrowserRestoreTabs } from '../src/renderer/src/lib/browser/restore-tabs.ts'
 import { subscribeBrowserPopups } from '../src/renderer/src/lib/browser/popup.ts'
 
 const tests = []
@@ -101,6 +103,56 @@ test('isAllowedNavigationUrl', () => {
   assert.equal(isAllowedNavigationUrl(`${BROWSER_MARKER_PREFIX}human/p-1`), true)
   assert.equal(isAllowedNavigationUrl('file:///etc'), false)
   assert.equal(isAllowedNavigationUrl('javascript:alert(1)'), false)
+})
+
+test('human browser input preserves URLs and classifies queries using domain knowledge', () => {
+  for (const [input, expected] of [
+    ['example.com', 'https://example.com/'],
+    ['react.dev/docs', 'https://react.dev/docs'],
+    ['例子.中国', 'https://xn--fsqu00a.xn--fiqs8s/'],
+    ['localhost', 'http://localhost/'],
+    ['localhost:3000/x', 'http://localhost:3000/x'],
+    ['devhost:8080/x', 'http://devhost:8080/x'],
+    ['127.0.0.1:3000/x', 'http://127.0.0.1:3000/x'],
+    ['[::1]:3000/x', 'http://[::1]:3000/x'],
+    ['printer.local', 'https://printer.local/'],
+    ['https://intranet/wiki', 'https://intranet/wiki'],
+    ['example.com/a b', 'https://example.com/a%20b'],
+    ['about:blank', 'about:blank'],
+  ]) assert.equal(resolveBrowserInput(input), expected, input)
+  for (const query of ['react', '内嵌浏览器', 'hello world', 'console.log', 'user@example.com', 'example.com tutorial', 'site:example.com react', 'filetype:pdf', 'weather:hongkong']) {
+    const url = new URL(resolveBrowserInput(query))
+    assert.equal(url.origin, 'https://www.google.com', query)
+    assert.equal(url.searchParams.get('q'), query, query)
+  }
+  assert.equal(new URL(resolveBrowserInput('? react.dev')).searchParams.get('q'), 'react.dev')
+  for (const rejected of ['', '   ', '?', 'https://', 'file:///etc/passwd', 'javascript:alert(1)', 'data:text/html,x', 'view-source:https://example.com', 'about:config', 'ftp://example.com', 'custom://target']) {
+    assert.equal(resolveBrowserInput(rejected), null, rejected)
+  }
+  // Search classification must not change the agent's URL-only normalizer.
+  assert.equal(normalizeNavigationUrl('react'), 'https://react/')
+})
+
+test('all browser search providers encode queries and unknown preferences fall back to Google', () => {
+  assert.equal(DEFAULT_BROWSER_SEARCH_ENGINE, 'google')
+  const expected = {
+    google: ['https://www.google.com/search', 'q'],
+    bing: ['https://www.bing.com/search', 'q'],
+    duckduckgo: ['https://duckduckgo.com/', 'q'],
+    baidu: ['https://www.baidu.com/s', 'wd'],
+  }
+  const query = '中文 C++ & a=b #fragment'
+  for (const engine of BROWSER_SEARCH_ENGINES) {
+    assert.equal(isBrowserSearchEngine(engine), true)
+    const [endpoint, parameter] = expected[engine]
+    const url = new URL(resolveBrowserInput(query, engine))
+    assert.equal(`${url.origin}${url.pathname}`, endpoint)
+    assert.equal(url.searchParams.get(parameter), query)
+    assert.equal([...url.searchParams].length, 1)
+    assert.equal(url.hash, '')
+  }
+  for (const invalid of ['retired-provider', null, {}, 4]) assert.equal(isBrowserSearchEngine(invalid), false)
+  assert.equal(resolveBrowserInput('query', 'retired-provider'), resolveBrowserInput('query', 'google'))
 })
 
 // Constants and owner identity helpers.
@@ -654,6 +706,30 @@ test("service: handshake timeout rejects with BrowserHostUnavailableError and cl
   assert.equal(svc.getStatus().pendingCreates.length, 0)
 })
 
+test("service: closing a pending page cancels creation and rejects late registration without retrying", async () => {
+  const ctx = mockContext()
+  const svc = new BrowserService(makeDeps(ctx))
+  svc.grantConsent()
+  const created = svc.createPage('human')
+  const rejected = assert.rejects(created, PageGoneError)
+  await until(() => svc.getStatus().pendingCreates.length === 1)
+  const pending = svc.getStatus().pendingCreates[0]
+  await svc.closePage(pending.id)
+  await rejected
+  assert.deepEqual(svc.getStatus().pendingCreates, [], 'closing removes the outstanding handshake immediately')
+  assert.deepEqual(svc.listPages(), [], 'closing before registration leaves no page')
+  // After the temporary closing grace expires, a delayed guest must still
+  // remain retired through both seen reports and CDP reconciliation.
+  await pauseMs(2_100)
+  const marker = mockPage({ url: buildMarkerUrl(pending.owner, pending.id) })
+  ctx.pages.push(marker)
+  assert.equal(svc.registerExternalPage({ id: pending.id, owner: pending.owner, url: marker.url() }), null)
+  await svc.reconcileElectronTargets()
+  assert.deepEqual(svc.listPages(), [], 'late marker discovery cannot resurrect the closed page')
+  assert.deepEqual(svc.getStatus().pendingCreates, [], 'cancellation must not retry a fresh creation')
+  await svc.dispose()
+})
+
 // Keep closing targets retired while renderer unmount is in flight.
 test("service: closing targets cannot re-register during the two-cycle reconcile grace period", async () => {
   const ctx = mockContext()
@@ -681,6 +757,8 @@ test("service: native webContents interaction invalidates old snapshot refs", as
   ctx.pages.push(mockPage({ url: buildMarkerUrl('agent:s1', 'p-wc1') }))
   await svc.reconcileElectronTargets()
   svc.registerExternalPage({ id: 'p-wc1', owner: 'agent:s1', url: 'https://a.dev/', webContentsId: 77 })
+  assert.equal(svc.ownerForWebContents(77), 'agent:s1', 'download provenance follows the registered guest owner')
+  assert.equal(svc.ownerForWebContents(999), undefined, 'unknown guests cannot claim a session owner')
   await svc.agentSnapshot('agent:s1')
 
   svc.bumpInteractionByWebContentsId(77)
@@ -1602,6 +1680,36 @@ test("session: storage persists changes, skips equal values, updates history and
   })
 })
 
+test("session: optional close/reopen restoration fences outgoing snapshot writes", () => {
+  withWindowShim(({ store }) => {
+    const saved = [
+      { owner: 'human', url: 'https://close.dev/', title: 'Close test' },
+      { owner: 'agent:s1', selected: true },
+    ]
+    const firstWriter = getOpenBrowserPagesRevision()
+    writeOpenBrowserPages(saved, firstWriter)
+    assert.equal(getBrowserRestoreTabsPref(), true, 'existing close/reopen restoration is the default')
+    closeOpenBrowserPages(getBrowserRestoreTabsPref())
+    assert.deepEqual(readOpenBrowserPages(), saved, 'enabled restoration retains every owner, blank slot and selection')
+    writeOpenBrowserPages([], firstWriter)
+    assert.deepEqual(readOpenBrowserPages(), saved, 'an outgoing pane cannot erase retained tabs during teardown')
+
+    const nextWriter = getOpenBrowserPagesRevision()
+    setBrowserRestoreTabs(false)
+    assert.equal(store.get('pi-app:browser-restore-tabs'), 'false', 'disabled preference persists')
+    assert.deepEqual(readOpenBrowserPages(), saved, 'changing the preference keeps the currently open pages')
+    closeOpenBrowserPages(getBrowserRestoreTabsPref())
+    assert.deepEqual(readOpenBrowserPages(), [], 'explicit closure drops the snapshot when restoration is disabled')
+    writeOpenBrowserPages(saved, nextWriter)
+    assert.deepEqual(readOpenBrowserPages(), [], 'late outgoing effects cannot resurrect closed tabs')
+
+    writeOpenBrowserPages(saved, getOpenBrowserPagesRevision())
+    assert.deepEqual(readOpenBrowserPages(), saved, 'the newly opened pane still records pages for fold reconstruction')
+    setBrowserRestoreTabs(true)
+    assert.equal(store.get('pi-app:browser-restore-tabs'), 'true', 'restoration can be enabled again')
+  })
+})
+
 test("device: invalid sizes use 200; cap at 3840 after rounding", () => {
   assert.equal(DEVICE_SIZE_MIN, 200)
   assert.equal(DEVICE_SIZE_MAX, 3840)
@@ -2078,7 +2186,7 @@ test("tools: fourteen browser definitions map execution parameters to service ca
     "Upload accepts selector targets")
   assert.ok(byName.get('browser_upload').parameters.properties.selector, "Expose upload selectors for hidden file inputs without refs")
   assert.ok(byName.get('browser_upload').parameters.properties.files, "Expose files to the model")
-  assert.match(byName.get('browser_upload').description, /The target is either the file input itself/, "Describe supported upload targets")
+  assert.match(byName.get('browser_upload').description, /file input.*button\/label/, "Describe both supported upload targets")
   assert.match(byName.get('browser_click').description, /browser_upload/, "Click description directs file selection to upload")
 
   const missing = await run('browser_upload', { ref: 'e6', files: [join(uploadFixture, 'nope.png')] })

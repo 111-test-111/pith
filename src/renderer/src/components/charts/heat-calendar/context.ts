@@ -9,14 +9,13 @@ import { addDays, CELL, EMPTY, fmtMonth, GAP, MONTH_ROW, mondayOf, PITCH, STEPS,
 /**
  * Weeks of activity as a single-hue grid with month labels, so
  * magnitude reads as the strength of one color and the eye needs no legend
- * to find a date. Cells spring in on a diagonal wave. Hovering one lifts it
- * and its neighbours in a small ripple and glides a tooltip with its date and
- * exact count; clicking pins the cell so touch and keyboard get the same
- * readout; from there the grid dims and hovering previews the span from that
- * cell to the pointer with its total, a second click locks it and a third
- * clears it; hovering a legend step filters
- * the grid to that level. Hover lifts are gated to pointer devices, and
- * reduced motion keeps the fades only.
+ * to find a date. Cells spring in on a diagonal wave. Hovering one recolours
+ * it and draws a highlight ring that hugs its shape while it glides a tooltip
+ * with its date and exact count; clicking pins the cell so touch and keyboard
+ * get the same readout; from there the grid dims and hovering previews the
+ * span from that cell to the pointer with its total, a second click locks it
+ * and a third clears it; hovering a legend step filters the grid to that
+ * level. Reduced motion keeps the fades only.
  */
 export function useHeatCalendarModel({
   unit = "commits",
@@ -44,12 +43,6 @@ export function useHeatCalendarModel({
   const gridRef = useRef<HTMLDivElement>(null);
   const tooltipId = useId();
   const [step, setStep] = useState<number | null>(null);
-  // the entrance wave owns the cells until it has landed; the ripple takes over after
-  const [settled, setSettled] = useState(false);
-  useEffect(() => {
-    const t = setTimeout(() => setSettled(true), reduce ? 0 : (weeks + 7) * 18 + 500);
-    return () => clearTimeout(t);
-  }, [weeks, reduce]);
 
   // "today" is read after mount: the server and a viewer on another calendar
   // day must produce the same HTML, so the grid renders first and its dates
@@ -165,7 +158,6 @@ export function useHeatCalendarModel({
     spanEnd,
     step,
     setStep,
-    settled,
     start,
     end,
     level,

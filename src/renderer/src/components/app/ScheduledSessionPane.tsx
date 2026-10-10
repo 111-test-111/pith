@@ -63,7 +63,7 @@ export const ScheduledSessionPane = memo(function ScheduledSessionPane({
           <p className="truncate text-xs font-medium text-foreground" title={taskName ?? undefined}>
             {taskName ?? t('scheduledTasks.pane.title')}
           </p>
-          <p className="truncate text-[11px] text-muted-foreground">{t('scheduledTasks.pane.readOnly')}</p>
+          <p className="truncate text-caption text-muted-foreground">{t('scheduledTasks.pane.readOnly')}</p>
         </div>
       </header>
 

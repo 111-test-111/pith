@@ -6,6 +6,7 @@ import { trajectoryLines } from './jsonl'
 import type { TrajectoryDetail, TrajectoryNode, TrajectoryNodePage, TrajectoryNodeRequest, TrajectoryPage, TrajectoryQuery, TrajectoryRecord, TrajectoryDocumentKind } from '../../../shared/trajectory'
 import { TRAJECTORY_CHILDREN_SIZE, TRAJECTORY_PAGE_SIZE, TRAJECTORY_TEXT_SIZE, TRAJECTORY_PREVIEW_SIZE } from '../../../shared/trajectory'
 import type { TraceAccess, TraceWrite } from './protocol'
+import type { ContextRequestDTO } from '../../../shared/types'
 import { scalarPreview, trajectoryPreview } from './preview'
 
 type RecordRow = { seq: number; data: string; roots: string }
@@ -182,7 +183,7 @@ export class TrajectoryStorage {
       Object.assign(metadata, this.excerpt(metadata, JSON.parse(row.roots)))
       this.prepare('UPDATE records SET data=? WHERE id=?').run(JSON.stringify(metadata), metadata.id)
     }
-    const { previewVersion: _version, ...record } = metadata
+    const { previewVersion: _version, contextStats: _context, ...record } = metadata
     return { ...record, seq: row.seq }
   }
 
@@ -299,6 +300,17 @@ export class TrajectoryStorage {
     const older = first !== undefined && this.prepare(`SELECT 1 FROM records WHERE ${base} AND (started_at,seq)<((SELECT started_at FROM records WHERE seq=?),?) LIMIT 1`).get(...args, first, first) ? first : null
     const newer = last !== undefined && this.prepare(`SELECT 1 FROM records WHERE ${base} AND (started_at,seq)>((SELECT started_at FROM records WHERE seq=?),?) LIMIT 1`).get(...args, last, last) ? last : null
     return { items, total, older, newer, ...(targetId ? { targetId } : {}) }
+  }
+
+  /** Uses the same verified ancestry as trace reads. Older logs cannot invent
+   * a request capture from their saved message bodies. Only metadata is read. */
+  context(access: TraceAccess): ContextRequestDTO | null {
+    const where = this.where(access)
+    const row = this.prepare(`SELECT json_extract(data,'$.contextStats') stats FROM records
+      WHERE kind='request' AND json_extract(data,'$.captured')=1
+        AND json_type(data,'$.contextStats')='object' AND ${where.sql}
+      ORDER BY started_at DESC,seq DESC LIMIT 1`).get(...where.args) as { stats: string } | undefined
+    return row ? JSON.parse(row.stats) as ContextRequestDTO : null
   }
 
   private toolTarget(access: TraceAccess, call: NonNullable<TrajectoryQuery['toolCall']>): RecordRow {

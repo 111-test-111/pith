@@ -1,0 +1,15 @@
+# Floating surface motion
+
+[`lib/overlay-motion.ts`](../src/renderer/src/lib/overlay-motion.ts) owns the entrance and exit for model and permission pickers, Select, Combobox, MultiSelect, popovers, context menus, tooltips, chart readouts, dialogs and the command palette. These surfaces fade and scale together from their resolved anchor; backdrops only fade. Exit is faster than entrance, and neither direction overshoots. Placement flips change the scale origin without carrying a previous direction's translation into the entrance.
+
+Panel height, width, trigger gap, padding and corner geometry are already at rest before the first visible frame. Rows do not have separate entrance animations or stagger delays, so a long list becomes usable at the same time as a short one. Placement measures resting dimensions, including the surface's borders and padding; transforms never feed back into placement.
+
+Ordinary action menus and every context-menu item compose the same beUI `Button` and shared menu-row styling. Hover and leave use the button's CSS color transition; keyboard focus keeps its focus ring independently of hover. Context menus do not project a moving background between focused items or retain a hover fill after the pointer exits. Disabled and destructive actions follow the ordinary button variants too.
+
+Both the application's Disable animations setting and the operating system's reduced-motion preference make floating surfaces arrive and leave immediately, without transforms. Floating surfaces subscribe to the live native OS signal in `reduce-motion.ts`; both preferences also finish active entrances without remounting. The application's existing running-indicator exception remains owned by `reduce-motion.ts`. Transcript reveals, layout changes, zoom and ongoing status motion retain their own semantic behavior.
+
+Closing releases pointer and keyboard ownership in the same commit, while the exit can finish visually. Retained picker panels use `inert` and disable pointer events. Mounted overlay exits use `PresenceGate`. A portalled picker keeps its last measured position for the exit, and returning focus uses `preventScroll`. Switching the content or anchor of an already open preview reuses its surface without replaying the entrance.
+
+New floating surfaces should use `useOverlayMotion` rather than supplying their own easing, spring, duration, blur or row variants. Vendored beUI integrations are marked as local patches. The explicit `instant` popover option is reserved for callers that require a synchronous surface handover; ordinary click menus use the shared animation.
+
+`overlay-motion` samples the actual components frame by frame in isolated Electron. It compares short and long picker entrances, verifies natural row geometry during entry and exit, checks portal parity and interrupted transitions, and exercises application and OS reduced-motion behavior. Adjacent suites cover picker selection and resizing, dropdown padding, corner geometry, nested modal focus, tooltip dismissal and scheduling controls. See [testing](testing.md) for the source-owned catalog and runner.

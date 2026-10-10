@@ -107,7 +107,7 @@ export function ContextRing({ usage, onOpen }: { usage: ContextUsageDTO | null; 
           </p>
           <div className="mt-2.5 grid grid-cols-2 gap-3 border-t border-border pt-2.5">
             <div className="min-w-0">
-              <p className="truncate text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
+              <p className="truncate text-micro font-medium uppercase tracking-wide text-muted-foreground/70">
                 {t('context.cacheHitLabel')}
               </p>
               <p
@@ -121,7 +121,7 @@ export function ContextRing({ usage, onOpen }: { usage: ContextUsageDTO | null; 
               </p>
             </div>
             <div className="min-w-0">
-              <p className="truncate text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
+              <p className="truncate text-micro font-medium uppercase tracking-wide text-muted-foreground/70">
                 {t('context.costLabel')}
               </p>
               <p className="mt-0.5 truncate text-xs font-medium tabular-nums text-foreground">
@@ -137,7 +137,6 @@ export function ContextRing({ usage, onOpen }: { usage: ContextUsageDTO | null; 
         size="icon"
         aria-label={t('context.label')}
         onClick={onOpen}
-        className="rounded-capsule"
       >
         <svg width={14} height={14} viewBox="0 0 16 16" style={{ transform: 'rotate(-90deg)' }} aria-hidden="true">
           <circle cx={8} cy={8} r={radius} fill="none" strokeWidth={2.4} className="stroke-muted-foreground/30" />

@@ -93,7 +93,7 @@ export function TurnStatus({ className, waitingUser = false, step = THINKING_STE
         // tailwind-merge drops the vendored gradient for this arbitrary value.
         <TextShimmer
           duration={2}
-          className="min-w-0 truncate whitespace-pre text-sm leading-6 bg-[linear-gradient(110deg,color-mix(in_oklch,var(--primary)_40%,transparent)_25%,var(--primary)_50%,color-mix(in_oklch,var(--primary)_40%,transparent)_75%)]"
+          className="transcript-label min-w-0 truncate whitespace-pre text-sm leading-ui-loose bg-[linear-gradient(110deg,color-mix(in_oklch,var(--primary)_40%,transparent)_25%,var(--primary)_50%,color-mix(in_oklch,var(--primary)_40%,transparent)_75%)]"
         >
           {label}
         </TextShimmer>

@@ -20,7 +20,7 @@ import type {
   UserMsg
 } from '../../../../shared/types'
 import { ModelPicker } from './ModelPicker'
-import { PreviewThumb } from './ImagePreview'
+import { ImagePreviewGroup, PreviewThumb } from './ImagePreview'
 import { FileAttachmentCard } from './FileAttachmentCard'
 
 /** What the dialog hands back to the resend path: the user's edit, with file
@@ -202,7 +202,7 @@ export function EditMessageDialog({
       className="max-w-xl overflow-visible"
     >
       <div role="dialog" aria-modal="true" aria-label={t('chat.editMessageTitle')}>
-        <h2 className="text-base font-semibold text-foreground">
+        <h2 className="text-sm font-semibold text-foreground">
           {t('chat.editMessageTitle')}
         </h2>
 
@@ -216,10 +216,10 @@ export function EditMessageDialog({
             onPaste={handlePaste}
             aria-label={t('chat.editMessageBodyAria')}
             placeholder={t('composer.placeholder')}
-            classNames={{ input: 'text-sm' }}
+            classNames={{ input: 'text-content leading-content' }}
             attachments={
               images.length || files.length ? (
-                <>
+                <ImagePreviewGroup>
                   {images.map((image) => (
                     <span key={image.id} className="group relative">
                       <PreviewThumb
@@ -233,7 +233,7 @@ export function EditMessageDialog({
                         type="button"
                         aria-label={t('workspace.removeAttachment', { name: image.name })}
                         onClick={() => removeImage(image.id)}
-                        className="absolute -right-1.5 -top-1.5 grid size-5 place-items-center rounded-capsule text-destructive opacity-0 transition-[opacity,color,background-color] group-hover:opacity-100 hover:bg-destructive/10 focus-visible:opacity-100"
+                        className="absolute -right-1.5 -top-1.5 grid size-5 place-items-center rounded-icon text-destructive opacity-0 transition-[opacity,color,background-color] group-hover:opacity-100 hover:bg-destructive/10 focus-visible:opacity-100"
                       >
                         <X className="size-3" />
                       </button>
@@ -247,7 +247,7 @@ export function EditMessageDialog({
                       onRemove={() => removeFile(file.id)}
                     />
                   ))}
-                </>
+                </ImagePreviewGroup>
               ) : undefined
             }
           />

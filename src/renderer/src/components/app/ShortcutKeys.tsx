@@ -1,4 +1,4 @@
-import { useMemo, type ReactElement } from 'react'
+import { Fragment, useMemo } from 'react'
 import {
   shortcutAriaLabel,
   shortcutKeyLabels,
@@ -6,44 +6,19 @@ import {
 } from '@/lib/shortcuts/keyboard-shortcuts'
 import { useShortcutBindings, useShortcutLabel } from '@/lib/shortcuts/use-shortcuts'
 import {
-  ArrowDown,
-  ArrowLeft,
-  ArrowRight,
-  ArrowUp,
+  KeyArrowDown,
+  KeyArrowLeft,
+  KeyArrowRight,
+  KeyArrowUp,
   Backspace,
   Command,
   Control,
   Option,
+  Shift,
   type IconComponent
 } from '@/lib/icons'
 import { cn } from '@/lib/utils'
-import { UI_ICON_SIZE, UI_ICON_STROKE } from '@/lib/icon-metrics'
-
-/**
- * The mac ⇧ (U+21E7) as drawn artwork: Hugeicons draws ⌘ and ⌥ (`Command`,
- * `Option`) and this adapter maps ⌃ to its `ChevronUp` caret, but the pack ships
- * no shift drawing, and the text character's baseline varies by fallback font —
- * exactly the off-centre look this component exists to kill. Stroked at the
- * family's own default weight (1.5px in the 24 box), so it sits evenly next to
- * them.
- */
-function ShiftGlyph({ size = UI_ICON_SIZE.compact }: { size?: string | number }): ReactElement {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={UI_ICON_STROKE}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M12 4 L18.5 11 H15 V20 H9 V11 H5.5 Z" />
-    </svg>
-  )
-}
+import { UI_ICON_SIZE } from '@/lib/icon-metrics'
 
 /**
  * Modifier and arrow keys render as ICONS, never text: the Unicode glyphs
@@ -51,23 +26,24 @@ function ShiftGlyph({ size = UI_ICON_SIZE.compact }: { size?: string | number })
  * small and low against the app font's letters. Everything else (letters,
  * digits, punctuation, Esc/Enter/Tab…) stays text.
  */
-const KEY_ICONS: Record<string, IconComponent | ((props: { size?: string | number }) => ReactElement)> = {
+const KEY_ICONS: Record<string, IconComponent> = {
   '⌘': Command,
   '⌥': Option,
   '⌃': Control,
-  '⇧': ShiftGlyph,
+  '⇧': Shift,
   '⌫': Backspace,
-  '←': ArrowLeft,
-  '→': ArrowRight,
-  '↑': ArrowUp,
-  '↓': ArrowDown
+  '←': KeyArrowLeft,
+  '→': KeyArrowRight,
+  '↑': KeyArrowUp,
+  '↓': KeyArrowDown
 }
 
 /**
- * One binding rendered as key caps (⌘ K). Each cap is its own chip — a light
- * field with a hairline edge, content flex-centred on a 24px box. Pure
- * presentation: pass the raw binding string and the platform; reactive
- * per-command labels go through `ShortcutBindingChip`.
+ * One cap per key, with plus separators outside the caps. Letters use the
+ * interface font. Icon canvases follow that font's cap height: the Lucide
+ * drawings have different native extents, so equal SVG boxes would make the
+ * arrows smaller than Command and the letters. Preserve the paths and balance
+ * their visible ink instead. Reactive bindings go through ShortcutBindingChip.
  */
 export function ShortcutKeys({
   binding,
@@ -81,25 +57,34 @@ export function ShortcutKeys({
   const keys = useMemo(() => shortcutKeyLabels(binding, mac), [binding, mac])
   return (
     <span
+      role="group"
       aria-label={shortcutAriaLabel(binding, mac)}
-      className={cn('inline-flex items-center gap-[3px] whitespace-nowrap', className)}
+      className={cn(
+        'inline-flex shrink-0 items-center gap-1 whitespace-nowrap font-sans text-keycap font-normal leading-none text-foreground',
+        className
+      )}
     >
       {keys.map((key, index) => {
         const Icon = KEY_ICONS[key]
         return (
-          // Every cap is the same 24×24 square: content (icon or glyph)
-          // centred, padding-free, so an icon cap never out-widens a letter
-          // cap. Long word labels (Enter/Space…) shrink to fit.
-          <kbd
-            key={index}
-            aria-hidden="true"
-            className={cn(
-              'inline-flex size-6 shrink-0 items-center justify-center overflow-hidden rounded-md border border-border/50 bg-muted/70 font-medium leading-none text-muted-foreground',
-              key.length > 3 ? 'text-[10px]' : 'text-[13px]'
-            )}
-          >
-            {Icon ? <Icon size={UI_ICON_SIZE.compact} /> : key}
-          </kbd>
+          <Fragment key={index}>
+            {index > 0 ? <span aria-hidden="true" className="text-xs text-muted-foreground">+</span> : null}
+            <kbd
+              aria-hidden="true"
+              className={cn(
+                'inline-flex h-[max(1.5rem,1.5em)] min-w-[max(1.5rem,1.5em)] shrink-0 items-center justify-center rounded-control border border-border bg-card font-sans font-normal leading-none',
+                !Icon && key.length > 1 && 'px-1.5'
+              )}
+            >
+              {Icon ? (
+                <Icon
+                  size={UI_ICON_SIZE.compact}
+                  strokeWidth={2}
+                  className={cn('shrink-0', key === '⌃' ? 'size-[1.75cap]' : '←→↑↓'.includes(key) ? 'size-[1.5cap]' : 'size-[1.2cap]')}
+                />
+              ) : key.length > 1 ? <span className="text-micro">{key}</span> : key}
+            </kbd>
+          </Fragment>
         )
       })}
     </span>
@@ -107,9 +92,9 @@ export function ShortcutKeys({
 }
 
 /**
- * The key caps the right-rail picker (and any button hint) shows for a
+ * The key chip the right-rail picker (and any button hint) shows for a
  * command: follows the user's rebinding live, and hides itself when the
- * command is disabled or unassigned (an empty cap would read as a broken
+ * command is disabled or unassigned (an empty chip would read as a broken
  * glyph).
  */
 export function ShortcutBindingChip({ id, className }: { id: ShortcutId; className?: string }) {

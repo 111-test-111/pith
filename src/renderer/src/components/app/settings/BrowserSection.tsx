@@ -5,6 +5,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/m
 import { useI18n } from '@/i18n'
 import { useOpenLinksInBrowserPref } from '@/lib/browser/open-link'
 import { useBrowserKeepAlivePref } from '@/lib/browser/keep-alive'
+import { useBrowserRestoreTabsPref } from '@/lib/browser/restore-tabs'
+import { useBrowserSearchEngine } from '@/lib/browser/search-engine'
+import { BROWSER_SEARCH_ENGINES, isBrowserSearchEngine } from '../../../../../shared/browser'
 import { useToast } from '../ToastProvider'
 import type {
   BrowserImportDiscoveryDTO,
@@ -26,7 +29,7 @@ function importErrorMessage(t: ReturnType<typeof useI18n>['t'], code?: string): 
 }
 
 /**
- * Settings → Browser. Six rows in one card:
+ * Settings → Browser. Grouped preference and data rows:
  *
  * - the agent browser tools toggle — initial value from AppInfoDTO, persisted
  *   app-wide through `app:setBrowserAgentTools`; a save re-reads appInfo so
@@ -37,6 +40,9 @@ function importErrorMessage(t: ReturnType<typeof useI18n>['t'], code?: string): 
  * - the keep-alive preference — localStorage only, shared with SidebarPanel:
  *   on, a folded rail keeps the browser pane mounted (webviews survive the
  *   fold; page activity is never interrupted) instead of unloading it;
+ * - restore tabs after closing the browser — localStorage only, applied by
+ *   Workspace on explicit tab close; rail folds always retain their snapshot;
+ * - the search engine — AppSettings-backed, shared live with both URL inputs;
  * - import login state from Chrome — decrypts Chrome's cookie DB in main and
  *   writes it into the shared browser partition (a Select picks the Chrome
  *   profile; the result is counts only, cookie values never cross IPC);
@@ -50,6 +56,15 @@ function importErrorMessage(t: ReturnType<typeof useI18n>['t'], code?: string): 
 export function BrowserSection() {
   const { t } = useI18n()
   const toast = useToast()
+  const { browserSearchEngine, setBrowserSearchEngine } = useBrowserSearchEngine()
+  const [savingSearch, setSavingSearch] = useState(false)
+  const changeSearchEngine = (value: string) => {
+    if (savingSearch || !isBrowserSearchEngine(value)) return
+    setSavingSearch(true)
+    void setBrowserSearchEngine(value)
+      .catch(() => toast.error({ title: t('settings.browserSearchSaveFailed') }))
+      .finally(() => setSavingSearch(false))
+  }
 
   // Agent browser tools.
   const [toolsEnabled, setToolsEnabled] = useState(false)
@@ -86,6 +101,7 @@ export function BrowserSection() {
 
   // Keep pages alive while the rail is folded: immediate localStorage preference.
   const { browserKeepAlive, setBrowserKeepAlive } = useBrowserKeepAlivePref()
+  const { browserRestoreTabs, setBrowserRestoreTabs } = useBrowserRestoreTabsPref()
 
   // Import Chrome login state.
   const [discovery, setDiscovery] = useState<BrowserImportDiscoveryDTO>({
@@ -248,6 +264,20 @@ export function BrowserSection() {
     <div className="space-y-6" data-browser-section>
       {/* The section heading already supplies the title; start directly with untitled grouped rows. */}
       <div className="divide-y divide-border/60 rounded-xl border border-border/70 bg-card">
+        <SettingsRow label={t('settings.browserSearchEngine')} description={t('settings.browserSearchEngineHint')}>
+          <span data-browser-search-engine className="contents">
+            <Select value={browserSearchEngine} onValueChange={changeSearchEngine} disabled={savingSearch}>
+              <SelectTrigger aria-label={t('settings.browserSearchEngine')} className="h-8 w-40 rounded-control px-3 text-sm">
+                {t(`browser.searchEngine.${browserSearchEngine}`)}
+              </SelectTrigger>
+              <SelectContent portal className="w-40">
+                {BROWSER_SEARCH_ENGINES.map((engine) => (
+                  <SelectItem key={engine} value={engine}>{t(`browser.searchEngine.${engine}`)}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </span>
+        </SettingsRow>
         <SettingsRow
           label={t('settings.browserAgentTools')}
           description={t('settings.browserAgentToolsHint')}
@@ -269,6 +299,17 @@ export function BrowserSection() {
             checked={openLinksInBrowser}
             onCheckedChange={(value) => setOpenLinksInBrowser(value)}
             aria-label={t('settings.browserOpenLinks')}
+          />
+        </SettingsRow>
+        <SettingsRow
+          label={t('settings.browserRestoreTabs')}
+          description={t('settings.browserRestoreTabsHint')}
+        >
+          <Checkbox
+            mark="square"
+            checked={browserRestoreTabs}
+            onCheckedChange={setBrowserRestoreTabs}
+            aria-label={t('settings.browserRestoreTabs')}
           />
         </SettingsRow>
         <SettingsRow
@@ -294,7 +335,7 @@ export function BrowserSection() {
                     {sources.find((s) => s.id === (profileId ?? sources[0].id))?.label ?? sources[0].label}
                   </span>
                 </SelectTrigger>
-                <SelectContent className="left-0 right-auto w-56">
+                <SelectContent className="left-auto right-0 w-56">
                   {sources.map((source) => (
                     <SelectItem key={source.id} value={source.id} className="py-1.5">
                       <span className="truncate text-sm text-foreground">{source.label}</span>
@@ -316,13 +357,13 @@ export function BrowserSection() {
         </SettingsRow>
         {discovery.status === 'blocked' ? (
           <div className="px-4 py-3" data-browser-import-permission>
-            <p className="text-xs leading-4 text-muted-foreground">
+            <p className="text-xs leading-ui-tight text-muted-foreground">
               {t('settings.browserImportBlocked')}
             </p>
             {/* Full Disk Access guidance differs by launch: dev/preview uses the repository Electron.app, so grant the launching terminal; installed apps are listed directly. Keep one concise instruction per path. */}
             <p
               data-browser-import-fda-guide={discovery.devMode ? 'dev' : 'installed'}
-              className="mt-1.5 text-xs leading-4 text-muted-foreground"
+              className="mt-1.5 text-xs leading-ui-tight text-muted-foreground"
             >
               {t(
                 discovery.devMode

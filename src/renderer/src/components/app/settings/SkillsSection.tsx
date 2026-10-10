@@ -84,7 +84,7 @@ export function SkillsSection() {
         onChange={setQuery}
         placeholder={t('settings.skillSearchPlaceholder')}
         aria-label={t('settings.skillSearchPlaceholder')}
-        classNames={{ input: 'text-xs' }}
+
       />
 
       {filtered.length === 0 ? (
@@ -180,7 +180,7 @@ function SkillDetail({
             {skill.name}
           </span>
           {skill.packageName ? (
-            <span className="shrink-0 rounded-control bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+            <span className="shrink-0 rounded-control bg-muted px-2 py-0.5 text-caption font-medium text-muted-foreground">
               {skill.packageName}
             </span>
           ) : null}
@@ -203,7 +203,7 @@ function SkillDetail({
           </span>
         </p>
         {skill.description ? (
-          <p className="text-sm leading-5 text-muted-foreground">{skill.description}</p>
+          <p className="text-sm leading-ui text-muted-foreground">{skill.description}</p>
         ) : null}
       </div>
 
@@ -218,13 +218,13 @@ function SkillDetail({
         </dd>
         <dt className="text-muted-foreground/70">{t('settings.skillSource')}</dt>
         <dd className="min-w-0">
-          <code className="break-all font-mono text-[11px] text-muted-foreground">
+          <code className="break-all font-mono text-caption text-muted-foreground">
             {skill.source}
           </code>
         </dd>
         <dt className="text-muted-foreground/70">{t('settings.skillBaseDir')}</dt>
         <dd className="min-w-0">
-          <span className="break-all font-mono text-[11px] text-muted-foreground">
+          <span className="break-all font-mono text-caption text-muted-foreground">
             {skill.baseDir}
           </span>
         </dd>

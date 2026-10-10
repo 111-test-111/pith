@@ -1,3 +1,4 @@
+// local patch (pi-app): shared scalable typography for content and code.
 "use client";
 
 import {
@@ -8,6 +9,9 @@ import {
 } from "react";
 import { createHighlighter, type Highlighter, type BundledLanguage } from "shiki";
 import { cn } from "@/lib/utils";
+// local patch (pi-app): all code surfaces share the persisted theme pair.
+import { getCodeThemes, useCodeThemes } from "@/lib/code-theme-settings";
+import { codeThemeKey, codeTokenCacheKey, type CodeThemes } from "@/lib/code-themes";
 
 // local patch (pi-app): file previews use Shiki's full language set, loaded on
 // demand. Existing transcript consumers retain the same initial grammars.
@@ -36,8 +40,6 @@ export interface AgentCodeLineProps {
   className?: string;
 }
 
-const LIGHT_THEME = "github-light-high-contrast";
-const DARK_THEME = "github-dark-high-contrast";
 let agentCodeHighlighter: Promise<Highlighter> | null = null;
 const tokenCache = new Map<string, AgentCodeTokenLines>();
 // local patch (pi-app): in-flight tokenizations, so a hover prefetch and the
@@ -50,15 +52,12 @@ const TOKEN_CACHE_MAX = 400;
 function getAgentCodeHighlighter() {
   if (!agentCodeHighlighter) {
     agentCodeHighlighter = createHighlighter({
-      themes: [LIGHT_THEME, DARK_THEME],
+      // local patch (pi-app): load the selected pair on demand below.
+      themes: [],
       langs: ["bash", "diff", "json", "tsx", "typescript"],
     });
   }
   return agentCodeHighlighter;
-}
-
-function tokenCacheKey(code: string, language: AgentCodeLanguage) {
-  return `${language}\u0000${code}`;
 }
 
 /**
@@ -71,8 +70,9 @@ function tokenCacheKey(code: string, language: AgentCodeLanguage) {
 function ensureAgentCodeTokens(
   code: string,
   language: AgentCodeLanguage,
+  themes: CodeThemes,
 ): Promise<AgentCodeTokenLines> {
-  const key = tokenCacheKey(code, language);
+  const key = codeTokenCacheKey(code, language, themes);
   const cached = tokenCache.get(key);
   if (cached) return Promise.resolve(cached);
   const pending = tokenPending.get(key);
@@ -86,13 +86,14 @@ function ensureAgentCodeTokens(
       if (language !== "text" && !highlighter.getLoadedLanguages().includes(language)) {
         await highlighter.loadLanguage(language);
       }
+      // local patch (pi-app): requests retain their theme snapshot across awaits;
+      // a late result cannot overwrite a newly selected palette's cache entry.
+      const missingThemes = [themes.light, themes.dark].filter(theme => !highlighter.getLoadedThemes().includes(theme));
+      if (missingThemes.length) await highlighter.loadTheme(...missingThemes);
       const lines = highlighter
         .codeToTokensWithThemes(code, {
           lang: language,
-          themes: {
-            light: LIGHT_THEME,
-            dark: DARK_THEME,
-          },
+          themes: { ...themes },
         })
         .map((line) =>
           line.map((token) => ({
@@ -128,13 +129,13 @@ export function prefetchAgentCodeTokens(
   code: string,
   language: AgentCodeLanguage,
 ): Promise<void> {
-  return ensureAgentCodeTokens(code, language).then(() => undefined);
+  return ensureAgentCodeTokens(code, language, getCodeThemes()).then(() => undefined);
 }
 
 // local patch (pi-app): previews snapshot already-warm tokens on entry. A cold
 // preview stays plain for that visit instead of repainting after Shiki lands.
-export function getCachedAgentCodeTokens(code: string, language: AgentCodeLanguage) {
-  return tokenCache.get(tokenCacheKey(code, language));
+export function getCachedAgentCodeTokens(code: string, language: AgentCodeLanguage, themes = getCodeThemes()) {
+  return tokenCache.get(codeTokenCacheKey(code, language, themes));
 }
 
 export function useAgentCodeTokens(
@@ -145,36 +146,40 @@ export function useAgentCodeTokens(
   // CPU. Highlighting runs once when the block completes.
   enabled = true,
 ) {
-  const key = enabled ? tokenCacheKey(code, language) : "";
+  // local patch (pi-app): update mounted blocks when Appearance changes.
+  const [themes] = useCodeThemes();
+  const themeKey = codeThemeKey(themes);
+  const key = enabled ? codeTokenCacheKey(code, language, themes) : "";
   const cached = enabled ? tokenCache.get(key) : undefined;
   const [result, setResult] = useState<{
     key: string;
     code: string;
     language: AgentCodeLanguage;
+    themeKey: string;
     lines: AgentCodeTokenLines;
-  } | null>(cached ? { key, code, language, lines: cached } : null);
+  } | null>(cached ? { key, code, language, themeKey, lines: cached } : null);
 
   useEffect(() => {
     if (!enabled) return;
     const current = tokenCache.get(key);
     if (current) {
-      setResult({ key, code, language, lines: current });
+      setResult({ key, code, language, themeKey, lines: current });
       return;
     }
 
     let cancelled = false;
-    ensureAgentCodeTokens(code, language).then((lines) => {
+    ensureAgentCodeTokens(code, language, themes).then((lines) => {
       if (cancelled) return;
-      setResult({ key, code, language, lines });
+      setResult({ key, code, language, themeKey, lines });
     });
     return () => {
       cancelled = true;
     };
-  }, [code, key, language, enabled]);
+  }, [code, key, language, enabled, themes, themeKey]);
 
   if (!enabled) return null;
   if (result?.key === key) return result.lines;
-  if (result?.language === language && code.startsWith(result.code)) {
+  if (result?.themeKey === themeKey && result.language === language && code.startsWith(result.code)) {
     return result.lines;
   }
   return null;
@@ -191,6 +196,8 @@ export function AgentCodeLine({
         ? tokens.map((token) => (
             <span
               key={`${token.offset}-${token.content}`}
+              // local patch (pi-app): paired previews pin a token's color mode.
+              data-agent-code-token=""
               style={
                 {
                   "--agent-code-light": token.light ?? "currentColor",
@@ -226,7 +233,8 @@ export function AgentCode({
   return (
     <pre
       className={cn(
-        "m-0 overflow-x-auto whitespace-pre font-mono text-xs leading-5 text-foreground/85",
+        // local patch (pi-app): uncoloured code retains primary content contrast.
+        "m-0 overflow-x-auto whitespace-pre font-mono text-code text-foreground",
         className,
       )}
     >

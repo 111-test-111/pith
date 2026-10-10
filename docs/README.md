@@ -15,10 +15,12 @@ Start with [README](../README.md) for the product, setup and development command
 | --- | --- |
 | [Plan Mode](plan-mode-implementation.md) | Read-only planning, sealed submissions, approval and recovery |
 | [Rewind](rewind-implementation.md) | Before-turn checkpoints, raw-byte transactions, partial/single-file restore |
+| [Git workbench](git-workbench.md) | Repository status, safe staging/discard, commits, branches, history, multi-branch graph and remote operations |
 | [Subagents](subagents-implementation.md) | Role grants, persisted runs, notifications and recovery |
 | [Native MCP / codemode](native-mcp-codemode.md) | SDK MCP configuration, scripts and result contracts |
 | [DAP debug](debug-implementation.md) | Target ownership, stopped references, native/core inspection |
 | [Embedded browser](architecture/embedded-browser.md) | webview/CDP hosting, tools, trust boundaries and cleanup |
+| [Image generation](image-generation.md) | OpenRouter protocols, atomic image files, billing, generated delivery and private retries |
 | [Jev integration](jev-integration.md) | Judgment tools, optional workflow and evidence |
 | [Jev tool reference](jev-tool-reference.md) | Native parameters/examples used by the Pi skill bridge |
 
@@ -27,15 +29,30 @@ Start with [README](../README.md) for the product, setup and development command
 | Document | Contract |
 | --- | --- |
 | [Context budget](context-budget-implementation.md) | Request-copy budgets and image safety |
+| [Context compaction](context-compaction.md) | Queued manual summaries, completed tool boundaries, process visualization and cancellation |
+| [Context statistics](context-statistics-implementation.md) | Billing, selected-branch projections and observed request composition |
+| [Resource usage](resource-usage.md) | CPU and resident-memory sampling, process-tree scope and exact local storage measurements |
+| [System prompt](system-prompt.md) | Concise runtime guidance and on-demand tool instructions |
 | [Delivery / trajectory](present-trajectory-implementation.md) | File delivery, recorded requests, paging and exports |
+| [Library](library-implementation.md) | Conversation resources, local copies, projects, archive quota and recovery |
 | [Session replay](session-replay-implementation.md) | Offline SDK/provider-boundary replay |
 | [Long-session benchmark](long-session-benchmarks.md) | Reproducible performance measurement and interpretation |
 | [Sidebar panes](sidebar-pane-layout.md) | Container layouts and state preservation |
-| [Wheel gestures](wheel-gestures.md) | Whole-gesture axis/action locking |
+| [File previews](file-preview.md) | Bounded archive/data readers, structured trees, automatic text decoding, cached diffs and worker lifetimes |
+| [Session sidebar](session-sidebar.md) | Projects, custom groups, timeline, archive and presentation preferences |
+| [Floating surface motion](overlay-motion.md) | Shared picker, menu, tooltip and dialog entrances, exits and reduced motion |
+| [Typography](typography.md) | Independent interface/content/code sizes, text ownership, line metrics and persistence |
+| [Code highlighting](code-highlighting.md) | Shared light/dark palettes, searchable theme choices, live updates and cache identity |
+| [Tool result views](tool-result-views.md) | Search highlighting, file-list artwork, source tokens, navigation and bounded expanded output |
+| [File icons](file-icons.md) | Native/square Pierre artwork, document/media additions, Sass overrides, offline assets, themes and upstream snapshots |
+| [Wheel gestures](wheel-gestures.md) | Free two-dimensional scrolling and input normalization |
 | [Math assets](math-assets.md) | Offline math fonts and distribution assets |
+| [Markdown rendering](markdown-rendering.md) | Syntax support, file line breaks, safe inline tags, alerts and footnote navigation |
 | [Debug fixtures](debug-fixtures.md) | Debugging comparison fixtures and usage |
 
 ## Verification
+
+The [Windows development guide](windows-development.md) covers guest-local dependencies, ARM64 prerequisites and desktop launch in Parallels.
 
 The [testing guide](testing.md) describes the unified commands, catalog, reports, CI lanes, prerequisites and rules for keeping only useful coverage. `npm test` prepares and runs standard suites; `npm run test:core`, `test:ui`, `test:native` and `test:performance` select layers. `npm run test:list` lists behavior and ownership without executing.
 

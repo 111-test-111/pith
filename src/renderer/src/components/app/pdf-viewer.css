@@ -18,6 +18,12 @@
   --page-border: 9px solid transparent;
   --pdfViewer-padding-bottom: 0;
   --viewer-container-height: 0;
+
+  /* pdf.js scrollIntoView walks past ancestors with no overflow. A short PDF
+   * can fit its viewport completely, letting initial scale, zoom or links
+   * scroll the clipped workspace instead and hide the rail's chrome. Keep
+   * one pixel of scroll range inside the PDF viewport so that walk stops here. */
+  min-height: calc(100% + 1px);
 }
 
 /* The page box must keep the content-box model pdf.js is written against: its

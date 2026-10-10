@@ -24,6 +24,7 @@ import { fileExtension } from './extension'
 import { isUnsupportedMedia, mediaKindOf, type MediaKind } from './media'
 import { isPdfPath } from './pdf'
 import { tableFormatOf } from './table'
+import { archiveFormatOf, dataFormatOf, structuredFormatOf } from './file-preview'
 
 export type PreviewKind =
   | MediaKind
@@ -37,13 +38,19 @@ export type PreviewKind =
   | 'unplayable'
   | 'diff'
   | 'notebook'
+  | 'json'
   | 'subtitle'
   | 'font'
+  | 'archive'
+  | 'data'
+  | 'structured'
 
 const MARKDOWN = new Set(['.md', '.markdown', '.mdown', '.mkd', '.mdx'])
 const HTML = new Set(['.html', '.htm'])
 const DIFF = new Set(['.diff', '.patch'])
 const NOTEBOOK = new Set(['.ipynb'])
+/** Strict JSON keeps its existing tree; other grammars own a parse worker. */
+const JSON_DOCUMENT = new Set(['.json'])
 export type SubtitleFormat = 'srt' | 'vtt' | 'lrc'
 const SUBTITLE: Readonly<Record<string, SubtitleFormat>> = { '.srt': 'srt', '.vtt': 'vtt', '.lrc': 'lrc' }
 
@@ -54,21 +61,22 @@ const FONT = new Set(['.ttf', '.otf', '.woff', '.woff2'])
 
 const MEDIA_KIND_SET: ReadonlySet<PreviewKind> = new Set<PreviewKind>(['image', 'video', 'audio'])
 /** Kinds whose bytes are decoded as text by `files:document`. */
-const TEXT_KINDS: ReadonlySet<PreviewKind> = new Set<PreviewKind>(['text', 'markdown', 'html', 'table', 'diff', 'notebook', 'subtitle'])
+const TEXT_KINDS: ReadonlySet<PreviewKind> = new Set<PreviewKind>(['text', 'markdown', 'html', 'table', 'diff', 'notebook', 'json', 'subtitle', 'structured'])
 /** Kinds that own a rendered preview tab beside the source tab. */
-const PREVIEW_KINDS: ReadonlySet<PreviewKind> = new Set<PreviewKind>(['markdown', 'html', 'table', 'diff', 'notebook', 'subtitle'])
+const PREVIEW_KINDS: ReadonlySet<PreviewKind> = new Set<PreviewKind>(['markdown', 'html', 'table', 'diff', 'notebook', 'json', 'subtitle', 'structured'])
 /** Kinds that take the whole pane: no view tabs, and never a document read. */
-const INLINE_KINDS: ReadonlySet<PreviewKind> = new Set<PreviewKind>(['image', 'video', 'audio', 'pdf', 'unplayable', 'spreadsheet', 'font'])
+const INLINE_KINDS: ReadonlySet<PreviewKind> = new Set<PreviewKind>(['image', 'video', 'audio', 'pdf', 'unplayable', 'spreadsheet', 'font', 'archive', 'data'])
 
 /** Bytes of a text document the preview reads. */
 export const TEXT_READ_BYTES = 512 * 1024
 /**
- * A notebook carries its outputs inline — a plotted chart is a base64 PNG in
- * the same JSON — so the ordinary text cap cuts the file mid-object and nothing
- * parses. Still bounded: a notebook is one document, read whole so `JSON.parse`
- * can see it.
+ * A structured JSON document is one object: a notebook carries its outputs
+ * inline — a plotted chart is a base64 PNG in the same JSON — and a `.json`
+ * file's tree preview parses the file whole. The ordinary text cap cuts
+ * either mid-token and `JSON.parse` cannot read any of it. Still bounded:
+ * it is one document, read whole so the parse can see it.
  */
-export const NOTEBOOK_READ_BYTES = 4 * 1024 * 1024
+export const JSON_READ_BYTES = 4 * 1024 * 1024
 
 /**
  * What this path is. An unrecognized extension is `text`: the text reader is
@@ -81,12 +89,16 @@ export function previewKindOf(path: string): PreviewKind {
   const table = tableFormatOf(path)
   if (table) return table === 'xlsx' ? 'spreadsheet' : 'table'
   if (isPdfPath(path)) return 'pdf'
+  if (archiveFormatOf(path)) return 'archive'
+  if (dataFormatOf(path)) return 'data'
+  if (structuredFormatOf(path)) return 'structured'
   const ext = fileExtension(path)
   if (FONT.has(ext)) return 'font'
   if (MARKDOWN.has(ext)) return 'markdown'
   if (HTML.has(ext)) return 'html'
   if (DIFF.has(ext)) return 'diff'
   if (NOTEBOOK.has(ext)) return 'notebook'
+  if (JSON_DOCUMENT.has(ext)) return 'json'
   if (subtitleFormatOf(path)) return 'subtitle'
   if (isUnsupportedMedia(path)) return 'unplayable'
   return 'text'
@@ -113,9 +125,9 @@ export function isInlineOnly(kind: PreviewKind): boolean {
   return INLINE_KINDS.has(kind)
 }
 
-/** The text cap for the kind: a notebook has to fit `JSON.parse`. */
+/** The text cap for the kind: a JSON document has to fit `JSON.parse`. */
 export function textReadLimit(kind: PreviewKind): number {
-  return kind === 'notebook' ? NOTEBOOK_READ_BYTES : TEXT_READ_BYTES
+  return kind === 'notebook' || kind === 'json' || kind === 'structured' ? JSON_READ_BYTES : TEXT_READ_BYTES
 }
 
 /** What a freshly opened tab shows first: a rendered view where there is one

@@ -3,16 +3,14 @@ import { countDiffChanges, synthesizeWritePatch } from './diff'
 import { relativize, resolveFromCwd } from './tool-path'
 import { extractUserDisplay } from './user-message'
 import { buildTurns, collectChangeScopes } from './chat-turns'
+import { previewKindOf } from '../../../shared/preview'
 
 /**
  * The files one assistant turn wrote — the data behind the transcript's
  * "changed N files" list.
  *
- * Ported from pi-web's `extractTurnWrittenFiles`, deliberately narrowed to what
- * pi-app has today: tool names are matched exactly (`edit` / `write`, no
- * MCP-decorated spellings) and subagent fan-out is not folded in (the app has no
- * subagent system). Widening it later means extending `WRITE_TOOL_NAMES` here,
- * nothing else.
+ * Direct edit/write results and persisted child-run text writes share this
+ * projection. Generated images stay in their result cards and Library.
  */
 const WRITE_TOOL_NAMES = new Set(['edit', 'write'])
 
@@ -116,8 +114,7 @@ function mergeChange(
 /**
  * Collects the distinct files one turn wrote, in first-seen order.
  *
- * A call counts only when its result arrived and did not fail — a call still
- * running on a live turn, or one that errored, wrote nothing. Reply text is
+ * A call counts only when its result carries committed text writes. Reply text is
  * never a source: mentioning a path is not evidence that a file was touched.
  * Several calls on the same file merge: their stats sum and their patches
  * concatenate. A `write` reports no patch of its own, so one is synthesized
@@ -173,6 +170,10 @@ export function extractTurnWrittenFiles(
   for (const { run } of runs.values()) {
     for (const file of run.writtenFiles ?? []) {
       if (typeof file?.filePath !== 'string' || !file.filePath) continue
+      // Keep image receipts in the persisted run for Rewind, outside code diffs.
+      // Older receipts have no kind; image paths without any text-change
+      // evidence are the legacy equivalent. Actual SVG edits retain their diff.
+      if (file.kind === 'generated-image' || (!file.patch && file.added === undefined && file.removed === undefined && previewKindOf(file.filePath) === 'image')) continue
       mergeChange(byPath, file.filePath,
         typeof file.patch === 'string' && file.patch.length > 0
           ? { patch: file.patch, added: file.added ?? countDiffChanges(file.patch).added, removed: file.removed ?? countDiffChanges(file.patch).removed }

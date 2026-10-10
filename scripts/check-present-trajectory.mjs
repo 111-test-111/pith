@@ -188,9 +188,20 @@ try {
   assert(disk < 25 * 1024 * 1024, `dedup disk ${disk}`)
   assert(growth < 160 * 1024 * 1024, `unbounded resident growth ${growth}`)
   console.log(`PASS storage: 500 repeated 3 MB requests, ${(disk / 1048576).toFixed(1)} MiB disk, ${elapsed.toFixed(0)} ms writes, ${(growth / 1048576).toFixed(1)} MiB RSS growth; pagination, branch isolation, Unicode fragments, redaction, export`)
+  const contextStats = id => ({ id, startedAt: 1000, provider: 'fixture', model: 'fixture', payloadCaptured: true,
+    inputTokens: 10, breakdown: { user: 10, assistant: 0, toolResults: 0, other: 0, total: 10 }, categories: [] })
+  assert.equal(storage.context(access), null, 'uncaptured older histories have no invented request statistics')
+  storage.write({ sessionId: 's', anchor: 'new', record: { id: 'context-new', kind: 'request', name: 'model', startedAt: 1000,
+    status: 'completed', captured: true, contextStats: contextStats('context-new') } })
+  storage.write({ sessionId: 's', anchor: 'old', record: { id: 'context-old', kind: 'request', name: 'model', startedAt: 1001,
+    status: 'completed', captured: true, contextStats: contextStats('context-old') } })
+  assert.equal(storage.context(access).id, 'context-new', 'newer abandoned requests cannot override selected-branch statistics')
+  assert.equal(storage.context({ ...access, leafId: 'old' }).id, 'context-old')
+  assert(!storage.page(access, {}).items.some(record => record.contextStats), 'normal timeline pages do not duplicate composition metadata')
   storage.write({ sessionId: 's', anchor: 'new', record: { id: 'crash', kind: 'tool', name: 'bash', startedAt: 999, status: 'running', captured: true } })
   storage.close(); storage = await TrajectoryStorage.open(database)
   assert.equal(storage.detail(access, 'crash').record.status, 'interrupted')
+  assert.equal(storage.context(access).id, 'context-new', 'statistics survive storage restart')
   storage.close(); storage = null
   client = new TrajectoryClient(join(temp, 'worker.sqlite'))
   for (let n = 0; n < 120; n++) await client.write({ sessionId: 's', anchor: 'new',
@@ -209,7 +220,12 @@ try {
   await client.dispose(); client = null
   console.log('PASS worker: 120 large structured clones, bounded heap/queue, FIFO settlements, capture during export, complete nested export')
 
-  fixture = await createPlanFixture({ providerCallbacks: true, respond: n => n === 1
+  fixture = await createPlanFixture({ providerCallbacks: true,
+    extensionFactories: [pi => {
+      let request = 0
+      pi.on('context', event => ({ messages: [...event.messages,
+        { role: 'user', content: 'request-extra: ' + 'x'.repeat(++request * 300), timestamp: 900000 + request }] }))
+    }], respond: n => n === 1
     ? [{ type: 'toolCall', id: 'present-sdk', name: 'present', arguments: { files: [{ path: 'final.txt' }] } }]
     : [{ type: 'text', text: 'Delivered' }] })
   await fixture.managed.lifecyclePromise
@@ -243,17 +259,26 @@ try {
     assert(!request.captureError, 'tool execution closures do not cause incomplete capture')
   }
   assert(fixture.session.agent.state.tools.every(tool => typeof tool.execute === 'function'), 'capture does not mutate live tools')
+  const context = await fixture.app.contextDetail(fixture.managed.path)
+  const latestRequest = trace.items.filter(record => record.kind === 'request').at(-1)
+  assert.equal(context.request.id, latestRequest.id)
+  assert.equal(context.request.inputTokens, 1)
+  const extras = fixture.requests.map(request => request.messages.find(message => message.role === 'user' && typeof message.content === 'string' && message.content.startsWith('request-extra: ')))
+  assert(extras[1].content.length > extras[0].content.length)
+  assert.equal(context.categories.find(category => category.kind === 'requestOnly').tokens, Math.ceil(extras[1].content.length / 4), 'request modifications are measured again on every round')
   const original = fixture.manager.getLeafId()
   const user = fixture.manager.getBranch().find(x => x.type === 'message' && x.message.role === 'user')
   fixture.manager.branch(user.id)
   const rewound = await fixture.app.trajectoryPage({ sessionPath: fixture.managed.path })
   assert.equal(rewound.items.filter(x => x.kind === 'request').length, 0)
+  assert.equal((await fixture.app.contextDetail(fixture.managed.path)).request, null, 'rewinding invalidates both the in-memory and persisted capture')
   fixture.manager.branch(original)
   assert.equal((await fixture.app.trajectoryPage({ sessionPath: fixture.managed.path })).items.filter(x => x.kind === 'request').length, 2)
   const fork = fixture.manager.constructor.forkFrom(fixture.managed.path, fixture.project, join(fixture.temporary, 'sessions'))
   const forkTrace = await fixture.app.trajectoryPage({ sessionPath: fork.getSessionFile() })
   assert.equal(forkTrace.items.filter(x => x.kind === 'request').length, 2)
   assert.equal(forkTrace.items.filter(x => x.kind === 'assistant').length, 0)
+  assert.equal((await fixture.app.contextDetail(fork.getSessionFile())).request.id, latestRequest.id, 'cold fork statistics recover the authorized parent capture')
   const previous = fixture.managed.trajectory.previous
   fixture.managed.trajectory.previous = (model, context, options) => previous(model, context, { ...options,
     onPayload: async (payload, requestModel) => {
@@ -267,6 +292,7 @@ try {
   const attemptedTrace = await fixture.app.trajectoryPage({ sessionPath: fixture.managed.path, kind: 'request' })
   assert.equal(attemptedTrace.total, 4)
   assert.equal(attemptedTrace.items.filter(x => x.status === 'failed').length, 1)
+  assert.equal((await fixture.app.contextDetail(fixture.managed.path)).request.id, attemptedTrace.items.at(-1).id, 'provider retry has its own latest-request identity')
   const afterAttempts = fixture.manager.getLeafId()
   fixture.manager.branch(beforeAttempts)
   assert.equal((await fixture.app.trajectoryPage({ sessionPath: fixture.managed.path, kind: 'request' })).total, 2)
@@ -275,7 +301,7 @@ try {
   fixture.managed.trajectory.previous = async (model, context, options) => {
     const message = { role: 'assistant', content: [{ type: 'text', text: 'Final text without streamed output' }], api: model.api,
       provider: model.provider, model: model.id, timestamp: Date.now(), stopReason: 'stop',
-      usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } }
+      usage: { input: 1, output: 1000, cacheRead: 10, cacheWrite: 20, totalTokens: 1031, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } }
     return { async *[Symbol.asyncIterator]() {
       await options.onPayload({ model: model.id, messages: context.messages }, model)
       yield { type: 'text_delta', contentIndex: 0, delta: '', partial: message }
@@ -289,6 +315,7 @@ try {
   const emptyRequests = emptyTrace.items.filter(x => !existingRequests.has(x.id))
   assert.equal(emptyRequests.length, 1)
   assert.equal(emptyRequests[0].firstTokenAt, undefined)
+  assert.equal((await fixture.app.contextDetail(fixture.managed.path)).request.inputTokens, 31, 'reported input includes cache reads/writes and excludes output')
   let started
   const starting = new Promise(resolve => { started = resolve })
   fixture.managed.trajectory.previous = (model, context, options) => {
@@ -305,11 +332,13 @@ try {
   }
   const interrupted = fixture.session.prompt('cancel this request')
   await starting
+  assert.equal((await fixture.app.contextDetail(fixture.managed.path)).request.inputTokens, null, 'running requests do not invent provider usage')
   await fixture.session.abort(); await interrupted
   await fixture.managed.trajectory.flush()
   const stoppedTrace = await fixture.app.trajectoryPage({ sessionPath: fixture.managed.path, status: 'cancelled' })
   assert.equal(stoppedTrace.items.filter(x => x.kind === 'request').length, 1)
   assert.equal(stoppedTrace.items.filter(x => x.kind === 'run').length, 1)
+  assert.equal((await fixture.app.contextDetail(fixture.managed.path)).request.inputTokens, null, 'zero-usage aborted requests remain unknown')
   fixture.session.settingsManager.setRetryEnabled(true)
   fixture.managed.trajectory.previous = (model, context, options) => {
     const message = { role: 'assistant', content: [], api: model.api, provider: model.provider, model: model.id,

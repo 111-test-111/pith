@@ -5,7 +5,8 @@ import { Tooltip } from '@/components/motion/tooltip'
 import { FileText, LoaderCircle, ZoomIn, ZoomOut } from '@/lib/icons'
 import { useI18n } from '@/i18n'
 import { useDiffWindow } from '@/lib/hooks/use-diff-window'
-import { useTablePreview } from '@/lib/hooks/use-table-preview'
+import { useTablePreview, type TablePreview } from '@/lib/hooks/use-table-preview'
+import { compactContentSize, useContentFontSize } from '@/lib/typography'
 import { BASE_FONT_PX, BASE_ROW_PX, LOOKAHEAD_ROWS, ZOOM_STEPS, type TableFormat } from '../../../../shared/table'
 import type { FileBrowserStore, FileTab } from '@/state/file-browser-store'
 
@@ -70,18 +71,23 @@ function cellBox(contentCh: number): CSSProperties {
 }
 
 function TableNotice({ children, loading = false }: { children: ReactNode; loading?: boolean }) {
-  return <div role="status" className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-5 text-center text-xs leading-5 text-muted-foreground">
+  return <div role="status" className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-5 text-center text-xs leading-ui text-muted-foreground">
     {loading ? <LoaderCircle aria-hidden className="size-5 motion-safe:animate-spin" /> : <FileText aria-hidden className="size-5 text-muted-foreground/60" />}{children}
   </div>
 }
 
 export function FileTable({ tab, format, store, generation }: { tab: FileTab; format: TableFormat; store: FileBrowserStore; generation: number }) {
-  const { t } = useI18n()
   const preview = useTablePreview(tab, format, generation, store)
+  return <FileTableGrid tab={tab} store={store} preview={preview} />
+}
+
+export function FileTableGrid({ tab, store, preview }: { tab: FileTab; store: FileBrowserStore; preview: TablePreview }) {
+  const { t } = useI18n()
   const { loadMore, selectSheet } = preview
   const [zoom, setZoom] = useState(1)
   const viewport = useRef<HTMLDivElement>(null)
-  const rowHeight = Math.round(BASE_ROW_PX * zoom)
+  const fontSize = compactContentSize(useContentFontSize())
+  const rowHeight = Math.round(BASE_ROW_PX * fontSize / BASE_FONT_PX * zoom)
   const header = preview.rows[0]
   const bodyCount = Math.max(0, preview.rows.length - 1)
   const ready = preview.status === 'ready'
@@ -129,13 +135,13 @@ export function FileTable({ tab, format, store, generation }: { tab: FileTab; fo
           : <>
             {/* Its own row above the grid: loaded shape on the left, zoom on the right. */}
             <div data-file-table-bar className="flex h-9 shrink-0 items-center gap-1 border-b border-border/40 px-2">
-              <span data-file-table-count role="status" className="shrink-0 px-0.5 text-[11px] leading-6 tabular-nums text-muted-foreground">{t('files.table.dimensions', { rows: bodyCount, columns: preview.columns })}</span>
-              {preview.error && preview.status === 'ready' ? <span data-file-table-error role="status" className="min-w-0 max-w-56 truncate px-1 text-[10px] text-destructive">{t(`files.error.${preview.error}`)}</span> : null}
+              <span data-file-table-count role="status" className="shrink-0 px-0.5 text-caption leading-ui-loose tabular-nums text-muted-foreground">{t('files.table.dimensions', { rows: bodyCount, columns: preview.columns })}</span>
+              {preview.error && preview.status === 'ready' ? <span data-file-table-error role="status" className="min-w-0 max-w-56 truncate px-1 text-micro text-destructive">{t(`files.error.${preview.error}`)}</span> : null}
               <div className="ml-auto flex shrink-0 items-center gap-1">
                 {preview.busy ? <LoaderCircle aria-hidden className="size-3.5 shrink-0 text-muted-foreground motion-safe:animate-spin" /> : null}
                 <div data-file-table-zoom className="flex items-center gap-0.5">
                   <Tooltip content={t('files.table.zoomOut')}><Button variant="ghost" size="icon" className="size-7" aria-label={t('files.table.zoomOut')} disabled={zoom <= ZOOM_STEPS[0]} onClick={() => step(-1)}><ZoomOut aria-hidden className="size-3.5" /></Button></Tooltip>
-                  <span data-file-table-scale className="select-none px-0.5 text-[11px] leading-6 tabular-nums">{Math.round(zoom * 100)}%</span>
+                  <span data-file-table-scale className="select-none px-0.5 text-caption leading-ui-loose tabular-nums">{Math.round(zoom * 100)}%</span>
                   <Tooltip content={t('files.table.zoomIn')}><Button variant="ghost" size="icon" className="size-7" aria-label={t('files.table.zoomIn')} disabled={zoom >= ZOOM_STEPS[ZOOM_STEPS.length - 1]} onClick={() => step(1)}><ZoomIn aria-hidden className="size-3.5" /></Button></Tooltip>
                 </div>
               </div>
@@ -148,7 +154,7 @@ export function FileTable({ tab, format, store, generation }: { tab: FileTab; fo
               aria-label={t('files.table.viewportAria')}
               onScroll={onScroll}
               className="min-h-0 flex-1 overflow-auto focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset"
-              style={{ fontSize: `${BASE_FONT_PX * zoom}px` }}
+              style={{ fontSize: `${fontSize * zoom}px`, overflowAnchor: 'none' }}
             >
               <div className="w-max min-w-full">
                 <div data-table-header className="sticky top-0 z-20 flex w-max min-w-full border-b border-border text-muted-foreground" style={{ height: rowHeight, backgroundColor: HEADER_FILL }}>
@@ -188,7 +194,7 @@ export function FileTable({ tab, format, store, generation }: { tab: FileTab; fo
                     key={sheet.path}
                     value={sheet.path}
                     data-table-sheet={sheet.path}
-                    className="mb-0 h-full min-h-0 items-center px-2.5 py-0 text-[11px]"
+                    className="mb-0 h-full min-h-0 items-center px-2.5 py-0 text-caption"
                     // The underline variant puts its indicator on the trigger's
                     // bottom edge; this strip is the pane's last row, so the
                     // indicator rides the divider above it instead.

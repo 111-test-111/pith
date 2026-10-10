@@ -1,5 +1,10 @@
 import type { TrajectoryQuery, TrajectoryPage, TrajectoryDetail, TrajectoryNodeRequest, TrajectoryNodePage } from '../shared/types'
+import type { ImageReplayRequest, ImageReplaySnapshot } from '../shared/image-replay'
+import type { GitBranch, GitCommitDetails, GitCommitFile, GitDiff, GitDiffRequest, GitDiscardPreview, GitGraph, GitGraphRequest, GitHistory, GitHistoryRequest, GitMutation, GitMutationReceipt, GitRepository, GitResult, GitWorkspaceRequest } from '../shared/git'
+import type { LibraryKind, LibraryPage, LibraryQuery, LibraryResult, LibrarySettingsUpdate, LibraryStatus, LibraryTextPreview } from '../shared/library'
 import type { AskUserAnswer } from '../shared/ask-user'
+import type { ResourceResult, ResourceRuntimeDTO, ResourceStorageDTO } from '../shared/resources'
+import type { BinaryPreviewRequest, PreviewResult } from '../shared/file-preview'
 import type { JevSettingsDTO, JevSettingsUpdate, JevActionResult, JevEvaluationDTO, JevTraceDTO, JevTracePageDTO } from '../shared/types'
 import type {
   BrowserDownloadInfo,
@@ -9,6 +14,7 @@ import type {
   BrowserPageMeta,
   BrowserPopupInfo,
   BrowserSeenPayload,
+  BrowserSearchEngine,
   ElementAtInfo
 } from '../shared/browser'
 import type { RewindPatchDTO, RewindStatsDTO, RewindStatsTargetDTO } from '../shared/types'
@@ -105,6 +111,28 @@ import type {
 } from '../shared/types'
 
 const api = {
+  gitStatus: (request: GitWorkspaceRequest): Promise<GitResult<GitRepository>> => ipcRenderer.invoke('git:status', request),
+  gitDiff: (request: GitDiffRequest): Promise<GitResult<GitDiff>> => ipcRenderer.invoke('git:diff', request),
+  gitBranches: (request: GitWorkspaceRequest): Promise<GitResult<GitBranch[]>> => ipcRenderer.invoke('git:branches', request),
+  gitHistory: (request: GitHistoryRequest): Promise<GitResult<GitHistory>> => ipcRenderer.invoke('git:history', request),
+  gitGraph: (request: GitGraphRequest): Promise<GitResult<GitGraph>> => ipcRenderer.invoke('git:graph', request),
+  gitCommitDetails: (request: GitWorkspaceRequest & { commit: string }): Promise<GitResult<GitCommitDetails>> => ipcRenderer.invoke('git:commitDetails', request),
+  gitCommitFiles: (request: GitWorkspaceRequest & { commit: string }): Promise<GitResult<GitCommitFile[]>> => ipcRenderer.invoke('git:commitFiles', request),
+  gitPrepareDiscard: (request: GitWorkspaceRequest & { revision: string; paths: string[] }): Promise<GitResult<GitDiscardPreview>> => ipcRenderer.invoke('git:prepareDiscard', request),
+  gitExecute: (request: GitMutation): Promise<GitResult<GitMutationReceipt>> => ipcRenderer.invoke('git:execute', request),
+  gitCancel: (request: GitWorkspaceRequest & { id: string }): Promise<GitResult<void>> => ipcRenderer.invoke('git:cancel', request),
+  libraryStatus: (): Promise<LibraryResult<LibraryStatus>> => ipcRenderer.invoke('library:status'),
+  libraryPage: (query: LibraryQuery): Promise<LibraryResult<LibraryPage>> => ipcRenderer.invoke('library:page', query),
+  libraryRescan: (): Promise<LibraryResult<LibraryStatus>> => ipcRenderer.invoke('library:rescan'),
+  setLibraryPreferences: (update: LibrarySettingsUpdate): Promise<LibraryResult<LibraryStatus>> => ipcRenderer.invoke('library:settings', update),
+  libraryChooseDirectory: (reset = false): Promise<LibraryResult<LibraryStatus | null>> => ipcRenderer.invoke('library:directory', reset),
+  libraryDelete: (id: string): Promise<LibraryResult<void>> => ipcRenderer.invoke('library:delete', id),
+  libraryClear: (kind: LibraryKind): Promise<LibraryResult<number>> => ipcRenderer.invoke('library:clear', kind),
+  libraryFile: (id: string): Promise<LibraryResult<string>> => ipcRenderer.invoke('library:file', id),
+  libraryPreviewText: (id: string): Promise<LibraryResult<LibraryTextPreview | null>> => ipcRenderer.invoke('library:previewText', id),
+  libraryHtmlThumbnail: (id: string): Promise<LibraryResult<string | null>> => ipcRenderer.invoke('library:htmlThumbnail', id),
+  librarySaveCopy: (id: string, name: string): Promise<FileActionResultDTO> => ipcRenderer.invoke('library:saveCopy', id, name),
+  onLibraryChanged: (listener: () => void) => subscribe('library:changed', listener),
   platform: process.platform,
   rewindList: (path: string): Promise<RewindResult<RewindListDTO>> => ipcRenderer.invoke('rewind:list', path),
   rewindPreview: (path: string, checkpoint: string, action?: 'undo' | 'redo'): Promise<RewindResult<RewindPreviewDTO>> => ipcRenderer.invoke('rewind:preview', path, checkpoint, action),
@@ -146,6 +174,10 @@ const api = {
    * reloads. */
   setBrowserAgentTools: (enabled: boolean): Promise<void> =>
     ipcRenderer.invoke('app:setBrowserAgentTools', enabled),
+  setBrowserSearchEngine: (engine: BrowserSearchEngine): Promise<BrowserSearchEngine> =>
+    ipcRenderer.invoke('app:setBrowserSearchEngine', engine),
+  onBrowserSearchEngineChanged: (cb: (engine: BrowserSearchEngine) => void) =>
+    subscribe('browser:searchEngineChanged', cb),
   jevSettings: (): Promise<JevSettingsDTO> => ipcRenderer.invoke('jev:settings'),
   updateJevSettings: (update: JevSettingsUpdate): Promise<JevActionResult<JevSettingsDTO>> => ipcRenderer.invoke('jev:updateSettings', update),
   testJev: (): Promise<JevActionResult<JevEvaluationDTO>> => ipcRenderer.invoke('jev:test'),
@@ -159,6 +191,7 @@ const api = {
   setStartup: (mode: StartupSessionMode): Promise<StartupSessionMode> =>
     ipcRenderer.invoke('app:setStartup', mode),
   setWindowTheme: (theme: WindowTheme): void => ipcRenderer.send('window:setTheme', theme),
+setAlwaysOnTop: (flag: boolean): Promise<boolean> => ipcRenderer.invoke('window:setAlwaysOnTop', flag),
   openPictureInPicture: (request: PictureInPictureOpenRequest): Promise<boolean> => ipcRenderer.invoke('window:pipOpen', request),
   pictureInPicturePreferences: (): Promise<PictureInPicturePreferencesDTO> => ipcRenderer.invoke('window:pipPreferences'),
   setPictureInPicturePreferences: (update: Partial<PictureInPicturePreferencesDTO>): Promise<PictureInPicturePreferencesDTO> =>
@@ -210,6 +243,10 @@ const api = {
   /** Provider request timeout for an unanswered model request, in seconds. */
   setResponseTimeoutSeconds: (value: number): Promise<number> =>
     ipcRenderer.invoke('app:setResponseTimeoutSeconds', value),
+  /** Settings → General: allow the composer's model and permission selectors to
+   * change while a run is streaming. */
+  setAllowMidRunChanges: (enabled: boolean): Promise<boolean> =>
+    ipcRenderer.invoke('app:setAllowMidRunChanges', enabled),
   setSandboxMode: (mode: SandboxMode): Promise<SandboxMode> => ipcRenderer.invoke('app:setSandboxMode', mode),
   /** Change one session's mode; resolves with that session's fresh snapshot. */
   exportPlan: (request: PlanDocumentRequest): Promise<PlanActionResult<{ cancelled: boolean }>> => ipcRenderer.invoke('plan:export', request),
@@ -220,7 +257,7 @@ const api = {
   resetPlanApproval: (request: PlanDocumentRequest): Promise<PlanActionResult<PlanStateDTO>> => ipcRenderer.invoke('plan:resetApproval', request),
   setSessionSandboxMode: (sessionPath: string, mode: SandboxMode): Promise<SessionSnapshotDTO> =>
     ipcRenderer.invoke('sandbox:setMode', sessionPath, mode),
-  /** Compact one session's context on demand (the CLI's `/compact`). */
+  /** Compact this session now or at its next complete response/tool boundary. */
   compactSession: (sessionPath: string): Promise<SessionSnapshotDTO> =>
     ipcRenderer.invoke('pi:compact', sessionPath),
   /** Re-read extensions/skills/prompts/context files on demand (the CLI's
@@ -264,8 +301,6 @@ const api = {
    * list/dirs (live sessions reload so the agent tool roster updates). */
   setSubagentProfileTools: (filePath: string, tools: 'all' | string[]): Promise<SubagentProfilesDTO> =>
     ipcRenderer.invoke('subagents:setProfileTools', filePath, tools),
-  setSubagentProfileDebug: (filePath: string, enabled: boolean): Promise<SubagentProfilesDTO> =>
-    ipcRenderer.invoke('subagents:setProfileDebug', filePath, enabled),
   setSubagentProfileDefaults: (filePath: string, defaults: SubagentProfileDefaultsPayload): Promise<SubagentProfilesDTO> =>
     ipcRenderer.invoke('subagents:setProfileDefaults', filePath, defaults),
   appInfo: (): Promise<AppInfoDTO> => ipcRenderer.invoke('app:info'),
@@ -282,6 +317,8 @@ const api = {
   searchSessions: (request: SessionSearchRequest): Promise<SessionSearchResultDTO> =>
     ipcRenderer.invoke('pi:searchSessions', request),
   usageStats: (): Promise<UsageStatsDTO> => ipcRenderer.invoke('pi:usageStats'),
+  resourceRuntime: (): Promise<ResourceResult<ResourceRuntimeDTO>> => ipcRenderer.invoke('resources:runtime'),
+  resourceStorage: (): Promise<ResourceResult<ResourceStorageDTO>> => ipcRenderer.invoke('resources:storage'),
   contextDetail: (sessionPath?: string): Promise<ContextDetailDTO> =>
     ipcRenderer.invoke('pi:contextDetail', sessionPath),
   deleteSession: (path: string): Promise<SessionSnapshotDTO | null> =>
@@ -310,6 +347,10 @@ const api = {
     ipcRenderer.invoke('pi:resendMessage', payload),
   continueMessage: (payload: ContinuePayload): Promise<void> =>
     ipcRenderer.invoke('pi:continueMessage', payload),
+  imageReplays: (sessionPath: string): Promise<ImageReplaySnapshot> => ipcRenderer.invoke('pi:imageReplays', sessionPath),
+  retryPresentedImage: (request: ImageReplayRequest): Promise<void> => ipcRenderer.invoke('pi:retryPresentedImage', request),
+  cancelImageReplay: (sessionPath: string, id: string): Promise<void> => ipcRenderer.invoke('pi:cancelImageReplay', sessionPath, id),
+  onImageReplays: (listener: (snapshot: ImageReplaySnapshot) => void) => subscribe('pi:image-replays', listener),
   forkFromMessage: (timestamp: number): Promise<ForkResultDTO> =>
     ipcRenderer.invoke('pi:forkFromMessage', timestamp),
   setModel: (providerId: string, modelId: string): Promise<SessionSnapshotDTO> =>
@@ -375,6 +416,7 @@ const api = {
 
   searchFiles: (query: string): Promise<FileHitDTO[]> =>
     ipcRenderer.invoke('files:search', query),
+  resolveFilePath: (request: FileBrowserRequest): Promise<string> => ipcRenderer.invoke('files:resolvePath', request),
   readFile: (path: string): Promise<FilePreviewDTO> => ipcRenderer.invoke('files:read', path),
   listFileDirectory: (request: FileBrowserRequest, offset?: number): Promise<FileDirectoryDTO> => ipcRenderer.invoke('files:directory', request, offset),
   readFileDocument: (request: FileBrowserRequest): Promise<FileDocumentDTO> => ipcRenderer.invoke('files:document', request),
@@ -394,6 +436,8 @@ const api = {
   tableStat: (request: FileBrowserRequest): Promise<TableStatDTO> => ipcRenderer.invoke('files:tableStat', request),
   tableSlice: (request: FileBrowserRequest, offset: number, maxBytes?: number): Promise<TableSliceDTO> => ipcRenderer.invoke('files:tableSlice', request, offset, maxBytes),
   tableRange: (request: FileBrowserRequest, begin: number, end: number): Promise<Uint8Array> => ipcRenderer.invoke('files:tableRange', request, begin, end),
+  binaryPreview: (request: BinaryPreviewRequest): Promise<PreviewResult> => ipcRenderer.invoke('files:binaryPreview', request),
+  cancelBinaryPreview: (id: string): void => ipcRenderer.send('files:cancelBinaryPreview', id),
   saveFileCopy: (path: string): Promise<FileActionResultDTO> => ipcRenderer.invoke('files:saveCopy', path),
   readImage: (path: string): Promise<ImageContent | null> =>
     ipcRenderer.invoke('files:readImage', path),

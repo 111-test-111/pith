@@ -1,11 +1,13 @@
 /** Real Pi SDK -> app tools -> QuickJS -> persisted result contract. Offline. */
 import assert from 'node:assert/strict'
-import { writeFile } from 'node:fs/promises'
+import { readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
+import { Type } from 'typebox'
 import { Check } from 'typebox/value'
 import { createCodemodeExtension } from '@earendil-works/pi-coding-agent'
 import { createBrowserTools } from '../src/main/browser/tools.ts'
 import { RefNotInSnapshotError } from '../src/main/browser/service.ts'
+import { createAppCodemodeExtension } from '../src/main/pi/codemode-guidance.ts'
 import { createPlanFixture } from './lib/plan-fixture.mjs'
 
 const { loadPhoton } = await import(new URL('./utils/photon.js', import.meta.resolve('@earendil-works/pi-coding-agent')))
@@ -25,16 +27,73 @@ for (const name of ['browser_screenshot', 'browser_navigate', 'browser_click']) 
   assert.equal(result.isError, name !== 'browser_screenshot')
 }
 
+let probeCalls = 0
+let prepareCalls = 0
+const probe = {
+  name: 'fixture_contract_probe',
+  description: 'Inspect the orchid fixture contract.',
+  parameters: Type.Object({ kind: Type.Literal('probe') }),
+  prepareLoadout: () => { prepareCalls++ },
+  outputSchema: Type.Object({
+    contractToken: Type.Literal('orchid_contract_preserved'),
+    ...Object.fromEntries(Array.from({ length: 300 }, (_, i) => [
+      `optionalField${i}`, Type.Optional(Type.String({ description: 'An optional fixture output field.' }))
+    ]))
+  }),
+  execute: async () => {
+    probeCalls++
+    return { content: [{ type: 'text', text: 'Probe completed' }], structuredContent: { contractToken: 'orchid_contract_preserved' } }
+  }
+}
+const requestTools = request => {
+  const tools = new Map()
+  for (const message of request.messages) {
+    if (message.role !== 'system') continue
+    for (const tool of message.toolsRemoved ?? []) tools.delete(tool.name)
+    for (const tool of message.toolsAdded ?? []) tools.set(tool.name, tool)
+  }
+  return tools
+}
+
+// The app keeps the SDK's mode selection, including hidden direct declarations.
+let compactDefinition
+createAppCodemodeExtension()({
+  registerTool: definition => { compactDefinition = definition },
+  getSettings: () => ({ codemode: { mode: 'only', inlineBudget: 100000 } }),
+  getAllTools: () => [probe]
+})
+const onlyLoadout = compactDefinition.prepareLoadout({
+  declared: [probe, compactDefinition], callable: [probe], registered: [probe, compactDefinition],
+  getExposure: name => name === 'codemode' ? 'model-only' : 'direct',
+  getNamespace: () => undefined
+})
+assert.deepEqual(onlyLoadout.hiddenDeclarations, [probe.name], 'codemode-only still hides direct declarations')
+assert.deepEqual(Object.keys(onlyLoadout.descriptions), ['codemode'], 'only codemode presentation is replaced')
+let sdkDefinition
+createCodemodeExtension()({
+  registerTool: definition => { sdkDefinition = definition },
+  getSettings: () => ({}), getAllTools: () => []
+})
+assert(onlyLoadout.descriptions.codemode.includes(sdkDefinition.description),
+  'the app retains the complete native compact runtime and model API reference')
+
+
 let fixture
 try {
-  fixture = await createPlanFixture({ extensionFactories: [createCodemodeExtension(), api => {
+  fixture = await createPlanFixture({ withLibrary: true, extensionFactories: [api => {
     for (const tool of browserTools) api.registerTool({ ...tool, name: `fixture_${tool.name}` })
+    api.registerTool(probe)
   }] })
   await fixture.managed.lifecyclePromise
   fixture.app.setSessionSandboxMode(fixture.managed.path, 'danger-full-access')
   fixture.app.setBashMaxWaitMs(1000)
-  fixture.session.setActiveToolsByName([...fixture.session.getActiveToolNames(), 'codemode', ...browserTools.map(t => `fixture_${t.name}`)])
+  fixture.session.setActiveToolsByName([...fixture.session.getActiveToolNames(), 'codemode', probe.name, ...browserTools.map(t => `fixture_${t.name}`)])
   assert(fixture.session.getActiveToolNames().includes('codemode'), 'the isolated fixture explicitly activates its real SDK codemode extension')
+  const beforeAssignment = prepareCalls
+  const currentTools = fixture.session.agent.state.tools
+  fixture.session.agent.state.tools = currentTools
+  assert.equal(prepareCalls, beforeAssignment, 'filtering an SDK state assignment never reruns prepareLoadout hooks')
+  assert.notEqual(fixture.session.agent.state.tools, currentTools, 'the public tools accessor still copies its assigned array')
   const run = async code => {
     const next = fixture.requests.length + 1, id = `contract-${next}`
     fixture.setRespond(i => i === next ? [{ type: 'toolCall', id, name: 'codemode', arguments: { code } }]
@@ -44,6 +103,37 @@ try {
     assert(result && !result.isError, JSON.stringify(result?.content))
     return result
   }
+  const discovered = await run(`
+const matches = await searchTools('orchid fixture contract', {limit:2});
+if (!matches.some(t => t.name === 'fixture_contract_probe')) throw new Error('discovery failed');
+const declaration = await describeTool('fixture_contract_probe');
+if (typeof declaration !== 'string') throw new Error('missing full declaration');
+text(declaration);
+const result = await tools.fixture_contract_probe({kind:'probe'});
+text(result.contractToken);
+if (!('fixture_contract_probe' in tools) || 'absent_fixture' in tools) throw new Error('presence checks failed');
+try { tools.fixture_contract_prob; throw new Error('missing tool access did not throw'); }
+catch (e) { if (!e.message.includes('fixture_contract_probe')) throw e; }
+try { models.getAvailableOfTyp; throw new Error('missing model helper access did not throw'); }
+catch (e) { if (!e.message.includes('getAvailableOfType')) throw e; }
+const invalid = await Promise.allSettled([tools.fixture_contract_probe({kind:'invalid'})]);
+if (invalid[0].status !== 'rejected') throw new Error('schema validation lost');
+`)
+  const discoveryText = discovered.content.filter(b => b.type === 'text').map(b => b.text).join('\n')
+  assert.match(discoveryText, /optionalField299/)
+  assert.match(discoveryText, /orchid_contract_preserved/)
+  assert.equal(probeCalls, 1, 'invalid input is rejected before execution')
+  const declared = requestTools(fixture.requests.at(-1))
+  assert.equal(declared.get(probe.name)?.description, probe.description, 'the provider receives the original description without generated return types')
+  assert.deepEqual(declared.get(probe.name)?.parameters, JSON.parse(JSON.stringify(probe.parameters)), 'the provider retains the complete input schema')
+  assert(!declared.get('codemode').description.includes('optionalField299'), 'the large nested contract enters context only through discovery')
+
+  await fixture.app.reloadSession(fixture.managed.path)
+  fixture.session.setActiveToolsByName([...fixture.session.getActiveToolNames(), 'codemode', probe.name, ...browserTools.map(t => `fixture_${t.name}`)])
+  await run(`text(await describeTool('fixture_contract_probe')); text((await tools.fixture_contract_probe({kind:'probe'})).contractToken);`)
+  assert.equal(probeCalls, 2, 'discovery and execution survive a resource reload')
+  assert.equal(requestTools(fixture.requests.at(-1)).get(probe.name)?.description, probe.description)
+
   const result = await run(`
 const shot = await tools.fixture_browser_screenshot({});
 if (!shot.ok || shot.content[0].type !== 'image') throw new Error('image projection lost');
@@ -136,5 +226,56 @@ const ended=await tools.debug({...ref,request:{action:'stack'}});
 if(ended.error?.code!=='DEBUG_SESSION_ENDED')throw new Error('ended diagnosis');
 text({debug:true,frames:stack.frames.length});
 `)
-  console.log('PASS codemode contracts: browser images/errors, both failure boundaries, structured commands, exact line/byte paging, changed-file detection, durable logs and debug start/stack/registers/wait/stop/history')
+  // Pi 1.0's real QuickJS models API, with only the provider request replaced.
+  const registry = await fixture.app.runtime()
+  const imageModel = { type: 'image', id: 'offline-image', name: 'Offline image', provider: 'fixture-image',
+    api: 'fixture-images', baseUrl: 'http://127.0.0.1:1', headers: { authorization: 'fixture-private' } }
+  const usage = { input: 17, output: 3, cacheRead: 0, cacheWrite: 0, totalTokens: 20,
+    cost: { input: 0.02, output: 0.1, cacheRead: 0, cacheWrite: 0, total: 0.12 } }
+  registry.getModelsOfType = type => type === 'image' ? [imageModel] : []
+  registry.getAvailableOfType = async type => type === 'image' ? [imageModel] : []
+  registry.getModelOfType = (type, provider, id) => type === 'image' && provider === imageModel.provider && id === imageModel.id ? imageModel : undefined
+  let generated = 0
+  registry.generateImages = async (model, context, options) => {
+    assert.equal(model, imageModel, 'script-supplied model URLs and credentials never replace the registry model')
+    assert(options.signal instanceof AbortSignal)
+    generated++
+    return { api: imageModel.api, provider: model.provider, model: model.id, timestamp: Date.now(),
+      output: context.input[0].text === 'fail' ? [] : [{ type: 'image', data: jpeg, mimeType: 'image/jpeg' }],
+      stopReason: context.input[0].text === 'fail' ? 'error' : 'stop',
+      ...(context.input[0].text === 'fail' ? { errorMessage: 'Fixture image generation failed' } : { usage }) }
+  }
+  const beforeImage = fixture.session.getSessionStats()
+  const generatedResult = await run(`
+const available = await models.getAvailableOfType('image');
+if (available.length !== 1 || 'headers' in available[0]) throw new Error('image model catalog leaked credentials');
+const invalid = await Promise.allSettled([models.generateImages(available[0], {prompt:'invalid'})]);
+if (invalid[0].status !== 'rejected') throw new Error('invalid image context passed validation');
+const result = await models.generateImages({...available[0], baseUrl:'https://untrusted.example', headers:{authorization:'untrusted'}}, {input:[{type:'text',text:'offline pixel'}]});
+if (result.stopReason !== 'stop') throw new Error(result.errorMessage);
+for (const block of result.output) if (block.type === 'image') image(block);
+const failed = await models.generateImages(available[0], {input:[{type:'text',text:'fail'}]});
+if (failed.stopReason !== 'error') throw new Error('image failure lost');
+text(failed.errorMessage);
+`)
+  assert.equal(generated, 2, 'invalid contexts never reach the image provider')
+  assert.equal(generatedResult.content.find(block => block.type === 'image')?.data, jpeg, 'generated pixels persist byte-for-byte')
+  assert.deepEqual(generatedResult.usage, usage)
+  const calls = generatedResult.details.calls.filter(call => call.name === 'models.generateImages')
+  assert.deepEqual(calls.map(call => call.status), ['ok', 'error'])
+  assert.equal(calls[0].cost, usage.cost.total)
+  assert(calls.every(call => !JSON.stringify(call).includes(jpeg) && !JSON.stringify(call).includes('offline pixel')), 'nested model rows retain no prompts or pixels')
+  assert.equal(fixture.session.getSessionStats().cost - beforeImage.cost, usage.cost.total, 'SDK image billing is counted once')
+  assert.equal((await fixture.app.contextDetail()).cost, fixture.session.getSessionStats().cost, 'app context billing includes image usage without adding nested costs again')
+  const generatedEntry = fixture.session.sessionManager.getBranch().find(entry => entry.type === 'message' && entry.message.role === 'toolResult' && entry.message.toolCallId === generatedResult.toolCallId)
+  assert(generatedEntry, 'the generated result is committed to the selected SDK branch')
+  let archived
+  for (let attempt = 0; attempt < 200; attempt++) {
+    archived = (await fixture.library.page({ kind: 'image' })).items.find(item => item.entryId === generatedEntry.id && item.toolName === 'codemode' && item.storage === 'saved')
+    if (archived) break
+    await new Promise(resolve => setTimeout(resolve, 10))
+  }
+  assert(archived, 'forwarded model images enter the app Library')
+  assert.deepEqual(await readFile(archived.archivedPath), Buffer.from(jpeg, 'base64'))
+  console.log('PASS codemode contracts: compact discovery, validation/reload/mode-only, Pi 1.0 model images/billing/library, browser images/errors, exact paging, durable logs and debug lifecycle')
 } finally { await fixture?.close() }

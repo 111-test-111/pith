@@ -18,6 +18,8 @@ Mode changes and approvals take the synchronous lock before any await. Prompt/ba
 - Admit reviewed app-owned bash/task inspection, questions, Todo, Jev and constrained delegation/communication by exact definition identity; root-only `submit_plan` is special.
 - `REVIEWED_EXTENSION_TOOLS` is empty. Unreviewed extensions, MCP, browser actions and write/edit stay unavailable.
 - Preserve the app's active base separately from the filtered set; lazy registration/reload cannot widen Plan or erase Normal tools.
+- Extension tool selection reads and updates that Normal base, while Plan still filters model declarations and execution. Explicitly inactive definitions retained for historical rendering stay inactive across app settings changes and reloads.
+- Pi 1.0 refreshes tools internally without calling the public session setter. The gate also intercepts the public `AgentState.tools` accessor, preserving its copy-on-assignment semantics. Registration, request preparation and reload all materialize the same restricted view; incompatible accessor shapes fail closed at installation. Disposal restores the original descriptor and hook chain.
 - Recheck held execute references after awaited work. A batch containing `submit_plan` plus another tool rejects before either executes.
 
 `tool-call-boundary.ts` routes SDK nested calls through current admission and Rewind leases. Receipt-dependent app tools are `model-only`; nested execution cannot perform their state transitions. In Plan, nested raw read definitions are refused because they bypass the trusted replacement. Children freeze `planRestricted` and their ceiling at dispatch; resume may narrow only. Restricted children cannot recursively delegate or submit the parent's plan.
@@ -38,7 +40,7 @@ Approval under the lock:
 
 Duplicate accepted approvals return the same result only after storage/version checks. Stop cancels an opening still in preparation. Failed persistence locks work; accepted openings are not erased or replayed on model error. Reopen marks incomplete approvals interrupted and never auto-executes them. Rewind/resend/fork/reload refold branch facts.
 
-SDK 0.99.1's outer continuation loop can drain queues after `finishTurn`; while sealed, the public `hasQueuedMessages` and `agent.continue` adapters preserve queues and stop further requests. These public adapters require regression checks on SDK upgrades.
+SDK 1.0.0's outer continuation loop can drain queues after `finishTurn`; while sealed, the public `hasQueuedMessages` and `agent.continue` adapters preserve queues and stop further requests. These public adapters require regression checks on SDK upgrades.
 
 ## IPC and presentation
 

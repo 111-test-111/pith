@@ -1,3 +1,4 @@
+// local patch (pi-app): shared scalable typography for UI annotations.
 // local patch (pi-app): keep UI frames and focus rings in this component at 1px.
 "use client";
 // beui.dev/components/agents/chat-app
@@ -35,6 +36,8 @@ import { SPRING_PRESS, SPRING_SWAP } from "@/lib/ease";
 // cutting a line (the app hides every scrollbar, so the cut had no other cue).
 import { useScrollFade } from "@/lib/hooks/use-scroll-fade";
 import { cn } from "@/lib/utils";
+// local patch (pi-app): output caps follow whole lines at the code size.
+import { codeLineHeight, useCodeFontSize } from "@/lib/typography";
 
 export type ToolResultStatus = "running" | "success" | "error" | "cancelled";
 export type ToolResultKind = "terminal" | "request" | "custom";
@@ -62,6 +65,13 @@ export interface ToolResultProps {
   animateChanges?: boolean;
   /** local patch (pi-app): do not mount expensive output while collapsed. */
   lazyContent?: boolean;
+  /**
+   * local patch (pi-app): content pinned INSIDE the frame, above the output's
+   * scroll viewport and separated from it by the frame's divider — a bash
+   * row's full command stays visible while long output scrolls beneath it.
+   * Only meaningful for the framed (non-`bare`) body.
+   */
+  header?: ReactNode;
   /**
    * local patch (pi-app): render the body WITHOUT its framed output box — the
    * content sits directly on the transcript at the row's own indent. A tool
@@ -164,7 +174,8 @@ export function ToolResultOutput({
       language={language}
       highlight={highlight}
       className={cn(
-        "whitespace-pre-wrap break-words text-foreground/80",
+        // local patch (pi-app): tool output uses the same contrast as reply content.
+        "whitespace-pre-wrap break-words text-foreground",
         className,
       )}
     />
@@ -176,12 +187,11 @@ export function ToolResultOutput({
  * shows whole lines, never a half one.
  *
  * The 12px body padding is INSIDE the scrollport, so the fold sits on a line
- * boundary at `padding + lines × line`: 12 + 11 × 20 = 232, and AgentCode's
- * `text-xs leading-5` makes that line 20px. The vendored 220 left a 208px
+ * boundary at `padding + lines × line`: default 12 + 11 × 20 = 232.
+ * The vendored 220 left a 208px
  * content area — 10.4 lines — so the line at the fold was sliced in half.
  */
 const OUTPUT_PADDING = 12;
-const OUTPUT_LINE = 20;
 const OUTPUT_LINES = 11;
 
 export function ToolResult({
@@ -196,7 +206,7 @@ export function ToolResult({
   defaultOpen = true,
   onOpenChange,
   collapseOnComplete = true,
-  maxHeight = OUTPUT_PADDING + OUTPUT_LINE * OUTPUT_LINES,
+  maxHeight,
   copyText,
   onCopy,
   onRetry,
@@ -204,9 +214,14 @@ export function ToolResult({
   contentClassName,
   animateChanges = true,
   lazyContent = false,
+  header,
   bare = false,
 }: ToolResultProps) {
   const reduce = useReducedMotion() ?? false;
+  const rowHeight = codeLineHeight(useCodeFontSize());
+  const viewportHeight = maxHeight === undefined
+    ? OUTPUT_PADDING + rowHeight * OUTPUT_LINES
+    : OUTPUT_PADDING + Math.max(rowHeight, Math.floor((maxHeight - OUTPUT_PADDING) / rowHeight) * rowHeight);
   const baseId = useId();
   const triggerId = `${baseId}-trigger`;
   const contentId = `${baseId}-content`;
@@ -307,13 +322,12 @@ export function ToolResult({
           {icon ?? <KindIcon kind={kind} />}
         </span>
         <span className="flex min-w-0 flex-1 items-baseline gap-2">
-          {/* local patch (pi-app): the app renders every tool row through this
-              title; muted keeps it distinct from the tool's output text
-              (`text-foreground/80`) while staying on the UI font. The title
-              and smaller meta stay on this parent's shared baseline, matching
-              grouped rows instead of centring their unequal line boxes. Data
+          {/* local patch (pi-app): tool titles use primary contrast; the smaller
+              metadata keeps its muted colour on this shared baseline. Data
               markers let the shared row geometry regression cover every host. */}
-          <span data-tool-result-title="" className="min-w-0 truncate font-medium text-muted-foreground">
+          {/* local patch (pi-app): centre the title and metadata by their type
+              area while retaining their shared baseline and truncation. */}
+          <span data-tool-result-title="" className="transcript-label min-w-0 truncate font-medium text-foreground">
             {animateChanges ? (
               <ActionSwapRollText value={titleKey}>{title}</ActionSwapRollText>
             ) : (
@@ -321,7 +335,7 @@ export function ToolResult({
             )}
           </span>
           {meta ? (
-            <span data-tool-result-meta="" className="shrink-0 text-xs text-muted-foreground/60">
+            <span data-tool-result-meta="" className="transcript-label shrink-0 text-xs text-muted-foreground/60">
               {animateChanges ? (
                 <ActionSwapRollText value={metaKey}>{meta}</ActionSwapRollText>
               ) : (
@@ -334,7 +348,7 @@ export function ToolResult({
               the width the title needs. Render it only when a caller supplies
               one (beUI previews still do). */}
           {tool ? (
-            <span className="min-w-0 truncate font-mono text-[11px] text-muted-foreground/55">
+            <span className="transcript-label min-w-0 truncate font-mono text-caption text-muted-foreground/55">
               {animateChanges ? (
                 <ActionSwapRollText value={toolKey}>{tool}</ActionSwapRollText>
               ) : (
@@ -349,7 +363,7 @@ export function ToolResult({
             stays for screen readers. */}
         <span
           className={cn(
-            "inline-flex shrink-0 items-center text-[11px] font-medium",
+            "inline-flex shrink-0 items-center text-caption font-medium",
             getStatusClass(status),
           )}
         >
@@ -382,13 +396,18 @@ export function ToolResult({
               <div className={cn("min-w-0", contentClassName)}>{children}</div>
             ) : (
               <div className="overflow-hidden rounded-xl bg-muted/80">
+                {header ? (
+                  <div data-tool-header="" className="border-b border-border/60">
+                    {header}
+                  </div>
+                ) : null}
                 <div
                   ref={viewportRef}
                   role="log"
                   aria-live="polite"
                   data-fade={fadeEdges.top && fadeEdges.bottom ? "both" : fadeEdges.bottom ? "bottom" : fadeEdges.top ? "top" : "none"}
                   className="scrollbar-hide overflow-y-auto"
-                  style={{ maxHeight, maskImage, WebkitMaskImage: maskImage }}
+                  style={{ maxHeight: viewportHeight, maskImage, WebkitMaskImage: maskImage }}
                 >
                   <div className={cn("p-3", contentClassName)}>{children}</div>
                 </div>
@@ -412,7 +431,7 @@ export function ToolResult({
                         <RotateCcw className="size-3.5" />
                       </ToolResultAction>
                     ) : null}
-                    <span className="ml-auto text-[11px] text-muted-foreground/55">
+                    <span className="ml-auto text-caption text-muted-foreground/55">
                       {animateChanges ? (
                         <ActionSwapRollText value={status}>{statusLabel}</ActionSwapRollText>
                       ) : (

@@ -16,6 +16,8 @@ asarUnpack:
 extraResources:
   - from: resources/icons
     to: icons
+  - from: resources/skills
+    to: skills
 mac:
   icon: resources/icons/icon.icns
   category: public.app-category.developer-tools

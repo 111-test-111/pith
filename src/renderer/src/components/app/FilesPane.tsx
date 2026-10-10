@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react'
 import type { DebugBreakpointDTO } from '../../../../shared/types'
 import { AgentCode } from '@/components/agents/agent-code'
 import { Button } from '@/components/motion/button'
@@ -20,6 +20,11 @@ import { FileHtml } from './FileHtml'
 import { FileMarkdown } from './FileMarkdown'
 import { requestBrowserOpenLink } from '@/lib/browser/open-link'
 import { FileNotebook } from './FileNotebook'
+import { FileJson } from './FileJson'
+import { FileStructured } from './FileStructured'
+import { FileArchive } from './FileArchive'
+import { FileData } from './FileData'
+import { structuredFormatOf } from '../../../../shared/file-preview'
 import { FileSubtitle } from './FileSubtitle'
 import { useToast } from './ToastProvider'
 import { FileMedia } from './FileMedia'
@@ -38,11 +43,11 @@ import { useDebugTargets } from '@/lib/hooks/use-debug-targets'
 import { useWheelScroll } from '@/lib/hooks/use-wheel-scroll'
 
 function ToolButton({ label, icon: Icon, onClick, active, disabled }: { label: string; icon: IconComponent; onClick: () => void; active?: boolean; disabled?: boolean }) {
-  return <Tooltip content={label}><Button variant="ghost" size="icon" className={cn('size-7 shrink-0', active && 'bg-primary/10 text-primary')} aria-label={label} aria-pressed={active} disabled={disabled} onClick={onClick}><Icon aria-hidden className="size-3.5" /></Button></Tooltip>
+  return <Tooltip content={label}><Button variant="ghost" size="icon" className={cn('size-7 shrink-0', active && 'bg-muted text-primary')} aria-label={label} aria-pressed={active} disabled={disabled} onClick={onClick}><Icon aria-hidden className="size-3.5" /></Button></Tooltip>
 }
 
 function Notice({ children, loading = false }: { children: ReactNode; loading?: boolean }) {
-  return <div role="status" className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-5 text-center text-xs leading-5 text-muted-foreground">
+  return <div role="status" className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-5 text-center text-xs leading-ui text-muted-foreground">
     {loading ? <LoaderCircle aria-hidden className="size-5 motion-safe:animate-spin" /> : <FileText aria-hidden className="size-5 text-muted-foreground/60" />}{children}
   </div>
 }
@@ -50,30 +55,35 @@ function Notice({ children, loading = false }: { children: ReactNode; loading?: 
 function FileContent({ tab, kind, document, store, search, refresh, wrap, debugBreakpoints, onToggleBreakpoint }: { tab: FileTab; kind: PreviewKind; document: FileDocumentDTO; store: FileBrowserStore; search?: { result: FileSearchResult; current: number }; refresh: number; wrap: boolean; debugBreakpoints?: DebugBreakpointDTO[]; onToggleBreakpoint?: (line: number) => void }) {
   const { t } = useI18n()
   const scroll = useRef<HTMLDivElement>(null)
-  const [diff, setDiff] = useState<FileGitDiffDTO | null>(null)
+  const [diff, setDiff] = useState<FileGitDiffDTO | null>(() => store.cache.gitDiff(tab) ?? null)
+  const [diffRoot, setDiffRoot] = useState<HTMLDivElement | null>(null)
+  // Child layout effects run before this scrollport's ref attaches. Publishing
+  // the root remeasures virtual rows before paint, after restoring its scroll.
+  const attachDiffRoot = useCallback((root: HTMLDivElement | null) => { scroll.current = root; setDiffRoot(root) }, [])
   const view = tab.view === 'diff' && !document.gitRoot ? 'source' : tab.view
+  const hasDiffBody = !!diff?.patch && !diff.error && !diff.binary
   useEffect(() => {
     if (view !== 'diff') return
     let cancelled = false
-    setDiff(null)
-    void window.pi.readFileGitDiff({ cwd: tab.cwd, path: tab.path }).then(value => { if (!cancelled) setDiff(value) })
-      .catch(() => { if (!cancelled) setDiff({ gitRoot: document.gitRoot, patch: '', binary: false, error: 'git' }) })
+    // Revalidate in the background without replacing a warm diff with a loader.
+    // The store cache also supplies the first frame after a rail/pane remount.
+    void store.cache.readGitDiff(tab).then(value => { if (!cancelled) setDiff(value) })
     return () => { cancelled = true }
-  }, [tab.path, tab.cwd, view, refresh, document.gitRoot])
+  }, [tab.path, tab.cwd, tab.visit, view, refresh, document.gitRoot, store])
   useLayoutEffect(() => {
     if (!scroll.current) return
     const saved = store.getScroll(tab.path, view)
     scroll.current.scrollTop = saved?.top ?? 0
     scroll.current.scrollLeft = saved?.left ?? 0
-  }, [tab.path, view, store, !!diff])
+  }, [tab.path, view, store, hasDiffBody])
   const onScroll = () => { if (scroll.current) store.saveScroll(tab.path, view, scroll.current.scrollTop, scroll.current.scrollLeft) }
   if (view === 'diff') {
     if (!diff) return <Notice loading>{t('files.loading')}</Notice>
     if (diff.error) return <Notice>{t(`files.error.${diff.error}`)}</Notice>
     if (diff.binary) return <Notice>{t('files.error.binary')}</Notice>
     if (!diff.patch) return <Notice>{t('files.noChanges')}</Notice>
-    return <div ref={scroll} data-file-diff onScroll={onScroll} className="min-h-0 flex-1 overflow-auto">
-      {diff.patch.includes('@@') ? <ReviewDiffBody patch={diff.patch} displayPath={tab.path} scrollRootRef={scroll} /> : <AgentCode code={diff.patch} language="diff" className="p-3" />}
+    return <div ref={attachDiffRoot} data-file-diff onScroll={onScroll} className="min-h-0 flex-1 overflow-auto">
+      {diff.patch.includes('@@') ? <ReviewDiffBody patch={diff.patch} displayPath={tab.path} scrollRootRef={scroll} layoutKey={diffRoot} /> : <AgentCode code={diff.patch} language="diff" className="p-3" />}
     </div>
   }
   if (document.error) return <Notice>{t(`files.error.${document.error}`)}</Notice>
@@ -83,6 +93,8 @@ function FileContent({ tab, kind, document, store, search, refresh, wrap, debugB
     // document's own scroll container (see shared/preview.ts).
     if (kind === 'diff') return <FileDiffPreview text={document.text ?? ''} displayPath={tab.path} />
     if (kind === 'notebook') return <FileNotebook text={document.text ?? ''} truncated={document.truncated} tab={tab} store={store} />
+    if (kind === 'json') return <FileJson text={document.text ?? ''} truncated={document.truncated} />
+    if (kind === 'structured') return <FileStructured text={document.text ?? ''} format={structuredFormatOf(tab.path)!} truncated={document.truncated} />
     if (kind === 'subtitle') return <FileSubtitle text={document.text ?? ''} format={subtitleFormatOf(tab.path) ?? 'srt'} />
     return <div ref={scroll} data-file-markdown onScroll={onScroll} className="min-h-0 flex-1 overflow-auto p-5">
       <FileNavigationProvider cwd={tab.cwd} openFile={target => store.open(tab.cwd, target)}>
@@ -118,9 +130,27 @@ function useDebugGutter(debug: DebugStore, shell: PiShellState, file: string | u
 }
 
 export function FilesPane({ files, store, filePath, debug }: { files: FileBrowserStore; store: PiStore; filePath: string | null; debug: DebugStore }) {
+  const shell = useSyncExternalStore(store.subscribe, store.getShell)
+  const gutter = useDebugGutter(debug, shell, filePath ?? undefined)
+  return <FilePreviewPane files={files} filePath={filePath} cwd={shell.cwd ?? ''} projectless={shell.projectless} streaming={shell.isStreaming} {...gutter} />
+}
+
+/** The same read-only engines and controls can live beside the Library list
+ * without mounting the conversation or acquiring its debug/session state. */
+export function FilePreviewPane({ files, filePath, cwd: fallbackCwd = '', projectless = false, streaming = false, displayName, toolbarActions, saveCopyAction, debugBreakpoints, onToggleBreakpoint }: {
+  files: FileBrowserStore
+  filePath: string | null
+  cwd?: string
+  projectless?: boolean
+  streaming?: boolean
+  displayName?: string
+  toolbarActions?: ReactNode
+  saveCopyAction?: { label: string; onClick: () => void }
+  debugBreakpoints?: DebugBreakpointDTO[]
+  onToggleBreakpoint?: (line: number) => void
+}) {
   const { t } = useI18n()
   const state = useSyncExternalStore(files.subscribe, files.getSnapshot)
-  const shell = useSyncExternalStore(store.subscribe, store.getShell)
   const currentTab = state.tabs.find(item => item.path === filePath)
   const lastTab = useRef<FileTab | undefined>(currentTab)
   if (currentTab) lastTab.current = currentTab
@@ -128,15 +158,14 @@ export function FilesPane({ files, store, filePath, debug }: { files: FileBrowse
   // Keep its last file frame until unmount, instead of mounting a fresh chooser
   // (and new tree animations) inside an already-exiting presence boundary.
   const tab = currentTab ?? (lastTab.current?.path === filePath ? lastTab.current : undefined)
-  const gutter = useDebugGutter(debug, shell, tab?.path)
   const treeOpen = tab?.treeOpen ?? state.treeOpen
-  const cwd = tab?.cwd ?? shell.cwd ?? ''
+  const cwd = tab?.cwd ?? fallbackCwd
   const root = tab && tab.path !== cwd && !tab.path.startsWith(cwd.replace(/\/$/, '') + '/') ? fileDirname(tab.path) : cwd
   // One routing table decides what this path is, and therefore which reader and
   // which body own it (see shared/preview.ts). The old per-family predicates —
   // mediaKindOf / isPdfPath / tableFormatOf / isUnsupportedMedia — are composed
   // inside it, so a new previewable type is one branch there and nothing here.
-  const kind: PreviewKind = tab ? previewKindOf(tab.path) : 'text'
+  const kind: PreviewKind = tab ? previewKindOf(displayName ?? tab.path) : 'text'
   const mediaKind = isMediaKind(kind) ? kind : null
   const table = kind === 'table' ? 'delimited' as const : kind === 'spreadsheet' ? 'xlsx' as const : null
   const spreadsheet = kind === 'spreadsheet'
@@ -144,7 +173,10 @@ export function FilesPane({ files, store, filePath, debug }: { files: FileBrowse
   // source/preview/diff tabs, and never a document read (a 2 GiB video would
   // come back as its first 512 KiB of "binary").
   const inlineOnly = !!tab && isInlineOnly(kind)
-  const [document, setDocument] = useState<FileDocumentDTO | null>(() => tab ? files.cache.document(tab) ?? null : null)
+  const [document, setDocument] = useState<{ key: string; value: FileDocumentDTO } | null>(() => {
+    const value = tab ? files.cache.document(tab) : undefined
+    return value && tab ? { key: `${tab.cwd}\0${tab.path}\0${tab.encoding ?? 'auto'}`, value } : null
+  })
   const [refresh, setRefresh] = useState(0)
   const [find, setFind] = useState(false)
   const [query, setQuery] = useState('')
@@ -189,22 +221,23 @@ export function FilesPane({ files, store, filePath, debug }: { files: FileBrowse
     window.addEventListener('focus', focus)
     return () => window.removeEventListener('focus', focus)
   }, [files, root])
-  const wasStreaming = useRef(shell.isStreaming)
+  const wasStreaming = useRef(streaming)
   useEffect(() => {
-    if (wasStreaming.current && !shell.isStreaming) { files.cache.invalidateTree(root); setRefresh(value => value + 1) }
-    wasStreaming.current = shell.isStreaming
-  }, [shell.isStreaming, files, root])
+    if (wasStreaming.current && !streaming) { files.cache.invalidateTree(root); setRefresh(value => value + 1) }
+    wasStreaming.current = streaming
+  }, [streaming, files, root])
   useEffect(() => {
     setMatchIndex(0)
     // Only a text-family path is read; the main process enforces the same rule.
     if (!tab || !readsAsText(kind)) { setDocument(null); return }
     let cancelled = false
-    void files.cache.readDocument(tab).then(value => { if (!cancelled) setDocument(value) })
+    const key = `${tab.cwd}\0${tab.path}\0${tab.encoding ?? 'auto'}`
+    void files.cache.readDocument(tab).then(value => { if (!cancelled) setDocument({ key, value }) })
     return () => { cancelled = true }
-  }, [tab?.path, tab?.cwd, tab?.visit, refresh, files])
+  }, [tab?.path, tab?.cwd, tab?.visit, tab?.encoding, refresh, files])
   useEffect(() => { if (!copied) return; const timer = setTimeout(() => setCopied(false), 1600); return () => clearTimeout(timer) }, [copied])
   useEffect(() => { setQuery(''); setFind(false); setCopied(false) }, [tab?.path])
-  const ready = document?.path === tab?.path ? document : tab ? files.cache.document(tab) ?? null : null
+  const ready = document?.key === `${tab?.cwd}\0${tab?.path}\0${tab?.encoding ?? 'auto'}` ? document.value : tab ? files.cache.document(tab) ?? null : null
   const { result: searchResult, searching } = useFileSearch(ready?.text ?? '', query, findOptions, find)
   const matches = searchResult.matches
   const selectedMatch = matches.length ? matchIndex % matches.length : 0
@@ -261,9 +294,9 @@ export function FilesPane({ files, store, filePath, debug }: { files: FileBrowse
   }}>
     <div data-file-toolbar className="flex h-11 shrink-0 items-center gap-1 border-b border-border/40 px-2">
       <ToolButton label={t(treeOpen ? 'files.hideTree' : 'files.showTree')} icon={FolderTree} active={treeOpen} onClick={() => files.toggleTree(tab?.path)} />
-      <LabelTooltip content={tab?.path ?? (shell.projectless ? t('files.workspace') : root)} wrap wrapperClassName="min-w-0 flex-1">
+      <LabelTooltip content={tab?.path ?? (projectless ? t('files.workspace') : root)} wrap wrapperClassName="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-1 overflow-hidden whitespace-nowrap px-1 text-xs" data-file-breadcrumb>
-          {tab ? <><span className="min-w-0 truncate text-muted-foreground">{pathParts.slice(0, -1).join(' / ')}</span>{pathParts.length > 1 ? <span className="text-muted-foreground/40">/</span> : null}<MiddleEllipsis name={basename(tab.path)} className="shrink-[0.3] font-medium" /></> : <span className="truncate text-muted-foreground">{shell.projectless ? t('files.workspace') : basename(root)}</span>}
+          {tab ? displayName ? <MiddleEllipsis name={displayName} className="font-medium" /> : <><span className="min-w-0 truncate text-muted-foreground">{pathParts.slice(0, -1).join(' / ')}</span>{pathParts.length > 1 ? <span className="text-muted-foreground/40">/</span> : null}<MiddleEllipsis name={basename(tab.path)} className="shrink-[0.3] font-medium" /></> : <span className="truncate text-muted-foreground">{projectless ? t('files.workspace') : basename(root)}</span>}
         </div>
       </LabelTooltip>
       <ToolButton label={t('files.refresh')} icon={RefreshCw} onClick={refreshFiles} />
@@ -271,35 +304,36 @@ export function FilesPane({ files, store, filePath, debug }: { files: FileBrowse
         {kind === 'html' ? <ToolButton label={t('files.html.openBrowser')} icon={Globe} onClick={() => void openInBrowser()} /> : null}
         <ToolButton label={t('files.openDefault')} icon={ExternalLink} onClick={() => void openDefault()} />
         <ToolButton label={t('files.showInFolder')} icon={FolderOpen} onClick={showInFolder} />
-        <ToolButton label={t('files.saveAs')} icon={Download} onClick={() => void saveCopy()} />
+        <ToolButton label={saveCopyAction?.label ?? t('files.saveAs')} icon={Download} onClick={saveCopyAction?.onClick ?? (() => void saveCopy())} />
       </> : null}
+      {toolbarActions}
     </div>
     <div ref={body} className="flex min-h-0 flex-1">
       {treeOpen && root ? <><div ref={tree} className="flex min-w-0 shrink-0 flex-col border-r border-border/30" style={{ '--file-tree-width': state.treeWidth === undefined ? 'min(36%, 208px)' : `${state.treeWidth}px`, width: 'clamp(96px, var(--file-tree-width), max(96px, min(480px, calc(100% - 140px))))' } as CSSProperties} data-file-tree-column>
-        <FileTree root={root} projectless={shell.projectless && root === shell.cwd} expanded={state.expanded} selected={tab?.path ?? null} store={files} refresh={refresh} />
+        <FileTree root={root} projectless={projectless && root === fallbackCwd} expanded={state.expanded} selected={tab?.path ?? null} store={files} refresh={refresh} />
       </div><PanelResizeHandle grow="right" label={t('files.resizeTree')} className="-mx-[3px] block focus-visible:bg-primary/20" value={state.treeWidth} onStep={delta => { startTreeResize(); resizeTree(delta); endTreeResize() }} onResizeStart={startTreeResize} onResize={resizeTree} onResizeEnd={endTreeResize} onActiveChange={active => tree.current?.style.setProperty('border-right-color', active ? 'var(--color-primary)' : '')} /></> : null}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-file-preview>
         {tab ? <>
           {inlineOnly || spreadsheet ? null : <div data-file-view-tabs className="flex min-h-10 shrink-0 flex-wrap items-center gap-1 border-b border-border/40 px-2 py-1">
             <Tabs value={view} variant="underline" onValueChange={value => { files.setView(tab.path, value as FileView); setFind(false); setQuery('') }} className="min-w-0">
               <TabsList className="h-7 gap-1 border-b-0 p-0">
-                <TabsTrigger value="source" className="min-h-0 px-2 py-1 text-[11px]">{t('files.source')}</TabsTrigger>
-                {hasPreviewView(kind) ? <TabsTrigger value="preview" className="min-h-0 px-2 py-1 text-[11px]">{t('files.preview')}</TabsTrigger> : null}
-                {ready?.gitRoot ? <TabsTrigger value="diff" className="min-h-0 px-2 py-1 text-[11px]">{t('files.diff')}</TabsTrigger> : null}
+                <TabsTrigger value="source" className="min-h-0 px-2 py-1 text-caption">{t('files.source')}</TabsTrigger>
+                {hasPreviewView(kind) ? <TabsTrigger value="preview" className="min-h-0 px-2 py-1 text-caption">{t('files.preview')}</TabsTrigger> : null}
+                {ready?.gitRoot ? <TabsTrigger value="diff" className="min-h-0 px-2 py-1 text-caption">{t('files.diff')}</TabsTrigger> : null}
               </TabsList>
             </Tabs>
-            <div className="ml-auto flex items-center gap-0.5">
+            <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-0.5">
               <div ref={findButton}><ToolButton label={t('files.find')} icon={Search} active={find} disabled={!ready?.text} onClick={showFind} /></div>
               <ToolButton label={t('files.wrap')} icon={WrapText} active={state.wrapLines} disabled={view !== 'source'} onClick={() => files.setWrapLines(!state.wrapLines)} />
               <ToolButton label={t(copied ? 'files.copied' : 'files.copy')} icon={copied ? Check : Copy} disabled={ready?.text === undefined} onClick={() => void copy()} />
             </div>
           </div>}
           {!inlineOnly && !spreadsheet && find ? <FileFindBar inputRef={findRef} query={query} options={findOptions} result={searchResult} current={selectedMatch} searching={searching} onQuery={value => { setQuery(value); setMatchIndex(0) }} onOptions={value => { setFindOptions(value); setMatchIndex(0) }} onMove={moveMatch} onClose={closeFind} /> : null}
-          {mediaKind ? <FileMedia tab={tab} kind={mediaKind} refresh={refresh} /> : kind === 'pdf' ? <FilePdf key={tab.path} tab={tab} onOpenFile={target => files.open(tab.cwd, { path: target })} /> : kind === 'font' ? <FileFont key={`${tab.path}:${refresh}`} tab={tab} /> : kind === 'unplayable' ? <Notice>{t('files.media.unsupported')}</Notice> : kind === 'html' && view === 'preview' ? <FileHtml key={tab.path} tab={tab} refresh={refresh} onFind={showFind} /> : table && view === 'preview' ? <FileTable key={tab.path} tab={tab} format={table} store={files} generation={refresh} /> : ready ? <FileContent key={tab.path} tab={tab} kind={kind} document={ready} store={files} search={find ? { result: searchResult, current: selectedMatch } : undefined} refresh={refresh} wrap={state.wrapLines} debugBreakpoints={gutter.debugBreakpoints} onToggleBreakpoint={gutter.onToggleBreakpoint} /> : <Notice loading>{t('files.loading')}</Notice>}
+          {kind === 'archive' ? <FileArchive key={tab.path} tab={tab} store={files} generation={refresh} /> : kind === 'data' ? <FileData key={tab.path} tab={tab} store={files} generation={refresh} /> : mediaKind ? <FileMedia tab={tab} kind={mediaKind} refresh={refresh} /> : kind === 'pdf' ? <FilePdf key={tab.path} tab={tab} onOpenFile={target => files.open(tab.cwd, { path: target })} /> : kind === 'font' ? <FileFont key={`${tab.path}:${refresh}`} tab={tab} /> : kind === 'unplayable' ? <Notice>{t('files.media.unsupported')}</Notice> : kind === 'html' && view === 'preview' ? <FileHtml key={tab.path} tab={tab} refresh={refresh} onFind={showFind} /> : table && view === 'preview' ? <FileTable key={tab.path} tab={tab} format={table} store={files} generation={refresh} /> : ready ? <FileContent key={tab.path} tab={tab} kind={kind} document={ready} store={files} search={find ? { result: searchResult, current: selectedMatch } : undefined} refresh={refresh} wrap={state.wrapLines} debugBreakpoints={debugBreakpoints} onToggleBreakpoint={onToggleBreakpoint} /> : <Notice loading>{t('files.loading')}</Notice>}
           {/* A table's preview is not the truncated source text, so the source
               notice belongs to the source view only. */}
           {ready?.truncated && !((table || kind === 'html') && view === 'preview') ? <p role="status" className="shrink-0 border-t border-border/40 px-3 py-2 text-xs text-muted-foreground">{t('files.truncated', { size: formatBytes(textReadLimit(kind)) })}</p> : null}
-          {view === 'diff' && ready?.gitRoot ? <p className="shrink-0 border-t border-border/40 px-3 py-1.5 text-[10px] text-muted-foreground">{t('files.diffBase')}</p> : null}
+          {view === 'diff' && ready?.gitRoot ? <p className="shrink-0 border-t border-border/40 px-3 py-1.5 text-micro text-muted-foreground">{t('files.diffBase')}</p> : null}
         </> : <Notice>{t('files.chooseFile')}</Notice>}
       </div>
     </div>

@@ -40,7 +40,7 @@ const nativeResult = object(native)
 /** Array actions have named fields; object actions keep their named fields.
  * Completeness is checked against the action registry at compile time. */
 export const debugResults = {
-  help: wrapped('actions', Type.Array(Type.Object({ action: s, access: s, target: s, core: b, capability: opt(s), pinned: opt(b), inputSchema: Type.Object({}), resultSchema: Type.Object({}) }))),
+  help: wrapped('actions', Type.Array(Type.Object({ action: s, access: s, target: s, core: b, capability: opt(s), pinned: opt(b), inputSchema: Type.Object({}), resultSchema: Type.Object({}), guidelines: Type.Array(s) }))),
   sessions: wrapped('sessions', Type.Array(session, { description: 'Owned live targets plus bounded ended history. starting/running/stopped are live; terminated/failed are ended.' })),
   adapters: wrapped('adapters', Type.Array(Type.Object({ id: s, label: s, languages: Type.Array(s), available: b, detail: opt(s) }))),
   configurations: wrapped('configurations', Type.Array(Type.Object({ name: s, adapterId: s, kind: s, program: opt(s), cwd: opt(s), extraKeys: Type.Array(s) }))),

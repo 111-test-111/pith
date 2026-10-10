@@ -38,6 +38,8 @@ files[4] = {filePath:'/fixture/edit.ts',displayPath:'src/edit.ts',added:1,remove
 const coldCode = 'export const snapshot = "ready";';
 files.push({filePath:'/fixture/cold.ts',displayPath:'src/cold.ts',added:1,patch:synthesizeWritePatch('cold.ts',coldCode)});
 files.push({filePath:'/fixture/empty.ts',displayPath:'src/empty.ts'});
+files.push({filePath:'/fixture/empty-patch.ts',displayPath:'src/empty-patch.ts',patch:'--- a/empty-patch.ts\\n+++ b/empty-patch.ts\\n@@ -0,0 +0,0 @@\\n'});
+files.push({filePath:'/fixture/blank-patch.ts',displayPath:'src/blank-patch.ts',patch:'  \\n'});
 window.warmCold = () => prefetchAgentCodeTokens(coldCode,'typescript');
 window.checkRoot = createRoot(document.getElementById('root'));
 const render = (items) => window.checkRoot.render(React.createElement(I18nProvider,null,React.createElement('div',
@@ -154,6 +156,11 @@ app.on('window-all-closed',()=>app.quit());`)
     await send('Input.dispatchKeyEvent',{type:'keyUp',key,code,windowsVirtualKeyCode})
   }
   const panels=()=>evaluate(`document.querySelectorAll('[data-morph-popover-portal]').length`)
+  const assertClosed=async(label)=>{
+    assert.ok(await evaluate(`[...document.querySelectorAll('[data-morph-popover-portal]')].every(p=>p.inert&&getComputedStyle(p).pointerEvents==='none')`),label+': exit releases input immediately')
+    for(let i=0;i<40&&await panels();i++)await pause(25)
+    assert.equal(await panels(),0,label+': the visual exit finishes')
+  }
   const rows=()=>evaluate(`[...document.querySelector('ul[data-plain-list]').querySelectorAll('li')].map(e=>{
     const r=e.getBoundingClientRect();return {x:r.left+8,y:r.top+r.height/2,cx:r.left+r.width/2}
   })`)
@@ -222,27 +229,26 @@ app.on('window-all-closed',()=>app.quit());`)
   assert.equal(bottom.height,3000*20,'virtual rows retain the complete scroll range')
   assert.ok(bottom.text.includes('file1Line3000'),'last line is reachable')
   assert.ok(bottom.rows<=40,'scrolling does not expand the mounted window')
-  // The cap's clipped edge fades instead of cutting a line, and only the edge
-  // that actually hides content carries the ramp: scrolled to the end, the
-  // bottom edge is content's own end.
+  // The hover preview owns no edge fade: its diff viewport cuts at the cap
+  // rather than laying a shadow gradient over the code at either end.
   const fadeAtEnd=await evaluate(`(()=>{const v=document.querySelector('[data-slot="file-diff-viewport"]');const s=getComputedStyle(v);return {fade:v.dataset.fade,mask:s.maskImage==='none'?'':s.maskImage,overflow:v.scrollHeight-v.clientHeight,top:v.scrollTop}})()`)
   assert.ok(fadeAtEnd.overflow>0,'the preview body is taller than its cap')
-  assert.equal(fadeAtEnd.fade,'top','scrolled to the end, only the top edge fades')
-  assert.match(fadeAtEnd.mask,/12px/,'the clipped edge is masked, not cut')
+  assert.equal(fadeAtEnd.fade,'none','the preview viewport carries no edge fade')
+  assert.equal(fadeAtEnd.mask,'','and no mask ramp, scrolled to the end')
   const fadeAtTop=await evaluate(`(async()=>{const v=document.querySelector('[data-slot="file-diff-viewport"]');v.scrollTop=0;await new Promise(r=>setTimeout(r,80));return {fade:v.dataset.fade,mask:getComputedStyle(v).maskImage}})()`)
-  assert.equal(fadeAtTop.fade,'bottom','at the top only the bottom edge fades')
-  assert.match(fadeAtTop.mask,/12px/,'and the ramp is applied there too')
+  assert.equal(fadeAtTop.fade,'none','scrolling back to the top does not reinstate a fade')
+  assert.equal(fadeAtTop.mask,'none','and the mask stays off there too')
   await move(positions[1].cx,positions[1].y);await pause(240)
   assert.equal(await panels(),1,'returning from panel to row keeps it open')
   await click(positions[1].cx,positions[1].y);await move(50,50);await pause(240)
   assert.equal(await panels(),1,'click pins the preview')
   await key('Escape');await pause(80)
-  assert.equal(await panels(),0,'Escape unmounts without an invisible exit overlay')
+  await assertClosed('Escape dismissal')
   await key('Tab','Tab',9);await pause(80)
   assert.equal(await panels(),1,'keyboard focus opens the next file')
   await evaluate(`const v=document.querySelector('[data-slot="file-diff-viewport"]');v.tabIndex=0;v.focus()`)
   await key('Escape');await pause(80)
-  assert.equal(await panels(),0,'Escape from the diff restores focus without reopening')
+  await assertClosed('Escape from the diff restores focus without reopening')
   assert.ok(await evaluate(`document.activeElement.matches('ul[data-plain-list] button')`),'focus returns to the current row')
 
   await move(positions[1].x,positions[1].y);await pause(700)
@@ -251,12 +257,12 @@ app.on('window-all-closed',()=>app.quit());`)
   assert.ok(await evaluate(`window.beforeRefresh===document.querySelector('[data-morph-popover-portal]')`),'equivalent transcript updates retain the portal')
   assert.equal(await evaluate(`document.querySelector('ul[data-plain-list] button[aria-expanded="true"]').textContent.includes('file-1.ts')`),true,'updated rows retain the active state')
   await click(50,50);await pause(80)
-  assert.equal(await panels(),0,'outside pointer dismissal unmounts the panel')
+  await assertClosed('Outside pointer dismissal')
 
   // Expand, reach a 10,000-line write, and verify offscreen tabs/CJK width.
   await evaluate(`document.querySelector('#fixture button[aria-expanded]:not([aria-haspopup])').click()`)
   positions=await rows()
-  assert.equal(positions.length,10)
+  assert.equal(positions.length,12)
   await move(positions[6].x,positions[6].y);await pause(700)
   const wide=await evaluate(`(async()=>{const v=document.querySelector('[data-slot="file-diff-viewport"]');
     const initialWidth=v.scrollWidth;v.scrollTop=v.scrollHeight;await new Promise(r=>setTimeout(r,80));
@@ -273,17 +279,30 @@ app.on('window-all-closed',()=>app.quit());`)
   await evaluate(`document.querySelector('ul[data-plain-list]').querySelectorAll('button')[8].focus()`)
   await pause(40)
   const plain=await evaluate(`document.querySelector('[data-slot="file-diff-viewport"]').innerHTML`)
-  assert.equal(await evaluate(`document.querySelector('[data-morph-popover-portal]').getBoundingClientRect().height`),22,'one-line preview is one 20px row plus its border')
+  assert.equal(await evaluate(`document.querySelector('[data-morph-popover-portal]').offsetHeight`),22,'one-line preview retains one 20px row plus its border throughout entrance')
   await evaluate('window.warmCold()')
   assert.equal(await evaluate(`document.querySelector('[data-slot="file-diff-viewport"]').innerHTML`),plain,'late tokens do not repaint an open preview')
   await move(positions[9].x,positions[9].y);await pause(80)
-  assert.equal(await panels(),1,'a file without a patch retains the shared panel')
-  assert.equal(await evaluate(`document.querySelectorAll('[data-slot="file-diff-viewport"]').length`),0,'no stale diff for an empty write')
-  assert.ok(await evaluate(`(()=>{const p=document.querySelector('[data-morph-popover-portal]');return Math.abs(p.getBoundingClientRect().height-p.querySelector('p').getBoundingClientRect().height-2)<1})()`),'no-diff fallback fits its message without reserved height')
+  await assertClosed('moving from a real diff to an empty write closes the previous preview')
+  assert.equal(await evaluate(`document.querySelector('ul[data-plain-list]').querySelectorAll('button')[9].hasAttribute('aria-haspopup')`),false,'an empty write does not advertise a popup')
+  for (const index of [9,10,11]) {
+    await move(50,50);await move(positions[index].x,positions[index].y);await pause(700)
+    assert.equal(await panels(),0,'hovering a missing, header-only or blank patch opens no panel')
+    await click(positions[index].cx,positions[index].y);await pause(80)
+    assert.equal(await panels(),0,'clicking an empty diff opens no panel')
+    await key('Tab','Tab',9)
+    await evaluate(`document.querySelector('ul[data-plain-list]').querySelectorAll('button')[${index}].focus()`)
+    await pause(80)
+    await assertClosed('keyboard focus on an empty diff opens no panel')
+  }
 
   await evaluate(`document.querySelectorAll('ul[data-plain-list]')[1].querySelector('button').focus()`)
   await pause(80)
-  assert.equal(await panels(),1,'moving to another turn releases the previous owner')
+  const owners=await evaluate(`[...document.querySelectorAll('[data-morph-popover-portal]')].map(p=>({inert:p.inert,pointer:getComputedStyle(p).pointerEvents}))`)
+  assert.equal(owners.filter(p=>!p.inert&&p.pointer==='auto').length,1,'moving to another turn retains only one interactive preview owner')
+  assert.ok(owners.filter(p=>p.inert).every(p=>p.pointer==='none'),'the previous owner releases input throughout its visual exit')
+  for(let i=0;i<40&&(await panels())>1;i++)await pause(25)
+  assert.equal(await panels(),1,'the previous owner finishes its visual exit')
   await evaluate('window.checkRoot.unmount()');await pause(80)
   assert.equal(await panels(),0,'unmounting the transcript releases the preview')
   await evaluate('window.resetCheckRoot();window.renderDiffSurfaces()')

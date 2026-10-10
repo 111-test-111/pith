@@ -4,11 +4,11 @@
 
 ## Profiles and permissions
 
-Global `<agentDir>/agents/*.md` profiles are shadowed by `<cwd>/.pi/agents/*.md` of the same name. Flat frontmatter supplies description, tools, optional model/thinking/context/background defaults and a separate `debug` grant. Explicit `tools` wins; supported `tool_preset` allow selections come next; missing/unresolved permissions fall back to read-only. Unknown presets never become full access.
+Global `<agentDir>/agents/*.md` profiles are shadowed by `<cwd>/.pi/agents/*.md` of the same name. Flat frontmatter supplies description, tools and optional model/thinking/context/background defaults. Explicit `tools` wins; supported `tool_preset` allow selections come next; missing/unresolved permissions fall back to read-only. Unknown presets never become full access.
 
 Four starters are written once. The marker beside the global files prevents deleted starters from returning; legacy userData marker drift may heal a fresh directory. Settings edits only owned frontmatter fields, preserving prompt/custom metadata/line endings and validating the result.
 
-Dispatch freezes `profile tools ∩ parent available tools`, removing excluded orchestration tools. Native callable MCP/resource tools can be granted even when deferred from the model declaration; `codemode` must also be granted for script use. `tools: all` still follows the parent's ceiling. Debug requires `debug: true` plus the parent's live grant; tools-all does not imply it. Enabled parent communication is injected before freezing.
+Dispatch freezes `profile tools ∩ parent available tools`, removing excluded orchestration tools. Explicit tool identities preserve SDK casing, including normalized MCP server/tool names; only the `all` / `none` keywords are case-insensitive. Native callable MCP/resource tools can be granted even when deferred from the model declaration; `codemode` must also be granted for script use. `tools: all` still follows the parent's ceiling. The debugger rides the same tools list — `all`, or an explicit `debug` entry — and the parent's live debug availability remains the ceiling either way. Enabled parent communication is injected before freezing.
 
 Children load extensions only if their frozen ceiling needs them and they are not Plan-restricted; ordinary read-only children remain extension-free. Dispatch persists model, thinking, append prompt, tool ceiling, extension-loading decision and Plan restriction. Resume intersects the old ceiling with current parent access and can only narrow it; enabling a feature later cannot widen an old run.
 
@@ -28,7 +28,7 @@ Roster snapshots/events use monotonic per-parent sequence values in both merge d
 
 Background completion uses a durable-aware outbox, steering plus `triggerTurn`, not follow-up queues. Delivery waits for the parent's committed dispatch result and acknowledges on committed receipt. Stopped/orphaned runs cannot wake the parent. Child background bash wakes the child; the run settles only after owned background work drains.
 
-Written files are derived from the child's complete selected branch and limited to the run interval. Foreground `agent` results and background `subagent_completion` notices fold into the parent's changed-file projection. Current run-scoped evidence deduplicates by run ID; legacy cumulative evidence by child session. Failed runs do not erase successful writes.
+Written files are derived from the child's complete selected branch and limited to the run interval. Foreground `agent` results and background `subagent_completion` notices fold into the parent's changed-file projection. Generated-image receipts retain their classification through persistence and roster snapshots: Rewind keeps their write evidence, while code-review lists omit them. Current run-scoped evidence deduplicates by run ID; legacy cumulative evidence by child session. Failed runs do not erase successful writes.
 
 Rewind collects known child writes from parent records, falling back to readable child files. It applies the parent's saved workspace/exclusion coverage; in-scope originals can already be in the parent's before-turn backup, while excluded/outside paths require explicit partial consent. Missing child files degrade evidence rather than invent originals or block every preview. Live run leases prohibit restore until work stops.
 

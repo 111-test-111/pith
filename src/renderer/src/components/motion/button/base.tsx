@@ -45,11 +45,11 @@ type Ripple = { id: number; x: number; y: number; size: number };
 
 const VARIANT_CLASS: Record<ButtonVariant, string> = {
   // local patch (pi-app): actions have no painted frame or resting fill.
-  // Their hover fill carries the variant's emphasis instead.
-  primary: "bg-transparent text-primary hover:bg-primary hover:text-primary-foreground",
+  // Ordinary hover fills are neutral; destructive actions retain their red cue.
+  primary: "bg-transparent text-primary hover:bg-muted hover:text-primary",
   secondary: "bg-transparent text-foreground hover:bg-muted",
   ghost: "bg-transparent text-muted-foreground hover:bg-muted hover:text-foreground",
-  outline: "bg-transparent text-foreground hover:bg-primary/10",
+  outline: "bg-transparent text-foreground hover:bg-muted",
   destructive: "bg-transparent text-destructive hover:bg-destructive/10 hover:text-destructive",
 };
 

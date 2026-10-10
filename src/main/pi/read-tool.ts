@@ -4,6 +4,7 @@ import { Type } from 'typebox'
 import { createReadToolDefinition, detectSupportedImageMimeTypeFromFile, truncateHead, DEFAULT_MAX_BYTES,
   type ToolDefinition } from '@earendil-works/pi-coding-agent'
 import { appToolError, appToolOutputSchema, appToolResult, ToolFailure } from './tool-result'
+import type { ReadRangeDTO } from '../../shared/types'
 import { utf8Page } from './utf8-page'
 
 const dataSchema = Type.Object({
@@ -83,8 +84,9 @@ export function createAppReadTool(cwd: string): ToolDefinition<any, any, any> {
         }
         const next = start + (truncation.content === '' && !truncation.truncated ? 1 : truncation.outputLines) + 1
         const eof = next > allLines.length
-        return appToolResult(result, { kind: 'text', mode: 'lines', text: truncation.content, version,
-          offset: start + 1, totalLines: allLines.length, totalBytes, nextOffset: eof ? null : next,
+        const range: ReadRangeDTO = { offset: start + 1, endLine: Math.min(next - 1, allLines.length), totalLines: allLines.length }
+        return appToolResult({ ...result, details: { ...result.details, piAppRead: range } }, { kind: 'text', mode: 'lines', text: truncation.content, version,
+          offset: range.offset, totalLines: range.totalLines, totalBytes, nextOffset: eof ? null : next,
           nextByteOffset: null, eof, truncated: !eof })
       } catch (error) { return appToolError(error) }
     }

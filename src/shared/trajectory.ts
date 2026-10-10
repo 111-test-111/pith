@@ -1,5 +1,6 @@
 /** Diagnostic data stays outside model history. Bodies are addressed by opaque
  * content hashes and read only through a record's verified ancestry. */
+import type { ContextRequestDTO } from './types'
 export type TrajectoryKind = 'run' | 'user' | 'assistant' | 'request' | 'tool' | 'compaction' | 'retry' | 'notification'
 /** Recovered assistant entries are the older capture format of a model turn. */
 export type TrajectoryPresentationKind = Exclude<TrajectoryKind, 'assistant'>
@@ -36,6 +37,8 @@ export interface TrajectoryRecord {
   /** Recorded requests differ from messages reconstructed from older logs. */
   captured: boolean
   captureError?: boolean
+  /** Bounded statistics, retained separately from lazy request documents. */
+  contextStats?: ContextRequestDTO
 }
 export interface TrajectoryQuery {
   sessionPath: string

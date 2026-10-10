@@ -42,6 +42,8 @@ export interface SessionRow {
   cwd: string
   name: string | undefined
   parentSessionPath: unknown
+  /** Epoch ms from the header; file mtime only backs malformed/missing time. */
+  created: number
   /** Epoch ms — last message activity, else header time, else file mtime. */
   modified: number
   /** Counts every `message` entry in the file, all branches included. */
@@ -179,6 +181,7 @@ class RowBuilder {
       cwd: typeof header.cwd === 'string' ? header.cwd : '',
       name: this.name,
       parentSessionPath: header.parentSession,
+      created: Number.isFinite(headerTime) ? headerTime : mtimeMs,
       modified,
       messageCount: this.messageCount,
       firstMessage: this.firstUserText || NO_MESSAGES,
@@ -239,7 +242,7 @@ export async function readSessionRow(path: string, stamp: FileStamp): Promise<Se
   }
 }
 
-const CACHE_VERSION = 1
+const CACHE_VERSION = 2
 /** Session-file reads run concurrently, bounded like the SDK's own list scan. */
 const MAX_CONCURRENT_READS = 10
 

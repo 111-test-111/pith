@@ -97,7 +97,7 @@ export const ReviewPane = memo(function ReviewPane({ store, focusTurnId }: Revie
       <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center">
         <Diff aria-hidden="true" className="size-5 text-muted-foreground/70" />
         <p className="text-sm font-medium text-foreground">{t('review.emptyTitle')}</p>
-        <p className="text-xs leading-5 text-muted-foreground">{t('review.emptyBody')}</p>
+        <p className="text-xs leading-ui text-muted-foreground">{t('review.emptyBody')}</p>
       </div>
     )
   }

@@ -1,4 +1,5 @@
 /** Pure browser helpers shared by main, preload and renderer. Guest markers encode owner/pageId in the initial URL fragment for CDP target registration. */
+import { parse as parseDomain } from 'tldts'
 
 export const BROWSER_PARTITION = 'persist:pith-browser'
 export const BROWSER_MARKER_PREFIX = 'about:blank#pith/'
@@ -61,6 +62,64 @@ export function isAllowedNavigationUrl(url: string): boolean {
   } catch {
     return false
   }
+}
+
+export const BROWSER_SEARCH_ENGINES = ['google', 'bing', 'duckduckgo', 'baidu'] as const
+export type BrowserSearchEngine = typeof BROWSER_SEARCH_ENGINES[number]
+export const DEFAULT_BROWSER_SEARCH_ENGINE: BrowserSearchEngine = 'google'
+
+export function isBrowserSearchEngine(value: unknown): value is BrowserSearchEngine {
+  return BROWSER_SEARCH_ENGINES.some((engine) => engine === value)
+}
+
+const SEARCH_ENDPOINTS: Record<BrowserSearchEngine, { url: string; parameter: string }> = {
+  google: { url: 'https://www.google.com/search', parameter: 'q' },
+  bing: { url: 'https://www.bing.com/search', parameter: 'q' },
+  duckduckgo: { url: 'https://duckduckgo.com/', parameter: 'q' },
+  baidu: { url: 'https://www.baidu.com/s', parameter: 'wd' }
+}
+
+function browserSearchUrl(query: string, engine: BrowserSearchEngine): string {
+  const endpoint = SEARCH_ENDPOINTS[isBrowserSearchEngine(engine) ? engine : DEFAULT_BROWSER_SEARCH_ENGINE]
+  const url = new URL(endpoint.url)
+  url.searchParams.set(endpoint.parameter, query)
+  return url.toString()
+}
+
+/** Human omnibox input only. Agent navigation and links retain URL-only semantics.
+ * Explicit URL schemes still pass the navigation allowlist; search operators
+ * are queries. Bare domains, IPs, localhost and development host:port stay URLs. */
+export function resolveBrowserInput(input: string, engine: BrowserSearchEngine = DEFAULT_BROWSER_SEARCH_ENGINE): string | null {
+  const trimmed = input.trim()
+  if (!trimmed) return null
+  // Omnibox's explicit search escape makes domain-shaped queries unambiguous.
+  if (trimmed.startsWith('?')) {
+    const query = trimmed.slice(1).trim()
+    return query ? browserSearchUrl(query, engine) : null
+  }
+  const searchOperator = /^(?:site|inurl|allinurl|intitle|allintitle|intext|allintext|filetype|before|after|related|cache):/i.test(trimmed)
+  const scheme = /^([a-zA-Z][a-zA-Z0-9+.-]*):/.exec(trimmed)
+  const explicitScheme = scheme && !searchOperator &&
+    (/^(?:https?|about|file|data|javascript|view-source|blob|ftp|mailto|tel|chrome(?:-extension)?|devtools|wss?|vbscript)$/i.test(scheme[1]) || trimmed.slice(scheme[0].length).startsWith('//'))
+  const bareHostPort = !searchOperator && looksLikeBareHostPort(trimmed)
+  const authority = trimmed.split(/[/?#]/, 1)[0]
+  const candidate = normalizeNavigationUrl(/^localhost(?:[/?#]|$)/i.test(trimmed) ? `http://${trimmed}` : trimmed)
+  if (explicitScheme || bareHostPort) {
+    return candidate && isAllowedNavigationUrl(candidate) ? candidate : null
+  }
+  if (!searchOperator && candidate && !/\s/.test(authority)) {
+    const parsed = new URL(candidate)
+    // The Public Suffix List avoids interpreting code-like text such as
+    // console.log as a domain; IDNs, IPs and special-use hosts stay supported.
+    const host = parseDomain(parsed.hostname, { detectSpecialUse: true })
+    const recognizedHost = host.isIp ||
+      (parsed.hostname.includes('.') && (host.isIcann || host.isSpecialUse)) ||
+      parsed.hostname === 'localhost'
+    if (!parsed.username && !parsed.password && recognizedHost) {
+      return isAllowedNavigationUrl(candidate) ? candidate : null
+    }
+  }
+  return browserSearchUrl(trimmed, engine)
 }
 
 export interface BrowserPageMeta {

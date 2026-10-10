@@ -54,7 +54,7 @@ export function TrajectoryRecordRow({ record, selected, reduce, onSelect, onTool
     : record.kind === 'assistant' ? record.model : record.kind === 'run' || record.kind === 'user' ? undefined : record.name
   return <div data-trajectory-entry={record.id} className="border-b border-border/50 last:border-b-0">
   <div className="relative">
-  <Button data-trajectory-record={record.id} size="sm" variant="ghost" className="trajectory-choice h-auto min-h-8 w-full items-start justify-start gap-2 px-1.5 py-1.5 text-xs leading-4" aria-pressed={selected} onClick={() => onSelect(record)}>
+  <Button data-trajectory-record={record.id} size="sm" variant="ghost" className="trajectory-choice h-auto min-h-8 w-full items-start justify-start gap-2 px-1.5 py-1.5 text-xs leading-ui-tight" aria-pressed={selected} onClick={() => onSelect(record)}>
     <Icon data-trajectory-content-icon={record.kind === 'tool' ? record.name : displayKind} aria-hidden="true" className="mt-px size-3.5 shrink-0 text-muted-foreground" />
     <span className="min-w-0 flex-1 text-left">
       <span className="flex items-center gap-2">

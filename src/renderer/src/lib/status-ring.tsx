@@ -5,10 +5,9 @@ import { cn } from './utils'
  * The app's status marks: one small circle per outcome — waiting, done, failed,
  * cancelled.
  *
- * Settled marks use the adapter's Hugeicons Stroke Rounded artwork, at the
- * same native 1.5 stroke as the waiting arc. Success/error have an r=10 ring,
- * cancellation an r=9 ring, on the shared 24 grid. Both corner presets draw
- * the same artwork; no status row introduces a private settled mark.
+ * Settled marks use the adapter's active family: Remix Line filled outlines for
+ * square interfaces, Hugeicons Stroke Rounded for squircle interfaces. Their
+ * own native geometry/weight survives; no row introduces a private settled mark.
  *
  * Waiting stays drawn here, because it is the one status that moves: the same
  * r=9 / 1.5px circle as a 3/4 arc (`pathLength` 1 with a 0.75/0.25 dash) that
@@ -21,14 +20,14 @@ import { cn } from './utils'
  */
 export type StatusRingStatus = 'running' | 'success' | 'error' | 'cancelled'
 
-/** One Hugeicons glyph per settled outcome, drawn at the waiting arc's weight. */
+/** One shared adapter glyph per settled outcome. */
 const SETTLED_GLYPHS = {
   success: CircleCheck,
   error: CircleX,
   cancelled: Ban
 } as const
 
-/** The weight both owners of the status circle are drawn at. */
+/** Stroke-family weight; the Remix Line adapter preserves its filled outlines. */
 const SETTLED_STROKE = 1.5
 
 /** The waiting arc's centerline radius in the 24 box the app's marks share. */

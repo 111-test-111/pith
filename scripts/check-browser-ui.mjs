@@ -12,6 +12,8 @@
  * mock-covered by `scripts/check-browser.mjs`; this check proves the
  * cross-process/live layer and re-proves the 13 Electron-44 iron rules from
  * docs/architecture/embedded-browser.md.
+ * A source-served StrictMode fixture first checks async pane mounting with a
+ * mocked bridge; real guest registration is exercised by the built app below.
  *
  * Group 1 output carries EXACTLY 13 iron-rule entries. Each is either
  * exercised live or printed as an explicit `[source-assertion]` — never
@@ -53,6 +55,8 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import electron from 'electron'
 import { chromium } from 'playwright-core'
+import { LIBRARY_WEB_SNAPSHOT_SCHEMA } from '../src/shared/library.ts'
+import { checkBrowserLifecycle } from './lib/check-browser-lifecycle.mjs'
 
 const execFileAsync = promisify(execFile)
 const pause = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -148,6 +152,8 @@ process.on('unhandledRejection', (reason) => {
 })
 
 try {
+  await checkBrowserLifecycle(repo)
+  pass('ui', 'development StrictMode opens an empty browser with one about:blank tab, reconstructs saved tabs, and ignores unmounted restore receipts')
   // ---- Fixture server: deterministic http pages on 127.0.0.1 (the navigation
   // whitelist accepts any http/https URL; a local server needs no network). ----
   // Unique download filename, verified through the real download handler.
@@ -157,8 +163,26 @@ try {
   // rail fold proves the page INSTANCE survived (a reload would restart n at 1).
   let tickCount = 0
   let tickLastN = 0
+  const pendingLoadResources = new Set()
   const fixture = createServer((request, response) => {
     const url = new URL(request.url ?? '/', 'http://fixture.test')
+    if (url.pathname === '/loading-redirect') {
+      response.writeHead(302, { Location: '/loading', 'Cache-Control': 'no-store' })
+      response.end()
+      return
+    }
+    if (url.pathname === '/loading') {
+      response.writeHead(200, { 'Content-Type': 'text/html', 'Cache-Control': 'no-store' })
+      response.end('<!doctype html><html><head><title>Loading fixture</title></head><body><h1>Loading fixture</h1><img src="/loading-resource" alt="Pending resource"></body></html>')
+      return
+    }
+    if (url.pathname === '/loading-resource') {
+      response.writeHead(200, { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'no-store' })
+      pendingLoadResources.add(response)
+      const deadline = setTimeout(() => response.end(), 20_000)
+      response.on('close', () => { clearTimeout(deadline); pendingLoadResources.delete(response) })
+      return
+    }
     if (url.pathname === '/tick') {
       tickCount += 1
       tickLastN = Math.max(tickLastN, Number(url.searchParams.get('n') ?? 0) || 0)
@@ -374,6 +398,21 @@ try {
   await send('Page.reload')
   await eventually(() => evaluate('document.readyState === "complete" && document.body && document.body.innerText.length > 50'), 'shell renderer after locale reload', 30_000)
   await eventually(async () => (await evaluate('document.documentElement.lang')) === 'en', 'locale pinned to en')
+  // Watch actual overlay insertions before any guest exists, including the
+  // initial about:blank marker handshake; a final hidden-state assertion
+  // alone would miss a brief flash on a blank page.
+  await evaluate(`(() => {
+    window.__browserProgressShows = 0;
+    new MutationObserver(records => {
+      for (const record of records) for (const node of record.addedNodes) {
+        if (!(node instanceof Element)) continue;
+        window.__browserProgressShows += Number(node.matches('[data-browser-loading-progress]'))
+          + node.querySelectorAll('[data-browser-loading-progress]').length;
+      }
+    }).observe(document.body, { childList: true, subtree: true });
+  })()`)
+  const progressShows = () => evaluate('window.__browserProgressShows')
+  const resetProgressShows = () => evaluate('window.__browserProgressShows = 0')
   // Documented substitution — must appear in the run's TRIMS section: the en
   // pin is a shell-only reload BEFORE any guest exists (rule 6 forbids
   // reloading GUESTS, never the shell), so label assertions stay
@@ -420,6 +459,12 @@ try {
   // The pending row and the registered row can overlap for one state round
   // trip; wait for the strip to settle on the single real page.
   await eventually(async () => await stripRows() === 1, 'strip settles to one row', 10_000)
+  await guest.waitForLoadState('load')
+  assert.equal(await progressShows(), 0, 'creating an about:blank marker never flashes a progress bar')
+  await click('[data-browser-toolbar] button[aria-label="Reload"]')
+  await guest.waitForLoadState('load')
+  await pause(350)
+  assert.equal(await progressShows(), 0, 'reloading the blank start page never flashes a progress bar')
   pass('flow', 'create-page handshake: the first-status latch auto-creates the start page and its marker webview materializes a guest target the connected client can see (Target.createTarget is unusable — see iron 1)')
 
   // ================= Iron rule 3 (LIVE): the three-state visibility rule =====
@@ -466,16 +511,55 @@ try {
   iron(3, 'live', 'unselected agent guests stay opacity:0 + pointer-events:none at full size while an unselected human page takes display:none — driven live through browserCreatePage + browser:seen, with the owner-based guard and its conditional hidden pinned as the regression half')
 
   // ---- Human navigation through the visible URL input. ----
-  const setUrl = (value) => evaluate(`(()=>{
-    const input=document.querySelector('[data-browser-toolbar] input');
+  const submitBrowserInput = (selector, value) => evaluate(`(()=>{
+    const input=document.querySelector(${JSON.stringify(selector)});
     const set=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;
     set.call(input,${JSON.stringify(value)});
     input.dispatchEvent(new Event('input',{bubbles:true}));
     input.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));
   })()`)
+  const setUrl = (value) => submitBrowserInput('[data-browser-toolbar] input', value)
   // The address bar's REST state trims the scheme/www (the focused field
   // shows the full url) — mirror the app's trim for value comparisons.
   const pretty = (u) => u.replace(/^https?:\/\/(?:www\.)?/i, '')
+
+  // Search stays offline: fulfill only search navigations on this real guest.
+  const searchRoute = /^https:\/\/(?:www\.google\.com\/search|www\.bing\.com\/search|duckduckgo\.com\/|www\.baidu\.com\/s)\?/
+  await guest.route(searchRoute, (route) => route.fulfill({ status: 200, contentType: 'text/html', body: '<!doctype html><title>Search fixture</title><h1>Search fixture</h1>' }))
+  assert.equal(await evaluate('window.pi.appInfo().then(info => info.browserSearchEngine)'), 'google', 'missing saved preference defaults to Google')
+  const startQuery = '内嵌浏览器 C++ & a=b'
+  await submitBrowserInput('[data-browser-start-page] input', startQuery)
+  await eventually(() => guest.url().startsWith('https://www.google.com/search?'), 'start page searches with Google')
+  assert.equal(new URL(guest.url()).searchParams.get('q'), startQuery)
+  await guest.waitForLoadState('load')
+  const query = 'site:example.com react'
+  for (const [engine, label, origin, parameter] of [
+    ['bing', 'Bing', 'https://www.bing.com', 'q'],
+    ['duckduckgo', 'DuckDuckGo', 'https://duckduckgo.com', 'q'],
+    ['baidu', 'Baidu', 'https://www.baidu.com', 'wd'],
+    ['google', 'Google', 'https://www.google.com', 'q'],
+  ]) {
+    await click('button[aria-label="Settings"]')
+    await eventually(() => evaluate('Boolean(document.querySelector(".z-40 [role=tab]"))'), 'settings open for search preference')
+    await evaluate(`[...document.querySelectorAll('.z-40 [role=tab]')].find(el => el.textContent.trim() === 'Browser').click()`)
+    await eventually(() => evaluate('Boolean(document.querySelector("[data-browser-search-engine] button"))'), 'search provider picker')
+    await click('[data-browser-search-engine] button')
+    await eventually(() => evaluate(`[...document.querySelectorAll('[role=option]')].some(el => el.textContent.trim() === ${JSON.stringify(label)})`), 'search provider options')
+    await evaluate(`[...document.querySelectorAll('[role=option]')].find(el => el.textContent.trim() === ${JSON.stringify(label)}).click()`)
+    await eventually(() => evaluate(`window.pi.appInfo().then(info => info.browserSearchEngine === ${JSON.stringify(engine)})`), 'search preference persisted through production IPC')
+    assert.equal(JSON.parse(await readFile(join(profile, 'app-settings.json'), 'utf8')).browserSearchEngine, engine)
+    await click('button[aria-label="Back to chat"]')
+    await eventually(() => evaluate('!document.querySelector(".z-40")'), 'settings closed after search choice')
+    await setUrl(query)
+    await eventually(() => guest.url().startsWith(`${origin}/`) && new URL(guest.url()).searchParams.get(parameter) === query, `${engine} search from the address bar`)
+    await guest.waitForLoadState('load')
+    await eventually(() => evaluate(`document.querySelector('[data-browser-toolbar] input').value.startsWith(${JSON.stringify(pretty(origin))})`), 'address bar releases the query draft to the committed URL')
+  }
+  assert.equal(await evaluate(`window.pi.setBrowserSearchEngine('invalid').then(() => false, () => true)`), true, 'invalid IPC preferences are rejected')
+  assert.equal(await evaluate('window.pi.appInfo().then(info => info.browserSearchEngine)'), 'google', 'rejected preference leaves the selection intact')
+  await guest.unroute(searchRoute)
+  pass('ui', 'start-page and address-bar searches encode queries; all four providers save through Settings and take effect in the mounted guest')
+
   await setUrl(fixtureUrl)
   await eventually(() => guest.url().startsWith(fixtureUrl), 'guest did-navigate to the fixture URL', 15_000)
   await guest.waitForLoadState('domcontentloaded', { timeout: 10_000 })
@@ -483,6 +567,95 @@ try {
   await eventually(() => evaluate(`(localStorage.getItem('pi-app:browser-recents')??'').includes(${JSON.stringify(fixtureUrl)})`), 'recents', 10_000)
   await eventually(() => evaluate(`(localStorage.getItem('pi-app:browser-history')??'').includes(${JSON.stringify(fixtureUrl)})`), 'history', 10_000)
   pass('flow', 'human URL-bar navigation drives the real guest; did-navigate records recents + history')
+
+  // Hold a real subresource across DOM readiness to prove progress cannot
+  // finish early, and compare layout before/during the absolute overlay.
+  const pageLayout = () => evaluate(`(() => {
+    const toolbar = document.querySelector('[data-browser-toolbar]');
+    const guest = toolbar.closest('[data-browser-page]').querySelector('webview');
+    const rect = el => { const r = el.getBoundingClientRect(); return [r.x, r.y, r.width, r.height] };
+    return { toolbar: rect(toolbar), guest: rect(guest) };
+  })()`)
+  const progressValue = () => evaluate(`document.querySelector('[data-browser-loading-progress] [role=progressbar]')?.getAttribute('aria-valuenow') ?? null`)
+  const releaseLoading = () => { for (const response of pendingLoadResources) response.end('<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>') }
+  await eventually(async () => (await progressValue()) == null, 'previous navigation progress clears')
+  await resetProgressShows()
+  const layoutBeforeLoad = await pageLayout()
+  await setUrl(`${fixtureUrl}loading`)
+  await eventually(() => pendingLoadResources.size > 0, 'held image request begins')
+  const initialProgress = await eventually(async () => Number(await progressValue()) || false, 'progress visible during navigation')
+  assert(initialProgress < 100, 'an unfinished resource keeps progress below completion')
+  await eventually(async () => Number(await progressValue()) > initialProgress, 'estimated progress advances while waiting')
+  assert.deepEqual(await pageLayout(), layoutBeforeLoad, 'the loading bar never moves the toolbar or webview')
+  const progressPlacement = await evaluate(`(() => {
+    const bar = document.querySelector('[data-browser-loading-progress]');
+    const guest = bar.parentElement.querySelector('webview');
+    return { top: bar.getBoundingClientRect().top, pageTop: guest.getBoundingClientRect().top, pointerEvents: getComputedStyle(bar).pointerEvents };
+  })()`)
+  assert.equal(progressPlacement.top, progressPlacement.pageTop, 'bar overlays the top of the page')
+  assert.equal(progressPlacement.pointerEvents, 'none', 'bar cannot intercept page input')
+  releaseLoading()
+  await eventually(async () => (await progressValue()) == null, 'progress clears when all resources finish')
+  assert.equal(await progressShows(), 1, 'one main-document navigation shows progress once')
+
+  // Chromium emits fresh spinner events for a dynamically added iframe
+  // after the main document has finished. These must not restart its bar.
+  await evaluate(`(() => {
+    window.__browserLoadingEvents = [];
+    const wv = document.querySelector('[data-browser-toolbar]').closest('[data-browser-page]').querySelector('webview');
+    for (const type of ['did-start-loading', 'did-stop-loading', 'did-start-navigation']) {
+      wv.addEventListener(type, event => window.__browserLoadingEvents.push({ type, isMainFrame: event.isMainFrame, isInPlace: event.isInPlace }));
+    }
+  })()`)
+  await guest.evaluate(() => {
+    const frame = document.createElement('iframe')
+    frame.id = 'late-loading-frame'
+    frame.src = '/loading?iframe'
+    document.body.append(frame)
+  })
+  await eventually(() => pendingLoadResources.size > 0, 'late iframe holds a real resource')
+  await eventually(() => evaluate(`window.__browserLoadingEvents.some(event => event.type === 'did-start-loading') && window.__browserLoadingEvents.some(event => event.type === 'did-start-navigation' && event.isMainFrame === false)`), 'late iframe emits another Chromium loading cycle')
+  assert.equal(await progressValue(), null, 'subframe loading cannot reopen completed main-document progress')
+  assert.equal(await progressShows(), 1, 'late iframe never inserts a second progress bar')
+  releaseLoading()
+  await eventually(() => guest.evaluate(() => document.querySelector('#late-loading-frame').contentDocument.readyState === 'complete'), 'late iframe completes')
+
+  await resetProgressShows()
+  await click('[data-browser-toolbar] button[aria-label="Reload"]')
+  await eventually(() => pendingLoadResources.size > 0, 'reload starts a fresh resource request')
+  await eventually(async () => Number(await progressValue()) > 0 && Number(await progressValue()) < 100, 'progress returns for a real toolbar reload')
+  releaseLoading()
+  await eventually(async () => (await progressValue()) == null, 'reload progress clears')
+  assert.equal(await progressShows(), 1, 'a real reload shows one fresh progress bar')
+
+  await resetProgressShows()
+  await setUrl(`${fixtureUrl}loading-redirect`)
+  await eventually(() => pendingLoadResources.size > 0, 'redirect destination holds a real resource')
+  await eventually(async () => Number(await progressValue()) > 0 && Number(await progressValue()) < 100, 'redirect keeps progress active')
+  releaseLoading()
+  await eventually(async () => (await progressValue()) == null, 'redirect progress clears')
+  assert.equal(await progressShows(), 1, 'a server redirect shares one main-document progress bar')
+  await guest.evaluate(() => { location.hash = 'in-page-navigation' })
+  await eventually(() => evaluate(`window.__browserLoadingEvents.some(event => event.type === 'did-start-navigation' && event.isMainFrame === true && event.isInPlace === true)`), 'same-document navigation reaches the webview')
+  assert.equal(await progressShows(), 1, 'hash navigation never starts new progress')
+
+  await resetProgressShows()
+  await setUrl('about:blank')
+  await eventually(() => guest.url() === 'about:blank', 'explicit navigation to the blank start page')
+  await guest.waitForLoadState('load')
+  await pause(350)
+  assert.equal(await progressValue(), null, 'about:blank has no progress')
+  assert.equal(await progressShows(), 0, 'navigating to about:blank never flashes progress')
+  await guest.route(`${fixtureUrl}load-failure`, route => route.abort('failed'))
+  const loadFailure = guest.waitForEvent('requestfailed', { predicate: request => request.url() === `${fixtureUrl}load-failure`, timeout: 10_000 })
+  await setUrl(`${fixtureUrl}load-failure`)
+  await loadFailure
+  await eventually(async () => (await progressValue()) == null && await evaluate(`!document.querySelector('[data-browser-toolbar]').closest('[data-browser-page]').querySelector('webview').isLoading()`), 'failed navigation leaves no stuck progress')
+  await guest.unroute(`${fixtureUrl}load-failure`)
+  await setUrl(fixtureUrl)
+  await eventually(() => guest.url() === fixtureUrl, 'guest returns to the fixture after progress checks')
+  await guest.waitForLoadState('load')
+  pass('ui', 'blank pages never show progress; each main-document navigation, redirect and reload shows one advancing page-top bar without layout shifts; late iframes and hash changes never restart it; completion and failure clear it')
 
   // ================= Iron rule 1 (live) ======================================
   // Electron's CDP endpoint does not implement Target.createTarget — pages can
@@ -619,6 +792,18 @@ try {
   }, 'downloaded fixture file', 20_000)
   assert.equal(await readFile(downloadPath, 'utf8'), 'browser download fixture')
   pass('flow', `guest download is intercepted by the browser session: toolbar indicator appears and the file lands complete (${downloadPath})`)
+  const downloadSource = await eventually(() => evaluate(`(async()=>{const result=await window.pi.libraryPage({query:${JSON.stringify(downloadName)}});return result.ok?result.value.items.find(item=>item.source==='download'&&item.name===${JSON.stringify(downloadName)}):null})()`), 'completed browser download source', 20_000)
+  assert.equal(downloadSource.kind, 'web'); assert(downloadSource.url.endsWith('/download.txt'))
+  assert(!downloadSource.originalPath, 'download bytes do not enter Files without an attachment or present declaration')
+  assert(downloadSource.archivedPath?.endsWith('.json'), 'Web downloads retain the current JSON source snapshot')
+  const downloadSnapshot = JSON.parse(await readFile(downloadSource.archivedPath, 'utf8'))
+  assert.equal(downloadSnapshot.schema, LIBRARY_WEB_SNAPSHOT_SCHEMA)
+  assert.equal(downloadSnapshot.url, downloadSource.url)
+  assert.equal(downloadSnapshot.source, 'download')
+  assert.equal(downloadSnapshot.excerpt, '', 'a download reference does not invent page content')
+  assert.equal(await evaluate(`window.pi.libraryPage({kind:'file',query:${JSON.stringify(downloadName)}}).then(result => result.ok && result.value.total)`), 0)
+  assert(downloadSource.sessionPath, 'human browser download URLs retain the originating conversation')
+  pass('flow', 'completed download retains its source URL in a Web JSON snapshot; library Files remain limited to attachments and present')
 
   // ================= Popup routing (flow + iron 10 live) =====================
   await guest.locator('#popup').click({ force: true, timeout: 10_000 })
@@ -989,11 +1174,15 @@ try {
   await eventually(() => guest.url().startsWith(fixtureUrl) && !guest.url().endsWith('/next'), 'guest back on fixture root', 15_000)
   await click('[data-browser-toolbar] [aria-label="Annotate page"]')
   await eventually(() => evaluate('Boolean(document.querySelector("[data-browser-annotate-capture]"))'), 'annotate capture layer')
+  const annotationWidth=await guest.evaluate(()=>{const previous=document.body.style.minWidth;document.body.style.minWidth='2000px';window.scrollTo(0,0);return previous})
   await evaluate(`(()=>{const wv=document.querySelector('webview'),capture=document.querySelector('[data-browser-annotate-capture]'),rect=wv.getBoundingClientRect();window.__annotateWheels=[];const original=wv.sendInputEvent.bind(wv);wv.sendInputEvent=event=>{window.__annotateWheels.push(event);return original(event)};window.__restoreAnnotateWheel=()=>{wv.sendInputEvent=original};for(const [deltaX,deltaY] of [[18,12],[12,20],[8,90]])capture.dispatchEvent(new WheelEvent('wheel',{deltaX,deltaY,clientX:rect.x+40,clientY:rect.y+40,bubbles:true,cancelable:true}))})()`)
   const annotationWheels=await evaluate('window.__annotateWheels.map(event=>({x:event.deltaX,y:event.deltaY}))')
-  assert.deepEqual(annotationWheels,[{x:-18,y:0},{x:-12,y:0},{x:-8,y:0}],'annotation forwarding locks the gesture direction and preserves inverted pixel deltas')
+  assert.deepEqual(annotationWheels,[{x:-18,y:-12},{x:-12,y:-20},{x:-8,y:-90}],'annotation forwarding preserves both axes and inverted pixel deltas')
   await evaluate('window.__restoreAnnotateWheel()')
-  pass('ui','annotate diagonal swipe keeps one axis through noise and momentum')
+  await eventually(()=>guest.evaluate(()=>window.scrollX>0&&window.scrollY>0),'annotate diagonal input scrolls both guest axes')
+  await guest.evaluate(previous=>{document.body.style.minWidth=previous;window.scrollTo(0,0)},annotationWidth)
+  await eventually(()=>guest.evaluate(()=>window.scrollX===0&&window.scrollY===0),'guest returns to the annotation target')
+  pass('ui','annotate diagonal swipe forwards both axes through momentum')
   await evaluate('window.__pithAnnotations = []; window.addEventListener("pith:browser-annotation", (e) => window.__pithAnnotations.push(e.detail))')
   // Click the h1: zoom is 1.0 here, so guest (40,40) maps to the webview
   // element's origin + (40,40) (the device pin moved the origin — measured
@@ -1067,6 +1256,26 @@ try {
   const appKnownPages = await evaluate('window.pi.browserStatus().then((s) => s.pages.length)')
   assert.ok(appKnownPages >= 1, 'the app registry still knows the guests (state-only registration)')
   iron(7, 'live', 'a second playwright connection sees NONE of the existing guests in context.pages(), while window.pi.browserStatus() reports them — the browser:seen state-only fallback is live-required, not theoretical')
+
+  const restoreTabsSelector = '[data-browser-section] [role=checkbox][aria-label="Restore tabs after closing the browser"]'
+  const setRestoreTabsThroughSettings = async (enabled) => {
+    await click('button[aria-label="Settings"]')
+    await eventually(() => evaluate('Boolean(document.querySelector(".z-40 [role=tab]"))'), 'settings open for restore-tabs preference')
+    await evaluate(`[...document.querySelectorAll('.z-40 [role=tab]')].find(el => el.textContent.trim() === 'Browser').click()`)
+    await eventually(() => evaluate(`Boolean(document.querySelector(${JSON.stringify(restoreTabsSelector)}))`), 'restore-tabs checkbox')
+    const checked = await evaluate(`document.querySelector(${JSON.stringify(restoreTabsSelector)}).getAttribute('aria-checked')`)
+    if (await evaluate('localStorage.getItem("pi-app:browser-restore-tabs")') === null) {
+      assert.equal(checked, 'true', 'restore-tabs defaults to existing behavior')
+    }
+    if (checked !== String(enabled)) await click(restoreTabsSelector)
+    await eventually(() => evaluate(`document.querySelector(${JSON.stringify(restoreTabsSelector)}).getAttribute('aria-checked') === ${JSON.stringify(String(enabled))}`), 'restore-tabs setting applied')
+    assert.equal(await evaluate('localStorage.getItem("pi-app:browser-restore-tabs")'), String(enabled), 'restore-tabs preference persists')
+    await click('button[aria-label="Back to chat"]')
+    await eventually(() => evaluate('!document.querySelector(".z-40")'), 'settings closed after restore-tabs choice')
+  }
+  // Disable close/reopen restoration before both fold checks. The live
+  // reconstruction and keep-alive legs must remain independent of it.
+  await setRestoreTabsThroughSettings(false)
 
   // ================= Open-pages snapshot restore after a rail fold (ui) =====
   // A rail fold unmounts the pane and DESTROYS the guests (the keep-alive layer
@@ -1390,6 +1599,7 @@ try {
     const before = await stripRows()
     await evaluate(`document.querySelector('button[aria-label="New page"]').click()`)
     await eventually(async () => (await stripRows()) === before + 1, 'new tab row appears', 10_000)
+    return evaluate(`document.querySelector('[data-browser-tab]:last-child').getAttribute('data-browser-tab')`)
   }
   {
     assert.equal(await activeTabIndex(), 0, 'premise: the first tab is selected')
@@ -1400,9 +1610,11 @@ try {
     await eventually(async () => (await stripRows()) === rowsBeforeHistory, 'row removed', 10_000)
     assert.equal(await activeTabIndex(), 0, 'closing a tab returns to the tab selected when it was opened')
     // E opens from A; selecting B and closing E in the background keeps B.
-    await openNewTab()
+    const backgroundTabId = await openNewTab()
     await evaluate(`(()=>{ const rows=[...document.querySelectorAll('[data-browser-tab]')]; rows[1].querySelector('[role="tab"]').click(); })()`)
     await eventually(async () => (await activeTabIndex()) === 1, 'second tab selected by click', 10_000)
+    await eventually(() => evaluate(`window.pi.browserStatus().then(status => status.pages.some(page => page.id === ${JSON.stringify(backgroundTabId)}) && !status.pendingCreates.some(page => page.id === ${JSON.stringify(backgroundTabId)}))`), 'background tab create receipt settles', 15_000)
+    assert.equal(await activeTabIndex(), 1, 'a late create receipt preserves the human tab selection')
     assert.ok(await closeTabAt(2), 'closing the background tab')
     await eventually(async () => (await stripRows()) === rowsBeforeHistory, 'background row removed', 10_000)
     assert.equal(await activeTabIndex(), 1, 'closing a background tab keeps the selection')
@@ -1506,6 +1718,7 @@ try {
   pass('ui', 'closing the opener guest closes its popup window (lifetime is bound to the opener, like a real browser)')
 
   // ================= Strip close + last-page-closes-pane (ui) ================
+  await setRestoreTabsThroughSettings(true)
   await click('[data-sidebar-tab="browser"] [role="tab"]')
   await eventually(() => evaluate('Boolean(document.querySelector(\'[data-sidebar-tab="browser"] [role=tab][aria-selected="true"]\'))'), 'browser tab active again')
   assert.equal(await stripRows(), 2)
@@ -1520,10 +1733,117 @@ try {
   // from the keep-alive leg remains, so the rail itself is still open).
   await eventually(async () => !(await evaluate('Boolean(document.querySelector("[data-sidebar-tab=browser]"))')), 'browser tab closes with its last page', 10_000)
   pass('ui', 'strip close: X removes its row; closing the last page closes the pane\'s rail tab (onEmpty)')
+
+  // Explicit browser rail-tab closure has its own preference. Keep another
+  // rail tab open first, then repeat with browser as the last tab so exit
+  // animations cannot write the cleared snapshot back.
+  // Track these added teardowns separately: each destroyed guest may emit
+  // Electron's existing Invalid guestInstanceId cleanup exception, while the
+  // original suite retains its fixed exception budget.
+  await evaluate(`(() => {
+    let count = 0;
+    const removed = new WeakSet();
+    const observer = new MutationObserver(records => {
+      for (const record of records) for (const node of record.removedNodes) {
+        if (!(node instanceof Element)) continue;
+        const guests = node.matches('webview') ? [node] : [...node.querySelectorAll('webview')];
+        for (const guest of guests) if (!removed.has(guest)) { removed.add(guest); count += 1; }
+      }
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    window.__finishRestoreGuestTeardowns = () => { observer.disconnect(); return count; };
+  })()`)
+  const reopenBrowser = async () => {
+    await evaluate('window.dispatchEvent(new CustomEvent("pith:browser-open-link"))')
+    await eventually(() => evaluate('Boolean(document.querySelector("[data-browser-pane]"))'), 'browser reopened')
+  }
+  const openPagesSnapshot = () => evaluate('JSON.parse(localStorage.getItem("pi-app:browser-open-pages") ?? "[]")')
+  const openReadyTab = async () => {
+    const id = await openNewTab()
+    await eventually(() => evaluate(`Boolean(document.querySelector('[data-browser-tab=${JSON.stringify(id)}] [role=tab][aria-selected="true"]')) && window.pi.browserStatus().then(status => status.pages.some(page => page.id === ${JSON.stringify(id)}) && !status.pendingCreates.some(page => page.id === ${JSON.stringify(id)}))`), 'new page selected and registered before navigation')
+  }
+  const expectBlankBrowser = async () => {
+    await eventually(async () => (await stripRows()) === 1 && (await urlField()) === 'about:blank', 'browser reopens with one blank page')
+    let observedStatus
+    await eventually(async () => {
+      observedStatus = await evaluate('window.pi.browserStatus()')
+      return observedStatus.pages.length === 1 && !observedStatus.pendingCreates.length
+    }, 'only the new blank guest is registered').catch(async (error) => {
+      console.log(`DEBUG blank reopen: status=${JSON.stringify(observedStatus)} rows=${await stripRows()} snapshot=${JSON.stringify(await openPagesSnapshot())}`)
+      console.log(`DEBUG blank guests: ${JSON.stringify(await evaluate(`[...document.querySelectorAll('webview')].map(wv => { try { return { src: wv.getAttribute('src'), url: wv.getURL(), webContentsId: wv.getWebContentsId() } } catch (error) { return { src: wv.getAttribute('src'), error: String(error) } } })`))}`)
+      throw error
+    })
+    assert.equal(await stripRows(), 1, 'closed tabs do not reappear after registration')
+  }
+  await setRestoreTabsThroughSettings(true)
+  assert.deepEqual(await openPagesSnapshot(), [], 'closing the final page leaves no restorable tabs')
+  await reopenBrowser()
+  await expectBlankBrowser()
+  await openReadyTab()
+  const reopenUrl = `${fixtureUrl}restore-after-close`
+  await setUrl(reopenUrl)
+  await eventually(() => evaluate(`window.pi.browserStatus().then(status => status.pages.some(page => page.url === ${JSON.stringify(reopenUrl)}))`), 'page loaded before explicit close')
+  await eventually(async () => (await openPagesSnapshot()).some(page => page.url === reopenUrl && page.selected), 'selected page saved before close')
+  const savedOnClose = await openPagesSnapshot()
+  assert.equal(savedOnClose.length, 2, 'two pages are open before explicit close')
+  await click('[data-sidebar-tab="browser"] button[aria-label="Close Browser"]')
+  await eventually(() => evaluate('!document.querySelector("[data-browser-pane]")'), 'browser closes while another rail tab stays open')
+  assert.deepEqual(await openPagesSnapshot(), savedOnClose, 'enabled restoration retains the snapshot after close')
+  await reopenBrowser()
+  await eventually(async () => (await stripRows()) === 2 && (await urlField()) === pretty(reopenUrl), 'enabled restoration reopens both pages with the selected URL')
+  await eventually(() => evaluate(`window.pi.browserStatus().then(status => status.pages.length === 2 && status.pages.some(page => page.url === ${JSON.stringify(reopenUrl)}))`), 'restored page finishes navigating')
+  pass('ui', 'restore-tabs enabled: explicit browser rail-tab close/reopen retains blank pages, count and selection')
+
+  await click('[data-sidebar-tab="browser"] button[aria-label="Close Browser"]')
+  await eventually(() => evaluate('!document.querySelector("[data-browser-pane]")'), 'browser closed before changing restoration preference')
+  await setRestoreTabsThroughSettings(false)
+  await reopenBrowser()
+  await expectBlankBrowser()
+  pass('ui', 'restore-tabs disabled while the browser is already closed: reopening discards the previously retained tabs')
+
+  await setRestoreTabsThroughSettings(true)
+  await openReadyTab()
+  await setUrl(reopenUrl)
+  await eventually(async () => (await openPagesSnapshot()).some(page => page.url === reopenUrl), 'live tabs ready before disabling restoration')
+  await setRestoreTabsThroughSettings(false)
+  assert.equal(await stripRows(), 2, 'disabling restoration leaves live tabs intact')
+  await click('[data-sidebar-tab="browser"] button[aria-label="Close Browser"]')
+  assert.deepEqual(await openPagesSnapshot(), [], 'disabled restoration clears the snapshot immediately on close')
+  await eventually(() => evaluate('!document.querySelector("[data-browser-pane]")'), 'browser unmounted after disabled close')
+  await reopenBrowser()
+  await expectBlankBrowser()
+  await click('[data-sidebar-tab="browser"] button[aria-label="Close Browser"]')
+  await eventually(() => evaluate('!document.querySelector("[data-browser-pane]")'), 'blank browser closed')
+  pass('ui', 'restore-tabs disabled: changing the setting preserves live pages, while explicit close/reopen starts blank; fold reconstruction and keep-alive remain covered with the setting off')
+
   // And with the final tab closed the rail folds itself away entirely.
   await click('[data-sidebar-tab="context"] button[aria-label^="Close"]')
   await eventually(async () => !(await evaluate('Boolean(document.querySelector("[data-panel=right]"))')), 'rail folds after its last tab closes', 10_000)
   pass('ui', 'closing the last remaining rail tab folds the right rail')
+
+  await reopenBrowser()
+  await expectBlankBrowser()
+  await setUrl(reopenUrl)
+  await eventually(async () => (await openPagesSnapshot()).some(page => page.url === reopenUrl), 'last rail-tab page saved')
+  await click('[data-sidebar-tab="browser"] button[aria-label="Close Browser"]')
+  assert.deepEqual(await openPagesSnapshot(), [], 'last rail-tab closure clears the snapshot before the exit animation')
+  await eventually(() => evaluate('!document.querySelector("[data-panel=right]")'), 'browser as the last rail tab finishes closing')
+  assert.deepEqual(await openPagesSnapshot(), [], 'exiting pane effects do not restore the cleared snapshot')
+  await reopenBrowser()
+  await expectBlankBrowser()
+  await setUrl(reopenUrl)
+  await eventually(async () => (await openPagesSnapshot()).some(page => page.url === reopenUrl), 'page ready before rapid close/reopen')
+  const rapidCloseIds = await rowIds()
+  // Reopen before AnimatePresence can finish the last-tab exit. An explicit
+  // close must start a fresh pane even if the same aside DOM is reused.
+  await evaluate(`document.querySelector('[data-sidebar-tab="browser"] button[aria-label="Close Browser"]').click(); window.dispatchEvent(new CustomEvent("pith:browser-open-link"))`)
+  await expectBlankBrowser()
+  assert.ok((await rowIds()).every(id => !rapidCloseIds.includes(id)), 'rapid reopening creates new pages instead of reviving the exiting pane')
+  pass('ui', 'restore-tabs disabled: immediate close/reopen during the rail exit starts a fresh blank pane')
+  await click('[data-sidebar-tab="browser"] button[aria-label="Close Browser"]')
+  await eventually(() => evaluate('!document.querySelector("[data-panel=right]")'), 'final browser fixture cleanup')
+  pass('ui', 'restore-tabs disabled: closing the last rail tab survives the exit animation and still reopens blank')
+  const restoreGuestTeardowns = await evaluate('window.__finishRestoreGuestTeardowns()')
 
   // ================= Iron rule 12 (live + app-side source) ==================
   assert.equal(app.exitCode, null, 'app process still running')
@@ -1640,7 +1960,9 @@ try {
   // the cap still catches a per-teardown blow-up (every guest dying on spawn).
   const COSMETIC_EXCEPTION_CAP = 24
   for (const [kind, count] of cosmeticKinds) {
-    assert.ok(count <= COSMETIC_EXCEPTION_CAP, `cosmetic exception class fired ${count} times (> ${COSMETIC_EXCEPTION_CAP}) — that is a regression, not teardown noise: ${kind}`)
+    const cap = kind === 'Electron webview teardown on the designed close path (Invalid guestInstanceId)'
+      ? COSMETIC_EXCEPTION_CAP + restoreGuestTeardowns : COSMETIC_EXCEPTION_CAP
+    assert.ok(count <= cap, `cosmetic exception class fired ${count} times (> ${cap}) — that is a regression, not teardown noise: ${kind}`)
   }
   const realExceptions = exceptions.filter((detail) => !cosmeticException(detail))
   assert.deepEqual(realExceptions, [], `renderer threw exceptions: ${JSON.stringify(realExceptions).slice(0, 2000)}`)

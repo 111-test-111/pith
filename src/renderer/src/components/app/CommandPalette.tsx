@@ -5,8 +5,10 @@ import {
   Folder,
   MessageSquarePlus,
   Minimize2,
-  PanelLeft,
-  PanelRight,
+  PanelLeftClose,
+  PanelLeftOpen,
+  PanelRightClose,
+  PanelRightOpen,
   Settings,
   SquareTerminal,
   Sun
@@ -64,7 +66,7 @@ export function AppCommandPalette({
   onNewSession: (cwd?: string) => void
   onOpenSettings: () => void
   onNewTerminal: () => void
-  /** Manual compaction, the app's `/compact`; the caller guards a live run. */
+  /** Manual compaction; main waits for a safe boundary during a live run. */
   onCompact: () => void
   onToggleSidebar: () => void
   onToggleRail: () => void
@@ -121,7 +123,7 @@ export function AppCommandPalette({
         group: t('palette.group.actions'),
         label: t(sidebarOpen ? 'palette.hideSidebar' : 'palette.showSidebar'),
         keywords: ['navigation', 'projects'],
-        icon: PanelLeft,
+        icon: sidebarOpen ? PanelLeftClose : PanelLeftOpen,
         onSelect: onToggleSidebar
       },
       {
@@ -129,7 +131,7 @@ export function AppCommandPalette({
         group: t('palette.group.actions'),
         label: t(sidePanelOpen ? 'palette.hideRail' : 'palette.showRail'),
         keywords: ['panel', 'files', 'review', 'terminal'],
-        icon: PanelRight,
+        icon: sidePanelOpen ? PanelRightClose : PanelRightOpen,
         onSelect: onToggleRail
       }
     ]

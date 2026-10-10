@@ -114,7 +114,7 @@ export function ChatAppPreview() {
         onClick={toggleExpanded}
         aria-label={expanded ? "Exit expanded preview" : "Expand preview"}
         title={expanded ? "Exit expanded preview" : "Expand preview"}
-        className="absolute top-5 right-24 z-50 grid size-10 place-items-center rounded-full border border-border/80 bg-background/90 text-muted-foreground backdrop-blur-sm transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-2"
+        className="absolute top-5 right-24 z-50 grid size-10 place-items-center rounded-icon border border-border/80 bg-background/90 text-muted-foreground backdrop-blur-sm transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-2"
       >
         <ActionSwapIcon
           value={expanded ? "minimize" : "maximize"}

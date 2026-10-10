@@ -12,6 +12,7 @@ export type TraceCommand =
   | { type: 'write'; value: TraceWrite }
   | { type: 'page'; access: TraceAccess; query: TrajectoryQuery }
   | { type: 'detail'; access: TraceAccess; recordId: string }
+  | { type: 'context'; access: TraceAccess }
   | { type: 'node'; access: TraceAccess; request: TrajectoryNodeRequest }
   | { type: 'export'; access: TraceAccess; recordId: string; path: string }
   | { type: 'settle'; sessionId: string }

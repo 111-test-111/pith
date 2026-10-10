@@ -67,6 +67,14 @@ try {
     const result = await tool.execute('schema', {debugId:b.id,stopId:b.stopId,request}, undefined, undefined, {cwd:temp})
     assert(Check(tool.outputSchema, result.structuredContent), `advertised result schema: ${request.action}`)
   }
+  // Detailed recipes stay discoverable without riding every model request.
+  const help = await tool.execute('help-topic', {request:{action:'help',topic:'breakpoints'}}, undefined, undefined, {cwd:temp})
+  assert(Check(tool.outputSchema, help.structuredContent))
+  assert.deepEqual(help.structuredContent.data.actions.map(action => action.action), ['breakpoints'])
+  assert(help.structuredContent.data.actions[0].guidelines.some(text => text.includes('NOT expression validity')))
+  const aliasHelp = await tool.execute('help-alias', {request:{action:'help',topic:'breakpoints.instruction.toggle'}}, undefined, undefined, {cwd:temp})
+  assert(aliasHelp.structuredContent.data.actions[0].guidelines.some(text => text.includes('ASLR')))
+  await assert.rejects(tool.execute('bad-help', {request:{action:'help',topic:'__proto__'}}, undefined, undefined, {cwd:temp}), /Unknown debug help topic/)
   const missing=await tool.execute('missing',{debugId:'missing',request:{action:'stack'}},undefined,undefined,{cwd:temp})
   assert.equal(missing.structuredContent.error.code,'DEBUG_SESSION_NOT_FOUND')
   const stale=await tool.execute('stale',{debugId:b.id,stopId:b.stopId+1,request:{action:'stack'}},undefined,undefined,{cwd:temp})

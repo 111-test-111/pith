@@ -387,9 +387,11 @@ window.pi = {
     sandboxMode: 'workspace-write',
     sandbox: { support: 'ready', backend: 'seatbelt', enforcement: 'full', unsandboxed: false },
     cwd: null, folders: [], contextFiles: true,
-    browserConsent: true, browserAgentToolsEnabled: false
+    browserConsent: true, browserAgentToolsEnabled: false, browserSearchEngine: 'google'
   }),
   setBrowserAgentTools: async (v) => v,
+  setBrowserSearchEngine: async (v) => v,
+  onBrowserSearchEngineChanged: () => () => {},
   browserImportSources: async () => ({ status, profiles, devMode }),
   browserOpenPrivacySettings: async () => { window.calls.push(['openPrivacySettings']); },
   browserImportCookies: async (profileId) => {

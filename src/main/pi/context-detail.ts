@@ -1,7 +1,8 @@
-import { estimateTokens } from '@earendil-works/pi-coding-agent'
+import { contextComposition } from './context-composition'
 import type {
   ContextBreakdownDTO,
   ContextDetailDTO,
+  ContextRequestDTO,
   ContextUsageDTO,
   ThinkingLevel
 } from '../../shared/types'
@@ -16,10 +17,9 @@ import type {
  *   `output` that the SDK's totals drop, so it is summed from the session
  *   entries (the summary entries' usage counts too: those are real LLM calls
  *   that the stats fold in as well);
- * - **the context breakdown** — the SDK has no per-category accounting, so each
- *   context message is estimated with the SDK's own `estimateTokens` (the same
- *   heuristic its compaction uses) and grouped by role. The pane labels this as
- *   an estimate everywhere it appears.
+ * - **composition** — folded system state and SDK estimates, independently of
+ *   reported usage. Prefer the last captured, transformed request on the
+ *   selected branch; older logs fall back to their canonical projection.
  *
  * Everything is a pure function of what the caller read off the session, so the
  * whole surface is checkable without booting Electron
@@ -38,16 +38,16 @@ export interface ContextStatsLike {
 }
 
 export interface ContextDetailInput {
-  /** `AgentSession.messages`: the branch's context, compaction-converted and
-   * ordered oldest first — what the model actually receives. Only the breakdown
-   * estimates it; no message body leaves this module. */
+  /** Canonical selected-branch projection; request transforms may further
+   * change it. Only statistics leave this module. */
   messages: readonly any[]
   /** `sessionManager.getEntries()`: every entry of the file (all branches), for
    * the reasoning split the stats drop. */
   entries: readonly any[]
   stats: ContextStatsLike
-  /** The composer ring's readout; its `tokens` anchors the breakdown total. */
+  /** The composer ring's readout, independent of category estimates. */
   usage: ContextUsageDTO
+  request?: ContextRequestDTO | null
   meta: {
     sessionId: string
     sessionPath: string | null
@@ -117,29 +117,16 @@ export function statsFromEntries(entries: readonly any[]): ContextStatsLike {
   }
 }
 
-/** Which bucket a context message's estimate lands in. Anything the four
- * buckets do not name (summaries, hidden extension state, bash executions) is
- * "other" together with the system prompt and the tool schemas. */
-export function bucketOf(role: string | undefined): 'user' | 'assistant' | 'toolResults' | 'other' {
-  if (role === 'user') return 'user'
-  if (role === 'assistant') return 'assistant'
-  if (role === 'toolResult') return 'toolResults'
-  return 'other'
+/** Category estimates have their own total. Provider usage is a different
+ * measurement and its difference must never become fictitious system tokens. */
+export function buildBreakdown(messages: readonly any[]): ContextBreakdownDTO {
+  return contextComposition(messages).breakdown
 }
 
-/**
- * Per-category tokens. `total` is the provider-anchored context size when the
- * ring has one, so the four buckets always sum to the number the ring shows:
- * the residue (`total` − the summed message estimates) IS the system prompt
- * plus the tool schemas plus estimation error, and it is reported as "other"
- * instead of being hidden as a bar that does not add up.
- */
-export function buildBreakdown(messages: readonly any[], contextTokens: number | null): ContextBreakdownDTO {
-  const buckets = { user: 0, assistant: 0, toolResults: 0, other: 0 }
-  for (const message of messages) buckets[bucketOf(message?.role)] += estimateTokens(message)
-  const estimate = buckets.user + buckets.assistant + buckets.toolResults + buckets.other
-  const total = contextTokens !== null && contextTokens > estimate ? contextTokens : estimate
-  return { ...buckets, other: buckets.other + (total - estimate), total }
+/** Both fresh input and cache writes are cache misses. Output is excluded. */
+export function cacheHitRate(tokens: ContextStatsLike['tokens']): number | null {
+  const input = tokens.input + tokens.cacheRead + tokens.cacheWrite
+  return input > 0 ? Math.min(tokens.cacheRead / input, 1) : null
 }
 
 /**
@@ -156,7 +143,7 @@ export function reasoningTokens(entries: readonly any[]): number | null {
     const usage =
       entry?.type === 'message' ? entry.message?.usage : entry?.type === 'compaction' || entry?.type === 'branch_summary' || entry?.type === 'usage' ? entry.usage : undefined
     const reasoning = usage?.reasoning
-    if (typeof reasoning !== 'number' || !Number.isFinite(reasoning)) continue
+    if (typeof reasoning !== 'number' || !Number.isFinite(reasoning) || reasoning < 0) continue
     reported = true
     total += reasoning
   }
@@ -165,6 +152,7 @@ export function reasoningTokens(entries: readonly any[]): number | null {
 
 export function buildContextDetail(input: ContextDetailInput): ContextDetailDTO {
   const { stats, usage, meta } = input
+  const projection = contextComposition(input.messages)
   return {
     sessionId: meta.sessionId,
     sessionPath: meta.sessionPath,
@@ -191,6 +179,9 @@ export function buildContextDetail(input: ContextDetailInput): ContextDetailDTO 
     },
     cost: stats.cost,
     usage,
-    breakdown: buildBreakdown(input.messages, usage.tokens)
+    breakdown: input.request?.breakdown ?? projection.breakdown,
+    projectionEstimate: projection.breakdown.total,
+    request: input.request ?? null,
+    categories: input.request?.categories ?? projection.categories
   }
 }

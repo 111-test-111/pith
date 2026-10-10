@@ -39,10 +39,10 @@ export function TimeGrid({
     <div className="flex flex-col gap-2" data-time-picker-phase={phase}>
       <div className="flex items-center justify-between gap-2 border-b border-border/60 pb-2">
         <div className="flex items-center gap-1">
-          <Button variant={phase === 'hour' ? 'secondary' : 'ghost'} size="sm" className={cn('h-7 px-2 text-xs', phase === 'hour' && 'bg-muted')} aria-pressed={phase === 'hour'} onClick={() => onPhaseChange('hour')}>
+          <Button variant={phase === 'hour' ? 'secondary' : 'ghost'} size="sm" className={cn('h-7 px-2 text-xs', phase === 'hour' && 'bg-primary/15 hover:bg-primary/25')} aria-pressed={phase === 'hour'} onClick={() => onPhaseChange('hour')}>
             {t('scheduledTasks.editor.hour')}
           </Button>
-          <Button variant={phase === 'minute' ? 'secondary' : 'ghost'} size="sm" className={cn('h-7 px-2 text-xs', phase === 'minute' && 'bg-muted')} aria-pressed={phase === 'minute'} onClick={() => onPhaseChange('minute')}>
+          <Button variant={phase === 'minute' ? 'secondary' : 'ghost'} size="sm" className={cn('h-7 px-2 text-xs', phase === 'minute' && 'bg-primary/15 hover:bg-primary/25')} aria-pressed={phase === 'minute'} onClick={() => onPhaseChange('minute')}>
             {t('scheduledTasks.editor.minute')}
           </Button>
         </div>
@@ -57,8 +57,8 @@ export function TimeGrid({
             aria-label={`${t(phase === 'hour' ? 'scheduledTasks.editor.hour' : 'scheduledTasks.editor.minute')} ${padTimePart(value_)}`}
             aria-pressed={selected === value_}
             className={cn(
-              'h-7 w-full rounded-detail text-[11px] font-normal tabular-nums',
-              selected === value_ ? 'bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground' : 'text-foreground'
+              'h-7 w-full rounded-detail text-caption font-normal tabular-nums',
+              selected === value_ ? 'bg-primary/15 text-foreground hover:bg-primary/25 hover:text-foreground' : 'text-foreground'
             )}
             onClick={() => {
               onChange(phase === 'hour' ? `${padTimePart(value_)}:${padTimePart(minute)}` : `${padTimePart(hour)}:${padTimePart(value_)}`)
@@ -103,7 +103,7 @@ export const TimeOfDayField = memo(function TimeOfDayField({
             <span className="tabular-nums">{value}</span>
           </Button>
         </MorphPopoverTrigger>
-        <MorphPopoverContent align="start" radius="var(--app-radius-card)" className="w-[21rem] p-2" instant>
+        <MorphPopoverContent align="start" radius="var(--app-radius-card)" className="w-[21rem] p-2">
           <TimeGrid value={value} phase={phase} onPhaseChange={setPhase} onChange={onChange} onComplete={() => setOpen(false)} />
         </MorphPopoverContent>
       </MorphPopover>

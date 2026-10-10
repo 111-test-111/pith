@@ -4,7 +4,7 @@ import { Button } from '@/components/motion/button'
 import { Input } from '@/components/motion/input'
 import { useI18n } from '@/i18n'
 import { guestBoxToHost, hostPointToGuest } from '@/lib/browser/zoom'
-import { createWheelGesture, wheelPixels } from '@/lib/wheel-gesture'
+import { wheelPixels } from '@/lib/wheel-gesture'
 import { isEditableTarget, type BrowserWebviewElement } from './BrowserPageView'
 
 /**
@@ -20,10 +20,8 @@ import { isEditableTarget, type BrowserWebviewElement } from './BrowserPageView'
  *  2. wheel forwarding: sendInputEvent mouseWheel with PURE PIXEL deltas and an
  *     INVERTED sign — payloads carrying wheelTicks or precise-scrolling flags
  *     are silently swallowed by guests;
- *  3. the secondary axis is zeroed before forwarding (macOS trackpads carry
- *     cross-axis noise; the direction is held for the gesture, not re-picked
- *     for every event; without zeroing the guest consumes both axes or the
- *     dominant-axis routing swallows the event);
+ *  3. both axes are forwarded so diagonal swipes and direction changes reach
+ *     the guest without losing either component;
  *  4. hover highlight is suppressed while scrolling and re-resolved once,
  *     250ms after the LAST wheel event (inertia keeps extending it);
  *  5. element resolution goes through the renderer-side executeJavaScript —
@@ -278,13 +276,12 @@ export function BrowserAnnotate({ wv, wrapEl, pageZoom, active, onExit, page }: 
 
   // Wheel forwarding for the whole annotate mode. The capture layer swallows
   // every pointer event, so without this the page could not scroll at all.
-  // Pure pixel deltas, INVERTED sign, secondary axis zeroed (see header).
+  // Pure pixel deltas, INVERTED sign, retaining both axes (see header).
   useEffect(() => {
     const capture = captureRef.current
     const guest = wvRef.current
     const wrap = wrapRef.current
     if (!capture || !guest || !wrap) return
-    const gesture = createWheelGesture(() => 'scroll')
     const onWheel = (e: WheelEvent) => {
       e.preventDefault() // the host has no scroll container; also stops ctrl+wheel shell zoom
       // Wheel coordinates stay in webview-element space (host pixels) — the
@@ -292,8 +289,8 @@ export function BrowserAnnotate({ wv, wrapEl, pageZoom, active, onExit, page }: 
       const rect = guest.getBoundingClientRect()
       const x = e.clientX - rect.left
       const y = e.clientY - rect.top
-      const input = gesture.read(wheelPixels(e, wrap, 40))
-      if (!input || (!input.deltaX && !input.deltaY)) return
+      const input = wheelPixels(e, wrap, 40)
+      if (!input.deltaX && !input.deltaY) return
       try {
         // The real webview API returns a promise — a wheel on a not-ready or
         // destroyed guest rejects asynchronously, which a bare try/catch

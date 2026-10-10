@@ -507,6 +507,11 @@ export class BrowserService {
     return this.state.pages.map(pageMeta)
   }
 
+  /** Capture download provenance before a guest closes or changes owners. */
+  ownerForWebContents(webContentsId: number): string | undefined {
+    return this.state.pages.find(page => page.webContentsId === webContentsId)?.owner
+  }
+
   private ensureStarted(): Promise<BrowserContextLike> {
     // After dispose() no new CDP connection may be opened: the app is quitting
     // (or has quit), and a late browser:* call must not restart work.
@@ -574,7 +579,7 @@ export class BrowserService {
       if (this.isShellWindowUrl(url)) { this.resetForeignPageEmulation(page); continue }
       const marker = parseMarkerUrl(url)
 
-      if (!marker || this.closingTargetIds.has(marker.pageId)) { this.resetForeignPageEmulation(page); continue }
+      if (!marker || this.closingTargetIds.has(marker.pageId) || this.retiredIds.includes(marker.pageId)) { this.resetForeignPageEmulation(page); continue }
       if (pageById(this.state, marker.pageId) && this.runtime.has(marker.pageId)) continue
       this.registerRuntimePage(page, marker.owner, marker.pageId)
     }
@@ -810,15 +815,25 @@ export class BrowserService {
   }
 
   async closePage(id: string): Promise<void> {
-
+    // A row can close before its guest registers. Cancel that handshake too:
+    // leaving it pending would materialize the closed page on the next pane mount.
+    const waiter = this.registrationWaiters.get(id)
+    if (waiter) {
+      clearTimeout(waiter.timer)
+      this.registrationWaiters.delete(id)
+      this.pendingCreates = this.pendingCreates.filter((page) => page.id !== id)
+      waiter.reject(new PageGoneError(id))
+      this.notifyState()
+    }
     this.closingTargetIds.add(id)
     this.handlePageClosed(id)
 
     if (pageById(this.state, id)) {
       this.state = removePage(this.state, id)
       this.notifyState()
-      this.retire(id)
     }
+    // Include unregistered rows so late seen/marker arrivals stay closed.
+    if (!this.retiredIds.includes(id)) this.retire(id)
 
     const timer = setTimeout(() => this.closingTargetIds.delete(id), ELECTRON_RECONCILE_INTERVAL_MS * 2)
     timer.unref()

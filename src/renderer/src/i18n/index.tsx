@@ -1,23 +1,43 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import en, { type MessageKey } from './locales/en'
 import zhCN from './locales/zh-CN'
+import zhTW from './locales/zh-TW'
 
 export const LOCALE_STORAGE_KEY = 'pi-app:locale'
 
-export type Locale = 'en' | 'zh-CN'
+export type Locale = 'en' | 'zh-CN' | 'zh-TW'
 
-const dictionaries: Record<Locale, typeof en> = { en, 'zh-CN': zhCN }
+const dictionaries: Record<Locale, typeof en> = { en, 'zh-CN': zhCN, 'zh-TW': zhTW }
 
 /** Language names shown in their own language, never translated. */
 export const LOCALE_NAMES: Record<Locale, string> = {
   en: 'English',
-  'zh-CN': '简体中文'
+  'zh-CN': '简体中文',
+  'zh-TW': '繁體中文'
+}
+
+const LOCALES = Object.keys(LOCALE_NAMES) as Locale[]
+
+/** True for a value that names one of the supported locales. */
+export function isLocale(value: unknown): value is Locale {
+  return typeof value === 'string' && (LOCALES as string[]).includes(value)
+}
+
+/**
+ * Chinese is split by script: `zh-Hant`/`zh-TW`/`zh-HK`/`zh-MO` get Traditional,
+ * every other `zh` tag (including the bare `zh`) gets Simplified.
+ */
+function localeFromLanguageTag(tag: string | undefined): Locale {
+  const lower = tag?.toLowerCase() ?? ''
+  if (!lower.startsWith('zh')) return 'en'
+  if (/^zh-(hant|tw|hk|mo)\b/.test(lower)) return 'zh-TW'
+  return 'zh-CN'
 }
 
 function detectLocale(): Locale {
   const stored = window.localStorage.getItem(LOCALE_STORAGE_KEY)
-  if (stored === 'en' || stored === 'zh-CN') return stored
-  return navigator.language?.toLowerCase().startsWith('zh') ? 'zh-CN' : 'en'
+  if (isLocale(stored)) return stored
+  return localeFromLanguageTag(navigator.language)
 }
 
 interface I18nContextValue {

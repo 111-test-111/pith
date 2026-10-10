@@ -3,6 +3,7 @@ import { isAbsolute, relative, resolve } from 'node:path'
 import type { AgentSession } from '@earendil-works/pi-coding-agent'
 import type { ChatMessage, SubagentWrittenFileDTO } from '../../../shared/types'
 import { SubagentError } from './errors.ts'
+import { IMAGE_TOOL_NAME, parseImageToolResult } from '../../../shared/image.ts'
 
 /**
  * Pure derivation helpers for subagent runs — no Electron, no manager imports,
@@ -122,8 +123,8 @@ export function synthesizeWritePatch(displayPath: string, content: string): stri
 }
 
 /**
- * Extract the files a child session wrote, from its successful `edit`/`write`
- * results only (reply prose is never a source). Same-file calls merge; total
+ * Extract the files a child session wrote, from committed `edit`/`write`/`image`
+ * receipts only (reply prose is never a source). Same-file calls merge; total
  * patch bytes are capped, keeping counts but dropping patches beyond budget.
  */
 export function extractSubagentWrittenFiles(messages: readonly ChatMessage[], cwd: string): SubagentWrittenFileDTO[] {
@@ -137,7 +138,16 @@ export function extractSubagentWrittenFiles(messages: readonly ChatMessage[], cw
   const byPath = new Map<string, SubagentWrittenFileDTO>()
   let patchBudget = MAX_SUBAGENT_WRITTEN_PATCH_BYTES
   for (const message of messages) {
-    if (message.role !== 'toolResult' || message.isError) continue
+    if (message.role !== 'toolResult') continue
+    if (message.toolName === IMAGE_TOOL_NAME && calls.get(message.toolCallId)?.name === IMAGE_TOOL_NAME) {
+      for (const file of parseImageToolResult(message.details)?.files ?? []) {
+        const rel = relative(cwd, file.path)
+        if (!byPath.has(file.path)) byPath.set(file.path, { filePath: file.path,
+          displayPath: rel.startsWith('..') || isAbsolute(rel) ? file.path : rel, kind: 'generated-image' })
+      }
+      continue
+    }
+    if (message.isError) continue
     if (message.toolName !== 'edit' && message.toolName !== 'write') continue
     const call = calls.get(message.toolCallId)
     if (!call) continue
@@ -165,6 +175,8 @@ export function extractSubagentWrittenFiles(messages: readonly ChatMessage[], cw
       })
       if (patch) patchBudget -= patch.length
     } else {
+      // A real text edit/write on the same path still belongs in code review.
+      delete existing.kind
       existing.added = (existing.added ?? 0) + (counts.added ?? 0)
       existing.removed = (existing.removed ?? 0) + (counts.removed ?? 0)
       if (patch && patch.length <= patchBudget) {

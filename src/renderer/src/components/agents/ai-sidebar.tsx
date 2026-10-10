@@ -1,3 +1,4 @@
+// local patch (pi-app): shared scalable typography for UI annotations.
 // local patch (pi-app): keep UI frames and focus rings in this component at 1px.
 "use client";
 // beui.dev/components/agents/chat-app
@@ -17,9 +18,12 @@ import {
   Undo2,
 } from "@/lib/icons";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+// local patch (pi-app): inline rename shares the sidebar filter style.
+import { SINGLE_LINE_INPUT_PADDING, SINGLE_LINE_INPUT_TEXT } from "@/lib/input-style";
 import {
   type DragEvent,
   type KeyboardEvent,
+  type ReactElement,
   type ReactNode,
   useCallback,
   useEffect,
@@ -90,6 +94,28 @@ export interface AISidebarProps {
   defaultActiveId?: string | null;
   onActiveChange?: (id: string) => void;
   defaultExpandedIds?: string[];
+  // local patch (pi-app): the app owns persistent collapse and row presentation.
+  expandedIds?: string[];
+  onExpandedIdsChange?: (ids: string[]) => void;
+  renderLabel?: (item: SidebarResource, label: ReactNode) => ReactNode;
+  // local patch (pi-app): app tooltips can observe the entire row, including its icon.
+  renderRow?: (item: SidebarResource, row: ReactElement, state: {
+    renaming: boolean;
+    menuOpen: boolean;
+    dragging: boolean;
+  }) => ReactNode;
+  canRename?: (item: SidebarResource) => boolean;
+  hasMenu?: (item: SidebarResource) => boolean;
+  menuClassName?: string;
+  menuHeight?: number;
+  labels?: {
+    actionsFor: (label: string) => string;
+    renameLabel: (label: string) => string;
+    movePending: string;
+    moved: (label: string, target: string, position: SidebarResourceDropPosition) => string;
+    moveFailed: (label: string) => string;
+    renameFailed: (label: string) => string;
+  };
   /** Allow rows to drop INTO container rows (sub-folder nesting) via drag,
    * the row menu, and keyboard moves. False limits every move path to
    * before/after reordering. Default: true. */
@@ -272,53 +298,12 @@ function defaultIcon(item: SidebarResource, expanded: boolean) {
   return <Icon className="size-4" />;
 }
 
-function MarqueeLabel({ active, children }: { active: boolean; children: string }) {
-  const reduce = useReducedMotion() ?? false;
-  const viewportRef = useRef<HTMLSpanElement>(null);
-  const labelRef = useRef<HTMLSpanElement>(null);
-  const [distance, setDistance] = useState(0);
-
-  useEffect(() => {
-    const measure = () => {
-      const viewport = viewportRef.current;
-      const label = labelRef.current;
-      if (!viewport || !label) return;
-      setDistance(label.scrollWidth > viewport.clientWidth ? label.scrollWidth + 24 : 0);
-    };
-    measure();
-    const observer = new ResizeObserver(measure);
-    if (viewportRef.current) observer.observe(viewportRef.current);
-    if (labelRef.current) observer.observe(labelRef.current);
-    return () => observer.disconnect();
-  }, []);
-
-  const running = active && distance > 0 && !reduce;
-
+// local patch (pi-app): labels stay still on hover; app labels may add a tooltip.
+function ResourceLabel({ children }: { children: string }) {
   return (
-    // local patch (pi-app): on hover the row's floating actions sit over the
-    // title; fade the marquee's right end under them (a mask, so it works no
-    // matter how the transformed text layer composites).
-    <span
-      ref={viewportRef}
-      className="relative z-0 block min-w-0 flex-1 overflow-hidden transform-gpu [contain:paint] [mask-image:linear-gradient(to_right,black_calc(100%_-_2rem),transparent)]"
-    >
-      <motion.span
-        className="flex w-max items-center gap-6 whitespace-nowrap"
-        animate={{ x: running ? [0, -distance] : 0 }}
-        transition={
-          running
-            ? {
-                duration: Math.max(2.4, distance / 34),
-                ease: "linear",
-                repeat: Number.POSITIVE_INFINITY,
-                repeatDelay: 2,
-              }
-            : ROW_REVEAL
-        }
-      >
-        <span ref={labelRef}>{children}</span>
-        {running ? <span aria-hidden="true">{children}</span> : null}
-      </motion.span>
+    // Floating actions overlay the label without reserving space or shifting it.
+    <span data-resource-label className="relative z-0 block min-w-0 flex-1 overflow-hidden whitespace-nowrap [mask-image:linear-gradient(to_right,black_calc(100%_-_2rem),transparent)]">
+      {children}
     </span>
   );
 }
@@ -355,6 +340,9 @@ interface ResourceRowProps {
   row: FlatResource;
   // local patch (pi-app): project and synthetic rows cannot start a drag.
   draggable: boolean;
+  // local patch (pi-app): synthetic sections are never renamed or given empty menus.
+  renameable: boolean;
+  hasMenu: boolean;
   active: boolean;
   expanded: boolean;
   focused: boolean;
@@ -378,12 +366,19 @@ interface ResourceRowProps {
   renderIcon?: (item: SidebarResource) => ReactNode;
   renderMenu?: AISidebarProps["renderMenu"];
   renderActions?: AISidebarProps["renderActions"];
+  renderLabel?: AISidebarProps["renderLabel"];
+  renderRow?: AISidebarProps["renderRow"];
+  labels?: AISidebarProps["labels"];
+  menuClassName?: string;
+  menuHeight: number;
   setRef: (node: HTMLDivElement | null) => void;
 }
 
 function ResourceRow({
   row,
   draggable,
+  renameable,
+  hasMenu,
   active,
   expanded,
   focused,
@@ -407,11 +402,15 @@ function ResourceRow({
   renderIcon,
   renderMenu,
   renderActions,
+  renderLabel,
+  renderRow,
+  labels,
+  menuClassName,
+  menuHeight,
   setRef,
 }: ResourceRowProps) {
   const reduce = useReducedMotion() ?? false;
   const canTouch = useTouchCapable();
-  const [hovered, setHovered] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   // local patch (pi-app): a row near the bottom of the window must open its
   // menu upward — the panel is portalled to the viewport, so it is otherwise
@@ -433,8 +432,8 @@ function ResourceRow({
     const rect = node.getBoundingClientRect();
     const below = window.innerHeight - rect.bottom - ROW_MENU_EDGE_MARGIN;
     const above = rect.top - ROW_MENU_EDGE_MARGIN;
-    setMenuSide(below >= ROW_MENU_HEIGHT || below >= above ? "bottom" : "top");
-  }, []);
+    setMenuSide(below >= Math.min(menuHeight, window.innerHeight - 24) || below >= above ? "bottom" : "top");
+  }, [menuHeight]);
   useLayoutEffect(() => {
     if (menuOpen) resolveMenuSide();
   }, [menuOpen, resolveMenuSide]);
@@ -501,7 +500,7 @@ function ResourceRow({
     </>
   );
 
-  return (
+  const element = (
     // local patch (registry beui.dev/components/agents/ai-sidebar has no enter
     // animation): rows fade/slide in when a folder expands, so children stop
     // popping in while siblings glide. No `exit` — collapse keeps its
@@ -524,6 +523,8 @@ function ResourceRow({
       tabIndex={focused ? 0 : -1}
       draggable={draggable && !row.item.disabled && !renaming}
       data-menu-open={menuOpen || undefined}
+      // local patch (pi-app): stable app identity for the shared context-menu resolver.
+      data-resource-id={row.item.id}
       data-drop={dropPosition ?? undefined}
       data-dragging={isDragging || undefined}
       onFocus={onFocus}
@@ -549,15 +550,11 @@ function ResourceRow({
         else onSelect();
       }}
       onDoubleClick={(event) => {
-        if (acceptsChildren || row.item.disabled) return;
+        if (acceptsChildren || row.item.disabled || !renameable) return;
         event.preventDefault();
         onRenameStart();
       }}
-      onMouseEnter={() => {
-        setHovered(true);
-        resolveMenuSide();
-      }}
-      onMouseLeave={() => setHovered(false)}
+      onMouseEnter={resolveMenuSide}
       onDragStartCapture={(event) => {
         // local patch (pi-app): reject synthetic/descendant drags as well.
         if (!draggable || row.item.disabled || renaming) {
@@ -617,7 +614,7 @@ function ResourceRow({
       onDragOver={(event) => onDragOver(event, row)}
       onDrop={onDrop}
       className={cn(
-        "group/resource relative flex min-h-9 min-w-0 cursor-pointer items-center gap-2.5 rounded-xl pr-3 text-sm outline-none",
+        "group/resource relative flex min-h-9 w-full min-w-0 cursor-pointer items-center gap-2.5 rounded-xl pr-3 text-sm outline-none",
         "text-muted-foreground transition-colors hover:bg-muted hover:text-foreground",
         "focus-visible:bg-muted/70 focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset",
         "data-[menu-open=true]:bg-muted data-[menu-open=true]:text-foreground",
@@ -640,7 +637,7 @@ function ResourceRow({
         <input
           ref={inputRef}
           value={draft}
-          aria-label={`Rename ${row.item.label}`}
+          aria-label={labels?.renameLabel(row.item.label) ?? `Rename ${row.item.label}`}
           onChange={(event) => setDraft(event.target.value)}
           draggable={false}
           onClick={(event) => event.stopPropagation()}
@@ -659,14 +656,16 @@ function ResourceRow({
               onRenameCancel();
             }
           }}
-          className="mx-1 h-7 min-w-0 flex-1 rounded-md border border-border bg-background px-2 text-sm text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          // local patch (pi-app): inline rename uses the same inset as other single-line inputs.
+          className={cn("mx-1 min-w-0 flex-1 rounded-md border border-border bg-background text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring", SINGLE_LINE_INPUT_TEXT, SINGLE_LINE_INPUT_PADDING)}
         />
       ) : (
-        <MarqueeLabel active={hovered || menuOpen}>{row.item.label}</MarqueeLabel>
+        renderLabel?.(row.item, <ResourceLabel>{row.item.label}</ResourceLabel>) ??
+          <ResourceLabel>{row.item.label}</ResourceLabel>
       )}
 
       {!renaming && !row.item.disabled ? renderActions?.(row.item) : null}
-      {!renaming && !row.item.disabled ? (
+      {!renaming && !row.item.disabled && hasMenu ? (
         // local patch (pi-app): float the actions menu over the row instead of
         // reserving a ~28px slot for it, so a title can use the full row width
         // instead of stopping well short of the right edge.
@@ -680,16 +679,14 @@ function ResourceRow({
               type="button"
               draggable={false}
               tabIndex={-1}
-              aria-label={`Actions for ${row.item.label}`}
+              aria-label={labels?.actionsFor(row.item.label) ?? `Actions for ${row.item.label}`}
               onClick={(event) => event.stopPropagation()}
               className={cn(
                 // local patch (pi-app): opaque background so the row hover
                 // state can't show the title through the floating menu button.
-                // local patch (pi-app): opaque floating chip so the marquee
-                // title underneath can't show through the action button.
                 // local patch (pi-app): the floating action has a fill cue
                 // without a persistent outline.
-                "grid size-7 shrink-0 place-items-center rounded-lg bg-background text-muted-foreground shadow-sm outline-none transition-[opacity,color,background-color] hover:bg-muted hover:text-foreground focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-ring group-hover/resource:opacity-100 group-data-[menu-open=true]/resource:opacity-100",
+                "grid size-7 shrink-0 place-items-center rounded-lg bg-background text-muted-foreground outline-none transition-[opacity,color,background-color] hover:bg-muted hover:text-foreground focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-ring group-hover/resource:opacity-100 group-data-[menu-open=true]/resource:opacity-100",
                 // A finger never hovers, and this menu is the only path to
                 // rename and move without a drag — keep it on screen there.
                 canTouch ? "opacity-100" : "opacity-0",
@@ -705,7 +702,7 @@ function ResourceRow({
             sideOffset={8}
             // local patch (pi-app): resource menus consume the shared surface radius.
             radius="var(--app-radius-card)"
-            className="w-40 p-1.5"
+            className={cn("w-40 p-1.5", menuClassName)}
           >
             <div data-sidebar-resource-menu={row.item.id}>{menu}</div>
           </MorphPopoverContent>
@@ -713,6 +710,7 @@ function ResourceRow({
       ) : null}
     </motion.div>
   );
+  return renderRow?.(row.item, element, { renaming, menuOpen, dragging: isDragging }) ?? element;
 }
 
 export function AISidebar({
@@ -726,6 +724,15 @@ export function AISidebar({
   defaultActiveId = null,
   onActiveChange,
   defaultExpandedIds = [],
+  expandedIds: expandedIdsProp,
+  onExpandedIdsChange,
+  renderLabel,
+  renderRow,
+  canRename,
+  hasMenu,
+  menuClassName,
+  menuHeight = ROW_MENU_HEIGHT,
+  labels,
   allowNesting = true,
   canDrag,
   canMove,
@@ -737,9 +744,16 @@ export function AISidebar({
 }: AISidebarProps) {
   const [internalItems, setInternalItems] = useState(items ?? defaultItems);
   const [internalActiveId, setInternalActiveId] = useState(defaultActiveId);
-  const [expandedIds, setExpandedIds] = useState(
+  const [internalExpandedIds, setInternalExpandedIds] = useState(
     () => new Set(defaultExpandedIds),
   );
+  // local patch (pi-app): controlled expansion survives new sections and list refreshes.
+  const expandedIds = useMemo(() => expandedIdsProp ? new Set(expandedIdsProp) : internalExpandedIds, [expandedIdsProp, internalExpandedIds]);
+  const setExpandedIds = useCallback((update: (current: Set<string>) => Set<string>) => {
+    const next = update(expandedIds);
+    if (expandedIdsProp === undefined) setInternalExpandedIds(next);
+    onExpandedIdsChange?.([...next]);
+  }, [expandedIds, expandedIdsProp, onExpandedIdsChange]);
   const [focusedId, setFocusedId] = useState<string | null>(
     activeId ?? defaultActiveId,
   );
@@ -800,7 +814,7 @@ export function AISidebar({
       // local patch (pi-app): never reparent the optimistic tree on rejection.
       if (canMove && !canMove(move)) return;
       if (movePendingRef.current) {
-        setAnnouncement("Wait for the current move to finish.");
+        setAnnouncement(labels?.movePending ?? "Wait for the current move to finish.");
         return;
       }
       const before = renderedItems;
@@ -814,7 +828,7 @@ export function AISidebar({
       const moved = findResource(before, move.itemId);
       const target = move.targetId ? findResource(before, move.targetId) : null;
       setAnnouncement(
-        target
+        labels && target ? labels.moved(moved?.label ?? move.itemId, target.label, move.position) : target
           ? `Moved ${moved?.label ?? "item"} ${move.position} ${target.label}.`
           : `Moved ${moved?.label ?? "item"} to the top level.`,
       );
@@ -823,13 +837,13 @@ export function AISidebar({
         await onMove?.(move);
       } catch (error) {
         updateItems(before);
-        setAnnouncement(`Move failed. ${moved?.label ?? "Item"} was restored.`);
+        setAnnouncement(labels?.moveFailed(moved?.label ?? move.itemId) ?? `Move failed. ${moved?.label ?? "Item"} was restored.`);
         onMoveError?.(error, move);
       } finally {
         movePendingRef.current = false;
       }
     },
-    [canMove, onMove, onMoveError, renderedItems, updateItems],
+    [canMove, onMove, onMoveError, renderedItems, updateItems, labels],
   );
 
   const focusRow = useCallback((id: string) => {
@@ -852,16 +866,19 @@ export function AISidebar({
       else next.add(id);
       return next;
     });
-  }, []);
+  }, [setExpandedIds]);
 
   // The same four moves `Alt+Shift+Arrow` performs, handed to the row menu so
   // they survive on a device with no drag and no modifier keys.
   const moveCommands = useCallback(
     (row: FlatResource): SidebarResourceMoveCommands => {
       if (row.item.disabled) return {};
-      const index = flat.findIndex(({ item }) => item.id === row.item.id);
-      const previous = flat[index - 1];
-      const next = flat[index + 1];
+      // local patch (pi-app): fixed-membership lists move among siblings even
+      // when a neighbouring section is expanded, without crossing its children.
+      const peers = allowNesting ? flat : flat.filter((entry) => entry.parentId === row.parentId);
+      const index = peers.findIndex(({ item }) => item.id === row.item.id);
+      const previous = peers[index - 1];
+      const next = peers[index + 1];
       const parentId = row.parentId;
       const commands: SidebarResourceMoveCommands = {};
 
@@ -919,7 +936,7 @@ export function AISidebar({
       }
       return commands;
     },
-    [allowNesting, canMove, flat, performMove],
+    [allowNesting, canMove, flat, performMove, setExpandedIds],
   );
 
   const handleKeyDown = useCallback(
@@ -966,14 +983,14 @@ export function AISidebar({
         return;
       }
 
-      if (moveModifier && event.key === "ArrowUp" && previous) {
+      if (moveModifier && event.key === "ArrowUp") {
         event.preventDefault();
-        void performMove({ itemId: row.item.id, targetId: previous.item.id, position: "before" });
+        moveCommands(row).up?.();
         return;
       }
-      if (moveModifier && event.key === "ArrowDown" && next) {
+      if (moveModifier && event.key === "ArrowDown") {
         event.preventDefault();
-        void performMove({ itemId: row.item.id, targetId: next.item.id, position: "after" });
+        moveCommands(row).down?.();
         return;
       }
       if (
@@ -1008,13 +1025,13 @@ export function AISidebar({
         else select(row.item.id);
       } else if (event.key === "F2") {
         event.preventDefault();
-        setRenamingId(row.item.id);
+        if (canRename?.(row.item) ?? true) setRenamingId(row.item.id);
       } else if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
         event.preventDefault();
-        setMenuOpenId(row.item.id);
+        if (hasMenu?.(row.item) ?? true) setMenuOpenId(row.item.id);
       }
     },
-    [allowNesting, expandedIds, flat, focusRow, performMove, select, toggle],
+    [allowNesting, expandedIds, flat, focusRow, performMove, select, toggle, canRename, hasMenu, setExpandedIds, moveCommands],
   );
 
   // local patch (pi-app): omit the root drop affordance when membership is fixed.
@@ -1059,6 +1076,8 @@ export function AISidebar({
             key={row.item.id}
             row={row}
             draggable={canDrag?.(row.item) ?? true}
+            renameable={canRename?.(row.item) ?? true}
+            hasMenu={hasMenu?.(row.item) ?? true}
             active={selectedId === row.item.id}
             expanded={expandedIds.has(row.item.id)}
             focused={focusedRow === row.item.id}
@@ -1081,7 +1100,7 @@ export function AISidebar({
               updateItems(renameResource(before, row.item.id, trimmed));
               void Promise.resolve(onRename?.(row.item, trimmed)).catch(() => {
                 updateItems(before);
-                setAnnouncement(`Rename failed. ${row.item.label} was restored.`);
+                setAnnouncement(labels?.renameFailed(row.item.label) ?? `Rename failed. ${row.item.label} was restored.`);
               });
             }}
             onMenuOpenChange={(open) => {
@@ -1137,6 +1156,11 @@ export function AISidebar({
             renderIcon={renderIcon}
             renderMenu={renderMenu}
             renderActions={renderActions}
+            renderLabel={renderLabel}
+            renderRow={renderRow}
+            labels={labels}
+            menuClassName={menuClassName}
+            menuHeight={menuHeight}
             setRef={(node) => {
               if (node) rowRefs.current.set(row.item.id, node);
               else rowRefs.current.delete(row.item.id);
@@ -1149,7 +1173,7 @@ export function AISidebar({
         <div
           aria-hidden="true"
           data-active={dropTarget?.id === null || undefined}
-          className="absolute inset-x-1 bottom-0 flex h-8 items-center justify-center rounded-lg border border-dashed border-border text-[10px] text-muted-foreground data-[active=true]:border-primary/50 data-[active=true]:bg-primary/10 data-[active=true]:text-foreground"
+          className="absolute inset-x-1 bottom-0 flex h-8 items-center justify-center rounded-lg border border-dashed border-border text-micro text-muted-foreground data-[active=true]:border-primary/50 data-[active=true]:bg-primary/10 data-[active=true]:text-foreground"
         >
           Move to top level
         </div>

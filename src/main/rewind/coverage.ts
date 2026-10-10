@@ -5,6 +5,8 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { RewindCheckpointDTO, RewindUncoveredPathDTO } from '../../shared/types'
 import { PathIndex } from './paths'
+import { IMAGE_TOOL_NAME, parseImageToolResult } from '../../shared/image'
+import { IMAGE_REPLAY_ENTRY, parseImageReplayRecord } from '../../shared/image-replay'
 
 /** Same input normalization as the SDK's built-in edit/write path resolver.
  * Keep this local: the SDK's path utility is not a public package export. */
@@ -43,6 +45,7 @@ export async function uncoveredWrites(branch: readonly SessionEntry[], cwd: stri
   const anchor = afterEntryId === null ? -1 : branch.findIndex(entry => entry.id === afterEntryId)
   const calls = new Map<string, { path: string; position: number }>()
   const outerCalls = new Map<string, number>()
+  const imageCalls = new Set<string>()
   const paths = new Set<string>()
   const addPath = (raw: unknown): void => {
     if (typeof raw !== 'string') return
@@ -50,11 +53,16 @@ export async function uncoveredWrites(branch: readonly SessionEntry[], cwd: stri
   }
   for (let position = 0; position < branch.length; position++) {
     const entry = branch[position]
+    if (entry.type === 'custom' && entry.customType === IMAGE_REPLAY_ENTRY && position > anchor) {
+      const replay = parseImageReplayRecord(entry.data)
+      if (replay?.endedAt !== undefined) for (const file of replay.result?.files ?? []) addPath(file.path)
+    }
     if (entry.type !== 'message') continue
     const message = entry.message
     if (message.role === 'assistant') {
       for (const block of message.content) if (block.type === 'toolCall') {
         outerCalls.set(block.id, position)
+        if (block.name === IMAGE_TOOL_NAME) imageCalls.add(block.id)
         if (['edit', 'write'].includes(block.name) && typeof block.arguments.path === 'string') {
           try { calls.set(block.id, { path: toolPath(block.arguments.path, cwd), position }) } catch { /* Invalid paths cannot be executed by the built-in tool. */ }
         }
@@ -69,6 +77,10 @@ export async function uncoveredWrites(branch: readonly SessionEntry[], cwd: stri
       // in details because the SDK bounds nestedCalls to 256 calls and 32 KiB
       // of arguments; older sessions can use the complete records it kept.
       if ((outerCalls.get(message.toolCallId) ?? -1) <= anchor) continue
+      if (message.toolName === IMAGE_TOOL_NAME && imageCalls.has(message.toolCallId)) {
+        // Failed batches may still contain explicitly committed earlier files.
+        for (const file of parseImageToolResult(message.details)?.files ?? []) addPath(file.path)
+      }
       const details = message.details as { piAppNestedWrites?: { version?: unknown; paths?: unknown } } | undefined
       if (details?.piAppNestedWrites?.version === 1 && Array.isArray(details.piAppNestedWrites.paths)) {
         for (const path of details.piAppNestedWrites.paths) addPath(path)

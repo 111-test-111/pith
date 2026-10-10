@@ -1,17 +1,15 @@
 import { execFile } from 'node:child_process'
 import { open, readdir, stat, realpath } from 'node:fs/promises'
-import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
+import { dirname, relative, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
 import type { FileBrowserError, FileBrowserRequest, FileDirectoryDTO, FileDocumentDTO, FileGitDiffDTO } from '../shared/types'
 import { previewKindOf, readsAsText, textReadLimit } from '../shared/preview'
+import { resolveFilePath } from './file-path'
+import { decodeFileText } from './text-decoding'
+import type { TextEncoding } from '../shared/file-preview'
 
 const exec = promisify(execFile)
 const PAGE_SIZE = 300
-
-function filePath(request: FileBrowserRequest): string {
-  if (!request || typeof request.cwd !== 'string' || !isAbsolute(request.cwd) || typeof request.path !== 'string' || request.path.includes('\0')) throw new Error('Invalid file request')
-  return resolve(request.cwd, request.path).split(sep).join('/')
-}
 
 function errorCode(error: unknown): FileBrowserError {
   return (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'unreadable'
@@ -53,7 +51,9 @@ async function physicalFilePath(path: string): Promise<string> {
   }
 }
 
-async function readText(path: string, limit: number): Promise<Pick<FileDocumentDTO, 'text' | 'size' | 'truncated' | 'error'>> {
+/** Bounded decoder shared by source panes and archive thumbnails. Callers gate
+ * document reads through readsAsText before using it. */
+export async function readFileText(path: string, limit: number, encoding: TextEncoding = 'auto'): Promise<Pick<FileDocumentDTO, 'text' | 'encoding' | 'size' | 'truncated' | 'error'>> {
   // O_NONBLOCK keeps FIFO/device paths from hanging the Electron main process.
   const { constants } = await import('node:fs')
   const handle = await open(path, constants.O_RDONLY | constants.O_NONBLOCK)
@@ -69,19 +69,15 @@ async function readText(path: string, limit: number): Promise<Pick<FileDocumentD
     }
     const truncated = bytesRead > limit || info.size > limit
     const bytes = buffer.subarray(0, Math.min(bytesRead, limit))
-    const utf16 = bytes[0] === 0xff && bytes[1] === 0xfe ? 'utf-16le' : bytes[0] === 0xfe && bytes[1] === 0xff ? 'utf-16be' : null
-    try {
-      const text = new TextDecoder(utf16 ?? 'utf-8', { fatal: true }).decode(bytes, { stream: truncated })
-      if (/[\x00-\x08\x0e-\x1f]/.test(text)) return { size: info.size, truncated: false, error: 'binary' }
-      return { text, size: info.size, truncated }
-    } catch { return { size: info.size, truncated: false, error: 'binary' } }
+    const decoded = decodeFileText(bytes, truncated, encoding)
+    return decoded ? { ...decoded, size: info.size, truncated } : { size: info.size, truncated: false, error: 'binary' }
   } finally { await handle.close() }
 }
 
 export async function listFileDirectory(request: FileBrowserRequest, offset = 0): Promise<FileDirectoryDTO> {
   let path = ''
   try {
-    path = filePath(request)
+    path = resolveFilePath(request)
     const entries = (await readdir(path, { withFileTypes: true }))
       .filter(entry => entry.name !== '.git' && entry.name !== '.DS_Store')
       .sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name, 'en', { numeric: true }))
@@ -95,7 +91,7 @@ export async function listFileDirectory(request: FileBrowserRequest, offset = 0)
 export async function readFileDocument(request: FileBrowserRequest): Promise<FileDocumentDTO> {
   let path = '', root: string | null = null
   try {
-    path = filePath(request)
+    path = resolveFilePath(request)
     // The routing table decides whether this path is text at all. A medium, a
     // PDF, a spreadsheet or a font read as a 512 KiB document would come back
     // as "binary" — or, for a 2 GiB video, as its first 512 KiB claiming to be
@@ -107,7 +103,7 @@ export async function readFileDocument(request: FileBrowserRequest): Promise<Fil
     const [gitDirectory, content] = await Promise.all([
       gitRoot(path),
       readsAsText(kind)
-        ? readText(path, textReadLimit(kind)).catch(error => ({ size: 0, truncated: false, error: errorCode(error) }))
+        ? readFileText(path, textReadLimit(kind), request.encoding).catch(error => ({ size: 0, truncated: false, error: errorCode(error) }))
         : Promise.resolve({ size: 0, truncated: false, error: 'binary' as const })
     ])
     root = gitDirectory
@@ -122,7 +118,7 @@ export async function readFileDocument(request: FileBrowserRequest): Promise<Fil
 export async function readFileGitDiff(request: FileBrowserRequest): Promise<FileGitDiffDTO> {
   let root: string | null = null
   try {
-    const path = filePath(request)
+    const path = resolveFilePath(request)
     root = await gitRoot(path)
     if (!root) return { gitRoot: null, patch: '', binary: false }
     const rel = relative(root, await physicalFilePath(path))
@@ -133,7 +129,7 @@ export async function readFileGitDiff(request: FileBrowserRequest): Promise<File
       return { gitRoot: root, patch, binary: /^Binary files .* differ$/m.test(patch) }
     }
     // Untracked files and newly staged files are additions relative to HEAD.
-    const content = await readText(path, textReadLimit(previewKindOf(path)))
+    const content = await readFileText(path, textReadLimit(previewKindOf(path)))
     if (content.error) return { gitRoot: root, patch: '', binary: content.error === 'binary', error: content.error === 'binary' ? undefined : content.error }
     if (content.truncated) return { gitRoot: root, patch: '', binary: false, error: 'tooLarge' }
     const patch = await git(root, ['diff', '--no-index', '--no-ext-diff', '--no-textconv', '--unified=3', '--', '/dev/null', rel], true)

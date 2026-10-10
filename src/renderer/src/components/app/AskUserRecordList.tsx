@@ -55,7 +55,7 @@ export function AskUserKindChip({ kind }: { kind: AskUserRecordKind }) {
   return (
     <span
       data-ask-user-kind={kind}
-      className={cn('shrink-0 rounded-control px-1.5 py-0.5 text-[11px] font-semibold', KIND_TONE[kind])}
+      className={cn('shrink-0 rounded-control px-1.5 py-0.5 text-caption font-semibold', KIND_TONE[kind])}
     >
       {t(KIND_LABEL[kind])}
     </span>
@@ -106,7 +106,7 @@ export function AskUserRecordList({ records }: { records: readonly AskUserRecord
               meta={
                 <span className="inline-flex shrink-0 items-center gap-1.5">
                   {record.mode === 'async' ? (
-                    <span className="rounded-control border border-border px-1.5 py-0.5 text-[11px] font-semibold text-muted-foreground">
+                    <span className="rounded-control border border-border px-1.5 py-0.5 text-caption font-semibold text-muted-foreground">
                       {t('askUser.asyncBadge')}
                     </span>
                   ) : null}
@@ -117,7 +117,7 @@ export function AskUserRecordList({ records }: { records: readonly AskUserRecord
             >
               {open ? (
                 <>
-                  <div className="px-0.5 pb-1 text-[11px] tabular-nums text-muted-foreground">
+                  <div className="px-0.5 pb-1 text-caption tabular-nums text-muted-foreground">
                     {formatTime(record.at)}
                   </div>
                   <AskUserResultCard details={details} />

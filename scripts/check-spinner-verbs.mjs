@@ -6,7 +6,7 @@
  *
  * Covered: the verb table and its pools (every verb reachable, no typos), tool →
  * pool targeting, the wall-clock slot math and the pure hash pick, the row's
- * dither loader + accent sentence in both locales, per-slot latching (a step change
+ * dither loader + accent sentence in all three locales, per-slot latching (a step change
  * mid-slot never swaps the sentence), beUI's native TextShimmer (its sweep
  * running continuously across a rotation, with the component's own reduced-motion
  * reset), the Settings preference off/on, the one-line/truncating geometry, and
@@ -143,7 +143,7 @@ window.__snapshot = (ctx, locale) => {
     aria: row && row.querySelector('[role=status]') ? row.querySelector('[role=status]').getAttribute('aria-label') : null,
     slot,
     expected: V.spinnerVerbLabel(V.pickSpinnerVerb(ctx, slot, window.__seed), locale),
-    inPool: sentence ? V.spinnerVerbPool(ctx).some((v) => v.en === sentence.textContent || v.zh === sentence.textContent) : false,
+    inPool: sentence ? V.spinnerVerbPool(ctx).some((v) => v.en === sentence.textContent || v.zh === sentence.textContent || v.tw === sentence.textContent) : false,
     height: row ? row.getBoundingClientRect().height : null,
     sentenceHeight: sentence ? sentence.getBoundingClientRect().height : null,
     scrollWidth: sentence ? sentence.scrollWidth : null,
@@ -529,6 +529,16 @@ try {
   assert.ok(zhRow.text === zhRow.expected && /[\u4e00-\u9fff]/.test(zhRow.text), 'zh-CN shows the Chinese sentence: ' + json(zhRow))
   assert.equal(zhRow.animationName, 'beui-text-shimmer', 'and it shimmers too: ' + zhRow.animationName)
 
+  // ── 5b. Locale: the same verb's Traditional Chinese sentence ──────────────
+  await evaluate(`window.__setClock(8009990); window.__mount('zh-TW', ${json(thinkingCtx)})`)
+  await pause(250)
+  const twRow = await evaluate(`window.__snapshot(${json(thinkingCtx)}, 'zh-TW')`)
+  assert.ok(twRow.text === twRow.expected && /[\u4e00-\u9fff]/.test(twRow.text), 'zh-TW shows the Traditional Chinese sentence: ' + json(twRow))
+  assert.notEqual(twRow.text, zhRow.text, 'and it differs from the Simplified one: ' + json(twRow))
+  // Leave the fixture mounted in zh-CN: the steps below sample the live row.
+  await evaluate(`window.__mount('zh-CN', ${json(thinkingCtx)})`)
+  await pause(200)
+
   // ── 6. The preference: off is exactly the old bare spinner ────────────────
   await evaluate(`window.__setEnabled(false)`)
   await pause(200)
@@ -591,7 +601,7 @@ try {
   console.log(
     'PASS: spinner verbs — 53 entries and their pools, step targeting, wall-clock rotation and per-slot latching, ' +
       "the tool-glyph-sized beUI dither (its four corner particles dropped) and the accent-tinted beUI TextShimmer sentence (its own keyframes and " +
-      'reduced-motion reset, one text node and no app-local timers, its phase surviving a rotation), both locales, the ' +
+      'reduced-motion reset, one text node and no app-local timers, its phase surviving a rotation), all three locales, the ' +
       'Settings preference and one-line truncating geometry.'
   )
 } finally {

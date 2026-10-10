@@ -1,6 +1,7 @@
 import { Worker } from 'node:worker_threads'
 import type { TrajectoryDetail, TrajectoryNodePage, TrajectoryNodeRequest, TrajectoryPage, TrajectoryQuery } from '../../../shared/trajectory'
 import type { TraceAccess, TraceCommand, TraceWrite } from './protocol'
+import type { ContextRequestDTO } from '../../../shared/types'
 
 /** The global worker is lazy. At most eight jobs are posted at a time; capture
  * callers await completion and never queue streamed deltas or body copies. */
@@ -54,6 +55,7 @@ export class TrajectoryClient {
   async write(value: TraceWrite): Promise<void> { await this.send({ type: 'write', value }); this.changed(value.sessionId) }
   page(access: TraceAccess, query: TrajectoryQuery): Promise<TrajectoryPage> { return this.send({ type: 'page', access, query }) }
   detail(access: TraceAccess, recordId: string): Promise<TrajectoryDetail> { return this.send({ type: 'detail', access, recordId }) }
+  context(access: TraceAccess): Promise<ContextRequestDTO | null> { return this.send({ type: 'context', access }) }
   node(access: TraceAccess, request: TrajectoryNodeRequest): Promise<TrajectoryNodePage> { return this.send({ type: 'node', access, request }) }
   export(access: TraceAccess, recordId: string, path: string): Promise<void> { return this.send({ type: 'export', access, recordId, path }) }
   settle(sessionId: string): Promise<void> { return this.send({ type: 'settle', sessionId }) }

@@ -1,18 +1,19 @@
 import { memo } from 'react'
 import { fileIconSource } from '@/lib/file-icons'
 import { FILE_ICON_SIZE } from '@/lib/icon-metrics'
+import { useUiStyle } from '@/lib/ui-style'
 
-/** File-type artwork is Catppuccin Icons for the whole app — the same set in
- * both interface styles. The SVGs are generated public files, so rows load only
- * the image they display instead of carrying the collection in the bundle. */
+/** Square uses angular Pierre adaptations; squircle uses native Pierre artwork.
+ * Both load individual offline SVG assets and keep the same row/card sizes. */
 export const FileTypeIcon = memo(function FileTypeIcon({ path, variant = 'tree', className }: {
   path: string
   variant?: keyof typeof FILE_ICON_SIZE
   className?: string
 }) {
+  const [uiStyle] = useUiStyle()
   return (
     <img
-      src={fileIconSource(path)}
+      src={fileIconSource(path, uiStyle)}
       alt=""
       aria-hidden="true"
       draggable={false}
@@ -21,6 +22,7 @@ export const FileTypeIcon = memo(function FileTypeIcon({ path, variant = 'tree',
       className={className}
       data-file-icon={path}
       data-file-icon-kind={variant}
+      data-file-icon-family={uiStyle === 'squircle' ? 'pierre' : 'pierre-square'}
     />
   )
 })

@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useState, type RefObject } from 'react'
+import { useCallback, useLayoutEffect, useRef, useState, type RefObject } from 'react'
 
 /** Preview rows never wrap; bound DOM work by the scrollport, not the file size. */
 export const DIFF_ROW_HEIGHT = 20
@@ -10,16 +10,29 @@ export function useDiffWindow(
   enabled: boolean,
   maxHeight: number,
   // The table grid shares this window with its own (zoom-dependent) row height.
-  rowHeight: number = DIFF_ROW_HEIGHT
+  rowHeight: number = DIFF_ROW_HEIGHT,
+  preservePosition = true
 ) {
   const [range, setRange] = useState({ first: 0, size: Math.ceil(maxHeight / rowHeight) })
+  const previousRowHeight = useRef(rowHeight)
+  const scrollPosition = useRef(0)
   const onScroll = useCallback(() => {
     const viewport = viewportRef.current
-    if (!enabled || !viewport) return
+    if (!viewport) return
+    scrollPosition.current = viewport.scrollTop
+    if (!enabled) return
     const first = Math.floor(viewport.scrollTop / rowHeight)
     const size = Math.ceil(viewport.clientHeight / rowHeight)
     setRange((previous) => previous.first === first && previous.size === size ? previous : { first, size })
   }, [enabled, viewportRef, rowHeight])
+
+  useLayoutEffect(() => {
+    const viewport = viewportRef.current
+    if (viewport && enabled && preservePosition && previousRowHeight.current !== rowHeight) {
+      viewport.scrollTop = scrollPosition.current / previousRowHeight.current * rowHeight
+    }
+    previousRowHeight.current = rowHeight
+  }, [viewportRef, rowHeight, preservePosition, enabled])
 
   useLayoutEffect(() => {
     if (!enabled) return

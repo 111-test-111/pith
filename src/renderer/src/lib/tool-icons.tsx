@@ -1,63 +1,41 @@
 import {
   ArrowDownUp,
-  BookDownload,
   BookOpenCheck,
-  BookSearch,
-  Braces,
   Bug,
   CalendarCheck,
   Camera,
-  Chart,
   CircleHelp,
   CloudDownload,
-  CommandLine,
+  Codesandbox,
+  Columns3Cog,
   Compass,
-  Dashboard,
-  Database,
-  FileCode2,
-  FileSearch2,
-  FirstAidKit,
-  Flask,
-  Focus,
+  CoPresent,
+  Edit02,
   FolderSearch,
   FolderTree,
-  Subagent,
+  Gavel,
   Globe,
-  InstallingUpdates,
+  Image,
   Keyboard,
   Layers,
   ListChecks,
-  ListIndentIncrease,
-  ListTree,
+  MessageSquareText,
   MousePointer2,
   MousePointerClick,
-  MessageSquareText,
-  Navigation,
-  Network,
-  PencilSparkles,
+  NotebookPen,
   Plug,
-  Power,
-  Replace,
-  ScanText,
+  QuillWrite,
   ScanSearch,
+  ScanText,
   Search,
-  SearchCode,
   Selection,
   Send,
-  Settings2,
-  NotebookPen,
-  SourceCode,
+  SourceCodeCircle,
   SquareArrowOutUpRight,
-  SquareFunction,
-  Stamp,
-  Stethoscope,
-  StickyNotePlus,
+  Subagent,
   Terminal,
-  TextSearch,
   Timer,
-  Trash2,
   Upload,
-  UserRoundArrowLeft,
   Wrench,
   XSquare,
   type IconComponent
@@ -75,6 +53,11 @@ import { cn } from '@/lib/utils'
  * else — a tool a new extension registers after this list was written — falls
  * back to the wrench, until it gets an explicit entry here. MCP namespaces are
  * the one exception, handled by prefix below.
+ *
+ * Two bundled extensions deliberately collapse to one glyph for the whole
+ * family instead of one glyph per tool: context-mode (`ctx_*`) and pi-lens.
+ * Their rows read as one activity, and a single mapping point keeps that
+ * promise cheap to hold.
  */
 const TOOL_ICONS: Record<string, IconComponent> = {
   // Built-in file + shell tools. The shell rows use the plain `Terminal` glyph;
@@ -86,9 +69,12 @@ const TOOL_ICONS: Record<string, IconComponent> = {
   // matches the composer button that switched the session into plan mode.
   submit_plan: NotebookPen,
   todo_write: ListChecks,
-  present: UserRoundArrowLeft,
+  present: CoPresent,
+  // The app's image tool paints a picture rather than declaring one, so it
+  // takes the image glyph instead of `present`'s co-present one.
+  image: Image,
   scheduled_task: CalendarCheck,
-  jev_decide: Flask,
+  jev_decide: Gavel,
   ask_user_question: CircleHelp,
   agent: Subagent,
   // Subagent communications (Settings → Subagents): the parent steering a
@@ -100,56 +86,54 @@ const TOOL_ICONS: Record<string, IconComponent> = {
   debug: Bug,
   powershell: Terminal,
   read: BookOpenCheck,
-  edit: PencilSparkles,
-  write: StickyNotePlus,
+  edit: Edit02,
+  write: QuillWrite,
   grep: Search,
   find: FolderSearch,
   ls: FolderTree,
-  // pi-fff (indexed search): the `ff`-prefixed variants of grep/find, plus its
-  // combined multigrep (named `fff-multi-grep`, or `multi_grep` in override
-  // mode).
-  ffgrep: TextSearch,
-  fffind: FileSearch2,
+  // pi-fff (indexed search): the `ff`-prefixed variants of grep/find wear the
+  // SAME glyphs as the built-ins they replace, so an indexed search reads as a
+  // search; the combined multigrep (named `fff-multi-grep`, or `multi_grep` in
+  // override mode) keeps a glyph of its own.
+  ffgrep: Search,
+  fffind: FolderSearch,
   'fff-multi-grep': ScanSearch,
   multi_grep: ScanSearch,
   // Tavily web tools.
   web_search: Globe,
   web_fetch: CloudDownload,
-  // context-mode: the sandbox-execution + knowledge-base family. The two
-  // executors run code (`</>` glyphs — the batch one is the boxed `>_`, so it
-  // stays distinguishable from the plain `Terminal` of `bash`), the knowledge
-  // base owns the database/book glyphs, and the maintenance tools keep their
-  // own verbs (diagnose / delete / dashboard / install).
-  ctx_execute: SourceCode,
-  ctx_execute_file: FileCode2,
-  ctx_batch_execute: CommandLine,
-  ctx_index: Database,
-  ctx_fetch_and_index: BookDownload,
-  ctx_search: BookSearch,
-  ctx_stats: Chart,
-  ctx_doctor: FirstAidKit,
-  ctx_purge: Trash2,
-  ctx_insight: Dashboard,
-  ctx_upgrade: InstallingUpdates,
-  // pi-lens (code feedback: LSP diagnostics, symbol comprehension, structural
-  // analysis). One glyph per job, and the pairs stay tellable apart: the check-up
-  // and the verdict it produces, one symbol and the scope enclosing it, the
-  // project graph and the module inside it, the situational-tool switch, and the
-  // ast-grep trio (structural search / rewrite / outline) against `symbol_search`
-  // (a name, not a pattern) and `read_symbol` (a symbol body, not a listing).
-  lens_diagnostics: Stethoscope,
-  lens_diagnostic_mark: Stamp,
-  symbol_search: Braces,
-  read_symbol: SquareFunction,
-  read_enclosing: Focus,
-  lsp_navigation: Navigation,
-  project_report: Network,
-  module_report: ListTree,
-  effective_config: Settings2,
-  pi_lens_activate_tools: Power,
-  ast_grep_search: SearchCode,
-  ast_grep_replace: Replace,
-  ast_grep_outline: ListIndentIncrease,
+  // context-mode: one family glyph for the sandbox-execution + knowledge-base
+  // tools. Every `ctx_*` row wears the same cog, so the family reads as one
+  // activity and no row claims a job of its own by artwork. The transcript's
+  // folded `context` group draws the same glyph (lib/tool-categories.ts).
+  ctx_execute: Columns3Cog,
+  ctx_execute_file: Columns3Cog,
+  ctx_batch_execute: Columns3Cog,
+  ctx_index: Columns3Cog,
+  ctx_fetch_and_index: Columns3Cog,
+  ctx_search: Columns3Cog,
+  ctx_stats: Columns3Cog,
+  ctx_doctor: Columns3Cog,
+  ctx_purge: Columns3Cog,
+  ctx_insight: Columns3Cog,
+  ctx_upgrade: Columns3Cog,
+  // pi-lens (code feedback): one family glyph as well. The extension ships
+  // `lens_*`, `ast_grep_*`, `read_symbol` and `lsp_navigation`, and its
+  // Settings → Tools row folds them under one family (lib/tool-groups.ts), so
+  // the per-tool artwork it used to carry only added noise.
+  lens_diagnostics: Codesandbox,
+  lens_diagnostic_mark: Codesandbox,
+  symbol_search: Codesandbox,
+  read_symbol: Codesandbox,
+  read_enclosing: Codesandbox,
+  lsp_navigation: Codesandbox,
+  project_report: Codesandbox,
+  module_report: Codesandbox,
+  effective_config: Codesandbox,
+  pi_lens_activate_tools: Codesandbox,
+  ast_grep_search: Codesandbox,
+  ast_grep_replace: Codesandbox,
+  ast_grep_outline: Codesandbox,
   // Native MCP resource tools and historical adapter entry points. Native
   // `mcp__<server>__<tool>` and old `mcp__<server>` proxies use the prefix
   // branch below. Codemode and tool search are separate capabilities.
@@ -158,7 +142,7 @@ const TOOL_ICONS: Record<string, IconComponent> = {
   read_mcp_resource: Plug,
   mcp: Plug,
   mcpScript: Plug,
-  codemode: SourceCode,
+  codemode: SourceCodeCircle,
   tool_search: Search,
   // Embedded browser agent tools. `browser_navigate` takes the `Compass` so it
   // stays distinct from web_search's `Globe`; one mapping per name even where

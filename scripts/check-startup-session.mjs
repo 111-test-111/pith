@@ -11,7 +11,7 @@ import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { pathToFileURL } from 'node:url'
 import { build } from 'esbuild'
 import { SessionManager } from '@earendil-works/pi-coding-agent'
 
@@ -44,13 +44,13 @@ try {
       name: 'isolated-runtime',
       setup(builder) {
         builder.onResolve({ filter: /^@earendil-works\/pi-coding-agent$/ }, () => ({
-          path: fileURLToPath(import.meta.resolve('@earendil-works/pi-coding-agent')),
+          path: import.meta.resolve('@earendil-works/pi-coding-agent'),
           external: true
         }))
         builder.onResolve({ filter: /^electron$/ }, () => ({ path: 'electron', namespace: 'fixture' }))
-        builder.onResolve({ filter: /^proper-lockfile$/ }, args => ({ path: fileURLToPath(import.meta.resolve(args.path)), external: true }))
+        builder.onResolve({ filter: /^proper-lockfile$|^@resvg\/resvg-js$/ }, args => ({ path: import.meta.resolve(args.path), external: true }))
         builder.onResolve({ filter: /^playwright-core(\/|$)|^chromium-bidi(\/|$)/ }, args => ({
-          path: fileURLToPath(import.meta.resolve(args.path)), external: true
+          path: import.meta.resolve(args.path), external: true
         }))
         builder.onLoad({ filter: /.*/, namespace: 'fixture' }, () => ({
           contents: `export const app = { getPath: () => ${JSON.stringify(userData)}, getVersion: () => '0.0.0' };

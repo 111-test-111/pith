@@ -1,3 +1,4 @@
+// local patch (pi-app): shared scalable typography for UI line metrics.
 "use client";
 // beui.dev/components/motion/animated-toast-stack
 
@@ -454,7 +455,7 @@ const ToastItem = memo(function ToastItem({
                 >
                   <p
                     className={cn(
-                      "truncate text-sm font-medium leading-5 text-foreground",
+                      "truncate text-sm font-medium leading-ui text-foreground",
                       classNames?.title,
                     )}
                   >
@@ -463,7 +464,7 @@ const ToastItem = memo(function ToastItem({
                   {toast.description ? (
                     <p
                       className={cn(
-                        "mt-0.5 line-clamp-2 text-xs leading-4 text-muted-foreground",
+                        "mt-0.5 line-clamp-2 text-xs leading-ui-tight text-muted-foreground",
                         classNames?.description,
                       )}
                     >
@@ -479,8 +480,8 @@ const ToastItem = memo(function ToastItem({
                   onClick={() => toast.action?.onClick(toast)}
                   className={cn(
                     // local patch (pi-app): capsule-by-design toast action, so
-                    // the shape token follows the UI style.
-                    "mt-2 inline-flex h-7 items-center rounded-capsule bg-primary/[0.06] px-3 text-xs font-medium text-foreground transition-colors hover:bg-primary/[0.1]",
+                    // the shape token follows the UI style; actions use neutral fills.
+                    "mt-2 inline-flex h-7 items-center rounded-capsule bg-muted px-3 text-xs font-medium text-foreground transition-colors hover:bg-accent",
                     classNames?.action,
                   )}
                 >
@@ -495,9 +496,9 @@ const ToastItem = memo(function ToastItem({
                 onClick={() => onDismiss?.(toast.id)}
                 aria-label="Dismiss toast"
                 className={cn(
-                  // local patch (pi-app): capsule-by-design dismiss button, so
-                  // the shape token follows the UI style.
-                  "inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-capsule text-muted-foreground transition-colors hover:bg-primary/[0.06] hover:text-foreground",
+                  // local patch (pi-app): the dismiss icon control keeps the
+                  // shared control radius rather than a capsule.
+                  "inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-icon text-muted-foreground transition-colors hover:bg-muted hover:text-foreground",
                   classNames?.close,
                 )}
               >

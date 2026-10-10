@@ -1,3 +1,4 @@
+// local patch (pi-app): shared scalable typography for UI annotations.
 // local patch (pi-app): keep UI frames and focus rings in this component at 1px.
 "use client";
 // local patch (pi-app): approval status badges use the semantic item radius.
@@ -26,7 +27,9 @@ import {
   type AgentCodeLanguage,
 } from "@/components/agents/agent-code";
 import { AgentDisclosure } from "@/components/agents/agent-disclosure";
-import { EASE_OUT, SPRING_PRESS, SPRING_SWAP } from "@/lib/ease";
+// local patch (pi-app): approval controls share beUI's standard button geometry.
+import { Button } from "@/components/motion/button";
+import { EASE_OUT, SPRING_SWAP } from "@/lib/ease";
 import { cn } from "@/lib/utils";
 
 export type ToolApprovalStatus =
@@ -51,11 +54,25 @@ export interface ToolApprovalCodeProps {
 }
 
 export interface ToolApprovalProps {
-  tool: ReactNode;
+  // local patch (pi-app): wrappers may include the tool name in the title.
+  tool?: ReactNode;
+  // local patch (pi-app): app wrappers supply artwork, full details and copy.
+  icon?: ReactNode;
+  iconClassName?: string;
+  children?: ReactNode;
+  labels?: {
+    status?: ReactNode;
+    details?: ReactNode;
+    approve?: ReactNode;
+    alwaysAllow?: ReactNode;
+    deny?: ReactNode;
+  };
   title?: ReactNode;
   description?: ReactNode;
   parameters?: ToolApprovalParameter[];
   status?: ToolApprovalStatus;
+  // local patch (pi-app): permission wrappers can keep full details visible.
+  collapsible?: boolean;
   open?: boolean;
   defaultOpen?: boolean;
   onOpenChange?: (open: boolean) => void;
@@ -109,10 +126,15 @@ export function ToolApprovalCode({
 
 export function ToolApproval({
   tool,
+  icon,
+  iconClassName,
+  children,
+  labels,
   title = "Allow this tool to run?",
   description,
   parameters = [],
   status = "pending",
+  collapsible = true,
   open,
   defaultOpen = false,
   onOpenChange,
@@ -126,7 +148,7 @@ export function ToolApproval({
   const detailsId = `${baseId}-details`;
   const previousStatus = useRef(status);
   const [internalOpen, setInternalOpen] = useState(defaultOpen);
-  const currentOpen = open ?? internalOpen;
+  const currentOpen = !collapsible || (open ?? internalOpen);
   const setOpen = useCallback(
     (next: boolean) => {
       if (open === undefined) setInternalOpen(next);
@@ -154,75 +176,76 @@ export function ToolApproval({
         className,
       )}
     >
-      <div className="flex items-start gap-3 p-4">
-        <span
-          aria-hidden="true"
-          className={cn(
-            "mt-0.5 grid size-8 shrink-0 place-items-center rounded-xl border border-border/60 bg-background text-muted-foreground",
-            error && "text-destructive",
-          )}
-        >
-          {busy ? (
-            <LoaderCircle className={cn("size-4", !reduce && "animate-spin")} />
-          ) : error ? (
-            <CircleAlert className="size-4" />
-          ) : status === "denied" ? (
-            <X className="size-4" />
-          ) : status === "approved" || status === "complete" ? (
-            <Check className="size-4" />
-          ) : (
-            <ShieldCheck className="size-4" />
-          )}
-        </span>
+      <div className="p-4">
+        {/* local patch (pi-app): only the title shares the icon's row. */}
+        <div className="flex min-w-0 items-center gap-2">
+          <span
+            aria-hidden="true"
+            className={cn(
+              "grid size-8 shrink-0 place-items-center rounded-xl border border-border/60 bg-background text-muted-foreground",
+              error && "text-destructive",
+              iconClassName,
+            )}
+          >
+            {busy ? (
+              <LoaderCircle className={cn("size-4", !reduce && "animate-spin")} />
+            ) : error ? (
+              <CircleAlert className="size-4" />
+            ) : status === "denied" ? (
+              <X className="size-4" />
+            ) : status === "approved" || status === "complete" ? (
+              <Check className="size-4" />
+            ) : (
+              icon ?? <ShieldCheck className="size-4" />
+            )}
+          </span>
 
-        <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 items-start justify-between gap-3">
-            <div className="min-w-0">
-              <div className="font-medium text-foreground">{title}</div>
-              <div className="mt-0.5 truncate font-mono text-xs text-muted-foreground">
-                {tool}
-              </div>
-            </div>
-            <span
-              className={cn(
-                "shrink-0 rounded-item border px-2 py-0.5 text-[11px] font-medium transition-colors",
-                getStatusBadgeClass(status),
-              )}
-            >
-              {getStatusCopy(status)}
-            </span>
-          </div>
-          {description ? (
-            <p className="mt-2 leading-5 text-muted-foreground">{description}</p>
-          ) : null}
-
-          {parameters.length ? (
-            <button
-              type="button"
-              aria-expanded={currentOpen}
-              aria-controls={detailsId}
-              onClick={() => setOpen(!currentOpen)}
-              // local patch (pi-app): details control fills instead of only changing text.
-              className="mt-2 inline-flex items-center gap-1 rounded-md px-1 text-xs font-medium text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
-            >
-              View details
-              <motion.span
-                aria-hidden="true"
-                animate={{ rotate: currentOpen ? 180 : 0 }}
-                transition={reduce ? { duration: 0 } : SPRING_SWAP}
-              >
-                <ChevronDown className="size-3.5" />
-              </motion.span>
-            </button>
-          ) : null}
+          <div className="min-w-0 flex-1 font-medium text-foreground">{title}</div>
+          <span
+            className={cn(
+              "shrink-0 rounded-item border px-2 py-0.5 text-caption font-medium transition-colors",
+              getStatusBadgeClass(status),
+            )}
+          >
+            {labels?.status ?? getStatusCopy(status)}
+          </span>
         </div>
+        {tool ? (
+          <div className="mt-0.5 truncate font-mono text-xs text-muted-foreground">
+            {tool}
+          </div>
+        ) : null}
+        {description ? (
+          <p className="mt-2 leading-ui text-muted-foreground">{description}</p>
+        ) : null}
+
+        {collapsible && (parameters.length || children) ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            type="button"
+            aria-expanded={currentOpen}
+            aria-controls={detailsId}
+            onClick={() => setOpen(!currentOpen)}
+            className="mt-2"
+          >
+            {labels?.details ?? "View details"}
+            <motion.span
+              aria-hidden="true"
+              animate={{ rotate: currentOpen ? 180 : 0 }}
+              transition={reduce ? { duration: 0 } : SPRING_SWAP}
+            >
+              <ChevronDown className="size-3.5" />
+            </motion.span>
+          </Button>
+        ) : null}
       </div>
 
       <AgentDisclosure
         id={detailsId}
         open={currentOpen}
       >
-        <dl className="mx-4 mb-4 grid gap-2 rounded-xl border border-border/50 bg-background/70 p-3">
+        {children ?? <dl className="mx-4 mb-4 grid gap-2 rounded-xl border border-border/50 bg-background/70 p-3">
           {parameters.map((parameter) => (
             <div
               key={parameter.id}
@@ -234,7 +257,7 @@ export function ToolApproval({
               </dd>
             </div>
           ))}
-        </dl>
+        </dl>}
       </AgentDisclosure>
 
       <AnimatePresence initial={false}>
@@ -246,35 +269,31 @@ export function ToolApproval({
             transition={{ duration: reduce ? 0.12 : 0.22, ease: EASE_OUT }}
             className="flex flex-wrap items-center gap-2 border-t border-border/60 px-4 py-3"
           >
-            <motion.button
+            <Button
+              size="sm"
               type="button"
               onClick={onApprove}
-              // local patch (pi-app): no press scale — an approval button must
-              // not dip inward while pressed (see `button/base`).
-              transition={SPRING_PRESS}
-              // local patch (pi-app): primary approval is unfilled until hover.
-              className="rounded-xl bg-transparent px-3 py-1.5 text-xs font-medium text-primary outline-none transition-colors hover:bg-primary hover:text-primary-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-2"
             >
-              Allow once
-            </motion.button>
+              {labels?.approve ?? "Allow once"}
+            </Button>
             {onAlwaysAllow ? (
-              <motion.button
+              <Button
+                variant="secondary"
+                size="sm"
                 type="button"
                 onClick={onAlwaysAllow}
-                // local patch (pi-app): no press scale — see `button/base`.
-                transition={SPRING_PRESS}
-                className="rounded-xl border border-transparent bg-transparent px-3 py-1.5 text-xs font-medium text-foreground outline-none transition-colors hover:bg-muted focus-visible:ring-1 focus-visible:ring-ring"
               >
-                Always allow
-              </motion.button>
+                {labels?.alwaysAllow ?? "Always allow"}
+              </Button>
             ) : null}
-            <button
+            <Button
+              variant="ghost"
+              size="sm"
               type="button"
               onClick={onDeny}
-              className="rounded-xl px-3 py-1.5 text-xs font-medium text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
             >
-              Deny
-            </button>
+              {labels?.deny ?? "Deny"}
+            </Button>
           </motion.div>
         ) : null}
       </AnimatePresence>

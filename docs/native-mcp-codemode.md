@@ -1,16 +1,24 @@
 # Native MCP and codemode
 
-Normal sessions load Pi SDK 0.99.1's native MCP, codemode and tool_search extensions. The desktop loader excludes the historical `pi-mcp-adapter`; global Pi CLI package removal is a separate user configuration change.
+Normal sessions load Pi SDK 1.0.0's native MCP, codemode and tool_search extensions. The desktop loader excludes the historical `pi-mcp-adapter`; global Pi CLI package removal is a separate user configuration change.
 
 ## Configuration and discovery
 
-Use `mcpServers` in `<agentDir>/mcp.json` or trusted `<cwd>/.pi/mcp.json`, with stdio `command/args` or streamable HTTP `url/headers`. Native disablement is `enabled:false`. Settings reports compatibility issues without silently dropping unknown fields. Exposure is `codemode` by default, plus `codemode-deferred`, `deferred`, `direct` and `hidden`, with per-tool `toolExposure` overrides.
+Use `mcpServers` in `<agentDir>/mcp.json` or trusted `<cwd>/.pi/mcp.json`, with stdio `command/args` or streamable HTTP `url/headers`. Native disablement is `enabled:false`. Settings reports compatibility issues without silently dropping unknown fields. Exposure is `codemode` by default, plus `deferred`, `direct` and `hidden`, with per-tool `toolExposure` overrides. The historical `codemode-deferred` alias remains accepted and displays as `codemode`; raw JSON and toggles preserve its original spelling. Both codemode and deferred configs register deferred SDK tool definitions; they differ in which discovery tool the MCP extension activates.
 
-Settings lists registered tools; registration may outlive transport disconnect, so it does not claim live connection state. HTTP supports native OAuth; print-mode desktop sessions use matching CLI `./node_modules/.bin/pi mcp login <server>` for interactive sign-in, then session/config reload.
+Server `description`, HTTP `auth:{provider}` and OAuth `clientName` / `authServerMetadataUrl` are supported in both JSON and the visual editor. Provider authentication is global-only and requires HTTPS or loopback HTTP. OAuth metadata URLs have the same transport restriction. Main and renderer share the schema/validation in `shared/mcp.ts`; rejected writes leave the complete file unchanged.
 
-Inside scripts, `ALL_TOOLS` lists callable nested definitions. Await `searchTools(query,{limit})` and `describeTool(name)` before inspecting them. Model-facing `tool_search` instead declares discoverable codemode/deferred tools absent from the current model schema, so its set intentionally differs.
+Default servers connect in the background; the first model request waits only for servers with direct tools, with the SDK's bounded startup wait. Script discovery, named MCP calls and resource helpers await the servers they need. SDK namespaces normalize `-` to `_`, but Settings keeps original editable names and maps live tools to them. Different config names sharing a normalized namespace are rejected, including across trusted global/project files; colliding raw tool names get distinct SDK hash suffixes.
 
-Subagent roles grant individual MCP/resource permissions under the frozen parent ceiling and `codemode` for script access. Plain read-only children avoid loading extension hosts.
+Settings observes the selected session's native MCP runtime through a version-checked SDK status callback. Connecting, connected, disconnected, failed, sign-in-required and disabled states are independent of registered tools, which may outlive transport disconnect. Servers with no tools still report their connection state. Runtime snapshots are sequence-free, include session identity, and cannot be overwritten by an older loader generation or an in-flight settings read. Other sessions in the same workspace do not contribute connection facts or tools. HTTP supports native OAuth; print-mode desktop sessions use matching CLI `./node_modules/.bin/pi mcp login <server>` for interactive sign-in, then session/config reload.
+
+Inside scripts, `ALL_TOOLS` lists callable nested definitions. Await `searchTools(query,{limit})`, `describeTool(name)` and `describeNamespace(name)` before inspecting unfamiliar contracts and server instructions. Model-facing `tool_search` instead declares discoverable codemode/deferred tools absent from the current model schema, so its set intentionally differs. A loaded deferred tool survives reload/late registration and a Plan round trip; Plan still excludes it while restricted. Use `"name" in tools` / `"name" in models` for presence checks: accessing a missing member throws with nearby matches.
+
+The app's codemode wrapper uses the SDK's `inlineBudget:0`: resident guidance keeps helpers and the model API reference, while nested tool declarations are queried on demand. Direct tools retain their original descriptions and full JSON parameter schemas, without the SDK-generated duplicate TypeScript input/output declaration. Full output schemas remain in the callable registry; `describeTool(name)` resolves to their complete declaration as a string. Query a few candidates, inspect unfamiliar contracts before calling or reading result fields, and avoid printing the whole catalog. The SDK's `codemode.mode` and MCP exposure settings still apply.
+
+The wrapper preserves Pi 1.0's compact runtime introduction and reference-document paths verbatim, adding app discovery/result guidance. Deferred contracts and opaque server instructions enter context only through discovery. `models.generateImages()` uses the registry-owned image model and request-time credentials; forwarded `image(block)` output persists unchanged, appears in Library, and its SDK usage contributes to billing once. Nested model rows carry model identity/status/cost, without image pixels or prompts.
+
+Subagent roles grant individual MCP/resource permissions under the frozen parent ceiling and `codemode` for script access. Plain read-only children avoid loading extension hosts. Historical explicit MCP names containing hyphens must be reselected using current catalog names for new dispatches. Frozen child/scheduled ceilings are never widened by automatic name migration.
 
 ## Execution boundary
 
@@ -34,8 +42,9 @@ Handle both promise rejection and resolved business failures. `Promise.allSettle
 | debug | Known target/stop/local-entry/wait-cursor errors resolve envelope; permission/capability/DAP may reject |
 | Native MCP tool | Tool error resolves CallToolResult; protocol/transport can reject |
 | MCP resource helpers | Direct payload; empty list is success, lookup/capability/transport failures reject |
+| Codemode classifier/image model | Success has `stopReason:'stop'`; provider failures can resolve with `errorMessage`, while malformed arguments and unknown models reject |
 
-A helper may await a result, throw on `isError` or `ok:false`, and otherwise return it. Catch only failures with an actual recovery path. Forward image content with `image(block)`; `text(result)` dumps base64 instead of displaying it.
+A tool helper may await a result, throw on `isError` or `ok:false`, and otherwise return it. Model calls instead check `stopReason`. Catch only failures with an actual recovery path. Forward generated images from `result.output` with `image(block)`; `text(result)` dumps base64 instead of displaying it.
 
 Completion is explicit:
 
@@ -46,7 +55,7 @@ Completion is explicit:
 - browser: use latest active-page snapshot refs; invalid syntax, absent refs and invalidated snapshots have distinct errors. Snapshot window/offset describes one capture, not a frozen page across actions.
 - debug: result paths and passive wait semantics are in [debug contracts](debug-implementation.md#action-registry-and-compatibility).
 
-`scripts/prepare-pi-sdk.mjs` applies a small pinned 0.99.1 resource-diagnostic patch during install/dev/build. It rejects version/anchor drift and leaves the SDK as sole MCP owner. Review/remove it when upgrading to equivalent upstream behavior.
+`scripts/prepare-pi-sdk.mjs` applies pinned 1.0.0 patches for native status observation, resource capability diagnostics and resource-helper waits during background registration. Multiple changes to one SDK file are composed before writing. Preparation is idempotent, rejects version/anchor drift, and leaves the SDK as sole MCP owner. Review/remove the patches when upgrading to equivalent upstream behavior.
 
 ## Verification
 

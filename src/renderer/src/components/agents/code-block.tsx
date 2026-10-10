@@ -1,9 +1,10 @@
+// local patch (pi-app): shared scalable typography for UI annotations.
 // local patch (pi-app): keep UI frames and focus rings in this component at 1px.
 "use client";
 // beui.dev/components/agents/chat-app
 
 // local patch (pi-app): use the shared UI icon adapter.
-import { Check, Copy, FileCode2, LoaderCircle } from "@/lib/icons";
+import { Check, Copy, FileCode2, WrapText } from "@/lib/icons";
 import { motion, useReducedMotion } from "motion/react";
 import {
   type ReactNode,
@@ -21,8 +22,10 @@ import {
 } from "@/components/agents/agent-code";
 import { SPRING_PRESS } from "@/lib/ease";
 import { cn } from "@/lib/utils";
+// local patch (pi-app): clip only at whole code lines when the size changes.
+import { codeLineHeight, useCodeFontSize } from "@/lib/typography";
 
-export type CodeBlockStatus = "streaming" | "complete";
+type CodeBlockStatus = "streaming" | "complete";
 
 export interface CodeBlockProps {
   code: string;
@@ -33,7 +36,11 @@ export interface CodeBlockProps {
   highlightLines?: number[];
   maxHeight?: number;
   wrap?: boolean;
+  // local patch (pi-app): app-owned headers can control the live wrap mode.
+  onWrapChange?: (wrap: boolean) => void;
   copyable?: boolean;
+  // local patch (pi-app): app compositions can own one shared header.
+  showHeader?: boolean;
   onCopy?: () => void | Promise<void>;
   className?: string;
 }
@@ -47,14 +54,22 @@ export function CodeBlock({
   highlightLines = [],
   maxHeight = 280,
   wrap = false,
+  onWrapChange,
   copyable = true,
+  showHeader = true,
   onCopy,
   className,
 }: CodeBlockProps) {
   const reduce = useReducedMotion() ?? false;
+  const rowHeight = codeLineHeight(useCodeFontSize());
+  const viewportHeight = Math.max(rowHeight, Math.floor((maxHeight - 16) / rowHeight) * rowHeight) + 16;
   const viewportRef = useRef<HTMLDivElement>(null);
   const copyTimer = useRef<number | undefined>(undefined);
   const [copied, setCopied] = useState(false);
+  // local patch (pi-app): preserve the standalone toggle while allowing a
+  // shared app header to control wrapping without remounting the source.
+  const [internalWrapped, setWrapped] = useState(wrap);
+  const wrapped = onWrapChange ? wrap : internalWrapped;
   const streaming = status === "streaming";
   // local patch (pi-app): skip shiki while the block is still streaming —
   // lines render as plain text and get highlighted once on completion.
@@ -69,6 +84,7 @@ export function CodeBlock({
     offset += content.length + 1;
     return line;
   });
+  const gutterWidth = `max(2.75rem, calc(${String(lines.length).length}ch + 1rem))`;
 
   useEffect(
     () => () => {
@@ -113,7 +129,7 @@ export function CodeBlock({
         className,
       )}
     >
-      <div className="flex h-10 items-center gap-2.5 px-3">
+      {showHeader ? <div className="flex h-10 items-center gap-2.5 px-3">
         <FileCode2
           aria-hidden="true"
           className="size-3.5 shrink-0 text-muted-foreground/70"
@@ -123,24 +139,23 @@ export function CodeBlock({
             {filename}
           </span>
         ) : null}
-        <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/55">
+        <span className="text-micro font-medium uppercase tracking-wide text-muted-foreground/55">
           {language}
         </span>
-        <span
+        <motion.button
+          type="button"
+          aria-label="Wrap lines"
+          aria-pressed={wrapped}
+          title="Wrap lines"
+          onClick={() => onWrapChange ? onWrapChange(!wrapped) : setWrapped(!wrapped)}
+          transition={SPRING_PRESS}
           className={cn(
-            "ml-auto inline-flex shrink-0 items-center gap-1 text-[10px] font-medium",
-            streaming
-              ? "text-blue-600 dark:text-blue-400"
-              : "text-emerald-600 dark:text-emerald-400",
+            "ml-auto grid size-7 shrink-0 place-items-center rounded-icon text-muted-foreground outline-none transition-colors hover:bg-background/70 hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring",
+            wrapped && "bg-background/70 text-foreground",
           )}
         >
-          {streaming ? (
-            <LoaderCircle className={cn("size-3", !reduce && "animate-spin")} />
-          ) : (
-            <Check className="size-3" />
-          )}
-          {streaming ? "Writing" : "Ready"}
-        </span>
+          <WrapText className="size-3.5" />
+        </motion.button>
         {copyable || onCopy ? (
           <motion.button
             type="button"
@@ -150,9 +165,9 @@ export function CodeBlock({
             // local patch (pi-app): no press scale — a label icon button must not
             // dip inward while pressed (see `button/base`).
             transition={SPRING_PRESS}
-            // local patch (pi-app): capsule-by-design, so the shape token
-            // follows the UI style (see --app-radius-capsule in styles.css).
-            className="grid size-7 shrink-0 place-items-center rounded-capsule text-muted-foreground outline-none transition-colors hover:bg-background/70 hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+            // local patch (pi-app): single-icon controls share the regular
+            // control radius rather than a capsule (see rounded-icon).
+            className="grid size-7 shrink-0 place-items-center rounded-icon text-muted-foreground outline-none transition-colors hover:bg-background/70 hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
           >
             {copied ? (
               <Check className="size-3.5" />
@@ -161,20 +176,26 @@ export function CodeBlock({
             )}
           </motion.button>
         ) : null}
-      </div>
+      </div> : null}
 
       <div
         ref={viewportRef}
         role={streaming ? "log" : undefined}
         aria-live={streaming ? "polite" : undefined}
         className="scrollbar-hide overflow-auto border-t border-foreground/[0.06] py-2"
-        style={{ maxHeight }}
+        style={{ maxHeight: viewportHeight }}
       >
         {/* local patch (pi-app): marked so StreamingResponse's raw-markdown
             `[&_pre]` framing skips this pre — CodeBlock frames itself. */}
         <pre
           data-code-block-pre=""
-          className="m-0 min-w-max font-mono text-xs leading-5 text-foreground/85"
+          className={cn(
+            // local patch (pi-app): uncoloured code retains primary content contrast.
+            "m-0 font-mono text-code text-foreground",
+            // A wrapped block measures itself against the viewport; an
+            // unwrapped one sizes to its longest line and scrolls sideways.
+            !wrapped && "min-w-max",
+          )}
         >
           <code>
             {lines.map((line, index) => {
@@ -183,12 +204,11 @@ export function CodeBlock({
                 <span
                   key={line.offset}
                   className={cn(
-                    "grid min-h-5",
-                    showLineNumbers
-                      ? "grid-cols-[2.75rem_minmax(0,1fr)]"
-                      : "grid-cols-1",
+                    "grid min-h-[var(--app-line-code)]",
+                    !showLineNumbers && "grid-cols-1",
                     highlighted.has(lineNumber) && "bg-blue-500/[0.07]",
                   )}
+                  style={showLineNumbers ? { gridTemplateColumns: `${gutterWidth} minmax(0,1fr)` } : undefined}
                 >
                   {showLineNumbers ? (
                     <span className="select-none pr-3 text-right tabular-nums text-muted-foreground/35">
@@ -201,7 +221,7 @@ export function CodeBlock({
                     className={cn(
                       "pr-4",
                       showLineNumbers ? "pl-1" : "pl-4",
-                      wrap ? "whitespace-pre-wrap break-words" : "whitespace-pre",
+                      wrapped ? "whitespace-pre-wrap break-words" : "whitespace-pre",
                     )}
                   />
                 </span>

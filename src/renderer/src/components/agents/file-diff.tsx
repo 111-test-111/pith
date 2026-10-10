@@ -11,6 +11,7 @@ import {
 } from "@/lib/icons";
 import { motion, useReducedMotion } from "motion/react";
 import {
+  type CSSProperties,
   type ReactNode,
   useCallback,
   useEffect,
@@ -30,7 +31,10 @@ import { AgentDisclosure } from "@/components/agents/agent-disclosure";
 import { SPRING_SWAP } from "@/lib/ease";
 import { cn } from "@/lib/utils";
 // local patch (pi-app): bounded row DOM for the scrollable hover preview.
-import { DIFF_ROW_HEIGHT, useDiffWindow } from "@/lib/hooks/use-diff-window";
+import { useDiffWindow } from "@/lib/hooks/use-diff-window";
+// local patch (pi-app): row geometry follows the independent code preference.
+import { codeLineHeight, useCodeFontSize } from "@/lib/typography";
+import { diffGutterColumns } from "@/lib/diff";
 // local patch (pi-app): the diff viewport's clipped edge fades instead of
 // cutting a line (the app hides every scrollbar, so the cut had no other cue).
 import { useScrollFade } from "@/lib/hooks/use-scroll-fade";
@@ -60,6 +64,8 @@ export interface FileDiffProps {
   onOpenChange?: (open: boolean) => void;
   collapseOnComplete?: boolean;
   maxHeight?: number;
+  /** local patch (pi-app): keep gutters stable across a parent-owned window. */
+  gutterColumns?: number;
   language?: AgentCodeLanguage;
   /** local patch (pi-app): glyph for the row; the app maps tool names to icons
    * (edit vs write) and falls back to the vendored FileCode2 when omitted. */
@@ -78,6 +84,10 @@ export interface FileDiffProps {
    * grows with the page and one scrollbar (with sticky file headers) drives the
    * whole view — the review tab's case — instead of a scroll region per file. */
   maxHeightOverride?: number | null;
+  /** local patch (pi-app): keep the clipped-edge ramp. The written-files hover
+   * preview clears it: inside its shadowed popover the extra edge fade read as a
+   * shadow gradient over the code. */
+  edgeFade?: boolean;
   /** local patch (pi-app): classes for the body's own frame. The review tab
    * squares its corners (`rounded-none`) so the diff sits flush under the file
    * header it belongs to; the vendored default is a rounded card. */
@@ -127,8 +137,10 @@ export function FileDiff({
   onOpenChange,
   collapseOnComplete = true,
   maxHeight = 220,
+  gutterColumns: gutterColumnsProp,
   maxHeightOverride,
   bodyClassName,
+  edgeFade = true,
   language = "typescript",
   icon,
   headerless = false,
@@ -152,7 +164,10 @@ export function FileDiff({
   // local patch (pi-app): a mask on whichever end of the cap hides rows. A
   // Review body (`maxHeightOverride={null}`) never overflows, so it keeps none,
   // and the body is lazy, so the measurement follows the disclosure's state.
-  const { edges: fadeEdges, maskImage } = useScrollFade(viewportRef, { dependsOn: currentOpen });
+  const { edges: fadeEdges, maskImage: fadeMaskImage } = useScrollFade(viewportRef, { dependsOn: currentOpen });
+  // local patch (pi-app): a host may opt out of the clipped-edge ramp.
+  const maskImage = edgeFade ? fadeMaskImage : undefined;
+  const fade = !edgeFade ? "none" : fadeEdges.top && fadeEdges.bottom ? "both" : fadeEdges.bottom ? "bottom" : fadeEdges.top ? "top" : "none";
   const streaming = status === "streaming";
   const additions = additionsProp ?? lines.filter((line) => line.type === "added").length;
   const deletions = deletionsProp ?? lines.filter((line) => line.type === "removed").length;
@@ -190,10 +205,14 @@ export function FileDiff({
   const liveTokens = useAgentCodeTokens(code, language, highlight && tokenLines === undefined && currentOpen && !streaming);
   const tokens = tokenLines === undefined ? liveTokens : tokenLines;
   // local patch (pi-app): uncapped reviews and growing transcript diffs retain
-  // their complete DOM. Opt-in settled previews have fixed 20px, non-wrapping
+  // their complete DOM. Opt-in settled previews have non-wrapping code
   // rows and keep only the visible window mounted.
   const virtual = virtualize && !streaming && maxHeightOverride !== null;
-  const { start, end, onScroll } = useDiffWindow(viewportRef, lines.length, virtual, maxHeightOverride ?? maxHeight);
+  const rowHeight = codeLineHeight(useCodeFontSize());
+  const gutterColumns = useMemo(() => gutterColumnsProp ?? diffGutterColumns(lines), [gutterColumnsProp, lines]);
+  const requestedHeight = maxHeightOverride === undefined ? maxHeight : maxHeightOverride;
+  const viewportHeight = requestedHeight === null ? undefined : Math.max(rowHeight, Math.floor(requestedHeight / rowHeight) * rowHeight);
+  const { start, end, onScroll } = useDiffWindow(viewportRef, lines.length, virtual, viewportHeight ?? maxHeight, rowHeight);
 
   const setOpen = useCallback(
     (next: boolean) => {
@@ -264,7 +283,8 @@ export function FileDiff({
           {/* local patch (pi-app): the app's tool rows are prose labels
               (`edit · file — path`), not code, so they use the same UI font,
               size and muted chrome color as the ToolResult title. */}
-          <span className="min-w-0 flex-1 truncate font-medium text-muted-foreground">
+          {/* local patch (pi-app): share tool/reasoning label type alignment. */}
+          <span className="transcript-label min-w-0 flex-1 truncate font-medium text-muted-foreground">
             {file}
           </span>
           <span className="flex shrink-0 items-center gap-2">
@@ -314,7 +334,7 @@ export function FileDiff({
             <div
               ref={viewportRef}
               data-slot="file-diff-viewport"
-              data-fade={fadeEdges.top && fadeEdges.bottom ? "both" : fadeEdges.bottom ? "bottom" : fadeEdges.top ? "top" : "none"}
+              data-fade={fade}
               // Settled virtual windows replace their visible row subtree on
               // scroll; announcing that as live output makes screen readers
               // repeat the diff. Only a genuinely growing diff is live.
@@ -322,7 +342,8 @@ export function FileDiff({
               onScroll={virtual ? onScroll : undefined}
               className="scrollbar-hide overflow-auto"
               style={{
-                maxHeight: maxHeightOverride === undefined ? maxHeight : maxHeightOverride ?? undefined,
+                maxHeight: viewportHeight,
+                overflowAnchor: "none",
                 maskImage,
                 WebkitMaskImage: maskImage
               }}
@@ -332,14 +353,15 @@ export function FileDiff({
                   removed tint spans the whole horizontally scrolled width
                   instead of stopping where the viewport ends. */}
               <div
-                className="w-max min-w-full font-mono text-xs leading-5"
-                style={containRows || virtual ? {
-                  width: `calc(6.5rem + ${widestLine}ch)`,
+                className="w-max min-w-full font-mono text-code"
+                style={{
+                  '--diff-gutter': `max(2.25rem, calc(${gutterColumns}ch + 0.5rem))`,
+                  width: containRows || virtual ? `calc(2 * var(--diff-gutter) + 2rem + ${widestLine}ch)` : undefined,
                   // local patch (pi-app): spacers preserve the full scroll range
                   // without mounting the skipped rows; no estimated heights.
-                  paddingTop: virtual ? start * DIFF_ROW_HEIGHT : undefined,
-                  paddingBottom: virtual ? (lines.length - end) * DIFF_ROW_HEIGHT : undefined,
-                } : undefined}
+                  paddingTop: virtual ? start * rowHeight : undefined,
+                  paddingBottom: virtual ? (lines.length - end) * rowHeight : undefined,
+                } as CSSProperties}
               >
                 <span className="sr-only">File changes</span>
                 {(virtual ? lines.slice(start, end) : lines).map((line, offset) => {
@@ -350,16 +372,16 @@ export function FileDiff({
                       key={line.id}
                       style={
                         virtual
-                          ? { height: DIFF_ROW_HEIGHT }
+                          ? { height: rowHeight }
                           : containRows
                           ? {
                               contentVisibility: "auto",
-                              containIntrinsicSize: "auto 20px",
+                              containIntrinsicSize: `auto ${rowHeight}px`,
                             }
                           : undefined
                       }
                       className={cn(
-                        "grid grid-cols-[2.25rem_2.25rem_1rem_minmax(0,1fr)]",
+                        "grid grid-cols-[var(--diff-gutter)_var(--diff-gutter)_1rem_minmax(0,1fr)]",
                         // local patch (pi-app): the vendored 7% wash was too pale
                         // to read as a change on the muted panel — the owner
                         // asked for deeper diff colours everywhere FileDiff

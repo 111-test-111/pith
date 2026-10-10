@@ -18,13 +18,18 @@
  *    the title adds 4px (`mb-1`). A title that sits in a plain block wrapper
  *    (a `<p>` over a radio group or a key/value list) carries the whole 10px
  *    itself (`mb-2.5`).
- *  - Control text: the form scale (14px, `text-sm`) for inputs, textareas,
- *    select triggers and items, radio/checkbox labels and picker triggers.
+ *  - Single-line input text and insets: the shared small interface role and
+ *    padding in `input-style.ts`, matching the sessions sidebar filter.
+ *    Choice controls under a field title — select triggers/items and
+ *    radio/checkbox labels — take the same small role, one step under the
+ *    title (`text-xs` against the title's `text-sm`; FORM_CHOICE_TEXT).
+ *    Textareas retain the interface base (default 14px, `text-sm`).
  *  - Editing items: 20px apart (`space-y-5`, grid `gap-5`) — never the tight
  *    12px control gap. A panel's item stack carries `data-form-items` on the
  *    container that holds the items, so a check can measure that rhythm.
  *  - One title colour: `text-foreground`. Helper and error lines are
- *    annotations, not titles, and stay at 11–12px, 6px under their control.
+ *    annotations, not titles, and use derived interface sizes (default 11–12px),
+ *    6px under their control.
  *
  * Exercised by `check-mcp-settings.mjs`, `check-scheduled-tasks-ui.mjs` and
  * `check-subagent-settings.mjs`.
@@ -52,3 +57,10 @@ export const FORM_INPUT_LABEL = { label: 'mb-1 px-0' } as const
  * own margin supplies the whole 10px.
  */
 export const FORM_FIELD_HEADING = 'mb-2.5 text-sm font-medium text-foreground'
+
+/**
+ * A choice control's label sits one size under the field title. The vendored
+ * RadioGroupItem/Checkbox paint their label in an inner span, so the size
+ * arrives through a direct-child override on the item's own className.
+ */
+export const FORM_CHOICE_TEXT = '[&>span]:text-xs'

@@ -466,6 +466,28 @@ function Helix({ size, speed, reduce }: PartProps) {
   );
 }
 
+// local patch (pi-app): expose the percent loader's track for controlled browser
+// loading progress. The app supplies its label, placement and theme colour.
+export function LoaderProgress({ value, label, className }: { value: number; label: string; className?: string }) {
+  const percent = Math.max(0, Math.min(100, value));
+  return (
+    <span
+      role="progressbar"
+      aria-label={label}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={Math.round(percent)}
+      className={cn("block overflow-hidden rounded-detail bg-current/15", className)}
+    >
+      <span
+        aria-hidden="true"
+        className="block h-full w-full origin-left rounded-detail bg-current transition-transform duration-200 motion-reduce:transition-none"
+        style={{ transform: `scaleX(${percent / 100})` }}
+      />
+    </span>
+  );
+}
+
 function Percent({ size, speed, reduce }: PartProps) {
   const [p, setP] = useState(0);
   useEffect(() => {

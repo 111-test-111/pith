@@ -1,3 +1,4 @@
+// local patch (pi-app): shared scalable typography for UI annotations.
 "use client";
 // beui.dev/components/motion/animated-badge
 
@@ -55,7 +56,7 @@ const STATUS_CLASS: Record<AnimatedBadgeStatus, string> = {
 };
 
 const SIZE_CLASS: Record<AnimatedBadgeSize, string> = {
-  sm: "h-6 gap-1.5 px-2 text-[11px]",
+  sm: "h-6 gap-1.5 px-2 text-caption",
   md: "h-8 gap-2 px-3 text-xs",
 };
 

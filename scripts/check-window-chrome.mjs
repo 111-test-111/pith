@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process'
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { build } from 'esbuild'
 import electron from 'electron'
 
@@ -15,9 +15,9 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms))
 let child, ws
 try {
   const preload = join(temporary, 'preload.mjs')
-  await writeFile(preload, `import ${JSON.stringify(join(repo, 'out/preload/index.mjs'))};
+  await writeFile(preload, `import ${JSON.stringify(pathToFileURL(join(repo, 'out/preload/index.mjs')).href)};
 import {contextBridge,ipcRenderer} from 'electron';
-contextBridge.exposeInMainWorld('fixture',{window:()=>ipcRenderer.invoke('fixture:window'),resize:(width,height)=>ipcRenderer.invoke('fixture:resize',width,height),fullscreen:value=>ipcRenderer.invoke('fixture:fullscreen',value),scenario:value=>ipcRenderer.invoke('fixture:scenario',value),startupChoices:()=>ipcRenderer.invoke('fixture:startupChoices'),reloads:()=>ipcRenderer.invoke('fixture:reloads'),compacts:()=>ipcRenderer.invoke('fixture:compacts'),opens:()=>ipcRenderer.invoke('fixture:opens')});`)
+contextBridge.exposeInMainWorld('fixture',{window:()=>ipcRenderer.invoke('fixture:window'),alpha:rect=>ipcRenderer.invoke('fixture:alpha',rect),resize:(width,height)=>ipcRenderer.invoke('fixture:resize',width,height),fullscreen:value=>ipcRenderer.invoke('fixture:fullscreen',value),scenario:value=>ipcRenderer.invoke('fixture:scenario',value),event:event=>ipcRenderer.invoke('fixture:event',event),startupChoices:()=>ipcRenderer.invoke('fixture:startupChoices'),reloads:()=>ipcRenderer.invoke('fixture:reloads'),compacts:()=>ipcRenderer.invoke('fixture:compacts'),opens:()=>ipcRenderer.invoke('fixture:opens')});`)
   const main = join(temporary, 'main.cjs')
   await build({ stdin: { contents: `
 import {app,BrowserWindow,ipcMain,nativeTheme} from 'electron';
@@ -26,6 +26,9 @@ app.setPath('userData',${JSON.stringify(join(temporary, 'profile'))});
 app.commandLine.appendSwitch('remote-debugging-port','0');
 app.whenReady().then(()=>{
  let scenario='project';
+ let running=false;
+ let compactionQueue={queued:false,revision:0};
+ let queue={steering:[],followUp:[]};
  let startupChoice='resume';
  const startupChoices=[];
  const reloads=[];
@@ -34,7 +37,7 @@ app.whenReady().then(()=>{
  const model={providerId:'deepseek',providerName:'DeepSeek',id:'fixture',name:'DeepSeek V4.1 Flash',reasoning:true,input:['text'],contextWindow:128000,maxTokens:8192,available:true,costInputPerM:0,costOutputPerM:0};
  const labels=['统一窗口标题栏与页面布局','梳理项目结构与入口','实现一个新的工具面板','检查最近的界面改动'];
  const sessions=labels.map((label,i)=>({id:'chat-'+i,path:'/fixture/chat-'+i,cwd:'/workspace/pi-app',projectless:false,label,created:new Date().toISOString(),modified:new Date().toISOString(),messageCount:2}));
- const snapshot=(cwd='/workspace/pi-app')=>({sessionId:'fixture',sessionPath:'/fixture/chat-0',cwd,projectless:scenario==='projectless',messages:scenario==='long'?[{role:'user',content:'Please review the layout.',timestamp:1},{role:'assistant',content:[{type:'text',text:'The window controls and workspace now share one title row.'}],timestamp:2,stopReason:'stop'}]:[],model,thinkingLevel:'high',availableThinkingLevels:['off','high'],isStreaming:false});
+ const snapshot=(cwd='/workspace/pi-app')=>({sessionId:'fixture',sessionPath:'/fixture/chat-0',cwd,projectless:scenario==='projectless',messages:scenario==='long'?[{role:'user',content:'Please review the layout.',timestamp:1},{role:'assistant',content:[{type:'text',text:'The window controls and workspace now share one title row.'}],timestamp:2,stopReason:'stop'}]:[],model,thinkingLevel:'high',availableThinkingLevels:['off','high'],isStreaming:running,queue,compactionQueue});
  ipcMain.handle('app:info',()=>({cwd:'/workspace/pi-app',folders:['/workspace/pi-app','/workspace/piws'],version:'fixture',contextFiles:true,bashMaxWaitMs:10000,startup:startupChoice}));
  ipcMain.handle('app:setStartup',(_,mode)=>{startupChoices.push(mode);startupChoice=mode;return mode});
  ipcMain.handle('pi:init',()=>snapshot(scenario==='projectless'?'/internal/private-workspace':'/workspace/pi-app'));
@@ -42,14 +45,36 @@ app.whenReady().then(()=>{
  ipcMain.handle('pi:listSessions',()=>scenario==='long'?[{...sessions[0],label:'A very long session title / 很长的会话标题 '.repeat(12)},...sessions.slice(1)]:sessions);
  ipcMain.handle('pi:openSession',(_,path)=>{opens.push(path);return snapshot()});ipcMain.handle('pi:models',()=>[model]);ipcMain.handle('bash:list',()=>[]);ipcMain.handle('pi:providers',()=>[]);
  ipcMain.handle('pi:reload',(_,sessionPath)=>{reloads.push(sessionPath);return snapshot()});
- ipcMain.handle('pi:compact',(_,sessionPath)=>{compacts.push(sessionPath);return snapshot()});
+ ipcMain.handle('pi:compact',(_,sessionPath)=>{
+  compacts.push(sessionPath);
+  if(scenario==='compact-small') throw new Error('Nothing to compact (session too small)');
+  if(running&&!compactionQueue.queued){
+   compactionQueue={queued:true,revision:compactionQueue.revision+1};
+   w.webContents.send('pi:event',{type:'compaction_queue_update',sessionPath,sessionId:'fixture',compactionQueue});
+  }
+  return snapshot();
+ });
  ipcMain.handle('pi:searchSessions',()=>({sessions:[],groups:[],total:0,hasMore:false}));
- const w=new BrowserWindow({...windowChromeOptions(),width:1320,height:880,minWidth:760,minHeight:560,title:'Pith · Layout check',backgroundColor:'#0b0b0d',webPreferences:{preload:${JSON.stringify(preload)},contextIsolation:true,nodeIntegration:false,sandbox:false,backgroundThrottling:false}});
+ const w=new BrowserWindow({...windowChromeOptions(),width:1320,height:880,minWidth:760,minHeight:560,title:'Pith · Layout check',backgroundColor:process.platform==='darwin'?'#00000000':'#0b0b0d',webPreferences:{preload:${JSON.stringify(preload)},contextIsolation:true,nodeIntegration:false,sandbox:false,backgroundThrottling:false}});
  ipcMain.on('window:setTheme',(event,theme)=>setWindowTheme(BrowserWindow.fromWebContents(event.sender),theme));
  ipcMain.handle('fixture:window',()=>({bounds:w.getBounds(),content:w.getContentBounds(),buttons:process.platform==='darwin'?w.getWindowButtonPosition():null,fullscreen:w.isFullScreen(),dark:nativeTheme.shouldUseDarkColors,theme:nativeTheme.themeSource}));
+ ipcMain.handle('fixture:alpha',async(_,rect)=>{
+  const image=await w.webContents.capturePage(rect);
+  const bytes=image.toBitmap();
+  let min=255,max=0;
+  for(let i=3;i<bytes.length;i+=4){min=Math.min(min,bytes[i]);max=Math.max(max,bytes[i])}
+  return{min,max,pixels:bytes.length/4};
+ });
  ipcMain.handle('fixture:resize',(_,width,height)=>w.setBounds({width,height}));
  ipcMain.handle('fixture:fullscreen',(_,value)=>w.setFullScreen(value));
  ipcMain.handle('fixture:scenario',(_,value)=>{scenario=value});
+ ipcMain.handle('fixture:event',(_,event)=>{
+  if(event.type==='agent_start') running=true;
+  if(event.type==='agent_settled') running=false;
+  if(event.type==='compaction_queue_update') compactionQueue=event.compactionQueue;
+  if(event.type==='queue_update') queue={steering:event.steering,followUp:event.followUp};
+  w.webContents.send('pi:event',event);
+ });
  ipcMain.handle('fixture:startupChoices',()=>startupChoices);
  ipcMain.handle('fixture:reloads',()=>reloads);
  ipcMain.handle('fixture:compacts',()=>compacts);
@@ -123,6 +148,48 @@ app.whenReady().then(()=>{
   assert.equal(await evaluate(`getComputedStyle(document.querySelector('[data-window-titlebar]')).webkitAppRegion`), 'drag')
   assert.equal(await evaluate(`getComputedStyle(document.querySelector('[data-slot="sidebar-trigger"]')).webkitAppRegion`), 'no-drag')
   assert.equal(await evaluate(`document.documentElement.scrollWidth<=innerWidth`), true)
+  // Capture the real workspace's composited alpha, including every ancestor
+  // and the native WebContents backing. A translucent sidebar panel alone
+  // cannot prove that glass reaches the window material behind the page.
+  const regionAlpha = selector => evaluate(`(()=>{
+    const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();
+    return fixture.alpha({x:Math.floor(r.right-24),y:Math.floor(r.bottom-24),width:8,height:8});
+  })()`)
+  const assertTitlebarGlass = async enabled => {
+    // Sample empty strips across the full width, below the controls and above
+    // the bottom border. Pick the visible page title when the workspace is covered.
+    for (const position of [0.125, 0.5, 0.875]) {
+      const title = await evaluate(`(()=>{
+        const header=[...document.querySelectorAll('[data-window-titlebar]')].find(el=>getComputedStyle(el).visibility==='visible'&&el.getBoundingClientRect().height>0);
+        const r=header.getBoundingClientRect();
+        return fixture.alpha({x:Math.floor(r.left+r.width*${position}),y:Math.floor(r.bottom-4),width:8,height:2});
+      })()`)
+      assert.ok(title.pixels > 0, 'the title-row capture contains pixels')
+      if (process.platform === 'darwin' && enabled) {
+        assert.ok(title.max < 255, 'glass reaches native material across the whole title row: ' + JSON.stringify(title))
+      } else {
+        assert.equal(title.min, 255, 'the title row is opaque with glass disabled or without a native material')
+      }
+    }
+  }
+  const assertWorkspaceGlass = async enabled => {
+    const sidebar = await regionAlpha('[data-slot="sidebar"]')
+    assert.ok(sidebar.pixels > 0, 'the sidebar capture contains pixels')
+    if (process.platform === 'darwin' && enabled) {
+      assert.ok(sidebar.max < 255, 'the whole sidebar background leaves the native material visible: ' + JSON.stringify(sidebar))
+    } else {
+      assert.equal(sidebar.min, 255, 'the sidebar is opaque with glass disabled or without a native material')
+    }
+    assert.equal((await regionAlpha('main')).min, 255, 'the conversation keeps its opaque background')
+    await assertTitlebarGlass(enabled)
+  }
+  await assertWorkspaceGlass(true)
+  // One chrome canvas: every title-row control draws the same 16px compact
+  // glyph the sessions sidebar's own controls draw (AGENTS.md · workspace).
+  const chromeGlyphs = await evaluate(`(()=>{const sizes=sel=>Array.from(document.querySelectorAll(sel)).map(svg=>[svg.dataset.appIcon,svg.getBoundingClientRect().width,svg.getBoundingClientRect().height]);return{titleRow:sizes('[data-window-titlebar] button svg[data-app-icon]'),sidebar:sizes('[data-slot="sidebar"] [data-slot="sidebar-menu"] svg[data-app-icon]')}})()`)
+  assert.ok(chromeGlyphs.sidebar.length >= 2 && chromeGlyphs.sidebar.every(([, width, height]) => width === 16 && height === 16), 'the sessions sidebar draws the compact 16px canvas: ' + JSON.stringify(chromeGlyphs))
+  assert.ok(chromeGlyphs.titleRow.length >= 4, 'the title row renders its control glyphs: ' + JSON.stringify(chromeGlyphs))
+  assert.ok(chromeGlyphs.titleRow.every(([, width, height]) => width === 16 && height === 16), 'every title-row control glyph matches the sidebar canvas: ' + JSON.stringify(chromeGlyphs))
   await screenshot('dark-home')
   // The row's pocket for later actions: it rests collapsed and keeps nothing
   // tabbable, unfolds to the LEFT of the chevron that leads the right-hand
@@ -146,7 +213,11 @@ app.whenReady().then(()=>{
   const unfolded = await pocket()
   assert.equal(unfolded.state, 'open')
   assert.equal(unfolded.expanded, 'true')
-  assert.equal(unfolded.actions, 5, 'all later actions are in the pocket')
+  assert.deepEqual(
+    await evaluate(`[...document.querySelectorAll('[data-titlebar-overflow] [data-titlebar-action]')].map(button => button.dataset.titlebarAction)`),
+    ['compact', 'reload', 'system-prompt', 'picture-in-picture', 'rewind'],
+    'all later actions are in the pocket'
+  )
   assert.equal(await evaluate(`document.querySelector('[data-titlebar-action="picture-in-picture"] svg[data-app-icon]').dataset.appIcon`), 'PictureInPicture2')
   assert.equal(await evaluate(`Boolean(document.querySelector('[data-titlebar-overflow] [data-titlebar-action="rewind"]'))`), true, 'the checkpoint entry is one of them')
   assert.notEqual(unfolded.glyph, unfolded.compactGlyph, 'fullscreen and summarize no longer share one glyph')
@@ -169,6 +240,42 @@ app.whenReady().then(()=>{
   await click('[data-titlebar-action="compact"]')
   assert.deepEqual(await evaluate('fixture.compacts()'), ['/fixture/chat-0'])
   assert.equal((await pocket()).actions, 0, 'the second action closes it too')
+  await evaluate(`fixture.event({type:'agent_start',sessionPath:'/fixture/chat-0'})`)
+  await pause(50)
+  await click('[data-titlebar-more]')
+  await waitFor(`document.querySelector('[data-titlebar-action="compact"]')`)
+  await click('[data-titlebar-action="compact"]')
+  await waitFor(`document.querySelector('[data-queue-compaction]')?.textContent.includes('等待压缩上下文')`)
+  assert.deepEqual(await evaluate('fixture.compacts()'), ['/fixture/chat-0', '/fixture/chat-0'], 'live clicks reach main instead of being refused in the renderer')
+  await pause(250)
+  assert.equal(await evaluate(`document.querySelector('[data-queue-compaction]').closest('[data-queue-panel]')!==null`), true, 'the action uses the existing composer queue')
+  assert.equal(await evaluate(`document.querySelector('[data-queue-panel]').getBoundingClientRect().bottom<=document.querySelector('[contenteditable="plaintext-only"]').getBoundingClientRect().top`), true, 'the queue remains above the input')
+  assert.match(await evaluate(`document.querySelector('[data-queue-compaction]').textContent`), /当前回复与工具调用完成后执行/)
+  assert.equal(await evaluate(`document.querySelector('[data-queue-panel]').querySelectorAll('button').length`), 0, 'the action has no message recall or promotion controls')
+  await click('[data-titlebar-more]')
+  await waitFor(`document.querySelector('[data-titlebar-action="compact"]')`)
+  await click('[data-titlebar-action="compact"]')
+  assert.equal(await evaluate(`document.querySelectorAll('[data-queue-compaction]').length`), 1, 'repeated clicks keep one pending row')
+  await evaluate(`fixture.event({type:'queue_update',sessionPath:'/fixture/chat-0',steering:[{text:'Check the current tool result',originalText:'Check the current tool result',imageCount:0,filePaths:[]}],followUp:[{text:'Review after finishing',originalText:'Review after finishing',imageCount:0,filePaths:[]}]})`)
+  await waitFor(`document.querySelectorAll('[data-queue-row]').length===2`)
+  assert.match(await evaluate(`document.querySelector('[data-queue-panel]').textContent`), /已排队 · 3/)
+  await screenshot('dark-compaction-queue')
+  await evaluate(`fixture.event({type:'compaction_queue_update',sessionPath:'/fixture/chat-0',compactionQueue:{queued:false,revision:2}})`)
+  await evaluate(`fixture.event({type:'compaction_start',sessionPath:'/fixture/chat-0',reason:'manual'})`)
+  await waitFor(`!document.querySelector('[data-queue-compaction]')`)
+  assert.equal(await evaluate(`document.querySelectorAll('[data-queue-row]').length`), 2, 'starting compaction preserves ordinary queued messages')
+  await evaluate(`fixture.event({type:'compaction_end',sessionPath:'/fixture/chat-0',reason:'manual'})`)
+  await evaluate(`fixture.event({type:'queue_update',sessionPath:'/fixture/chat-0',steering:[],followUp:[]})`)
+  await waitFor(`!document.querySelector('[data-queue-panel]')`)
+  await evaluate(`fixture.scenario('compact-small')`)
+  await click('[data-titlebar-more]')
+  await waitFor(`document.querySelector('[data-titlebar-action="compact"]')`)
+  await click('[data-titlebar-action="compact"]')
+  await waitFor(`document.body.textContent.includes('当前会话内容较少，无需总结')`)
+  assert.equal((await evaluate('fixture.compacts()')).length, 4, 'too-small live requests also reach main and show its rejection')
+  assert.equal(await evaluate(`Boolean(document.querySelector('[data-queue-compaction]'))`), false, 'too-small rejection adds no queued action')
+  await evaluate(`fixture.scenario('project')`)
+  await evaluate(`fixture.event({type:'agent_settled',sessionPath:'/fixture/chat-0'})`)
   // Escape is the pocket's own key: it closes the surface and claims the event —
   // the flag the composer's Esc-to-stop reads.
   await click('[data-titlebar-more]')
@@ -211,10 +318,29 @@ app.whenReady().then(()=>{
     assert.equal(g.rail.bottom, g.main.bottom)
     assert.equal(g.covered, true, 'the rail owns pointer input over the chat')
     assert.equal(g.sidebarCovered, false, 'the session sidebar stays accessible')
+    // One VISIBLE rule at the seam. Fullscreen anchors the rail's left edge
+    // exactly on the session sidebar's right border, so a painted rail border
+    // there stacked a second 1px line against that sidebar rule — a 2px double
+    // seam. The rail keeps its 1px box (the pane's width must not change with
+    // the mode) but paints nothing: the session sidebar's own rule is the
+    // boundary, exactly as it is against the chat when the rail is folded.
+    const seam = await evaluate(`(()=>{
+      const rail=document.querySelector('[data-panel="right"]');
+      const panel=document.querySelector('aside[data-slot="sidebar"] > div:last-child');
+      const r=getComputedStyle(rail.firstElementChild), s=getComputedStyle(panel);
+      return {railWidth:r.borderLeftWidth,railRule:r.borderLeftColor,sidebarWidth:s.borderRightWidth,sidebarRule:s.borderRightColor};
+    })()`)
+    assert.equal(seam.railWidth, '1px', 'the fullscreen rail keeps its 1px border box: ' + JSON.stringify(seam))
+    assert.equal(seam.railRule, 'rgba(0, 0, 0, 0)', 'the fullscreen rail paints no rule of its own: ' + JSON.stringify(seam))
+    assert.equal(seam.sidebarWidth, '1px')
+    assert.notEqual(seam.sidebarRule, 'rgba(0, 0, 0, 0)', 'the session sidebar draws the fullscreen seam: ' + JSON.stringify(seam))
     return g
   }
   await click(railToggle)
   const docked = await railGeometry()
+  assert.equal(await evaluate(`getComputedStyle(document.querySelector('[data-panel="right"]').firstElementChild).borderLeftWidth`), '1px', 'the docked rail draws its own left rule')
+  assert.notEqual(await evaluate(`getComputedStyle(document.querySelector('[data-panel="right"]').firstElementChild).borderLeftColor`), 'rgba(0, 0, 0, 0)', 'the docked rail paints its own left rule')
+  assert.equal(await evaluate(`getComputedStyle(document.querySelector('aside[data-slot="sidebar"] > div:last-child')).borderRightWidth`), '1px', 'the session sidebar keeps its right rule')
   await evaluate(`window.__railBeforeFullscreen=document.querySelector('[data-panel="right"]');window.__composerBeforeFullscreen=document.querySelector('[data-prompt-editor]');void 0`)
   await toggleFull()
   await assertFull()
@@ -259,15 +385,17 @@ app.whenReady().then(()=>{
   assert.equal((await railGeometry()).fullscreen, false, 'closing the last tab also clears fullscreen')
   await click(railToggle)
   console.log('PASS: sidebar fullscreen bounds, live resize, retained DOM, restored width and fold reset')
-  // The session row menu's own additions: copy-session-ID sits between Rename
-  // and the destructive Delete, and copies the session's own ID — not its file
+  // Copy-session-ID follows Rename and precedes destructive Delete, alongside
+  // the other session actions, and copies the session's own ID — not its file
   // path. `navigator.clipboard` refuses an unfocused document, so the write is
   // wrapped in the focus emulation the other CDP checks use.
-  await click('button[aria-label="Actions for 统一窗口标题栏与页面布局"]')
+  await click('[data-resource-id="/fixture/chat-0"] button[aria-label]')
   const rowMenu = '[data-sidebar-resource-menu="/fixture/chat-0"]'
   await waitFor(`document.querySelector('${rowMenu}')`)
   const menuRows = await evaluate(`[...document.querySelectorAll('${rowMenu} button')].map((b) => b.innerText.trim())`)
-  assert.deepEqual(menuRows.slice(-3), ['重命名', '复制会话 ID', '删除会话'], `the ID action sits before the destructive one: ${JSON.stringify(menuRows)}`)
+  const renameIndex = menuRows.indexOf('重命名'), copyIndex = menuRows.indexOf('复制会话 ID'), deleteIndex = menuRows.indexOf('删除会话')
+  assert.ok(renameIndex >= 0 && renameIndex < copyIndex && copyIndex < deleteIndex, `the ID action follows Rename and precedes Delete: ${JSON.stringify(menuRows)}`)
+  assert.equal(menuRows.at(-1), '删除会话', 'Delete remains the final, destructive action')
   await send('Emulation.setFocusEmulationEnabled', { enabled: true })
   await evaluate(`navigator.clipboard.writeText('__NOT_COPIED__')`)
   const copyPoint = await evaluate(`(()=>{const b=[...document.querySelectorAll('${rowMenu} button')].find((n) => n.innerText.trim()==='复制会话 ID');const r=b.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`)
@@ -288,6 +416,8 @@ app.whenReady().then(()=>{
   await send('Input.insertText', { text: '保留这份草稿 / keep this draft' })
   await click('button[aria-label="设置"]')
   assert.ok(await evaluate(`document.querySelector('button[aria-label="返回对话"]').getBoundingClientRect().left>=${process.platform === 'darwin' ? 92 : 12}`))
+  await assertTitlebarGlass(true)
+  assert.equal(await evaluate(`getComputedStyle(document.querySelector('.workspace-window > [data-window-titlebar]')).visibility`), 'hidden', 'the covered title controls do not show through page glass')
   // Startup preference: the saved choice is the selected radio, and picking the
   // other one writes it back through the bridge.
   const startupRadio = label => `(()=>{const l=[...document.querySelectorAll('label')].find(n=>n.innerText.trim()===${JSON.stringify(label)});return l?l.querySelector('[role="radio"]'):null})()`
@@ -299,7 +429,26 @@ app.whenReady().then(()=>{
   assert.equal(await evaluate(`${startupRadio('总是新建会话')}.getAttribute('aria-checked')`), 'true')
   assert.deepEqual(await evaluate('fixture.startupChoices()'), ['new'])
   await screenshot('settings')
+  await evaluate(`[...document.querySelectorAll('[role="tab"]')].find(button=>button.textContent.trim()==='外观').click()`)
+  const glassCheckbox = '[role="checkbox"][aria-label="半透明顶栏和侧栏"]'
+  await waitFor(`document.querySelector('${glassCheckbox}')`)
+  await evaluate(`document.querySelector('${glassCheckbox}').scrollIntoView({block:'center'})`)
+  await pause(300)
+  await click(glassCheckbox)
+  assert.equal(await evaluate(`document.querySelector('${glassCheckbox}').getAttribute('aria-checked')`), 'false')
+  await assertTitlebarGlass(false)
+  await screenshot('settings-glass-off')
   await click('button[aria-label="返回对话"]')
+  await assertWorkspaceGlass(false)
+  await click('button[aria-label="设置"]')
+  await evaluate(`[...document.querySelectorAll('[role="tab"]')].find(button=>button.textContent.trim()==='外观').click()`)
+  await evaluate(`document.querySelector('${glassCheckbox}').scrollIntoView({block:'center'})`)
+  await pause(300)
+  await click(glassCheckbox)
+  await assertTitlebarGlass(true)
+  await screenshot('settings-glass-on')
+  await click('button[aria-label="返回对话"]')
+  await assertWorkspaceGlass(true)
   assert.equal(await evaluate(`document.querySelector('[data-prompt-editor]').textContent`), '保留这份草稿 / keep this draft')
   await click('button[aria-label="搜索会话"]')
   await waitFor(`document.querySelector('[aria-modal="true"]')`)
@@ -345,6 +494,7 @@ app.whenReady().then(()=>{
   await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] })
   await reload()
   assert.equal((await evaluate('fixture.window()')).dark, false)
+  await assertWorkspaceGlass(true)
   await waitFor(`document.querySelector('[data-window-titlebar]').innerText.includes('A very long session title')`)
   // Long labels must keep window controls reachable; a private fade marker is
   // an implementation detail rather than an observable layout contract.
@@ -373,7 +523,7 @@ app.whenReady().then(()=>{
   await evaluate(`fixture.fullscreen(false)`)
   await waitFor(`fixture.window().then(w=>!w.fullscreen)`)
   assert.deepEqual(exceptions, [])
-  console.log('PASS: native title row, themes, control hit targets, titlebar pocket, session row menu, sidebar, settings/draft, modal ownership, narrow layout, long titles, projectless privacy and fullscreen')
+  console.log('PASS: native title row, themes, composited sidebar transparency, control hit targets, titlebar pocket, session row menu, sidebar, settings/draft, modal ownership, narrow layout, long titles, projectless privacy and fullscreen')
   if (process.env.PI_WINDOW_INSPECT) {
     console.log('Inspection endpoint: ' + endpoint)
     await evaluate(`fixture.scenario('project');localStorage.setItem('pi-app:locale','zh-CN');localStorage.setItem('theme','dark')`)

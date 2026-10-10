@@ -25,7 +25,7 @@ export { buildToolCatalog } from './src/main/pi/catalog';`, resolveDir: resolve(
     plugins: [{ name: 'isolated-profile', setup(builder) {
       builder.onResolve({ filter: /^@earendil-works\/pi-coding-agent$/ }, () => ({ path: 'sdk', namespace: 'fixture' }))
       builder.onResolve({ filter: /^electron$/ }, () => ({ path: 'electron', namespace: 'fixture' }))
-      builder.onResolve({ filter: /^proper-lockfile$/ }, args => ({ path: fileURLToPath(import.meta.resolve(args.path)), external: true }))
+      builder.onResolve({ filter: /^proper-lockfile$|^@resvg\/resvg-js$/ }, args => ({ path: fileURLToPath(import.meta.resolve(args.path)), external: true }))
       builder.onResolve({ filter: /^playwright-core(\/|$)|^chromium-bidi(\/|$)/ }, (args) => {
         // Keep the test bundle out of the embedded browser's heavy optional
         // dependency graph. The browser service is loaded for its type surface
@@ -140,8 +140,8 @@ pi.on('tool_result',e=>{if(e.toolName==='todo_write'&&e.input.todos[0]?.content=
   const requestSystem = contexts[0].messages.filter((message) => message.role === 'system')
   assert(requestSystem.flatMap((message) => message.toolsAdded ?? []).some((tool) => tool.name === 'todo_write'))
   const requestPrompt = requestSystem.map((message) => [message.content, ...Object.values(message.sections ?? {})].join('\n')).join('\n')
-  assert.match(requestPrompt, /Keep at most one todo_write item/)
-  assert.match(requestPrompt, /Never restate, summarize or acknowledge the task list/)
+  assert.match(requestPrompt, /at most one item in_progress/)
+  assert.match(requestPrompt, /do not repeat or acknowledge the list in prose/)
   const original = structuredClone(managed.todos.snapshot)
   const catalog = buildToolCatalog(managed.resourceLoader, session.getAllTools(), session.getActiveToolNames(), new Set(), new Map(), new Map())
   assert.equal(catalog.tools.find((t) => t.name === 'todo_write')?.source.kind, 'builtin')

@@ -139,7 +139,7 @@ export function SandboxModePicker({
                   <span className={cn('truncate', option === FULL_ACCESS && WARNING_TONE)}>
                     {t(MODE_LABEL[option])}
                   </span>
-                  <span className="text-[10px] leading-4 text-muted-foreground">
+                  <span className="text-micro leading-ui-tight text-muted-foreground">
                     {t(MODE_DESCRIPTION[option])}
                   </span>
                 </span>

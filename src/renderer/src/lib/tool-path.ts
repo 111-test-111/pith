@@ -13,6 +13,11 @@ export function isAbsolutePath(path: string): boolean {
   return path.startsWith('/') || /^[A-Za-z]:\//.test(path)
 }
 
+/** A leading marker needs the host's home directory; an embedded ~ is literal. */
+export function isHomePath(path: string): boolean {
+  return path === '~' || path.startsWith('~/')
+}
+
 /** Resolves `.` / `..` segments in an already-slashed absolute path. */
 export function collapseSegments(path: string): string {
   const segments: string[] = []
@@ -28,9 +33,10 @@ export function collapseSegments(path: string): string {
   return (path.startsWith('/') ? '/' : '') + segments.join('/')
 }
 
-/** Tool paths are "relative or absolute"; make them absolute and uniform. */
+/** Make tool paths uniform; preserve a leading ~ for main to expand before IO. */
 export function resolveFromCwd(rawPath: string, cwd: string | null | undefined): string {
   const path = normalizeSlashes(rawPath)
+  if (isHomePath(path)) return path
   if (isAbsolutePath(path)) return collapseSegments(path)
   if (!cwd) return path
   const base = normalizeSlashes(cwd).replace(/\/+$/, '')

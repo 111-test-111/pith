@@ -25,6 +25,7 @@ export interface McpStoreState {
 let state: McpStoreState = { status: 'idle', data: null, error: null, busy: null, actionError: null }
 let inflight: Promise<void> | null = null
 let statusSubscription: (() => void) | null = null
+let latestStatus: McpStatusPushDTO | null = null
 const listeners = new Set<() => void>()
 
 function emit(): void {
@@ -40,10 +41,17 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-/** Merge an observed native runtime status into the roster rows it names. */
-function applyLiveStatus(push: McpStatusPushDTO): void {
-  const data = state.data
-  if (!data || data.projectCwd !== push.cwd) return
+function sameRuntime(data: McpStateDTO, push: McpStatusPushDTO): boolean {
+  return data.projectCwd === push.cwd && data.sessionPath === push.sessionPath
+}
+
+function sameServers(data: McpStateDTO, push: McpStatusPushDTO): boolean {
+  const names = new Set(push.servers.map(server => server.name))
+  return data.servers.length === names.size && data.servers.every(server => names.has(server.name))
+}
+
+/** Update connection facts without replacing editable config with runtime data. */
+function withLiveStatus(data: McpStateDTO, push: McpStatusPushDTO): McpStateDTO {
   const live = new Map(push.servers.map((server) => [server.name, server]))
   let changed = false
   const servers = data.servers.map((server) => {
@@ -55,10 +63,35 @@ function applyLiveStatus(push: McpStatusPushDTO): void {
     changed = true
     return { ...server, status: entry.status, toolCount: entry.toolCount, disabled: entry.disabled }
   })
-  if (changed) {
-    detailCache.clear()
-    setState({ data: { ...data, servers } })
+  return changed ? { ...data, servers } : data
+}
+
+/** Read once; a newer push may supersede a snapshot still crossing IPC. */
+async function readCurrentState(call: () => Promise<McpStateDTO>): Promise<McpStateDTO> {
+  for (;;) {
+    const before = latestStatus
+    const data = await call()
+    const push = latestStatus
+    if (!push || push === before) return data
+    if (sameRuntime(data, push) && sameServers(data, push)) return withLiveStatus(data, push)
+    // Ownership or membership changed during the read. Refresh metadata,
+    // never repeat a mutating call to obtain the selected session's roster.
+    call = () => window.pi.mcpState()
   }
+}
+
+/** Complete native snapshots follow the selected session, including same-cwd switches. */
+function applyLiveStatus(push: McpStatusPushDTO): void {
+  latestStatus = push
+  const data = state.data
+  if (!data || !sameRuntime(data, push) || !sameServers(data, push)) {
+    void refreshMcpState()
+    return
+  }
+  const next = withLiveStatus(data, push)
+  if (next === data) return
+  detailCache.clear()
+  setState({ data: next })
 }
 
 /** Reload from the main process; concurrent callers share one request. */
@@ -67,7 +100,7 @@ export function refreshMcpState(): Promise<void> {
   setState({ status: state.data ? state.status : 'loading', error: null })
   inflight = (async () => {
     try {
-      const data = await window.pi.mcpState()
+      const data = await readCurrentState(() => window.pi.mcpState())
       detailCache.clear()
       setState({ status: 'ready', data, error: null })
     } catch (error) {
@@ -83,7 +116,7 @@ export function refreshMcpState(): Promise<void> {
 async function runAction(key: string, call: () => Promise<McpStateDTO>): Promise<boolean> {
   setState({ busy: key, actionError: null })
   try {
-    const data = await call()
+    const data = await readCurrentState(call)
     detailCache.clear()
     setState({ status: 'ready', data, error: null, busy: null })
     return true
@@ -123,8 +156,9 @@ export function peekMcpServerDetail(name: string): McpServerDetailDTO | null {
 
 /** One server's currently registered tool metadata. */
 export async function fetchMcpServerDetail(name: string): Promise<McpServerDetailDTO> {
+  const owner = state.data?.sessionPath
   const detail = await window.pi.mcpServerDetail(name)
-  detailCache.set(name, detail)
+  if (owner === state.data?.sessionPath) detailCache.set(name, detail)
   return detail
 }
 

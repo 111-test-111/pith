@@ -1,6 +1,7 @@
 import { PlanCard, PlanPresentationContext } from './PlanCard'
 import { visibleSubmissionIds } from '@/lib/plan-submissions'
 import { BashTasksProvider } from '@/lib/bash-tasks'
+import { ImageReplaysProvider } from '@/lib/image-replays'
 import { SessionTasks } from './SessionTasks'
 import { memo, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, useSyncExternalStore } from 'react'
 import { AlertTriangle, RefreshCw, X } from '@/lib/icons'
@@ -21,8 +22,9 @@ import { extractReviewTurns } from '@/lib/turn-written-files'
 import { extractUserDisplay } from '@/lib/user-message'
 import { AssistantGroup, BashItem, CustomItem, SummaryItem, UserItem } from './MessageItems'
 import { RowReveal } from './RowReveal'
-import { SummaryRow } from './SummaryRow'
+import { SummaryDisclosureContext, SummaryRow } from './SummaryRow'
 import { TurnStatus } from './TurnStatus'
+import { TRANSCRIPT_ROW_WIDTH } from '@/lib/transcript-rhythm'
 import { continuationTarget } from '../../../../shared/continuation'
 
 /** Final answer text of a turn: the last round that produced prose. */
@@ -205,6 +207,7 @@ export const ChatView = memo(function ChatView({
   const menuRow = useRef<TranscriptMenuRow | null>(null)
   const [menuOpen, setMenuOpen] = useState(false)
   const state: PiState = useSyncExternalStore(store.subscribe, store.getState)
+  const summaryDisclosures = useRef(new Map<string, boolean>())
   const toolResults = useMemo(() => {
     const map = new Map<string, ToolResultMsg>()
     for (const message of state.messages) {
@@ -213,7 +216,18 @@ export const ChatView = memo(function ChatView({
     return map
   }, [state.messages])
 
-  const busy = state.isStreaming || Boolean(state.streaming)
+  const running = state.isStreaming || Boolean(state.streaming)
+  /**
+   * A prompt was echoed but its run has not been announced yet. The waiting
+   * row (spinner + sentence) renders from this in the same commit as the
+   * user's own bubble instead of trailing it by an IPC round trip; once
+   * `agent_start` arrives, `isStreaming` owns the row exactly as before.
+   */
+  const awaitingRun = state.awaitingRun && !running
+  // The echoed prompt already owns the waiting row. Hide message actions in
+  // that same commit: removing their layout slot only at agent_start pulled
+  // the spinner upward after it had appeared below the pending prompt.
+  const busy = running || awaitingRun
   const continueFrom = !busy && !state.initializing && !state.subagentChild && !state.scheduledTaskSession &&
     !state.plan?.blockers.submit.includes('already-submitted') ? continuationTarget(state.messages) : null
   /** Seed for the waiting row's spinner verb: the session, not the turn, so the
@@ -340,6 +354,21 @@ export const ChatView = memo(function ChatView({
   const recoveryCard = missingPlan && state.sessionPath && state.plan
     ? <PlanCard key={`plan:${missingPlan.submissionEntryId}`} sessionPath={state.sessionPath} reference={missingPlan} state={state.plan} onRefine={onRefinePlan} /> : null
   const lastDisplayTurn = displayTurns[displayTurns.length - 1]
+  const compactionProcess = state.compactionProcess.process
+  const compactionRow = state.notice?.key === 'compacting' || state.notice?.key === 'compactFailed' ||
+    compactionProcess?.status === 'running' || compactionProcess?.status === 'error' || compactionProcess?.status === 'cancelled' ? (
+    <RowReveal key={`${compactionProcess?.id ?? 'compaction'}:${state.notice?.key ?? compactionProcess?.status}`} animate rowKind="process" className={TRANSCRIPT_ROW_WIDTH}>
+      <SummaryRow
+        kind="compaction"
+        status={compactionProcess?.status === 'cancelled' ? 'cancelled' : state.notice?.key === 'compactFailed' || compactionProcess?.status === 'error' ? 'error' : 'running'}
+        detail={state.notice?.detail ?? compactionProcess?.errorMessage}
+        process={compactionProcess ?? undefined}
+      />
+    </RowReveal>
+  ) : null
+  // A live group owns the last spinner. Keep compaction in that group's row
+  // stack, so it shares tool geometry and appears before the waiting row.
+  const compactionHosted = Boolean(compactionRow && (liveTurn || streamingJoinsLastTurn || waitingInLastTurn))
 
   /** Right-click: resolve the row, then let the surface trigger open. A row the
    * menu has no actions for (a summary, a bash/custom notice, status chrome)
@@ -396,7 +425,7 @@ export const ChatView = memo(function ChatView({
       )
     if (turn.role === 'info')
       return (
-        <RowReveal key={turn.key} animate={busy}>
+        <RowReveal key={turn.key} animate={busy} rowKind="process" className={TRANSCRIPT_ROW_WIDTH}>
           <SummaryItem message={turn.message} />
         </RowReveal>
       )
@@ -441,6 +470,7 @@ export const ChatView = memo(function ChatView({
         showWrittenFiles={changes?.ownerKey === turn.key && !(busy && scopeId === state.activeChangeScopeId)}
         streamingIndex={live ? 0 : isLast && streamingJoinsLastTurn ? turn.assistants.length : -1}
         pending={!live && isLast && waitingInLastTurn}
+        liveProcess={isLast && compactionHosted ? compactionRow : null}
         retryFrom={retryFrom}
         continueFrom={continueFrom && turn.assistants.includes(continueFrom) ? continueFrom : undefined}
         onContinue={onContinue}
@@ -455,17 +485,21 @@ export const ChatView = memo(function ChatView({
         toolRuns={state.toolRuns}
         spinnerSeed={spinnerSeed}
         onReview={onReview}
-        onUndoFiles={undoTarget && undoFiles ? () => undoFiles(undoTarget) : undefined}
+        onUndoFiles={undoFiles}
+        undoTarget={undoTarget}
       />
     )
   }
 
   return (
     <BashTasksProvider sessionPath={state.sessionPath}>
+      <ImageReplaysProvider sessionPath={state.sessionPath} disabled={busy || state.initializing || state.subagentChild || state.scheduledTaskSession || state.plan?.mode === 'plan' || state.sandboxMode === 'read-only'}>
       <SessionTasks jevState={state.jevWorkflow} key={state.sessionPath} todos={state.todos} subagents={state.subagents} askUserRecords={state.askUserRecords} busy={busy} sessionPath={state.sessionPath} onOpenSession={onOpenSession} />
       <ContextMenu open={menuOpen} onOpenChange={setMenuOpen}>
       <ContextMenuTrigger>
       <MessageScroller
+      // The echoed prompt's pending run already paints a waiting row: the
+      // transcript reports itself busy from that same commit (`aria-busy`).
       busy={busy}
       onContextMenuCapture={captureMenuRow}
       onPointerDownCapture={trackMenuRow}
@@ -485,24 +519,19 @@ export const ChatView = memo(function ChatView({
       contentClassName="mx-auto min-h-full w-full max-w-3xl overflow-x-clip"
     >
       <PlanPresentationContext.Provider value={state.plan && state.sessionPath ? { state: state.plan, sessionPath: state.sessionPath, onRefine: onRefinePlan, onReviewExecution: reviewExecution } : null}>
+      <SummaryDisclosureContext.Provider value={summaryDisclosures.current}>
       <MessageGroup data-transcript-rows>
         {displayTurns.flatMap((turn, index) => [index === recoveredIndex ? recoveryCard : null, renderTurn(turn)])}
         {recoveredIndex < 0 ? recoveryCard : null}
 
-        {state.isStreaming && !streaming && !waitingInLastTurn ? (
+        {!compactionHosted ? compactionRow : null}
+
+        {/* One waiting row, two owners: the announced run (`isStreaming`) or the
+            echoed prompt whose run has not started yet. Keeping them in ONE
+            slot means the handover reuses the mounted spinner instead of
+            remounting it a frame later. */}
+        {(state.isStreaming && !streaming && !waitingInLastTurn) || (awaitingRun && lastTurn?.role === 'user') ? (
           <TurnStatus seedKey={spinnerSeed} />
-        ) : null}
-
-        {state.notice?.key === 'compacting' ? (
-          <RowReveal animate>
-            <SummaryRow kind="compaction" status="running" />
-          </RowReveal>
-        ) : null}
-
-        {state.notice?.key === 'compactFailed' ? (
-          <RowReveal animate>
-            <SummaryRow kind="compaction" status="error" detail={state.notice.detail} />
-          </RowReveal>
         ) : null}
 
         {state.notice && state.notice.key !== 'compacting' && state.notice.key !== 'compactFailed' && !failureHosted ? (
@@ -543,6 +572,7 @@ export const ChatView = memo(function ChatView({
           </RowReveal>
         ) : null}
       </MessageGroup>
+      </SummaryDisclosureContext.Provider>
       </PlanPresentationContext.Provider>
     </MessageScroller>
     </ContextMenuTrigger>
@@ -593,6 +623,7 @@ export const ChatView = memo(function ChatView({
       ) : null}
     </ContextMenuContent>
     </ContextMenu>
+      </ImageReplaysProvider>
     </BashTasksProvider>
   )
 })

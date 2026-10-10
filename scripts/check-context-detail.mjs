@@ -1,14 +1,13 @@
 /**
  * The rail's context pane is derived, not reported: the SDK's `SessionStats`
  * has counts, cumulative tokens and cost, but no reasoning split and no
- * per-role context accounting. `src/main/pi/context-detail.ts` builds those two,
- * and this check pins each of them — the bucketing and how the residue
- * reconciles with the ring's provider-anchored total, the reasoning aggregation
+ * context composition. This check pins independent estimates, system replay,
+ * exact request provenance and reasoning aggregation
  * (message usage AND summary/standalone usage entries, with a real 0 kept distinct
  * from "no provider reported"), and, the accuracy pin, that the disk fallback's
  * `statsFromEntries` reproduces a REAL `AgentSession.getSessionStats()` exactly
- * on a session file that carries usage, tool results and a compaction. No
- * Electron.
+ * on a real session file with usage, compaction, context edits and branches.
+ * No Electron or live provider calls.
  */
 import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
@@ -23,23 +22,27 @@ import {
   SessionManager,
   SettingsManager
 } from '@earendil-works/pi-coding-agent'
+import { convertToLlm } from '@earendil-works/pi-coding-agent'
+import { createPlanFixture } from './lib/plan-fixture.mjs'
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const scratch = join(repo, 'node_modules', '.cache', 'pith-context-detail')
 const temporary = await mkdtemp(join(tmpdir(), 'pith-context-detail-'))
+let fixture
 try {
   await rm(scratch, { recursive: true, force: true })
   await mkdir(scratch, { recursive: true })
   const bundle = join(scratch, 'context-detail.mjs')
   await build({
-    entryPoints: [join(repo, 'src/main/pi/context-detail.ts')],
+    stdin: { contents: "export * from './src/main/pi/context-detail'; export { contextComposition } from './src/main/pi/context-composition';", resolveDir: repo },
     bundle: true,
     platform: 'node',
     format: 'esm',
     packages: 'external',
     outfile: bundle
   })
-  const { buildBreakdown, buildContextDetail, reasoningTokens, statsFromEntries } = await import(bundle)
+  const { buildBreakdown, buildContextDetail, cacheHitRate, contextComposition, reasoningTokens, statsFromEntries } = await import(bundle)
+  const { getCurrentSystemMessage } = await import(new URL('../node_modules/@earendil-works/pi-ai/dist/index.js', import.meta.resolve('@earendil-works/pi-coding-agent')))
 
   const user = (text) => ({ role: 'user', content: text })
   const assistant = (text, extra = {}) => ({ role: 'assistant', content: [{ type: 'text', text }], ...extra })
@@ -53,28 +56,56 @@ try {
     estimateTokens(messages[1]) +
     estimateTokens(messages[2]) +
     estimateTokens(messages[3])
-  const noWindow = buildBreakdown(messages, null)
+  const noWindow = buildBreakdown(messages)
   assert.equal(noWindow.user, estimateTokens(messages[0]), 'user messages land in the user bucket')
   assert.equal(noWindow.assistant, estimateTokens(messages[1]), 'assistant messages land in theirs')
   assert.equal(noWindow.toolResults, estimateTokens(messages[2]), 'tool results land in theirs')
   assert.equal(noWindow.other, estimateTokens(messages[3]), 'a summary is "other"')
   assert.equal(noWindow.total, summed, 'without a provider total the buckets ARE the total')
 
-  // 2. Reconciliation: the provider-anchored context size the ring shows is the
-  //    total, and the system prompt + tool schemas ride along in "other" — a bar
-  //    whose segments do not add up to the ring would be worse than no bar.
-  const anchored = buildBreakdown(messages, summed + 12_000)
-  assert.equal(anchored.total, summed + 12_000, 'the ring total wins over the estimate')
-  assert.equal(anchored.other, estimateTokens(messages[3]) + 12_000, 'the residue is "other"')
-  assert.equal(
-    anchored.user + anchored.assistant + anchored.toolResults + anchored.other,
-    anchored.total,
-    'the four buckets always sum to the total'
-  )
-  // A provider total SMALLER than the estimate must not shrink the buckets into
-  // negative widths; the estimate is then the honest total.
-  const smaller = buildBreakdown(messages, 1)
-  assert.equal(smaller.total, summed, 'a stale/small usage never cuts the estimate down')
+  // 2. Replay against the SDK, including replacements, removals and re-adds.
+  const patches = [
+    { role: 'system', timestamp: 0, content: 'base', sections: { files: 'x'.repeat(12000), removed: 'gone' }, toolsAdded: [{ name: 'read', description: 'x'.repeat(1000), parameters: {} }] },
+    { role: 'system', timestamp: 1, content: 'append', sections: { files: 'short', removed: null }, toolsRemoved: [{ name: 'read' }] },
+    { role: 'system', timestamp: 2, content: '', toolsAdded: [{ name: 'read', description: 'new', parameters: {} }] }
+  ]
+  const patched = buildBreakdown([...patches, ...messages])
+  const expectedSystem = estimateTokens(getCurrentSystemMessage(patches))
+  assert.equal(patched.other, expectedSystem + estimateTokens(messages[3]), 'superseded prompts and removed schemas do not accumulate')
+  assert.equal(patched.total, summed + expectedSystem, 'system is measured once, independently of usage')
+  assert.equal(cacheHitRate({ input: 0, output: 1000, cacheRead: 100, cacheWrite: 100, total: 1200 }), 0.5, 'cache writes are misses; output is excluded')
+  assert.equal(cacheHitRate({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }), null)
+
+  const splitMessages = [...patches,
+    { role: 'system', timestamp: 3, content: '', sections: { project_context: '<project_context>instructions</project_context>', skills: '<skills>descriptions</skills>' } },
+    { role: 'user', content: [{ type: 'text', text: 'user' }, { type: 'image', data: 'x'.repeat(100000), mimeType: 'image/png' }], timestamp: 4 },
+    { role: 'assistant', content: [{ type: 'text', text: 'answer' }, { type: 'thinking', thinking: 'visible reasoning', thinkingSignature: 'opaque'.repeat(20000) }, { type: 'toolCall', name: 'read', id: 'split', arguments: { path: 'file' } }], timestamp: 5 },
+    { role: 'toolResult', toolName: 'read', content: [{ type: 'text', text: 'output' }], timestamp: 6 }
+  ]
+  const split = contextComposition(splitMessages)
+  assert.equal(split.categories.reduce((n, c) => n + c.tokens, 0), split.breakdown.total)
+  for (const kind of ['projectFiles', 'skills', 'toolSchemas', 'images', 'thinking', 'toolCalls', 'toolResults']) assert(split.categories.some(c => c.kind === kind), kind)
+  assert.equal(split.categories.find(c => c.kind === 'images').tokens, 1200, 'images use the SDK fixed estimate, not base64 length')
+  const shortImage = contextComposition([{ role: 'user', content: [{ type: 'text', text: 'a' }, { type: 'image', data: 'AA', mimeType: 'image/png' }], timestamp: 1 }])
+  assert.equal(shortImage.categories.find(c => c.kind === 'images').tokens, 1200, 'text rounding cannot consume or enlarge the fixed image estimate')
+  assert.equal(shortImage.categories.find(c => c.kind === 'userText').tokens, 1)
+  splitMessages.find(m => m.role === 'assistant').content.find(b => b.type === 'thinking').thinkingSignature = 'changed'
+  assert.deepEqual(contextComposition(splitMessages), split, 'opaque signatures do not inflate visible reasoning')
+  const sources = [
+    { role: 'custom', customType: 'fixture', content: 'custom state', display: false, timestamp: 7 },
+    { role: 'compactionSummary', summary: 'summary', timestamp: 8 },
+    { role: 'branchSummary', summary: 'branch', timestamp: 9 }
+  ]
+  const converted = convertToLlm(sources)
+  const attributed = contextComposition([...converted, converted[0]], sources)
+  assert(attributed.categories.some(c => c.kind === 'extensions'))
+  assert(attributed.categories.some(c => c.kind === 'summaries'))
+  assert.equal(attributed.categories.find(c => c.kind === 'requestOnly').tokens, estimateTokens(converted[0]), 'exact multiplicities distinguish additional request content from saved custom messages')
+  const schemas = Array.from({ length: 50 }, (_, i) => ({ name: `schema-${i}`, description: 'definition', parameters: {} }))
+  const many = contextComposition([{ role: 'system', content: '', toolsAdded: schemas, timestamp: 0 }])
+  assert.equal(many.categories[0].items.length, 24)
+  assert.equal(many.categories[0].omittedItems, 26)
+  assert.equal(many.breakdown.total, estimateTokens({ role: 'system', content: '', toolsAdded: schemas, timestamp: 0 }), 'bounded names retain the full token total')
 
   // 3. Reasoning: message usage and the summary entries' own usage, and a real
   //    0 stays 0 instead of reading as "unknown".
@@ -143,12 +174,22 @@ try {
         timestamp: stamp(),
         message: { role: 'toolResult', toolCallId: 'c1', toolName: 'read', content: 'ok', timestamp: Date.now(), usage: usage(1000, 5, 800, 0, 3, 0.02) }
       },
-      { type: 'compaction', id: 'k1', parentId: 't1', timestamp: stamp(), summary: 'sum', firstKeptEntryId: 't1', tokensBefore: 5000, usage: usage(300, 400, 20, 5, 250, 0.25) },
+      { type: 'compaction', id: 'k1', parentId: 't1', timestamp: stamp(), summary: 'sum', firstKeptEntryId: 't1', tokensBefore: 5000, usage: usage(300, 400, 20, 5, 250, 0.25), systemMessage: patches[0] },
       { type: 'usage', id: 'g1', parentId: 'k1', timestamp: stamp(), kind: 'fixture', provider: 'fixture', model: 'fixture-model', usage: usage(40, 80, 0, 0, 11, 0.1) },
       { type: 'message', id: 'u2', parentId: 'g1', timestamp: stamp(), message: { role: 'user', timestamp: Date.now(), content: 'again' } },
       { type: 'thinking_level_change', id: 'x1', parentId: 'u2', timestamp: stamp(), thinkingLevel: 'high' }
     ].map((line) => JSON.stringify(line)).join('\n') + '\n'
   )
+  await writeFile(file, [
+    { type: 'message', id: 's2', parentId: 'x1', timestamp: stamp(), message: patches[1] },
+    { type: 'custom_message', id: 'c2', parentId: 's2', timestamp: stamp(), customType: 'fixture', content: 'custom state'.repeat(100), display: false },
+    { type: 'branch_summary', id: 'b2', parentId: 'c2', timestamp: stamp(), fromId: 'a1', summary: 'branch summary'.repeat(100) },
+    { type: 'context_edit', id: 'e2', parentId: 'b2', timestamp: stamp(), targetId: 'u2', replacement: { content: 'z' } },
+    { type: 'model_change', id: 'selected-model', parentId: 'e2', timestamp: stamp(), provider: 'selected-provider', modelId: 'selected-model' },
+    { type: 'message', id: 'abandoned', parentId: 'x1', timestamp: stamp(), message: assistant('old branch', { timestamp: Date.now(), provider: 'abandoned-provider', model: 'abandoned-model', api: 'openai-completions', stopReason: 'stop', usage: usage(0, 0, 0, 0, 0, 0) }) },
+    { type: 'thinking_level_change', id: 'abandoned-level', parentId: 'abandoned', timestamp: stamp(), thinkingLevel: 'off' },
+    { type: 'custom', id: 'selected-leaf', parentId: 'selected-model', timestamp: stamp(), customType: 'fixture', data: {} }
+  ].map(line => JSON.stringify(line)).join('\n') + '\n', { flag: 'a' })
   const manager = SessionManager.open(file)
   const fileEntries = manager.getEntries()
   const services = await createAgentSessionServices({
@@ -173,8 +214,7 @@ try {
     'reasoning counts the assistant round, tool result, compaction and standalone usage'
   )
 
-  // The whole DTO over that session: the counts are the stats' own, the
-  // breakdown is anchored to the ring's total, and no message body is carried.
+  // Billing, live usage and composition remain independent; no body is carried.
   const { messages: contextMessages } = manager.buildSessionContext()
   const detail = buildContextDetail({
     messages: contextMessages,
@@ -202,7 +242,8 @@ try {
   assert.equal(detail.tokens.input, sdkStats.tokens.input)
   assert.equal(detail.cost, sdkStats.cost)
   assert.equal(detail.tokens.reasoning, 384)
-  assert.equal(detail.breakdown.total, 9000, 'the ring total anchors the breakdown')
+  assert.equal(detail.breakdown.total, buildBreakdown(contextMessages).total, 'composition has its own estimate total')
+  assert.notEqual(detail.breakdown.total, detail.usage.tokens, 'provider residual is not attributed to system content')
   assert.equal(
     detail.breakdown.user + detail.breakdown.assistant + detail.breakdown.toolResults + detail.breakdown.other,
     detail.breakdown.total,
@@ -210,11 +251,25 @@ try {
   )
   assert.ok(!('messages' in detail), 'no message body rides the DTO any more')
 
+  fixture = await createPlanFixture()
+  await fixture.managed.lifecyclePromise
+  const cold = await fixture.app.contextDetail(file)
+  const canonical = manager.buildSessionProjection().messages
+  assert(canonical.some(m => m.role === 'compactionSummary') && canonical.some(m => m.role === 'custom') && canonical.some(m => m.role === 'branchSummary'))
+  assert(canonical.some(m => m.role === 'user' && m.content === 'z'), 'context edit is applied to the projection')
+  assert.deepEqual(cold.breakdown, buildBreakdown(canonical), 'cold detail includes checkpoints, summaries, custom messages and context edits')
+  assert.equal(cold.request, null, 'older logs never pretend their saved history was a captured request')
+  assert.equal(cold.provider, 'selected-provider')
+  assert.equal(cold.model, 'selected-model')
+  assert.equal(cold.thinkingLevel, 'high', 'abandoned branch metadata cannot replace selected branch settings')
+  assert.deepEqual(cold.tokens, detail.tokens, 'billing still includes every branch')
+
   console.log(
-    'PASS: context detail (bucket math and reconciliation, reasoning incl. summary entries and a real 0,' +
+    'PASS: context detail (SDK system replay, independent estimates, cache writes, reasoning incl. summary entries and a real 0,' +
       ' stats identical to a real AgentSession.getSessionStats(), no message bodies in the DTO)'
   )
 } finally {
+  await fixture?.close()
   await rm(temporary, { recursive: true, force: true })
   await rm(scratch, { recursive: true, force: true })
 }

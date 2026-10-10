@@ -1,4 +1,5 @@
 import { presentedFiles } from '@/lib/presented-files'
+import { FileTypeIcon } from './FileTypeIcon'
 import { PresentedFiles } from './PresentedFiles'
 import { SubmissionCard } from './PlanCard'
 import { submittedPlanRef } from '@/lib/plan-submissions'
@@ -14,7 +15,7 @@ import {
   useState,
   type ReactNode
 } from 'react'
-import { ArrowLeftFromLine, ArrowRight, Brain, ChevronDown, CircleX, FileText, GitFork, Pencil, RefreshCw } from '@/lib/icons'
+import { ArrowLeftFromLine, ArrowRight, Brain, ChevronDown, CircleX, GitFork, Pencil, RefreshCw } from '@/lib/icons'
 import { AgentActivity } from '@/components/agents/agent-activity'
 import { AgentDisclosure } from '@/components/agents/agent-disclosure'
 import {
@@ -29,6 +30,7 @@ import { Markdown } from '@/lib/markdown'
 import { SummaryRow } from './SummaryRow'
 import { useFileNavigation } from '@/lib/file-navigation'
 import { ACTIVITY_BODY_INDENT, TRANSCRIPT_ROW, TRANSCRIPT_ROW_WIDTH } from '@/lib/transcript-rhythm'
+import { contentLineHeight, useContentFontSize } from '@/lib/typography'
 import { cn } from '@/lib/utils'
 import { ToolIcon } from '@/lib/tool-icons'
 import { formatTime, formatTokenCount, basename } from '@/lib/format'
@@ -72,7 +74,7 @@ import { RowReveal } from './RowReveal'
 import { TurnStatus } from './TurnStatus'
 import { TurnWrittenFiles } from './TurnWrittenFiles'
 import { CopyAction, MessageAction, MessageActions } from './MessageActions'
-import { PreviewThumb } from './ImagePreview'
+import { ImagePreviewGroup, PreviewThumb } from './ImagePreview'
 import { LabelTooltip } from './LabelTooltip'
 
 /** `anywhere` (unlike `break-words`) shrinks intrinsic min-content so long
@@ -90,13 +92,11 @@ type Translate = (key: MessageKey, params?: Record<string, string | number>) => 
 const ACTIONS_HOVER =
   'opacity-0 transition-opacity group-hover/message:opacity-100 focus-within:opacity-100'
 
-/** Collapsed height of a user bubble body: ten 24px body lines
- * (`text-sm/leading-6`). Long pastes are cut here and offered an expand
- * toggle instead of pushing the whole transcript down. */
-const USER_BUBBLE_MAX_REM = 10 * 1.5
+/** Collapse at ten content lines, including when the user changes its base. */
+const USER_BUBBLE_MAX_LINES = 10
 
 /**
- * Clamps a user bubble body to {@link USER_BUBBLE_MAX_REM} and — only when the
+ * Clamps a user bubble body to {@link USER_BUBBLE_MAX_LINES} and — only when the
  * body is actually taller than that — offers the expand toggle. The measured
  * element is the inner one: the clamp caps the wrapper, so the verdict cannot
  * flip when expanding removes the cap and hide the control the user just used.
@@ -105,6 +105,7 @@ const USER_BUBBLE_MAX_REM = 10 * 1.5
  */
 function UserBubbleBody({ children }: { children: ReactNode }) {
   const { t } = useI18n()
+  const maxHeight = USER_BUBBLE_MAX_LINES * contentLineHeight(useContentFontSize())
   const [open, setOpen] = useState(false)
   const [overflowing, setOverflowing] = useState(false)
   const bodyRef = useRef<HTMLDivElement>(null)
@@ -114,8 +115,7 @@ function UserBubbleBody({ children }: { children: ReactNode }) {
     const node = bodyRef.current
     if (!node) return
     const update = () => {
-      const rootFont = Number.parseFloat(getComputedStyle(document.documentElement).fontSize) || 16
-      setOverflowing(node.getBoundingClientRect().height > USER_BUBBLE_MAX_REM * rootFont + 1)
+      setOverflowing(node.getBoundingClientRect().height > maxHeight + 1)
     }
     update()
     // Watching the inner element (not the clamped wrapper, whose box stops
@@ -124,7 +124,7 @@ function UserBubbleBody({ children }: { children: ReactNode }) {
     const observer = new ResizeObserver(update)
     observer.observe(node)
     return () => observer.disconnect()
-  }, [])
+  }, [maxHeight])
 
   const collapsed = overflowing && !open
   return (
@@ -138,7 +138,7 @@ function UserBubbleBody({ children }: { children: ReactNode }) {
             ? 'overflow-hidden [mask-image:linear-gradient(to_bottom,#000_82%,transparent_100%)]'
             : undefined
         }
-        style={collapsed ? { maxHeight: `${USER_BUBBLE_MAX_REM}rem` } : undefined}
+        style={collapsed ? { maxHeight } : undefined}
       >
         <div ref={bodyRef}>{children}</div>
       </div>
@@ -200,10 +200,13 @@ export const UserItem = memo(function UserItem({
       className={spaced ? 'mt-4' : undefined}
     >
       <MessageContent data-transcript-rows>
-        {/* beUI's native gray bubble: `bg-muted` with `text-foreground`, so it
-            stays a distinct gray in both light and dark mode and keeps the
-            text legible (unlike solid's fixed black/white). */}
-        <MessageBubble variant="soft">
+        {/* A pale wash of the theme's accent, not a gray: `tint` is
+            `bg-primary/10`, which blends the ACTIVE accent token over whatever
+            is behind it — and because `--primary` carries a light/dark pair
+            (plus the accent presets and the runtime custom slot), the wash
+            stays a light theme colour in both modes while `text-foreground`
+            keeps the text legible (unlike solid's fixed black/white). */}
+        <MessageBubble variant="tint">
           <MessageBubbleContent>
             <UserBubbleBody>
               {text ? <p className={`whitespace-pre-wrap ${WRAP_ANYWHERE}`}>{text}</p> : null}
@@ -214,9 +217,9 @@ export const UserItem = memo(function UserItem({
                       <Button
                         variant="ghost" size="sm"
                         onClick={() => fileNavigation.openPath(path)}
-                        className="inline-flex max-w-64 items-center gap-1.5 rounded-lg bg-background/60 px-2 py-1 text-xs text-foreground/90 transition-colors hover:bg-background"
+                        className="inline-flex max-w-64 items-center gap-1.5 rounded-lg bg-background/60 px-2 py-1 text-xs text-foreground transition-colors hover:bg-background"
                       >
-                        <FileText className="size-3.5 shrink-0" />
+                        <FileTypeIcon path={path} className="size-4 shrink-0" />
                         <span className="truncate">{basename(path)}</span>
                       </Button>
                     </LabelTooltip>
@@ -224,6 +227,7 @@ export const UserItem = memo(function UserItem({
                 </div>
               ) : null}
               {images.length ? (
+                <ImagePreviewGroup>
                 <div className="mt-2 flex flex-wrap gap-2">
                   {images.map((image, index) => (
                     <PreviewThumb
@@ -235,6 +239,7 @@ export const UserItem = memo(function UserItem({
                     />
                   ))}
                 </div>
+                </ImagePreviewGroup>
               ) : null}
             </UserBubbleBody>
           </MessageBubbleContent>
@@ -272,6 +277,7 @@ export const SummaryItem = memo(function SummaryItem({
       status="success"
       summary={message.summary}
       tokensBefore={message.tokensBefore}
+      process={message.process}
     />
   ) : (
     <SummaryRow kind="branch" status="success" summary={message.summary} />
@@ -338,7 +344,7 @@ export const CustomItem = memo(function CustomItem({ message }: { message: Custo
   if (message.customType === 'ask_user_answer') return null
   return (
     <div data-row="text" className="rounded-xl border border-border bg-card px-3 py-2">
-      <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+      <p className="text-caption font-medium uppercase tracking-wide text-muted-foreground">
         {t('chat.customMessage', { type: message.customType })}
       </p>
       {text ? (
@@ -347,6 +353,7 @@ export const CustomItem = memo(function CustomItem({ message }: { message: Custo
         </div>
       ) : null}
       {images.length ? (
+        <ImagePreviewGroup>
         <div className="mt-2 flex flex-wrap gap-2">
           {images.map((image, index) => (
             <PreviewThumb
@@ -358,6 +365,7 @@ export const CustomItem = memo(function CustomItem({ message }: { message: Custo
             />
           ))}
         </div>
+        </ImagePreviewGroup>
       ) : null}
     </div>
   )
@@ -485,7 +493,7 @@ const AssistantParts = memo(function AssistantParts({
                   // scans like the tool calls under it.
                   <span className="inline-flex items-center gap-2">
                     <Brain aria-hidden="true" className="size-4 shrink-0" />
-                    {t('chat.reasoning')}
+                    <span className="transcript-label">{t('chat.reasoning')}</span>
                   </span>
                 }
                 defaultOpen={false}
@@ -637,6 +645,51 @@ function AssistantStatus({ message, streaming = false }: {
   )
 }
 
+/**
+ * Element-wise identity for the arrays a row renders from. The transcript
+ * rebuilds every turn's arrays on each message change, so comparing by array
+ * identity would re-render every settled turn for a row that never saw it.
+ */
+function sameRefs<T>(prev: readonly T[] | undefined, next: readonly T[] | undefined): boolean {
+  if (prev === next) return true
+  if (!prev || !next || prev.length !== next.length) return false
+  for (let index = 0; index < prev.length; index++) {
+    if (prev[index] !== next[index]) return false
+  }
+  return true
+}
+
+/** Turn notices are rebuilt with their turn, so compare their data by value. */
+function sameNotices(prev: TurnNotice[] | undefined, next: TurnNotice[] | undefined): boolean {
+  if (prev === next) return true
+  if (!prev || !next || prev.length !== next.length) return false
+  for (let index = 0; index < prev.length; index++) {
+    if (prev[index].beforeRound !== next[index].beforeRound || prev[index].message !== next[index].message) {
+      return false
+    }
+  }
+  return true
+}
+
+/**
+ * Whether the tool results these messages read changed. The store rebuilds the
+ * whole map on every transcript change, so its identity says nothing about a
+ * given round: compare the entries that round actually renders.
+ */
+function sameToolResults(
+  messages: readonly AssistantMsg[],
+  prev: ReadonlyMap<string, ToolResultMsg>,
+  next: ReadonlyMap<string, ToolResultMsg>
+): boolean {
+  if (prev === next) return true
+  for (const message of messages) {
+    for (const part of message.content) {
+      if (part.type === 'toolCall' && prev.get(part.id) !== next.get(part.id)) return false
+    }
+  }
+  return true
+}
+
 function assistantPartsPropsEqual(prev: AssistantPartsProps, next: AssistantPartsProps): boolean {
   if (
     prev.showStatus !== next.showStatus ||
@@ -651,13 +704,13 @@ function assistantPartsPropsEqual(prev: AssistantPartsProps, next: AssistantPart
     prev.footer !== next.footer ||
     prev.onResend !== next.onResend ||
     prev.onFork !== next.onFork ||
-    prev.toolResults !== next.toolResults ||
     prev.messageIndex !== next.messageIndex ||
     prev.blocksFrom !== next.blocksFrom ||
     prev.blocksTo !== next.blocksTo
   ) {
     return false
   }
+  if (!sameToolResults([prev.message], prev.toolResults, next.toolResults)) return false
   // Plans are rebuilt (new Map identity) whenever any round changes, so compare
   // by value — an untouched round must keep its memo.
   if (!sameToolPlan(prev.toolPlan, next.toolPlan, prev.message, prev.messageIndex)) return false
@@ -684,6 +737,8 @@ export interface AssistantGroupProps extends ToolContext {
   /** True while the turn is between rounds (tools running, no partial message
    * yet): the group keeps its bottom spinner lit even without a live round. */
   pending?: boolean
+  /** In-flight process rows, such as compaction, before the live spinner. */
+  liveProcess?: ReactNode
   /** The user message that started this turn — the retry target. Data (not a
    * closure) so the group's memo survives streaming re-renders. */
   retryFrom?: UserMsg
@@ -706,29 +761,29 @@ export interface AssistantGroupProps extends ToolContext {
   /** Opens the review tab on this turn (its first assistant message id). */
   onReview?: (turnId: number) => void
   /** Opens Rewind on the user message that opened the turn's change scope,
-   * preselected files-only — the changed-files card's Undo action. The anchor
-   * is bound by the caller (ChatView closes over the scope's prompt). */
-  onUndoFiles?: () => void
+   * preselected files-only — the changed-files card's Undo action. Together
+   * with `undoTarget` this stays a stable prop; the group binds the pair. */
+  onUndoFiles?: (message: UserMsg) => void
+  /** The change scope's opening prompt, or null when a compaction removed it. */
+  undoTarget?: UserMsg | null
 }
 
 /**
  * memo comparator for AssistantGroup: a new `toolRuns` record identity (every
  * tool_execution_update creates one) must not re-render the group unless one
- * of the tool calls THIS group renders actually changed.
+ * of the tool calls THIS group renders actually changed. The turn's own arrays
+ * and the shared tool-result map are rebuilt with every transcript change for
+ * the same reason, so they are compared element- and entry-wise.
  */
 function assistantGroupPropsEqual(prev: AssistantGroupProps, next: AssistantGroupProps): boolean {
   if (
     prev.continueFrom !== next.continueFrom ||
     prev.onContinue !== next.onContinue ||
-    prev.messages !== next.messages ||
-    prev.notices !== next.notices ||
-    prev.writtenMessages !== next.writtenMessages ||
-    prev.writtenCompletions !== next.writtenCompletions ||
     prev.writtenReviewId !== next.writtenReviewId ||
     prev.showWrittenFiles !== next.showWrittenFiles ||
     prev.streamingIndex !== next.streamingIndex ||
     prev.pending !== next.pending ||
-    prev.toolResults !== next.toolResults ||
+    prev.liveProcess !== next.liveProcess ||
     prev.cwd !== next.cwd ||
     prev.retryFrom !== next.retryFrom ||
     prev.forkAt !== next.forkAt ||
@@ -739,10 +794,16 @@ function assistantGroupPropsEqual(prev: AssistantGroupProps, next: AssistantGrou
     prev.actionsAlwaysVisible !== next.actionsAlwaysVisible ||
     prev.spinnerSeed !== next.spinnerSeed ||
     prev.onReview !== next.onReview ||
-    prev.onUndoFiles !== next.onUndoFiles
+    prev.onUndoFiles !== next.onUndoFiles ||
+    prev.undoTarget !== next.undoTarget
   ) {
     return false
   }
+  if (!sameRefs(prev.messages, next.messages)) return false
+  if (!sameRefs(prev.writtenMessages, next.writtenMessages)) return false
+  if (!sameRefs(prev.writtenCompletions, next.writtenCompletions)) return false
+  if (!sameNotices(prev.notices, next.notices)) return false
+  if (!sameToolResults(prev.messages, prev.toolResults, next.toolResults)) return false
   if (prev.toolRuns === next.toolRuns) return true
   for (const message of prev.messages) {
     for (const part of message.content) {
@@ -882,6 +943,7 @@ export const AssistantGroup = memo(function AssistantGroup({
   showWrittenFiles = true,
   streamingIndex,
   pending = false,
+  liveProcess,
   retryFrom,
   forkAt,
   onResend,
@@ -893,6 +955,7 @@ export const AssistantGroup = memo(function AssistantGroup({
   spinnerSeed,
   onReview,
   onUndoFiles,
+  undoTarget,
   toolResults,
   toolRuns
 }: AssistantGroupProps) {
@@ -1020,7 +1083,7 @@ export const AssistantGroup = memo(function AssistantGroup({
         {writtenFiles.length > 0 ? <TurnWrittenFiles
           files={writtenFiles}
           onReview={onReview ? () => onReview(writtenReviewId ?? turnTimestamp) : undefined}
-          onUndo={onUndoFiles}
+          onUndo={onUndoFiles && undoTarget ? () => onUndoFiles(undoTarget) : undefined}
         /> : null}
       </div>
     ) : null
@@ -1094,7 +1157,7 @@ export const AssistantGroup = memo(function AssistantGroup({
                   />
                 ) : null}
                 {failure ? (
-                  <p data-turn-failure data-row="text" className={cn('text-sm leading-6 text-destructive', WRAP_ANYWHERE)}>
+                  <p data-turn-failure data-row="text" className={cn('text-content text-destructive', WRAP_ANYWHERE)}>
                     {failure}
                   </p>
                 ) : null}
@@ -1136,6 +1199,7 @@ export const AssistantGroup = memo(function AssistantGroup({
         ))}
         {tailMessages.length > 0 || foldedRowCount === 0 ? noticeRows(messages.length) : null}
 
+        {live ? liveProcess : null}
         {live ? <TurnStatus step={liveStep} waitingUser={waitingUser} seedKey={spinnerSeed} /> : null}
 
         {/* A standalone file summary keeps the roomy leading gap, including

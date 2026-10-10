@@ -1,0 +1,11 @@
+{
+  "tool": "built-in image_gen.imagegen",
+  "created": "2026-10-09",
+  "edit_target": "b-pi-code-v2.png",
+  "output": "b-pi-code-v3.png",
+  "production_masters": [
+    "resources/pith.svg",
+    "resources/pith-square.svg"
+  ],
+  "prompt": "Use case: precise-object-edit.\nAsset type: final desktop application logo for Pi App / Pith.\nInput image 1 is the selected edit target: a white custom <π> emblem on saturated blue.\nPrimary request: change ONLY the blue background to a slightly more visible but still restrained blue-to-blue gradient. Preserve the exact white π and angle brackets: identical shapes, proportions, positions, spacing, soft rounded terminals, and white color.\nBackground: smooth diagonal royal-blue gradient, subtly lighter and brighter in the upper-left (#287AFF) and moderately deeper in the lower-right (#1546D9), passing through the original vibrant blue. Compared with the input, the change in blue should be clearly visible when looking across the whole image, while remaining tasteful and quiet. It must stay entirely blue, without a spotlight, vignette, cyan, teal, purple, visible texture, noise, glow, banding, or a dramatic dark corner.\nComposition: preserve the square full-bleed canvas and the existing flat white <π> mark exactly.\nConstraints: one logo image only; do not redraw or embellish the white symbol, do not change relative sizes or margins, no labels, words, captions, border, shadow, 3D, embossing, watermark, or mockup. Crisp professional vector-like artwork."
+}

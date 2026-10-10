@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { build } from 'esbuild'
+import { createPlanFixture } from './lib/plan-fixture.mjs'
 
 const temporary = await mkdtemp(join(tmpdir(), 'pith-extension-startup-'))
 let session
@@ -45,6 +46,59 @@ try {
   changed.handlers.set('before_agent_start', [])
   assert.equal(desktopExtension(changed), changed)
   console.log('PASS: version-bounded FFF preparation skips eager indexing, keeps catalog/runner ownership and leaves other extensions unchanged.')
+
+  // FFF 0.11 registers historical renderers before startup, then deactivates
+  // those aliases once override mode selects grep/find. Registration is not
+  // evidence that a tool still belongs in the model's active set.
+  let extensionApi
+  const aliases = ['ffgrep', 'fffind']
+  const definition = name => ({ name, label: name, description: 'Indexed search fixture',
+    parameters: { type: 'object', properties: {} },
+    execute: async () => ({ content: [{ type: 'text', text: name }] }) })
+  const fixture = await createPlanFixture({ extensionFactories: [pi => {
+    extensionApi = pi
+    aliases.forEach(name => pi.registerTool(definition(name)))
+    pi.registerTool({ ...definition('opt_in_search'), defaultActive: false })
+    pi.on('session_start', () => {
+      for (const name of ['grep', 'find']) pi.registerTool(definition(name))
+      pi.setActiveTools(pi.getActiveTools().filter(name => !aliases.includes(name)))
+    })
+  }] })
+  try {
+    await fixture.managed.lifecyclePromise
+    const assertSelection = async () => {
+      const active = new Set(fixture.session.getActiveToolNames())
+      assert(active.has('grep') && active.has('find'), 'override search is active')
+      for (const name of aliases) {
+        assert(fixture.session.getToolDefinition(name), 'historical renderers stay registered')
+        assert.equal(active.has(name), false, 'startup must honor extension alias deactivation')
+        assert.equal(fixture.session.getCallableToolNames().includes(name), false, 'inactive direct aliases are not callable')
+        assert.equal((await fixture.app.catalog()).tools.find(tool => tool.name === name)?.active, false)
+      }
+    }
+    await assertSelection()
+    assert.equal(fixture.session.getActiveToolNames().includes('opt_in_search'), false, 'default-inactive tools stay inactive')
+    await fixture.app.reloadSession(fixture.managed.path)
+    await assertSelection()
+    extensionApi.registerTool(definition('late_search'))
+    assert(fixture.session.getActiveToolNames().includes('late_search'), 'lazy tools still activate')
+    await fixture.app.setSessionMode({ sessionPath: fixture.managed.path, mode: 'plan' })
+    extensionApi.registerTool(definition('late_alias'))
+    extensionApi.setActiveTools([...extensionApi.getActiveTools().filter(name => name !== 'late_alias'), 'opt_in_search'])
+    fixture.app.applyActiveTools(fixture.managed, fixture.managed.resourceLoader)
+    await fixture.app.setSessionMode({ sessionPath: fixture.managed.path, mode: 'normal' })
+    await assertSelection()
+    assert(fixture.session.getActiveToolNames().includes('late_search'), 'settings in Plan preserve lazy tools')
+    assert.equal(fixture.session.getActiveToolNames().includes('late_alias'), false, 'explicit Plan deactivation survives leaving Plan')
+    assert(fixture.session.getActiveToolNames().includes('opt_in_search'), 'explicit opt-in survives app settings')
+    await fixture.app.setSessionMode({ sessionPath: fixture.managed.path, mode: 'plan' })
+    await fixture.app.reloadSession(fixture.managed.path)
+    assert.equal(fixture.session.getActiveToolNames().includes('ffgrep'), false, 'Plan reload keeps aliases hidden')
+    await fixture.app.setSessionMode({ sessionPath: fixture.managed.path, mode: 'normal' })
+    await assertSelection()
+    assert(fixture.session.getActiveToolNames().includes('write'), 'Plan reload preserves app tools')
+    console.log('PASS: extension-selected tools survive startup, reload and Plan/settings transitions without reactivating historical aliases.')
+  } finally { await fixture.close() }
 
   if (process.env.PI_FFF_EXTENSION_PATH) {
     const agentDir = join(temporary, 'agent'), project = join(temporary, 'project')

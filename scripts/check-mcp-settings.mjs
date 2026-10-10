@@ -71,7 +71,7 @@ const roster = () => [
   { name: 'context7', transport: 'http', summary: 'https://mcp.context7.com/mcp', disabled: false,
     scope: 'global', sourcePath: '/agent/mcp.json', editable: true,
     status: 'configured', toolCount: 2, exposure: 'direct',
-    entry: { url: 'https://mcp.context7.com/mcp', headers: { CONTEXT7_API_KEY: 'x' } } },
+    entry: { url: 'https://mcp.context7.com/mcp', headers: { CONTEXT7_API_KEY: 'x' }, description: 'Context documentation', auth: { provider: 'anthropic' }, oauth: { clientId: 'existing-id', clientSecret: 'existing-secret', clientName: 'Pith', scope: 'read', authServerMetadataUrl: 'https://auth.example/metadata' } } },
   { name: 'local-server', transport: 'stdio', summary: 'npx -y local-mcp', disabled: false,
     scope: 'project', sourcePath: '/proj/.pi/mcp.json', editable: true,
     status: state.localStatus, toolCount: state.localTools, exposure: 'deferred',
@@ -79,11 +79,14 @@ const roster = () => [
   { name: 'shared-server', transport: 'registered', summary: '—', disabled: false,
     scope: 'external', editable: false,
     status: 'failed', toolCount: 1, exposure: 'codemode',
-    entry: {} }
+    entry: {} },
+  ...(state.extra ? [{ name: 'empty-external', transport: 'registered', summary: '—', disabled: false,
+    scope: 'external', editable: false, status: 'connected', toolCount: 0, exposure: 'codemode', entry: {} }] : [])
 ];
-const state = { beuiDisabled: false, beuiStatus: 'connected', localStatus: 'configured', localTools: null };
+const state = { sessionPath: '/sessions/first.jsonl', extra: false,
+  beuiDisabled: false, beuiStatus: 'connected', localStatus: 'connecting', localTools: 0 };
 const stateDTO = () => ({
-  projectCwd: '/proj', projectTrusted: true,
+  projectCwd: '/proj', sessionPath: state.sessionPath, projectTrusted: true,
   global: { path: '/agent/mcp.json', exists: true, content: globalContent, parseError: null },
   project: { path: '/proj/.pi/mcp.json', exists: true, content: projectContent, parseError: null },
   servers: roster(), configIssues: []
@@ -104,7 +107,13 @@ window.pi = {
   appInfo: () => count('appInfo', appInfo),
   openExternal: (url) => count('openExternal', url),
   showInFolder: (path) => count('showInFolder', path),
-  mcpState: () => count('mcpState', stateDTO()),
+  mcpState: () => {
+    const snapshot = stateDTO();
+    window.calls.push(['mcpState', snapshot]);
+    if (!window.holdMcpRead) return Promise.resolve(snapshot);
+    window.holdMcpRead = false;
+    return new Promise(resolve => { window.finishMcpRead = () => { resolve(snapshot); window.finishMcpRead = null; }; });
+  },
   mcpWriteConfig: (scope, content) => {
     window.calls.push(['mcpWriteConfig', scope, content]);
     if (scope === 'global') globalContent = content; else projectContent = content;
@@ -113,12 +122,21 @@ window.pi = {
   mcpSetServerDisabled: (name, disabled) => {
     window.calls.push(['mcpSetServerDisabled', name, disabled]);
     if (name === 'beui') { state.beuiDisabled = disabled; state.beuiStatus = disabled ? 'disabled' : 'connected'; }
-    return Promise.resolve(stateDTO());
+    const snapshot = stateDTO();
+    if (!window.holdMcpAction) return Promise.resolve(snapshot);
+    window.holdMcpAction = false;
+    return new Promise(resolve => { window.finishMcpAction = () => { resolve(snapshot); window.finishMcpAction = null; }; });
   },
   mcpUpsertServer: (payload) => { window.calls.push(['mcpUpsertServer', payload]); return Promise.resolve(stateDTO()); },
   mcpDeleteServer: (path, name) => { window.calls.push(['mcpDeleteServer', path, name]); return Promise.resolve(stateDTO()); },
-  mcpServerDetail: (name) => count('mcpServerDetail', { ...detail, name }),
+  mcpServerDetail: (name) => count('mcpServerDetail', { ...detail, name,
+    tools: detail.tools.map(tool => ({ ...tool, description: tool.description + ' ' + state.sessionPath })) }),
   onMcpStatus: (listener) => { window.mcpStatusListener = listener; return () => { window.mcpStatusListener = null; } }
+};
+window.emitMcpStatus = patch => {
+  Object.assign(state, patch);
+  window.mcpStatusListener({ cwd: '/proj', sessionPath: state.sessionPath,
+    servers: roster().map(({ name, status, toolCount, disabled }) => ({ name, status, toolCount, disabled })) });
 };
 
 // The beUI Input renders a <label htmlFor>, not aria-label — resolve dialog
@@ -268,6 +286,21 @@ app.on('window-all-closed',()=>app.quit());`
   assert.ok(await evaluate(`!!document.querySelector('[role=tablist]')`), 'fixture mounted')
   await pause(400)
 
+  const configChecks = await evaluate(`(async () => {
+    const m = await import('/src/lib/mcp-config.ts');
+    const form = m.serverEntryToForm('legacy-name', { url:'https://fixture.example/mcp', exposure:'codemode-deferred', toolExposure:{'read-*':'codemode-deferred'}, auth:{provider:'anthropic'}, oauth:{clientName:'Pith',authServerMetadataUrl:'https://auth.example/metadata'} });
+    return { exposures:m.MCP_EXPOSURES, formExposure:form.exposure, toolExposure:form.toolExposure[0].value,
+      collision:m.validateMcpServerForm({...form,name:'local_server',originalName:undefined},['local-server']),
+      project:m.validateMcpServerForm(form,[],'project'),
+      config:m.validateMcpConfigDocument({mcpServers:{credentials:m.formToServerEntry(form)}},'project') };
+  })()`)
+  assert.deepEqual(configChecks.exposures, ['codemode','deferred','direct','hidden'])
+  assert.equal(configChecks.formExposure, 'codemode')
+  assert.equal(configChecks.toolExposure, 'codemode')
+  assert(configChecks.collision.includes('duplicate'))
+  assert(configChecks.project.includes('authScope'))
+  assert.equal(configChecks.config, 'credentials.auth')
+
   // 1. Registry: MCP sits between Extensions and Skills.
   const order = await evaluate(`[...document.querySelectorAll('[role=tab]')].map((t) => t.textContent.trim())`)
   const mcpAt = order.indexOf('MCP')
@@ -326,7 +359,7 @@ app.on('window-all-closed',()=>app.quit());`
   )
 
   // 4. A pushed live snapshot re-marks a row without a reload.
-  await evaluate(`window.mcpStatusListener({ cwd: '/proj', servers: [{ name: 'local-server', status: 'connected', toolCount: 7, disabled: false }] })`)
+  await evaluate(`window.emitMcpStatus({ localStatus: 'connected', localTools: 7 })`)
   await pause(200)
   assert.ok(
     await evaluate(`document.querySelector(${JSON.stringify(rowSelector('local-server') + ' [data-mcp-status]')})?.classList.contains('bg-emerald-500')`),
@@ -334,6 +367,64 @@ app.on('window-all-closed',()=>app.quit());`
   )
   const localRow = await evaluate(`document.querySelector(${JSON.stringify(rowSelector('local-server'))}).textContent`)
   assert.ok(localRow.includes('7 tools'), 'the push updates the tool count')
+
+  // A details dialog follows every native state transition while it stays open.
+  await evaluate(`document.querySelector(${JSON.stringify(rowSelector('local-server'))} + ' button[aria-label="Browse tools"]').click()`)
+  await pause(200)
+  for (const [status, label] of [['connecting', 'Connecting'], ['connected', 'Connected'],
+    ['disconnected', 'Disconnected'], ['failed', 'Connection failed'],
+    ['needs-auth', 'Sign-in required'], ['disabled', 'Disabled']]) {
+    await evaluate(`window.emitMcpStatus({ localStatus: ${JSON.stringify(status)} })`)
+    await pause(100)
+    assert.ok((await evaluate(`document.querySelector(${JSON.stringify(rowSelector('local-server') + ' [data-mcp-status]')}).getAttribute('aria-label')`)).includes(label),
+      'the roster reports ' + status)
+    assert.ok((await evaluate(`document.querySelector('[role=dialog]').textContent`)).includes(label),
+      'the open details dialog reports ' + status)
+    await screenshot('status-' + status)
+  }
+  const firstOwner = '/sessions/first.jsonl'
+  const secondOwner = '/sessions/second.jsonl'
+  await evaluate(`window.emitMcpStatus({ sessionPath: ${JSON.stringify(secondOwner)} })`)
+  await pause(200)
+  const switchedTools = await evaluate(`document.querySelector('[role=dialog]').textContent`)
+  assert.ok(switchedTools.includes(secondOwner) && !switchedTools.includes(firstOwner),
+    'an open dialog refreshes its tools when switching sessions with identical status and count')
+  await evaluate(`document.querySelector('button[aria-label="Close modal"]').click()`)
+  await pause(250)
+  await evaluate(`window.emitMcpStatus({ sessionPath: ${JSON.stringify(firstOwner)} })`)
+  await pause(150)
+
+  // A state read made before the connected push must not overwrite that push.
+  await evaluate(`window.emitMcpStatus({ localStatus: 'connecting' }); window.holdMcpRead = true;
+    void import('/src/lib/mcp-store.ts').then(m => m.refreshMcpState());`)
+  await pause(100)
+  assert.ok(await evaluate(`!!window.finishMcpRead`), 'the fixture holds a connecting snapshot in flight')
+  await evaluate(`window.emitMcpStatus({ localStatus: 'connected' }); window.finishMcpRead();`)
+  await pause(200)
+  assert.equal(await evaluate(`document.querySelector(${JSON.stringify(rowSelector('local-server') + ' [data-mcp-status]')}).getAttribute('aria-label')`),
+    'Connected', 'an older read cannot replace a new connection observation')
+
+  // A pending action returns the old session snapshot after a same-cwd switch.
+  const beforeRace = await evaluate(`window.calls.filter(c => c[0] === 'mcpSetServerDisabled').length`)
+  await evaluate(`window.holdMcpAction = true;
+    void import('/src/lib/mcp-store.ts').then(m => m.setMcpServerDisabled('beui', true));`)
+  await pause(100)
+  assert.ok(await evaluate(`!!window.finishMcpAction`), 'the fixture holds a mutating reply in flight')
+  await evaluate(`window.emitMcpStatus({ sessionPath: '/sessions/second.jsonl', localStatus: 'connecting', localTools: 0 }); window.finishMcpAction();`)
+  await pause(250)
+  assert.equal(await evaluate(`document.querySelector(${JSON.stringify(rowSelector('local-server') + ' [data-mcp-status]')}).getAttribute('aria-label')`),
+    'Connecting', 'a same-cwd session switch supersedes an old action snapshot')
+  assert.equal(await evaluate(`window.calls.filter(c => c[0] === 'mcpSetServerDisabled').length`), beforeRace + 1,
+    'reading the new session never repeats the mutating call')
+
+  await evaluate(`window.emitMcpStatus({ extra: true })`)
+  await pause(200)
+  assert.ok(await evaluate(`!!document.querySelector(${JSON.stringify(rowSelector('empty-external'))})`),
+    'a live external server with zero tools joins the roster')
+  await evaluate(`window.emitMcpStatus({ extra: false })`)
+  await pause(200)
+  assert.equal(await evaluate(`!!document.querySelector(${JSON.stringify(rowSelector('empty-external'))})`), false,
+    'a removed external server leaves the roster')
 
   // 5. Edit: fields populate from the entry; a rename saves via mcpUpsertServer.
   await evaluate(`document.querySelector(${JSON.stringify(rowSelector('beui'))} + ' button[aria-label="Edit"]').click()`)
@@ -363,7 +454,7 @@ app.on('window-all-closed',()=>app.quit());`
     editorColumns.scroll <= editorColumns.client + 2,
     `every MCP editor item shows at once, nothing clipped: ${JSON.stringify(editorColumns)}`
   )
-  assert.deepEqual(await evaluate(`[...document.querySelectorAll('[role=dialog] input, [role=dialog] textarea')].map(e=>getComputedStyle(e).fontSize).filter(s=>s!=='14px')`), [], 'editor fields carry the form type scale')
+  await screenshot('editor')
   await evaluate(`(()=>{
     const el = window.fieldByLabel('Name');
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, 'beui2');
@@ -409,6 +500,31 @@ app.on('window-all-closed',()=>app.quit());`
   const projectAdd = (await evaluate(`window.calls.filter((c) => c[0] === 'mcpUpsertServer')`)).at(-1)
   assert.equal(projectAdd[1].scope, 'project', 'visual add targets .pi/mcp.json')
 
+  // Pi 1.0 native fields round-trip through the actual visual editor.
+  const beforeNativeEdit = await evaluate(`window.calls.filter(c => c[0] === 'mcpUpsertServer').length`)
+  await evaluate(`document.querySelector(${JSON.stringify(rowSelector('context7'))} + ' button[aria-label="Edit"]').click()`)
+  await pause(250)
+  assert.equal(await evaluate(`window.fieldByLabel('Description')?.value`), 'Context documentation')
+  assert.equal(await evaluate(`window.fieldByLabel('Provider authentication')?.value`), 'anthropic')
+  assert.equal(await evaluate(`window.fieldByLabel('OAuth client name')?.value`), 'Pith')
+  assert.equal(await evaluate(`window.fieldByLabel('Authorization server metadata URL')?.value`), 'https://auth.example/metadata')
+  await screenshot('native-editor')
+  await typeField('Authorization server metadata URL', 'http://remote.example/metadata')
+  await evaluate(`[...document.querySelectorAll('[role=dialog] button')].find(b => b.textContent.trim() === 'Save').click()`)
+  await pause(150)
+  assert.equal(await evaluate(`window.calls.filter(c => c[0] === 'mcpUpsertServer').length`), beforeNativeEdit, 'unsafe metadata URL never reaches IPC')
+  assert.ok(await evaluate(`document.querySelector('[role=dialog]').textContent.includes('must use HTTPS')`))
+  await typeField('Authorization server metadata URL', 'https://auth.example/new-metadata')
+  await typeField('OAuth client name', 'Pith 1.0')
+  await evaluate(`[...document.querySelectorAll('[role=dialog] button')].find(b => b.textContent.trim() === 'Save').click()`)
+  await pause(250)
+  const nativeEdit = (await evaluate(`window.calls.filter(c => c[0] === 'mcpUpsertServer')`)).at(-1)[1]
+  assert.deepEqual(nativeEdit.entry, {
+    url: 'https://mcp.context7.com/mcp', headers: { CONTEXT7_API_KEY: 'x' }, description: 'Context documentation',
+    auth: { provider: 'anthropic' }, oauth: { clientId: 'existing-id', clientSecret: 'existing-secret', clientName: 'Pith 1.0',
+      scope: 'read', authServerMetadataUrl: 'https://auth.example/new-metadata' }
+  }, 'editing new OAuth fields preserves existing credentials and provider auth')
+
   // 6b. JSON paste mode: invalid snippets are rejected without an IPC write;
   //     both documented shapes save with the raw entry preserved verbatim.
   const upsertCount = await evaluate(`window.calls.filter((c) => c[0] === 'mcpUpsertServer').length`)
@@ -439,6 +555,11 @@ app.on('window-all-closed',()=>app.quit());`
   await pause(150)
   assert.equal(await evaluate(`window.calls.filter((c) => c[0] === 'mcpUpsertServer').length`), upsertCount, 'unsupported field is not written')
   assert.ok(await evaluate(`document.querySelector('[role=dialog]').textContent.includes('not supported')`), 'legacy field gets actionable error')
+  await typeInto('[role=dialog] textarea', '{"mcpServers":{"pasted":{"url":"https://x.test/mcp","description":42}}}')
+  await evaluate(`[...document.querySelectorAll('[role=dialog] button')].find((b) => b.textContent.trim() === 'Save').click()`)
+  await pause(150)
+  assert.equal(await evaluate(`window.calls.filter((c) => c[0] === 'mcpUpsertServer').length`), upsertCount, 'invalid native field is not written')
+  assert.ok(await evaluate(`document.querySelector('[role=dialog]').textContent.includes('Unsupported or invalid field: pasted.description')`), 'an invalid new field value does not claim the supported field is retired')
   await typeInto('[role=dialog] textarea', '{"mcpServers":{"pasted":{"url":"https://x.test/mcp","exposure":"direct","toolExposure":{"write_*":"hidden"}}}}')
   await evaluate(`[...document.querySelectorAll('[role=dialog] button')].find((b) => b.textContent.trim() === 'Save').click()`)
   await pause(250)
@@ -510,8 +631,16 @@ app.on('window-all-closed',()=>app.quit());`
   assert.ok(await evaluate(`[...document.querySelectorAll('button')].some((b) => b.textContent.trim() === '添加服务器')`), 'zh-CN add button renders')
   await screenshot('zh-CN')
 
+  // 9b. zh-TW renders the section in Traditional Chinese.
+  await evaluate(`window.setLocale('zh-TW')`)
+  await pause(300)
+  const twRow = await evaluate(`document.querySelector(${JSON.stringify(rowSelector('beui'))})?.textContent ?? ''`)
+  assert.ok(twRow.includes('全域'), 'zh-TW scope badge renders')
+  assert.ok(await evaluate(`[...document.querySelectorAll('button')].some((b) => b.textContent.trim() === '新增伺服器')`), 'zh-TW add button renders')
+  await screenshot('zh-TW')
+
   assert.deepEqual(exceptions, [], 'no renderer exceptions')
-  console.log('PASS: native roster + statuses, toggle, live push, visual editor, exposure, tool viewer, JSON editors, both locales')
+  console.log('PASS: native roster + statuses, toggle, live push, visual editor, exposure, tool viewer, JSON editors, all three locales')
 } finally {
   try { ws?.close() } catch {}
   try { child?.kill() } catch {}

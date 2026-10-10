@@ -20,8 +20,8 @@ import { toolCategory } from './tool-categories'
  * The pick is a pure hash of (seedKey, slot): deterministic across re-renders
  * and remounts, yet uncorrelated between slots and sessions.
  *
- * Both languages live in this table (per the owner's decision) instead of in
- * `i18n/locales/*`: 53 sentences × 2 locales would swamp the dictionaries, and
+ * All locales live in this table (per the owner's decision) instead of in
+ * `i18n/locales/*`: 53 sentences × 3 locales would swamp the dictionaries, and
  * the list is data with a stable per-entry id rather than UI prose. The header
  * sentence below is the only string read from this module.
  */
@@ -36,6 +36,8 @@ export interface SpinnerVerb {
   en: string
   /** Localized sentence shown for zh-CN. */
   zh: string
+  /** Localized sentence shown for zh-TW. */
+  tw: string
 }
 
 /** Rotation cadence: one sentence per wall-clock slot. */
@@ -47,59 +49,59 @@ export const SPINNER_VERB_INTERVAL_MS = 10_000
  * vivid beats terse.
  */
 export const SPINNER_VERBS: readonly SpinnerVerb[] = [
-  { id: 'Accomplishing', en: 'Pi is getting it done', zh: 'Pi 正在搞定任务' },
-  { id: 'Actualizing', en: 'Pi is making it real', zh: 'Pi 正在把构想变成现实' },
-  { id: 'Architecting', en: 'Pi is architecting the structure', zh: 'Pi 正在搭建骨架' },
-  { id: 'Calculating', en: 'Pi is crunching the numbers', zh: 'Pi 正在飞速计算' },
-  { id: 'Cascading', en: 'Pi is riding the network waves', zh: 'Pi 正在网上冲浪' },
-  { id: 'Channeling', en: 'Pi is channeling the web', zh: 'Pi 正在接通网络' },
-  { id: 'Choreographing', en: 'Pi is choreographing the steps', zh: 'Pi 正在编排舞步' },
-  { id: 'Coalescing', en: 'Pi is gathering the scattered pieces', zh: 'Pi 正在汇聚碎片' },
-  { id: 'Composing', en: 'Pi is composing fresh code', zh: 'Pi 正在谱写代码' },
-  { id: 'Computing', en: 'Pi is firing up the silicon', zh: 'Pi 正在全速运算' },
-  { id: 'Considering', en: 'Pi is weighing the options', zh: 'Pi 正在权衡方案' },
-  { id: 'Contemplating', en: 'Pi is contemplating the approach', zh: 'Pi 正在沉思对策' },
-  { id: 'Crafting', en: 'Pi is crafting with care', zh: 'Pi 正在精雕细琢' },
-  { id: 'Creating', en: 'Pi is conjuring new files', zh: 'Pi 正在变出新文件' },
-  { id: 'Crystallizing', en: 'Pi is crystallizing the details', zh: 'Pi 正在让细节成形' },
-  { id: 'Cultivating', en: 'Pi is growing the codebase', zh: 'Pi 正在培育代码' },
-  { id: 'Deciphering', en: 'Pi is deciphering the code', zh: 'Pi 正在破译代码' },
-  { id: 'Deliberating', en: 'Pi is deliberating the trade-offs', zh: 'Pi 正在斟酌取舍' },
-  { id: 'Determining', en: 'Pi is zeroing in on the answer', zh: 'Pi 正在锁定答案' },
-  { id: 'Effecting', en: 'Pi is making it happen', zh: 'Pi 正在让一切发生' },
-  { id: 'Elucidating', en: 'Pi is shining a light on it', zh: 'Pi 正在拨开迷雾' },
-  { id: 'Envisioning', en: 'Pi is envisioning the big picture', zh: 'Pi 正在构想蓝图' },
-  { id: 'Flowing', en: 'Pi is surfing the data stream', zh: 'Pi 正在顺流而下' },
-  { id: 'Forging', en: 'Pi is forging the changes', zh: 'Pi 正在锻造改动' },
-  { id: 'Forming', en: 'Pi is giving it shape', zh: 'Pi 正在塑造雏形' },
-  { id: 'Generating', en: 'Pi is generating at full throttle', zh: 'Pi 正在全速生成' },
-  { id: 'Harmonizing', en: 'Pi is harmonizing the edits', zh: 'Pi 正在协调细节' },
-  { id: 'Hashing', en: 'Pi is hashing things out', zh: 'Pi 正在仔细盘算' },
-  { id: 'Ideating', en: 'Pi is cooking up ideas', zh: 'Pi 正在烹饪点子' },
-  { id: 'Imagining', en: 'Pi is imagining the possibilities', zh: 'Pi 正在畅想可能' },
-  { id: 'Improvising', en: 'Pi is improvising a fix', zh: 'Pi 正在即兴修复' },
-  { id: 'Incubating', en: 'Pi is incubating a plan', zh: 'Pi 正在孵化方案' },
-  { id: 'Inferring', en: 'Pi is connecting the dots', zh: 'Pi 正在串联线索' },
-  { id: 'Infusing', en: 'Pi is infusing fresh knowledge', zh: 'Pi 正在注入新知' },
-  { id: 'Mulling', en: 'Pi is mulling it over', zh: 'Pi 正在反复琢磨' },
-  { id: 'Musing', en: 'Pi is musing over the problem', zh: 'Pi 正在冥思苦想' },
-  { id: 'Nesting', en: 'Pi is nesting the pieces in place', zh: 'Pi 正在嵌套归位' },
-  { id: 'Orchestrating', en: 'Pi is orchestrating the moving parts', zh: 'Pi 正在指挥全局' },
-  { id: 'Percolating', en: 'Pi is letting ideas percolate', zh: 'Pi 正在沉淀想法' },
-  { id: 'Perusing', en: 'Pi is perusing the files', zh: 'Pi 正在翻阅文件' },
-  { id: 'Pondering', en: 'Pi is pondering the puzzle', zh: 'Pi 正在思索难题' },
-  { id: 'Processing', en: 'Pi is digesting the data', zh: 'Pi 正在消化数据' },
-  { id: 'Propagating', en: 'Pi is propagating the signal', zh: 'Pi 正在传递信号' },
-  { id: 'Puzzling', en: 'Pi is puzzling it out', zh: 'Pi 正在破解谜题' },
-  { id: 'Ruminating', en: 'Pi is ruminating on the details', zh: 'Pi 正在深思熟虑' },
-  { id: 'Synthesizing', en: 'Pi is synthesizing the insights', zh: 'Pi 正在综合洞见' },
-  { id: 'Tempering', en: 'Pi is tempering the rough edges', zh: 'Pi 正在淬火打磨' },
-  { id: 'Thinking', en: 'Pi is thinking hard', zh: 'Pi 正在开动脑筋' },
-  { id: 'Tinkering', en: 'Pi is tinkering with the tricky bits', zh: 'Pi 正在调试难题' },
-  { id: 'Unfurling', en: 'Pi is unfurling the long files', zh: 'Pi 正在展开长卷' },
-  { id: 'Unravelling', en: 'Pi is unravelling the threads', zh: 'Pi 正在抽丝剥茧' },
-  { id: 'Working', en: 'Pi is working its magic', zh: 'Pi 正在施展魔法' },
-  { id: 'Wrangling', en: 'Pi is wrangling the search results', zh: 'Pi 正在收拢线索' },
+  { id: 'Accomplishing', en: 'Pi is getting it done', zh: 'Pi 正在搞定任务', tw: 'Pi 正在搞定任務' },
+  { id: 'Actualizing', en: 'Pi is making it real', zh: 'Pi 正在把构想变成现实', tw: 'Pi 正在把構想變成現實' },
+  { id: 'Architecting', en: 'Pi is architecting the structure', zh: 'Pi 正在搭建骨架', tw: 'Pi 正在搭建骨架' },
+  { id: 'Calculating', en: 'Pi is crunching the numbers', zh: 'Pi 正在飞速计算', tw: 'Pi 正在飛速計算' },
+  { id: 'Cascading', en: 'Pi is riding the network waves', zh: 'Pi 正在网上冲浪', tw: 'Pi 正在網路衝浪' },
+  { id: 'Channeling', en: 'Pi is channeling the web', zh: 'Pi 正在接通网络', tw: 'Pi 正在接通網路' },
+  { id: 'Choreographing', en: 'Pi is choreographing the steps', zh: 'Pi 正在编排舞步', tw: 'Pi 正在編排舞步' },
+  { id: 'Coalescing', en: 'Pi is gathering the scattered pieces', zh: 'Pi 正在汇聚碎片', tw: 'Pi 正在匯聚碎片' },
+  { id: 'Composing', en: 'Pi is composing fresh code', zh: 'Pi 正在谱写代码', tw: 'Pi 正在譜寫程式碼' },
+  { id: 'Computing', en: 'Pi is firing up the silicon', zh: 'Pi 正在全速运算', tw: 'Pi 正在全速運算' },
+  { id: 'Considering', en: 'Pi is weighing the options', zh: 'Pi 正在权衡方案', tw: 'Pi 正在權衡方案' },
+  { id: 'Contemplating', en: 'Pi is contemplating the approach', zh: 'Pi 正在沉思对策', tw: 'Pi 正在沉思對策' },
+  { id: 'Crafting', en: 'Pi is crafting with care', zh: 'Pi 正在精雕细琢', tw: 'Pi 正在精雕細琢' },
+  { id: 'Creating', en: 'Pi is conjuring new files', zh: 'Pi 正在变出新文件', tw: 'Pi 正在變出新檔案' },
+  { id: 'Crystallizing', en: 'Pi is crystallizing the details', zh: 'Pi 正在让细节成形', tw: 'Pi 正在讓細節成形' },
+  { id: 'Cultivating', en: 'Pi is growing the codebase', zh: 'Pi 正在培育代码', tw: 'Pi 正在培育程式碼' },
+  { id: 'Deciphering', en: 'Pi is deciphering the code', zh: 'Pi 正在破译代码', tw: 'Pi 正在破譯程式碼' },
+  { id: 'Deliberating', en: 'Pi is deliberating the trade-offs', zh: 'Pi 正在斟酌取舍', tw: 'Pi 正在斟酌取捨' },
+  { id: 'Determining', en: 'Pi is zeroing in on the answer', zh: 'Pi 正在锁定答案', tw: 'Pi 正在鎖定答案' },
+  { id: 'Effecting', en: 'Pi is making it happen', zh: 'Pi 正在让一切发生', tw: 'Pi 正在讓一切發生' },
+  { id: 'Elucidating', en: 'Pi is shining a light on it', zh: 'Pi 正在拨开迷雾', tw: 'Pi 正在撥開迷霧' },
+  { id: 'Envisioning', en: 'Pi is envisioning the big picture', zh: 'Pi 正在构想蓝图', tw: 'Pi 正在構想藍圖' },
+  { id: 'Flowing', en: 'Pi is surfing the data stream', zh: 'Pi 正在顺流而下', tw: 'Pi 正在順流而下' },
+  { id: 'Forging', en: 'Pi is forging the changes', zh: 'Pi 正在锻造改动', tw: 'Pi 正在鍛造改動' },
+  { id: 'Forming', en: 'Pi is giving it shape', zh: 'Pi 正在塑造雏形', tw: 'Pi 正在塑造雛形' },
+  { id: 'Generating', en: 'Pi is generating at full throttle', zh: 'Pi 正在全速生成', tw: 'Pi 正在全速生成' },
+  { id: 'Harmonizing', en: 'Pi is harmonizing the edits', zh: 'Pi 正在协调细节', tw: 'Pi 正在協調細節' },
+  { id: 'Hashing', en: 'Pi is hashing things out', zh: 'Pi 正在仔细盘算', tw: 'Pi 正在仔細盤算' },
+  { id: 'Ideating', en: 'Pi is cooking up ideas', zh: 'Pi 正在烹饪点子', tw: 'Pi 正在烹飪點子' },
+  { id: 'Imagining', en: 'Pi is imagining the possibilities', zh: 'Pi 正在畅想可能', tw: 'Pi 正在暢想可能' },
+  { id: 'Improvising', en: 'Pi is improvising a fix', zh: 'Pi 正在即兴修复', tw: 'Pi 正在即興修復' },
+  { id: 'Incubating', en: 'Pi is incubating a plan', zh: 'Pi 正在孵化方案', tw: 'Pi 正在孵化方案' },
+  { id: 'Inferring', en: 'Pi is connecting the dots', zh: 'Pi 正在串联线索', tw: 'Pi 正在串聯線索' },
+  { id: 'Infusing', en: 'Pi is infusing fresh knowledge', zh: 'Pi 正在注入新知', tw: 'Pi 正在注入新知' },
+  { id: 'Mulling', en: 'Pi is mulling it over', zh: 'Pi 正在反复琢磨', tw: 'Pi 正在反覆琢磨' },
+  { id: 'Musing', en: 'Pi is musing over the problem', zh: 'Pi 正在冥思苦想', tw: 'Pi 正在冥思苦想' },
+  { id: 'Nesting', en: 'Pi is nesting the pieces in place', zh: 'Pi 正在嵌套归位', tw: 'Pi 正在巢狀歸位' },
+  { id: 'Orchestrating', en: 'Pi is orchestrating the moving parts', zh: 'Pi 正在指挥全局', tw: 'Pi 正在掌控全域' },
+  { id: 'Percolating', en: 'Pi is letting ideas percolate', zh: 'Pi 正在沉淀想法', tw: 'Pi 正在沉澱想法' },
+  { id: 'Perusing', en: 'Pi is perusing the files', zh: 'Pi 正在翻阅文件', tw: 'Pi 正在翻閱檔案' },
+  { id: 'Pondering', en: 'Pi is pondering the puzzle', zh: 'Pi 正在思索难题', tw: 'Pi 正在思索難題' },
+  { id: 'Processing', en: 'Pi is digesting the data', zh: 'Pi 正在消化数据', tw: 'Pi 正在消化資料' },
+  { id: 'Propagating', en: 'Pi is propagating the signal', zh: 'Pi 正在传递信号', tw: 'Pi 正在傳遞訊號' },
+  { id: 'Puzzling', en: 'Pi is puzzling it out', zh: 'Pi 正在破解谜题', tw: 'Pi 正在破解謎題' },
+  { id: 'Ruminating', en: 'Pi is ruminating on the details', zh: 'Pi 正在深思熟虑', tw: 'Pi 正在深思熟慮' },
+  { id: 'Synthesizing', en: 'Pi is synthesizing the insights', zh: 'Pi 正在综合洞见', tw: 'Pi 正在綜合洞見' },
+  { id: 'Tempering', en: 'Pi is tempering the rough edges', zh: 'Pi 正在淬火打磨', tw: 'Pi 正在淬火打磨' },
+  { id: 'Thinking', en: 'Pi is thinking hard', zh: 'Pi 正在开动脑筋', tw: 'Pi 正在開動腦筋' },
+  { id: 'Tinkering', en: 'Pi is tinkering with the tricky bits', zh: 'Pi 正在调试难题', tw: 'Pi 正在偵錯難題' },
+  { id: 'Unfurling', en: 'Pi is unfurling the long files', zh: 'Pi 正在展开长卷', tw: 'Pi 正在展開長卷' },
+  { id: 'Unravelling', en: 'Pi is unravelling the threads', zh: 'Pi 正在抽丝剥茧', tw: 'Pi 正在抽絲剝繭' },
+  { id: 'Working', en: 'Pi is working its magic', zh: 'Pi 正在施展魔法', tw: 'Pi 正在施展魔法' },
+  { id: 'Wrangling', en: 'Pi is wrangling the search results', zh: 'Pi 正在收拢线索', tw: 'Pi 正在收攏線索' },
 ]
 
 /** The step a verb pool is targeted at: reasoning, or a kind of tool call. */
@@ -243,9 +245,11 @@ export function pickSpinnerVerb(ctx: SpinnerStepContext, slot: number, seedKey: 
   return verbs[hashSeed(`${seedKey}#${slot}`) % verbs.length]
 }
 
-/** Localized sentence: zh-CN gets the Chinese one, everything else English. */
+/** Localized sentence per locale; English is the fallback for anything else. */
 export function spinnerVerbLabel(verb: SpinnerVerb, locale: Locale): string {
-  return locale === 'zh-CN' ? verb.zh : verb.en
+  if (locale === 'zh-CN') return verb.zh
+  if (locale === 'zh-TW') return verb.tw
+  return verb.en
 }
 
 // ── preference store (Settings → General) ────────────────────────────────────

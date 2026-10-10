@@ -102,7 +102,7 @@ export function PictureInPicture() {
         inert={!focused}
         className={`absolute inset-x-2 top-2 z-10 flex h-10 items-center gap-1 rounded-control border border-border bg-background/90 px-1.5 shadow-overlay backdrop-blur-md transition-opacity duration-150 motion-reduce:transition-none ${focused ? 'opacity-100' : 'pointer-events-none opacity-0'}`}
       >
-        <span className="flex min-w-0 flex-1 items-center gap-1.5 pl-1 text-[11px] font-medium">
+        <span className="flex min-w-0 flex-1 items-center gap-1.5 pl-1 text-caption font-medium">
           <PictureInPicture2 aria-hidden="true" className="size-3.5 shrink-0" />
           <span className="truncate">{t('pip.title')}</span>
         </span>

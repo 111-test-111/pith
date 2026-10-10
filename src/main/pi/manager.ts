@@ -1,5 +1,12 @@
 import { createPresentTool } from './present'
 import { PRESENT_TOOL_NAME } from '../../shared/present'
+import { createImageTool } from './image'
+import { ensureOpenRouterNativeImages } from './image-protocol'
+import { IMAGE_TOOL_NAME, parseImageToolResult } from '../../shared/image'
+import { IMAGE_GENERATION_ENTRY, IMAGE_REPLAY_ENTRY, type ImageReplayRequest, type ImageReplaySnapshot, type ImageReplayRecord } from '../../shared/image-replay'
+import { capturePresentedImage, hydrateImagePresentations, imagePresentationDetails, imageReplayRecords, installImageReplayContextGuard, presentedGeneration } from './image-replay'
+import { Check } from 'typebox/value'
+import { randomUUID } from 'node:crypto'
 import { TrajectoryClient } from './trajectory/client'
 import { TrajectoryRecorder } from './trajectory/recorder'
 import type { TraceAccess } from './trajectory/protocol'
@@ -24,9 +31,13 @@ import {
   type AgentSessionEvent,
   type AgentSessionServices,
   type Extension,
+  type ExtensionAPI,
   type ResourceLoader
 } from '@earendil-works/pi-coding-agent'
 import { NOTHING_TO_COMPACT_MESSAGE } from '../../shared/compaction-errors'
+import type { CompactionQueueUpdateEvent } from '../../shared/compaction'
+import { ManualCompaction } from './manual-compaction'
+import { CompactionProcess, compactionProcesses, createCompactionProcessExtension } from './compaction-process'
 import { app, shell } from 'electron'
 import { settleWithin, SESSION_DISPOSE_TIMEOUT_MS } from '../shutdown'
 import { homedir } from 'node:os'
@@ -36,6 +47,7 @@ import { dirname, join } from 'node:path'
 import { BashTaskManager } from '../bash/manager'
 import { createManagedBashTools, APP_BASH_TOOL_NAMES } from './bash-tools'
 import { createAppCodemodeExtension } from './codemode-guidance'
+import { createPromptFormatExtension } from './prompt-format'
 import { createDebugTools, APP_DEBUG_TOOL_NAMES, type DebugRunInTerminal } from '../debug/tools'
 import { DebugManager } from '../debug/manager'
 import { dispatchDebugPanel, dispatchDebugAction } from '../debug/action-registry'
@@ -45,6 +57,7 @@ import { getBrowserService } from '../browser/service'
 import { agentOwner } from '../../shared/browser'
 import { createSandboxFileTools, APP_FILE_TOOL_NAMES } from './file-tools'
 import { createAppReadTool } from './read-tool'
+import { createSearchResultExtension } from './search-results'
 import { isSandboxMode, sandboxModeFromBranch, SANDBOX_MODE_ENTRY_TYPE } from '../sandbox/mode'
 import { createScheduledTaskTool, SCHEDULED_TASK_TOOL_NAME } from './scheduled-tasks/tool'
 import { ScheduledTaskService, type ScheduledTaskExecutionContext } from './scheduled-tasks/service'
@@ -63,6 +76,7 @@ import {
 import { taskIsLive } from '../bash/task-status'
 import { sandboxStatus } from '../sandbox/broker'
 import { resolveEscalatedMode, PLAN_ESCALATION_REFUSED } from '../sandbox/escalation'
+import type { SandboxEscalationOperationDTO } from '../../shared/types'
 import { clearSessionEscalations, listPendingEscalations, respondToEscalation } from '../sandbox/pending'
 import { clearSessionAskUserRequests, clearSubagentAskUserRequests, createAskUserTool, engageAskUser as engageAskUserRequest, listPendingAskUser, respondAskUserRequest } from './ask-user'
 import type { AskUserAnswer } from '../../shared/ask-user'
@@ -71,6 +85,7 @@ import { RESPONSE_TIMEOUT_MAX_S, RESPONSE_TIMEOUT_MIN_S, clampResponseTimeoutSec
 import type { SandboxMode } from '../sandbox/types'
 import type { SandboxEscalationDecision } from '../../shared/types'
 import { TaskNotifications } from './task-notifications'
+import { mcpServerKey } from '../../shared/mcp'
 import { RewindClient } from '../rewind/client'
 import {
   buildMcpRoster,
@@ -119,13 +134,13 @@ import { SUBAGENT_TOOL_NAME, AGENT_STEER_TOOL_NAME, MESSAGE_PARENT_TOOL_NAME, SU
 import type { SubagentMessageDetails, SubagentRunStartData } from './subagents/protocol'
 import { createSubagentTool, createAgentSteerTool, createMessageParentTool, installSubagentResultHook } from './subagents/tools'
 import { subagentModelSpecError } from './subagents/model-spec'
-import { ensureDefaultProfiles, createSubagentProfileFile, listSubagentProfiles, toSubagentProfileDTO, writeSubagentProfileDebug, writeSubagentProfileDefaults, writeSubagentProfileTools } from './subagents/profiles'
+import { ensureDefaultProfiles, createSubagentProfileFile, listSubagentProfiles, toSubagentProfileDTO, writeSubagentProfileDefaults, writeSubagentProfileTools } from './subagents/profiles'
 import { isSubagentSessionFile } from './subagents/session-filter'
 import { SessionListIndex, rowFromSessionManager } from './session-list'
 import { BASH_MIN_WAIT_MS, BASH_MAX_WAIT_MS, SDK_BUILTIN_TOOL_NAMES, SUBAGENT_MAX_TURNS_LIMIT, type StartupSessionMode, type SubagentProfileCreatePayload, type SubagentProfileDefaultsPayload, type SubagentProfileDTO, type SubagentProfilesDTO } from '../../shared/types'
 import { FileIndex, readAttachment } from './files'
 import { compactedContextTokens } from './context-estimate'
-import { buildContextDetail, statsFromEntries, type ContextStatsLike } from './context-detail'
+import { buildContextDetail, cacheHitRate, statsFromEntries, type ContextStatsLike } from './context-detail'
 import { SessionSearch } from './session-search'
 import { UsageAggregator } from './usage'
 import { ensureDefaultWorkspace, isDefaultWorkspace } from './default-workspace'
@@ -144,6 +159,8 @@ import {
   writeModelsConfig
 } from './models-config'
 import { loadSettings, saveSettings } from '../settings'
+import { getLibraryService } from '../library/service'
+import type { LibrarySession } from '../../shared/library'
 import { buildToolCatalog, extensionId, loadPackageResources, type PackageResources } from './catalog'
 import { setDisableModelInvocation } from './skill-frontmatter'
 import { desktopExtension } from './extension-startup'
@@ -306,7 +323,13 @@ function serialize(value: unknown): any {
 function transcriptMessages(manager: SessionManager): ChatMessage[] {
   // Since SDK 0.86, prompt and tool changes are persisted as system messages.
   // They belong to provider context, not the visible conversation.
-  return manager.getBranch().flatMap(sessionEntryToContextMessages)
+  const presentations = imagePresentationDetails(manager)
+  const processes = compactionProcesses(manager)
+  return manager.getBranch().flatMap(entry => sessionEntryToContextMessages(entry).map(message => {
+    if (message.role === 'compactionSummary') return { ...message, sessionEntryId: entry.id, process: processes.get(entry.id) }
+    const details = presentations.get(entry.id)
+    return details && message.role === 'toolResult' && message.toolName === 'present' ? { ...message, details } : message
+  }))
     .filter(message => message.role !== 'system') as ChatMessage[]
 }
 
@@ -377,6 +400,7 @@ function scheduledDelay(signal: AbortSignal, ms: number): Promise<void> {
 }
 
 interface ManagedSession {
+  manualCompaction?: ManualCompaction
   trajectory?: TrajectoryRecorder
   jevWorkflow?: JevWorkflow
   recoveryOnly?: boolean
@@ -398,7 +422,9 @@ interface ManagedSession {
   disposePlanStream?: () => void
   disposeContextBudget?: () => void
   disposeImageSafety?: () => void
+  disposeImageReplayContext?: () => void
   disposeTextOnlyImages?: () => void
+  compactionProcess?: CompactionProcess
   planApproval?: PlanApprovalController
   /** Present on subagent child sessions: linkage + frozen tool ceiling. The
    * child's initialization activates only the ceiling, never the full set. */
@@ -429,6 +455,8 @@ interface ManagedSession {
   userAborted?: boolean
   /** Owns Continue from admission through settle; Stop also cancels preparation. */
   continuationRequest?: AbortController
+  /** Direct UI execution; private entries, never assistant/model messages. */
+  imageReplay?: { id: string; controller: AbortController; promise?: Promise<void> }
   toolRuns: Record<string, ToolRunDTO>
   /** Rich payload mirror of the SDK's two queues, keyed by queued text. */
   queueMirror: { steering: QueuedItem[]; followUp: QueuedItem[] }
@@ -564,6 +592,13 @@ export class PiManager {
    * own auto-retry turns the resulting timeout error into a retry.
    */
   private responseTimeoutMs = clampResponseTimeoutSeconds(loadSettings().responseTimeoutSeconds) * 1000
+  /**
+   * Settings → General: whether the model and permission selectors may change
+   * while a run is streaming. Read live by the switch guards below, so a
+   * preference change applies to the very next switch without a session
+   * rebuild.
+   */
+  private allowMidRunChanges = loadSettings().allowMidRunChanges === true
 
   /**
    * Give one SettingsManager the app's provider timeout. `applyOverrides`
@@ -655,6 +690,14 @@ export class PiManager {
     for (const managed of this.sessions.values()) this.applyResponseTimeout(managed.session.settingsManager)
     return value
   }
+  /** Settings → General: allow model/thinking/permission switches while a run
+   * is streaming. Persisted app-local and read live by the switch guards. */
+  setAllowMidRunChanges(enabled: boolean): boolean {
+    const value = enabled === true
+    saveSettings({ ...loadSettings(), allowMidRunChanges: value })
+    this.allowMidRunChanges = value
+    return value
+  }
   /** Settings → General: the default a session starts from, not a live mode. */
   setSandboxMode(value: SandboxMode): SandboxMode {
     if (!isSandboxMode(value)) throw new Error('Invalid sandbox mode')
@@ -675,6 +718,8 @@ export class PiManager {
     if (!managed) throw new Error('No such session')
     if (managed.subagentChild) throw new Error('A subagent session follows its parent session')
     if (managed.scheduledTask) throw new Error('A scheduled task session is read-only')
+    if (managed.imageReplay) throw new Error('image-retry-busy')
+    this.assertMidRunChangeAllowed(managed)
     // A mode change may not race this branch write.
     managed.plan.checkWorkAdmission()
     if (managed.plan.restricted) {
@@ -723,6 +768,7 @@ export class PiManager {
     input: {
       toolCallId: string
       toolName: 'bash' | 'edit' | 'write' | 'debug'
+      operation: SandboxEscalationOperationDTO
       sandboxPermissions: unknown
       justification: unknown
       signal?: AbortSignal
@@ -744,6 +790,7 @@ export class PiManager {
       sessionPath: managed.path,
       toolCallId: input.toolCallId,
       toolName: input.toolName,
+      operation: input.operation,
       currentMode: managed.sandboxMode,
       sandboxPermissions: input.sandboxPermissions,
       justification: input.justification,
@@ -806,37 +853,24 @@ export class PiManager {
     return accepted
   }
 
-  /**
-   * Manual compaction — the app's `/compact`. The SDK's own manual entry point
-   * aborts whatever is running first and never retries the interrupted turn, so
-   * a live run is refused here rather than silently killed: the user stops the
-   * turn deliberately, then compacts. Auto-compaction is unaffected and still
-   * enters through its own threshold/overflow path.
-   */
+  /** Manual compaction waits for a complete response/tool boundary during a
+   * live run. The promise belongs to this session, even after navigation. */
   async compactSession(sessionPath: string): Promise<SessionSnapshotDTO> {
     const managed = this.sessions.get(sessionPath)
     if (!managed) throw new Error('No such session')
     if (managed.subagentChild) throw new Error('A subagent session follows its parent session')
     if (managed.scheduledTask) throw new Error('A scheduled task session is read-only')
-    if (managed.session.isStreaming) throw new Error('Stop the running turn before compacting')
-    const release = managed.plan.beginWork('branch')
-    try {
-      // Pre-flight the same "is there anything to summarize?" check the SDK does
-      // inside `prepareCompaction()`: if the whole context fits within
-      // `keepRecentTokens`, the cut point keeps everything and there is nothing to
-      // summarize. Catching this here avoids emitting `compaction_start` /
-      // `compaction_end` events and the transient "compressing" row they produce.
-      const branch = managed.session.sessionManager.getBranch()
-      const settings = managed.session.settingsManager.getCompactionSettings(managed.session.model ?? undefined)
-      const messages = buildSessionContext(branch).messages
-      const tokens = messages.reduce((sum, m) => sum + estimateTokens(m), 0)
-      if (tokens <= settings.keepRecentTokens) {
-        throw new Error(NOTHING_TO_COMPACT_MESSAGE)
-      }
+    if (managed.imageReplay) throw new Error('Stop the image retry before compacting')
+    await managed.manualCompaction!.request()
+    return this.snapshotOf(managed)
+  }
 
-      await managed.session.compact()
-      return this.snapshotOf(managed)
-    } finally { release() }
+  private validateCompaction(managed: ManagedSession): void {
+    managed.plan.checkWorkAdmission()
+    const settings = managed.session.settingsManager.getCompactionSettings(managed.session.model ?? undefined)
+    const messages = buildSessionContext(managed.session.sessionManager.getBranch()).messages
+    const tokens = messages.reduce((sum, message) => sum + estimateTokens(message), 0)
+    if (tokens <= settings.keepRecentTokens) throw new Error(NOTHING_TO_COMPACT_MESSAGE)
   }
 
   /**
@@ -856,7 +890,7 @@ export class PiManager {
     const managed = this.sessions.get(sessionPath)
     if (!managed) throw new Error('No such session')
     if (managed.scheduledTask) throw new Error('A scheduled task session is read-only')
-    if (managed.session.isStreaming) throw new Error('Stop the running turn before reloading')
+    if (managed.session.isStreaming || managed.imageReplay) throw new Error('Stop the running turn before reloading')
     const release = managed.plan.beginWork('branch')
     try {
       await this.reloadLiveSessions()
@@ -924,10 +958,9 @@ export class PiManager {
    * away from) falls back to the file, so the pane can never throw at a session
    * boundary.
    *
-   * Everything here is in-memory except the fallback's one file read, so the
-   * renderer can ask for it whenever the ring's readout moves (main's 2s
-   * `context_usage` ping): the pane follows the ring live instead of showing a
-   * snapshot that ages between turns.
+   * Live request statistics are bounded in-memory metadata. Recovery reads
+   * statistics through the trajectory worker, without loading body documents.
+   * Sequence-free context revisions also refresh captures with equal usage.
    */
   async contextDetail(sessionPath?: string): Promise<ContextDetailDTO> {
     const managed = sessionPath ? this.sessions.get(sessionPath) : this.activeSession
@@ -936,14 +969,15 @@ export class PiManager {
       return this.diskContextDetail(sessionPath)
     }
     const session = managed.session
+    const model = session.routedModel?.model ?? session.model
     // SAFETY: the SDK statistics carry the cost fields required by ContextStatsLike.
     const stats = session.getSessionStats() as unknown as ContextStatsLike
     const usage = this.contextUsageOf(managed) ?? {
       tokens: null,
-      contextWindow: session.model?.contextWindow ?? 0,
+      contextWindow: model?.contextWindow ?? 0,
       percent: null,
       sessionCost: stats.cost,
-      cacheHitRate: null
+      cacheHitRate: cacheHitRate(stats.tokens)
     }
     const header = session.sessionManager.getHeader()
     const createdAt = header?.timestamp ? Date.parse(header.timestamp) : NaN
@@ -956,8 +990,9 @@ export class PiManager {
         // A file that vanished keeps the header-derived values only.
       }
     }
-    return buildContextDetail({
-      messages: session.messages as any[],
+    const leafId = session.sessionManager.getLeafId()
+    const input = {
+      messages: session.sessionManager.buildSessionProjection().messages,
       entries: session.sessionManager.getEntries() as any[],
       stats,
       usage,
@@ -967,13 +1002,16 @@ export class PiManager {
         title: session.sessionManager.getSessionName() ?? null,
         cwd: managed.cwd,
         projectless: isDefaultWorkspace(managed.cwd),
-        provider: session.model?.provider ?? null,
-        model: session.model?.name ?? session.model?.id ?? null,
+        provider: model?.provider ?? null,
+        model: model?.name ?? model?.id ?? null,
         thinkingLevel: session.thinkingLevel as ThinkingLevel,
         createdAt: Number.isFinite(createdAt) ? createdAt : null,
         lastActivity
       }
-    })
+    }
+    const request = managed.trajectory?.contextStats() ?? await this.trajectory.context({ sessionPath: managed.path,
+      sessionId: session.sessionId, leafId }).catch(() => null)
+    return buildContextDetail({ ...input, request })
   }
 
   /**
@@ -983,12 +1021,10 @@ export class PiManager {
    * live ring readout stays blank, because a file has no context window — `—` is
    * the honest answer there, not a guess.
    */
-  private diskContextDetail(path: string): ContextDetailDTO {
+  private async diskContextDetail(path: string): Promise<ContextDetailDTO> {
     const manager = SessionManager.open(path)
     const entries = manager.getEntries() as any[]
-    const messages = manager.buildContextEntries()
-      .filter((entry) => entry.type === 'message')
-      .map((entry) => entry.message) as any[]
+    const projection = manager.buildSessionProjection()
     const header = manager.getHeader()
     const createdAt = header?.timestamp ? Date.parse(header.timestamp) : NaN
     let lastActivity: number | null = null
@@ -997,33 +1033,28 @@ export class PiManager {
     } catch {
       // Unreadable file: the pane still opens with the messages it could read.
     }
-    // The provider/model of the LAST request the file recorded is what the
-    // session was working with; older entries may name earlier models.
-    let provider: string | null = null
-    let model: string | null = null
-    let thinkingLevel: ThinkingLevel | null = null
-    for (const entry of entries) {
-      if (entry?.type === 'thinking_level_change' && typeof entry.thinkingLevel === 'string') {
-        thinkingLevel = entry.thinkingLevel as ThinkingLevel
-        continue
-      }
-      const message = entry?.type === 'message' ? entry.message : null
-      if (message?.role !== 'assistant') continue
-      if (typeof message.provider === 'string') provider = message.provider
-      if (typeof message.model === 'string') model = message.model
-    }
+    // Model and thinking are selected-branch facts, unlike all-entry billing.
+    const branch = manager.getBranch()
+    const assistant = branch.filter(entry => entry.type === 'message' && entry.message.role === 'assistant').at(-1)
+    const last = assistant?.type === 'message' && assistant.message.role === 'assistant' ? assistant.message : null
+    const provider = projection.model?.provider ?? last?.provider ?? null
+    const model = projection.model?.modelId ?? last?.model ?? null
+    const thinkingLevel = branch.some(entry => entry.type === 'thinking_level_change')
+      ? projection.thinkingLevel as ThinkingLevel : null
     const cwd = manager.getCwd()
     const stats = statsFromEntries(entries)
+    const request = await this.trajectory.context({ sessionPath: path, sessionId: manager.getSessionId(), leafId: manager.getLeafId() }).catch(() => null)
     return buildContextDetail({
-      messages,
+      messages: projection.messages,
       entries,
       stats,
+      request,
       usage: {
         tokens: null,
         contextWindow: 0,
         percent: null,
         sessionCost: stats.cost,
-        cacheHitRate: null
+        cacheHitRate: cacheHitRate(stats.tokens)
       },
       meta: {
         sessionId: manager.getSessionId(),
@@ -1041,17 +1072,15 @@ export class PiManager {
   }
 
   /**
-   * The session's CURRENT effective system prompt, read live off the SDK
-   * (`AgentSession.systemPrompt`: base prompt + tool snippets/guidelines +
-   * context files + per-turn extension modifications). The SDK rebuilds it on
-   * model, tool and resource changes (reload included), so every read is what
-   * the next model request would carry. With no path the ACTIVE session
-   * answers, so a chat that is not persisted yet has a prompt too.
+   * The latest ordinary provider request's system prompt in this branch.
+   * SDK per-turn overrides disappear at settlement, so read the recorder's
+   * request snapshot. Before a request or after resource reload, fall back to
+   * the SDK base; before_agent_start applies formatting on the next turn.
    */
   systemPrompt(sessionPath?: string): string {
     const managed = sessionPath ? this.sessions.get(sessionPath) : this.activeSession
     if (!managed) throw new Error(sessionPath ? 'No such session' : 'Pi session is not initialized')
-    return managed.session.systemPrompt
+    return managed.trajectory?.systemPrompt() ?? managed.session.systemPrompt
   }
 
   /**
@@ -1170,12 +1199,6 @@ export class PiManager {
     return this.subagentProfiles()
   }
 
-  async setSubagentProfileDebug(filePath: string, enabled: boolean): Promise<SubagentProfilesDTO> {
-    if (!listSubagentProfiles(this.cwd ?? null).some(profile => profile.filePath === filePath)) throw new Error('Unknown subagent profile')
-    writeSubagentProfileDebug(filePath, enabled)
-    return this.subagentProfiles()
-  }
-
   async setSubagentProfileDefaults(filePath: string, defaults: SubagentProfileDefaultsPayload): Promise<SubagentProfilesDTO> {
     if (!listSubagentProfiles(this.cwd ?? null).some(profile => profile.filePath === filePath)) throw new Error('Unknown subagent profile')
     writeSubagentProfileDefaults(filePath, defaults)
@@ -1214,8 +1237,12 @@ export class PiManager {
   private sessionBuilds = new Map<string, Promise<ManagedSession>>()
   /** Per-session-file Plan metadata clock; survives a managed rebuild. */
   private planSequences = new Map<string, number>()
+  /** Queue metadata clock also advances when a managed session is rebuilt. */
+  private compactionQueueRevision = 0
+  private compactionProcessRevision = 0
   /** Every currently active or background-running SDK session, keyed by file. */
   private sessions = new Map<string, ManagedSession>()
+  private imageReplayRevisions = new Map<string, number>()
   private activeSession: ManagedSession | null = null
   /** Invalidates slower session creations when a newer navigation wins. */
   private navigationEpoch = 0
@@ -1251,7 +1278,8 @@ export class PiManager {
 
   constructor(
     private emit: (channel: string, payload: unknown) => void,
-    private notifyError: (message: string) => void
+    private notifyError: (message: string) => void,
+    private readonly imageSkillPath?: string
   ) {
     this.checkoutCoordinator.initialize(() => this.rewindClient.recoveryMarkers())
     ensureDefaultProfiles(join(app.getPath('userData'), 'subagents'))
@@ -1277,7 +1305,10 @@ export class PiManager {
       subagentCommsEnabled: () => this.subagentCommsFlag && !this.closing,
       subagentTurnLimitOverrideEnabled: () => this.subagentTurnLimitOverrideFlag === true && !this.closing,
       subagentMaxTurns: () => this.subagentMaxTurnsSetting ?? null,
-      profileDebugEnabled: (cwd, name) => listSubagentProfiles(cwd).some(p => p.name === name && p.enabled && p.debugEnabled),
+      // The debugger grant rides the profile's ordinary tool set: `all`, or
+      // an explicit `debug` entry. The parent's own debug availability stays
+      // the ceiling at dispatch either way (runtime.ts).
+      profileDebugEnabled: (cwd, name) => listSubagentProfiles(cwd).some(p => p.name === name && p.enabled && (p.tools === 'all' || p.tools.includes('debug'))),
       planRestricted: path => this.sessions.get(path)?.plan.restricted ?? false,
       frozenToolCeiling: path => this.sessions.get(path)?.subagentChild?.toolCeiling ?? null,
       commandTasks: () => this.commandTasks,
@@ -1385,11 +1416,19 @@ export class PiManager {
         allowModelNetwork: true,
         modelRefreshTimeoutMs: 10_000
       })
+      // Publish OpenRouter's native image endpoint as a first-class Pi image API
+      // so the `image` tool and codemode reach the models that OpenRouter serves
+      // only there. Best-effort: a missing credential or unreachable catalog
+      // must never block a session from starting.
+      await ensureOpenRouterNativeImages(this.modelRuntime)
     }
     return this.modelRuntime
   }
 
-  private async servicesFor(cwd: string, todos: TodoState, recoveryOnly = false, subagent?: { appendSystemPrompt?: string; extensions?: boolean }, planContext?: ReturnType<typeof createPlanContextExtension>): Promise<AgentSessionServices> {
+  /** Runtime facts belong to the same loader as the native MCP extension. */
+  private mcpRuntimeStatuses = new WeakMap<ResourceLoader, Map<string, { name: string; status: McpRuntimeStatus }>>()
+
+  private async servicesFor(cwd: string, todos: TodoState, recoveryOnly = false, subagent?: { appendSystemPrompt?: string; extensions?: boolean }, planContext?: ReturnType<typeof createPlanContextExtension>, compactionProcess?: ReturnType<typeof createCompactionProcessExtension>): Promise<AgentSessionServices> {
     // A loader owns mutable extension closures and an ExtensionRuntime whose
     // actions bind to ONE session. Sharing it by cwd lets another session's
     // bind/reload/dispose overwrite or invalidate a still-live MCP context.
@@ -1401,11 +1440,14 @@ export class PiManager {
     const settingsManager = SettingsManager.create(cwd, getAgentDir())
     this.applyResponseTimeout(settingsManager)
     const loadNativeTools = !recoveryOnly && (subagent === undefined || subagent.extensions === true)
+    const mcpStatuses = new Map<string, { name: string; status: McpRuntimeStatus }>()
+    let mcpGeneration = 0
     const services = await createAgentSessionServices({
       cwd,
       settingsManager,
       modelRuntime: await this.runtime(),
       resourceLoaderOptions: {
+        additionalSkillPaths: this.imageSkillPath ? [this.imageSkillPath] : [],
         // A child loads extensions only when its frozen ceiling names one.
         // The SDK's `tools` allowlist then restricts even late registrations.
         // Every other delegation stays extension-free — N children with
@@ -1413,14 +1455,29 @@ export class PiManager {
         // recovery-only session never loads extensions at all.
         noExtensions: recoveryOnly || (subagent !== undefined && subagent.extensions !== true),
         extensionFactories: [
-          createToolCallBoundaryExtension(), todos.extension(), ...(planContext ? [planContext] : []),
+          createToolCallBoundaryExtension(), todos.extension(), createPromptFormatExtension(), createSearchResultExtension(), ...(planContext ? [planContext] : []),
+          ...(compactionProcess ? [compactionProcess] : []),
           // Ordered last below: enhance the default without masking a read
           // override, including one registered lazily by another inline factory.
           { name: 'native-read', factory: api => api.registerTool(createAppReadTool(cwd)), hidden: true },
           ...(loadNativeTools ? [
             { name: 'native-codemode', factory: createAppCodemodeExtension(), hidden: true },
             { name: 'native-tool-search', factory: createToolSearchExtension(), hidden: true },
-            { name: 'native-mcp', factory: createMcpExtension(), hidden: true }
+            { name: 'native-mcp', factory: (api: ExtensionAPI) => {
+              const generation = ++mcpGeneration
+              mcpStatuses.clear()
+              return createMcpExtension({ onStatusChange: servers => {
+                // A loader reload creates a new factory closure. Its predecessor
+                // may still finish disconnecting; never let it replace live facts.
+                if (generation !== mcpGeneration || this.closing) return
+                mcpStatuses.clear()
+                for (const server of servers) mcpStatuses.set(mcpServerKey(server.name), {
+                  name: server.name,
+                  status: server.state === 'closed' ? 'disconnected' : server.state
+                })
+                this.publishMcpStatusIfChanged()
+              } })(api)
+            }, hidden: true }
           ] : [])
         ],
         // The adapter may still be installed globally for Pi CLI. It must not
@@ -1436,6 +1493,7 @@ export class PiManager {
         agentsFilesOverride: (base) => (this.includeContextFiles ? base : { agentsFiles: [] })
       }
     })
+    this.mcpRuntimeStatuses.set(services.resourceLoader, mcpStatuses)
     return services
   }
 
@@ -1476,6 +1534,8 @@ export class PiManager {
     if (managed.subagentChild) clearSubagentAskUserRequests(managed.path)
     if (managed.disposePromise) return managed.disposePromise
     managed.disposing = true
+    managed.manualCompaction?.dispose()
+    managed.imageReplay?.controller.abort()
     this.jevService.cancel(managed.path)
     managed.planApproval?.dispose()
     managed.rewind?.dispose()
@@ -1487,6 +1547,7 @@ export class PiManager {
     managed.jevWorkflow?.dispose()
     managed.disposePlanStream?.()
     managed.disposeTextOnlyImages?.()
+    managed.disposeImageReplayContext?.()
     managed.disposeContextBudget?.()
     managed.disposeImageSafety?.()
     managed.reloadPending = false
@@ -1513,6 +1574,7 @@ export class PiManager {
       }
       const settled = await settleWithin([
         abort,
+        ...(managed.imageReplay?.promise ? [managed.imageReplay.promise] : []),
         Promise.resolve().then(() => this.commandTasksInstance?.stopSession(managed.path)),
         Promise.resolve().then(() => this.debugManagerInstance?.stopSession(managed.path)),
         shutdown()
@@ -1547,6 +1609,7 @@ export class PiManager {
     this.publishAskUser(managed)
     if (remember) {
       this.activateFolder(managed.cwd)
+      this.publishMcpStatusIfChanged()
       return
     }
     if (this.cwd !== managed.cwd || !this.fileIndex) {
@@ -1554,6 +1617,7 @@ export class PiManager {
       void this.fileIndex.refresh(true).catch(() => {})
     }
     this.cwd = managed.cwd
+    this.publishMcpStatusIfChanged()
   }
 
   private routeEvent(managed: ManagedSession, event: AgentSessionEvent | PiEvent): void {
@@ -1890,6 +1954,7 @@ export class PiManager {
       this.checkoutCoordinator.setRecovery(sessionManager.getCwd(), status.pending[0]?.id)
     }
     const recoveryOnly = this.checkoutCoordinator.needsRecovery(sessionManager.getCwd())
+    if (!recoveryOnly) await hydrateImagePresentations(sessionManager)
     let detectedRole = subagentRole
     if (!detectedRole) {
       // Any open path (sidebar click, search hit, delete/recover rebuild) can
@@ -1919,7 +1984,11 @@ export class PiManager {
           const latest = managed.plan.branch.latest
           return latest && managed.plan.branch.mode === 'plan'
             ? { revision: latest.ref.revision, markdown: latest.markdown } : null
-        } })
+        } }),
+      createCompactionProcessExtension({
+        prepared: event => managed.compactionProcess?.prepared(event),
+        applied: event => managed.compactionProcess?.applied(event)
+      })
     )
     const services = { ...fullServices, resourceLoader: this.filterExtensions(fullServices.resourceLoader) }
     let notifications: TaskNotifications | undefined
@@ -1954,6 +2023,7 @@ export class PiManager {
     const escalateForTools = (input: {
       toolCallId: string
       toolName: 'bash' | 'edit' | 'write' | 'debug'
+      operation: SandboxEscalationOperationDTO
       sandboxPermissions: unknown
       justification: unknown
       signal?: AbortSignal
@@ -1980,7 +2050,8 @@ export class PiManager {
         isPlanRestricted: () => managed.plan.restricted,
         ...(isChild || isScheduled ? {} : { escalate: escalateForTools })
       }),
-      createPresentTool({ cwd: services.cwd, canStart: () => (notifications?.canStart ?? false) && this.planToolAdmitted(managed) }),
+      createPresentTool({ cwd: services.cwd, canStart: () => (notifications?.canStart ?? false) && this.planToolAdmitted(managed),
+        generatedImage: (path, size) => capturePresentedImage(sessionManager, path, size) }),
       createPlanSubmissionTool(plan),
       createTodoTool(todos, () => (notifications?.canStart ?? false) && this.planToolAdmitted(managed)),
       // The scheduler's own tool: registered for every session (children
@@ -2089,6 +2160,19 @@ export class PiManager {
         ...(isChild || isScheduled ? {} : { escalate: escalateForTools }),
         canStart: () => (notifications?.canStart ?? false) && this.planToolAdmitted(managed),
         runInTerminal: () => this.debugTerminalBridge
+      }),
+      // The app's image tool. Registered unconditionally, like the browser and
+      // debug tools: exposure belongs to the active set (applyActiveTools), so
+      // a live toggle works for sessions that already exist.
+      createImageTool({
+        cwd: services.cwd,
+        runtime: services.modelRuntime,
+        skillPath: this.imageSkillPath,
+        getMode: liveSandboxMode,
+        getTimeoutMs: () => this.responseTimeoutMs,
+        recordGeneration: record => { sessionManager.appendCustomEntry(IMAGE_GENERATION_ENTRY, record) },
+        isPlanRestricted: () => managed.plan.restricted,
+        canStart: () => (notifications?.canStart ?? false) && this.planToolAdmitted(managed)
       })
     ]
     // These tools rely on a persisted top-level toolResult or its completion
@@ -2097,7 +2181,7 @@ export class PiManager {
     // Mutate the captured definitions in place: Plan proves exact identity,
     // and Jev's description is a live getter that object spreading would lose.
     const modelOnlyAppTools = new Set<string>([
-      PRESENT_TOOL_NAME, 'submit_plan', TODO_TOOL_NAME, SCHEDULED_TASK_TOOL_NAME,
+      PRESENT_TOOL_NAME, IMAGE_TOOL_NAME, 'submit_plan', TODO_TOOL_NAME, SCHEDULED_TASK_TOOL_NAME,
       JEV_TOOL_NAME, ASK_USER_TOOL_NAME, SUBAGENT_TOOL_NAME,
       AGENT_STEER_TOOL_NAME, MESSAGE_PARENT_TOOL_NAME
     ])
@@ -2226,6 +2310,9 @@ export class PiManager {
     }
     plan.onWakeOpened = flushDeferredWakes
     notifications.onWake = () => managed.changeScopes.continue()
+    // An answered question wakes the same way: its rounds rejoin the asking
+    // turn's settled scope instead of opening a separate one.
+    askUserNotifications.onWake = () => managed.changeScopes.continue()
     // Subagent children own no rewind recorder: they must never record
     // checkpoints (rewind points exist only before user turns), and their
     // writes reach coverage diagnostics through the parent's consent flow.
@@ -2251,7 +2338,23 @@ export class PiManager {
       subagentNotifications.onWake = () => managed.changeScopes.continue()
     }
     const observeEvent = (event: AgentSessionEvent): void => {
+      const library = getLibraryService()
+      if (event.type === 'message_end' && library) {
+        const committed = session.sessionManager.getLeafEntry()
+        if (committed?.type === 'message' && committed.message === event.message) library.committed({
+          id: session.sessionId, path: managed.path, cwd: isDefaultWorkspace(managed.cwd) ? null : managed.cwd,
+          workspace: managed.cwd, title: session.sessionManager.getSessionName() ?? ''
+        }, committed.id, event.message)
+        library.sessionChanged(managed.path)
+      }
+      else if (event.type === 'tool_execution_start') library?.toolStarted(managed.path, event.toolCallId, event.toolName, event.args)
+      else if (event.type === 'tool_execution_end' && library) {
+        library.toolEnded({ id: session.sessionId, path: managed.path,
+          cwd: isDefaultWorkspace(managed.cwd) ? null : managed.cwd, workspace: managed.cwd,
+          title: session.sessionManager.getSessionName() ?? '' }, event.toolCallId, event.result, event.isError, 'parentToolCallId' in event)
+      }
       if (event.type !== 'message_end') managed.trajectory?.observe(event)
+      managed.compactionProcess?.observe(event)
       managed.rewind?.observe(event)
       const previousTodos = managed.todos.snapshot
       managed.todos.observe(event)
@@ -2291,8 +2394,25 @@ export class PiManager {
       observeEvent(event)
     })
     managed.unsubscribe = () => { unsubscribeSession(); unsubscribeCommitted() }
-    managed.trajectory = new TrajectoryRecorder(session, this.trajectory)
+    managed.manualCompaction = new ManualCompaction(session, {
+      reserve: () => managed.plan.beginWork('branch'),
+      prepare: () => managed.lifecyclePromise,
+      validate: () => this.validateCompaction(managed),
+      nextRevision: () => ++this.compactionQueueRevision,
+      queueChanged: compactionQueue => {
+        const event: CompactionQueueUpdateEvent = { type: 'compaction_queue_update', sessionId: session.sessionId, sessionPath: managed.path, compactionQueue }
+        this.emit('pi:event', event)
+      }
+    })
+    managed.compactionProcess = new CompactionProcess(session, {
+      nextRevision: () => ++this.compactionProcessRevision,
+      changed: compactionProcess => this.emit('pi:event', {
+        type: 'compaction_process_update', sessionId: session.sessionId, sessionPath: managed.path, compactionProcess
+      })
+    })
+    managed.trajectory = new TrajectoryRecorder(session, this.trajectory, request => managed.compactionProcess?.request(request))
     managed.disposeContextBudget = installContextBudgetOverlay(session, model => services.settingsManager.getCompactionSettings(model))
+    managed.disposeImageReplayContext = installImageReplayContextGuard(session)
     managed.disposeTextOnlyImages = installTextOnlyImageOverlay(session)
     managed.disposePlanStream = installPlanStreamOverlay(session, () => plan.restricted)
     if (!isChild && !isScheduled) managed.jevWorkflow = new JevWorkflow({ session, service: this.jevService, owner: path,
@@ -2542,17 +2662,20 @@ export class PiManager {
         declarable(name) && (name !== JEV_TOOL_NAME || this.jevActive()) && (name !== 'debug' || this.debugEnabledFlag)))
       return
     }
-    // An SDK tools allowlist would also hide extension tools. Select only
-    // declarable extension definitions: explicitly activating codemode or
-    // deferred MCP names would leak their full schemas into the model prompt.
+    // An SDK tools allowlist would also hide extension tools. Preserve the
+    // extension-selected Normal base, including lazy tools masked by Plan.
+    // Registered definitions may remain solely for historical rendering (FFF
+    // aliases in override mode); registration must not reactivate them.
+    // Only declarable definitions belong in the model prompt.
     // The delegation tool is gated by its setting here (its customTool is
     // registered at build; the runtime re-checks dispatch live).
+    const selected = new Set(managed.gate?.activeToolNames() ?? managed.session.getActiveToolNames())
     const extensionTools = managed.session.getAllTools().filter(tool => {
       if (tool.sourceInfo?.source === 'builtin' || tool.sourceInfo?.source === 'sdk') return false
-      return declarable(tool.name) && managed.session.getToolDefinition(tool.name)?.defaultActive !== false
+      return selected.has(tool.name) && declarable(tool.name)
     }).map(tool => tool.name)
     this.setActiveTools(managed, [...new Set([
-      ...BUILTIN_TOOL_NAMES, ...APP_BASH_TOOL_NAMES, ...APP_FILE_TOOL_NAMES, TODO_TOOL_NAME, PRESENT_TOOL_NAME,
+      ...BUILTIN_TOOL_NAMES, ...APP_BASH_TOOL_NAMES, ...APP_FILE_TOOL_NAMES, TODO_TOOL_NAME, PRESENT_TOOL_NAME, IMAGE_TOOL_NAME,
       // A scheduled-run session has no human surface: ask_user is disabled at
       // registration AND left out of the active set.
       ...(managed.scheduledTask ? [] : [ASK_USER_TOOL_NAME]), 'submit_plan', SCHEDULED_TASK_TOOL_NAME,
@@ -2563,7 +2686,7 @@ export class PiManager {
       // Preserve Pi's own discovery activation. MCP turns codemode on for
       // codemode exposure (unless autoEnableCodemode is false) and tool_search
       // on for deferred exposure; users may also opt in through defaultTools.
-      ...managed.session.getActiveToolNames().filter(name => name === 'codemode' || name === 'tool_search'),
+      ...[...selected].filter(name => name === 'codemode' || name === 'tool_search'),
       ...extensionTools
     ])])
   }
@@ -2692,7 +2815,7 @@ export class PiManager {
       const target = await this.resolveScheduledTaskSession(task.target.sessionId)
       const managed = this.sessions.get(target.path)
       if (!managed || managed.disposing) return true
-      return managed.session.isIdle && !managed.initializing
+      return managed.session.isIdle && !managed.initializing && !managed.imageReplay
     } catch {
       return true // execute records the precise target error
     }
@@ -2949,6 +3072,7 @@ export class PiManager {
     if (this.closing || managed.disposing) return
     const startedAt = performance.now()
     try {
+      managed.gate?.bindExtensionRuntime(loader.getExtensions().runtime)
       // Keep print mode + onError: lazy tools register during session_start,
       // and the binding is also required for reload to re-emit session_start.
       await managed.session.bindExtensions({ mode: 'print', onError: (error) => {
@@ -2983,6 +3107,15 @@ export class PiManager {
     const managed = this.activeSession
     if (!managed || !this.cwd) throw new Error('Pi session is not initialized')
     return this.snapshotOf(managed)
+  }
+
+  /** Main-owned binding for explicit user Git actions, independent of agent tools. */
+  gitWorkspace(): { cwd: string | null; writable: boolean } {
+    const managed = this.activeSession
+    return {
+      cwd: managed && !isDefaultWorkspace(managed.cwd) ? managed.cwd : null,
+      writable: !!managed && !managed.subagentChild && !managed.scheduledTask && !isDefaultWorkspace(managed.cwd)
+    }
   }
 
   /**
@@ -3020,7 +3153,7 @@ export class PiManager {
       closing: this.closing || managed.disposing,
       child: Boolean(managed.subagentChild),
       recovery: managed.recoveryOnly || this.checkoutCoordinator.needsRecovery(managed.cwd),
-      sdkIdle: session.isIdle,
+      sdkIdle: session.isIdle && !managed.imageReplay,
       tasks,
       subagents: managed.subagents?.hasLiveRuns ? 1 : 0,
       deliveries:
@@ -3161,6 +3294,29 @@ export class PiManager {
   }
 
   /** Serialize one session's current state for the renderer. */
+  /**
+   * A run is in flight: the agent loop is active, or a wake owner (notification
+   * delivery, an answered question) will continue it at settlement. This is
+   * exactly what the snapshot reports as `isStreaming` and what the composer
+   * reads as `busy`, so the renderer's gates and the guards below agree on
+   * "mid-run" by construction.
+   */
+  private sessionBusy(managed: ManagedSession): boolean {
+    return managed.session.isStreaming || managed.notifications.continuesAtSettled || managed.askUser.continuesAtSettled
+  }
+
+  /**
+   * The mid-run switch gate: model, thinking level and the session's sandbox
+   * mode may only change while a run is streaming when Settings → General
+   * allows it. Off is the default and refuses; the message is a token (the
+   * renderer's pickers are already disabled, so a rejection here is a stale
+   * caller, not a path that needs prose).
+   */
+  private assertMidRunChangeAllowed(managed: ManagedSession): void {
+    if (this.allowMidRunChanges || !this.sessionBusy(managed)) return
+    throw new Error('mid-run-changes-disabled')
+  }
+
   private snapshotOf(managed: ManagedSession): SessionSnapshotDTO {
     this.flushStreamEvents(managed)
     const messages = this.transcriptOf(managed)
@@ -3196,10 +3352,12 @@ export class PiManager {
         steering: managed.queueMirror.steering.map(dtoOf),
         followUp: managed.queueMirror.followUp.map(dtoOf)
       },
+      compactionQueue: managed.manualCompaction?.queueState,
+      compactionProcess: managed.compactionProcess?.snapshot,
       model: modelRef(managed.session.model),
       thinkingLevel: (managed.session.thinkingLevel ?? 'medium') as ThinkingLevel,
       availableThinkingLevels: managed.session.getAvailableThinkingLevels() as ThinkingLevel[],
-      isStreaming: managed.session.isStreaming || managed.notifications.continuesAtSettled || managed.askUser.continuesAtSettled,
+      isStreaming: this.sessionBusy(managed),
       contextUsage: this.contextUsageOf(managed),
       subagents: managed.subagents?.snapshot() ?? [],
       subagentChild: Boolean(managed.subagentChild),
@@ -3263,19 +3421,25 @@ export class PiManager {
   private contextUsageOf(managed: ManagedSession): ContextUsageDTO | null {
     const stats = managed.session.getSessionStats()
     const usage = stats.contextUsage
-    if (!usage || !usage.contextWindow) return null
+    const revision = `${managed.session.sessionManager.getLeafId() ?? ''}:${managed.trajectory?.contextRevision ?? 0}`
+    // Unknown windows keep the ring unknown, but request/billing metadata must
+    // still refresh (including the first request through a virtual model).
+    if (!usage || !usage.contextWindow) return {
+      tokens: null, contextWindow: usage?.contextWindow ?? 0, percent: null,
+      sessionCost: stats.cost, cacheHitRate: cacheHitRate(stats.tokens), revision
+    }
     const live = managed.streaming ? estimateTokens(managed.streaming as any) : 0
     const reported = usage.tokens === null || usage.tokens === undefined
-      ? compactedContextTokens(managed.session.messages)
+      ? compactedContextTokens(managed.session.sessionManager.buildSessionProjection().messages)
       : usage.tokens
     const tokens = reported === null ? null : reported + live
-    const cacheable = stats.tokens.cacheRead + stats.tokens.input
     return {
       tokens,
       contextWindow: usage.contextWindow,
       percent: tokens === null ? null : (tokens / usage.contextWindow) * 100,
       sessionCost: stats.cost,
-      cacheHitRate: cacheable > 0 ? Math.min(stats.tokens.cacheRead / cacheable, 1) : null
+      cacheHitRate: cacheHitRate(stats.tokens),
+      revision
     }
   }
 
@@ -3468,6 +3632,7 @@ export class PiManager {
           // No prose here: an empty session carries `null` so the renderer can
           // label it in the active locale.
           label: s.name?.trim() || (s.messageCount > 0 ? s.firstMessage?.trim().slice(0, 80) || null : null),
+          created: new Date(s.created).toISOString(),
           modified: new Date(s.modified).toISOString(),
           messageCount: s.messageCount,
           cwd: folder,
@@ -3542,17 +3707,26 @@ export class PiManager {
     // (already done above) and trash their files with it, or they would be
     // orphaned — hidden from the sidebar but unreachable from any roster.
     const childFiles = await this.subagentChildFiles(targetCwd, path)
-    for (const child of childFiles) {
-      const childManaged = this.sessions.get(child)
-      if (childManaged) await this.disposeManaged(childManaged)
-      await shell.trashItem(child).catch(() => {})
+    let trashFailure: unknown
+    try {
+      for (const child of childFiles) {
+        const childManaged = this.sessions.get(child)
+        if (childManaged) await this.disposeManaged(childManaged)
+        await shell.trashItem(child)
+      }
+      await shell.trashItem(path)
+    } catch (error) {
+      // Do not report deletion when the OS refused it. Restore a usable
+      // selection even though this session's live owners were already closed.
+      // A failed child recycle also leaves the parent reachable on disk.
+      trashFailure = error
     }
-    await shell.trashItem(path).catch(() => {})
     if (!this.activeSession && this.cwd) {
       const sessions = await SessionManager.list(this.cwd).catch(() => [])
       const latest = sessions[0]
       await this.buildSession(latest ? SessionManager.open(latest.path) : SessionManager.create(this.cwd))
     }
+    if (trashFailure !== undefined) throw trashFailure
     return this.activeSession ? this.snapshot() : null
   }
 
@@ -3594,6 +3768,7 @@ export class PiManager {
     const managed = this.activeSession
     const session = managed?.session
     if (this.closing || managed?.disposing) return
+    if (managed?.imageReplay) { this.notifyError('An image retry is running. Wait for it to finish or stop it first.'); return }
     // An opened subagent child is a READ-ONLY view: it carries no checkpoint
     // recorder and its runs are owned by the parent's runtime, so a direct
     // user prompt would bypass every execution protection.
@@ -3724,6 +3899,7 @@ export class PiManager {
       followUp: recallOf(managed.queueMirror.followUp)
     }
     if (stopping) {
+      managed.manualCompaction?.cancel()
       managed.continuationRequest?.abort()
       managed.notifications.pause()
       managed.askUser.pause()
@@ -3827,12 +4003,118 @@ export class PiManager {
     return null
   }
 
+  imageReplays(sessionPath: string): ImageReplaySnapshot {
+    const managed = this.sessions.get(sessionPath)
+    const manager = managed?.session.sessionManager ?? SessionManager.open(sessionPath)
+    return { sessionPath, revision: this.imageReplayRevisions.get(sessionPath) ?? 0,
+      items: imageReplayRecords(manager, managed?.imageReplay?.id) }
+  }
+
+  private publishImageReplays(managed: ManagedSession): void {
+    if (!existsSync(managed.path)) return
+    this.imageReplayRevisions.set(managed.path, (this.imageReplayRevisions.get(managed.path) ?? 0) + 1)
+    this.emit('pi:image-replays', this.imageReplays(managed.path))
+  }
+
+  cancelImageReplay(sessionPath: string, id: string): void {
+    const managed = this.sessions.get(sessionPath)
+    if (!managed || managed.imageReplay?.id !== id || managed.subagentChild || managed.scheduledTask) throw new Error('image-retry-stale-request')
+    managed.notifications.pause(); managed.askUser.pause(); managed.subagents?.notifications?.pause()
+    managed.imageReplay.controller.abort()
+  }
+
+  /** User-owned UI operation: no prompt, assistant entry or model request.
+   * Parameters are resolved exclusively from private selected-branch records. */
+  async retryPresentedImage(request: ImageReplayRequest): Promise<void> {
+    const managed = this.activeSession
+    if (!managed || managed.path !== request?.sessionPath || managed.subagentChild || managed.scheduledTask) throw new Error('image-retry-stale-session')
+    if (managed.plan.restricted) throw new Error('image-file-effect-refused-in-plan-mode')
+    if (managed.imageReplay || managed.continuationRequest || !managed.session.isIdle || managed.plan.snapshot.blockers.switch.length) throw new Error('image-retry-busy')
+    const manager = managed.session.sessionManager
+    const source = presentedGeneration(manager, request.generationId, request.path)
+    if (!source) throw new Error('image-retry-unavailable')
+    const history = imageReplayRecords(manager).filter(item => item.generationId === source.id && item.sourcePath === request.path)
+    const restoreId = request.restoreId === undefined ? history.at(-1)?.id ?? null : request.restoreId
+    if (restoreId !== null && !history.some(item => item.id === restoreId)) throw new Error('image-retry-unavailable')
+    const releasePlan = managed.plan.beginWork('background')
+    const job = { id: randomUUID(), controller: new AbortController(), promise: undefined as Promise<void> | undefined }
+    managed.imageReplay = job
+    const owners = [managed.notifications, managed.askUser, managed.subagents?.notifications].filter(owner => owner != null)
+    for (const owner of owners) { owner.holdWake(); owner.resume() }
+    let state: ImageReplayRecord = { version: 1, id: job.id, generationId: source.id, sourcePath: request.path, restoreId, status: 'queued', startedAt: Date.now() }
+    let leaf: string | null = null
+    const persist = (): string => {
+      if (!existsSync(managed.path)) return ''
+      const entryId = manager.appendCustomEntry(IMAGE_REPLAY_ENTRY, state)
+      leaf = manager.getLeafId()
+      this.publishImageReplays(managed)
+      return entryId
+    }
+    const admitted = (): boolean => {
+      const tool = managed.gate?.tools().find(tool => tool.name === IMAGE_TOOL_NAME)
+      return !job.controller.signal.aborted && !this.closing && !managed.disposing && !managed.plan.restricted &&
+        managed.imageReplay === job && manager.getLeafId() === leaf && managed.notifications.canStart &&
+        tool?.provenance === 'app' && tool.definition === managed.session.getToolDefinition(IMAGE_TOOL_NAME)
+    }
+    job.promise = (async () => {
+      let releaseTool: (() => void) | undefined
+      try {
+        persist()
+        releaseTool = await this.checkoutCoordinator.enter(managed.cwd, 'tool', managed.path, job.controller.signal)
+        job.controller.signal.throwIfAborted()
+        if (!admitted()) throw new Error('image-retry-admission-closed')
+        const runtime = await this.runtime()
+        if (!admitted()) throw new Error('image-retry-admission-closed')
+        const tool = createImageTool({ cwd: managed.cwd, runtime, skillPath: this.imageSkillPath,
+          getMode: () => this.effectiveSandboxMode(managed), getTimeoutMs: () => this.responseTimeoutMs,
+          isPlanRestricted: () => managed.plan.restricted, canStart: admitted, replayFile: request.path,
+          recordGeneration: record => { state = { ...state, fileHashes: record.fileHashes } } })
+        const args: Record<string, unknown> = { ...structuredClone(source.arguments), n: 1 }
+        // Freeze an omitted default to the model that actually produced the original.
+        if (args.model === undefined) args.model = source.result.model
+        if (!Check(tool.parameters, args)) throw new Error('image-retry-invalid-parameters')
+        state = { ...state, status: 'generating' }; persist()
+        const library = getLibraryService()
+        library?.toolStarted(managed.path, job.id, IMAGE_TOOL_NAME, args)
+        const output = await tool.execute(job.id, args as never, job.controller.signal, undefined, undefined as never)
+        const result = parseImageToolResult(output.details)
+        state = { ...state, status: output.isError ? 'error' : 'complete', endedAt: Date.now(),
+          ...(result ? { result } : {}), ...(output.isError ? { error: result?.error ?? 'Image generation failed.',
+            ...(job.controller.signal.aborted ? { cancelled: true } : {}) } : {}) }
+        const entryId = persist()
+        if (output.usage && existsSync(managed.path)) manager.appendUsage('image-replay', 'openrouter', source.result.model, output.usage)
+        // Archive the same committed receipt without inserting a tool message
+        // into agent state or model history. History scans read the private entry.
+        library?.committed({ id: managed.session.sessionId, path: managed.path,
+          cwd: isDefaultWorkspace(managed.cwd) ? null : managed.cwd, workspace: managed.cwd,
+          title: manager.getSessionName() ?? '' }, entryId,
+        { role: 'toolResult', toolCallId: job.id, toolName: IMAGE_TOOL_NAME, content: [], details: output.details,
+          isError: output.isError ?? false, timestamp: state.endedAt })
+        library?.sessionChanged(managed.path)
+        this.emit('pi:rewind', { sessionPath: managed.path })
+      } catch (error) {
+        state = { ...state, status: 'error', endedAt: Date.now(),
+          ...(job.controller.signal.aborted ? { cancelled: true } : {}),
+          error: (job.controller.signal.aborted ? 'Image generation was cancelled.' : error instanceof Error ? error.message : String(error)).slice(0, 8000) }
+        persist()
+      } finally {
+        releaseTool?.()
+        if (managed.imageReplay === job) managed.imageReplay = undefined
+        releasePlan()
+        for (const owner of owners) owner.releaseWake()
+        this.publishImageReplays(managed)
+        if (managed.reloadPending && !this.closing && !managed.disposing) { managed.reloadPending = false; await this.reloadManagedSession(managed) }
+      }
+    })()
+    await job.promise
+  }
+
   /** Resume the interrupted frontier using its original context and scope. */
   async continueMessage(payload: ContinuePayload): Promise<void> {
     const managed = this.activeSession
     if (!managed || managed.path !== payload.sessionPath || managed.subagentChild || managed.scheduledTask) throw new Error('continue-stale-session')
     const session = managed.session
-    if (managed.continuationRequest || !session.isIdle) throw new Error('continue-busy')
+    if (managed.continuationRequest || managed.imageReplay || !session.isIdle) throw new Error('continue-busy')
     const target = continuationTarget(this.transcriptOf(managed))
     if (!target || target.timestamp !== payload.timestamp) throw new Error('continue-stale-turn')
     // A continuation cannot lift a submitted plan's seal or bypass approval.
@@ -3889,10 +4171,13 @@ export class PiManager {
     if (managed.subagentChild) throw new Error('A subagent session is read-only')
     if (managed.scheduledTask) throw new Error('A scheduled task session is read-only')
     if (managed.continuationRequest && session.isIdle) throw new Error('continue-busy')
+    const replay = managed.imageReplay
+    replay?.controller.abort()
     // Branch move + fresh user turn: reserve before the first await, and keep
     // the user registration so the new turn can lift a submission seal.
     const releasePlanWork = managed.plan.beginWork('user')
     try {
+      await replay?.promise
       await managed.lifecyclePromise
       const release = await this.checkoutCoordinator.enter(managed.cwd, 'run', managed.path)
       try {
@@ -4029,7 +4314,9 @@ export class PiManager {
   abort(): void {
     const managed = this.activeSession
     if (!managed) return
+    managed.manualCompaction?.cancel()
     managed.continuationRequest?.abort()
+    managed.imageReplay?.controller.abort()
     managed.jevWorkflow?.cancel()
     managed.planApproval?.cancelOpening()
     managed.userAborted = true
@@ -4047,8 +4334,10 @@ export class PiManager {
 
   async setModel(providerId: string, modelId: string): Promise<SessionSnapshotDTO> {
     const managed = this.activeSession
+    if (managed?.imageReplay) throw new Error('image-retry-busy')
     if (managed?.subagentChild) throw new Error('A subagent session is read-only')
     if (managed?.scheduledTask) throw new Error('A scheduled task session is read-only')
+    if (managed) this.assertMidRunChangeAllowed(managed)
     const runtime = await this.runtime()
     const model = runtime.getModel(providerId, modelId)
     if (!model) throw new Error(`Unknown model ${providerId}/${modelId}`)
@@ -4060,9 +4349,11 @@ export class PiManager {
   }
 
   async setThinkingLevel(level: ThinkingLevel): Promise<SessionSnapshotDTO> {
+    if (this.activeSession?.imageReplay) throw new Error('image-retry-busy')
     if (this.activeSession?.subagentChild) throw new Error('A subagent session is read-only')
     if (this.activeSession?.scheduledTask) throw new Error('A scheduled task session is read-only')
     if (!this.activeSession) throw new Error('No active session')
+    this.assertMidRunChangeAllowed(this.activeSession)
     this.activeSession.session.setThinkingLevel(level)
     return this.snapshot()
   }
@@ -4080,7 +4371,8 @@ export class PiManager {
       if (auth?.apiKey) authTypes.push('api_key')
       if (auth?.oauth) authTypes.push('oauth')
       const check = await runtime.checkAuth(provider.id).catch(() => undefined)
-      const api = (provider.getModels()[0] as any)?.api as string | undefined
+      const providerModels = provider.getModels()
+      const api = (providerModels[0] as any)?.api as string | undefined
       const custom = Object.prototype.hasOwnProperty.call(config.providers, provider.id)
       providers.push({
         id: provider.id,
@@ -4095,7 +4387,8 @@ export class PiManager {
         baseUrl: builtinBaseUrls.get(provider.id),
         discoverable: custom
           ? supportsModelDiscovery(config.providers[provider.id]?.api ?? api)
-          : supportsModelDiscovery(api)
+          : supportsModelDiscovery(api),
+        modelCount: providerModels.length
       })
       seen.add(provider.id)
     }
@@ -4114,7 +4407,12 @@ export class PiManager {
         custom: true,
         api: entry.api,
         baseUrl: entry.baseUrl ?? builtinBaseUrls.get(providerId),
-        discoverable: Boolean(entry.baseUrl) && supportsModelDiscovery(entry.api)
+        discoverable: Boolean(entry.baseUrl) && supportsModelDiscovery(entry.api),
+        // Not composed yet: count the carriers the user added (blank-id
+        // drafts are not real models).
+        modelCount: (entry.models ?? []).filter(
+          (model) => typeof model?.id === 'string' && model.id.trim().length > 0
+        ).length
       })
     }
     return providers
@@ -4418,44 +4716,47 @@ export class PiManager {
 
   // ---- MCP servers (Settings → MCP; Pi's native extension) ----
 
-  /** Native MCP publishes no public status stream. Registered SDK tools reveal
-   * its tool catalog, but may remain after a transport disconnect; connection
-   * status is therefore always "configured" without stronger evidence. */
-  private mcpLiveTools(cwd: string | null): Map<string, { status: McpRuntimeStatus; tools: McpToolDTO[] }> {
-    const live = new Map<string, { status: McpRuntimeStatus; tools: McpToolDTO[] }>()
-    if (!cwd) return live
-    for (const managed of this.sessions.values()) {
-      if (managed.cwd !== cwd || managed.disposing || managed.subagentChild) continue
-      for (const tool of managed.session.getAllTools()) {
-        const namespace = tool.namespace?.name
-        if (!namespace?.startsWith('mcp__') || tool.exposure === 'hidden') continue
-        const name = namespace.slice('mcp__'.length)
-        if (!name || !tool.name.startsWith(`${namespace}__`)) continue
-        let entry = live.get(name)
-        if (!entry) { entry = { status: 'configured', tools: [] }; live.set(name, entry) }
-        if (entry.tools.some(existing => existing.name === tool.name)) continue
-        entry.tools.push({
-          name: tool.name,
-          description: tool.description,
-          inputSchema: JSON.parse(JSON.stringify(tool.parameters ?? {})) as Record<string, unknown>,
-          exposure: tool.exposure as McpToolDTO['exposure']
-        })
-      }
+  /** Native connection facts and registered tools of the selected session.
+   * Tool registrations survive disconnects, so they never imply connectivity. */
+  private mcpLiveTools(): Map<string, { name?: string; status: McpRuntimeStatus; tools: McpToolDTO[] }> {
+    const live = new Map<string, { name?: string; status: McpRuntimeStatus; tools: McpToolDTO[] }>()
+    const managed = this.activeSession
+    if (!managed || managed.disposing || managed.subagentChild) return live
+    for (const [key, server] of this.mcpRuntimeStatuses.get(managed.resourceLoader) ?? []) {
+      live.set(key, { ...server, tools: [] })
+    }
+    for (const tool of managed.session.getAllTools()) {
+      const namespace = tool.namespace?.name
+      if (!namespace?.startsWith('mcp__') || tool.exposure === 'hidden') continue
+      const name = namespace.slice('mcp__'.length)
+      // The SDK keeps the full namespace but shortens long tool identifiers
+      // with a hash. The namespace remains the authoritative server owner.
+      if (!name || !tool.name.startsWith('mcp__')) continue
+      let entry = live.get(name)
+      if (!entry) { entry = { status: 'configured', tools: [] }; live.set(name, entry) }
+      if (entry.tools.some(existing => existing.name === tool.name)) continue
+      entry.tools.push({
+        name: tool.name,
+        description: tool.description,
+        inputSchema: JSON.parse(JSON.stringify(tool.parameters ?? {})) as Record<string, unknown>,
+        exposure: tool.exposure as McpToolDTO['exposure']
+      })
     }
     for (const entry of live.values()) entry.tools.sort((a, b) => a.name.localeCompare(b.name))
     return live
   }
 
-  /** Sequence-free settings push when native MCP tool registration changes. */
+  /** Sequence-free settings push on native state, tool or selected-session changes. */
   private mcpStatusKey = ''
   private publishMcpStatusIfChanged(): void {
-    const cwd = this.cwd
+    if (this.closing) return
+    const cwd = this.activeSession?.cwd
     if (!cwd) return
     const agentDir = getAgentDir()
     const projectTrusted = SettingsManager.create(cwd, agentDir).isProjectTrusted()
-    const rows = buildMcpRoster({ cwd, agentDir, projectTrusted, live: this.mcpLiveTools(cwd) })
-    const push: McpStatusPushDTO = { cwd, servers: rows.map(row => ({
-      name: row.name, status: row.status ?? 'configured', toolCount: row.toolCount ?? 0, disabled: row.disabled
+    const rows = buildMcpRoster({ cwd, agentDir, projectTrusted, live: this.mcpLiveTools() })
+    const push: McpStatusPushDTO = { cwd, sessionPath: this.activeSession!.path, servers: rows.map(row => ({
+      name: row.name, status: row.status ?? 'configured', toolCount: row.toolCount, disabled: row.disabled
     })) }
     const key = JSON.stringify(push)
     if (key === this.mcpStatusKey) return
@@ -4470,10 +4771,11 @@ export class PiManager {
     const projectTrusted = cwd ? SettingsManager.create(cwd, agentDir).isProjectTrusted() : false
     return {
       projectCwd: cwd,
+      sessionPath: this.activeSession?.path ?? null,
       projectTrusted,
       global: readMcpConfigFile('global', null, agentDir)!,
       project: readMcpConfigFile('project', cwd, agentDir),
-      servers: buildMcpRoster({ cwd, agentDir, projectTrusted, live: this.mcpLiveTools(cwd) }),
+      servers: buildMcpRoster({ cwd, agentDir, projectTrusted, live: this.mcpLiveTools() }),
       configIssues: readMcpConfigIssues(cwd, agentDir, projectTrusted)
     }
   }
@@ -4495,7 +4797,7 @@ export class PiManager {
     const cwd = this.activeSession?.cwd ?? null
     const agentDir = getAgentDir()
     if (scope === 'project') this.assertMcpProjectWriteAllowed(cwd, agentDir, cwd ? join(cwd, '.pi', 'mcp.json') : null)
-    writeMcpConfigFile(scope, content, cwd, agentDir)
+    writeMcpConfigFile(scope, content, cwd, agentDir, cwd ? SettingsManager.create(cwd, agentDir).isProjectTrusted() : false)
     this.catalogCache = null
     await this.reloadLiveSessions()
     return this.mcpState()
@@ -4514,8 +4816,7 @@ export class PiManager {
 
   /** One server's currently registered tools (native MCP has no public cache). */
   async mcpServerDetail(name: string): Promise<McpServerDetailDTO> {
-    const cwd = this.activeSession?.cwd ?? null
-    return mcpServerDetail(name, this.mcpLiveTools(cwd).get(name)?.tools ?? [])
+    return mcpServerDetail(name, this.mcpLiveTools().get(mcpServerKey(name))?.tools ?? [])
   }
 
   /**
@@ -4527,7 +4828,7 @@ export class PiManager {
     const cwd = this.activeSession?.cwd ?? null
     const agentDir = getAgentDir()
     this.assertMcpProjectWriteAllowed(cwd, agentDir, payload.targetPath ?? (payload.scope === 'project' && cwd ? join(cwd, '.pi', 'mcp.json') : null))
-    upsertMcpServerEntry(payload, { cwd, agentDir })
+    upsertMcpServerEntry(payload, { cwd, agentDir, projectTrusted: cwd ? SettingsManager.create(cwd, agentDir).isProjectTrusted() : false })
     this.catalogCache = null
     await this.reloadLiveSessions()
     return this.mcpState()
@@ -4538,7 +4839,7 @@ export class PiManager {
     const cwd = this.activeSession?.cwd ?? null
     const agentDir = getAgentDir()
     this.assertMcpProjectWriteAllowed(cwd, agentDir, path)
-    deleteMcpServerEntry(path, name, { cwd, agentDir })
+    deleteMcpServerEntry(path, name, { cwd, agentDir, projectTrusted: cwd ? SettingsManager.create(cwd, agentDir).isProjectTrusted() : false })
     this.catalogCache = null
     await this.reloadLiveSessions()
     return this.mcpState()
@@ -4560,10 +4861,11 @@ export class PiManager {
     const pending = (async () => {
       await previous
       if (this.closing || managed.disposing) return
-      if (!managed.session.isIdle) { managed.reloadPending = true; return }
+      if (!managed.session.isIdle || managed.imageReplay) { managed.reloadPending = true; return }
       try {
         await managed.session.reload({ beforeSessionStart: () => {
           if (this.closing || managed.disposing) throw new Error('Session is shutting down')
+          managed.gate?.bindExtensionRuntime(managed.resourceLoader.getExtensions().runtime)
         } })
         // reload() re-activated every registered tool (includeAllExtensionTools);
         // re-applying the active set AFTER it resolves is what removes the
@@ -4572,11 +4874,15 @@ export class PiManager {
         // (initializeSession receives the filtered one too), so disabled
         // extensions' tools are not re-activated here either.
         this.applyActiveTools(managed, this.filterExtensions(managed.resourceLoader))
+        managed.trajectory?.resetSystemPrompt()
         // A reload re-derives the session from disk; re-fold the Plan branch so
         // a mode/plan entry written outside this process is adopted (and an
         // unknown version keeps the session restricted).
         managed.plan.restore()
         managed.planApproval?.recover()
+        if (!managed.recoveryOnly && !this.checkoutCoordinator.needsRecovery(managed.cwd)) {
+          await hydrateImagePresentations(managed.session.sessionManager)
+        }
       }
       catch { /* Keep the existing resource-reload error policy. */ }
       finally { this.catalogCache = null }
@@ -4594,7 +4900,7 @@ export class PiManager {
 
   private async reloadLiveSessions(): Promise<void> {
     for (const managed of [...this.sessions.values()]) {
-      if (managed.session.isStreaming) {
+      if (managed.session.isStreaming || managed.imageReplay) {
         managed.reloadPending = true
         continue
       }
@@ -5049,6 +5355,15 @@ export class PiManager {
     )
   }
 
+  /** Lightweight library provenance without loading sessions or snapshots. */
+  librarySession(id?: string): LibrarySession | null {
+    const managed = id ? [...this.sessions.values()].find(value => value.session.sessionId === id) : this.activeSession
+    if (!managed) return null
+    return { id: managed.session.sessionId, path: managed.path,
+      cwd: isDefaultWorkspace(managed.cwd) ? null : managed.cwd, workspace: managed.cwd,
+      title: managed.session.sessionManager.getSessionName() ?? '' }
+  }
+
   dispose(): Promise<void> {
     if (this.disposePromise) return this.disposePromise
     this.closing = true
@@ -5064,7 +5379,7 @@ export class PiManager {
     this.contextUsageTimer = null
     for (const controller of this.sideChats.values()) controller.abort()
     for (const controller of this.loginAborts.values()) controller.abort()
-    this.disposePromise = Promise.allSettled([this.disposeAllSessions(), this.commandTasksInstance?.dispose(), this.debugManagerInstance?.dispose()]).then(async () => { await this.rewindClient.dispose(); await this.trajectory.dispose() })
+    this.disposePromise = Promise.allSettled([this.disposeAllSessions(), this.commandTasksInstance?.dispose(), this.debugManagerInstance?.dispose()]).then(async () => { await this.rewindClient.dispose(); await this.trajectory.dispose(); await getLibraryService()?.dispose() })
     return this.disposePromise
   }
 }

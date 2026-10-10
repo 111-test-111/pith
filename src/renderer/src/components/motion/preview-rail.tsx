@@ -1,3 +1,4 @@
+// local patch (pi-app): shared scalable typography for UI line metrics.
 // local patch (pi-app): keep UI frames and focus rings in this component at 1px.
 "use client";
 
@@ -62,7 +63,7 @@ function DefaultPreview({ item }: { item: PreviewRailItem }) {
       {item.description ? (
         <div
           data-slot="preview-rail-description"
-          className="mt-1 text-sm leading-6 text-muted-foreground"
+          className="mt-1 text-sm leading-ui-loose text-muted-foreground"
         >
           {item.description}
         </div>

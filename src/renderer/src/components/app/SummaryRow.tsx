@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { createContext, useContext, useMemo, useState } from 'react'
 import { ArrowLeftFromLine, Minimize2 } from '@/lib/icons'
 import { ToolResult } from '@/components/agents/tool-result'
 import { Markdown } from '@/lib/markdown'
@@ -6,9 +6,15 @@ import { formatTokenCount } from '@/lib/format'
 import { splitSummaryFiles } from '@/lib/summary-files'
 import { useFileNavigation } from '@/lib/file-navigation'
 import { useI18n } from '@/i18n'
+import type { CompactionProcessDTO } from '../../../../shared/compaction'
+import { CompactionProcessView } from './CompactionProcessView'
 
 export type SummaryKind = 'compaction' | 'branch'
-export type SummaryStatus = 'running' | 'success' | 'error'
+export type SummaryStatus = 'running' | 'success' | 'error' | 'cancelled'
+
+/** A live row becomes a persisted row at settlement. Keep the user's disclosure
+ * choice through that move, without mounting collapsed summary bodies. */
+export const SummaryDisclosureContext = createContext<Map<string, boolean> | null>(null)
 
 /**
  * A context rewrite reads as a tool row, because that is what it is: the app
@@ -24,41 +30,59 @@ export type SummaryStatus = 'running' | 'success' | 'error'
  * and capped like every other tool body: a summary can be tens of thousands of
  * characters, and the row must cost nothing until the user asks for it.
  */
-export function SummaryRow({ kind, status, summary, tokensBefore, detail }: {
+export function SummaryRow({ kind, status, summary, tokensBefore, detail, process }: {
   kind: SummaryKind
   status: SummaryStatus
   summary?: string
   /** Only a compaction records one; a branch summary covers an abandoned path. */
   tokensBefore?: number
-  /** Raw reason text for a failure — the nearest thing to a result it has. */
+  /** Raw failure detail; compaction shows it in the process region. */
   detail?: string
+  process?: CompactionProcessDTO
 }) {
   const { t } = useI18n()
+  const disclosures = useContext(SummaryDisclosureContext)
+  const [open, setOpen] = useState(() => status === 'error' || ((process && disclosures?.get(process.id)) ?? false))
+  const changeOpen = (next: boolean): void => {
+    setOpen(next)
+    if (process && disclosures) {
+      disclosures.set(process.id, next)
+      if (disclosures.size > 128) disclosures.delete(disclosures.keys().next().value!)
+    }
+  }
   const Icon = kind === 'compaction' ? Minimize2 : ArrowLeftFromLine
   const meta = tokensBefore && tokensBefore > 0
     ? t('chat.summaryTokensBefore', { tokens: formatTokenCount(tokensBefore) })
     : undefined
   const { body, read, modified } = useMemo(() => splitSummaryFiles(summary ?? ''), [summary])
-  // A settled summary carries the SDK's trailing file sections; a failure's
-  // body is its reason, which never has any.
-  const text = summary ? body : detail ?? ''
+  // Only a settled summary carries the SDK's trailing file sections.
+  const text = summary ? body : kind === 'branch' ? detail ?? '' : ''
   return (
     <div data-summary-row={kind} data-state={status}>
       <ToolResult
         animateChanges={false}
         lazyContent
-        // A failure has no second representation: the reason IS the result, so
-        // it opens on arrival rather than hiding behind a click.
-        defaultOpen={status === 'error'}
+        // Open failures on arrival so their process detail is visible.
+        open={open}
+        onOpenChange={changeOpen}
         collapseOnComplete={false}
         icon={<Icon aria-hidden="true" className="size-3.5" />}
         title={kind === 'compaction' ? t('chat.compactTitle') : t('chat.summaryBranchTitle')}
         meta={meta}
         status={status}
         maxHeight={320}
+        header={kind === 'compaction' ? <CompactionProcessView process={process} detail={detail} /> : undefined}
       >
-        {text ? <Markdown>{text}</Markdown> : null}
-        <SummaryFiles read={read} modified={modified} />
+        {kind === 'compaction' ? <section data-compaction-summary aria-label={t('chat.compactionSummary')}>
+          <h3 className="mb-2 text-xs font-medium text-foreground/80">{t('chat.compactionSummary')}</h3>
+          {text ? <Markdown>{text}</Markdown> : <p className="text-xs text-muted-foreground">{t(
+            status === 'running' ? 'chat.compactionSummaryPending' : status === 'cancelled' ? 'chat.compactionSummaryCancelled' : 'chat.compactionSummaryMissing'
+          )}</p>}
+          <SummaryFiles read={read} modified={modified} />
+        </section> : <>
+          {text ? <Markdown>{text}</Markdown> : null}
+          <SummaryFiles read={read} modified={modified} />
+        </>}
       </ToolResult>
     </div>
   )
@@ -89,7 +113,7 @@ function SummaryFileGroup({ label, paths }: { label: string; paths: string[] }) 
   return (
     <div data-summary-file-group>
       <p className="mb-1 text-xs font-medium text-muted-foreground">{label}</p>
-      <ul className="list-disc pl-5 text-sm leading-6">
+      <ul className="list-disc pl-5 text-sm leading-ui-loose">
         {paths.map((path) => (
           <li key={path} className="[overflow-wrap:anywhere]">
             <button

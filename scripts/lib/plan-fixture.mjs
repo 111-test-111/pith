@@ -18,7 +18,7 @@ const sdk = fileURLToPath(import.meta.resolve('@earendil-works/pi-coding-agent')
  * The fake stream is installed inside the mocked createAgentSessionFromServices
  * so it exists before PiManager takes ownership of the session.
  */
-export async function createPlanFixture({ respond: initialRespond, extensionFactories = [], withRewind = false, keepRecentTokens = 20000, providerCallbacks = false, prepareAgentDir, loadDiscoveredExtensions = false } = {}) {
+export async function createPlanFixture({ respond: initialRespond, extensionFactories = [], withRewind = false, withLibrary = false, keepRecentTokens = 20000, providerCallbacks = false, prepareAgentDir, loadDiscoveredExtensions = false, loadSkills = false, loadContextFiles = false, imageSkillPath } = {}) {
   const temporary = await mkdtemp(join(tmpdir(), 'pith-plan-mode-'))
   const agentDir = join(temporary, 'agent')
   const project = join(temporary, 'project')
@@ -39,6 +39,7 @@ export async function createPlanFixture({ respond: initialRespond, extensionFact
     stdin: {
       contents: `export { PiManager } from './src/main/pi/manager';
 export { debugAdapterSpec } from './src/main/debug/adapters';
+export { startLibraryService } from './src/main/library/service';
 export { PlanStorage } from './src/main/pi/plan-storage';
 export * from './src/main/pi/plan-protocol';
 export { PiStore } from './src/renderer/src/state/pi-store';
@@ -54,7 +55,7 @@ export { SessionManager, ModelRuntime, SettingsManager, setPlanFixtureStream, re
       setup(builder) {
         builder.onResolve({ filter: /^@earendil-works\/pi-coding-agent$/ }, () => ({ path: 'sdk', namespace: 'fixture' }))
         builder.onResolve({ filter: /^electron$/ }, () => ({ path: 'electron', namespace: 'fixture' }))
-        builder.onResolve({ filter: /^proper-lockfile$/ }, args => ({ path: fileURLToPath(import.meta.resolve(args.path)), external: true }))
+        builder.onResolve({ filter: /^proper-lockfile$|^@resvg\/resvg-js$/ }, args => ({ path: fileURLToPath(import.meta.resolve(args.path)), external: true }))
         // Strict absolute externalization for the browser dependency graph.
         builder.onResolve({ filter: /^playwright-core(\/|$)|^chromium-bidi(\/|$)/ }, (args) => {
           const resolved = fileURLToPath(import.meta.resolve(args.path))
@@ -84,10 +85,10 @@ export function createAgentSessionServices(options){
     resourceLoaderOptions:{
       ...options.resourceLoaderOptions,
       noExtensions:${!loadDiscoveredExtensions},
-      noSkills:true,
+      noSkills:${!loadSkills},
       noPromptTemplates:true,
       noThemes:true,
-      noContextFiles:true,
+      noContextFiles:${!loadContextFiles},
       extensionFactories:[...(options.resourceLoaderOptions.extensionFactories??[]), ...fixtureExtensionFactories]
     }
   });
@@ -103,11 +104,14 @@ export async function createAgentSessionFromServices(options){
   })
 
   await build({ entryPoints: [join(planRepoRoot, 'src/main/pi/trajectory-worker.ts')], outfile: join(temporary, 'trajectory-worker.mjs'), bundle: true, platform: 'node', format: 'esm' })
+  if (withLibrary) await build({ entryPoints: [join(planRepoRoot, 'src/main/library/worker.ts')], outfile: join(temporary, 'library-worker.mjs'), bundle: true, platform: 'node', format: 'esm',
+    plugins: [{ name: 'library-dependencies', setup(builder) { builder.onResolve({ filter: /^@earendil-works\/pi-coding-agent$|^proper-lockfile$/ }, args => ({ path: fileURLToPath(import.meta.resolve(args.path)), external: true })) } }] })
   if (withRewind) await build({ entryPoints: [join(planRepoRoot, 'src/main/rewind/worker.ts')], outfile: join(temporary, 'rewind-worker.mjs'), bundle: true, platform: 'node', format: 'esm' })
 
   const {
     PiManager,
     PiStore,
+    startLibraryService,
     SessionManager,
     ModelRuntime,
     setPlanFixtureStream,
@@ -193,7 +197,8 @@ export async function createAgentSessionFromServices(options){
     },
     (error) => {
       throw new Error(error)
-    }
+    },
+    typeof imageSkillPath === 'function' ? imageSkillPath(agentDir) : imageSkillPath
   )
   app.runtime = async () => runtime
 
@@ -202,6 +207,7 @@ export async function createAgentSessionFromServices(options){
   const { session } = managed
 
   store.applySnapshot(app.snapshot())
+  const library = withLibrary ? startLibraryService(() => {}, id => app.librarySession(id)) : null
 
   return {
     app,
@@ -209,6 +215,7 @@ export async function createAgentSessionFromServices(options){
     session,
     manager,
     store,
+    library,
     debugAdapterSpec,
     project,
     temporary,

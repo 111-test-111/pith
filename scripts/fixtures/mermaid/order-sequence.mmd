@@ -1,0 +1,42 @@
+sequenceDiagram
+    autonumber
+    actor U as 用户
+    participant W as Web 前端
+    participant A as API 网关
+    participant S as 订单服务
+    participant P as 支付服务
+    participant D as 数据库
+
+    U->>W: 点击「立即购买」
+    W->>A: POST /orders
+    activate A
+    A->>A: JWT 校验
+    A->>S: 创建订单
+    activate S
+    S->>D: INSERT order
+    D-->>S: order_id
+    S-->>A: 201 Created
+    deactivate S
+
+    par 并行处理
+        A->>P: 发起支付
+        activate P
+        P-->>A: 支付链接
+        deactivate P
+    and 库存扣减
+        A->>S: 锁定库存
+        S-->>A: ok
+    end
+
+    alt 支付成功
+        P-->>A: callback success
+        A->>S: 更新订单状态
+        S->>D: UPDATE status = PAID
+        A-->>W: 200 下单成功
+    else 支付失败
+        P-->>A: callback failed
+        A->>S: 回滚订单
+        Note over S,D: 释放库存并标记 FAILED
+        A-->>W: 402 支付失败
+    end
+    deactivate A

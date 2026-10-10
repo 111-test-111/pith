@@ -4,20 +4,27 @@ import {
   memo,
   useContext,
   useEffect,
+  useId,
   useState,
   type ComponentPropsWithoutRef,
   type ReactNode
 } from 'react'
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import { CodeBlock } from '@/components/agents/code-block'
-import { PreviewThumb } from '@/components/app/ImagePreview'
+import { ImagePreviewGroup, PreviewThumb } from '@/components/app/ImagePreview'
 import { MarkdownMath } from '@/components/app/MarkdownMath'
-import { REMARK_PLUGINS } from '@/lib/markdown-plugins'
+import { MarkdownMermaid } from '@/components/app/MarkdownMermaid'
+import { FILE_REMARK_PLUGINS, REMARK_PLUGINS } from '@/lib/markdown-plugins'
 import { splitMarkdownBlocks } from '@/lib/markdown-blocks'
 import { normalizeQuotedMath } from '@/lib/markdown-quoted-math'
+import { normalizeLinkSpaces } from '@/lib/markdown-link-spaces'
 import { localFileTarget, useFileNavigation } from '@/lib/file-navigation'
 import { codeLanguage } from '@/lib/file-language'
 import { getOpenLinksInBrowserPref, requestBrowserOpenLink } from '@/lib/browser/open-link'
+import { useI18n } from '@/i18n'
+import { cn } from '@/lib/utils'
+import { CircleAlert, Info, Lightbulb } from '@/lib/icons'
+import type { MarkdownAlertKind } from '@/lib/remark-alerts'
 
 /**
  * Assistant markdown renderer: react-markdown + GFM (tables, task lists,
@@ -35,8 +42,10 @@ import { getOpenLinksInBrowserPref, requestBrowserOpenLink } from '@/lib/browser
  */
 
 /** True while the surrounding Markdown is streaming — CodeBlock renders its
- * streaming state (no highlighting, "Writing" chip) instead of "complete". */
+ * streaming state (live tail, no highlighting) instead of "complete". */
 const StreamingMarkdownContext = createContext(false)
+const PreserveLineBreaksContext = createContext(false)
+const FootnoteLabelContext = createContext('footnote-label')
 
 /**
  * Markdown image sources are usually WORKSPACE paths (`output/cat.png`), not
@@ -192,44 +201,57 @@ const components: MarkdownComponents = {
   },
   pre({ children }) {
     const { code, language } = extractCodeBlock(children)
+    const streaming = useContext(StreamingMarkdownContext)
+    if (language?.toLowerCase() === 'mermaid') return <MarkdownMermaid code={code} streaming={streaming} />
     return (
       <CodeBlock
         code={code}
         language={normalizeLanguage(language)}
-        status={useContext(StreamingMarkdownContext) ? 'streaming' : 'complete'}
+        status={streaming ? 'streaming' : 'complete'}
       />
     )
   },
   code({ children }) {
     // Only inline code reaches this override — fenced code is consumed by `pre`.
     return (
-      <code className="rounded-detail bg-muted px-1.5 py-0.5 font-mono text-xs text-foreground">
+      <code data-inline-code className="rounded-detail bg-muted px-1.5 py-0.5 font-mono text-code-inline text-foreground">
         {children}
       </code>
     )
   },
-  a({ href, title, children }) {
+  a({ node, href, title, children, className, ...props }) {
     const navigation = useFileNavigation()
+    const footnoteLabel = useContext(FootnoteLabelContext)
     return (
       <a
+        {...props}
         href={href}
         title={title}
+        aria-describedby={props['aria-describedby'] === 'footnote-label' ? footnoteLabel : props['aria-describedby']}
         onClick={(event) => {
           if (!href) return
           event.preventDefault()
           if (href.startsWith('#')) {
+            const scope = event.currentTarget.closest<HTMLElement>('[data-markdown]')
             const page = event.currentTarget.closest<HTMLElement>('[data-file-markdown]')
-            let anchor = href.slice(1)
+            const fragment = href.slice(1)
+            let anchor = fragment
             try { anchor = decodeURIComponent(anchor) } catch { /* literal fragment */ }
-            const heading = [...(page?.querySelectorAll<HTMLElement>('h1,h2,h3,h4,h5,h6') ?? [])].find(element =>
-              element.textContent?.toLowerCase().replace(/[^\p{L}\p{N}\p{M}_\-\s]/gu, '').replace(/\s/g, '-') === anchor)
-            if (page && heading) page.scrollTop += heading.getBoundingClientRect().top - page.getBoundingClientRect().top
+            const target = [...(scope?.querySelectorAll<HTMLElement>('[id]') ?? [])].find(element => element.id === fragment || element.id === anchor)
+              ?? [...((page ?? scope)?.querySelectorAll<HTMLElement>('h1,h2,h3,h4,h5,h6') ?? [])].find(element =>
+                element.textContent?.toLowerCase().replace(/[^\p{L}\p{N}\p{M}_\-\s]/gu, '').replace(/\s/g, '-') === anchor)
+            if (target) {
+              if (page) page.scrollTop += target.getBoundingClientRect().top - page.getBoundingClientRect().top
+              else target.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+              if (!target.hasAttribute('tabindex') && target.tagName !== 'A') target.tabIndex = -1
+              target.focus({ preventScroll: true })
+            }
           } else if (isBrowserOpenLinkClick(href, event)) {
             // Queue and dispatch pith:browser-open-link. Mounted panes drain immediately; otherwise Workspace opens the pane and mount drains. preventDefault already ran above.
             requestBrowserOpenLink(href)
           } else navigation.open(href)
         }}
-        className="font-medium text-primary underline underline-offset-2 hover:opacity-80"
+        className={cn('font-medium text-primary underline underline-offset-2 hover:opacity-80', className)}
       >
         {children}
       </a>
@@ -242,7 +264,7 @@ const components: MarkdownComponents = {
       // let the table outgrow the frame. Scrollbars stay hidden per the app's
       // chrome-less policy — trackpad swipe / Shift+wheel scroll the frame.
       <div className="w-full overflow-x-auto overscroll-x-contain rounded-xl border border-border">
-        <table className="w-full border-collapse text-sm">{children}</table>
+        <table className="w-full border-collapse text-content-tight">{children}</table>
       </div>
     )
   },
@@ -267,30 +289,40 @@ const components: MarkdownComponents = {
   tr({ children }) {
     return <tr className="last:[&>td]:border-b-0">{children}</tr>
   },
-  ul({ children }) {
-    return <ul className="ml-5 list-disc space-y-1 marker:text-muted-foreground">{children}</ul>
+  ul({ node, children, className, ...props }) {
+    return <ul {...props} className={cn('ml-5 list-disc space-y-1 marker:text-muted-foreground', className)}>{children}</ul>
   },
-  ol({ children, start }) {
-    return <ol start={start} className="ml-5 list-decimal space-y-1 marker:text-muted-foreground">{children}</ol>
+  ol({ node, children, className, ...props }) {
+    return <ol {...props} className={cn('ml-5 list-decimal space-y-1 marker:text-muted-foreground', className)}>{children}</ol>
   },
-  li({ children, className }) {
-    return <li className={`pl-1 [>&]:min-w-0${className?.split(' ').includes('task-list-item') ? ' list-none' : ''}`}>{children}</li>
+  li({ node, children, className, ...props }) {
+    return <li {...props} className={cn('pl-1 [>&]:min-w-0', className, className?.split(' ').includes('task-list-item') && 'list-none')}>{children}</li>
   },
-  h1({ children }) {
-    return <h1 className="text-base font-bold text-foreground">{children}</h1>
+  h1({ node, children, className, ...props }) {
+    return <h1 {...props} className={cn('text-content-heading font-bold text-foreground', className)}>{children}</h1>
   },
-  h2({ children }) {
-    return <h2 className="text-base font-semibold text-foreground">{children}</h2>
+  h2({ node, children, className, id, ...props }) {
+    const footnoteLabel = useContext(FootnoteLabelContext)
+    return <h2 {...props} id={id === 'footnote-label' ? footnoteLabel : id} className={cn('text-content-heading font-semibold text-foreground', className)}>{children}</h2>
   },
-  h3({ children }) {
-    return <h3 className="text-sm font-semibold text-foreground">{children}</h3>
+  h3({ node, children, className, ...props }) {
+    return <h3 {...props} className={cn('text-content-tight font-semibold text-foreground', className)}>{children}</h3>
   },
-  h4({ children }) {
-    return <h4 className="text-sm font-semibold text-foreground">{children}</h4>
+  h4({ node, children, className, ...props }) {
+    return <h4 {...props} className={cn('text-content-tight font-semibold text-foreground', className)}>{children}</h4>
   },
-  blockquote({ children }) {
+  blockquote({ node, children }) {
+    const { t } = useI18n()
+    const kind = node?.properties?.['data-markdown-alert'] as MarkdownAlertKind | undefined
+    const Icon = kind === 'tip' ? Lightbulb : kind === 'warning' || kind === 'caution' ? CircleAlert : Info
+    if (kind) return <blockquote data-markdown-alert={kind} className="border-l-2 pl-3 text-foreground">
+      <p data-markdown-alert-title className="mb-1 flex items-center gap-1.5 font-medium">
+        <Icon className="size-4 shrink-0" aria-hidden="true" />{t(`markdown.alert.${kind}`)}
+      </p>
+      {children}
+    </blockquote>
     return (
-      <blockquote className="border-l border-border pl-3 text-muted-foreground">
+      <blockquote className="border-l border-border pl-3 text-foreground">
         {children}
       </blockquote>
     )
@@ -327,10 +359,28 @@ class MarkdownBlockBoundary extends Component<{ source: string; children: ReactN
 }
 
 function ParsedMarkdown({ source }: { source: string }) {
+  const { t } = useI18n()
+  const preserveLineBreaks = useContext(PreserveLineBreaksContext)
+  const idPrefix = `markdown-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}-`
+  // Both normalizers only rewrite rendering input, before the parser sees it:
+  // quoted math keeps a Jupyter formula's quote structure, and link spaces
+  // wrap a destination CommonMark would otherwise refuse as literal text.
+  const text = normalizeLinkSpaces(normalizeQuotedMath(source))
   return (
-    <ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={components} urlTransform={markdownUrlTransform}>
-      {normalizeQuotedMath(source)}
-    </ReactMarkdown>
+    <FootnoteLabelContext.Provider value={`${idPrefix}footnote-label`}>
+      <ReactMarkdown
+        remarkPlugins={preserveLineBreaks ? FILE_REMARK_PLUGINS : REMARK_PLUGINS}
+        remarkRehypeOptions={{
+          clobberPrefix: idPrefix,
+          footnoteLabel: t('markdown.footnotes'),
+          footnoteBackLabel: (index, occurrence) => t('markdown.backToReference', { number: `${index + 1}${occurrence > 1 ? `-${occurrence}` : ''}` })
+        }}
+        components={components}
+        urlTransform={markdownUrlTransform}
+      >
+        {text}
+      </ReactMarkdown>
+    </FootnoteLabelContext.Provider>
   )
 }
 
@@ -342,30 +392,36 @@ const MarkdownBlock = memo(function MarkdownBlock({ children }: { children: stri
 
 export const Markdown = memo(function Markdown({
   children,
-  streaming = false
+  streaming = false,
+  preserveLineBreaks = false
 }: {
   children: string
   streaming?: boolean
+  preserveLineBreaks?: boolean
 }) {
   const blocks = streaming ? splitMarkdownBlocks(children) : null
   return (
     <StreamingMarkdownContext.Provider value={streaming}>
-      {/* `overflow-wrap: anywhere` keeps unbroken tokens (long paths, URLs)
-          from widening the bubble; code blocks opt out via their own
-          whitespace-pre. Stacked streaming blocks keep single-parse spacing
-          through this wrapper's own `space-y-3`. */}
-      <div className="space-y-3 text-sm leading-6 text-foreground [overflow-wrap:anywhere]">
-        {blocks ? (
-          <>
-            {blocks.stable.map((block, index) => (
-              <MarkdownBlock key={index}>{block}</MarkdownBlock>
-            ))}
-            {blocks.tail ? <MarkdownBlock>{blocks.tail}</MarkdownBlock> : null}
-          </>
-        ) : (
-          <MarkdownBlock>{children}</MarkdownBlock>
-        )}
-      </div>
+      <PreserveLineBreaksContext.Provider value={preserveLineBreaks}>
+        <ImagePreviewGroup>
+          {/* `overflow-wrap: anywhere` keeps unbroken tokens (long paths, URLs)
+              from widening the bubble; code blocks opt out via their own
+              whitespace-pre. Stacked streaming blocks keep single-parse spacing
+              through this wrapper's own `space-y-3`. */}
+          <div data-markdown className="space-y-3 text-content text-foreground [overflow-wrap:anywhere]">
+            {blocks ? (
+              <>
+                {blocks.stable.map((block, index) => (
+                  <MarkdownBlock key={index}>{block}</MarkdownBlock>
+                ))}
+                {blocks.tail ? <MarkdownBlock>{blocks.tail}</MarkdownBlock> : null}
+              </>
+            ) : (
+              <MarkdownBlock>{children}</MarkdownBlock>
+            )}
+          </div>
+        </ImagePreviewGroup>
+      </PreserveLineBreaksContext.Provider>
     </StreamingMarkdownContext.Provider>
   )
 })

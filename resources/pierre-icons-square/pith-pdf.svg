@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+  <!-- Pith square adaptation (2026). Apache-2.0; see NOTICE.txt. -->
+  <path fill="currentColor" fill-rule="evenodd" d="M2 1h6v6h6v8H2z" opacity="0.4"/><path fill="currentColor" fill-rule="evenodd" d="M9 1l5 5H9z"/><path fill="currentColor" fill-rule="evenodd" d="M3 8h3v3H4v2H3zm1 1v1h1V9zM7 8h3v5H7zm1 1v3h1V9zM11 8h2.5v1H12v1h1.25v1H12v2h-1z"/>
+</svg>

@@ -21,11 +21,11 @@
  *   absent, not silently trusted.
  *
  * The ceiling is enforced at three points, all reading live state:
- * `setActiveToolsByName` (what the model can see), `beforeToolCall` (what may
+ * the public agent-state tools accessor (what the model can see), `beforeToolCall` (what may
  * start, including after an awaited hook), and the wrapped `execute` (a
  * re-activated or old-schema reference). It is not a prompt or a name filter.
  */
-import type { AgentSession, ToolDefinition } from '@earendil-works/pi-coding-agent'
+import type { AgentSession, ExtensionActions, ToolDefinition } from '@earendil-works/pi-coding-agent'
 import { createReadOnlyTools } from '@earendil-works/pi-coding-agent'
 import { createAppReadTool } from './read-tool'
 import { APP_BASH_TOOL_NAMES } from './bash-tools'
@@ -34,6 +34,7 @@ import { JEV_TOOL_NAME } from './jev/protocol'
 import { AGENT_STEER_TOOL_NAME, MESSAGE_PARENT_TOOL_NAME, SUBAGENT_TOOL_NAME } from './subagents/protocol'
 import { ASK_USER_TOOL_NAME } from '../../shared/ask-user'
 import { PRESENT_TOOL_NAME } from '../../shared/present'
+import { IMAGE_TOOL_NAME } from '../../shared/image'
 import { SCHEDULED_TASK_TOOL_NAME } from './scheduled-tasks/tool'
 import { hasPlanOpening, cancelledPlanOpening } from './plan-approval-access'
 import type { PlanController } from './plan-mode'
@@ -77,6 +78,10 @@ export interface PlanGate {
    * never narrow the base that leaving Plan restores.
    */
   setAppActiveTools(names: readonly string[]): void
+  /** Normal-mode selection, before Plan materializes its restricted view. */
+  activeToolNames(): string[]
+  /** Bind explicit extension selection separately from SDK registry refreshes. */
+  bindExtensionRuntime(runtime: Pick<ExtensionActions, 'getActiveTools' | 'setActiveTools'>): void
   /** The last materialized effective view (catalog / capability readout). */
   tools(): readonly EffectivePlanTool[]
   /** Admit an SDK `ctx.executeTool()` call against the live definition and role ceiling. */
@@ -129,9 +134,14 @@ const CHILD_FORBIDDEN_TOOLS: ReadonlySet<string> = new Set([
 
 /** These app tools depend on a committed top-level result or orchestration
  * receipt. The SDK persists only a summary of nested calls, so running one
- * through ctx.executeTool would lose that state transition. */
+ * through ctx.executeTool would lose that state transition.
+ *
+ * `image` belongs here for the same reason: it writes its bytes to disk and its
+ * deliverable is the returned preview, which a nested call would flatten into a
+ * script result. */
 const MODEL_ONLY_APP_TOOLS: ReadonlySet<string> = new Set([
   PRESENT_TOOL_NAME,
+  IMAGE_TOOL_NAME,
   TODO_TOOL_NAME,
   ASK_USER_TOOL_NAME,
   'submit_plan',
@@ -183,6 +193,17 @@ function createGate(options: PlanGateOptions): PlanGate {
   }
 
   const originalSet = session.setActiveToolsByName
+  // Pi 1.0 also replaces tools internally during registration, reload and
+  // request preparation. All of those paths write the public AgentState
+  // accessor, even when they do not call setActiveToolsByName(). Preserve its
+  // copy-on-assignment semantics and avoid depending on private SDK methods.
+  const toolsDescriptor = Object.getOwnPropertyDescriptor(session.agent.state, 'tools')
+  if (!toolsDescriptor?.get || !toolsDescriptor.set || !toolsDescriptor.configurable) {
+    throw new Error('Review Pi SDK AgentState.tools before installing the Plan gate')
+  }
+  const writeTools = (tools: AgentSession['agent']['state']['tools']): void => {
+    toolsDescriptor.set!.call(session.agent.state, tools)
+  }
   const previousFinish = session.agent.finishTurn
   const previousPrompt = session.agent.prompt
   const promptRun: typeof previousPrompt = async (...args) => {
@@ -191,6 +212,8 @@ function createGate(options: PlanGateOptions): PlanGate {
     const messages = Array.isArray(args[0]) ? args[0] : [args[0]]
     const userOpening = messages.some(m => typeof m === 'string' || m.role === 'user')
     if (controller.submissionLocked && !userOpening) throw new Error('plan-already-submitted')
+    // Pi 1.0's prompt is a prototype method, not a bound callback. Preserve
+    // its Agent receiver as well as either overload's original arguments.
     return Reflect.apply(previousPrompt, session.agent, args)
   }
   session.agent.prompt = promptRun
@@ -229,6 +252,7 @@ function createGate(options: PlanGateOptions): PlanGate {
   let extras: string[] = []
   let effective: EffectivePlanTool[] = []
   let disposed = false
+  let unbindExtensionRuntime: (() => void) | undefined
 
   /**
    * Identity-based provenance. `unreviewed` is a real answer, not a placeholder:
@@ -292,6 +316,10 @@ function createGate(options: PlanGateOptions): PlanGate {
     // The registry's AgentTool carries the extension context as a 5th argument
     // that its declared type omits; keep it so app/extension tools still run
     // with their own context.
+    // SAFETY: the registry's AgentTool declares four parameters while the
+    // runtime passes a fifth (the extension context). The narrowed signature
+    // only re-states that wider reality; `execute` is invoked with exactly
+    // those arguments below, so width is preserved in both directions.
     const execute = tool.execute as unknown as (
       toolCallId: string,
       params: unknown,
@@ -310,13 +338,15 @@ function createGate(options: PlanGateOptions): PlanGate {
       if (denial) throw new Error(denial)
       return execute(toolCallId, params, signal, onUpdate, ctx)
     }
+    // SAFETY: the only replaced field is `execute`, whose wrapper accepts and
+    // forwards the same five arguments as the captured implementation, so the
+    // result is still a `PlanTool` — the assertion cannot mask a shape drift.
     return { ...tool, execute: wrappedExecute } as unknown as PlanTool
   }
 
-  const materialize = (): void => {
+  const materialize = (registry = session.agent.state.tools): void => {
     const ceiling = options.roleCeiling()
     const restricted = controller.restricted
-    const registry = session.agent.state.tools
     const next: EffectivePlanTool[] = []
     const seen = new Set<string>()
     for (const tool of registry) {
@@ -326,6 +356,9 @@ function createGate(options: PlanGateOptions): PlanGate {
       if (ceiling && !ceiling.includes(name)) continue
       const isSafeRead = restricted && safeReads.has(name)
       const provenance: PlanToolProvenance = isSafeRead ? 'safe-read' : classify(name)
+      // An internal SDK refresh may activate its registered custom tools by
+      // default. Owned service toggles are authoritative in every mode.
+      if (provenance === 'app' && !appNames.includes(name)) continue
       const definition = isSafeRead ? undefined : session.getToolDefinition(name)
       if (restricted) {
         if (!allowedInPlan(name, provenance)) continue
@@ -344,15 +377,17 @@ function createGate(options: PlanGateOptions): PlanGate {
       next.push({ name, tool: wrapped(current, provenance), ...(definition ? { definition } : {}), provenance })
     }
     effective = next
-    session.agent.state.tools = next.map((entry) => entry.tool)
+    writeTools(next.map((entry) => entry.tool))
+  }
+
+  const activeToolNames = (): string[] => {
+    const present = new Set(session.getAllTools().map((tool) => tool.name))
+    return dedupe([...appNames, ...extras]).filter((name) => present.has(name))
   }
 
   const apply = (): void => {
     if (disposed) return
-    const present = new Set(session.getAllTools().map((tool) => tool.name))
-    const wanted = dedupe([...appNames, ...extras]).filter((name) => present.has(name))
-    originalSet.call(session, wanted)
-    materialize()
+    originalSet.call(session, activeToolNames())
   }
 
   /**
@@ -361,8 +396,7 @@ function createGate(options: PlanGateOptions): PlanGate {
    * view, so its list must never replace the app's base: only the names it
    * genuinely ADDS are remembered, and the base is rebuilt from `appNames`.
    */
-  const setter = (names: string[]): void => {
-    if (disposed) return
+  const rememberSdkTools = (names: string[]): void => {
     const previous = new Set(effective.map((entry) => entry.name))
     for (const name of names) {
       if (typeof name !== 'string') continue
@@ -373,8 +407,20 @@ function createGate(options: PlanGateOptions): PlanGate {
       if (classify(name) === 'app' || safeReads.has(name)) continue
       extras.push(name)
     }
+  }
+  const setter = (names: string[]): void => {
+    if (disposed) return
+    rememberSdkTools(names)
     apply()
   }
+  const setTools = (tools: AgentSession['agent']['state']['tools']): void => {
+    if (disposed) { writeTools(tools); return }
+    rememberSdkTools(tools.map(tool => tool.name))
+    // This is an already prepared SDK loadout. Filter it directly; invoking
+    // the session setter here would run prepareLoadout hooks a second time.
+    materialize(tools)
+  }
+  Object.defineProperty(session.agent.state, 'tools', { ...toolsDescriptor, set: setTools })
   session.setActiveToolsByName = setter
 
   const beforeToolCall = async (context: BeforeContext, signal?: AbortSignal): Promise<BeforeResult> => {
@@ -410,6 +456,37 @@ function createGate(options: PlanGateOptions): PlanGate {
       // never be in it, so a settings change still takes full effect.
       apply()
     },
+    activeToolNames,
+    bindExtensionRuntime: runtime => {
+      unbindExtensionRuntime?.()
+      if (disposed) return
+      const originalGet = runtime.getActiveTools
+      const originalExtensionSet = runtime.setActiveTools
+      // An extension's read/modify/write selection operates on the Normal
+      // base. Reading the Plan-filtered view would accidentally discard every
+      // masked extension tool when it only meant to remove obsolete aliases.
+      const get = () => activeToolNames()
+      const set = (names: string[]) => {
+        if (disposed) return
+        const selected = new Set(names)
+        const extensionNames = new Set(session.getAllTools().filter(tool =>
+          tool.sourceInfo.source !== 'builtin' && tool.sourceInfo.source !== 'sdk' &&
+          classify(tool.name) !== 'app' && !safeReads.has(tool.name)).map(tool => tool.name))
+        const keep = (name: string) => !extensionNames.has(name) || selected.has(name)
+        appNames = appNames.filter(keep)
+        extras = extras.filter(keep)
+        // Explicit removals are authoritative for extension tools. SDK
+        // refreshes still use the additive setter above to preserve the base
+        // when their previous-active snapshot came from the Plan view.
+        setter(names)
+      }
+      runtime.getActiveTools = get
+      runtime.setActiveTools = set
+      unbindExtensionRuntime = () => {
+        if (runtime.getActiveTools === get) runtime.getActiveTools = originalGet
+        if (runtime.setActiveTools === set) runtime.setActiveTools = originalExtensionSet
+      }
+    },
     tools: () => effective,
     admitNested: (name, params, definition) => {
       // The SDK resolves nested calls from its raw registry, bypassing both
@@ -431,7 +508,11 @@ function createGate(options: PlanGateOptions): PlanGate {
     dispose: () => {
       if (disposed) return
       disposed = true
+      unbindExtensionRuntime?.()
       if (session.setActiveToolsByName === setter) session.setActiveToolsByName = originalSet
+      if (Object.getOwnPropertyDescriptor(session.agent.state, 'tools')?.set === setTools) {
+        Object.defineProperty(session.agent.state, 'tools', toolsDescriptor)
+      }
       if (session.agent.beforeToolCall === beforeToolCall) session.agent.beforeToolCall = previousBefore
       if (session.agent.finishTurn === finish) session.agent.finishTurn = previousFinish
       if (session.agent.prompt === promptRun) session.agent.prompt = previousPrompt

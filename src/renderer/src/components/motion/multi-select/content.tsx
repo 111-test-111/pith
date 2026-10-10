@@ -1,39 +1,25 @@
 "use client";
 // beui.dev/components/motion/multi-select
 
-import { motion, type Transition } from "motion/react";
+import { motion } from "motion/react";
 import {
   type CSSProperties,
   type ReactNode,
   useEffect,
   useLayoutEffect,
-  useRef,
   useState,
 } from "react";
 import { createPortal } from "react-dom";
 import { usePopoverPortalPosition } from "@/components/motion/popover-position";
+// local patch (pi-app): shared overlay motion, with natural content geometry.
+import { useOverlayMotion } from "@/lib/overlay-motion";
 import { cn } from "@/lib/utils";
 import { useMultiSelectContext } from "./context";
 
 type Side = "top" | "bottom";
 type Align = "start" | "center" | "end";
 
-// Matches the Combobox surface: the field grows into a panel and then
-// separates, preserving a continuous spatial relationship with its trigger.
-const MULTI_SELECT_MORPH: Transition = {
-  type: "spring",
-  duration: 0.5,
-  bounce: 0.22,
-};
 const VIEWPORT_PADDING = 8;
-
-/** The panel's own 1px top/bottom borders (`border border-border` below).
- *  local patch (pi-app): the animated height is this surface's BORDER-box
- *  height (border-box is global), while the measured content is the inner
- *  wrapper — without these the panel settles 2px short of its content and
- *  `overflow: hidden` clips the BOTTOM padding, so the list reads top-heavy.
- *  Same fix as select.tsx and combobox/content. */
-const PANEL_BORDER_PX = 2;
 
 export interface MultiSelectContentProps {
   children: ReactNode;
@@ -53,22 +39,16 @@ export function MultiSelectContent({
   className,
 }: MultiSelectContentProps) {
   const context = useMultiSelectContext("MultiSelectContent");
-  const measureRef = useRef<HTMLDivElement>(null);
   const [portalReady, setPortalReady] = useState(false);
   const [actualSide, setActualSide] = useState<Side>(side);
-  const [morphReady, setMorphReady] = useState(false);
+  const overlay = useOverlayMotion(actualSide);
   const layout = usePopoverPortalPosition(
     context.triggerRef,
-    measureRef,
+    context.contentRef,
     portalReady,
   );
 
   useEffect(() => setPortalReady(true), []);
-  useLayoutEffect(() => {
-    if (!portalReady) return;
-    const readyFrame = requestAnimationFrame(() => setMorphReady(true));
-    return () => cancelAnimationFrame(readyFrame);
-  }, [portalReady]);
 
   useLayoutEffect(() => {
     if (!context.open || !layout) return;
@@ -112,7 +92,6 @@ export function MultiSelectContent({
     window.innerWidth - contentWidth - VIEWPORT_PADDING,
   );
   const left = Math.min(Math.max(desiredLeft, VIEWPORT_PADDING), maxLeft);
-  const surfaceHeight = (layout?.content.height ?? 0) + PANEL_BORDER_PX;
 
   return createPortal(
     <motion.div
@@ -121,29 +100,18 @@ export function MultiSelectContent({
       data-side={actualSide}
       aria-hidden={!context.open}
       inert={!context.open}
-      initial={false}
-      animate={{
-        height: context.open ? surfaceHeight : 0,
-        opacity: context.open ? 1 : 0,
-        y: context.open
-          ? actualSide === "bottom"
-            ? sideOffset
-            : -sideOffset
-          : 0,
-      }}
-      transition={
-        context.reduce || !morphReady ? { duration: 0 } : MULTI_SELECT_MORPH
-      }
+      {...overlay}
+      animate={context.open && layout ? "open" : "closed"}
       style={
         {
           left,
           top:
             actualSide === "bottom" && layout
-              ? layout.trigger.top + layout.trigger.height
+              ? layout.trigger.top + layout.trigger.height + sideOffset
               : undefined,
           bottom:
             actualSide === "top" && layout
-              ? window.innerHeight - layout.trigger.top
+              ? window.innerHeight - layout.trigger.top + sideOffset
               : undefined,
           minWidth: triggerWidth,
           pointerEvents: context.open ? "auto" : "none",
@@ -153,20 +121,13 @@ export function MultiSelectContent({
         } as CSSProperties
       }
       className={cn(
-        "fixed z-[9999] w-(--multi-select-trigger-width) overflow-hidden rounded-xl border border-border bg-background text-popover-foreground outline-none will-change-[height,transform]",
+        "fixed z-[9999] w-(--multi-select-trigger-width) overflow-hidden rounded-xl border border-border bg-background text-popover-foreground shadow-overlay outline-none",
         className,
       )}
     >
-      <motion.div
-        ref={measureRef}
-        initial={false}
-        animate={{ opacity: context.open ? 1 : 0 }}
-        transition={
-          context.reduce || !morphReady ? { duration: 0 } : MULTI_SELECT_MORPH
-        }
-      >
+      <div>
         {children}
-      </motion.div>
+      </div>
     </motion.div>,
     document.body,
   );

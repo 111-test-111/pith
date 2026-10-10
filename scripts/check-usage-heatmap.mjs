@@ -126,22 +126,34 @@ try {
   assert.equal(await evaluate(`document.querySelectorAll('[data-activity-week]').length`), 0, 'the weekly blocks are gone')
 
   // Hover treatment: the header carries its month labels and the hovered
-  // particle is the ONLY particle that moves. The
-  // vendored ripple scaled its neighbours too, which read as the pointer
-  // deforming the cells it passed over.
+  // particle is the ONLY particle that reacts. It recolours and draws a
+  // highlight ring that hugs its own shape — it must not grow, and every
+  // neighbour must stay untouched.
   const dailyLabels = await evaluate(`(()=>{const grid=document.querySelector('[data-heat-cell]').closest('.grid');return [...grid.children].filter(node=>node.tagName==='SPAN'&&getComputedStyle(node).gridRow==='1').length})()`)
   assert.ok(dailyLabels > 0, 'the daily header carries month labels')
   // Let the entrance wave land before measuring a hover.
   await waitFor(`(()=>{const cells=[...document.querySelectorAll('[data-heat-cell]')];const visual=cells[cells.length-1].firstElementChild;const t=getComputedStyle(visual).transform;return getComputedStyle(visual).opacity==='1'&&(t==='none'||Math.abs(new DOMMatrix(t).a-1)<0.01)})()`)
   // Pick an interior cell, so all four neighbours exist to be measured.
-  const hotCell = await evaluate(`(()=>{const cells=[...document.querySelectorAll('[data-heat-cell]')];const inner=(cell)=>{const [w,d]=cell.getAttribute('data-heat-cell').split('-').map(Number);return w>=2&&w<=40&&d>=1&&d<=5};const cell=cells.find(inner);cell.dispatchEvent(new PointerEvent('pointerenter',{bubbles:true}));cell.dispatchEvent(new PointerEvent('pointerover',{bubbles:true}));return cell.getAttribute('data-heat-cell')})()`)
-  await waitFor(`(()=>{const cell=document.querySelector('[data-heat-cell][aria-describedby]');if(!cell)return false;const t=getComputedStyle(cell.firstElementChild).transform;return t!=='none'&&new DOMMatrix(t).a>1.01})()`)
-  await pause(400)
+  const hotCell = await evaluate(`(()=>{const cells=[...document.querySelectorAll('[data-heat-cell]')];const inner=(cell)=>{const [w,d]=cell.getAttribute('data-heat-cell').split('-').map(Number);return w>=2&&w<=40&&d>=1&&d<=5};const cell=cells.find(inner);return cell.getAttribute('data-heat-cell')})()`)
   const [hotW, hotD] = hotCell.split('-').map(Number)
-  const hoverTreatment = await evaluate(`(()=>{const scale=(id)=>{const cell=document.querySelector('[data-heat-cell="'+id+'"]');if(!cell)return null;const t=getComputedStyle(cell.firstElementChild).transform;return t==='none'?1:new DOMMatrix(t).a};return {scale:scale('${hotCell}'),neighbours:[scale('${hotW - 1}-${hotD}'),scale('${hotW + 1}-${hotD}'),scale('${hotW}-${hotD - 1}'),scale('${hotW}-${hotD + 1}')]}})()`)
-  assert.ok(hoverTreatment.scale > 1.01, 'the hovered particle responds to the pointer: ' + JSON.stringify(hoverTreatment))
+  const restFill = await evaluate(`(()=>getComputedStyle(document.querySelector('[data-heat-cell="${hotCell}"]').firstElementChild).backgroundColor)()`)
+  await evaluate(`(()=>{const cell=document.querySelector('[data-heat-cell="${hotCell}"]');cell.dispatchEvent(new PointerEvent('pointerenter',{bubbles:true}));cell.dispatchEvent(new PointerEvent('pointerover',{bubbles:true}))})()`)
+  await waitFor(`(()=>{const cell=document.querySelector('[data-heat-cell][aria-describedby]');return !!cell && !!cell.firstElementChild?.querySelector(':scope > span')})()`)
+  await pause(400)
+  const hoverTreatment = await evaluate(`(()=>{
+    const view=document.querySelector('[data-heat-cell="${hotCell}"]').firstElementChild;
+    const t=getComputedStyle(view).transform;
+    const ring=view.querySelector(':scope > span');
+    const vr=view.getBoundingClientRect();const rr=ring?ring.getBoundingClientRect():null;
+    const neighbour=(id)=>{const cell=document.querySelector('[data-heat-cell="'+id+'"]');if(!cell)return null;const vt=getComputedStyle(cell.firstElementChild).transform;return {scale:vt==='none'?1:new DOMMatrix(vt).a,ring:!!cell.firstElementChild.querySelector(':scope > span')}};
+    return {scale:t==='none'?1:new DOMMatrix(t).a,ring:!!ring,ringBox:rr?[Math.round(rr.width*100)/100,Math.round(rr.height*100)/100]:null,box:[Math.round(vr.width*100)/100,Math.round(vr.height*100)/100],fill:getComputedStyle(view).backgroundColor,neighbours:['${hotW - 1}-${hotD}','${hotW + 1}-${hotD}','${hotW}-${hotD - 1}','${hotW}-${hotD + 1}'].map(neighbour)};
+  })()`)
+  assert.ok(Math.abs(hoverTreatment.scale - 1) < 0.01, 'the hovered particle does not grow: ' + JSON.stringify(hoverTreatment))
+  assert.ok(hoverTreatment.ring, 'the hovered particle shows a highlight ring: ' + JSON.stringify(hoverTreatment))
+  assert.deepEqual(hoverTreatment.ringBox, hoverTreatment.box, 'and the ring hugs the particle exactly: ' + JSON.stringify(hoverTreatment))
+  assert.notEqual(hoverTreatment.fill, restFill, 'the hovered particle recolours on hover: ' + JSON.stringify({ rest: restFill, hover: hoverTreatment.fill }))
   assert.ok(
-    hoverTreatment.neighbours.every((s) => s !== null && Math.abs(s - 1) < 0.01),
+    hoverTreatment.neighbours.every((n) => n !== null && Math.abs(n.scale - 1) < 0.01 && n.ring === false),
     'and the hover leaves every neighbour untouched: ' + JSON.stringify(hoverTreatment.neighbours)
   )
   await screenshot('daily')
@@ -156,6 +168,28 @@ try {
   assert.ok(statCards.every((card) => /Requests|Est\. cost/.test(card.label)), 'two range summary cards, no duplicated total: ' + JSON.stringify(statCards))
   assert.ok(statCards.some((card) => card.label === 'Requests' && /3/.test(card.text)), 'and the request count rolls in: ' + JSON.stringify(statCards))
   await evaluate(`document.querySelectorAll('[role="tooltip"]').forEach((tip)=>tip.remove())`)
+  // The range switcher's fill box must not depend on its state. The hover fill
+  // is painted by the trigger itself, so the selected indicator has to cover
+  // exactly that box: the wrapper's line box used to be ~2px taller than its
+  // inline-flex button (baseline strut), and the selected 7d/30d pill then sat
+  // 1px proud of the hovered one on each side.
+  const rangeFills = await evaluate(`(()=>{
+    const texts=['7d','30d','MTD','Last month','All'];
+    return [...document.querySelectorAll('[role="tab"]')].filter(t=>texts.includes(t.textContent.trim())).map(t=>{
+      const wrapper=t.parentElement;
+      const button=t.getBoundingClientRect(),box=wrapper.getBoundingClientRect();
+      const indicator=wrapper.querySelector(':scope > span');
+      const fill=indicator?indicator.getBoundingClientRect():null;
+      const same=(a,b)=>Math.abs(a-b)<=0.5;
+      return {label:t.textContent.trim(),selected:t.getAttribute('aria-selected')==='true',
+        boxed:same(box.height,button.height)&&same(box.top,button.top)&&same(box.width,button.width),
+        filled:!fill||(same(fill.height,button.height)&&same(fill.top,button.top))};
+    });
+  })()`)
+  assert.equal(rangeFills.length, 5, 'the usage range switcher renders every range: ' + JSON.stringify(rangeFills))
+  assert.ok(rangeFills.every((tab) => tab.boxed), 'every range tab boxes its fill on the trigger: ' + JSON.stringify(rangeFills))
+  assert.ok(rangeFills.some((tab) => tab.selected), 'one range is selected: ' + JSON.stringify(rangeFills))
+  assert.ok(rangeFills.every((tab) => tab.filled), 'the selected fill matches the hover fill box: ' + JSON.stringify(rangeFills))
 
   // The stacked areas draw themselves in through the animated clip: switching
   // the range remounts the chart — sampled at the next animation frame the
@@ -223,7 +257,7 @@ try {
   assert.equal(await evaluate(`document.querySelectorAll('tbody tr').length`), 2, 'both fixture turns are listed')
 
   assert.deepEqual(exceptions, [], 'no uncaught renderer exceptions')
-  console.log('PASS: token activity — heat-calendar daily grid (the only view), exact counts, bilingual readout, a hover that animates the hovered particle alone; usage trends — clip reveal, spring crosshair, boundary dots exactly on their curve, a pointer-following readout, no duplicated total')
+  console.log('PASS: token activity — heat-calendar daily grid (the only view), exact counts, bilingual readout, a hover that recolours the hovered particle under a shape-hugging ring and leaves neighbours untouched; usage trends — clip reveal, spring crosshair, boundary dots exactly on their curve, a pointer-following readout, no duplicated total')
 } finally {
   ws?.close()
   if (child && child.exitCode === null) { const exited = new Promise((r) => child.once('exit', r)); child.kill(); await exited }

@@ -2,9 +2,9 @@ import { useSyncExternalStore } from 'react'
 
 /**
  * Interface style — Settings → Appearance. ONE global preference that drives
- * the corner/radius preset (`data-corners`). Icons are NOT part of it: the app
- * has a single icon family (Hugeicons UI glyphs, Catppuccin file types),
- * so both styles draw the same artwork and only the geometry differs.
+ * the corner/radius preset (`data-corners`) and UI glyphs through icons.tsx.
+ * Square uses Remix Line and Bearded file types; squircle uses Hugeicons Stroke
+ * Rounded and Pierre file types. Keyboard marks and brands keep their artwork.
  *
  * The squircle values are recovered from 397f6ed^ (the parent of the commit
  * that squared the branch); the square style is the default and the two token

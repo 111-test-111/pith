@@ -584,6 +584,8 @@ const timeoutDetails = (questions) => ({
   const questions = normalizeAskUserQuestions(sampleQuestions)
   const session = fakeSession()
   const outbox = new AskUserNotifications(session)
+  let wakes = 0
+  outbox.onWake = () => { wakes += 1 }
   outbox.settle({ toolCallId: 't1', details: answerDetails(questions), text: 'The user answered 1 question(s): 1. q -> Yes' })
   await delay(1)
   assert.equal(session.received.length, 0, 'nothing is steered before the receipt is in history')
@@ -601,6 +603,7 @@ const timeoutDetails = (questions) => ({
   assert.match(delivery.message.content, /-> Yes/, 'with the answer text')
   assert.equal(delivery.options.deliverAs, 'steer', 'steer, never follow-up')
   assert.equal(delivery.options.triggerTurn, true, 'an answer wakes an idle session')
+  assert.equal(wakes, 1, 'and the idle wake reopens the settled turn\u2019s scope')
   assert.equal(outbox.continuesAtSettled, true, 'so the run is not visually over yet')
 
   // Acknowledged by the SDK consuming it, not by the send resolving.
@@ -617,9 +620,12 @@ const timeoutDetails = (questions) => ({
   const session = fakeSession()
   session.messages.push(receipt('t2'))
   const outbox = new AskUserNotifications(session)
+  let wakes = 0
+  outbox.onWake = () => { wakes += 1 }
   outbox.settle({ toolCallId: 't2', details: timeoutDetails(questions), text: 'The user did not answer within 120 seconds.' })
   assert.equal(session.received.length, 1, 'a settled timeout is delivered at once')
   assert.equal(session.received[0].options.triggerTurn, false, 'without waking an idle session')
+  assert.equal(wakes, 0, 'so no turn is reopened for it')
   assert.equal(session.received[0].options.deliverAs, 'steer', 'still a steer, so a live turn sees it')
   assert.equal(outbox.continuesAtSettled, false, 'and nothing looks like it is still running')
   outbox.dispose()
@@ -633,8 +639,11 @@ const timeoutDetails = (questions) => ({
   session.isIdle = false
   session.messages.push(receipt('t3'))
   const outbox = new AskUserNotifications(session)
+  let wakes = 0
+  outbox.onWake = () => { wakes += 1 }
   outbox.settle({ toolCallId: 't3', details: timeoutDetails(questions), text: 'timed out' })
   assert.equal(session.received[0].options.triggerTurn, true, 'a timeout steers into the running turn')
+  assert.equal(wakes, 0, 'a steer into the live turn is not a wake')
   outbox.dispose()
 }
 

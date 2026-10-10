@@ -32,7 +32,7 @@ const GLYPHS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz 0123456789
 let familySeq = 0
 
 function FontNotice({ children, loading = false }: { children: ReactNode; loading?: boolean }) {
-  return <div role="status" className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 bg-muted/30 p-5 text-center text-xs leading-5 text-muted-foreground">
+  return <div role="status" className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 bg-muted/30 p-5 text-center text-xs leading-ui text-muted-foreground">
     {loading ? <LoaderCircle aria-hidden className="size-5 motion-safe:animate-spin" /> : <FileText aria-hidden className="size-5 text-muted-foreground/60" />}{children}
   </div>
 }
@@ -93,10 +93,10 @@ export function FileFont({ tab }: { tab: FileTab }) {
   const format = fileExtension(tab.path).replace('.', '').toUpperCase()
   return <div data-file-font className="flex min-h-0 flex-1 flex-col">
     <div data-file-font-toolbar className="flex min-h-10 shrink-0 flex-wrap items-center gap-1 border-b border-border/40 px-2 py-1">
-      <Input value={sample} onChange={setSample} aria-label={t('files.font.sampleLabel')} placeholder={t('files.font.samplePlaceholder')} maxLength={400} classNames={{ field: 'h-7', input: 'h-full px-2 text-xs' }} className="min-w-0 max-w-md flex-1" />
+      <Input value={sample} onChange={setSample} aria-label={t('files.font.sampleLabel')} placeholder={t('files.font.samplePlaceholder')} maxLength={400}  className="min-w-0 max-w-md flex-1" />
       <div data-file-font-zoom className="ml-auto flex shrink-0 items-center gap-0.5">
         <ToolButton label={t('imagePreview.zoomOut')} icon={ZoomOut} disabled={zoom <= STEPS[0]} onClick={() => step(-1)} />
-        <span data-file-font-scale className="select-none px-0.5 text-[11px] leading-6 tabular-nums">{Math.round(zoom * 100)}%</span>
+        <span data-file-font-scale className="select-none px-0.5 text-caption leading-ui-loose tabular-nums">{Math.round(zoom * 100)}%</span>
         <ToolButton label={t('imagePreview.zoomIn')} icon={ZoomIn} disabled={zoom >= STEPS[STEPS.length - 1]} onClick={() => step(1)} />
       </div>
     </div>
@@ -110,7 +110,7 @@ export function FileFont({ tab }: { tab: FileTab }) {
         >{sample || t('files.font.sample')}</p>)}
         <p aria-hidden data-font-glyphs style={{ ...style, fontSize: `${Math.round(14 * zoom)}px`, lineHeight: 1.6 }} className="m-0 break-all border-t border-border/60 pt-3 text-muted-foreground">{GLYPHS}</p>
       </div>
-      <p role="status" className="mx-auto mt-3 max-w-3xl px-1 text-[10px] tabular-nums text-muted-foreground">{t('files.font.meta', { format, size: formatBytes(size) })}</p>
+      <p role="status" className="mx-auto mt-3 max-w-3xl px-1 text-micro tabular-nums text-muted-foreground">{t('files.font.meta', { format, size: formatBytes(size) })}</p>
     </div>
   </div>
 }

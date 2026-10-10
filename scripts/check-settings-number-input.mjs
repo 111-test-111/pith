@@ -121,8 +121,7 @@ window.probeField = (label) => {
     type: input.type,
     inputMode: input.inputMode,
     align: getComputedStyle(input).textAlign,
-    fontSize: getComputedStyle(input).fontSize,
-    height: Math.round(fieldRect.height),
+    fullyVisible: inputRect.top >= fieldRect.top && inputRect.bottom <= fieldRect.bottom,
     width: Math.round(fieldRect.width),
     inputWidth: Math.round(inputRect.width),
     buttons: [...cluster.querySelectorAll('button')].map((b) => b.textContent.trim()),
@@ -293,8 +292,7 @@ app.on('window-all-closed',()=>app.quit());`
     assert.equal(state.type, 'text', `${label}: a text field, so no native stepper chrome`)
     assert.ok(state.inputMode === 'numeric' || state.inputMode === 'decimal', `${label}: numeric keyboard on touch`)
     assert.equal(state.align, 'center', `${label}: the value is centred in its field`)
-    assert.equal(state.fontSize, '14px', `${label}: the value is body-sized`)
-    assert.equal(state.height, 32, `${label}: the field stays compact`)
+    assert.ok(state.fullyVisible, `${label}: the editable value fits its visible field`)
     assert.equal(state.buttons.length, save ? 1 : 0, `${label}: no increment/decrement actions`)
     if (save) assert.deepEqual(state.buttons, [save], `${label}: the only action is Save`)
     if (unit) {
@@ -422,7 +420,7 @@ app.on('window-all-closed',()=>app.quit());`
   await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] })
   await evaluate('document.documentElement.classList.add("dark")')
   await frame()
-  assert.equal((await evaluate(`window.probeField('并发委派数')`)).height, 32, 'reduced motion keeps the compact field')
+  assert.ok((await evaluate(`window.probeField('并发委派数')`)).fullyVisible, 'reduced motion keeps the editable value fully visible')
   await screenshot('general-dark-zh')
 
   // The sandbox group's status line speaks only when there is something to act

@@ -9,7 +9,7 @@ import {
   PICTURE_IN_PICTURE_SCALES,
   type PictureInPicturePreferencesDTO
 } from '../../../../../shared/types'
-import { SettingsGroup, SettingsRow } from './SettingsRow'
+import { SettingsRow } from './SettingsRow'
 
 type Position = PictureInPicturePreferencesDTO['position']
 type Scale = PictureInPicturePreferencesDTO['initialScale']
@@ -57,7 +57,9 @@ export function PictureInPictureSection() {
     <div data-pip-settings className="space-y-6">
       {preferences ? (
         <>
-          <SettingsGroup title={t('pip.settingsPlayback')}>
+          {/* Playback and window behavior are four rows of one feature —
+              one card, like the Browser section's. */}
+          <div className="divide-y divide-border/60 rounded-xl border border-border/70 bg-card">
             <SettingsRow label={t('pip.settingsFrameRate')} description={t('pip.settingsFrameRateDesc')}>
               <Select
                 value={String(preferences.frameRate)}
@@ -76,9 +78,6 @@ export function PictureInPictureSection() {
                 </SelectContent>
               </Select>
             </SettingsRow>
-          </SettingsGroup>
-
-          <SettingsGroup title={t('pip.settingsWindow')}>
             <SettingsRow label={t('pip.settingsPosition')} description={t('pip.settingsPositionDesc')}>
               <Select
                 value={preferences.position}
@@ -124,17 +123,17 @@ export function PictureInPictureSection() {
                 onCheckedChange={(value) => void save({ startPinned: value === true })}
               />
             </SettingsRow>
-          </SettingsGroup>
+          </div>
         </>
       ) : (
-        <SettingsGroup title={t('pip.settingsWindow')}>
+        <div className="divide-y divide-border/60 rounded-xl border border-border/70 bg-card">
           <div className="px-4 py-3 text-sm text-muted-foreground">{t(error ? 'pip.settingsLoadError' : 'pip.settingsLoading')}</div>
           {error ? (
             <div className="px-4 pb-3">
               <Button size="sm" variant="outline" onClick={() => setRetry((value) => value + 1)}>{t('pip.settingsRetry')}</Button>
             </div>
           ) : null}
-        </SettingsGroup>
+        </div>
       )}
       {error && preferences ? <p role="alert" className="px-4 text-xs text-destructive">{t('pip.settingsSaveError')}</p> : null}
     </div>

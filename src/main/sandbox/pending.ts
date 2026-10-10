@@ -6,7 +6,7 @@
  * turn) must settle as cancelled rather than linger.
  */
 import { randomUUID } from 'node:crypto'
-import type { SandboxEscalationDecision, SandboxEscalationRequestDTO, SandboxMode } from '../../shared/types'
+import type { SandboxEscalationDecision, SandboxEscalationOperationDTO, SandboxEscalationRequestDTO, SandboxMode } from '../../shared/types'
 
 export type EscalationOutcome = 'allowed-once' | 'rejected' | 'cancelled' | 'unavailable'
 
@@ -17,6 +17,7 @@ export interface WaitForEscalationInput {
   toolName: string
   currentMode: SandboxMode
   requestedMode: SandboxMode
+  operation: SandboxEscalationOperationDTO
   justification: string
   signal?: AbortSignal
 }
@@ -60,6 +61,7 @@ export function waitForEscalation(
       toolName: input.toolName,
       currentMode: input.currentMode,
       requestedMode: input.requestedMode,
+      operation: structuredClone(input.operation),
       justification: input.justification,
       createdAt: Date.now()
     }

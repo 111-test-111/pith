@@ -3,6 +3,8 @@
 // beui.dev/components/motion/file-tree
 
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+// local patch (pi-app): archive collections reuse this tree with windowed rows.
+import { defaultRangeExtractor, useVirtualizer } from "@tanstack/react-virtual";
 // local patch (pi-app): use the shared UI icon adapter.
 import { ChevronRight, FileText as File, Folder, FolderOpen } from "@/lib/icons";
 import {
@@ -13,6 +15,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useLayoutEffect,
   type KeyboardEvent,
   type ReactElement,
   type ReactNode,
@@ -67,6 +70,9 @@ export interface FileTreeProps {
   // local patch (pi-app): filesystem navigation restores whole branches at once.
   // Skip row entrance/layout motion while preserving the native tree controls.
   instant?: boolean;
+  // local patch (pi-app): keep native tree semantics/keyboard navigation for
+  // bounded archive indexes without mounting every expanded row.
+  virtualize?: { scrollElement: HTMLElement | null; rowHeight: number; initialOffset?: number };
   children: ReactNode;
   value?: string | null;
   defaultValue?: string | null;
@@ -217,6 +223,7 @@ function DefaultIcon({
 
 export function FileTree({
   instant = false,
+  virtualize,
   children,
   value,
   defaultValue = null,
@@ -229,6 +236,8 @@ export function FileTree({
   className,
   classNames,
 }: FileTreeProps) {
+  // local patch (pi-app): virtual positions are explicit, never animated.
+  instant = instant || !!virtualize;
   // local patch (pi-app): automatic path reveals must not replay row springs.
   const reducedMotion = useReducedMotion() ?? false;
   const reduce = reducedMotion || instant;
@@ -245,6 +254,7 @@ export function FileTree({
   const renderedRows = useRef(new Map<string, {
     row: FlatFileTreeItem; open: boolean; selected: boolean; focused: boolean;
     reduce: boolean; instant: boolean; indent: number; classes: FileTreeClassNames | undefined;
+    offset?: number; height?: number;
     element: ReactElement;
   }>());
   const selectedId = value === undefined ? internalValue : value;
@@ -276,12 +286,36 @@ export function FileTree({
       : (rows[0]?.item.value ?? null));
   if (focusedId !== focusedRow) setFocusedId(focusedRow);
 
+  // local patch (pi-app): retain the roving-focus row even outside the window;
+  // keyboard moves scroll to the destination before focusing its mounted row.
+  const focusedIndex = rows.findIndex(({ item }) => item.value === focusedRow);
+  const virtualizer = useVirtualizer({
+    enabled: !!virtualize,
+    count: rows.length,
+    getScrollElement: () => virtualize?.scrollElement ?? null,
+    getItemKey: index => rows[index].item.value,
+    estimateSize: () => virtualize?.rowHeight ?? 36,
+    initialOffset: virtualize?.initialOffset ?? 0,
+    overscan: 8,
+    rangeExtractor: range => {
+      const indices = defaultRangeExtractor(range);
+      if (focusedIndex >= 0 && !indices.includes(focusedIndex)) indices.push(focusedIndex);
+      return indices.sort((a, b) => a - b);
+    },
+  });
+  const pendingFocus = useRef<string | null>(null);
   const focusRow = useCallback((id: string) => {
     setFocusedId(id);
+    pendingFocus.current = id;
+    if (virtualize) virtualizer.scrollToIndex(rows.findIndex(({ item }) => item.value === id), { align: "auto" });
     const row = rowRefs.current.get(id);
-    if (row) row.focus();
-    else requestAnimationFrame(() => rowRefs.current.get(id)?.focus());
-  }, []);
+    if (row) { pendingFocus.current = null; row.focus({ preventScroll: !!virtualize }); }
+  }, [rows, virtualize, virtualizer]);
+  useLayoutEffect(() => {
+    if (!pendingFocus.current) return;
+    const row = rowRefs.current.get(pendingFocus.current);
+    if (row) { pendingFocus.current = null; row.focus({ preventScroll: !!virtualize }); }
+  });
 
   const selectItem = useCallback(
     (item: FileTreeItem) => {
@@ -353,37 +387,46 @@ export function FileTree({
   // neighbours and controlled selection never retain an older tree snapshot.
   const handlers = useRef({ handleKeyDown, selectItem, toggleFolder });
   handlers.current = { handleKeyDown, selectItem, toggleFolder };
-  // local patch (pi-app): instant collections need no per-row Motion instance
-  // or layout measurement; the beUI structure, focus and hover ownership stay.
+  // local patch (pi-app): instant collections use the row's own hover fill.
+  // A shared layout pill can jump between transformed virtual rows and replay
+  // an exit over a row that the pointer already left.
+  const Collection = instant ? "div" : SharedLayoutBg;
   const Row = instant ? "div" : motion.div;
   const Branch = instant ? "span" : motion.span;
   const Chevron = instant ? "span" : motion.span;
-  const visibleIds = new Set(rows.map(row => row.item.value));
+  // local patch (pi-app): cache mounted rows only, including the focus anchor.
+  const visibleRows = virtualize
+    ? virtualizer.getVirtualItems().map(item => ({ row: rows[item.index], offset: item.start, height: item.size }))
+    : rows.map(row => ({ row, offset: undefined, height: undefined }));
+  const visibleIds = new Set(visibleRows.map(({ row }) => row.item.value));
   for (const id of renderedRows.current.keys()) if (!visibleIds.has(id)) renderedRows.current.delete(id);
 
   return (
-    <SharedLayoutBg
+    <Collection
       role="tree"
       aria-label={ariaLabel}
       aria-multiselectable="false"
-      inset={0}
-      pillClassName="rounded-xl bg-muted"
-      // local patch (pi-app): allow compact rows and hover geometry together.
-      pillContainerClassName={cn("inset-y-auto top-0 h-9", classNames?.pillContainer)}
-      className={cn("min-w-0", className, classNames?.tree)}
+      {...(instant ? {} : {
+        inset: 0,
+        pillClassName: "rounded-xl bg-muted",
+        pillContainerClassName: cn("inset-y-auto top-0 h-9", classNames?.pillContainer),
+      })}
+      className={cn("flex w-full min-w-0 flex-col", className, classNames?.tree)}
+      // local patch (pi-app): provide one full-height canvas for the scrollport.
+      style={virtualize ? { position: "relative", height: virtualizer.getTotalSize() } : undefined}
     >
-      {rows.map((row) => {
+      {visibleRows.map(({ row, offset, height }) => {
           const isFolder = row.item.type === "folder";
           const isOpen = isFolder && expanded.has(row.item.value);
           const isSelected = selectedId === row.item.value;
           const isFocused = focusedRow === row.item.value;
           const cached = renderedRows.current.get(row.item.value);
-          if (cached && cached.row === row && cached.open === isOpen && cached.selected === isSelected && cached.focused === isFocused && cached.reduce === reduce && cached.instant === instant && cached.indent === indent && cached.classes === classNames) return cached.element;
+          if (cached && cached.row === row && cached.open === isOpen && cached.selected === isSelected && cached.focused === isFocused && cached.reduce === reduce && cached.instant === instant && cached.indent === indent && cached.classes === classNames && cached.offset === offset && cached.height === height) return cached.element;
 
           const element = (
             <Row
               key={row.item.value}
-              {...(instant ? { style: { opacity: row.item.disabled ? 0.42 : 1 } } : {
+              {...(instant ? { style: { opacity: row.item.disabled ? 0.42 : 1, ...(offset === undefined ? {} : { position: "absolute" as const, top: 0, left: 0, width: "100%", height, transform: `translateY(${offset}px)` }) } } : {
                 layout: reduce ? false : "position" as const,
                 initial: reduce ? false : { opacity: 0, y: -6 },
                 animate: {
@@ -421,8 +464,10 @@ export function FileTree({
                 }}
                 className={cn(
                   "group/file-tree relative flex h-9 w-full items-center gap-2 overflow-hidden rounded-lg pr-2 text-left text-sm text-muted-foreground outline-none",
-                  // local patch (pi-app): SharedLayoutBg owns the hover fill; this row changes text only.
+                  // local patch (pi-app): stable navigation rows share ordinary
+                  // controls' CSS colour transition, without a moving overlay.
                   "transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset",
+                  instant && "hover:bg-muted",
                   "aria-disabled:cursor-not-allowed",
                   isSelected && "bg-muted font-medium text-foreground",
                   classNames?.item,
@@ -487,9 +532,9 @@ export function FileTree({
               </button>
             </Row>
           );
-          renderedRows.current.set(row.item.value, { row, open: isOpen, selected: isSelected, focused: isFocused, reduce, instant, indent, classes: classNames, element });
+          renderedRows.current.set(row.item.value, { row, open: isOpen, selected: isSelected, focused: isFocused, reduce, instant, indent, classes: classNames, offset, height, element });
           return element;
         })}
-    </SharedLayoutBg>
+    </Collection>
   );
 }

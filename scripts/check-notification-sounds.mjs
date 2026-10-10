@@ -32,20 +32,16 @@ const temporary = await mkdtemp(join(tmpdir(), 'pith-notification-sounds-'))
 const fixturePath = '/__notification_sounds_check.html'
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
-const SOUNDS_GROUP = 'Sounds'
 const SOUNDS_LABEL = 'Notification sounds'
 const TURN_LABEL = 'Turn finished'
 const ASK_LABEL = 'Waiting for your answer'
 const SCHEDULED_LABEL = 'Scheduled task finished'
-const SYSTEM_NOTIFICATIONS_GROUP = 'System notifications'
 const SYSTEM_NOTIFICATIONS_LABEL = 'System notifications'
 const SOUNDS_LABEL_ZH = '提示音'
-const SOUNDS_GROUP_ZH = '提示音'
 const TURN_LABEL_ZH = '轮次完成'
 const ASK_LABEL_ZH = '等待你的回答'
 const SCHEDULED_LABEL_ZH = '定时任务完成'
 const PREVIEW_ZH = '试听'
-const SYSTEM_NOTIFICATIONS_GROUP_ZH = '系统通知'
 const SYSTEM_NOTIFICATIONS_LABEL_ZH = '系统通知'
 const SYSTEM_NOTIFICATION_PREVIEW_ZH = '试看'
 const COMPLETE_NOTIFICATION = { title: 'Task complete', body: 'Pith has finished working on your request.' }
@@ -232,12 +228,12 @@ window.__checked = (label) => {
   return { state: box.getAttribute('data-state'), mark: !!mark };
 };
 window.__clickToggle = (label) => { const box = window.__row(label); if (!box) return null; box.click(); return true; };
-window.__labels = (title) => {
-  const section = window.__soundsSection(title);
-  return section
-    ? [...section.querySelectorAll('[role="checkbox"][aria-label]')].map((box) => box.getAttribute('aria-label'))
-    : [];
-};
+// System alerts and every sound cue share one untitled card, so labels are
+// read straight off the card in row order.
+window.__labels = () =>
+  [...document.querySelectorAll('#root [role="checkbox"][aria-label]')].map((box) => box.getAttribute('aria-label'));
+window.__oneCard = () =>
+  document.querySelectorAll('#root .divide-y').length === 1 && document.querySelectorAll('#root section').length === 0;
 window.__previewLabel = (rowLabel) => {
   const box = window.__row(rowLabel);
   const row = box ? box.closest('div') : null;
@@ -254,12 +250,7 @@ window.__clickPreview = (rowLabel) => {
   button.click();
   return true;
 };
-window.__soundsSection = (title) => [...document.querySelectorAll('section')].find((section) => {
-  const heading = section.querySelector('p');
-  return !!heading && heading.textContent.trim() === title;
-});
-window.__hasGroupTitle = (title) => !!window.__soundsSection(title);
-window.__statusText = (title) => window.__soundsSection(title)?.querySelector('[role="status"]')?.textContent.trim() ?? null;
+window.__statusText = () => document.querySelector('#root [role="status"]')?.textContent.trim() ?? null;
 
 window.__mount('en');
 window.fixtureReady = true;
@@ -574,16 +565,16 @@ app.on('window-all-closed',()=>app.quit());`
   // ── 5. The Settings rows themselves ───────────────────────────────────────
   await evaluate('window.__setSettings({ enabled: true, turnComplete: true, askUser: true, scheduledTask: true })')
   await frame()
-  assert.equal(
-    await evaluate(`window.__hasGroupTitle(${json(SOUNDS_GROUP)})`),
-    true,
-    'the Sounds group has its own heading'
-  )
-  assert.deepEqual(
-    await evaluate(`window.__labels(${json(SOUNDS_GROUP)})`),
-    [SOUNDS_LABEL, TURN_LABEL, ASK_LABEL, SCHEDULED_LABEL],
-    'the group holds one master switch and one switch per cue'
-  )
+assert.equal(
+await evaluate('window.__oneCard()'),
+true,
+'system alerts and sounds share one card without inner group headings'
+)
+assert.deepEqual(
+await evaluate('window.__labels()'),
+[SYSTEM_NOTIFICATIONS_LABEL, SOUNDS_LABEL, TURN_LABEL, ASK_LABEL, SCHEDULED_LABEL],
+'the card holds the system switch, the sounds master and one switch per cue'
+)
   assert.deepEqual(
     await evaluate(`({ turn: window.__checked(${json(TURN_LABEL)}), ask: window.__checked(${json(ASK_LABEL)}), sched: window.__checked(${json(SCHEDULED_LABEL)}) })`),
     { turn: { state: 'checked', mark: true }, ask: { state: 'checked', mark: true }, sched: { state: 'checked', mark: true } },
@@ -601,16 +592,11 @@ app.on('window-all-closed',()=>app.quit());`
   await evaluate('window.__setSystemSettings({ enabled: false })')
   await resetNative('default')
   await frame()
-  assert.equal(
-    await evaluate(`window.__hasGroupTitle(${json(SYSTEM_NOTIFICATIONS_GROUP)})`),
-    true,
-    'system notifications have their own Settings group'
-  )
-  assert.deepEqual(
-    await evaluate(`window.__labels(${json(SYSTEM_NOTIFICATIONS_GROUP)})`),
-    [SYSTEM_NOTIFICATIONS_LABEL],
-    'the group exposes one independent master switch'
-  )
+assert.equal(
+(await evaluate('window.__labels()'))[0],
+SYSTEM_NOTIFICATIONS_LABEL,
+'the system-notification switch is the card’s first row, independent of the sounds master'
+)
   assert.equal(
     (await evaluate(`window.__checked(${json(SYSTEM_NOTIFICATIONS_LABEL)})`)).state,
     'unchecked',
@@ -662,7 +648,7 @@ app.on('window-all-closed',()=>app.quit());`
     'a denied permission cannot leave the switch deceptively on'
   )
   assert.match(
-    await evaluate(`window.__statusText(${json(SYSTEM_NOTIFICATIONS_GROUP)})`),
+    await evaluate('window.__statusText()'),
     /blocked|Allow Pith/,
     'a denial explains how to recover'
   )
@@ -670,27 +656,12 @@ app.on('window-all-closed',()=>app.quit());`
   // ── 7. Both locales ───────────────────────────────────────────────────────
   await evaluate('window.__mount("zh-CN")')
   await frame()
-  assert.equal(
-    await evaluate(`window.__hasGroupTitle(${json(SOUNDS_GROUP_ZH)})`),
-    true,
-    'the Chinese group heading is translated too'
-  )
-  assert.deepEqual(
-    await evaluate(`window.__labels(${json(SOUNDS_GROUP_ZH)})`),
-    [SOUNDS_LABEL_ZH, TURN_LABEL_ZH, ASK_LABEL_ZH, SCHEDULED_LABEL_ZH],
-    'the Chinese labels map to the same three switches'
-  )
-  assert.equal(await evaluate(`window.__previewLabel(${json(TURN_LABEL_ZH)})`), PREVIEW_ZH, 'and the sound preview action is translated')
-  assert.equal(
-    await evaluate(`window.__hasGroupTitle(${json(SYSTEM_NOTIFICATIONS_GROUP_ZH)})`),
-    true,
-    'the system-notification group is translated too'
-  )
-  assert.deepEqual(
-    await evaluate(`window.__labels(${json(SYSTEM_NOTIFICATIONS_GROUP_ZH)})`),
-    [SYSTEM_NOTIFICATIONS_LABEL_ZH],
-    'the Chinese system-notification switch has the localized label'
-  )
+assert.deepEqual(
+await evaluate('window.__labels()'),
+[SYSTEM_NOTIFICATIONS_LABEL_ZH, SOUNDS_LABEL_ZH, TURN_LABEL_ZH, ASK_LABEL_ZH, SCHEDULED_LABEL_ZH],
+'the Chinese labels map to the same five switches on one card'
+)
+assert.equal(await evaluate(`window.__previewLabel(${json(TURN_LABEL_ZH)})`), PREVIEW_ZH, 'and the sound preview action is translated')
   assert.equal(
     await evaluate(`window.__previewLabel(${json(SYSTEM_NOTIFICATIONS_LABEL_ZH)})`),
     SYSTEM_NOTIFICATION_PREVIEW_ZH,

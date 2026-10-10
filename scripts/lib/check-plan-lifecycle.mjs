@@ -26,14 +26,14 @@ export async function checkPlanLifecycle() {
     } finally { barrier.resolve(); await transition }
 
     const compactBarrier = deferred()
-    const original = f.session.compact
-    f.session.compact = () => compactBarrier.promise
+    const original = f.session.compactAtBoundary
+    f.session.compactAtBoundary = () => compactBarrier.promise
     const compacting = f.app.compactSession(f.managed.path)
     try {
       const result = await f.app.setSessionMode({ sessionPath: f.managed.path, mode: 'plan' })
       assert.equal(result.ok, false, 'mode change must refuse during compaction preparation')
       assert(result.blockers.includes('busy'))
-    } finally { compactBarrier.resolve(); await compacting; f.session.compact = original }
+    } finally { compactBarrier.resolve(); await compacting; f.session.compactAtBoundary = original }
   } finally { await f.close() }
   await checkNothingToCompact()
   await checkRestoration()

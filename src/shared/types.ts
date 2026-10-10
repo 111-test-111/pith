@@ -5,8 +5,9 @@
  */
 
 import type { AskUserRecordDTO, PendingAskUserDTO } from './ask-user'
+import type { CompactionProcessDTO, CompactionProcessStateDTO, CompactionQueueStateDTO } from './compaction'
 import type { TableFormat } from './table'
-import type { BrowserPageMeta } from './browser'
+import type { BrowserPageMeta, BrowserSearchEngine } from './browser'
 import type {
   PlanActionResult,
   PlanApprovalDTO,
@@ -163,12 +164,31 @@ export interface ToolResultMsg extends CompletedAt {
   timestamp: number
 }
 
+/** The actual 1-based line range a `read` call returned, stamped on the tool
+ * result as `details.piAppRead`. EOF and the byte/line caps can cut the
+ * requested window short, so this is read from the result, never the args. */
+export interface ReadRangeDTO {
+  offset: number
+  endLine: number
+  totalLines: number
+}
+
+/** Built-in search/list root at execution time, carried in details.piAppSearchRoot.
+ * Grep prints a basename when searching one file and relative paths when
+ * searching a directory; the renderer must not guess which spelling it saw. */
+export interface ToolSearchRootDTO {
+  path: string
+  kind: 'file' | 'directory'
+}
+
 /** Context was compacted: this entry replaces summarized history for the model, not the UI. */
 export interface CompactionSummaryMsg {
   role: 'compactionSummary'
   summary: string
   tokensBefore: number
   timestamp: number
+  sessionEntryId?: string
+  process?: CompactionProcessDTO
 }
 
 /** A branch summary entry created when the session tree was navigated. */
@@ -222,6 +242,9 @@ export interface PiEvent {
   cwd?: string
   /** Monotonic within one live AgentSession; guards snapshot/event races. */
   eventSequence?: number
+  /** Transient manual-compaction metadata with its own revision. */
+  compactionQueue?: CompactionQueueStateDTO
+  compactionProcess?: CompactionProcessStateDTO
   /** True when this event belongs to a subagent child session. A child's turns
    * are steps of its parent's run, so notification cues (renderer-side) skip
    * them instead of chiming once per delegated round. */
@@ -272,6 +295,9 @@ export interface ProviderDTO {
   baseUrl?: string
   /** True when the wire API exposes a models-list endpoint we can fetch. */
   discoverable: boolean
+  /** Composed model count, hidden models included (hidden only filters
+   * selectors); carrier count for entries that did not compose. */
+  modelCount: number
 }
 
 // ---- models.json editing (Settings → Providers) ----
@@ -431,6 +457,8 @@ export interface SessionSummaryDTO {
   /** Session name or first user message; `null` for a session with no
    * messages yet, which the renderer labels in the active locale. */
   label: string | null
+  /** Session header creation time, independent of later message activity. */
+  created: string
   modified: string
   messageCount: number
   /** Folder (working directory) the session belongs to. */
@@ -547,32 +575,60 @@ export type ThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhi
  * `context_usage` poll, so the composer ring tracks the session live.
  */
 export interface ContextUsageDTO {
-  /** Estimated context tokens, or null if unknown (e.g. right after compaction). */
+  /** Estimated context tokens, or null if unknown. */
   tokens: number | null
   contextWindow: number
   /** Percent of the context window, or null when tokens is unknown. */
   percent: number | null
-  /** Session running cost in USD, summed over assistant message usage. */
+  /** Session running cost in USD, SDK totals over all entries. */
   sessionCost: number
-  /** Cache hit rate 0–1 over the session (cacheRead / (cacheRead + input)),
+  /** Cache hit rate 0–1 over the session (cacheRead / (cacheRead + cacheWrite + input)),
    * or null before any cacheable usage arrives. */
   cacheHitRate: number | null
+  /** Independent metadata revision; never a transcript event sequence. */
+  revision?: string
 }
 
 /**
- * Token split of ONE message of the context, for the detail pane's breakdown
- * bar. The numbers are the SDK's own `estimateTokens` heuristic (chars/4), so
- * they are estimates — see `ContextBreakdownDTO` for how the residue is
- * reconciled with the ring's provider-anchored total.
+ * Estimated composition, using the SDK's chars/4 heuristic and folded system
+ * state. Its total is independent of the ring/provider measurement.
  */
 export interface ContextBreakdownDTO {
   user: number
   assistant: number
   toolResults: number
-  /** System prompt + tool schemas + estimate residue: total − the three above. */
+  /** Folded system prompt, tools, summaries and extension context. */
   other: number
   /** Sum of the four buckets; never null (falls back to the message estimates). */
   total: number
+}
+
+export type ContextCategoryKind = 'system' | 'projectFiles' | 'skills' | 'toolSchemas'
+  | 'userText' | 'images' | 'assistantText' | 'thinking' | 'toolCalls'
+  | 'toolResults' | 'summaries' | 'extensions' | 'bash' | 'requestOnly' | 'other'
+
+export interface ContextCategoryDTO {
+  kind: ContextCategoryKind
+  tokens: number
+  /** Bounded section/tool names and estimates, never their contents. */
+  items: Array<{ name: string; tokens: number }>
+  omittedItems: number
+}
+
+/** Statistics of one observed model request, after app/extension transforms
+ * and before provider serialization. No prompt or message bodies are carried. */
+export interface ContextRequestDTO {
+  id: string
+  startedAt: number
+  provider: string
+  model: string
+  /** True when the provider's final onPayload callback was captured too. */
+  payloadCaptured: boolean
+  /** Reported input + cache read + cache write, excluding generated output.
+   * Null while running or when a failed request reported no input usage. */
+  inputTokens: number | null
+  breakdown: ContextBreakdownDTO
+  categories: ContextCategoryDTO[]
 }
 
 /**
@@ -581,9 +637,8 @@ export interface ContextBreakdownDTO {
  * carry. `usage` is the same readout the composer ring renders, so the two can
  * never disagree about the window, the percent or the cost.
  *
- * Every number here is either reported by the SDK or the ring's own; the only
- * derived one is `tokens.reasoning` (a documented subset the SDK's totals drop)
- * and `breakdown`, which is labelled as an estimate wherever it is shown.
+ * Reasoning is a reported subset of output. Composition/projection statistics
+ * are explicit estimates, independent of provider usage and cumulative billing.
  */
 export interface ContextDetailDTO {
   sessionId: string
@@ -621,9 +676,14 @@ export interface ContextDetailDTO {
   cost: number
   /** The composer ring's live readout (context size, window, percent, cache hit). */
   usage: ContextUsageDTO
-  /** Estimated token split of the CURRENT context; never sums to more than the
-   * ring's total, which it is reconciled against (see the pane's own note). */
+  /** Estimated token split, independent of the live usage measurement. */
   breakdown: ContextBreakdownDTO
+  /** Estimate of the current persisted projection, before request transforms. */
+  projectionEstimate: number
+  /** Latest observed request on the selected branch, or null for older logs. */
+  request: ContextRequestDTO | null
+  /** Composition of the request when captured, otherwise the projection. */
+  categories: ContextCategoryDTO[]
 }
 
 // ---- Tools & extensions catalog (Settings → Tools / Extensions) ----
@@ -778,6 +838,10 @@ export interface SessionSnapshotDTO {
   streaming?: AssistantMsg | null
   toolRuns?: Record<string, ToolRunDTO>
   queue?: { steering: QueuedItemDTO[]; followUp: QueuedItemDTO[] }
+  /** Pending manual action, independent of the queued message payloads. */
+  compactionQueue?: CompactionQueueStateDTO
+  /** Latest live/outcome metadata; settled successful records also accompany their summary. */
+  compactionProcess?: CompactionProcessStateDTO
   model: ModelRefDTO | null
   thinkingLevel: ThinkingLevel
   /** Levels the current model actually supports (SDK getAvailableThinkingLevels),
@@ -805,14 +869,16 @@ export interface SessionSnapshotDTO {
 
 // ---- subagents (delegated child sessions) ----
 
-/** A file a subagent run wrote, extracted from the child session's successful
- * edit/write results. `patch` is a real unified diff (synthesized for `write`),
+/** A file a subagent run wrote, extracted from the child session's committed
+ * edit/write/image results. `patch` is a real unified diff (synthesized for `write`),
  * bounded in total size by the runtime. */
 export interface SubagentWrittenFileDTO {
   /** Absolute path resolved against the shared session cwd. */
   filePath: string
   /** Path to render: relative to the cwd when it lies inside it. */
   displayPath: string
+  /** Image-only writes retain Rewind evidence but are omitted from code diffs. */
+  kind?: 'generated-image'
   added?: number
   removed?: number
   patch?: string
@@ -874,9 +940,11 @@ export interface SubagentProfileDTO {
   displayName: string
   description: string
   systemPrompt: string
-  /** 'all' resolves against the parent session's active tools at dispatch. */
+  /** 'all' resolves against the parent session's active tools at dispatch.
+   * Granting the debugger rides this same list: `all`, or an explicit
+   * `debug` entry — the parent session's own debug availability remains the
+   * ceiling either way. */
   tools: 'all' | string[]
-  debugEnabled: boolean
   /** Where `tools` came from — an unresolved preset is flagged so the settings
    * row can say why the set is only read-only. */
   toolsSource?: 'explicit' | 'preset' | 'unresolved-preset' | 'default'
@@ -1030,6 +1098,12 @@ export type SandboxBackend = 'bubblewrap' | 'landlock' | 'seatbelt' | 'windows-a
 export type SandboxSupport = 'ready' | 'partial' | 'dependencies-missing' | 'host'
 export type SandboxEscalationDecision = 'approve' | 'deny'
 
+/** The complete operation being approved, including its execution directory. */
+export interface SandboxEscalationOperationDTO {
+  cwd: string
+  parameters: Record<string, unknown>
+}
+
 /**
  * One pending one-shot escalation: this call wants a strictly wider mode, and
  * only the user's answer decides. Data only — the renderer composes the prose.
@@ -1042,6 +1116,7 @@ export interface SandboxEscalationRequestDTO {
   toolName: string
   currentMode: SandboxMode
   requestedMode: SandboxMode
+  operation: SandboxEscalationOperationDTO
   /** The model's reason for wanting the wider mode. */
   justification: string
   createdAt: number
@@ -1161,10 +1236,18 @@ export interface AppInfoDTO {
    * SDK retries it; the value is applied to sessions in memory only.
    */
   responseTimeoutSeconds: number
+  /**
+   * Whether the composer's model and permission selectors may change while a
+   * run is streaming (Settings → General). Off keeps both frozen until the run
+   * settles, and main refuses a mid-run switch from any caller.
+   */
+  allowMidRunChanges: boolean
   /** The user consented to the embedded browser (stored, asked once). */
   browserConsent: boolean
   /** Whether the model's browser_* tools are enabled for sessions. */
   browserAgentToolsEnabled: boolean
+  /** Search provider for human browser input. */
+  browserSearchEngine: BrowserSearchEngine
   /** Whether the DAP debugger tool is enabled (Settings → General). */
   debugEnabled: boolean
   version: string
@@ -1274,7 +1357,9 @@ export interface FilePreviewDTO {
  * sessions cannot repoint an in-flight read at another project. */
 export interface FileBrowserRequest {
   cwd: string
+  /** Absolute, workspace-relative, or leading ~; main expands the home marker. */
   path: string
+  encoding?: import('./file-preview').TextEncoding
 }
 /** URL serves complete HTML and its scoped assets, independently of the source cap. */
 export type HtmlPreviewDTO = { url: string; error?: never } | { url?: never; error: FileBrowserError }
@@ -1298,6 +1383,7 @@ export interface FileDocumentDTO {
   relativePath: string
   gitRoot: string | null
   text?: string
+  encoding?: import('./file-preview').DecodedEncoding
   size: number
   truncated: boolean
   error?: FileBrowserError
@@ -1739,6 +1825,7 @@ export interface McpServerDTO {
 /** Everything Settings → MCP renders, including both native config files. */
 export interface McpStateDTO {
   projectCwd: string | null
+  sessionPath: string | null
   projectTrusted: boolean
   global: McpConfigFileDTO
   project: McpConfigFileDTO | null
@@ -1767,10 +1854,11 @@ export interface McpServerDetailDTO {
   cachedAt: number | null
 }
 
-/** Optional sequence-free runtime status push; no adapter event is consumed. */
+/** Complete sequence-free status roster from the selected session's native MCP runtime. */
 export interface McpStatusPushDTO {
   cwd: string
-  servers: { name: string; status: McpRuntimeStatus; toolCount: number; disabled: boolean }[]
+  sessionPath: string
+  servers: { name: string; status: McpRuntimeStatus; toolCount: number | null; disabled: boolean }[]
 }
 
 /** One visual-editor save: the server entry as a plain object plus where it lands. */
@@ -2063,3 +2151,4 @@ export type DebugPanelRequest = { sessionPath: string; debugId: string; stopId?:
 export type { TrajectoryKind, TrajectoryStatus, TrajectoryRecord, TrajectoryQuery, TrajectoryPage, TrajectoryDetail, TrajectoryNodeRequest, TrajectoryNodePage, TrajectoryNode, TrajectoryDocumentKind, TrajectoryUsage } from './trajectory'
 
 export type { PresentedFile, PresentResult } from './present'
+export type { LibraryItem, LibraryKind, LibrarySource, LibraryStorage, LibraryPreferences, LibraryQuery, LibraryPage, LibraryStatus, LibraryResult, LibrarySettingsUpdate } from './library'

@@ -1,10 +1,16 @@
 import { registerTrajectoryIpc } from './pi/trajectory/ipc'
+import { registerGitIpc } from './git/ipc'
 import { app, ipcMain, dialog, session, shell, webContents, BrowserWindow } from 'electron'
 import { join } from 'node:path'
+import { homedir } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import { pathToFileURL } from 'node:url'
+import { getAgentDir } from '@earendil-works/pi-coding-agent'
+import type { ImageReplayRequest } from '../shared/image-replay'
 import { registerPlanIpc } from './pi/plan-ipc'
 import { PiManager } from './pi/manager'
+import { registerResourceIpc } from './resources/service'
+import { installImageSkill } from './pi/image-skill'
 import { ScheduledTaskError } from './pi/scheduled-tasks/service'
 import type { JevSettingsUpdate, PictureInPicturePreferencesDTO, ScheduledTaskResult } from '../shared/types'
 import { TerminalManager } from './terminal/manager'
@@ -23,7 +29,7 @@ import {
   makeSessionApply,
   readImportStatus
 } from './browser/import-cookies'
-import { BROWSER_PARTITION, HUMAN_OWNER } from '../shared/browser'
+import { BROWSER_PARTITION, HUMAN_OWNER, isBrowserSearchEngine } from '../shared/browser'
 import type { BrowserFocusGuestPayload, BrowserSeenPayload } from '../shared/browser'
 import { sandboxStatus } from './sandbox/broker'
 import { setWindowTheme } from './window-chrome'
@@ -32,7 +38,10 @@ import { readPdfRange, readPdfStat } from './pdf'
 import { readFontData } from './font'
 import { htmlPreviews } from './html-preview'
 import { readTableRange, readTableSlice, readTableStat } from './table'
+import { filePreviews } from './file-preview/service'
+import type { BinaryPreviewRequest } from '../shared/file-preview'
 import { saveFileCopy } from './file-actions'
+import { resolveFilePath } from './file-path'
 import { MAX_CONCURRENT_SUBAGENTS_DEFAULT } from './pi/subagents/runtime'
 import type { AskUserAnswer } from '../shared/ask-user'
 import type {
@@ -79,7 +88,9 @@ export function broadcast(channel: string, payload: unknown): void {
 
 export function createPiManager(): PiManager {
   const notifyError = (message: string) => broadcast('pi:event', { type: 'pi_error', message })
-  return new PiManager(broadcast, notifyError)
+  const skills = app.isPackaged ? join(process.resourcesPath, 'skills') : join(app.getAppPath(), 'resources', 'skills')
+  const imageSkillPath = installImageSkill(join(skills, 'openrouter-image'), join(getAgentDir(), 'skills', 'openrouter-image'))
+  return new PiManager(broadcast, notifyError, imageSkillPath)
 }
 
 export function registerIpc(
@@ -89,11 +100,19 @@ export function registerIpc(
 ): () => boolean {
   ipcMain.handle('files:saveCopy', (event, path: string) => {
     const win = BrowserWindow.fromWebContents(event.sender)
-    return win ? saveFileCopy(win, path) : { status: 'error' }
+    try {
+      return win ? saveFileCopy(win, resolveFilePath({ cwd: pi.cwd ?? homedir(), path })) : { status: 'error' }
+    } catch { return { status: 'error' } }
   })
   ipcMain.on('window:setTheme', (event, theme: WindowTheme) => {
     const win = BrowserWindow.fromWebContents(event.sender)
     if (win && !win.isDestroyed()) setWindowTheme(win, theme)
+  })
+  ipcMain.handle('window:setAlwaysOnTop', (event, flag: boolean) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    if (!win || win.isDestroyed()) return false
+    win.setAlwaysOnTop(flag === true)
+    return win.isAlwaysOnTop()
   })
   ipcMain.handle('window:pipPreferences', () => loadSettings().pictureInPicture)
   ipcMain.handle('window:pipSetPreferences', (_event, update: Partial<PictureInPicturePreferencesDTO>) => {
@@ -101,6 +120,8 @@ export function registerIpc(
     onPictureInPicturePreferencesChanged(next)
     return next
   })
+  const git = registerGitIpc(pi)
+  const resources = registerResourceIpc()
   const terminals = new TerminalManager(pi.checkoutCoordinator)
   ipcMain.handle('terminal:create', (event, payload) => terminals.create(event.sender, payload))
   ipcMain.on('terminal:command', (event, command) => terminals.command(event.sender, command))
@@ -162,7 +183,7 @@ export function registerIpc(
     owner.once('destroyed', cancel)
     owner.send('debug:terminal-request', { requestId, title: input.title, cwd: input.cwd } satisfies DebugTerminalRequest)
   })
-  const isQuitting = registerQuitHandler(app, [async () => { pi.stopScheduledTasks() }, () => terminals.dispose(), () => pi.dispose(), async () => getBrowserService()?.dispose(), () => htmlPreviews.dispose()])
+  const isQuitting = registerQuitHandler(app, [async () => { pi.stopScheduledTasks() }, () => resources.dispose(), () => git.dispose(), () => terminals.dispose(), () => pi.dispose(), async () => getBrowserService()?.dispose(), () => htmlPreviews.dispose(), () => filePreviews.dispose()])
 
   // Embedded browser singleton: one per app, owned here and by the quit
   // cleanup above (runs before the window exists — registerIpc is called from
@@ -340,8 +361,10 @@ export function registerIpc(
       subagentMaxTurns: settings.subagentMaxTurns,
       askUserTimeoutSeconds: settings.askUserTimeoutSeconds,
       responseTimeoutSeconds: settings.responseTimeoutSeconds,
+      allowMidRunChanges: settings.allowMidRunChanges === true,
       browserConsent: settings.browserConsent === true,
       browserAgentToolsEnabled: settings.browserAgentToolsEnabled === true,
+      browserSearchEngine: settings.browserSearchEngine,
       debugEnabled: settings.debugEnabled === true,
       version: app.getVersion()
     }
@@ -392,12 +415,19 @@ export function registerIpc(
   ipcMain.handle('app:setBashMaxWaitMs', (_event, value: number) => pi.setBashMaxWaitMs(value))
   ipcMain.handle('app:setAskUserTimeoutSeconds', (_event, value: number) => pi.setAskUserTimeoutSeconds(value))
   ipcMain.handle('app:setResponseTimeoutSeconds', (_event, value: number) => pi.setResponseTimeoutSeconds(value))
+  ipcMain.handle('app:setAllowMidRunChanges', (_event, enabled: boolean) => pi.setAllowMidRunChanges(enabled))
   ipcMain.handle('app:setSandboxMode', (_event, mode: SandboxMode) => pi.setSandboxMode(mode))
   // The preference is persisted here like the other app:set* switches; the
   // manager applies the flag to sessions (build-time registration + live reload).
   ipcMain.handle('app:setBrowserAgentTools', (_event, enabled: boolean) => {
     saveSettings({ ...loadSettings(), browserAgentToolsEnabled: enabled })
     return pi.setBrowserAgentTools(enabled)
+  })
+  ipcMain.handle('app:setBrowserSearchEngine', (_event, engine: unknown) => {
+    if (!isBrowserSearchEngine(engine)) throw new TypeError('Invalid browser search engine')
+    saveSettings({ ...loadSettings(), browserSearchEngine: engine })
+    broadcast('browser:searchEngineChanged', engine)
+    return engine
   })
   ipcMain.handle('app:setDebugEnabled', (_event, enabled: boolean) => {
     saveSettings({ ...loadSettings(), debugEnabled: enabled })
@@ -417,7 +447,7 @@ export function registerIpc(
   registerPlanIpc(pi)
   ipcMain.handle('sandbox:setMode', (_event, sessionPath: string, mode: SandboxMode) =>
     pi.setSessionSandboxMode(sessionPath, mode))
-  // Manual compaction, the app's equivalent of `/compact`.
+  // Manual compaction; the promise waits for a live session's safe boundary.
   ipcMain.handle('pi:compact', (_event, sessionPath: string) => pi.compactSession(sessionPath))
   // Manual resource reload, the app's equivalent of `/reload`.
   ipcMain.handle('pi:reload', (_event, sessionPath: string) => pi.reloadSession(sessionPath))
@@ -456,7 +486,6 @@ export function registerIpc(
   ipcMain.handle('subagents:setCommsEnabled', (_event, enabled: boolean) => pi.setSubagentCommsEnabled(enabled))
   ipcMain.handle('subagents:setTurnLimitOverrideEnabled', (_event, enabled: boolean) => pi.setSubagentTurnLimitOverrideEnabled(enabled))
   ipcMain.handle('subagents:setMaxTurns', (_event, value: number | null) => pi.setSubagentMaxTurns(value))
-  ipcMain.handle('subagents:setProfileDebug', (_event, filePath: string, enabled: boolean) => pi.setSubagentProfileDebug(filePath, enabled))
   ipcMain.handle('subagents:setProfileDefaults', (_event, filePath: string, defaults: SubagentProfileDefaultsPayload) => pi.setSubagentProfileDefaults(filePath, defaults))
   ipcMain.handle('subagents:profiles', () => pi.subagentProfiles())
   ipcMain.handle(
@@ -516,6 +545,9 @@ export function registerIpc(
   })
   ipcMain.handle('pi:resendMessage', (_event, payload: ResendPayload) => pi.resendMessage(payload))
   ipcMain.handle('pi:continueMessage', (_event, payload: ContinuePayload) => pi.continueMessage(payload))
+  ipcMain.handle('pi:imageReplays', (_event, sessionPath: string) => pi.imageReplays(sessionPath))
+  ipcMain.handle('pi:retryPresentedImage', (_event, request: ImageReplayRequest) => pi.retryPresentedImage(request))
+  ipcMain.handle('pi:cancelImageReplay', (_event, sessionPath: string, id: string) => pi.cancelImageReplay(sessionPath, id))
   ipcMain.handle('pi:forkFromMessage', (_event, timestamp: number) => pi.forkFromMessage(timestamp))
   ipcMain.handle('pi:setModel', (_event, providerId: string, modelId: string) =>
     pi.setModel(providerId, modelId)
@@ -577,6 +609,7 @@ export function registerIpc(
   ipcMain.handle('pi:readSkill', (_event, filePath: string) => pi.readSkill(filePath))
 
   ipcMain.handle('files:search', (_event, query: string) => pi.searchFiles(query))
+  ipcMain.handle('files:resolvePath', (_event, request: FileBrowserRequest) => resolveFilePath(request))
   ipcMain.handle('files:read', (_event, path: string) => pi.readFile(path))
   ipcMain.handle('files:directory', (_event, request: FileBrowserRequest, offset?: number) => listFileDirectory(request, offset))
   ipcMain.handle('files:document', (_event, request: FileBrowserRequest) => readFileDocument(request))
@@ -593,10 +626,20 @@ export function registerIpc(
   ipcMain.handle('files:tableStat', (_event, request: FileBrowserRequest) => readTableStat(request))
   ipcMain.handle('files:tableSlice', (_event, request: FileBrowserRequest, offset: number, maxBytes?: number) => readTableSlice(request, offset, maxBytes))
   ipcMain.handle('files:tableRange', (_event, request: FileBrowserRequest, begin: number, end: number) => readTableRange(request, begin, end))
+  const previewOwners = new Set<number>()
+  ipcMain.handle('files:binaryPreview', (event, request: BinaryPreviewRequest) => {
+    if (!previewOwners.has(event.sender.id)) {
+      const owner = event.sender.id
+      previewOwners.add(owner)
+      event.sender.once('destroyed', () => { previewOwners.delete(owner); filePreviews.cancelOwner(owner) })
+    }
+    return filePreviews.read(event.sender.id, request)
+  })
+  ipcMain.on('files:cancelBinaryPreview', (event, id: string) => { if (typeof id === 'string') filePreviews.cancel(event.sender.id, id) })
   ipcMain.handle('files:readImage', (_event, path: string) => pi.readImage(path))
 
-  ipcMain.handle('shell:openPath', (_event, path: string) => shell.openPath(path))
-  ipcMain.handle('shell:showInFolder', (_event, path: string) => shell.showItemInFolder(path))
+  ipcMain.handle('shell:openPath', (_event, path: string) => shell.openPath(resolveFilePath({ cwd: pi.cwd ?? homedir(), path })))
+  ipcMain.handle('shell:showInFolder', (_event, path: string) => shell.showItemInFolder(resolveFilePath({ cwd: pi.cwd ?? homedir(), path })))
   ipcMain.handle('shell:openExternal', (_event, url: string) => shell.openExternal(url))
 
   ipcMain.on('pi:auth-reply', (_event, payload: { requestId: string; value: string | null }) => {

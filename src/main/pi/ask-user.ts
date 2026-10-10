@@ -276,9 +276,7 @@ export function createAskUserTool(deps: AskUserToolDeps): ToolDefinition<typeof 
     ].join(' '),
     promptSnippet: 'Ask the user structured questions when the answer changes what you do next.',
     promptGuidelines: [
-      'Use ask_user_question when a decision or missing fact genuinely belongs to the user and changes what you do next. Never use it to confirm work you are already permitted to do.',
-      'If the user dismisses the questions, or they close automatically, do not re-ask immediately: proceed on clearly stated assumptions.',
-      'With mode "async" you keep working; the answer arrives as a separate message, so do not block, and do not ask the same thing again while it is open.'
+      'Ask only for user-owned decisions or missing facts that change your next step, never to reconfirm authorized work. Use async while independent work remains. Do not duplicate open/dismissed questions; after dismissal, proceed with stated assumptions.'
     ],
     async execute(toolCallId, args, signal) {
       const questions = normalizeAskUserQuestions(args.questions)

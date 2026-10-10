@@ -1,3 +1,4 @@
+// local patch (pi-app): shared scalable typography for content and code.
 // local patch (pi-app): keep UI frames and focus rings in this component at 1px.
 // local patch (pi-app): use the shared Hugeicons adapter at its native 1.5 stroke.
 import {
@@ -52,14 +53,14 @@ function StepRow({ item }: { item: AgentActivityStep }) {
       </span>
       <span
         className={cn(
-          "min-w-0 flex-1 leading-5",
+          "min-w-0 flex-1 leading-ui",
           state === "pending" ? "text-muted-foreground/55" : "text-foreground/90",
         )}
       >
         {item.label}
       </span>
       {item.meta ? (
-        <span className="shrink-0 leading-5 text-muted-foreground/55">
+        <span className="shrink-0 leading-ui text-muted-foreground/55">
           {item.meta}
         </span>
       ) : null}
@@ -69,7 +70,7 @@ function StepRow({ item }: { item: AgentActivityStep }) {
 
 function TextRow({ item }: { item: AgentActivityText }) {
   return (
-    <div className="rounded-md px-1.5 py-1 leading-5 text-muted-foreground">
+    <div className="rounded-md px-1.5 py-1 text-content-tight text-muted-foreground">
       {item.content}
     </div>
   );
@@ -181,7 +182,7 @@ function ToolRow({ item }: { item: AgentActivityTool }) {
   const action = item.action.charAt(0).toUpperCase() + item.action.slice(1);
 
   return (
-    <div className="flex min-h-8 min-w-0 items-center gap-2.5 rounded-md px-1.5 py-0.5 leading-5">
+    <div className="flex min-h-8 min-w-0 items-center gap-2.5 rounded-md px-1.5 py-0.5 leading-ui">
       <span
         aria-hidden="true"
         className="grid size-4 shrink-0 place-items-center text-muted-foreground/70"
@@ -189,7 +190,7 @@ function ToolRow({ item }: { item: AgentActivityTool }) {
         <ActionIcon action={item.action} />
       </span>
       <span className="shrink-0 font-medium text-foreground/90">{action}</span>
-      <span className="min-w-0 flex-1 truncate rounded-lg bg-muted/80 px-2.5 py-1 font-mono text-xs text-muted-foreground/70">
+      <span className="min-w-0 flex-1 truncate rounded-lg bg-muted/80 px-2.5 py-1 font-mono text-code-inline text-muted-foreground/70">
         {item.target}
       </span>
       {typeof item.additions === "number" || typeof item.deletions === "number" ? (
@@ -226,7 +227,7 @@ function TraceRow({ item }: { item: AgentActivityTrace }) {
       </span>
       <span className="font-medium text-foreground/90">{item.label}</span>
       {item.detail ? (
-        <span className="min-w-0 truncate rounded-lg bg-muted/80 px-2.5 py-1 font-mono text-xs text-muted-foreground/70">
+        <span className="min-w-0 truncate rounded-lg bg-muted/80 px-2.5 py-1 font-mono text-code-inline text-muted-foreground/70">
           {item.detail}
         </span>
       ) : (

@@ -1,4 +1,4 @@
-import { Compass, Database, Diff, Globe, Plug, SquareTerminal, type IconComponent } from '@/lib/icons'
+import { Columns3Cog, Diff, Globe, Plug, Safari, SquareTerminal, type IconComponent } from '@/lib/icons'
 import type { MessageKey } from '@/i18n/locales/en'
 
 /**
@@ -39,7 +39,7 @@ export const TOOL_CATEGORIES: readonly ToolCategory[] = [
   {
     id: 'exploration',
     labelKey: 'tool.categoryExploration',
-    icon: Compass,
+    icon: Safari,
     tools: ['read', 'find', 'grep', 'ffgrep', 'fffind', 'ls', 'web_search', 'web_fetch']
   },
   {
@@ -57,7 +57,7 @@ export const TOOL_CATEGORIES: readonly ToolCategory[] = [
   {
     id: 'context',
     labelKey: 'tool.categoryContext',
-    icon: Database,
+    icon: Columns3Cog,
     prefix: 'ctx_',
     tools: [
       'ctx_execute', 'ctx_execute_file', 'ctx_batch_execute', 'ctx_index',

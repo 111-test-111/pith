@@ -1,5 +1,5 @@
 import { memo, useMemo, useSyncExternalStore } from 'react'
-import { ChatText, Link2 } from '@/lib/icons'
+import { ChatAdd, Link2 } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
 import { RunningLoader } from './RunningLoader'
 import { MessageGroup, Message, MessageBubble, MessageBubbleContent } from '@/components/agents/message'
@@ -178,9 +178,9 @@ function SideChatEmpty() {
   const { t } = useI18n()
   return (
     <div className="flex flex-col items-center justify-center gap-2 px-4 py-16 text-center">
-      <ChatText aria-hidden="true" className="size-5 text-muted-foreground/70" />
+      <ChatAdd aria-hidden="true" className="size-5 text-muted-foreground/70" />
       <p className="text-sm font-medium text-foreground">{t('sidebar.chatEmptyTitle')}</p>
-      <p className="text-xs leading-5 text-muted-foreground">{t('sidebar.chatEmptyBody')}</p>
+      <p className="text-xs leading-ui text-muted-foreground">{t('sidebar.chatEmptyBody')}</p>
     </div>
   )
 }

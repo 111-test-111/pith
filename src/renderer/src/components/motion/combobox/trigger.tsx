@@ -10,6 +10,8 @@ import type {
   Ref,
 } from "react";
 import { cn } from "@/lib/utils";
+// local patch (pi-app): searchable fields share the sidebar filter style.
+import { SINGLE_LINE_INPUT_PADDING, SINGLE_LINE_INPUT_TEXT } from "@/lib/input-style";
 import { mergeRefs, useComboboxContext } from "./context";
 
 export interface ComboboxTriggerProps {
@@ -34,7 +36,10 @@ export function ComboboxTrigger({ children, className }: ComboboxTriggerProps) {
       className={cn(
         // local patch (pi-app): a clickable picker fills on hover without a
         // painted or highlighted frame.
-        "relative z-20 flex h-10 w-full min-w-52 cursor-text items-center justify-between gap-3 rounded-xl border border-transparent bg-transparent px-3 text-sm text-foreground transition-colors hover:bg-muted",
+        // local patch (pi-app): share single-line field insets and grow with type.
+        "relative z-20 flex w-full min-w-52 cursor-text items-center justify-between gap-3 rounded-xl border border-transparent bg-transparent text-foreground transition-colors hover:bg-muted",
+        SINGLE_LINE_INPUT_TEXT,
+        SINGLE_LINE_INPUT_PADDING,
         "focus-within:ring-1 focus-within:ring-foreground/20",
         context.disabled && "pointer-events-none opacity-50",
         className,
@@ -186,7 +191,9 @@ export function ComboboxInput({
         }}
         onKeyDown={handleKeyDown}
         className={cn(
-          "h-10 min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed",
+          // local patch (pi-app): the trigger supplies the shared vertical inset.
+          "min-w-0 flex-1 bg-transparent py-0 text-foreground outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed",
+          SINGLE_LINE_INPUT_TEXT,
           className,
         )}
       />

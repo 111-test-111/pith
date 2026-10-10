@@ -1,4 +1,4 @@
-import { app, BrowserWindow, screen } from 'electron'
+import { app, BrowserWindow, dialog, screen } from 'electron'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { appendCdpSwitches, pickCdpPort } from './browser/cdp-port.ts'
@@ -11,6 +11,9 @@ import { loadSettings, saveSettings, type WindowBounds } from './settings'
 import { registerPictureInPictureIpc } from './picture-in-picture'
 import { registerQuitShortcut } from './shutdown'
 import { windowChromeOptions } from './window-chrome'
+import { getLibraryService, startLibraryService } from './library/service'
+import { registerLibraryIpc } from './library/ipc'
+import { acquireRuntimeLock } from './runtime-lock'
 
 // A privileged scheme has to be declared before the app is ready.
 registerMediaScheme()
@@ -75,7 +78,9 @@ function createWindow(): BrowserWindow {
     show: false,
     title: 'Pith',
     icon: join(iconDirectory, process.platform === 'win32' ? 'icon.ico' : '512x512.png'),
-    backgroundColor: '#0b0b0d',
+    // A vibrancy window (macOS, window-chrome.ts) must not paint an opaque
+    // backing — the material itself is what shows behind the page.
+    backgroundColor: process.platform === 'darwin' ? '#00000000' : '#1e1e1e',
     webPreferences: {
       preload: join(__dirname, '../preload/index.mjs'),
       contextIsolation: true,
@@ -95,7 +100,12 @@ function createWindow(): BrowserWindow {
   // wiring installs unconditionally; only the input relay is service-aware, and it
   // looks the singleton up lazily via getBrowserService() — a designed no-op until
   // the service initializes in ipc.ts (registerIpc).
-  installBrowserWiring(win, broadcast)
+  installBrowserWiring(win, broadcast, (owner) => {
+    const library = getLibraryService()
+    if (!library) return undefined
+    const source = library.downloadSession(owner)
+    return (path, url) => library.download(path, url, source)
+  })
   installHtmlPreviewWiring(win)
 
   // Restore the maximized state the window was closed in. Reading bounds while
@@ -155,10 +165,20 @@ function createWindow(): BrowserWindow {
   return win
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  try {
+    const release = await acquireRuntimeLock()
+    app.once('quit', () => { void release().catch(error => console.error('[Pith] Runtime unlock failed:', error)) })
+  } catch (error) {
+    dialog.showErrorBox('Pith', error instanceof Error ? error.message : String(error))
+    app.quit()
+    return
+  }
   // BrowserWindow.icon does not set the macOS Dock icon during development.
   if (process.platform === 'darwin') app.dock?.setIcon(join(iconDirectory, '512x512.png'))
   const pi = createPiManager()
+  const library = startLibraryService(broadcast, (id) => pi.librarySession(id))
+  registerLibraryIpc(library)
   const pictureInPicture = registerPictureInPictureIpc()
   const isQuitting = registerIpc(pi, () => pictureInPicture.mainWindow(), (preferences) => pictureInPicture.setPreferences(preferences))
   app.on('before-quit', () => pictureInPicture.dispose())

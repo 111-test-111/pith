@@ -4,13 +4,13 @@
 import {
   AnimatePresence,
   motion,
-  useReducedMotion,
 } from "motion/react";
 import { type ReactNode } from "react";
 // local patch (pi-app): nested modal cleanup must not unlock an open parent or
 // leave scrolling locked when both surfaces unmount in the same commit.
 import { useModalScrollLock } from "@/lib/hooks/use-modal-scroll-lock";
-import { EASE_OUT, SPRING_PANEL } from "@/lib/ease";
+// local patch (pi-app): all dialogs and their backdrops share overlay motion.
+import { useOverlayMotion } from "@/lib/overlay-motion";
 import { PresenceGate } from "@/lib/presence-gate";
 import { cn } from "@/lib/utils";
 
@@ -32,9 +32,8 @@ export function MorphingModal({
   className,
 }: MorphingModalProps) {
   const open = viewId !== null;
-  const reduce = useReducedMotion();
-  const enterY = reduce ? 0 : placement === "bottom" ? 40 : 20;
-  const enterScale = reduce ? 1 : 0.97;
+  const overlay = useOverlayMotion();
+  const backdrop = useOverlayMotion("backdrop");
 
   useModalScrollLock(open);
 
@@ -53,10 +52,7 @@ export function MorphingModal({
             <motion.button
               type="button"
               aria-label="Close modal"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.2, ease: EASE_OUT }}
+              {...backdrop}
               {...gate}
               onClick={onClose}
               className="pointer-events-auto fixed inset-0 z-[80] bg-background/5 [backdrop-filter:blur(14px)_saturate(140%)] [-webkit-backdrop-filter:blur(14px)_saturate(140%)]"
@@ -80,15 +76,7 @@ export function MorphingModal({
               <motion.div
                 key="panel"
                 layout
-                initial={{ opacity: 0, y: enterY, scale: enterScale }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{
-                  opacity: 0,
-                  y: enterY,
-                  scale: reduce ? 1 : 0.98,
-                  transition: { duration: 0.18, ease: EASE_OUT },
-                }}
-                transition={SPRING_PANEL}
+                {...overlay}
                 {...gate}
                 className={cn(
                   // local patch (pi-app): dialogs share radius and themed elevation.
@@ -100,49 +88,7 @@ export function MorphingModal({
                   <AnimatePresence mode="popLayout" initial={false}>
                     <motion.div
                       key={viewId}
-                      initial={
-                        reduce
-                          ? { opacity: 0 }
-                          : { opacity: 0, y: 8, filter: "blur(4px)" }
-                      }
-                      animate={
-                        reduce
-                          ? {
-                              opacity: 1,
-                              transition: {
-                                duration: 0.18,
-                                ease: EASE_OUT,
-                              },
-                            }
-                          : {
-                              opacity: 1,
-                              y: 0,
-                              filter: "blur(0px)",
-                              transition: {
-                                duration: 0.24,
-                                ease: EASE_OUT,
-                              },
-                            }
-                      }
-                      exit={
-                        reduce
-                          ? {
-                              opacity: 0,
-                              transition: {
-                                duration: 0.14,
-                                ease: EASE_OUT,
-                              },
-                            }
-                          : {
-                              opacity: 0,
-                              y: -8,
-                              filter: "blur(4px)",
-                              transition: {
-                                duration: 0.16,
-                                ease: EASE_OUT,
-                              },
-                            }
-                      }
+                      {...backdrop}
                     >
                       {children}
                     </motion.div>

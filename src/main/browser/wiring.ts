@@ -111,12 +111,16 @@ function popupWindowOptions(features: string): BrowserWindowConstructorOptions {
 }
 
 export type BrowserEmit = (channel: string, payload: unknown) => void
+/** Capture provenance when a download starts; the returned receipt runs only
+ * after completion. Wiring stays independent of archive/settings ownership. */
+export type BrowserDownloadCollector = (owner?: string) => ((path: string, url: string) => void) | undefined
 
 // Install listeners once; refresh window/emit references after macOS window recreation.
 let wiringInstalled = false
 let sessionWired = false
 let shellWin: BrowserWindow | null = null
 let activeEmit: BrowserEmit | null = null
+let activeDownloadCollector: BrowserDownloadCollector | undefined
 
 let markerDropLogged = false
 function dropForgedMarker(url: string): void {
@@ -246,7 +250,7 @@ function wireBrowserSession(): void {
   const { app, session } = electron()
   const ses = session.fromPartition(BROWSER_PARTITION)
 
-  ses.on('will-download', (_event, item) => {
+  ses.on('will-download', (_event, item, contents) => {
     const dir = app.getPath('downloads')
     const filename = item.getFilename() || 'download'
     const ext = extname(filename)
@@ -258,8 +262,13 @@ function wireBrowserSession(): void {
       seq += 1
     }
     item.setSavePath(target)
+    const owner = contents ? getBrowserService()?.ownerForWebContents(contents.id) : undefined
+    const onCompleted = activeDownloadCollector?.(owner)
     item.once('done', (_e, state) => {
-      if (state === 'completed') activeEmit?.('browser:download', { path: target, filename })
+      if (state === 'completed') {
+        activeEmit?.('browser:download', { path: target, filename })
+        onCompleted?.(target, item.getURL())
+      }
       else activeEmit?.('browser:download', { path: target, filename, error: state })
     })
   })
@@ -270,9 +279,10 @@ function wireBrowserSession(): void {
 }
 
 /** Install independently of service initialization; lazy input relay is a no-op until ready. */
-export function installBrowserWiring(win: BrowserWindow, emit: BrowserEmit): void {
+export function installBrowserWiring(win: BrowserWindow, emit: BrowserEmit, collectDownload?: BrowserDownloadCollector): void {
   shellWin = win
   activeEmit = emit
+  activeDownloadCollector = collectDownload
   if (!wiringInstalled) {
     wiringInstalled = true
     const { app } = electron()

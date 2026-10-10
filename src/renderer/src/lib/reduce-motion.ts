@@ -96,6 +96,27 @@ export function useReduceMotion(): boolean {
   )
 }
 
+let systemMotionQuery: MediaQueryList | undefined
+
+function getSystemMotionQuery(): MediaQueryList {
+  return systemMotionQuery ??= window.matchMedia('(prefers-reduced-motion: reduce)')
+}
+
+function subscribeSystemMotion(listener: () => void): () => void {
+  const query = getSystemMotionQuery()
+  query.addEventListener('change', listener)
+  return () => query.removeEventListener('change', listener)
+}
+
+/** Live native OS signal. Motion's useReducedMotion captures only mount state. */
+export function useSystemReducedMotion(): boolean {
+  return useSyncExternalStore(
+    subscribeSystemMotion,
+    () => getSystemMotionQuery().matches,
+    () => false
+  )
+}
+
 /**
  * Tailwind class that keeps a rotation-based running indicator moving while the
  * switch is on — Tailwind's own keyframes, so the app keeps owning none of its

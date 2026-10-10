@@ -23,6 +23,7 @@ import {
   type ReactElement,
   type ReactNode,
   useCallback,
+  useEffect,
   useId,
   useMemo,
   useRef,
@@ -48,6 +49,8 @@ export interface TooltipProps {
   align?: Align;
   /** Delay before showing (ms). Default 120. */
   delay?: number;
+  /** local patch (pi-app): keep the anchor mounted while a row edits or opens its menu. */
+  disabled?: boolean;
   className?: string;
   /** Classes for the outer wrapper span. Use to fix baseline / fill parent. */
   wrapperClassName?: string;
@@ -167,6 +170,7 @@ export function Tooltip({
   side = "top",
   align = "center",
   delay = 120,
+  disabled = false,
   className,
   wrapperClassName,
 }: TooltipProps) {
@@ -244,10 +248,11 @@ export function Tooltip({
   );
 
   const show = useCallback(() => {
+    if (disabled) return;
     if (timer.current) clearTimeout(timer.current);
     const warm = Date.now() - lastHiddenAt < WARM_WINDOW_MS;
     timer.current = setTimeout(() => setOpen(true), warm ? 0 : delay);
-  }, [delay]);
+  }, [delay, disabled]);
 
   const hide = useCallback(() => {
     if (timer.current) {
@@ -258,6 +263,15 @@ export function Tooltip({
     setOpen(false);
   }, [open]);
 
+  // local patch (pi-app): cancel pending/open labels without replacing their
+  // trigger, so editing and portalled menus retain layout and focus.
+  useEffect(() => {
+    if (disabled) hide();
+  }, [disabled, hide]);
+  useEffect(() => () => {
+    if (timer.current) clearTimeout(timer.current);
+  }, []);
+
   // A finger never hovers, and Safari does not focus a button on tap either, so
   // the label is only reachable if the tap itself opens the tooltip. A click
   // carries no pointerType, so the pointerdown that preceded it is what says
@@ -265,14 +279,14 @@ export function Tooltip({
   // all, and focus has already shown the label there.
   const toggleOnTap = useCallback(() => {
     const gesture = tap.take();
-    if (!gesture || gesture.pointerType === "mouse") return;
+    if (disabled || !gesture || gesture.pointerType === "mouse") return;
     if (gesture.state) {
       hide();
       return;
     }
     if (timer.current) clearTimeout(timer.current);
     setOpen(true);
-  }, [hide, tap]);
+  }, [disabled, hide, tap]);
 
   // ...and closed again by the next tap that lands somewhere else. The label
   // covers nothing interactive, so that tap passes through to what it hit.

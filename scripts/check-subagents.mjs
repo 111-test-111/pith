@@ -99,6 +99,32 @@ const entriesOf = (...records) => records.map((record, index) => ({
   assert.ok(!files.some((file) => file.filePath.includes('broken')))
 }
 
+// --- image receipts survive persistence for Rewind without becoming code diffs ---
+{
+  const messages = [
+    { role: 'assistant', content: [
+      { type: 'toolCall', id: 'image', name: 'image', arguments: {} },
+      { type: 'toolCall', id: 'edit', name: 'write', arguments: { path: 'picture.svg', content: '<svg />' } }
+    ] },
+    { role: 'toolResult', toolCallId: 'image', toolName: 'image', isError: true,
+      details: { kind: 'pi-app-image', action: 'generate', model: 'fixture/image', protocol: 'native', prompt: 'test',
+        files: [{ path: '/w/picture.svg', mimeType: 'image/svg+xml', size: 20, width: 1, height: 1 }] } }
+  ]
+  const writtenFiles = derive.extractSubagentWrittenFiles(messages, '/w')
+  assert.equal(writtenFiles[0].kind, 'generated-image', 'even a partial failed batch retains its committed image')
+  const restored = protocol.readDiskSubagentRuns(entriesOf(
+    { customType: protocol.SUBAGENT_RUN_TYPE, data: run() },
+    { customType: protocol.SUBAGENT_RESULT_TYPE, data: result({ writtenFiles }) }
+  ))[0].result.writtenFiles
+  assert.equal(restored[0].filePath, '/w/picture.svg')
+  assert.equal(restored[0].kind, 'generated-image', 'reload preserves the image-only receipt marker')
+  const edited = derive.extractSubagentWrittenFiles([...messages,
+    { role: 'toolResult', toolCallId: 'edit', toolName: 'write', isError: false }
+  ], '/w')
+  assert.equal(edited[0].kind, undefined, 'a subsequent text edit to SVG remains reviewable')
+  assert.match(edited[0].patch, /\+<svg \/>/)
+}
+
 // --- patch budget: beyond-cap patches keep counts but drop the body ---
 {
   const big = `--- a/big.txt\n+++ b/big.txt\n@@ -1 +1 @@\n-${'x'.repeat(40)}\n+${'y'.repeat(40)}\n`
@@ -291,15 +317,15 @@ const entriesOf = (...records) => records.map((record, index) => ({
     const crlf = profiles.setProfileToolsLine('---\r\ndescription: q\r\ntools: read\r\n---\r\n\r\nB.', ['grep'])
     assert.ok(crlf.includes('tools: grep\r\n'), 'CRLF is preserved')
 
-    // The write path validates before it commits: dedupe + lowercase, a
+    // The write path validates before it commits: dedupe + exact SDK identities, a
     // re-parse that must still be the SAME profile, and an empty set refused.
     await writeFile(join(agentsDir, 'keeper.md'), original, 'utf8')
-    const written = profiles.writeSubagentProfileTools(join(agentsDir, 'keeper.md'), ['mcp', 'Read', 'mcp', ''])
-    assert.deepEqual(written.tools, ['mcp', 'read'], 'names are deduped and lowercased')
+    const written = profiles.writeSubagentProfileTools(join(agentsDir, 'keeper.md'), ['mcp', 'read', 'mcp', 'mcp__Docs_Server__Read_File', ''])
+    assert.deepEqual(written.tools, ['mcp', 'read', 'mcp__Docs_Server__Read_File'], 'names are deduped without changing case-sensitive MCP identities')
     assert.equal(written.description, 'Keeps its shape')
     assert.equal(written.systemPrompt, 'You are the keeper.')
     const onDisk = readFileSync(join(agentsDir, 'keeper.md'), 'utf8')
-    assert.ok(onDisk.includes('tools: mcp,read\n'), 'exactly one tools: line is written')
+    assert.ok(onDisk.includes('tools: mcp,read,mcp__Docs_Server__Read_File\n'), 'exactly one tools: line is written')
     assert.ok(onDisk.includes('tool_preset: some-preset'), 'an explicit list overrides a preset without deleting it')
     assert.equal((onDisk.match(/^tools:/gm) ?? []).length, 1, 'the line is never duplicated')
     let refused = false
@@ -354,21 +380,27 @@ const entriesOf = (...records) => records.map((record, index) => ({
   } finally { await rm(dir, { recursive: true, force: true }) }
 }
 
-// Debug is an explicit per-role flag, separate from tools: all or presets.
+// A legacy `debug:` frontmatter line no longer grants anything: the parser
+// ignores it, and the ordinary tools line is the only place the debugger
+// lives (`tools: all`, or an explicit `debug` entry).
 {
-  const dir = await mkdtemp(join(tmpdir(), 'pith-profile-debug-'))
-  const file = join(dir, 'role.md')
+  const agentDir = await mkdtemp(join(tmpdir(), 'pith-subagent-agentdir-debug-'))
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR
+  process.env.PI_CODING_AGENT_DIR = agentDir
   try {
-    await writeFile(file, '---\r\ndescription: Debug role\r\ntools: all\r\n"debug": false\r\n---\r\n\r\nKeep this prompt.\r\n')
-    profiles.writeSubagentProfileDebug(file, true)
-    const { readFileSync } = await import('node:fs')
-    let text = readFileSync(file, 'utf8')
-    assert.ok(text.includes('debug: true\r\n'))
-    assert.ok(text.endsWith('Keep this prompt.\r\n'))
-    profiles.writeSubagentProfileDebug(file, false)
-    assert.ok(readFileSync(file, 'utf8').includes('debug: false'))
-    assert.throws(() => profiles.writeSubagentProfileDebug(file, 'true'), /Invalid/)
-  } finally { await rm(dir, { recursive: true, force: true }) }
+    const { mkdirSync, readFileSync: _readFileSync } = await import('node:fs')
+    const dir = join(agentDir, 'agents')
+    mkdirSync(dir, { recursive: true })
+    await writeFile(join(dir, 'role.md'), '---\r\ndescription: Debug role\r\ntools: read,debug\r\n"debug": false\r\n---\r\n\r\nKeep this prompt.\r\n')
+    const parsed = profiles.listSubagentProfiles(null)
+    assert.equal(parsed.length, 1, 'a file with a legacy debug line still parses')
+    assert.ok(!('debugEnabled' in parsed[0]), 'the parser no longer reads a debug flag')
+    assert.deepEqual(parsed[0].tools, ['read', 'debug'], 'the debugger rides the ordinary tools line')
+  } finally {
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir
+    await rm(agentDir, { recursive: true, force: true })
+  }
 }
 
 // --- profile creation (Settings → Subagents): a least-privilege starter file
@@ -669,12 +701,14 @@ const entriesOf = (...records) => records.map((record, index) => ({
 // --- roster rows are panel metadata: patch bodies never ride them ---
 {
   const withPatch = { sessionId: 'c1', runId: 'r1', seq: 1, status: 'completed', createdAt: '2026-01-01T00:00:00Z',
-    writtenFiles: [{ filePath: '/w/a.ts', displayPath: 'a.ts', added: 1, removed: 2, patch: '+++ a diff body' }] }
+    writtenFiles: [{ filePath: '/w/a.ts', displayPath: 'a.ts', added: 1, removed: 2, patch: '+++ a diff body' },
+      { filePath: '/w/generated.png', displayPath: 'generated.png', kind: 'generated-image' }] }
   const slim = protocol.slimRunForRoster(withPatch)
   assert.equal(slim.writtenFiles[0].patch, undefined, 'the roster payload carries no patch body')
   assert.equal(slim.writtenFiles[0].displayPath, 'a.ts')
   assert.equal(slim.writtenFiles[0].added, 1)
   assert.equal(slim.writtenFiles[0].removed, 2)
+  assert.equal(slim.writtenFiles[1].kind, 'generated-image', 'slimming keeps image receipt classification')
   assert.equal(protocol.slimRunForRoster(slim), slim, 'slimming an already-slim row is a no-op')
   const withoutFiles = { ...withPatch, writtenFiles: undefined }
   assert.equal(protocol.slimRunForRoster(withoutFiles), withoutFiles, 'a row without files is untouched')
@@ -846,24 +880,29 @@ console.log('check-subagents: all assertions passed')
       assert.deepEqual(runs[0].start.resource.tools.sort(), ['grep', 'read'])
     }
 
-    // Dedicated debug opt-in is frozen at dispatch and only narrows on resume.
+    // The debug grant rides the profile's ordinary tool set: `all` inherits
+    // the parent's debug availability, an explicit `debug` entry grants it,
+    // the parent's active set stays the ceiling, and a resume only narrows
+    // the frozen set.
     {
       const debugParent = fakeSession({ sessionId: 'parent-session', getActiveToolNames: () => ['read', 'debug'] })
       const host = makeHost(fakeSession({ getLastAssistantText: () => 'done' }))
       let allowed = true
       host.profileDebugEnabled = () => allowed
       const runtime = new SubagentRuntime(host), state = new SubagentParentState('parent-session')
-      const off = await (await runtime.start(state, baseRequest({ parentSession: debugParent, profile: { ...profile, tools: 'all', debugEnabled: false } }))).completion
-      assert.deepEqual(runtime.readChildRuns(off.sessionPath)[0].start.resource.tools, ['read'])
-      const on = await (await runtime.start(state, baseRequest({ parentSession: debugParent, profile: { ...profile, tools: ['read'], debugEnabled: true } }))).completion
-      assert.deepEqual(runtime.readChildRuns(on.sessionPath)[0].start.resource.tools, ['read', 'debug'])
+      const all = await (await runtime.start(state, baseRequest({ parentSession: debugParent, profile: { ...profile, tools: 'all' } }))).completion
+      assert.deepEqual(runtime.readChildRuns(all.sessionPath)[0].start.resource.tools, ['read', 'debug'], 'tools: all inherits the parent debug availability')
+      const off = await (await runtime.start(state, baseRequest({ parentSession: debugParent, profile: { ...profile, tools: ['read'] } }))).completion
+      assert.deepEqual(runtime.readChildRuns(off.sessionPath)[0].start.resource.tools, ['read'], 'an explicit list without debug stays without it')
+      const on = await (await runtime.start(state, baseRequest({ parentSession: debugParent, profile: { ...profile, tools: ['read', 'debug'] } }))).completion
+      assert.deepEqual(runtime.readChildRuns(on.sessionPath)[0].start.resource.tools, ['read', 'debug'], 'an explicit debug entry grants it when the parent has it')
       allowed = false
       await (await runtime.resume(state, debugParent, on.sessionId, 'continue')).completion
       assert.deepEqual(runtime.readChildRuns(on.sessionPath)[0].start.resource.tools, ['read'])
       allowed = true
       await (await runtime.resume(state, debugParent, on.sessionId, 'continue again')).completion
       assert.deepEqual(runtime.readChildRuns(on.sessionPath)[0].start.resource.tools, ['read'], 'resume cannot widen a frozen ceiling')
-      const missing = await (await runtime.start(state, baseRequest({ profile: { ...profile, debugEnabled: true } }))).completion
+      const missing = await (await runtime.start(state, baseRequest({ profile: { ...profile, tools: ['read', 'debug'] } }))).completion
       assert.ok(!runtime.readChildRuns(missing.sessionPath)[0].start.resource.tools.includes('debug'), 'parent active set is still the upper ceiling')
     }
 

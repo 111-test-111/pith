@@ -1,171 +1,168 @@
-import { useEffect, useState } from 'react'
-import { AlertCircle, Download, Loader2 } from '@/lib/icons'
-import { MorphingModal } from '@/components/motion/morphing-modal'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Download, Loader2, Search } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
-import { MultiSelect, MultiSelectContent, MultiSelectEmpty, MultiSelectInput, MultiSelectItem, MultiSelectList, MultiSelectTrigger, MultiSelectValue } from '@/components/motion/multi-select'
+import { Input } from '@/components/motion/input'
+import { Checkbox } from '@/components/motion/checkbox'
 import { useI18n } from '@/i18n'
 import type { CustomProviderDTO, DiscoveredModelDTO } from '../../../../../../shared/types'
 import type { ModelsConfigMutate } from './use-models-config'
+import { ProviderDialog, ProviderNotice, PROVIDER_INPUT_CLASS_NAMES } from './ProviderUi'
 
 const MAX_SHOWN = 300
 
-/**
- * Fetches the provider's /models endpoint and imports the selected ids as
- * bare `{id, name?}` carriers — the registry/composition layer fills in the
- * wire details, and the model editor can refine any single row afterwards.
- */
+/** A visible searchable selection list; selected ids survive changing the search. */
 export function DiscoverDialog({
-  open,
-  providerId,
-  providerName,
-  entry,
-  flush,
-  mutate,
-  onClose
+  open, providerId, providerName, entry, flush, mutate, onClose
 }: {
   open: boolean
   providerId: string
   providerName: string
   entry: CustomProviderDTO | undefined
-  flush: () => Promise<void>
+  flush: () => Promise<boolean>
   mutate: ModelsConfigMutate
   onClose: () => void
 }) {
   const { t } = useI18n()
   const [loading, setLoading] = useState(false)
+  const [importing, setImporting] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [models, setModels] = useState<DiscoveredModelDTO[] | null>(null)
+  const [saveBlocked, setSaveBlocked] = useState(false)
+  const [models, setModels] = useState<DiscoveredModelDTO[]>([])
   const [selected, setSelected] = useState<string[]>([])
+  const [query, setQuery] = useState('')
+  const [existing, setExisting] = useState<Set<string>>(new Set())
+  const entryRef = useRef(entry)
+  entryRef.current = entry
+  const epochRef = useRef(0)
+  const searchRef = useRef<HTMLInputElement>(null)
+
+  const load = useCallback(async () => {
+    const epoch = ++epochRef.current
+    setLoading(true)
+    setError(null)
+    setSaveBlocked(false)
+    try {
+      if (!await flush()) { if (epoch === epochRef.current) setSaveBlocked(true); return }
+      const fetched = await window.pi.discoverModels(providerId)
+      if (epoch === epochRef.current) {
+        // A provider may repeat an id; one id must correspond to one selectable model.
+        setModels([...new Map(fetched.map(model => [model.id, model])).values()])
+      }
+    } catch (err) {
+      if (epoch === epochRef.current) setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      if (epoch === epochRef.current) setLoading(false)
+    }
+  }, [flush, providerId])
 
   useEffect(() => {
     if (!open) return
-    setLoading(true)
-    setError(null)
-    setModels(null)
+    setModels([])
     setSelected([])
-    void (async () => {
-      try {
-        await flush()
-        setModels(await window.pi.discoverModels(providerId))
-      } catch (err) {
-        setError(err instanceof Error ? err.message : String(err))
-      } finally {
-        setLoading(false)
+    setQuery('')
+    setExisting(new Set((entryRef.current?.models ?? []).map(model => model.id?.trim()).filter(Boolean)))
+    void load()
+    return () => { epochRef.current++ }
+  }, [open, load])
+
+  const keyword = query.trim().toLocaleLowerCase()
+  const matched = models.filter(model => !keyword || (model.id + ' ' + (model.name ?? '')).toLocaleLowerCase().includes(keyword))
+  const shown = matched.slice(0, MAX_SHOWN)
+  const selectable = shown.filter(model => !existing.has(model.id)).map(model => model.id)
+  const selectedSet = new Set(selected)
+  const importCount = selected.filter(id => !existing.has(id)).length
+  const allShownSelected = selectable.length > 0 && selectable.every(id => selectedSet.has(id))
+  const toggle = (id: string, checked: boolean) =>
+    setSelected(current => checked ? [...current.filter(item => item !== id), id] : current.filter(item => item !== id))
+
+  const importSelected = async () => {
+    if (importCount === 0 || importing) return
+    setImporting(true)
+    setSaveBlocked(false)
+    mutate(draft => {
+      const provider = draft.providers[providerId] ?? {}
+      const carriers = [...(provider.models ?? [])]
+      const known = new Set(carriers.map(model => model.id?.trim()))
+      for (const id of selected) {
+        if (known.has(id)) continue
+        const found = models.find(model => model.id === id)
+        carriers.push(found?.name ? { id, name: found.name } : { id })
+        known.add(id)
       }
-    })()
-    // Re-fetch every time the dialog opens, never on config changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, providerId])
-
-  if (!open) return null
-
-  const existing = new Set(
-    (entry?.models ?? [])
-      .map((model) => (typeof model?.id === 'string' ? model.id.trim() : ''))
-      .filter(Boolean)
-  )
-  const shown = (models ?? []).slice(0, MAX_SHOWN)
-  const importCount = selected.filter((id) => !existing.has(id)).length
-
-  const importSelected = () => {
-    if (importCount === 0) return
-    mutate(
-      (draft) => {
-        const provider = draft.providers[providerId] ?? {}
-        const models = [...(provider.models ?? [])]
-        const known = new Set(
-          models.map((model) => (typeof model?.id === 'string' ? model.id.trim() : ''))
-        )
-        for (const id of selected) {
-          if (known.has(id)) continue
-          const found = shown.find((m) => m.id === id)
-          models.push(found?.name ? { id, name: found.name } : { id })
-        }
-        return { ...draft, providers: { ...draft.providers, [providerId]: { ...provider, models } } }
-      },
-      true
-    )
-    onClose()
+      return { ...draft, providers: { ...draft.providers, [providerId]: { ...provider, models: carriers } } }
+    })
+    if (await flush()) onClose()
+    else setSaveBlocked(true)
+    setImporting(false)
   }
 
   return (
-    <MorphingModal viewId={open ? 'discover' : null} onClose={onClose} placement="center" className="max-w-md">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h2 className="text-base font-semibold text-foreground">
-            {t('settings.discoverTitle', { name: providerName })}
-          </h2>
-          <p className="mt-0.5 text-xs text-muted-foreground">{t('settings.discoverHint')}</p>
+    <ProviderDialog open={open} onClose={onClose}
+      busy={importing}
+      title={t('settings.discoverTitle', { name: providerName })}
+      description={t('settings.discoverHint')}
+      initialFocusRef={searchRef}
+      toolbar={<div className="space-y-2">
+        <Input ref={searchRef} value={query} onChange={setQuery} leftIcon={<Search />}
+          placeholder={t('settings.discoverSearch')} aria-label={t('settings.discoverSearch')} classNames={PROVIDER_INPUT_CLASS_NAMES} />
+        {models.length > 0 ? <div className="flex flex-wrap items-center justify-between gap-2">
+          <span className="text-xs text-muted-foreground">{t('settings.providerModelCount', { count: matched.length })}</span>
+          <div className="flex items-center gap-1">
+            <Button variant="ghost" size="sm" disabled={selectable.length === 0 || importing} onClick={() => setSelected(current => allShownSelected
+              ? current.filter(id => !selectable.includes(id)) : [...new Set([...current, ...selectable])])}>
+              {t(allShownSelected ? 'settings.providerDeselectResults' : 'settings.providerSelectResults')}
+            </Button>
+            <Button variant="ghost" size="sm" disabled={selected.length === 0 || importing} onClick={() => setSelected([])}>{t('settings.providerClearSelection')}</Button>
+          </div>
+        </div> : null}
+      </div>}
+      footer={<div className="flex flex-wrap items-center justify-between gap-2">
+        <span role="status" className="text-xs text-muted-foreground">{t('settings.providerSelectedCount', { count: importCount })}</span>
+        <div className="flex items-center gap-2">
+          <Button variant="ghost" size="sm" disabled={importing} onClick={onClose}>{t('common.cancel')}</Button>
+          <Button variant="primary" size="sm" disabled={importCount === 0 || importing || loading} onClick={() => void importSelected()}>
+            {importing ? <Loader2 className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}
+            {t('settings.discoverImport', { count: importCount })}
+          </Button>
         </div>
-        <Download className="size-4 shrink-0 text-muted-foreground" />
+      </div>}
+    >
+      <div className="space-y-3">
+        {loading ? (
+          <div className="flex items-center justify-center gap-2 py-10 text-xs text-muted-foreground">
+            <Loader2 className="size-4 animate-spin" />{t('settings.discoverLoading')}
+          </div>
+        ) : error || saveBlocked ? (
+          <ProviderNotice tone="error">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span>{error ?? t('settings.providerSaveBeforeContinue')}</span>
+              <Button variant="ghost" size="sm" disabled={importing} onClick={() => void (models.length ? importSelected() : load())}>{t('settings.providerRetry')}</Button>
+            </div>
+          </ProviderNotice>
+        ) : null}
+        {!loading && models.length > 0 ? <>
+          <div role="group" aria-label={t('settings.discoverList')} className="divide-y divide-border/60 rounded-item border border-border/60 p-1">
+            {shown.map(model => {
+              const added = existing.has(model.id)
+              return (
+                <div key={model.id} data-discovered-model={model.id} className="flex min-w-0 items-center gap-3 px-3 py-3">
+                  <div className="min-w-0 flex-1">
+                    <Checkbox checked={added || selectedSet.has(model.id)} disabled={added || importing}
+                      label={model.name ?? model.id}
+                      className="w-full min-w-0 [&>span]:truncate [&>span]:text-xs"
+                      aria-label={t('settings.providerSelectModel', { name: model.name ?? model.id })}
+                      onCheckedChange={checked => toggle(model.id, checked)} />
+                    {model.name && model.name !== model.id ? <p className="mt-0.5 truncate pl-6.5 font-mono text-caption text-muted-foreground">{model.id}</p> : null}
+                  </div>
+                  {added ? <span className="shrink-0 text-caption text-muted-foreground">{t('settings.discoverAlreadyAdded')}</span> : null}
+                </div>
+              )
+            })}
+            {shown.length === 0 ? <p className="px-3 py-8 text-center text-xs text-muted-foreground">{t('settings.discoverNoMatch')}</p> : null}
+          </div>
+          {matched.length > MAX_SHOWN ? <p className="text-caption text-muted-foreground">{t('settings.discoverCapped', { shown: MAX_SHOWN, total: matched.length })}</p> : null}
+        </> : !loading && !error && !saveBlocked ? <p className="py-8 text-center text-xs text-muted-foreground">{t('settings.discoverEmpty')}</p> : null}
       </div>
-
-      {loading ? (
-        <div className="mt-8 mb-8 flex items-center justify-center gap-2 text-sm text-muted-foreground">
-          <Loader2 className="size-4 animate-spin" />
-          {t('settings.discoverLoading')}
-        </div>
-      ) : error ? (
-        <div className="mt-4 flex items-start gap-1.5 rounded-xl bg-destructive/10 px-3 py-2 text-xs text-destructive">
-          <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
-          <span className="min-w-0 break-words">{error}</span>
-        </div>
-      ) : models && models.length > 0 ? (
-        <div className="mt-3">
-          <MultiSelect value={selected} onValueChange={setSelected} className="w-full">
-            <MultiSelectTrigger>
-              <MultiSelectValue placeholder={t('settings.discoverSelectPlaceholder')} />
-              <MultiSelectInput
-                placeholder={t('settings.discoverSearch')}
-                aria-label={t('settings.discoverSearch')}
-                className="h-7 min-w-40 flex-1"
-              />
-            </MultiSelectTrigger>
-            <MultiSelectContent>
-              <MultiSelectList ariaLabel={t('settings.discoverList')}>
-                {shown.map((model) => {
-                  const added = existing.has(model.id)
-                  return (
-                    <MultiSelectItem
-                      key={model.id}
-                      value={model.id}
-                      disabled={added}
-                      textValue={model.name ?? model.id}
-                      keywords={[model.id]}
-                    >
-                      <span className="min-w-0 flex-1 truncate">{model.name ?? model.id}</span>
-                      <span className="shrink-0 truncate font-mono text-[11px] text-muted-foreground">
-                        {added ? t('settings.discoverAlreadyAdded') : model.id}
-                      </span>
-                    </MultiSelectItem>
-                  )
-                })}
-                {shown.length === 0 ? (
-                  <MultiSelectEmpty>{t('settings.discoverNoMatch')}</MultiSelectEmpty>
-                ) : null}
-              </MultiSelectList>
-            </MultiSelectContent>
-          </MultiSelect>
-          {models.length > MAX_SHOWN ? (
-            <p className="px-2 pt-1.5 text-[11px] text-muted-foreground">
-              {t('settings.discoverCapped', { shown: MAX_SHOWN, total: models.length })}
-            </p>
-          ) : null}
-        </div>
-      ) : (
-        <p className="mt-6 mb-6 text-center text-sm text-muted-foreground">
-          {t('settings.discoverEmpty')}
-        </p>
-      )}
-
-      <div className="mt-5 flex justify-end gap-2">
-        <Button variant="ghost" size="sm" onClick={onClose}>
-          {t('common.cancel')}
-        </Button>
-        <Button variant="primary" size="sm" disabled={importCount === 0} onClick={importSelected}>
-          {t('settings.discoverImport', { count: importCount })}
-        </Button>
-      </div>
-    </MorphingModal>
+    </ProviderDialog>
   )
 }

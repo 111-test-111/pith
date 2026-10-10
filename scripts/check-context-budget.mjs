@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { SettingsManager } from '@earendil-works/pi-coding-agent'
+import { estimateTokens, SettingsManager } from '@earendil-works/pi-coding-agent'
 import { build } from 'esbuild'
 import { createPlanFixture, planRepoRoot } from './lib/plan-fixture.mjs'
 
@@ -140,6 +140,26 @@ try {
   assert(persisted.filter(e => e.type === 'message' && e.message.role === 'toolResult').every(e => e.message.content[0].text === fullOutput))
   const page = await fixture.app.trajectoryPage({ sessionPath: fixture.managed.path })
   const request = page.items.filter(item => item.kind === 'request').at(-1)
+  const statistics = await fixture.app.contextDetail(fixture.managed.path)
+  assert.equal(statistics.request.id, request.id)
+  assert.equal(statistics.request.inputTokens, 1, 'request input excludes output')
+  assert.equal(statistics.request.payloadCaptured, true)
+  assert.equal(statistics.breakdown.toolResults, requestResults.reduce((n, message) => n + estimateTokens(message), 0), 'composition measures budgeted request copies, not full persisted outputs')
+  assert(statistics.projectionEstimate > statistics.breakdown.total, 'the unbudgeted projection remains independently visible')
+  assert.equal(statistics.categories.reduce((n, c) => n + c.tokens, 0), statistics.breakdown.total)
+  assert(!JSON.stringify(statistics).includes(fullOutput), 'statistics do not expose tool bodies')
+  const selectedModel = fixture.session.model
+  fixture.session.agent.state.model = { ...selectedModel, contextWindow: 0 }
+  const unknownUsage = fixture.app.snapshot().contextUsage
+  assert.equal(unknownUsage.tokens, null)
+  assert.equal(unknownUsage.percent, null)
+  assert.equal(unknownUsage.contextWindow, 0)
+  assert.equal(unknownUsage.revision, statistics.usage.revision, 'unknown windows still publish request metadata revisions')
+  fixture.session.agent.state.model = selectedModel
+  const revision = fixture.store.getShell().contextUsage
+  fixture.store.dispatch({ type: 'context_usage', sessionId: fixture.session.sessionId, sessionPath: fixture.managed.path,
+    contextUsage: { ...revision, revision: 'new-request-same-numbers' } })
+  assert.equal(fixture.store.getShell().contextUsage.revision, 'new-request-same-numbers', 'PiStore preserves request metadata revisions even when numeric usage is unchanged')
   const exportFile = join(temporary, 'request.json')
   await fixture.app.exportTrajectory(fixture.managed.path, request.id, exportFile)
   const exported = JSON.parse(await readFile(exportFile, 'utf8'))

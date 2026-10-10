@@ -10,7 +10,7 @@ import {
   useNotificationSounds,
   useSystemNotifications
 } from '@/lib/notification-sounds'
-import { SettingsGroup, SettingsRow } from './SettingsRow'
+import { SettingsRow } from './SettingsRow'
 
 /** Native alerts and audio cues — every out-of-app attention signal in one page. */
 export function NotificationsSection() {
@@ -57,7 +57,9 @@ export function NotificationsSection() {
 
   return (
     <div className="space-y-6">
-      <SettingsGroup title={t('settings.systemNotificationsGroup')}>
+      {/* Every attention signal on one card — the section heading already
+          supplies the title, so no inner group repeats it. */}
+      <div className="divide-y divide-border/60 rounded-xl border border-border/70 bg-card">
         <SettingsRow
           label={t('settings.systemNotificationsEnabled')}
           description={t('settings.systemNotificationsEnabledDesc')}
@@ -85,9 +87,6 @@ export function NotificationsSection() {
               : 'settings.systemNotificationsUnavailable')}
           </p>
         ) : null}
-      </SettingsGroup>
-
-      <SettingsGroup title={t('settings.soundsGroup')}>
         <SettingsRow label={t('settings.soundsEnabled')} description={t('settings.soundsEnabledDesc')}>
           <Checkbox
             mark="square"
@@ -133,7 +132,7 @@ export function NotificationsSection() {
             aria-label={t('settings.soundScheduledTask')}
           />
         </SettingsRow>
-      </SettingsGroup>
+      </div>
     </div>
   )
 }

@@ -46,7 +46,7 @@ export { CheckoutCoordinator } from './src/main/rewind/coordinator';`, resolveDi
       }))
       builder.onResolve({ filter: /^playwright-core(\/|$)/ }, args => ({ path: fileURLToPath(import.meta.resolve(args.path)), external: true }))
       builder.onResolve({ filter: /^electron$/ }, () => ({ path: 'electron', namespace: 'fixture' }))
-      builder.onResolve({ filter: /^proper-lockfile$/ }, args => ({ path: fileURLToPath(import.meta.resolve(args.path)), external: true }))
+      builder.onResolve({ filter: /^proper-lockfile$|^@resvg\/resvg-js$/ }, args => ({ path: fileURLToPath(import.meta.resolve(args.path)), external: true }))
       builder.onLoad({ filter: /.*/, namespace: 'fixture' }, () => ({ contents:
         `export const app = { getPath() { return ${JSON.stringify(temporary)} } }; export const shell = {};` }))
     } }]
@@ -272,8 +272,8 @@ export { CheckoutCoordinator } from './src/main/rewind/coordinator';`, resolveDi
     assert.match(tools.find((tool) => tool.name === 'bash').description, /threshold/)
     // Check the actual SDK/model boundary, including the request after reload:
     // putting guidelines on a tool object alone does not prove they reach it.
-    assert.match(prompt, /END the current response/)
-    assert.match(prompt, /a single sleep N, sleep N; tail/)
+    assert.match(prompt, /end (?:the current |the )response/i)
+    assert.match(prompt, /sleep.*tail.*polling/)
     assert.match(tools.find((tool) => tool.name === 'bash').description, /same command keeps running/)
     assert.match(tools.find((tool) => tool.name === 'bash_task').description, /bounded tail/)
     assert.equal(tools.find((tool) => tool.name === 'read').description, 'fixture read')

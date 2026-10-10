@@ -1,7 +1,7 @@
 import { open } from 'node:fs/promises'
-import { isAbsolute, resolve, sep } from 'node:path'
 import { previewKindOf } from '../shared/preview'
 import type { FileBrowserRequest, FontDataDTO } from '../shared/types'
+import { resolveFilePath } from './file-path'
 
 /**
  * Bytes for the font preview.
@@ -22,8 +22,7 @@ const MAX_FONT_BYTES = 32 * 1024 * 1024
 /** The absolute path of a request that really is a font: the same routing table
  * the pane dispatches on decides, so this can never serve another family. */
 function fontPath(request: FileBrowserRequest): string {
-  if (!request || typeof request.cwd !== 'string' || !isAbsolute(request.cwd) || typeof request.path !== 'string' || request.path.includes('\0')) throw new Error('Invalid font request')
-  const path = resolve(request.cwd, request.path).split(sep).join('/')
+  const path = resolveFilePath(request)
   if (previewKindOf(path) !== 'font') throw new Error('Not a font file')
   return path
 }

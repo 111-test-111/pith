@@ -15,6 +15,12 @@
  * scroll, which is what let the old portalled model panel float away from
  * its trigger.
  *
+ * The final scenario streams a synthetic run and drives the real General
+ * section: the pickers freeze while the run is live, the switch (persisted in
+ * main, re-read when Settings closes) lets both through, an allowed pick
+ * dispatches to main, and turning the switch back off freezes the still-live
+ * run until it settles.
+ *
  * Run after `npm run build`. PI_PICKER_SCREENSHOT_DIR retains the views.
  */
 import assert from 'node:assert/strict'
@@ -34,7 +40,7 @@ try {
   const preload = join(temporary, 'preload.mjs')
   await writeFile(preload, `import ${JSON.stringify(join(repo, 'out/preload/index.mjs'))};
 import {contextBridge,ipcRenderer} from 'electron';
-contextBridge.exposeInMainWorld('fixture',{resize:(w,h)=>ipcRenderer.invoke('fixture:resize',w,h)});`)
+contextBridge.exposeInMainWorld('fixture',{resize:(w,h)=>ipcRenderer.invoke('fixture:resize',w,h),escalate:request=>ipcRenderer.invoke('fixture:escalation',request),decisions:()=>ipcRenderer.invoke('fixture:decisions'),streaming:(on)=>ipcRenderer.invoke('fixture:streaming',on),calls:()=>ipcRenderer.invoke('fixture:calls')});`)
   const main = join(temporary, 'main.cjs')
   await build({ stdin: { contents: `
 import {app,BrowserWindow,ipcMain} from 'electron';
@@ -45,21 +51,42 @@ app.whenReady().then(()=>{
  const model={providerId:'deepseek',providerName:'DeepSeek',id:'fixture',name:'DeepSeek V4.1 Flash',reasoning:true,input:['text','image'],contextWindow:128000,maxTokens:8192,available:true,costInputPerM:0,costOutputPerM:0};
  const other={providerId:'minimax',providerName:'MiniMax CN',id:'m27',name:'MiniMax-M2.7',reasoning:true,input:['text'],contextWindow:205000,available:true,costInputPerM:0,costOutputPerM:0};
  const standard={...other,id:'plain',name:'Standard',reasoning:false};
- let active=model,thinkingLevel='high';
+ let active=model,thinkingLevel='high',streaming=false,midRun=false;
+ const modelCalls=[],modeCalls=[],midRunCalls=[];
  const levels=()=>!active.reasoning?['off']:active===model?['off','minimal','low','medium','high','xhigh','max']:['off','high'];
- const snapshot=()=>({sessionId:'fixture',sessionPath:'/fixture/new',cwd:'/workspace/pi-app',projectless:false,messages:[],model:active,thinkingLevel,availableThinkingLevels:levels(),isStreaming:false,eventSequence:0});
- ipcMain.handle('app:info',()=>({cwd:'/workspace/pi-app',folders:['/workspace/pi-app'],version:'fixture',contextFiles:true,bashMaxWaitMs:10000}));
+ const snapshot=()=>({sessionId:'fixture',sessionPath:'/fixture/new',cwd:'/workspace/pi-app',projectless:false,messages:[],model:active,thinkingLevel,availableThinkingLevels:levels(),isStreaming:streaming,eventSequence:0});
+ ipcMain.handle('app:info',()=>({cwd:'/workspace/pi-app',folders:['/workspace/pi-app'],version:'fixture',contextFiles:true,bashMaxWaitMs:10000,
+   checkpointsEnabled:true,debugEnabled:false,startup:'resume',sandboxMode:'workspace-write',sandbox:{support:'host',backend:null},
+   askUserTimeoutSeconds:120,responseTimeoutSeconds:60,allowMidRunChanges:midRun,subagentsEnabled:true,subagentMaxConcurrent:4,
+   subagentReuseEnabled:false,subagentCommsEnabled:false,subagentTurnLimitOverrideEnabled:false,subagentMaxTurns:null,
+   browserConsent:false,browserAgentToolsEnabled:false}));
  ipcMain.handle('pi:init',()=>snapshot());
  ipcMain.handle('pi:newSession',()=>snapshot());
  ipcMain.handle('pi:listSessions',()=>[]);
  ipcMain.handle('pi:models',()=>[model,other,standard]);
  ipcMain.handle('pi:providers',()=>[]);
- ipcMain.handle('pi:setModel',async(_,providerId,id)=>{await new Promise(r=>setTimeout(r,240));active=id==='plain'?standard:providerId==='minimax'?other:model;return snapshot()});
+ ipcMain.handle('pi:setModel',async(_,providerId,id)=>{modelCalls.push([providerId,id]);await new Promise(r=>setTimeout(r,240));active=id==='plain'?standard:providerId==='minimax'?other:model;return snapshot()});
  ipcMain.handle('pi:setThinkingLevel',(_,level)=>{thinkingLevel=level;return snapshot()});
+ ipcMain.handle('sandbox:setMode',(_,sessionPath,mode)=>{modeCalls.push(mode);return {...snapshot(),sessionPath,sandboxMode:mode}});
+ ipcMain.handle('app:setAllowMidRunChanges',(_,enabled)=>{midRun=enabled===true;midRunCalls.push(midRun);return midRun});
+ ipcMain.handle('fixture:streaming',(_,on)=>{streaming=on===true;w.webContents.send('pi:event',{type:streaming?'agent_start':'agent_settled',sessionId:'fixture',sessionPath:'/fixture/new',...(streaming?{}:{continuing:false})});return streaming});
+ ipcMain.handle('fixture:calls',()=>({models:modelCalls,modes:modeCalls,midRun:midRunCalls}));
  ipcMain.handle('bash:list',()=>[]);
  ipcMain.handle('pi:searchSessions',()=>({sessions:[],groups:[],total:0,hasMore:false}));
  ipcMain.handle('files:read',(_,path)=>({path,relPath:path,kind:'text',size:12}));
  ipcMain.handle('fixture:resize',(_,width,height)=>w.setBounds({width,height}));
+ const decisions=[];
+ ipcMain.handle('fixture:decisions',()=>decisions);
+ ipcMain.handle('fixture:escalation',(_,request)=>{
+   streaming=true;
+   w.webContents.send('pi:event',{type:'agent_start',sessionId:'fixture',sessionPath:'/fixture/new'});
+   w.webContents.send('pi:event',{type:'sandbox_escalation',sessionId:'fixture',sessionPath:'/fixture/new',requests:[request]});
+ });
+ ipcMain.handle('sandbox:respondEscalation',(_,requestId,sessionPath,decision)=>{
+   decisions.push({requestId,sessionPath,decision});
+   w.webContents.send('pi:event',{type:'sandbox_escalation',sessionId:'fixture',sessionPath:'/fixture/new',requests:[]});
+   return true;
+ });
  const w=new BrowserWindow({...windowChromeOptions(),width:1320,height:880,minWidth:760,minHeight:560,title:'Pith composer pickers check',backgroundColor:'#0b0b0d',webPreferences:{preload:${JSON.stringify(preload)},contextIsolation:true,nodeIntegration:false,sandbox:false,backgroundThrottling:false}});
  ipcMain.on('window:setTheme',(event,theme)=>setWindowTheme(BrowserWindow.fromWebContents(event.sender),theme));
  w.loadFile(${JSON.stringify(join(repo, 'out/renderer/index.html'))});
@@ -103,7 +130,9 @@ app.whenReady().then(()=>{
   }
   const waitFor = async (expression) => {
     for (let i = 0; i < 150; i++) { if (await evaluate(`Boolean(${expression})`)) return; await pause(100) }
-    throw new Error('Timed out: ' + expression + '\n' + JSON.stringify(exceptions) + '\n' + output.slice(-2000))
+    const state = await evaluate(`({model:document.querySelector('button[aria-controls="model-picker-panel"]')?.textContent,open:document.getElementById('model-picker-panel')?.getAttribute('aria-hidden'),selected:[...document.querySelectorAll('[data-model-option][aria-selected="true"]')].map(row=>row.dataset.modelOption),focus:document.activeElement?.outerHTML})`)
+    await screenshot('failure')
+    throw new Error('Timed out: ' + expression + '\n' + JSON.stringify(state) + '\n' + JSON.stringify(exceptions) + '\n' + output.slice(-2000))
   }
   const clickAt = async (point) => {
     await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...point, button: 'left', clickCount: 1 })
@@ -332,7 +361,10 @@ app.whenReady().then(()=>{
   assert.deepEqual((await thinkingGeometry('minimax/m27')).options, ['off', 'high'], 'switching from a non-reasoning model opens the target levels')
 
   // A capped model list scrolls independently of the submenu's containing
-  // panel. Center against the visible row, then follow another scroll.
+  // panel. The level panel is anchored to one row, so scrolling the list
+  // beneath it dismisses the cascade — a panel that slid along a moving list
+  // would point at a row that is no longer the one it was opened from. The
+  // model panel itself stays open.
   await evaluate(`(()=>{
     const row=document.querySelector('[data-model-option="minimax/m27"]');
     const list=document.getElementById('model-picker-panel').firstElementChild;
@@ -341,10 +373,16 @@ app.whenReady().then(()=>{
   })()`)
   await pause(200)
   assert.ok(await evaluate(`document.getElementById('model-picker-panel').firstElementChild.scrollTop>0`), 'the fixture really scrolls the list')
-  assert.ok(Math.abs((await thinkingGeometry('minimax/m27')).centerDy) <= 1, 'a scrolled row retains its centered submenu')
-  await evaluate(`document.getElementById('model-picker-panel').firstElementChild.scrollTop+=8`)
+  await waitFor(`!document.querySelector('[data-thinking-panel]')`)
+  assert.equal(await isOpen(MODEL), true, 'scrolling the list keeps the model panel open')
+  // Reopen on the row, now unscrolled: the following checks need the cascade
+  // open, and the picker must keep working after a scroll.
+  await evaluate(`(()=>{const list=document.getElementById('model-picker-panel').firstElementChild;list.scrollTop=0;list.style.maxHeight=''})()`)
   await pause(200)
-  assert.ok(Math.abs((await thinkingGeometry('minimax/m27')).centerDy) <= 1, 'the open submenu follows subsequent scrolling')
+  await click(`document.querySelector('[data-model-option="minimax/m27"]')`)
+  await waitFor(`document.querySelector('[data-thinking-option="high"]')`)
+  await pause(250)
+  assert.deepEqual((await thinkingGeometry('minimax/m27')).options, ['off', 'high'], 'the cascade reopens on the row after the list scrolled')
 
   // Near the top/right viewport edges, keep the tall menu visible and flip
   // left. Moving only the fixture's trigger box preserves the real component.
@@ -362,8 +400,186 @@ app.whenReady().then(()=>{
   assert.ok(edge.top >= 7 && edge.top <= 9, `the viewport alone limits upward expansion (${show(edge)})`)
   assert.ok(edge.bottom <= edge.viewportHeight - 7, 'the whole menu remains in the viewport')
 
+  // Production permission cards share the editor's width, including narrow
+  // chats after a window resize. Long commands and file content stay complete.
+  const command = `printf '%s\\n' '${'long-unbroken-command-'.repeat(240)}'\n` + Array.from({ length: 35 }, (_, i) => `printf 'line ${i} 中文\\n'`).join('\n')
+  const requestBase = { sessionId: 'fixture', sessionPath: '/fixture/new', toolCallId: 'approval-call', currentMode: 'workspace-write', requestedMode: 'danger-full-access', justification: 'Review the complete operation before allowing this call.', createdAt: Date.now() }
+  const geometry = () => evaluate(`(()=>{
+    const card=document.querySelector('[data-sandbox-escalation]'),form=document.querySelector('[data-prompt-editor]').closest('form');
+    const a=card.getBoundingClientRect(),b=form.getBoundingClientRect(),details=card.querySelector('[data-fade-scroll]');
+    return {left:a.left,right:a.right,formLeft:b.left,formRight:b.right,client:details.clientWidth,scroll:details.scrollWidth,
+      capped:details.scrollHeight>details.clientHeight,detailsVisible:details.getBoundingClientRect().height>0&&!details.closest('[aria-hidden="true"],[inert]'),
+      bottom:b.bottom,viewport:innerHeight,text:card.textContent};
+  })()`)
+  const checkWidth = async () => {
+    const g = await geometry()
+    assert.ok(Math.abs(g.left - g.formLeft) <= 1 && Math.abs(g.right - g.formRight) <= 1, `approval and editor edges match: ${show(g)}`)
+    assert.ok(g.scroll <= g.client + 1, 'full details wrap without horizontal overflow')
+    assert.ok(g.bottom <= g.viewport, 'approval leaves the composer reachable')
+  }
+  for (const locale of ['en', 'zh-CN', 'zh-TW']) {
+    await evaluate(`localStorage.setItem('pi-app:locale',${JSON.stringify(locale)})`)
+    await send('Page.reload')
+    await waitFor(`document.documentElement?.lang===${JSON.stringify(locale)} && document.querySelector('[data-prompt-editor]') && !!window.fixture`)
+    await evaluate(`window.fixture.resize(1460,940)`)
+    const request = { ...requestBase, requestId: 'bash-' + locale, toolName: 'bash', operation: { cwd: '/workspace/pi-app', parameters: { command, timeout: 20 } } }
+    await evaluate(`window.fixture.escalate(${JSON.stringify(request)})`)
+    await waitFor(`document.querySelector('[data-sandbox-operation-parameter="command"]')`)
+    await pause(300)
+    assert.equal(await evaluate(`document.querySelector('[data-sandbox-operation-parameter="command"] code').textContent`), command, 'the entire multiline command is readable')
+    assert.equal((await geometry()).detailsVisible, true, 'the full operation stays visible')
+    assert.equal(await evaluate(`document.querySelector('[data-sandbox-escalation] button[aria-expanded]')===null`), true, 'permission details have no collapse control')
+    assert.equal((await geometry()).capped, true, 'long operations scroll within a bounded card')
+    for (const width of [1460, 980, 760]) {
+      await evaluate(`window.fixture.resize(${width},780)`)
+      await pause(200)
+      await checkWidth()
+    }
+    await evaluate(`window.fixture.resize(760,560)`)
+    await pause(200)
+    await checkWidth()
+    await evaluate(`window.fixture.resize(760,780)`)
+    await pause(200)
+    if (locale !== 'en') assert.doesNotMatch((await geometry()).text, /Approval required|Allow once|Deny|View details/, 'approval copy follows the selected locale')
+    await screenshot('permission-' + locale)
+    assert.equal((await geometry()).detailsVisible, true, 'permission details remain visible after resizing')
+    await evaluate(`(()=>{const details=document.querySelector('[data-sandbox-escalation] [data-fade-scroll]');details.scrollTop=details.scrollHeight})()`)
+    await pause(100)
+    assert.ok(await evaluate(`document.querySelector('[data-sandbox-escalation] [data-fade-scroll]').scrollTop>0`), 'the complete operation can be scrolled to its end')
+    await evaluate(`document.querySelector('[data-sandbox-escalation]').querySelectorAll('button')[0].click()`)
+    await waitFor(`!document.querySelector('[data-sandbox-escalation]')`)
+    assert.deepEqual((await evaluate(`window.fixture.decisions()`)).at(-1), { requestId: request.requestId, sessionPath: request.sessionPath, decision: 'approve' }, 'allow once answers the exact pending request')
+  }
+  const content = 'complete file content 中文\n'.repeat(1500)
+  const writeRequest = { ...requestBase, requestId: 'write-complete', toolName: 'write', operation: { cwd: '/workspace/pi-app', parameters: { path: '/outside/' + 'long-file-name-'.repeat(80) + '.txt', content } } }
+  await evaluate(`window.fixture.escalate(${JSON.stringify(writeRequest)})`)
+  await waitFor(`document.querySelector('[data-sandbox-operation-parameter="content"]')`)
+  await pause(300)
+  assert.equal(await evaluate(`document.querySelector('[data-sandbox-operation-parameter="path"] code').textContent`), writeRequest.operation.parameters.path)
+  assert.equal(await evaluate(`document.querySelector('[data-sandbox-operation-parameter="content"] code').textContent`), content, 'file details retain all original content and line breaks')
+  await checkWidth()
+  await screenshot('permission-write')
+  await evaluate(`document.querySelector('[data-sandbox-escalation]').querySelectorAll('button')[1].click()`)
+  await waitFor(`!document.querySelector('[data-sandbox-escalation]')`)
+  assert.deepEqual((await evaluate(`window.fixture.decisions()`)).at(-1), { requestId: writeRequest.requestId, sessionPath: writeRequest.sessionPath, decision: 'deny' }, 'deny answers the exact pending request')
+
+  const edits = [{ oldText: 'before\nsecond line', newText: 'after 中文\nsecond line' }]
+  const editRequest = { ...requestBase, requestId: 'edit-details', toolName: 'edit', operation: { cwd: '/workspace/pi-app', parameters: { path: '/outside/permission-test.txt', edits } } }
+  await evaluate(`window.fixture.escalate(${JSON.stringify(editRequest)})`)
+  await waitFor(`document.querySelector('[data-sandbox-operation-parameter="edits"]')`)
+  await pause(300)
+  assert.equal(await evaluate(`document.querySelector('[data-sandbox-operation-parameter="edits"] code').textContent`), JSON.stringify(edits, null, 2), 'edit approval displays complete before/after text')
+  await checkWidth()
+  await screenshot('permission-edit')
+
+  // --- Mid-run switches (Settings → General) -------------------------------
+  // The bottom-row model and permission pickers freeze while a run streams
+  // unless the General switch allows it. This claims the whole path, not just
+  // the Composer prop: the flag is read from appInfo at boot and re-read when
+  // Settings closes, and an allowed pick must reach main's IPC.
+  await evaluate(`localStorage.setItem('pi-app:locale','en')`)
+  await send('Page.reload')
+  await waitFor(`document.documentElement?.lang==='en' && document.querySelector('[data-prompt-editor]') && !!window.fixture`)
+  await evaluate(`window.fixture.resize(1460,940)`)
+  // A reload boots from the fixture's main-process state, which the escalation
+  // leg above left streaming; settle it before the idle claims.
+  await evaluate(`window.fixture.streaming(false)`)
+  await waitFor(`(${MODEL}).disabled===false`)
+  const frozen = () => evaluate(`({model:(${MODEL}).disabled===true,sandbox:(${SANDBOX}).disabled===true})`)
+  const midRunSwitch = `document.querySelector('button[role="checkbox"][aria-label="Change model and permissions during a run"]')`
+  // Settings owns its entrance/exit motion, so this scenario drives it with
+  // DOM clicks (the picker geometry part above already owns real pointer
+  // input): coordinates captured mid-animation can miss a moving target.
+  const openSettings = async () => {
+    await evaluate(`[...document.querySelectorAll('button')].find(b=>b.getAttribute('aria-label')==='Settings').click()`)
+    await waitFor(`Boolean(${midRunSwitch})`)
+    await pause(400)
+  }
+  const closeSettings = async () => {
+    await evaluate(`document.querySelector('button[aria-label="Back to chat"]').click()`)
+    // The page is removed on exit completion; an exit that never completes
+    // leaves an invisible full-window container behind, so the wait is on the
+    // container itself, not just its back button.
+    await waitFor(`!document.querySelector('.window-page.absolute.inset-0.z-40')`)
+    await waitFor(`!document.querySelector('button[aria-label="Back to chat"]')`)
+  }
+  const fixtureCalls = () => evaluate(`window.fixture.calls()`)
+
+  // Idle with the setting off, both pickers are usable as before.
+  assert.deepEqual(await frozen(), { model: false, sandbox: false }, 'idle with mid-run switches off: both pickers are usable')
+
+  // The General switch lets them through and saves through main; the idle
+  // close claims the plain Settings round trip before the stream starts.
+  await openSettings()
+  assert.equal(await evaluate(`${midRunSwitch}.getAttribute('data-state')`), 'unchecked', 'the mid-run switch starts off')
+  await evaluate(`${midRunSwitch}.click()`)
+  await waitFor(`${midRunSwitch}.getAttribute('data-state')==='checked'`)
+  await closeSettings()
+  let calls = await fixtureCalls()
+  assert.deepEqual(calls.midRun, [true], 'the General switch reaches main')
+
+  // Off is the default rule, but with the switch on a streaming run keeps both
+  // triggers usable — and a frozen trigger still cannot open its panel.
+  await evaluate(`window.fixture.streaming(true)`)
+  await waitFor(`(${MODEL}).disabled===false`)
+  assert.deepEqual(await frozen(), { model: false, sandbox: false }, 'mid-run switches on: both pickers stay usable while the run streams')
+
+  // An allowed mid-run pick really dispatches for both pickers.
+  const modelsBefore = calls.models.length
+  await click(MODEL)
+  await waitFor(`document.getElementById(${MODEL}.getAttribute('aria-controls')).getAttribute('aria-hidden')==='false'`)
+  await pause(500)
+  await click(`document.querySelector('[data-model-option="minimax/m27"]')`)
+  await waitFor(`(${MODEL}).textContent.includes('MiniMax')`)
+  calls = await fixtureCalls()
+  assert.equal(calls.models.length, modelsBefore + 1, 'the mid-run model pick sends one switch')
+  assert.deepEqual(calls.models.at(-1), ['minimax', 'm27'], 'and it carries the picked model')
+  await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'}))`)
+  await pause(300)
+  const modesBefore = calls.modes.length
+  await click(SANDBOX)
+  await waitFor(`Boolean(document.querySelector('[data-sandbox-mode-option="read-only"]'))`)
+  await pause(400)
+  await click(`document.querySelector('[data-sandbox-mode-option="read-only"]')`)
+  await waitFor(`(${SANDBOX}).textContent.includes('Read only')`)
+  calls = await fixtureCalls()
+  assert.equal(calls.modes.length, modesBefore + 1, 'the mid-run permission pick sends one switch')
+  assert.equal(calls.modes.at(-1), 'read-only', 'and it carries the picked mode')
+
+  // Back off: the frozen rule returns for a run that is still streaming, and
+  // the run settling frees the pickers again even with the setting off.
+  await openSettings()
+  await evaluate(`${midRunSwitch}.click()`)
+  await waitFor(`${midRunSwitch}.getAttribute('data-state')==='unchecked'`)
+  await closeSettings()
+  await waitFor(`(${MODEL}).disabled===true`)
+  assert.deepEqual(await frozen(), { model: true, sandbox: true }, 'turning the switch off freezes a still-streaming run again')
+  await evaluate(`window.fixture.streaming(false)`)
+  await waitFor(`(${MODEL}).disabled===false`)
+  assert.deepEqual(await frozen(), { model: false, sandbox: false }, 'the settled run frees the pickers with the setting off')
+  assert.deepEqual((await fixtureCalls()).midRun, [true, false], 'both switch states reached main')
+
+  // The flow the feature exists for: a page that is already busy before its
+  // first Settings visit. A reload boots busy from the fixture's main-process
+  // state, so this is a fresh session whose only Settings round trip happens
+  // mid-run — including its exit, which must not leave an invisible overlay.
+  await evaluate(`window.fixture.streaming(true)`)
+  await send('Page.reload')
+  await waitFor(`document.documentElement?.lang==='en' && document.querySelector('[data-prompt-editor]') && !!window.fixture`)
+  await evaluate(`window.fixture.resize(1460,940)`)
+  await waitFor(`(${MODEL}).disabled===true`)
+  await openSettings()
+  await evaluate(`${midRunSwitch}.click()`)
+  await waitFor(`${midRunSwitch}.getAttribute('data-state')==='checked'`)
+  await closeSettings()
+  await waitFor(`(${MODEL}).disabled===false`)
+  assert.deepEqual(await frozen(), { model: false, sandbox: false }, 'the switch turned on mid-run frees the pickers of a session that booted busy')
+  await evaluate(`window.fixture.streaming(false)`)
+  await waitFor(`(${MODEL}).disabled===false`)
+
   assert.deepEqual(exceptions, [], 'no uncaught renderer exceptions')
   console.log('PASS: composer pickers — centered thinking menus with stable first-frame options/heights, non-reasoning→reasoning switches, scrolling and viewport bounds; model/sandbox panels remain anchored, unclipped and on top through panel dragging')
+  console.log('PASS: permission cards — complete multiline commands and writes, always-visible details, bounded scrolling, composer-aligned widths after resizing, all locales and request-specific allow/deny')
 } finally {
   ws?.close()
   if (child && child.exitCode === null) { const exited = new Promise((r) => child.once('exit', r)); child.kill(); await exited }

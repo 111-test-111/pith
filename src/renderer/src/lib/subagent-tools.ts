@@ -7,8 +7,9 @@ import { TOOL_GROUP_MIN_SIZE, toolGroupKey } from './tool-groups'
  *
  * The universe is the shared tools catalog — SDK built-ins, app tools and
  * every extension tool, one row per name, exactly what Settings → Tools
- * shows — with two collapsible levels: each native MCP tool and historical
- * adapter entry point answers its OWN checkbox, while one family inside
+ * shows — with two collapsible levels: the MCP section's tools (native,
+ * historical adapter entry points and per-server names) collapse into ONE
+ * family row exactly like an extension family, and one family inside
  * a section becomes one row with a tri-state checkbox that selects the whole
  * family or opens to pick members one by one. A family is the one the registry
  * declares (`ctx_*`, `browser_*`) or else the extension that owns the tool, so
@@ -52,7 +53,8 @@ export interface SubagentToolRow {
 export type SubagentToolEntry = SubagentToolFamily | SubagentToolRow
 
 export interface SubagentToolGroups {
-  /** Individually selectable MCP tools, including saved historical names. */
+  /** The whole MCP section as one collapsible family (native, historical
+   * adapter and per-server names stay individual grants inside it). */
   mcp: SubagentToolEntry[]
   builtin: SubagentToolEntry[]
   extension: SubagentToolEntry[]
@@ -161,8 +163,13 @@ export function subagentToolGroups(universe: ToolInfoDTO[], profileTools: 'all' 
     }
   }
 
+  const mcpOptions = mcpNames.map((name) => ({ names: [name], label: name }))
+
   return {
-    mcp: mcpNames.map((name) => ({ kind: 'option', option: { names: [name], label: name } })),
+    // The whole MCP section collapses into ONE family row, exactly like an
+    // extension family: a tri-state checkbox selects every server in one
+    // gesture, and the disclosure opens the still-independent per-tool grants.
+    mcp: mcpOptions.length ? [{ kind: 'family', prefix: 'mcp', options: mcpOptions }] : [],
     builtin: toToolEntries(
       [...builtin.values()].sort(
         (a, b) =>

@@ -1,3 +1,4 @@
+// local patch (pi-app): shared scalable typography for UI annotations.
 // local patch (pi-app): keep UI frames and focus rings in this component at 1px.
 "use client";
 // local patch (pi-app): approval actions and status badges use semantic radii.
@@ -153,8 +154,8 @@ function QuestionOptions({
           className={cn("p-0.5", question.options?.length && "mt-1.5")}
           classNames={{
             field:
-              "h-10 rounded-xl border-0 bg-background/70 focus-within:bg-background",
-            input: "px-3 text-sm",
+              // local patch (pi-app): inherit the shared single-line field height.
+              "rounded-xl border-0 bg-background/70 focus-within:bg-background",
           }}
         />
       ) : null}
@@ -318,7 +319,7 @@ export function ApprovalCard({
 
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-start gap-3">
-            <h3 className="min-w-0 flex-1 text-base font-medium leading-5 text-foreground">
+            <h3 className="min-w-0 flex-1 text-base font-medium leading-ui text-foreground">
               <ActionSwapRollText value={titleKey}>
                 {displayTitle}
               </ActionSwapRollText>
@@ -330,7 +331,7 @@ export function ApprovalCard({
             ) : (
               <span
                 className={cn(
-                  "shrink-0 rounded-item border px-2 py-0.5 text-[11px] font-medium transition-colors",
+                  "shrink-0 rounded-item border px-2 py-0.5 text-caption font-medium transition-colors",
                   getStatusBadgeClass(status),
                 )}
               >
@@ -342,10 +343,10 @@ export function ApprovalCard({
                 type="button"
                 aria-label="Dismiss"
                 onClick={onDismiss}
-                // local patch (pi-app): capsule-by-design, so the shape token
-                // follows the UI style (see --app-radius-capsule in styles.css).
+                // local patch (pi-app): the dismiss icon control shares the
+                // regular control radius rather than a capsule.
                 // local patch (pi-app): dismiss uses the shared filled hover cue.
-                className="grid size-5 shrink-0 place-items-center rounded-capsule text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+                className="grid size-5 shrink-0 place-items-center rounded-icon text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
               >
                 <X className="size-4" />
               </button>
@@ -363,7 +364,7 @@ export function ApprovalCard({
                   transition={{ duration: reduce ? 0 : 0.2, ease: EASE_OUT }}
                 >
                   {question.description ? (
-                    <p className="mt-1 leading-5 text-muted-foreground">
+                    <p className="mt-1 leading-ui text-muted-foreground">
                       {question.description}
                     </p>
                   ) : null}
@@ -379,7 +380,7 @@ export function ApprovalCard({
             ) : (
               <div>
                 {description ? (
-                  <p className="mt-1 leading-5 text-muted-foreground">
+                  <p className="mt-1 leading-ui text-muted-foreground">
                     {description}
                   </p>
                 ) : null}

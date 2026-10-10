@@ -7,6 +7,7 @@ import { useI18n } from '@/i18n'
 import { cn } from '@/lib/utils'
 import { opensInFilePane } from '../../../../shared/preview'
 import type { FileTab } from '@/state/file-browser-store'
+import type { PdfStatDTO } from '../../../../shared/types'
 import type { PDFDocumentProxy } from 'pdfjs-dist'
 import type { PDFViewer as PdfViewer } from 'pdfjs-dist/web/pdf_viewer.mjs'
 
@@ -40,7 +41,7 @@ function ToolButton({ label, icon: Icon, onClick, disabled }: { label: string; i
 }
 
 function PdfNotice({ children, loading = false }: { children: ReactNode; loading?: boolean }) {
-  return <div role="status" className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-background/90 p-6 text-center text-xs leading-5 text-muted-foreground">
+  return <div role="status" className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-background/90 p-6 text-center text-xs leading-ui text-muted-foreground">
     {loading ? <LoaderCircle aria-hidden className="size-5 motion-safe:animate-spin" /> : <FileText aria-hidden className="size-5 text-muted-foreground/60" />}{children}
   </div>
 }
@@ -59,6 +60,7 @@ export function FilePdf({ tab, onOpenFile }: { tab: FileTab; /** Opens a linked 
   const [wrongPassword, setWrongPassword] = useState(false)
   /** Why the viewer gave up; surfaced on the root for diagnostics. */
   const [failure, setFailure] = useState('')
+  const [fileError, setFileError] = useState<PdfStatDTO['error']>()
 
   useEffect(() => {
     const scroller = scrollerRef.current
@@ -69,6 +71,7 @@ export function FilePdf({ tab, onOpenFile }: { tab: FileTab; /** Opens a linked 
     const request = { cwd: tab.cwd, path: tab.path }
     setStatus('loading')
     setFailure('')
+    setFileError(undefined)
     setPassword('')
     setWrongPassword(false)
     setPages(0)
@@ -93,7 +96,12 @@ export function FilePdf({ tab, onOpenFile }: { tab: FileTab; /** Opens a linked 
 
         const stat = await window.pi.pdfStat(request)
         if (disposed) return
-        if (stat.error || !stat.size) { setStatus('error'); return }
+        if (stat.error || !stat.size) {
+          setFileError(stat.error)
+          setFailure(stat.error ?? 'empty')
+          setStatus('error')
+          return
+        }
         const initial = new Uint8Array(await window.pi.pdfRange(request, 0, Math.min(CHUNK_BYTES, stat.size)))
         if (disposed) return
 
@@ -239,12 +247,12 @@ export function FilePdf({ tab, onOpenFile }: { tab: FileTab; /** Opens a linked 
     <div data-file-pdf-toolbar className="flex min-h-10 shrink-0 flex-wrap items-center gap-1 border-b border-border/40 px-2 py-1">
       <div className="flex items-center gap-0.5">
         <ToolButton label={t('files.pdf.previousPage')} icon={ChevronLeft} disabled={status !== 'ready' || page <= 1} onClick={() => turn(-1)} />
-        <span aria-label={t('files.pdf.page')} className="select-none px-0.5 text-[11px] leading-6 tabular-nums"><span data-pdf-page>{page}</span><span className="text-muted-foreground"> / {pages || '—'}</span></span>
+        <span aria-label={t('files.pdf.page')} className="select-none px-0.5 text-caption leading-ui-loose tabular-nums"><span data-pdf-page>{page}</span><span className="text-muted-foreground"> / {pages || '—'}</span></span>
         <ToolButton label={t('files.pdf.nextPage')} icon={ChevronRight} disabled={status !== 'ready' || (pages > 0 && page >= pages)} onClick={() => turn(1)} />
       </div>
       <div className="ml-auto flex items-center gap-0.5">
         <ToolButton label={t('imagePreview.zoomOut')} icon={ZoomOut} disabled={status !== 'ready' || scale <= ZOOM_MIN + 0.001} onClick={() => zoom(1 / ZOOM_STEP)} />
-        <span data-pdf-scale className="select-none px-0.5 text-[11px] leading-6 tabular-nums">{Math.round(scale * 100)}%</span>
+        <span data-pdf-scale className="select-none px-0.5 text-caption leading-ui-loose tabular-nums">{Math.round(scale * 100)}%</span>
         <ToolButton label={t('imagePreview.zoomIn')} icon={ZoomIn} disabled={status !== 'ready' || scale >= ZOOM_MAX - 0.001} onClick={() => zoom(ZOOM_STEP)} />
         <span aria-hidden className="mx-1 h-5 w-px shrink-0 bg-border" />
         <ToolButton label={t('files.pdf.fitWidth')} icon={Maximize2} disabled={status !== 'ready'} onClick={() => fit('page-width')} />
@@ -258,11 +266,11 @@ export function FilePdf({ tab, onOpenFile }: { tab: FileTab; /** Opens a linked 
         <div ref={viewerRef} className="pdfViewer" />
       </div>
       {status === 'loading' ? <PdfNotice loading>{t('files.loading')}</PdfNotice> : null}
-      {status === 'error' ? <PdfNotice>{t('files.pdf.failed')}</PdfNotice> : null}
+      {status === 'error' ? <PdfNotice>{t(fileError === 'missing' ? 'files.error.missing' : fileError === 'unreadable' ? 'files.error.unreadable' : 'files.pdf.failed')}</PdfNotice> : null}
       {status === 'password' ? <div className="absolute inset-0 flex items-center justify-center bg-background/90 p-6">
         <form onSubmit={submitPassword} className="flex w-full max-w-xs flex-col gap-3 rounded-card border border-border bg-background p-4 shadow-overlay">
-          <p className="text-xs leading-5 text-muted-foreground">{t('files.pdf.passwordPrompt')}</p>
-          <Input type="password" value={password} onChange={setPassword} aria-label={t('files.pdf.password')} autoComplete="off" error={wrongPassword} classNames={{ field: 'h-7', input: 'h-full px-2 text-xs' }} />
+          <p className="text-xs leading-ui text-muted-foreground">{t('files.pdf.passwordPrompt')}</p>
+          <Input type="password" value={password} onChange={setPassword} aria-label={t('files.pdf.password')} autoComplete="off" error={wrongPassword}  />
           <Button size="sm" type="submit" disabled={!password}>{t('files.pdf.passwordSubmit')}</Button>
         </form>
       </div> : null}

@@ -62,8 +62,8 @@ function SearchFolderGroup({ cwd, projectless, open, onToggle, count, children }
           <ChevronRight aria-hidden="true" className={cn('size-3.5 shrink-0 text-muted-foreground transition-transform motion-reduce:transition-none', open && 'rotate-90')} />
           {projectless ? <MessageSquare aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" /> : <Folder aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />}
           <span className="max-w-[45%] shrink-0 truncate text-base font-semibold text-foreground">{name}</span>
-          <span className="min-w-0 truncate text-[11px] font-normal text-muted-foreground/70">{projectless ? null : cwd}</span>
-          {count !== undefined ? <span className="ml-auto shrink-0 text-[11px] font-normal tabular-nums text-muted-foreground/70">{count}</span> : null}
+          <span className="min-w-0 truncate text-caption font-normal text-muted-foreground/70">{projectless ? null : cwd}</span>
+          {count !== undefined ? <span className="ml-auto shrink-0 text-caption font-normal tabular-nums text-muted-foreground/70">{count}</span> : null}
         </Button>
       </h3>
       <AgentDisclosure id={contentId} open={open} className={cn('ml-8 border-l border-border/60 pl-3', !open && 'hidden')}>
@@ -301,7 +301,7 @@ export function SessionSearch({ sessions, activePath, runningPaths, onOpen, open
             <div className="p-1">
               <Input ref={input} value={query} onChange={changeQuery} maxLength={512} autoFocus autoComplete="off" spellCheck={false}
                 aria-label={t('sessionSearch.label')} placeholder={t('sessionSearch.placeholder')}
-                classNames={{ input: 'text-xs', rightIcon: 'pr-2' }}
+                classNames={{ rightIcon: 'pr-2' }}
                 leftIcon={<Search aria-hidden="true" />}
                 rightIcon={query ? (
                   // The vendored input pins its right slot to a field-height
@@ -412,10 +412,10 @@ export function SessionSearch({ sessions, activePath, runningPaths, onOpen, open
                       <span className="min-w-0 flex-1">
                         <span className="flex items-center gap-2">
                           <SessionTitle value={hit.title} />
-                          {current ? <span className="shrink-0 text-[10px] font-medium text-primary">{t('sessionSearch.current')}</span> : null}
-                          {active && Number.isFinite(date.getTime()) ? <time className="hidden shrink-0 text-[11px] tabular-nums text-muted-foreground/70 sm:block" dateTime={hit.modified}>{dateFormat.format(date)}</time> : null}
+                          {current ? <span className="shrink-0 text-micro font-medium text-primary">{t('sessionSearch.current')}</span> : null}
+                          {active && Number.isFinite(date.getTime()) ? <time className="hidden shrink-0 text-caption tabular-nums text-muted-foreground/70 sm:block" dateTime={hit.modified}>{dateFormat.format(date)}</time> : null}
                         </span>
-                        {active && hit.snippet ? <span className="mt-0.5 line-clamp-2 break-words text-xs leading-5 text-muted-foreground [overflow-wrap:anywhere]">{hit.snippetSource ? <span className="mr-1.5 text-[10px] font-medium text-muted-foreground/70">{t(SOURCE_LABELS[hit.snippetSource])}{hit.snippetToolName ? ` · ${hit.snippetToolName}` : ''}</span> : null}<Highlight value={hit.snippet} /></span> : null}
+                        {active && hit.snippet ? <span className="mt-0.5 line-clamp-2 break-words text-xs leading-ui text-muted-foreground [overflow-wrap:anywhere]">{hit.snippetSource ? <span className="mr-1.5 text-micro font-medium text-muted-foreground/70">{t(SOURCE_LABELS[hit.snippetSource])}{hit.snippetToolName ? ` · ${hit.snippetToolName}` : ''}</span> : null}<Highlight value={hit.snippet} /></span> : null}
                       </span>
                     </Button>
                   )
@@ -424,21 +424,21 @@ export function SessionSearch({ sessions, activePath, runningPaths, onOpen, open
             ))}
           </div>
           <div className="flex min-h-9 shrink-0 items-center justify-between gap-3 border-t border-border bg-muted/20 px-4 py-1">
-            <div role="status" aria-live="polite" className="flex items-center gap-2 text-[11px] text-muted-foreground">
+            <div role="status" aria-live="polite" className="flex items-center gap-2 text-caption text-muted-foreground">
               {busy ? <><LoaderCircle aria-hidden="true" className="size-3 animate-spin" />{t('sessionSearch.searching')}</>
                 : !active ? t('sessionSearch.total', { count: sessions.length })
                   : !error && value ? t('sessionSearch.count', { count: value.total }) : null}
             </div>
             {active && value && value.total > 40 ? (
               <div className="flex items-center gap-1">
-                <span className="mr-1 text-[11px] tabular-nums text-muted-foreground">{t('sessionSearch.page', { start: offset + 1, end: offset + value.hits.length, total: value.total })}</span>
+                <span className="mr-1 text-caption tabular-nums text-muted-foreground">{t('sessionSearch.page', { start: offset + 1, end: offset + value.hits.length, total: value.total })}</span>
                 <Button variant="ghost" size="icon" className="size-7" aria-label={t('sessionSearch.previous')} disabled={offset === 0 || busy}
                   onClick={() => { setOffset((n) => Math.max(0, n - 40)); results.current?.scrollTo(0, 0) }}><ChevronLeft aria-hidden="true" className="size-4" /></Button>
                 <Button variant="ghost" size="icon" className="size-7" aria-label={t('sessionSearch.next')} disabled={offset + value.hits.length >= value.total || busy}
                   onClick={() => { setOffset((n) => n + 40); results.current?.scrollTo(0, 0) }}><ChevronRight aria-hidden="true" className="size-4" /></Button>
               </div>
             ) : (
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-caption text-muted-foreground">
                 <span><kbd className="mr-1 font-sans text-muted-foreground/70">{t('sessionSearch.escapeKey')}</kbd>{t('sessionSearch.close')}</span>
               </div>
             )}

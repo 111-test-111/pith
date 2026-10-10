@@ -1,3 +1,4 @@
+// local patch (pi-app): shared scalable typography for UI line metrics.
 "use client";
 
 // local patch (pi-app): animate shared UI artwork through the SVG adapter.
@@ -22,6 +23,8 @@ import {
   type TextareaHTMLAttributes,
 } from "react";
 import { cn } from "@/lib/utils";
+// local patch (pi-app): all single-line fields share the sidebar filter style.
+import { SINGLE_LINE_INPUT_PADDING, SINGLE_LINE_INPUT_TEXT } from "@/lib/input-style";
 
 export type InputClassNames = {
   root?: string;
@@ -104,11 +107,9 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
 
   // Right edge shows the success check, otherwise the caller's right icon.
   const rightSlot = success ? null : rightIcon;
-  // local patch (pi-app): pin the multiline height to a whole number of text
-  // rows — `rows` lines at the field's leading-6 (1.5rem). The vertical
-  // padding sits on the field, not here, so the clip edge lands exactly on a
-  // line boundary and no half line ever shows.
-  const multilineHeight = `calc(${rows} * 1.5rem)`;
+  // local patch (pi-app): use the textarea's own computed line box. Message
+  // editing follows content size, while record fields follow interface size.
+  const multilineHeight = `calc(${rows} * 1lh)`;
 
   // Shake the field when an error appears.
   useEffect(() => {
@@ -159,7 +160,9 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
           // vertical padding lives on the field so the <textarea> box itself
           // is exactly `rows` lines tall and clips at a line boundary.
           // local patch (pi-app): fields use the shared continuous control corner.
-          multiline ? "rounded-card py-3" : "h-11 overflow-hidden rounded-control",
+          // local patch (pi-app): single-line height comes from the text and
+          // shared vertical inset, so compact and enlarged type both fit.
+          multiline ? "rounded-card py-3" : "overflow-hidden rounded-control",
           // local patch (pi-app): hover/focus share one thin outer highlight;
           // its transparent border preserves the field's size without doubling.
           focused && !hasError ? "field-highlight" : "border-border",
@@ -172,7 +175,9 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
         {leftIcon ? (
           <span
             className={cn(
-              "pointer-events-none absolute left-3 top-1/2 flex -translate-y-1/2 items-center text-muted-foreground [&_svg]:h-4 [&_svg]:w-4",
+              "pointer-events-none absolute top-1/2 flex -translate-y-1/2 items-center text-muted-foreground [&_svg]:h-4 [&_svg]:w-4",
+              // local patch (pi-app): single-line icons follow the shared inset.
+              multiline ? "left-3" : "left-3.5",
               classNames?.leftIcon,
             )}
           >
@@ -212,7 +217,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
             className={cn(
               // local patch (pi-app): use the surrounding body size by default;
               // compact surfaces can still pass text-xs through classNames.input.
-              "peer block w-full resize-none bg-transparent py-0 text-sm leading-6 text-foreground caret-foreground outline-none",
+              "peer block w-full resize-none bg-transparent py-0 text-sm leading-ui-loose text-foreground caret-foreground outline-none",
               "placeholder:text-muted-foreground/60",
               leftIcon ? "pl-10" : "pl-3.5",
               rightSlot || success ? "pr-10" : "pr-3.5",
@@ -240,11 +245,14 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
               onBlur?.(event);
             }}
             className={cn(
-              // local patch (pi-app): keep single-line fields at the body size.
-              "peer h-full w-full bg-transparent text-sm leading-6 text-foreground caret-foreground outline-none",
+              // local patch (pi-app): text and numeric fields use the same
+              // sidebar-sized text and padding, with room for optional icons.
+              "peer block w-full bg-transparent text-foreground caret-foreground outline-none",
+              SINGLE_LINE_INPUT_TEXT,
+              SINGLE_LINE_INPUT_PADDING,
               "placeholder:text-muted-foreground/60",
-              leftIcon ? "pl-10" : "pl-3.5",
-              rightSlot || success ? "pr-10" : "pr-3.5",
+              leftIcon && "pl-10",
+              (rightSlot || success) && "pr-10",
               disabled && "cursor-not-allowed",
               classNames?.input,
             )}
@@ -269,7 +277,10 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
         ) : rightSlot ? (
           <span
             className={cn(
-              "absolute right-0 top-0 flex h-full items-center text-muted-foreground [&_button]:grid [&_button]:size-11 [&_button]:place-items-center [&_svg]:h-4 [&_svg]:w-4",
+              "absolute right-0 top-0 flex h-full items-center text-muted-foreground [&_button]:grid [&_button]:place-items-center [&_svg]:h-4 [&_svg]:w-4",
+              // local patch (pi-app): single-line actions fit the text-driven
+              // field height; multiline actions retain their existing canvas.
+              multiline ? "[&_button]:size-11" : "[&_button]:h-full [&_button]:w-9",
               classNames?.rightIcon,
             )}
           >

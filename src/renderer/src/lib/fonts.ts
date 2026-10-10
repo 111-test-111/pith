@@ -41,7 +41,7 @@ const UI_FALLBACK =
 const MONO_STACK =
   "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace"
 
-/** The math tail: the bundled Latin Modern Math face (registered as
+/** The math tail: the bundled TeX Gyre DejaVu Math face (registered as
  * `Pith Math` in `lib/math.css`), then the platform's generic math face.
  * Unlike the text tails this one must carry an OpenType MATH table — MathML
  * layout reads radical/fence metrics from it — so a plain text family can
@@ -94,7 +94,7 @@ function resolveMonoFont(family: string, ui: string): string {
 }
 
 /** The CSS stack the math setting resolves to: the typed family first, then
- * the bundled Latin Modern Math face. An empty field, an unknown family and a
+ * the bundled TeX Gyre DejaVu Math face. An empty field, an unknown family and a
  * rejected stack all land on the bundled face, so a misconfigured value can
  * never leave formulas in a font without math metrics. */
 function resolveMathFont(family: string): string {
@@ -142,6 +142,15 @@ function get(): FontSettings {
   return current
 }
 
+/** Applying a stack rewrites root CSS variables, which invalidates style and
+ * layout across the whole document — including a live transcript mounted
+ * behind the Settings overlay. A typing burst collapses into one trailing
+ * application; persistence and subscriber state stay immediate, so the field
+ * never lags the keystroke that produced it. */
+const APPLY_DEBOUNCE_MS = 200
+
+let applyTimer: ReturnType<typeof setTimeout> | null = null
+
 function set(patch: Partial<FontSettings>): void {
   current = { ...get(), ...patch }
   try {
@@ -149,7 +158,11 @@ function set(patch: Partial<FontSettings>): void {
   } catch {
     /* persistence is best-effort; the in-memory value still applies */
   }
-  apply(current)
+  if (applyTimer !== null) clearTimeout(applyTimer)
+  applyTimer = setTimeout(() => {
+    applyTimer = null
+    apply(current)
+  }, APPLY_DEBOUNCE_MS)
   for (const listener of listeners) listener()
 }
 

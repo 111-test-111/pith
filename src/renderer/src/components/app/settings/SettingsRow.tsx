@@ -22,7 +22,7 @@ export function SettingsRow({
       <div className="min-w-0">
         <p className="text-sm font-medium text-foreground">{label}</p>
         {description ? (
-          <p className="mt-0.5 text-xs leading-4 text-muted-foreground">{description}</p>
+          <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>
         ) : null}
       </div>
       {children ? <div className="flex shrink-0 items-center gap-1.5">{children}</div> : null}
@@ -34,16 +34,19 @@ export function SettingsRow({
 export function SettingsGroup({
   title,
   children,
-  description
+  description,
+  titleClassName
 }: {
   title: ReactNode
   children: ReactNode
   description?: ReactNode
+  /** Optional override for the group heading, e.g. a report page's own scale. */
+  titleClassName?: string
 }) {
   return (
     <section>
       <div className="px-1 pb-2">
-        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{title}</p>
+        <p className={cn('text-xs font-medium uppercase tracking-wide text-muted-foreground', titleClassName)}>{title}</p>
         {description ? <p className="mt-1 text-xs text-muted-foreground/70">{description}</p> : null}
       </div>
       {/* no overflow-hidden: beUI Select renders its dropdown panel inside the

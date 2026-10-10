@@ -272,7 +272,7 @@ export function AccentColorPicker({
               aria-label={t('settings.accentCustom')}
               spellCheck={false}
               autoComplete="off"
-              classNames={{ root: 'min-w-0 flex-1', field: 'h-7', input: 'font-mono text-xs' }}
+              classNames={{ root: 'min-w-0 flex-1', input: 'font-mono' }}
             />
           </div>
 

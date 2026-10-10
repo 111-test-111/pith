@@ -1,4 +1,12 @@
 import { estimateTokens } from '@earendil-works/pi-coding-agent'
+import { currentSystemMessage } from './transcript-context'
+
+/** Canonical projection estimate, matching the SDK's system-state fold. */
+export function estimateContextTokens(messages: readonly any[]): number {
+  const system = currentSystemMessage(messages)
+  return (system ? estimateTokens(system) : 0) + messages.reduce((tokens, message) =>
+    tokens + (message?.role === 'system' ? 0 : estimateTokens(message)), 0)
+}
 
 /**
  * What the context holds after a compaction, for as long as the SDK cannot say.
@@ -11,15 +19,11 @@ import { estimateTokens } from '@earendil-works/pi-coding-agent'
  * tokens both stranded at `—`), exactly when the user wants to watch the number
  * drop.
  *
- * The fallback is the estimate the SDK itself uses for a compaction's
- * `estimatedTokensAfter`: the summed per-message estimate of the compacted
- * list, computed with the SDK's own `estimateTokens`. Only a session that
- * actually carries a summary takes it — a fresh session's blank ring is honest,
- * because this estimate covers neither the system prompt nor the tool schemas.
+ * Fold system patches once, then estimate the remaining projection messages.
+ * This includes checkpoint prompts/schemas without counting superseded state.
+ * Only a session carrying a compaction summary takes this fallback.
  */
 export function compactedContextTokens(messages: readonly any[]): number | null {
   if (!messages.some((message) => message?.role === 'compactionSummary')) return null
-  let tokens = 0
-  for (const message of messages) tokens += estimateTokens(message)
-  return tokens
+  return estimateContextTokens(messages)
 }
