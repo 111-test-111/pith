@@ -24,7 +24,7 @@ try {
   const preload = join(temporary, 'preload.mjs')
   await writeFile(preload, `import ${JSON.stringify(join(repo, 'out/preload/index.mjs'))};
 import {contextBridge,ipcRenderer} from 'electron';
-contextBridge.exposeInMainWorld('fixture',{calls:()=>ipcRenderer.invoke('fixture:calls'),resize:(w,h)=>ipcRenderer.invoke('fixture:resize',w,h)});`)
+contextBridge.exposeInMainWorld('fixture',{calls:()=>ipcRenderer.invoke('fixture:calls'),goalCalls:()=>ipcRenderer.invoke('fixture:goalCalls'),resize:(w,h)=>ipcRenderer.invoke('fixture:resize',w,h)});`)
   const main = join(temporary, 'main.cjs')
   const attachmentFile = join(temporary, 'attachment-sample.txt')
   await writeFile(attachmentFile, 'attached sample\n')
@@ -36,7 +36,7 @@ app.commandLine.appendSwitch('remote-debugging-port','0');
 app.whenReady().then(()=>{
  const model={providerId:'deepseek',providerName:'DeepSeek',id:'fixture',name:'DeepSeek V4.1 Flash',reasoning:true,input:['text'],contextWindow:128000,maxTokens:8192,available:true,costInputPerM:0,costOutputPerM:0};
  const sessions=[{id:'chat-0',path:'/fixture/chat-0',cwd:'/workspace/pi-app',projectless:false,label:'梳理项目结构',created:new Date().toISOString(),modified:new Date().toISOString(),messageCount:2}];
- const calls=[];
+ const calls=[],goalCalls=[];
  let folders=['/workspace/pi-app','/workspace/piws'];
  const snapshot=(cwd='/workspace/pi-app')=>({sessionId:'fixture',sessionPath:'/fixture/chat-0',cwd,projectless:cwd.startsWith('/internal/'),messages:[],model,thinkingLevel:'high',availableThinkingLevels:['off','high'],isStreaming:false});
  ipcMain.handle('app:info',()=>({cwd:'/workspace/pi-app',folders:[...folders],version:'fixture',contextFiles:true,bashMaxWaitMs:10000}));
@@ -47,6 +47,8 @@ app.whenReady().then(()=>{
  ipcMain.handle('pi:listSessions',()=>sessions);
  ipcMain.handle('app:pickDirectory',()=>({cwd:'/workspace/new-project'}));
  ipcMain.handle('fixture:calls',()=>calls);
+ ipcMain.handle('fixture:goalCalls',()=>goalCalls);
+ ipcMain.handle('goal:action',(_,request)=>{goalCalls.push(request);return {ok:false,code:'unavailable'}});
  ipcMain.handle('fixture:resize',(_,width,height)=>w.setBounds({width,height}));
  ipcMain.handle('pi:models',()=>[model]);ipcMain.handle('bash:list',()=>[]);ipcMain.handle('pi:providers',()=>[]);
  // Real reads label a workspace file relatively; the attachment card must
@@ -120,10 +122,51 @@ app.whenReady().then(()=>{
     await mkdir(process.env.PI_NEW_SESSION_SCREENSHOT_DIR, { recursive: true })
     await writeFile(join(process.env.PI_NEW_SESSION_SCREENSHOT_DIR, name + '.png'), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'))
   }
+  const checkGoalSelection = async name => {
+    await click('[data-prompt-editor]')
+    await send('Input.insertText', { text: 'Keep this goal draft.' })
+    const before = await evaluate(`(()=>{
+      const editor=document.querySelector('[data-prompt-editor]');
+      window.goalLandingRefs={editor,form:editor.closest('form'),project:document.querySelector('${TRIGGER}'),shader:document.querySelector('[data-shader-backdrop]')};
+      return {rect:window.goalLandingRefs.form.getBoundingClientRect().toJSON(),placeholder:editor.getAttribute('aria-placeholder'),title:document.querySelector('[data-window-titlebar]').innerText};
+    })()`)
+    await click('button[aria-label="Add to prompt"]')
+    const option = await evaluate(`(()=>{const button=[...document.querySelectorAll('button')].find(n=>n.innerText.trim()==='目标模式');if(!button)return null;const r=button.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`)
+    assert(option, 'the + panel offers Goal mode on the landing page')
+    await clickAt(option)
+    await waitFor(`document.querySelector('[data-goal-mode-control]')`)
+    const selected = await evaluate(`(()=>{
+      const refs=window.goalLandingRefs,editor=document.querySelector('[data-prompt-editor]');
+      return {editorSame:editor===refs.editor,formSame:editor.closest('form')===refs.form,projectSame:document.querySelector('${TRIGGER}')===refs.project,shaderSame:document.querySelector('[data-shader-backdrop]')===refs.shader,
+        rect:editor.closest('form').getBoundingClientRect().toJSON(),placeholder:editor.getAttribute('aria-placeholder'),text:editor.innerText,title:document.querySelector('[data-window-titlebar]').innerText,
+        label:document.querySelector('[data-goal-mode-control]').innerText.trim(),transcript:Boolean(document.querySelector('[data-transcript-rows]')),tasks:Boolean(document.querySelector('[data-session-tasks]')),focused:document.activeElement===editor};
+    })()`)
+    for (const key of ['editorSame','formSame','projectSame','shaderSame','focused']) assert.equal(selected[key],true, `Goal selection preserves ${key} on ${name}`)
+    for (const key of ['x','y','width','height']) assert.ok(Math.abs(selected.rect[key]-before.rect[key])<=1, `Goal selection preserves composer ${key} on ${name}: ${JSON.stringify({before:before.rect,after:selected.rect})}`)
+    assert.equal(selected.label,'目标')
+    assert.equal(selected.text,'Keep this goal draft.')
+    assert.equal(selected.title,before.title)
+    assert.notEqual(selected.placeholder,before.placeholder,'Goal selection updates only the editor hint and bottom control')
+    assert.match(selected.placeholder,/目标/)
+    assert.equal(selected.transcript,false,'selection cannot mount the conversation transcript')
+    assert.equal(selected.tasks,false,'selection cannot reveal the task strip')
+    assert.deepEqual(await evaluate('fixture.goalCalls()'),[],'selection grants no native Goal execution')
+    await screenshot('goal-selected-'+name)
+    await click('[data-goal-mode-control]')
+    await waitFor(`!document.querySelector('[data-goal-mode-control]')`)
+    assert.equal(await evaluate(`document.querySelector('[data-prompt-editor]').getAttribute('aria-placeholder')`),before.placeholder,'deselecting restores the landing hint')
+    assert.deepEqual(await evaluate('fixture.goalCalls()'),[],'ending an unstarted mode also needs no Goal IPC')
+    await evaluate(`(()=>{const editor=document.querySelector('[data-prompt-editor]');editor.focus();const range=document.createRange();range.selectNodeContents(editor);const selection=getSelection();selection.removeAllRanges();selection.addRange(range)})()`)
+    await send('Input.dispatchKeyEvent', { type:'keyDown',key:'Backspace',code:'Backspace',windowsVirtualKeyCode:8 })
+    await send('Input.dispatchKeyEvent', { type:'keyUp',key:'Backspace',code:'Backspace',windowsVirtualKeyCode:8 })
+    await waitFor(`document.querySelector('[data-prompt-editor]').innerText.trim()===''`)
+  }
   await send('Runtime.enable')
   await ready()
   await evaluate(`localStorage.setItem('pi-app:locale','zh-CN');localStorage.setItem('theme','dark')`)
   await send('Page.reload'); await pause(400); await ready()
+
+  await checkGoalSelection('project')
 
   // The landing page shows the active project in a real control, not a label.
   assert.equal(await triggerText(), 'pi-app')
@@ -167,6 +210,7 @@ app.whenReady().then(()=>{
   assert.deepEqual(await evaluate('fixture.calls()'), ['/workspace/piws', null])
   assert.equal(await evaluate(`/internal|private-workspace/.test(document.body.innerText)`), false)
   assert.equal(await evaluate(`Boolean(document.querySelector('[data-window-titlebar] [data-window-interactive]'))`), false)
+  await checkGoalSelection('projectless')
   await screenshot('switched-projectless')
 
   // ...and back to a project from a projectless chat.
@@ -254,13 +298,14 @@ app.whenReady().then(()=>{
   // Narrow window: the panel stays inside the viewport.
   await evaluate(`fixture.resize(760,560)`)
   await pause(600)
+  await checkGoalSelection('narrow')
   await click(TRIGGER)
   const rect = await evaluate(`(()=>{const r=${projectList}.getBoundingClientRect();return{left:r.left,right:r.right,width:innerWidth}})()`)
   assert.ok(rect.left >= 0 && rect.right <= rect.width, 'panel must stay inside the viewport: ' + JSON.stringify(rect))
   await screenshot('panel-open-narrow')
 
   assert.deepEqual(exceptions, [])
-  console.log('PASS: new-session project picker — options, project switch, projectless switch, privacy, escape, geometry')
+  console.log('PASS: new-session project picker — project/projectless/narrow Goal selection preserves landing, drafts and geometry; project switch, privacy and escape')
 } finally {
   ws?.close()
   if (child && child.exitCode === null) { child.kill('SIGTERM'); await new Promise(resolve => { child.once('exit', resolve); setTimeout(resolve, 3000) }) }

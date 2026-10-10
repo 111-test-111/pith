@@ -1314,7 +1314,7 @@ const [alwaysOnTop, setAlwaysOnTop] = useState(false)
    * cwd at creation); an unanswered session is only written once an assistant
    * reply lands, so switching back and forth leaves no stray file behind. */
   const newSessionStart = useMemo<NewSessionContext | undefined>(() => {
-    if (!isNewSession || shell.goalUI.enabled) return undefined
+    if (!isNewSession || shell.goalUI.submitted) return undefined
     const active = shell.cwd && !shell.projectless ? shell.cwd : null
     return {
       projectName: active ? basename(active) : null,
@@ -1334,7 +1334,7 @@ const [alwaysOnTop, setAlwaysOnTop] = useState(false)
         }
       }
     }
-  }, [isNewSession, shell.goalUI.enabled, shell.cwd, shell.projectless, newSessionProjects, newSession])
+  }, [isNewSession, shell.goalUI.submitted, shell.cwd, shell.projectless, newSessionProjects, newSession])
 
   /** Session paths whose live SDK session is currently streaming, so the
    * sidebar row shows the running spinner instead of the file glyph. The
@@ -1682,7 +1682,7 @@ const [alwaysOnTop, setAlwaysOnTop] = useState(false)
       <AnimatedSidebarInset className="isolate min-h-0 overflow-hidden bg-background md:-ml-[3px]">
         <div className="flex min-h-0 flex-1">
           <div data-pip-source="conversation" className="flex min-h-0 min-w-0 flex-1 flex-col" inert={sidePanelFullscreen} aria-hidden={sidePanelFullscreen || undefined}>
-            {!isNewSession || shell.goalUI.enabled ? (
+            {!isNewSession || shell.goalUI.submitted ? (
               <ChatView
                 onRefinePlan={shell.scheduledTaskSession ? undefined : () => window.dispatchEvent(new CustomEvent('pith:refine-plan', { detail: { sessionPath: shell.sessionPath } }))}
                 store={store}

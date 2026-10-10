@@ -9,6 +9,7 @@ const en = {
   "goal.panelSummary": "One goal for this conversation; tasks use the existing Todo list.",
   "goal.intro": "Write your goal in the composer and send to start. Continuations reuse current context and completed work.",
   "composer.goalMode": "Goal mode",
+  "composer.goalPlaceholder": "Describe the goal you want to achieve…",
   "goal.exit": "End goal mode",
   "goal.end": "End",
   "goal.acceptanceOptional": "Acceptance criteria (optional)",

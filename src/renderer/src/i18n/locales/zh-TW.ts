@@ -7,6 +7,7 @@ const zhTW: Messages = {
   "goal.panelSummary": "本對話一個目標，任務沿用現有 Todo 清單。",
   "goal.intro": "在輸入框中填寫目標並傳送，即可開始執行。續跑會沿用目前上下文和已完成的工作。",
   "composer.goalMode": "目標模式",
+  "composer.goalPlaceholder": "描述你想完成的目標…",
   "goal.exit": "結束目標模式",
   "goal.end": "結束",
   "goal.acceptanceOptional": "驗收條件（選填）",

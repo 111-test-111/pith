@@ -660,7 +660,7 @@ export function Composer({
                   ? t(behavior === 'steer' ? 'composer.hintSteer' : 'composer.hintFollowUp', {
                       modifier: IS_MAC ? '⌘' : 'Ctrl'
                     })
-                  : t(refining ? 'plan.refinePrompt' : start ? 'newSession.placeholder' : 'composer.placeholder')
+                  : t(refining ? 'plan.refinePrompt' : goalEnabled ? 'composer.goalPlaceholder' : start ? 'newSession.placeholder' : 'composer.placeholder')
               }
               leadingAction={
                 <span className="flex min-w-0 items-center gap-1">

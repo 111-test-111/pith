@@ -91,7 +91,7 @@ export const suites = [
   suite('mid-run-switches', 'integration', 'composer', 'Mid-run model, thinking and permission switches are refused while a run is live unless the setting allows them, then apply on the next call and persist.'),
   suite('model-picker', 'ui', 'models', 'Model switches use SDK-supported reasoning levels and preserve the current snapshot until the next arrives.'),
   suite('native-mcp-codemode', 'integration', 'mcp', 'Real SDK MCP discovery and calls preserve native connection status through failure, authentication, reload and session switches.'),
-  suite('new-session-project', 'ui', 'session', 'Project selection recreates chats in the selected workspace while preserving drafts.', { requiresBuild: true }),
+  suite('new-session-project', 'ui', 'session', 'Project selection recreates chats while preserving drafts; Goal selection retains the landing layout until sending.', { requiresBuild: true }),
   suite('notification-sounds', 'ui', 'notifications', 'Completion and question notifications deduplicate events, honor opt-in and respect mute settings.'),
   suite('overlay-motion', 'ui', 'appearance', 'Floating surfaces share rendered motion, retain complete rows and release input during exit and interrupted transitions.'),
   suite('pdf-preview', 'ui', 'files', 'Lazy PDF rendering uses exclusive-end ranges, confines short-document scrolling to its viewport and preserves rail chrome through navigation, zoom and pane changes.', { requiresBuild: true }),

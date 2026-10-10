@@ -7,6 +7,7 @@ const zhCN: Messages = {
   "goal.panelSummary": "本会话一个目标，任务复用现有 Todo 列表。",
   "goal.intro": "在输入框中填写目标并发送，即可开始执行。续跑会沿用当前上下文和已完成的工作。",
   "composer.goalMode": "目标模式",
+  "composer.goalPlaceholder": "描述你想完成的目标…",
   "goal.exit": "结束目标模式",
   "goal.end": "结束",
   "goal.acceptanceOptional": "验收条件（可选）",
