@@ -79,6 +79,8 @@ export const suites = [
   suite('goal-evidence', 'integration', 'tasks', 'Criterion revisions and committed file-version proofs reject stale, failed or forged completion through Todo, Stop, Rewind and recovery.'),
   suite('goal-definition', 'integration', 'tasks', 'Live objective and acceptance edits drain SDK work, invalidate old receipts and fence Stop, Plan and Rewind while preserving Todo and usage.'),
   suite('goal-fork', 'integration', 'tasks', 'Real SDK forks retain shared lifetime charges, atomically claim the last slot and keep independent run scopes through Rewind and missing accounting.'),
+  suite('goal-accounting', 'integration', 'tasks', 'Managed children and Jev retain independent shared-pool attribution through Resume, Stop, Rewind, Fork and unavailable provider usage.'),
+  suite('goal-accounting-recovery', 'integration', 'tasks', 'OS SIGKILL around child/Jev claims, receipts and pool application replays charges once without executing accepted work.', { platforms: POSIX, timeoutMs: 300_000 }),
   suite('goal-recovery', 'integration', 'tasks', 'OS SIGKILL at goal, claim, input, billing, proof, Plan, Stop and Rewind boundaries preserves immutable input and lifetime fork accounting.', { platforms: POSIX, timeoutMs: 300_000 }),
   suite('goals-ui', 'ui', 'tasks', 'Goal selection stays in the composer; sending reveals a manually opened current-goal panel, preserves responsive drafts and ends through localized, session-pinned controls.', { requiresBuild: true, platforms: POSIX }),
   suite('library', 'integration', 'library', 'Conversation resources retain exact copies, JSON web sources, project provenance, quotas and deletion across history replay, format rebuild and archive migration.'),

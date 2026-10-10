@@ -18,7 +18,7 @@ export interface GoalReceipt extends Omit<GoalUpdateInput, 'claims'> {
   claims: Array<{ criterionId: string; revision: number; summary: string; sources: GoalEvidenceRef[] }>
 }
 const statuses: GoalStatus[] = ['active', 'verifying', 'paused', 'blocked', 'completed', 'cancelled']
-const reasons: GoalReason[] = ['user', 'stopped', 'plan', 'rewound', 'interrupted', 'runs', 'tokens', 'no_progress', 'review', 'error', 'storage', 'criteria', 'evidence', 'input']
+const reasons: GoalReason[] = ['user', 'stopped', 'plan', 'rewound', 'interrupted', 'runs', 'tokens', 'no_progress', 'review', 'error', 'storage', 'criteria', 'evidence', 'input', 'accounting']
 const object = (v: unknown): Record<string, any> | null => v !== null && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, any> : null
 const id = (v: unknown, max = 160): v is string => typeof v === 'string' && !!v && v.length <= max
 const revision = (v: unknown): v is number => Number.isSafeInteger(v) && (v as number) >= 1

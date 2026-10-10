@@ -132,6 +132,7 @@ export interface ChildSessionHandle {
   parentSessionId: string
   /** Resource snapshot actually applied — what a later reopen must restore. */
   resource: SubagentRunStartData['resource']
+  goalOwner?: SubagentRunStartData['goalOwner']
   /** Stop everything the child owns: its notification wake path, its queues,
    * its background bash processes and its SDK run. Awaitable. */
   halt: () => Promise<void>
@@ -776,6 +777,7 @@ export class SubagentRuntime {
       task: identity.task,
       runInBackground: identity.runInBackground,
       createdAt,
+      ...(child.goalOwner ? { goalOwner: child.goalOwner } : {}),
       resource: child.resource
     }
     // A run without its persisted start record has no recoverable identity:

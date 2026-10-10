@@ -1,4 +1,5 @@
 import { TypeSafeClient, APIError, APITimeoutError, APIUserAbortError, type Questions, type Fetch } from '@typesafe-ai/sdk'
+import { randomUUID } from 'node:crypto'
 import type { JevAnswerDTO, JevEvaluationDTO, JevPreferences } from '../../../shared/types'
 import { JevError, JEV_MODEL, parseJevRequest, type JevRequest } from './protocol'
 
@@ -45,6 +46,11 @@ export interface JevServiceOptions {
   apiKey: () => Promise<string | undefined>
   fetch?: Fetch
   timeoutMs?: number
+  /** Capture ownership before credential lookup; claim only at actual dispatch. */
+  accounting?: (owner: string) => ((requestId: string, callId?: string) => {
+    record(usage: { input: number; output: number; cacheRead: number; cacheWrite: number }, providerRequestId?: string): void
+    uncertain(): void
+  }) | undefined
 }
 
 /** One application service; requests retain their owning session and abort independently. */
@@ -63,12 +69,15 @@ export class JevService {
   }
   dispose(): void { this.closed = true; this.cancel() }
 
-  async evaluate(input: unknown, options: { owner: string; signal?: AbortSignal; canStart?: () => boolean; probe?: boolean; workflow?: boolean }): Promise<JevEvaluationDTO> {
+  async evaluate(input: unknown, options: { owner: string; signal?: AbortSignal; canStart?: () => boolean; probe?: boolean; workflow?: boolean; callId?: string }): Promise<JevEvaluationDTO> {
     const allowed = () => !this.closed && (options.canStart?.() ?? true)
     if (!allowed() || options.signal?.aborted) throw new JevError('cancelled')
     const prefs = this.options.preferences()
     if (!options.probe && prefs.mode !== (options.workflow ? 'workflow' : 'tools')) throw new JevError('disabled')
     const request = parseJevRequest(input, options.probe || options.workflow ? { mode: prefs.mode, choice: true, score: true, noul: true } : prefs)
+    let accounting: ReturnType<NonNullable<JevServiceOptions['accounting']>>
+    try { accounting = options.probe ? undefined : this.options.accounting?.(options.owner) }
+    catch { throw new JevError('storage') }
     if (this.requests.size >= 4) throw new JevError('busy')
     const controller = new AbortController()
     this.requests.set(controller, options.owner)
@@ -76,6 +85,7 @@ export class JevService {
     const timer = setTimeout(() => timeout.abort(), this.options.timeoutMs ?? 10_000)
     const signal = AbortSignal.any([controller.signal, timeout.signal, ...(options.signal ? [options.signal] : [])])
     const started = performance.now()
+    let ticket: ReturnType<NonNullable<typeof accounting>> | undefined
     try {
       const apiKey = await this.options.apiKey()
       if (signal.aborted || !allowed()) throw new JevError('cancelled')
@@ -84,10 +94,23 @@ export class JevService {
       const client = new TypeSafeClient({ apiKey, baseURL: 'https://api.typesafe.ai', defaultModel: JEV_MODEL,
         timeout: this.options.timeoutMs ?? 10_000, retry: { maxRetries: 0 }, logLevel: 'off',
         ...(this.options.fetch ? { fetch: this.options.fetch } : {}) })
-      const raw = await client.systemOne({ state: request.state, questions: request.questions as Questions }, { signal })
+      try { ticket = accounting?.(randomUUID(), options.callId) } catch { throw new JevError('storage') }
+      const response = await client.systemOne({ state: request.state, questions: request.questions as Questions }, { signal }).withResponse()
+      const raw = response.data
+      // Reported usage survives cancellation and invalid semantic answers.
+      // Never discard a billed response because Stop won the publication race.
+      if (ticket) {
+        const u = raw?.usage
+        try {
+          if (u && [u.input_tokens, u.output_tokens, u.input_tokens + u.output_tokens].every(n => Number.isSafeInteger(n) && n >= 0)) {
+            ticket.record({ input: u.input_tokens, output: u.output_tokens, cacheRead: 0, cacheWrite: 0 }, response.requestId)
+          } else ticket.uncertain()
+        } catch { throw new JevError('storage') }
+      }
       if (signal.aborted || !allowed()) throw new JevError('cancelled')
       return readJevResult(raw, request, Math.round(performance.now() - started))
     } catch (error) {
+      try { ticket?.uncertain() } catch { throw new JevError('storage') }
       if (timeout.signal.aborted) throw new JevError('timeout')
       if (signal.aborted || error instanceof APIUserAbortError) throw new JevError('cancelled')
       if (error instanceof JevError) throw error

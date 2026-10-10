@@ -106,13 +106,14 @@ import { TodoState, createTodoTool } from './todo'
 import { TODO_TOOL_NAME } from './todo-protocol'
 import { GoalRuntime } from './goals/runtime'
 import { GoalStorage } from './goals/storage'
+import { GoalAccounting, GoalAccountingError } from './goals/accounting'
 import { GoalInputError, type PreparedGoalInput } from './goals/input'
 import { createGoalTools, createGoalContextExtension } from './goals/tools'
 import { GOAL_ENTRY, GOAL_GET, GOAL_UPDATE, GOAL_STEP, goalFromBranch, goalLive } from './goals/protocol'
 import { preserveInitialSelections } from './session-selections'
 import { goalCanBeReplaced, validGoalCriteria, validGoalLimits, type GoalActionRequest, type GoalActionResult, type GoalInput, type GoalReason } from '../../shared/goal'
 import { JevCredentials } from './jev/credentials'
-import { JevService } from './jev/service'
+import { JevService, type JevServiceOptions } from './jev/service'
 import { JevWorkflow } from './jev/workflow'
 import { createJevTool } from './jev/tool'
 import { JevError, JEV_TOOL_NAME } from './jev/protocol'
@@ -408,6 +409,8 @@ function scheduledDelay(signal: AbortSignal, ms: number): Promise<void> {
 
 interface ManagedSession {
   goals?: GoalRuntime
+  goalBilling?: ReturnType<GoalAccounting['child']>
+  disposeGoalBillingStream?: () => void
   goalEdit?: AbortController
   manualCompaction?: ManualCompaction
   trajectory?: TrajectoryRecorder
@@ -518,7 +521,29 @@ export class PiManager {
   private jevPreferences = loadSettings().jev
   private jevUpdating = false
   private jevCredentials = new JevCredentials(join(getAgentDir(), 'jev-auth.json'))
-  private jevService = new JevService({ preferences: () => this.jevPreferences, apiKey: () => this.jevCredentials.key() })
+  private jevService = new JevService({ preferences: () => this.jevPreferences, apiKey: () => this.jevCredentials.key(),
+    accounting: owner => this.captureJevAccounting(owner) })
+  private goalAccountingInstance: GoalAccounting | null = null
+  private get goalAccounting(): GoalAccounting {
+    return this.goalAccountingInstance ??= new GoalAccounting(app.getPath('userData'), owner => queueMicrotask(() => {
+      for (const managed of this.sessions.values()) if (managed.goals?.snapshot?.id === owner.goalId) managed.goals.syncAccounting()
+    }))
+  }
+  private captureJevAccounting(path: string): ReturnType<NonNullable<JevServiceOptions['accounting']>> {
+    const managed = this.sessions.get(path)
+    const childBilling = managed?.goalBilling
+    const owner = childBilling?.owner ?? managed?.goals?.billingOwner(true)
+    if (!owner || !managed) return undefined
+    return (requestId: string, callId?: string) => {
+      if (managed.disposing || this.closing || (childBilling ? managed.goalBilling !== childBilling :
+        managed.goals?.billingOwner(true)?.parentRunId !== owner.parentRunId || managed.goals?.snapshot?.id !== owner.goalId)) throw new GoalAccountingError('unavailable')
+      const parent = managed.subagentChild ? this.sessions.get(managed.subagentChild.parentPath) : managed
+      const budget = parent?.goals?.snapshot?.id === owner.goalId ? parent.goals.snapshot.limits.tokenBudget : owner.tokenBudget
+      try { this.goalAccounting.check(owner, budget) }
+      catch (error) { parent?.goals?.pause(error instanceof GoalAccountingError && error.code === 'quota' ? 'tokens' : 'accounting'); throw error }
+      return this.goalAccounting.jev({ ...owner, tokenBudget: budget }, managed.session.sessionId, requestId, callId, childBilling?.runId)
+    }
+  }
 
   async jevSettings(): Promise<JevSettingsDTO> {
     return { ...this.jevPreferences, keySource: await this.jevCredentials.source() }
@@ -1558,6 +1583,7 @@ export class PiManager {
     managed.gate?.dispose()
     managed.jevWorkflow?.dispose()
     managed.disposePlanStream?.()
+    managed.disposeGoalBillingStream?.()
     managed.disposeTextOnlyImages?.()
     managed.disposeImageReplayContext?.()
     managed.disposeContextBudget?.()
@@ -1592,6 +1618,12 @@ export class PiManager {
         shutdown()
       ], SESSION_DISPOSE_TIMEOUT_MS)
       if (!settled) managed.session.dispose()
+      try {
+        if (managed.goalBilling) {
+          if (settled && managed.session.isIdle) managed.goalBilling.close()
+          else managed.goalBilling.abandon()
+        }
+      } catch { try { managed.goalBilling?.abandon() } catch { /* recovery retains the source even when the ledger cannot be written */ } }
       managed.unsubscribe()
       await managed.trajectory?.dispose()
       if (managed.streamFlushTimer) clearTimeout(managed.streamFlushTimer)
@@ -2290,7 +2322,7 @@ export class PiManager {
       throw new Error('Application is shutting down')
     }
     if (!isChild && !isScheduled) managed.goals = new GoalRuntime({
-      session, storage: planStorage, userData: app.getPath('userData'), cwd: managed.cwd,
+      session, storage: planStorage, userData: app.getPath('userData'), cwd: managed.cwd, accounting: this.goalAccounting,
       nextSeq: () => {
         // Like the lazy session services, support constructor-free SDK fixtures.
         this.goalSequences ??= new Map()
@@ -2429,6 +2461,7 @@ export class PiManager {
       observeEvent(event)
     })
     const unsubscribeCommitted = session.agent.subscribe(async event => {
+      if (event.type === 'message_end') managed.goalBilling?.flush()
       if (event.type === 'message_end') managed.trajectory?.observe(event)
       if (event.type === 'message_end' && event.message.role !== 'user' && event.message.role !== 'toolResult') await managed.goals?.committed(event)
       if (event.type === 'message_start' && event.message.role === 'user') plan.releaseSubmissionForUser()
@@ -2475,6 +2508,7 @@ export class PiManager {
       changed: jevWorkflow => this.emit('pi:event', serialize({ type: 'jev_workflow_update', sessionPath: path, jevWorkflow, jevWorkflowSeq: managed.jevWorkflow?.revision ?? 0 }))
     })
     managed.goals?.installStreamGuard()
+    if (isChild) managed.disposeGoalBillingStream = this.installChildBillingStream(managed)
     // The mode is a fact about the selected branch: fold it (and publish) as
     // soon as the session owns a listener, before extension startup finishes.
     plan.restore()
@@ -2546,6 +2580,13 @@ export class PiManager {
     const sessionManager = options.mode === 'new'
       ? SessionManager.create(options.cwd, undefined, { parentSession: options.parentSessionPath })
       : SessionManager.open(options.sessionPath!)
+    const parent = this.sessions.get(options.parentSessionPath)
+    const owner = parent?.goals?.billingOwner(true) ?? (options.mode === 'reopen' ? readDiskSubagentRuns(sessionManager.getEntries()).at(-1)?.start.goalOwner : undefined)
+    if (owner) {
+      const budget = parent?.goals?.snapshot?.id === owner.goalId ? parent.goals.snapshot.limits.tokenBudget : owner.tokenBudget
+      try { this.goalAccounting.check(owner, budget) }
+      catch (error) { parent?.goals?.pause(error instanceof GoalAccountingError && error.code === 'quota' ? 'tokens' : 'accounting'); throw error }
+    }
     if (options.mode === 'new') this.materializeSession(sessionManager)
     const path = sessionManager.getSessionFile()
     const existing = path ? this.sessions.get(path) : undefined
@@ -2581,6 +2622,8 @@ export class PiManager {
     // Resume is the sole write admission for that view and reopens this owner.
     managed.notifications.resume()
     managed.askUser.resume()
+    const billing = owner ? this.goalAccounting.child({ ...owner, tokenBudget: parent?.goals?.snapshot?.id === owner.goalId ? parent.goals.snapshot.limits.tokenBudget : owner.tokenBudget }, managed.session.sessionManager, options.runId) : undefined
+    managed.goalBilling = billing
     // The handle's manager MUST be the one the live AgentSession writes
     // through: a freshly `open()`ed manager shares the file but not the
     // in-memory tree, and run records written through it land on a different
@@ -2593,6 +2636,7 @@ export class PiManager {
       runId: options.runId,
       parentSessionId: options.parentSessionId,
       resource: options.resource,
+      ...(billing ? { goalOwner: billing.owner } : {}),
       isSettled: () => managed.session.isIdle && !managed.notifications.hasPendingCompletions && !managed.askUser.hasPendingDeliveries,
       halt: async () => {
         // Stop everything the child owns: its wake path first (a completion
@@ -2603,17 +2647,73 @@ export class PiManager {
         await this.commandTasksInstance?.stopSession(managed.path).catch(() => {})
         await this.debugManagerInstance?.stopSession(managed.path).catch(() => {})
         await managed.session.abort().catch(() => {})
+        billing?.flush()
       },
       release: async () => {
-        // A completed child retains its transcript, never a live debuggee.
-        await this.debugManagerInstance?.stopSession(managed.path)
-        // A child the user is currently viewing stays alive; it is disposed by
-        // its own lifecycle (navigation away is non-destructive in pi-app).
-        if (this.sessions.get(managed.path) === managed && this.activeSession !== managed) {
-          await this.disposeManaged(managed)
+        try { billing?.close() }
+        finally {
+          if (managed.goalBilling === billing) managed.goalBilling = undefined
+          // A completed child retains its transcript, never a live debuggee.
+          await this.debugManagerInstance?.stopSession(managed.path)
+          // A child the user is currently viewing stays alive; it is disposed by
+          // its own lifecycle (navigation away is non-destructive in pi-app).
+          if (this.sessions.get(managed.path) === managed && this.activeSession !== managed) {
+            await this.disposeManaged(managed)
+          }
         }
       }
     }
+  }
+
+  private installChildBillingStream(managed: ManagedSession): () => void {
+    const agent = managed.session.agent, previous = agent.streamFunction
+    const stream: typeof previous = async (model, context, options) => {
+      const billing = managed.goalBilling
+      if (!billing) return previous(model, context, options)
+      if (options?.signal?.aborted) throw new Error('GOAL_CANCELLED')
+      const parent = this.sessions.get(managed.subagentChild!.parentPath)
+      const budget = parent?.goals?.snapshot?.id === billing.owner.goalId ? parent.goals.snapshot.limits.tokenBudget : billing.owner.tokenBudget
+      try { billing.check(budget) }
+      catch (error) { parent?.goals?.pause(error instanceof GoalAccountingError && error.code === 'quota' ? 'tokens' : 'accounting'); throw error }
+      const ticket = billing.beforeRequest()
+      let finished = false
+      let uncertain = false
+      const unknown = () => { if (!finished && !uncertain) { ticket.finish(undefined); uncertain = true } }
+      const finish = (message: { usage: unknown; stopReason: string }) => {
+        if (finished) return
+        // SDK-generated zero-usage abort/error messages are not a provider
+        // receipt. Retain the unknown request instead of treating it as free.
+        const usage = message.usage as { input?: number; output?: number; cacheRead?: number; cacheWrite?: number } | undefined
+        const known = !['aborted', 'error'].includes(message.stopReason) || usage &&
+          (usage.input ?? 0) + (usage.output ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0) > 0
+        if (known) { ticket.finish(usage); finished = true }
+        else unknown()
+      }
+      let result: Awaited<ReturnType<typeof previous>>
+      try { result = await previous(model, context, options) }
+      catch (error) { unknown(); throw error }
+      return new Proxy(result, {
+        get(target, key) {
+          if (key === Symbol.asyncIterator) return async function* () {
+            try {
+              for await (const event of target) {
+                if (event.type === 'done') finish(event.message)
+                else if (event.type === 'error') finish(event.error)
+                yield event
+              }
+            } finally { unknown() }
+          }
+          if (key === 'result') return async () => {
+            try { const message = await target.result(); finish(message); return message }
+            catch (error) { unknown(); throw error }
+          }
+          const value = Reflect.get(target, key, target)
+          return typeof value === 'function' ? value.bind(target) : value
+        }
+      })
+    }
+    agent.streamFunction = stream
+    return () => { if (agent.streamFunction === stream) agent.streamFunction = previous }
   }
 
   /**
@@ -4211,7 +4311,7 @@ export class PiManager {
       if (request.criteriaRevision !== current.criteriaRevision) return { ok: false, code: 'stale' }
       if (!validGoalCriteria(request.criteria) || request.criteria.some(c => c.id && !current.criteria.some(old => old.id === c.id)) ||
         request.action === 'definition' && (typeof request.objective !== 'string' || !request.objective.trim() || request.objective.length > 8000)) return { ok: false, code: 'invalid' }
-      if (!current.accountingAvailable) return { ok: false, code: 'storage' }
+      if (!current.accountingAvailable) return { ok: false, code: current.billing?.unresolved ? 'accounting' : 'storage' }
       if (managed.goalEdit || managed.plan.branchWork || managed.plan.transitionBusy || managed.initializing || managed.lifecyclePromise || managed.imageReplay || managed.continuationRequest) return { ok: false, code: 'busy' }
       try { managed.plan.checkWorkAdmission() } catch { return { ok: false, code: 'busy' } }
       const controller = managed.goalEdit = new AbortController()
@@ -4259,9 +4359,9 @@ export class PiManager {
       if (facts.tasks || facts.subagents || facts.deliveries || facts.questions || facts.escalations || facts.queuedMessages) return { ok: false, code: 'busy' }
     } else {
       if (!goals.snapshot || goals.snapshot.status === 'cancelled' || goals.snapshot.status === 'completed') return { ok: false, code: 'invalid' }
-      if (request.action === 'resume' && !goals.snapshot.accountingAvailable) return { ok: false, code: 'storage' }
+      if (request.action === 'resume' && !goals.snapshot.accountingAvailable) return { ok: false, code: goals.snapshot.billing?.unresolved ? 'accounting' : 'storage' }
       if (request.action === 'resume' && goals.snapshot.pendingInput && !goals.snapshot.pendingInput.available) return { ok: false, code: 'attachments' }
-      if (request.action === 'resume' && goals.quota()) return { ok: false, code: goals.snapshot?.reason === 'storage' ? 'storage' : 'quota' }
+      if (request.action === 'resume' && goals.quota()) return { ok: false, code: goals.snapshot?.reason === 'storage' ? 'storage' : goals.snapshot?.billing?.unresolved ? 'accounting' : 'quota' }
     }
     let release: () => void
     try { release = managed.plan.beginWork('branch') } catch { return { ok: false, code: 'busy' } }

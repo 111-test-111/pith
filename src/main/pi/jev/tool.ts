@@ -17,7 +17,7 @@ export function createJevTool(service: JevService, owner: string, canStart: () =
       'If unavailable or inconclusive, gather evidence with existing tools; do not repeatedly retry or claim success.'
     ],
     async execute(_id, args, signal) {
-      const evaluation = await service.evaluate(args, { owner, signal, canStart })
+      const evaluation = await service.evaluate(args, { owner, signal, canStart, callId: _id })
       return { content: [{ type: 'text', text: JSON.stringify(evaluation) }], details: { kind: 'pi-app-jev', evaluation } }
     }
   }

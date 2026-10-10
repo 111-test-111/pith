@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { AgentSession, AgentSessionEvent } from '@earendil-works/pi-coding-agent'
-import type { GoalCriterionInput, GoalInput, GoalLimits, GoalRecord, GoalReason, GoalSnapshotDTO, GoalPendingInputDTO } from '../../../shared/goal'
+import type { GoalCriterionInput, GoalInput, GoalLimits, GoalRecord, GoalReason, GoalSnapshotDTO, GoalPendingInputDTO, GoalBillingOwner } from '../../../shared/goal'
 import { statsFromEntries } from '../context-detail'
 import { collectJevEvidence, jevExcerpt } from '../jev/evidence'
 import { BASH_COMPLETION_TYPE } from '../task-notifications'
@@ -11,6 +11,7 @@ import { GOAL_ENTRY, GOAL_EVIDENCE, GOAL_GET, GOAL_UPDATE, applyGoalReceipt, par
 import { collectGoalEvidence, currentGoalSource, goalEvidenceView, makeGoalStamps, readGoalVersions, type GoalEvidenceState } from './evidence'
 import { GoalStorage, type GoalLedger } from './storage'
 import { GoalInputStorage } from './input'
+import { GoalAccounting } from './accounting'
 
 interface Host {
   session: AgentSession
@@ -20,6 +21,7 @@ interface Host {
   nextSeq(): number
   changed(goal: GoalSnapshotDTO | null, seq: number): void
   accountingChanged?(goalId: string): void
+  accounting?: GoalAccounting
   /** Checked before reservation AND again immediately before dispatch. */
   available(): boolean
   pending(): boolean
@@ -36,6 +38,7 @@ export class GoalRuntime {
   private ledger: GoalLedger | null = null
   private store: GoalStorage
   private inputs: GoalInputStorage
+  private accounting: GoalAccounting
   private inputController: AbortController | null = null
   private inputPromise: Promise<boolean> | null = null
   private pendingInput: GoalPendingInputDTO | null = null
@@ -60,6 +63,7 @@ export class GoalRuntime {
   constructor(private host: Host) {
     this.store = new GoalStorage(host.userData, host.session.sessionId)
     this.inputs = new GoalInputStorage(host.userData, host.session.sessionId)
+    this.accounting = host.accounting ?? new GoalAccounting(host.userData)
     this.restore('interrupted')
   }
   get preparing(): boolean { return !!this.job || !!this.inputController }
@@ -77,7 +81,9 @@ export class GoalRuntime {
     return record ? { ...record, criteria: view?.criteria ?? record.criteria.map(c => ({ ...c, state: c.proof ? 'stale' as const : 'pending' as const })),
       evidenceResults: view?.results ?? [], evidenceOmitted: this.proofState?.evidence.omitted ?? 0, evidenceBlocked: view?.blocked ?? false,
       seq: this.seq, autoRuns: this.ledger?.autoRuns ?? 0,
-      tokens: this.ledger?.tokens ?? 0, accountingAvailable: !this.failed && !!this.ledger,
+      tokens: this.ledger?.tokens ?? 0, accountingAvailable: !this.failed && !!this.ledger && !this.ledger.independent?.unresolved.length,
+      ...(this.ledger ? { billing: { parentTokens: this.ledger.tokens - (this.ledger.independent?.subagentTokens ?? 0) - (this.ledger.independent?.jevTokens ?? 0),
+        subagentTokens: this.ledger.independent?.subagentTokens ?? 0, jevTokens: this.ledger.independent?.jevTokens ?? 0, unresolved: this.ledger.independent?.unresolved.length ?? 0 } } : {}),
       executing: !this.host.session.isIdle || this.preparing, waiting: this.live && this.host.pending(),
       ...(this.pendingInput ? { pendingInput: structuredClone(this.pendingInput) } : {}) } : null
   }
@@ -137,7 +143,11 @@ export class GoalRuntime {
     this.ledger = null
     this.failed = false
     if (this.goal) {
-      try { this.ledger = this.store.read(this.goal.id, true) }
+      try {
+        this.ledger = this.store.read(this.goal.id, true)
+        this.accounting.recover(this.billingOwner()!)
+        this.ledger = this.store.read(this.goal.id, true)
+      }
       catch { this.fault(); return }
       // Reconcile a persisted run after a hard crash. A claim is never replayed.
       this.bill()
@@ -170,6 +180,7 @@ export class GoalRuntime {
       // endpoints. Recovery grants no execution; explicit Resume persists the
       // next transition. Reopening this active branch will pause it again.
       if (goalLive(this.goal) || reason === 'rewound' && this.goal.status === 'completed') this.goal = { ...this.goal, status: 'paused', reason, evidence: null }
+      if (this.ledger.independent?.unresolved.length && !['completed', 'cancelled'].includes(this.goal.status)) this.goal = { ...this.goal, status: 'paused', reason: 'accounting' }
     }
     this.evaluate = false
     this.publish(true)
@@ -292,18 +303,33 @@ export class GoalRuntime {
   quota(): GoalReason | null {
     if (!this.goal || !this.ledger) return null
     if (!this.syncAccounting()) return 'storage'
+    if (this.ledger.independent?.unresolved.length) return 'accounting'
     if (this.goal.limits.tokenBudget !== null && this.ledger.tokens >= this.goal.limits.tokenBudget) return 'tokens'
     if (this.ledger.autoRuns >= this.goal.limits.maxAutoRuns) return 'runs'
     return null
   }
   syncAccounting(): boolean {
     if (!this.goal || !this.ledger || this.failed) return false
-    try { this.ledger = this.store.read(this.goal.id, true); this.publish(); return true }
+    try {
+      this.ledger = this.store.read(this.goal.id, true)
+      if (this.ledger.independent?.unresolved.length && this.live) {
+        this.invalidate()
+        this.goal = { ...this.goal, status: 'paused', reason: 'accounting' }
+        this.host.stop('accounting')
+      }
+      this.publish(); return true
+    }
     catch { this.fault(); return false }
   }
   checkpointAccounting(): void {
     if (!this.goal || this.failed) return
     try { this.host.storage.sync(); this.bill() } catch { this.fault() }
+  }
+  /** An independently owned run retains this attribution through Stop/Rewind. */
+  billingOwner(ownedOnly = false): GoalBillingOwner | null {
+    if (!this.goal || !this.ledger || this.failed || ownedOnly && !this.ledger.run) return null
+    return { goalId: this.goal.id, ownerSessionId: this.store.owner(this.goal.id), parentSessionId: this.host.session.sessionId,
+      parentRunId: this.ledger.run?.id ?? 'recovery', tokenBudget: this.goal.limits.tokenBudget }
   }
   resume(): void {
     if (!this.goal || this.failed || this.quota()) return
@@ -551,8 +577,8 @@ export class GoalRuntime {
       this.bill()
       const owned = this.live || !this.manualWakes || (!this.failed && !!this.ledger?.run)
       const cancelled = !!options?.signal?.aborted
-      if (cancelled || owned && (this.failed || this.ledger?.run && this.goal?.limits.tokenBudget !== null && this.ledger.tokens >= (this.goal?.limits.tokenBudget ?? Infinity))) {
-        if (!cancelled && !this.failed) this.pause('tokens')
+      if (cancelled || owned && (this.failed || this.ledger?.independent?.unresolved.length || this.ledger?.run && this.goal?.limits.tokenBudget !== null && this.ledger.tokens >= (this.goal?.limits.tokenBudget ?? Infinity))) {
+        if (!cancelled && !this.failed) this.pause(this.ledger?.independent?.unresolved.length ? 'accounting' : 'tokens')
         const message = { role: 'assistant' as const, content: [], api: model.api, provider: model.provider, model: model.id,
           stopReason: 'aborted' as const, errorMessage: cancelled ? 'GOAL_CANCELLED' : 'GOAL_TOKEN_BUDGET', timestamp: Date.now(),
           usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } }

@@ -353,7 +353,7 @@ export class JevWorkflow {
     const trace = this.traces.start(stage, request)
     this.update({})
     try {
-      const result = await this.options.service.evaluate(request, { owner: this.options.owner, signal, workflow: true,
+      const result = await this.options.service.evaluate(request, { owner: this.options.owner, signal, workflow: true, callId: trace.id,
         canStart: () => this.enabled && this.options.canStart() })
       this.check(signal)
       const answer = result.answers[stage === 'router' ? 'route' : 'review']

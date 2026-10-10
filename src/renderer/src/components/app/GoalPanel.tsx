@@ -167,18 +167,22 @@ export function GoalPanel({ sessionPath, goal, seq, busy, restricted, visible, u
             {inputExpanded ? goal.pendingInput.files.map((path, index) => <p key={`${index}:${path}`} className="truncate font-mono" title={path}>{path}</p>) : null}
           </> : null}
         </div> : null}
-        {!terminal ? <div className="border-t border-border/60 pt-2">
+        {!terminal || goal.billing ? <div className="border-t border-border/60 pt-2">
           <Button size="sm" variant="ghost" aria-expanded={limitsExpanded} aria-controls={`${baseId}-limits`} data-goal-action="showLimits" onClick={() => setLimitsExpanded(value => !value)}>
             {t('goal.limits')}<ChevronDown className={cn('size-3 text-muted-foreground transition-transform', limitsExpanded && 'rotate-180')} aria-hidden="true" />
           </Button>
           <AgentDisclosure open={limitsExpanded} id={`${baseId}-limits`}>
             <div className="flex flex-col gap-3 pt-3">
-              <div data-form-items className="grid grid-cols-1 gap-5 md:grid-cols-2">
+              {goal.billing ? <div className="flex flex-col gap-1.5 text-xs text-muted-foreground" data-goal-billing>
+                <p>{t('goal.billingBreakdown', { parent: goal.billing.parentTokens, subagents: goal.billing.subagentTokens, jev: goal.billing.jevTokens })}</p>
+                {goal.billing.unresolved ? <p role="status">{t('goal.billingUnresolved', { count: goal.billing.unresolved })}</p> : null}
+              </div> : null}
+              {!terminal ? <div data-form-items className="grid grid-cols-1 gap-5 md:grid-cols-2">
                 <Input type="number" min={1} max={1000} step={1} classNames={FORM_INPUT_LABEL} label={t('goal.maxRuns')} value={runs} onChange={value => editLimits(value, tokens)} disabled={pending || busy} data-goal-input="runs" />
                 <Input type="number" min={1} max={1_000_000_000} step={1} classNames={FORM_INPUT_LABEL} label={t('goal.tokenBudget')} placeholder={t('goal.noTokenLimit')} value={tokens} onChange={value => editLimits(runs, value)} disabled={pending || busy} data-goal-input="tokens" />
-              </div>
+              </div> : null}
               <p className="text-xs text-muted-foreground">{t('goal.budgetHint')}</p>
-              <Button className="self-start" size="sm" variant="secondary" disabled={pending || busy || !valid || goal.reason === 'storage'} data-goal-action="limits" onClick={() => void act('limits')}>{t('goal.saveLimits')}</Button>
+              {!terminal ? <Button className="self-start" size="sm" variant="secondary" disabled={pending || busy || !valid || goal.reason === 'storage'} data-goal-action="limits" onClick={() => void act('limits')}>{t('goal.saveLimits')}</Button> : null}
             </div>
           </AgentDisclosure>
         </div> : null}
@@ -188,7 +192,7 @@ export function GoalPanel({ sessionPath, goal, seq, busy, restricted, visible, u
     </FadeScroll>
     <div className="flex items-center justify-between gap-2 border-t border-border/60 px-4 py-3">
       <div>{!terminal && !editing ? active ? <Button size="sm" variant="secondary" disabled={pending} onClick={() => void act('pause')} data-goal-action="pause">{t('goal.pause')}</Button> :
-        <Button size="sm" disabled={pending || busy || restricted || goal?.reason === 'storage' || goal?.pendingInput?.available === false} onClick={() => void act('resume')} data-goal-action="resume">{t('goal.resume')}</Button> : null}</div>
+        <Button size="sm" disabled={pending || busy || restricted || !goal?.accountingAvailable || goal?.pendingInput?.available === false} onClick={() => void act('resume')} data-goal-action="resume">{t('goal.resume')}</Button> : null}</div>
       <Button size="sm" variant="secondary" disabled={pending} data-goal-action="end" onClick={onEnd}>{t('goal.end')}</Button>
     </div>
   </div>

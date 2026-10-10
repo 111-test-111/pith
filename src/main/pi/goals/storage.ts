@@ -13,6 +13,8 @@ export interface GoalLedger {
   run: { id: string; before: string[]; state: 'claimed' | 'started' } | null
   fingerprint: string | null
   noProgress: number
+  /** Independent charges share the root pool, outside branch/run scopes. */
+  independent?: { sources: string[]; billed: string[]; unresolved: string[]; subagentTokens: number; jevTokens: number; requests?: string[] }
 }
 export function emptyLedger(goalId: string): GoalLedger {
   return { version: 1, goalId, autoRuns: 0, tokens: 0, billed: [], run: null, fingerprint: null, noProgress: 0 }
@@ -23,6 +25,10 @@ const validRun = (run: GoalLedger['run']) => run === null || !!run && typeof run
   run.before.every(i => typeof i === 'string') && ['claimed', 'started'].includes(run.state)
 const validScope = (s: Scope) => !!s && validRun(s.run) && Number.isSafeInteger(s.noProgress) && s.noProgress >= 0 &&
   (s.fingerprint === null || typeof s.fingerprint === 'string')
+const validIndependent = (v: GoalLedger['independent'], total: number) => v === undefined || !!v &&
+  [v.sources, v.billed, v.unresolved].every(ids => Array.isArray(ids) && ids.every(id => typeof id === 'string' && /^[a-f0-9]{64}$/.test(id)) && new Set(ids).size === ids.length) &&
+  (v.requests === undefined || Array.isArray(v.requests) && v.requests.every(id => typeof id === 'string' && /^[a-f0-9]{64}$/.test(id)) && new Set(v.requests).size === v.requests.length) &&
+  [v.subagentTokens, v.jevTokens].every(tokens => Number.isSafeInteger(tokens) && tokens >= 0) && v.subagentTokens + v.jevTokens <= total
 const key = (sessionId: string, id: string) => createHash('sha256').update(`${sessionId}\0${id}`).digest('hex')
 function atomic(path: string, value: unknown, root: string): void {
   const temporary = `${path}.${randomUUID()}.tmp`
@@ -63,7 +69,7 @@ export class GoalStorage {
       const data: StoredLedger = JSON.parse(readFileSync(this.path(id, owner), 'utf8'))
       if (data.version !== 1 || data.goalId !== id || !Number.isSafeInteger(data.autoRuns) || data.autoRuns < 0 ||
         !Number.isSafeInteger(data.tokens) || data.tokens < 0 || !Array.isArray(data.billed) || data.billed.some(i => typeof i !== 'string') ||
-        !validScope(data) || (data.scopes !== undefined && (!data.scopes || typeof data.scopes !== 'object' || Array.isArray(data.scopes) ||
+        !validScope(data) || !validIndependent(data.independent, data.tokens) || (data.scopes !== undefined && (!data.scopes || typeof data.scopes !== 'object' || Array.isArray(data.scopes) ||
           Object.entries(data.scopes).some(([sessionId, scope]) => !sessionId || sessionId.length > 80 || !validScope(scope))))) throw new Error('goal-ledger-invalid')
       return data
     } catch (error) {

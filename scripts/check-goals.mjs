@@ -472,6 +472,9 @@ try {
   await until(() => goal(reviewed)?.status === 'completed' && idle(reviewed), 'Goal waits for Jev review')
   assert(reviews > 0)
   assert.equal(reviewed.managed.jevWorkflow.snapshot.phase, 'completed')
+  assert.equal(goal(reviewed).billing.jevTokens, reviewed.managed.jevWorkflow.snapshot.jevInput + reviewed.managed.jevWorkflow.snapshot.jevOutput, 'workflow router/review service usage joins the owned Goal pool independently of primary SDK tokens')
+  assert.equal(goal(reviewed).billing.parentTokens, reviewed.requests.length * 2)
+  assert.equal(goal(reviewed).tokens, goal(reviewed).billing.parentTokens + goal(reviewed).billing.jevTokens)
   assert(reviewGoals.every(g => g?.id === goal(reviewed).id && g.criteriaRevision === 1 && g.criteria.length === 1), 'Jev reviews the explicit Goal criteria')
   assert.equal(reviewed.managed.jevWorkflow.snapshot.goalReviewKey, reviewGoals.at(-1).key)
   const reviewedKey = reviewGoals.at(-1).key, reviewedTokens = goal(reviewed).tokens

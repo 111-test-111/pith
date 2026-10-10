@@ -43,6 +43,8 @@ export { startLibraryService } from './src/main/library/service';
 export { PlanStorage } from './src/main/pi/plan-storage';
 export { GoalStorage } from './src/main/pi/goals/storage';
 export { GoalInputStorage } from './src/main/pi/goals/input';
+export { GoalAccounting } from './src/main/pi/goals/accounting';
+export { JevService } from './src/main/pi/jev/service';
 export * from './src/main/pi/plan-protocol';
 export { PiStore } from './src/renderer/src/state/pi-store';
 export { SessionManager, ModelRuntime, SettingsManager, setPlanFixtureStream, registerPlanFixtureExtensionFactories } from '@earendil-works/pi-coding-agent';`,

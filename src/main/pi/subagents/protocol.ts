@@ -1,5 +1,6 @@
 import type { SessionEntry } from '@earendil-works/pi-coding-agent'
 import type { SubagentMessageDetails, SubagentRunDTO, SubagentRunStatus, SubagentWrittenFileDTO } from '../../../shared/types'
+import { validGoalBillingOwner, type GoalBillingOwner } from '../../../shared/goal.ts'
 
 /** Persistence + wire protocol for subagent runs. Shared by runtime, manager
  * and the disk reader below; deliberately free of Electron imports so the
@@ -44,6 +45,7 @@ export interface SubagentRunStartData {
   task: string
   runInBackground: boolean
   createdAt: string
+  goalOwner?: GoalBillingOwner
   /** Frozen dispatch-time resource snapshot; also the restore contract when
    * the child session is reopened later. */
   resource: {
@@ -101,7 +103,7 @@ function parseStart(data: unknown): SubagentRunStartData | null {
   const profile = asString(record.profile)
   const task = asString(record.task)
   const resource = asRecord(record.resource)
-  if (!runId || !parentSessionId || !parentSessionPath || !profile || !task || !resource) return null
+  if (!runId || !parentSessionId || !parentSessionPath || !profile || !task || !resource || record.goalOwner !== undefined && !validGoalBillingOwner(record.goalOwner)) return null
   const tools = asStringArray(resource.tools)
   if (!tools) return null
   return {
@@ -116,6 +118,7 @@ function parseStart(data: unknown): SubagentRunStartData | null {
     task,
     runInBackground: asBoolean(record.runInBackground) === true,
     createdAt: asString(record.createdAt) ?? new Date(0).toISOString(),
+    ...(validGoalBillingOwner(record.goalOwner) ? { goalOwner: { ...record.goalOwner } } : {}),
     resource: {
       tools,
       ...(resource.planRestricted === true ? { planRestricted: true as const } : {}),

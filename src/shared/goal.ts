@@ -2,9 +2,29 @@ import type { ImageContent } from './types'
 
 /** Goal is a session fact, independent of permission/Plan mode and Todo. */
 export type GoalStatus = 'active' | 'verifying' | 'paused' | 'blocked' | 'completed' | 'cancelled'
-export type GoalReason = 'user' | 'stopped' | 'plan' | 'rewound' | 'interrupted' | 'runs' | 'tokens' | 'no_progress' | 'review' | 'error' | 'storage' | 'criteria' | 'evidence' | 'input'
+export type GoalReason = 'user' | 'stopped' | 'plan' | 'rewound' | 'interrupted' | 'runs' | 'tokens' | 'no_progress' | 'review' | 'error' | 'storage' | 'criteria' | 'evidence' | 'input' | 'accounting'
 export interface GoalLimits { maxAutoRuns: number; tokenBudget: number | null }
 export interface GoalInput { images?: ImageContent[]; files?: string[] }
+/** Frozen attribution, including the original pool owner across Fork. */
+export interface GoalBillingOwner {
+  goalId: string
+  ownerSessionId: string
+  parentSessionId: string
+  parentRunId: string
+  tokenBudget: number | null
+}
+export function validGoalBillingOwner(value: unknown): value is GoalBillingOwner {
+  if (!value || typeof value !== 'object') return false
+  const owner = value as GoalBillingOwner
+  return [owner.goalId, owner.ownerSessionId, owner.parentSessionId, owner.parentRunId].every(id => typeof id === 'string' && !!id && id.length <= 160) &&
+    (owner.tokenBudget === null || Number.isSafeInteger(owner.tokenBudget) && owner.tokenBudget > 0 && owner.tokenBudget <= 1_000_000_000)
+}
+export interface GoalBillingDTO {
+  parentTokens: number
+  subagentTokens: number
+  jevTokens: number
+  unresolved: number
+}
 export interface GoalPendingInputDTO { cwd: string; files: string[]; imageCount: number; available: boolean }
 export const DEFAULT_GOAL_LIMITS: GoalLimits = { maxAutoRuns: 20, tokenBudget: null }
 export const GOAL_MAX_CRITERIA = 32
@@ -59,6 +79,7 @@ export interface GoalSnapshotDTO extends GoalRecord {
   /** Automatic execution is waiting for outstanding work or user input. */
   waiting: boolean
   pendingInput?: GoalPendingInputDTO
+  billing?: GoalBillingDTO
 }
 export type GoalActionRequest = {
   sessionPath: string
@@ -71,7 +92,7 @@ export type GoalActionRequest = {
   { action: 'criteria'; criteriaRevision: number; criteria: GoalCriterionInput[] } |
   { action: 'definition'; criteriaRevision: number; objective: string; criteria: GoalCriterionInput[] }
 )
-export type GoalErrorCode = 'invalid' | 'stale' | 'busy' | 'plan' | 'quota' | 'storage' | 'unavailable' | 'attachments'
+export type GoalErrorCode = 'invalid' | 'stale' | 'busy' | 'plan' | 'quota' | 'storage' | 'unavailable' | 'attachments' | 'accounting'
 export type GoalActionResult = { ok: true; goal: GoalSnapshotDTO | null; seq: number } | { ok: false; code: GoalErrorCode }
 /** A completed goal remains replaceable if later observations invalidate its
  * bound proofs. Explicit Pause, criteria edits and Rewind keep their ownership. */
