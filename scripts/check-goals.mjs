@@ -32,6 +32,9 @@ try {
   assert.equal(goal(f).autoRuns, 1)
   assert.equal(goal(f).tokens, 8)
   const branch = f.manager.getBranch()
+  const completeResult=branch.find(e=>e.type==='message'&&e.message.role==='toolResult'&&e.message.toolName==='update_goal'&&!e.message.isError)
+  assert(completeResult.message.content.some(c=>c.type==='text'&&c.text.includes('Completed in the Goal panel means finalization is already finished.')),'committed tool receipts explain automatic finalization instead of promising a later review')
+  assert(JSON.stringify(f.requests.at(-1).messages).includes('there is no later system-review job'),'the model receives truthful final-reply guidance')
   assert.equal(branch.filter(e => e.type === 'message' && e.message.role === 'user').length, 1, 'only the explicit goal start adds a user turn')
   assert.equal(branch.filter(e => e.type === 'custom_message' && e.customType === 'pith_goal_step_v1').length, 1, 'automatic runs are hidden continuations')
   assert.equal(f.store.getState().goal.status, 'completed')
@@ -341,8 +344,8 @@ try {
   await writeFile(attachmentPath, 'Attached evidence\n')
   const attachmentGate = deferred()
   let attachmentPreparing = false
-  const attachmentBlocks = attached.app.readFileBlocks.bind(attached.app)
-  attached.app.readFileBlocks = async (...args) => { attachmentPreparing = true; await attachmentGate.promise; return attachmentBlocks(...args) }
+  const attachmentInput = attached.managed.goals.inputs.load.bind(attached.managed.goals.inputs)
+  attached.managed.goals.inputs.load = async (...args) => { attachmentPreparing = true; await attachmentGate.promise; return attachmentInput(...args) }
   attached.setRespond(n => n === 1 ? [evidenceRead(attached)] : n === 2 ? [tool('attachment-complete', 'update_goal', completion(attached, 'Verified the attached request.'))] : [text('Verified.')])
   const image = { type: 'image', mimeType: 'image/png', data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==' }
   assert.equal((await call(attached, 'create', { objective: 'Verify my attachments', acceptance: 'Verify my attachments', limits: { maxAutoRuns: 2, tokenBudget: null }, files: [attachmentPath], images: [image] })).ok, true)
@@ -357,6 +360,34 @@ try {
   assert(attachedUser.content.find(part => part.type === 'text').text.startsWith('Verify my attachments\n\n'))
   assert(attachedUser.content.find(part => part.type === 'text').text.includes('Attached evidence'))
   assert.equal((await attached.app.rewindList(attached.managed.path)).value.checkpoints.length, 1)
+
+  // A kill before the consumption tombstone plus Rewind must not make an
+  // already accepted attachment look pending again on the historical branch.
+  const savedInput=attached.managed.goals.inputs.directory(goal(attached).id)
+  await unlink(join(savedInput,'consumed.json'))
+  const attachmentCheckpoint=(await attached.app.rewindList(attached.managed.path)).value.checkpoints[0]
+  const attachmentPreview=await attached.app.rewindPreview(attached.managed.path,attachmentCheckpoint.id)
+  assert.equal((await attached.app.rewindRestore({sessionPath:attached.managed.path,token:attachmentPreview.value.token,mode:'conversation',operationId:randomUUID()})).error,undefined)
+  assert.equal(goal(attached).pendingInput.available,false,'off-branch accepted input remains consumed even without its old tombstone')
+  const beforeReplacement=attached.requests.length,attachmentUsage=goal(attached).tokens
+  assert.equal((await call(attached,'resume')).code,'attachments')
+  assert.equal(attached.requests.length,beforeReplacement)
+  await unlink(join(savedInput,'receipt.json'))
+  attached.setRespond(()=>[text('Replacement input retained.')])
+  const replacement='Use this replacement input; the earlier attachment stays consumed.'
+  attached.app.prompt({text:replacement,images:[],files:[]})
+  await until(()=>attached.requests.length===beforeReplacement+1&&idle(attached),'manual replacement after unavailable saved input')
+  assert.equal(goal(attached).pendingInput,undefined,'a new explicit prompt supersedes missing saved input')
+  assert.equal(goal(attached).accountingAvailable,true,'a missing input receipt cannot corrupt lifetime accounting')
+  assert.equal(goal(attached).tokens,attachmentUsage,'an ordinary prompt in a paused goal does not resume owned billing')
+  assert.equal((await call(attached,'definition',{objective:'Verify the explicitly replaced input',criteriaRevision:goal(attached).criteriaRevision,
+    criteria:goal(attached).criteria.map(c=>({id:c.id,text:'The new input is verified'}))})).ok,true)
+  await call(attached,'limits',{limits:{maxAutoRuns:1,tokenBudget:null}})
+  assert.equal((await call(attached,'resume')).ok,true)
+  await until(()=>goal(attached).reason==='runs'&&idle(attached),'resume after manual replacement')
+  assert.equal(attached.requests.length,beforeReplacement+2)
+  assert.equal(attached.manager.getBranch().filter(e=>e.type==='message'&&e.message.role==='user').length,1,'Resume reuses the replacement user entry instead of the old attachment prompt')
+  assert(JSON.stringify(attached.requests.at(-1).messages).includes(replacement))
 
   const transformed = await fixture({ extensionFactories: [pi => pi.on('input', event => ({ action: 'transform', text: `${event.text}\nExtension context.`, images: event.images }))] })
   transformed.setRespond(n => n === 1 ? [text('Work remains.')] : n === 2 ? [evidenceRead(transformed)] : n === 3 ? [tool('transformed-complete', 'update_goal', completion(transformed, 'Verified the transformed input.'))] : [text('Verified.')])

@@ -9,6 +9,7 @@ import {
 } from 'react'
 import { isNothingToCompactError } from '../../../../shared/compaction-errors'
 import { goalCanBeReplaced } from '../../../../shared/goal'
+import { optimisticEchoText } from '@/lib/attachments'
 import {
   ArrowsInLineHorizontal,
   ArrowsOutLineHorizontal,
@@ -149,19 +150,6 @@ interface PendingDelete {
   label: string
 }
 
-/**
- * Optimistic echo text for an outgoing user message: file references become the
- * same `<file path>` blocks the main process inlines, so the pending row renders
- * its file chips (and the message matches its persisted twin's prose) before the
- * real message lands.
- */
-function optimisticEchoText(text: string, files: readonly string[]): string {
-  if (!files.length) return text
-  const blocks = files
-    .map((file) => `<file path="${file.replace(/^\//, '')}">(pending)</file>`)
-    .join('\n\n')
-  return text ? `${text}\n\n${blocks}` : blocks
-}
 
 /**
  * Whether a resend's snapshot already carries the re-prompted user message.

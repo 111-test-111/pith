@@ -8,19 +8,19 @@ Stable criterion IDs/revisions, panel editing, per-row committed provenance and 
 
 Deterministic real-SDK fixtures include a deliberately failing check and a plausible false completion claim. They verify application refusal, not real-model task quality. Real-provider evaluation with these adversarial cases remains part of section 4; external Jev/provider calls are opt-in and are not asserted as covered by offline regressions.
 
-Next prioritize the process-kill recovery matrix below, then shared owned-work billing. Keep one goal per ordinary conversation while these guarantees mature.
+The process-kill recovery matrix, immutable pending input and shared Fork spending now ship. Next prioritize attribution for independent owned-work billing, then bounded diagnostics and real-provider evaluation. Keep one goal per ordinary conversation while these guarantees mature.
 
-## 2. Process-kill recovery matrix
+## 2. Process-kill recovery, pending input and Fork — implemented
 
-Extend the current deferred-barrier and ledger-reconciliation tests with a separate OS process. Kill it after goal-definition fsync, dispatch claim, user-entry commit, usage commit, verification receipt and final-state fsync. Repeat around Plan entry, Stop and Rewind journal commitment, including disk-write failure and stale storage locks.
+`goal-recovery` uses actual SIGKILL/restart at fsynced goal, dispatch, input, billing, verification, completion/dismissal, Plan, Stop, Rewind, disk-failure, Fork and storage-lock boundaries. It verifies exact recovery endpoints, no provider calls on restart, no accepted-prompt/claim replay, once-only billing and unavailable-accounting refusal. Completed goals remain discoverable after restart until explicit End; unfinished goals require explicit Resume.
 
-Persist a bounded pending-input receipt for attachments not yet accepted as the initial user turn. Validate image bytes before storage, retain the captured cwd and immutable attachment references, and distinguish pending input from a committed user message. Only explicit Resume may create a new dispatch; accepted prompts and old claims are never replayed. Define fork behavior explicitly so copied branch facts cannot create fresh zero-usage allowance.
+Bounded immutable file/image receipts preserve captured cwd, byte hashes, original paths and binary/long-text inspection copies. Resume validates them before charging; independent consumption tombstones and persisted branch ancestry prevent accepted attachment replay after Rewind. Forks share spent allowance through a durable original-owner alias, with independent dispatch/progress scopes and atomic last-slot admission. A fresh allowance requires explicit new-goal creation.
 
-Acceptance: restart always pauses unfinished goals, each committed charge is billed once, used allowance never decreases, and recovery preserves the exact Rewind endpoints. An interrupted preflight exposes enough input state for the user to resume without silently losing an attachment. Missing/corrupt accounting continues to fail closed.
+Live objective/criterion editing drains work under Plan's transition lock, invalidates the affected proofs and Jev review, retains Todo/usage and stays paused for explicit Resume. The panel has one acceptance view and collapsed proof/allowance details. POSIX process checks do not establish Windows behavior; live-provider quality remains unverified by these fixtures.
 
 ## 3. Budget across owned work
 
-Add run-scoped attribution for independent child SDK and Jev-service billing. Retain source IDs and report parent, child and review usage separately before presenting a combined cap. Include actual reported cache/summary/tool billing without nested duplication. Check the shared allowance before admitting new owned work; requests already in flight retain the documented possible overshoot.
+First add a main-owned immutable charge record keyed by originating session/run and provider entry or Jev request ID, then connect it to the goal's shared owner pool. Add run-scoped attribution for independent child SDK and Jev-service billing. Retain source IDs and report parent, child and review usage separately before presenting a combined cap. Include actual reported cache/summary/tool billing without nested duplication. Check the shared allowance before admitting new owned work; requests already in flight retain the documented possible overshoot.
 
 Acceptance: child/review charges survive Stop, Resume, Rewind, deletion and restart without duplicate billing. Unavailable attribution is explicit and cannot be converted into a zero charge. Adding or increasing a limit never changes the consumed amount.
 

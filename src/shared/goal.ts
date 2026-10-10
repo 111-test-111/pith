@@ -2,9 +2,10 @@ import type { ImageContent } from './types'
 
 /** Goal is a session fact, independent of permission/Plan mode and Todo. */
 export type GoalStatus = 'active' | 'verifying' | 'paused' | 'blocked' | 'completed' | 'cancelled'
-export type GoalReason = 'user' | 'stopped' | 'plan' | 'rewound' | 'interrupted' | 'runs' | 'tokens' | 'no_progress' | 'review' | 'error' | 'storage' | 'criteria' | 'evidence'
+export type GoalReason = 'user' | 'stopped' | 'plan' | 'rewound' | 'interrupted' | 'runs' | 'tokens' | 'no_progress' | 'review' | 'error' | 'storage' | 'criteria' | 'evidence' | 'input'
 export interface GoalLimits { maxAutoRuns: number; tokenBudget: number | null }
 export interface GoalInput { images?: ImageContent[]; files?: string[] }
+export interface GoalPendingInputDTO { cwd: string; files: string[]; imageCount: number; available: boolean }
 export const DEFAULT_GOAL_LIMITS: GoalLimits = { maxAutoRuns: 20, tokenBudget: null }
 export const GOAL_MAX_CRITERIA = 32
 export interface GoalCriterionInput { id?: string; text: string }
@@ -39,6 +40,10 @@ export interface GoalRecord {
   limits: GoalLimits
   createdAt: number
   updatedAt: number
+  /** Initial input has a private immutable receipt; it must never fall back to live files. */
+  inputReceipt?: true
+  /** Explicit End hides this retained record across renderer/app restarts. */
+  dismissed?: true
 }
 export interface GoalSnapshotDTO extends GoalRecord {
   criteria: GoalCriterionDTO[]
@@ -53,6 +58,7 @@ export interface GoalSnapshotDTO extends GoalRecord {
   executing: boolean
   /** Automatic execution is waiting for outstanding work or user input. */
   waiting: boolean
+  pendingInput?: GoalPendingInputDTO
 }
 export type GoalActionRequest = {
   sessionPath: string
@@ -60,11 +66,12 @@ export type GoalActionRequest = {
   goalId: string | null
 } & (
   ({ action: 'create'; objective: string; acceptance: string; limits: GoalLimits } & GoalInput) |
-  { action: 'resume' | 'pause' | 'cancel' | 'inspect' } |
+  { action: 'resume' | 'pause' | 'cancel' | 'dismiss' | 'inspect' } |
   { action: 'limits'; limits: GoalLimits } |
-  { action: 'criteria'; criteriaRevision: number; criteria: GoalCriterionInput[] }
+  { action: 'criteria'; criteriaRevision: number; criteria: GoalCriterionInput[] } |
+  { action: 'definition'; criteriaRevision: number; objective: string; criteria: GoalCriterionInput[] }
 )
-export type GoalErrorCode = 'invalid' | 'stale' | 'busy' | 'plan' | 'quota' | 'storage' | 'unavailable'
+export type GoalErrorCode = 'invalid' | 'stale' | 'busy' | 'plan' | 'quota' | 'storage' | 'unavailable' | 'attachments'
 export type GoalActionResult = { ok: true; goal: GoalSnapshotDTO | null; seq: number } | { ok: false; code: GoalErrorCode }
 /** A completed goal remains replaceable if later observations invalidate its
  * bound proofs. Explicit Pause, criteria edits and Rewind keep their ownership. */

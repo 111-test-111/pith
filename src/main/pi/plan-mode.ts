@@ -249,6 +249,16 @@ export class PlanController {
    * check → save → apply atomic in a single event-loop turn.
    */
   async transition<T>(operation: () => Promise<T>, prepare?: () => Promise<void>): Promise<T> {
+    return this.withTransition(operation, prepare, false)
+  }
+
+  /** Goal definition edits stop/drain work under the same admission lock.
+   * Paused questions/deliveries stay owned for explicit Resume; they cannot wake here. */
+  async editGoal<T>(operation: () => Promise<T>, prepare: () => Promise<void>): Promise<T> {
+    return this.withTransition(operation, prepare, true)
+  }
+
+  private async withTransition<T>(operation: () => Promise<T>, prepare: (() => Promise<void>) | undefined, goalEdit: boolean): Promise<T> {
     if (this.lock) throw new PlanAdmissionError('A session mode change is already in progress', ['transition'])
     this.lock = true
     this.trackWakeAdmission()
@@ -256,7 +266,8 @@ export class PlanController {
       // Cancellation/draining of a session-owned wake happens under the same
       // lock, before checking the final idle facts. No Resume may enter here.
       if (prepare) await prepare()
-      const blockers = this.factBlockers(this.options.facts(), false)
+      const blockers = this.factBlockers(this.options.facts(), false).filter(blocker =>
+        !goalEdit || !['questions', 'deliveries', 'escalations'].includes(blocker))
       if (blockers.length) throw new PlanAdmissionError('The session is not ready for a mode change', blockers)
       return await operation()
     } finally {

@@ -19,26 +19,30 @@ import {BashTasksProvider} from '/src/lib/bash-tasks.tsx';import {setReduceMotio
 import {goalCanBeReplaced} from '/@fs${repo}/src/shared/goal.ts';
 import {I18nProvider} from '/src/i18n/index.tsx';import {PiStore} from '/src/state/pi-store.ts';import '/src/styles.css';
 const h=React.createElement;const locale=new URLSearchParams(location.search).get('locale')||'en';localStorage.setItem('pi-app:locale',locale);setReduceMotion(true);
-window.calls=[];window.stopCalls=0;window.seq=1;window.goal=null;window.reject=false;window.sent=[];
-window.store=new PiStore();const snapshot=(path='/fixture.jsonl')=>({sessionPath:path,sessionId:path,cwd:'/tmp',projectless:false,messages:[],model:null,thinkingLevel:'off',isStreaming:false,goal:window.goal,goalSeq:window.seq});
+const saved=JSON.parse(sessionStorage.getItem('nativeGoal')||'null');
+window.calls=[];window.stopCalls=0;window.seq=saved?.seq??1;window.goal=saved?.goal??null;window.reject=false;window.sent=[];window.PiStore=PiStore;
+window.store=new PiStore();const snapshot=(path=saved?.path??'/fixture.jsonl')=>({sessionPath:path,sessionId:path,cwd:'/tmp',projectless:false,messages:[],model:null,thinkingLevel:'off',isStreaming:false,goal:window.goal,goalSeq:window.seq});
 window.store.applySnapshot(snapshot());
 window.pi={searchFiles:async()=>[],queueAction:async()=>{},listBashTasks:async()=>[],onBashTask:()=>()=>{},goalAction:async request=>{
 window.calls.push(request);if(window.hold)await new Promise(resolve=>window.release=resolve);if(window.reject)return {ok:false,code:'stale'};
 const now=Date.now();if(request.action==='create')window.goal={version:2,criteriaRevision:1,criteria:[{id:'c1',revision:1,text:request.acceptance,proof:null,state:'pending'}],evidenceResults:[],evidenceOmitted:0,evidenceBlocked:false,id:'g'+now,objective:request.objective,acceptance:request.acceptance,limits:request.limits,status:'active',reason:null,evidence:null,createdAt:now,updatedAt:now,autoRuns:0,tokens:0,waiting:false,executing:false,accountingAvailable:true};
-if(request.action==='pause')window.goal={...window.goal,status:'paused',reason:'user'};
+if(request.action==='pause')window.goal={...window.goal,status:'paused',reason:'user',executing:false};
 if(request.action==='resume')window.goal={...window.goal,status:'active',reason:null};
 if(request.action==='cancel')window.goal={...window.goal,status:'cancelled',reason:'user'};
-if(request.action==='criteria')window.goal={...window.goal,criteriaRevision:window.goal.criteriaRevision+1,status:'paused',reason:'criteria',evidence:null,criteria:request.criteria.map((row,index)=>{const old=window.goal.criteria.find(c=>c.id===row.id);return old&&old.text===row.text?old:{id:old?.id||'c'+(index+1),revision:(old?.revision||0)+1,text:row.text,proof:null,state:'pending'}})};
+if(request.action==='dismiss')window.goal={...window.goal,dismissed:true};
+if(request.action==='criteria'||request.action==='definition')window.goal={...window.goal,objective:request.objective??window.goal.objective,executing:false,criteriaRevision:window.goal.criteriaRevision+1,status:'paused',reason:'criteria',evidence:null,criteria:request.criteria.map((row,index)=>{const old=window.goal.criteria.find(c=>c.id===row.id);return old&&old.text===row.text&&(!request.objective||request.objective===window.goal.objective)?old:{id:old?.id||'c'+(index+1),revision:(old?.revision||0)+1,text:row.text,proof:null,state:'pending'}})};
 if(request.action==='limits')window.goal={...window.goal,limits:request.limits};
+if(request.action==='create'&&!window.skipGoalCommit)window.store.dispatch({type:'message_end',sessionPath:request.sessionPath,message:{role:'user',timestamp:Date.now(),content:[{type:'text',text:request.objective}]}});
+if(request.action==='create'&&window.handleGoalInput)window.goal={...window.goal,status:'paused',reason:'user',pendingInput:{cwd:'/tmp',files:[],imageCount:0,available:true}};
 window.goal={...window.goal,seq:++window.seq};return {ok:true,goal:window.goal,seq:window.seq};}};
 window.publish=patch=>{window.goal={...window.goal,...patch,seq:++window.seq};window.store.dispatch({type:'goal_update',sessionPath:'/fixture.jsonl',goal:window.goal,goalSeq:window.seq})};
 window.switchSession=path=>window.store.applySnapshot({...snapshot(path),goal:null,goalSeq:1});
 window.addEventListener('keydown',e=>{if(e.key==='Escape'&&!e.defaultPrevented)window.stopCalls++});
 function App(){const state=React.useSyncExternalStore(window.store.subscribe,window.store.getState);const [restricted,setRestricted]=React.useState(false);window.setRestricted=setRestricted;
 return h(I18nProvider,null,h(BashTasksProvider,{sessionPath:state.sessionPath},h('div',{style:{display:'flex',flexDirection:'column',height:'100vh',padding:'30px 0',margin:'0 auto',maxWidth:'760px'}},
-h(SessionTasks,{key:state.sessionPath,sessionPath:state.sessionPath,todos:{items:[{id:'t1',content:'Existing task',status:'pending'}]},subagents:[],busy:false,goal:state.goal,goalSeq:state.goalSeq,goalAvailable:true,goalRestricted:restricted,goalUI:state.goalUI,onGoalDraft:draft=>window.store.setGoalDraft(state.sessionPath,draft),onGoalEnd:()=>window.store.endGoalMode(state.sessionPath),onGoalState:(sessionPath,goal,goalSeq)=>window.store.dispatch({type:'goal_update',sessionPath,goal,goalSeq})}),
+h(SessionTasks,{key:state.sessionPath,sessionPath:state.sessionPath,todos:{items:[{id:'t1',content:'Existing task',status:'pending'}]},subagents:[],busy:state.goal?.executing===true,goal:state.goal,goalSeq:state.goalSeq,goalAvailable:true,goalRestricted:restricted,goalUI:state.goalUI,onGoalDraft:draft=>window.store.setGoalDraft(state.sessionPath,draft),onGoalEnd:()=>window.store.endGoalMode(state.sessionPath),onGoalState:(sessionPath,goal,goalSeq)=>window.store.dispatch({type:'goal_update',sessionPath,goal,goalSeq})}),
 h('div',{'data-transcript':true,style:{flex:1,minHeight:0,background:'var(--background)'}},'Transcript stays in place'),
-h(Composer,{models:[],model:null,thinkingLevel:'off',availableThinkingLevels:['off'],busy:false,sessionPath:state.sessionPath,goalEnabled:state.goalUI.enabled,goalPending:state.goalUI.pending,goalError:state.goalUI.error,onGoalModeChange:enabled=>enabled?window.store.openGoalMode(state.sessionPath):window.store.endGoalMode(state.sessionPath),queued:{steering:[],followUp:[]},onSend:payload=>state.goalUI.enabled&&goalCanBeReplaced(state.goal)?window.store.startGoal(payload):window.sent.push(payload),onQueue:()=>{},onRecallQueue:async()=>[],onModelChange:()=>{},onThinkingLevelChange:()=>{}}))))}
+h(Composer,{models:[],model:null,thinkingLevel:'off',availableThinkingLevels:['off'],busy:state.goal?.executing===true,sessionPath:state.sessionPath,goalEnabled:state.goalUI.enabled,goalPending:state.goalUI.pending,goalError:state.goalUI.error,onGoalModeChange:enabled=>enabled?window.store.openGoalMode(state.sessionPath):window.store.endGoalMode(state.sessionPath),queued:{steering:[],followUp:[]},onSend:payload=>state.goalUI.enabled&&goalCanBeReplaced(state.goal)?window.store.startGoal(payload):window.sent.push(payload),onQueue:()=>{},onRecallQueue:async()=>[],onModelChange:()=>{},onThinkingLevelChange:()=>{}}))))}
 createRoot(document.getElementById('root')).render(h(App));
 </script></body></html>`
 let server, app
@@ -58,6 +62,15 @@ try {
   app = await _electron.launch({ executablePath: electron, args: [main], env: { ...process.env, ELECTRON_RUN_AS_NODE: '' } })
   const page = await app.firstWindow()
   page.on('pageerror', error => errors.push(String(error)))
+  const capture=async name=>{
+    if(!process.env.PI_GOAL_SCREENSHOT_DIR)return
+    await mkdir(process.env.PI_GOAL_SCREENSHOT_DIR,{recursive:true})
+    await page.waitForFunction(()=>{
+      const panel=document.querySelector('[data-task-panel="goal"]')
+      return panel?.getAttribute('aria-hidden')==='false'&&getComputedStyle(panel).opacity==='1'&&getComputedStyle(panel.parentElement).opacity==='1'
+    })
+    await page.screenshot({path:join(process.env.PI_GOAL_SCREENSHOT_DIR,name)})
+  }
   for (const [locale, label, controlLabel] of [['en', 'Goal mode', 'Goal'], ['zh-CN', '目标模式', '目标'], ['zh-TW', '目標模式', '目標']]) {
     await page.goto(url + '?locale=' + locale)
     const editor = page.locator('[data-main-composer]')
@@ -99,6 +112,9 @@ try {
     await page.waitForFunction(() => !!window.release)
     assert.equal(await trigger.count(), 0, 'pending creation cannot reveal an old or unsubmitted goal')
     assert.equal(await editor.textContent(), '', 'sending releases the draft before IPC returns')
+    assert.equal(await page.evaluate(() => window.store.getState().messages.length),1,'the Goal message appears immediately before held IPC resolves')
+    await page.evaluate(() => window.store.applySnapshot({sessionPath:'/fixture.jsonl',sessionId:'fixture',cwd:'/tmp',projectless:false,messages:[],eventSequence:1,model:null,thinkingLevel:'off',isStreaming:false,goal:null,goalSeq:1}))
+    assert.equal(await page.evaluate(() => window.store.getState().messages.length),1,'a newer preflight snapshot cannot erase the optimistic Goal message')
     assert.equal(await editor.isEnabled(), true, 'goal activation never blocks editing')
     await editor.fill('Draft for the next turn')
     await editor.press('Enter')
@@ -106,22 +122,25 @@ try {
     await page.evaluate(() => { window.hold = false; window.release() })
     await page.waitForFunction(() => window.store.getState().goal?.status === 'active' && !window.store.getState().goalUI.pending)
     assert.equal(await editor.textContent(), 'Draft for the next turn')
+    assert.equal(await page.evaluate(() => window.store.getState().messages.length),1,'committed SDK user reconciliation leaves exactly one bubble')
     assert.deepEqual(await page.evaluate(() => window.calls[0]), { sessionPath: '/fixture.jsonl', expectedSeq: 1, goalId: null, action: 'create', objective: requestText, acceptance: requestText, limits: { maxAutoRuns: 20, tokenBudget: null }, images: [], files: [] })
     assert.equal(await trigger.count(), 1, 'a sent goal appears in the task strip')
     assert.equal(await trigger.getAttribute('aria-expanded'), 'false', 'sending does not auto-open the Goal panel')
     await trigger.click()
     assert.equal(await page.locator('[data-goal-objective]').textContent(), requestText, 'opening shows the submitted user message as the current goal')
+    assert.equal(await page.locator('[data-goal-acceptance-label]').count(),1,'only one acceptance section exists')
+    assert.equal(await page.locator('[data-goal-action="showLimits"]').getAttribute('aria-expanded'),'false','allowance fields are collapsed by default')
     await page.locator('[data-goal-action="pause"]').click()
     await page.locator('[data-goal-status="paused"]').waitFor()
-    if (process.env.PI_GOAL_SCREENSHOT_DIR) {
-      await mkdir(process.env.PI_GOAL_SCREENSHOT_DIR, { recursive: true })
-      await page.screenshot({ path: join(process.env.PI_GOAL_SCREENSHOT_DIR, `goal-${locale}.png`) })
-    }
+    await capture(`goal-${locale}.png`)
     await page.evaluate(() => window.setRestricted(true))
     await page.waitForFunction(() => document.querySelector('[data-goal-action="resume"]').disabled)
     await page.evaluate(() => window.setRestricted(false))
     await page.waitForFunction(() => !document.querySelector('[data-goal-action="resume"]').disabled)
+    await page.evaluate(() => window.publish({status:'active',executing:true,waiting:true}))
+    assert.equal(await page.locator('[data-goal-action="editCriteria"]').isEnabled(),true,'criteria and objective remain editable during execution and waiting')
     await page.locator('[data-goal-action="editCriteria"]').click()
+    assert.equal(await page.locator('[data-goal-objective-input]').inputValue(),requestText)
     await page.locator('[data-goal-action="addCriterion"]').click()
     assert.equal(await page.locator('[data-goal-action="saveCriteria"]').isDisabled(), true, 'empty criteria cannot be saved')
     const criterionInputs = page.locator('[data-goal-criterion-input]')
@@ -135,11 +154,15 @@ try {
     await page.waitForFunction(() => window.store.getState().goal.criteriaRevision === 2)
     assert.equal(await page.locator('[data-goal-criterion]').count(), 2)
     assert.equal(await page.evaluate(() => window.store.getState().goal.reason), 'criteria')
-    const criteriaCall = await page.evaluate(() => window.calls.find(c => c.action === 'criteria'))
+    const criteriaCall = await page.evaluate(() => window.calls.find(c => c.action === 'definition'))
     assert.equal(criteriaCall.criteriaRevision, 1)
     assert.deepEqual(criteriaCall.criteria, [{id:'c1',text:requestText},{text:'Check crash recovery'}])
     await page.evaluate(() => window.publish({criteria:window.goal.criteria.map((c,i)=>i===0?{...c,state:'verified',proof:{revision:c.revision,summary:'Verified with a committed read',receiptId:'r1',sources:[{id:'read1',stampId:'s1',hash:'a'.repeat(64)}]},files:{'/tmp/result.txt':'b'.repeat(64)}}:c)}))
     assert.equal(await page.locator('[data-criterion-state="verified"]').count(), 1)
+    const proofToggle=page.locator('[data-goal-proof-toggle]').first()
+    assert.equal(await proofToggle.getAttribute('aria-expanded'),'false','long proof details are collapsed by default')
+    assert.equal(await page.locator('[data-criterion-proof]').evaluate(node=>node.closest('[aria-hidden]').clientHeight),0)
+    await proofToggle.click()
     assert.equal(await page.locator('[data-criterion-proof]').textContent(), 'Verified with a committed read')
     assert.equal(await page.locator('[data-criterion-file]').count(), 1)
     await page.locator('[data-goal-action="editCriteria"]').click()
@@ -147,10 +170,18 @@ try {
     await page.locator('[data-goal-action="saveCriteria"]').click()
     await page.waitForFunction(() => window.store.getState().goal.criteriaRevision === 3)
     assert.equal(await page.locator('[data-criterion-state="verified"]').count(), 1, 'unchanged proof remains visible')
+    await page.evaluate(() => window.publish({status:'active',executing:true,waiting:false}))
+    await page.locator('[data-goal-action="editCriteria"]').click()
+    await page.locator('[data-goal-objective-input]').fill('Revised current goal')
+    await page.locator('[data-goal-action="saveCriteria"]').click()
+    await page.waitForFunction(() => window.store.getState().goal.criteriaRevision===4)
+    assert.equal(await page.locator('[data-goal-objective]').textContent(),'Revised current goal')
+    assert.equal(await page.locator('[data-criterion-state="verified"]').count(),0,'a changed objective clears every proof')
     await page.evaluate(() => window.setRestricted(true))
-    await page.waitForFunction(() => document.querySelector('[data-goal-action="editCriteria"]').disabled)
+    assert.equal(await page.locator('[data-goal-action="editCriteria"]').isEnabled(), true, 'definition edits do not change Plan permissions')
     await page.evaluate(() => window.setRestricted(false))
-    if (process.env.PI_GOAL_SCREENSHOT_DIR) await page.screenshot({ path: join(process.env.PI_GOAL_SCREENSHOT_DIR, `criteria-${locale}.png`) })
+    await capture(`criteria-${locale}.png`)
+    await page.locator('[data-goal-action="showLimits"]').click()
     await page.locator('[data-goal-input="runs"]').fill('4')
     await page.locator('[data-goal-input="tokens"]').fill('10000')
     await page.locator('[data-task-trigger="todo"]').click()
@@ -200,12 +231,15 @@ try {
     assert.equal(await trigger.count(), 0)
     assert.equal(await editor.textContent(), 'Retry this goal', 'a refused start restores its draft')
     await page.evaluate(() => { window.hold = true; window.release = null })
+    const persistedCount=await page.evaluate(()=>window.store.getState().messages.length)
     await editor.press('Enter')
     await page.waitForFunction(() => !!window.release)
+    assert.equal(await page.evaluate(()=>window.store.getState().messages.length),persistedCount+1)
     await editor.fill('Newer draft')
     await page.evaluate(() => { window.hold = false; window.release() })
     await page.waitForFunction(() => !window.store.getState().goalUI.pending)
     assert.equal(await editor.textContent(), 'Newer draft', 'a late failure never overwrites newer input')
+    assert.equal(await page.evaluate(()=>window.store.getState().messages.length),persistedCount,'refusal rolls back only its uncommitted echo')
     await page.evaluate(() => window.reject = false)
     await editor.fill('Second goal')
     await editor.press('Enter')
@@ -224,8 +258,11 @@ try {
     await page.evaluate(() => window.store.activateCachedSession('/fixture.jsonl'))
     await page.waitForFunction(() => !window.store.getState().goalUI.pending)
     assert.equal(await trigger.count(), 0, 'late metadata never re-enables ended mode')
-    await page.evaluate(() => window.store.applySnapshot({ sessionPath: '/restored.jsonl', sessionId: 'restored', cwd: '/tmp', messages: [], model: null, thinkingLevel: 'off', isStreaming: false,
-      goal: { ...window.goal, status: 'paused', reason: 'interrupted' }, goalSeq: ++window.seq }))
+    await page.evaluate(() => {
+      window.goal={...window.goal,status:'paused',reason:'interrupted'}
+      window.store.applySnapshot({ sessionPath: '/restored.jsonl', sessionId: 'restored', cwd: '/tmp', messages: [], model: null, thinkingLevel: 'off', isStreaming: false,
+        goal: window.goal, goalSeq: ++window.seq })
+    })
     await trigger.waitFor()
     assert.equal(await trigger.getAttribute('aria-expanded'), 'false', 'a restored goal stays discoverable without auto-opening')
     assert.equal(await indicator.textContent(), controlLabel)
@@ -233,15 +270,44 @@ try {
     assert.equal(await page.locator('[data-goal-objective]').textContent(), 'Second goal')
     await page.evaluate(() => {
       const state = window.store.getState()
-      window.store.dispatch({ type: 'goal_update', sessionPath: state.sessionPath, goal: { ...state.goal, status: 'completed', reason: null }, goalSeq: ++window.seq })
+      window.goal={ ...state.goal, status: 'completed', reason: null, criteria:state.goal.criteria.map(c=>({...c,state:'verified',proof:{revision:c.revision,summary:'Verified with current committed evidence. '.repeat(20),receiptId:'finished-receipt',sources:[{id:'finished-result',stampId:'finished-stamp',hash:'a'.repeat(64)}]},files:{'/tmp/current-result.txt':'b'.repeat(64)}})),evidence:'Repeated summary should not clutter the completed panel.'.repeat(30)}
+      window.store.dispatch({ type: 'goal_update', sessionPath: state.sessionPath, goal:window.goal, goalSeq: ++window.seq })
     })
     await page.locator('[data-goal-status="completed"]').waitFor()
     assert.equal(await trigger.count(), 1, 'a completed current goal remains inspectable until End')
+    assert.equal(await page.locator('[data-goal-input="acceptance"]').count(),0,'completed goals never gain a second acceptance input')
+    assert.equal(await page.locator('[data-goal-evidence]').count(),0,'completion summaries do not repeat the bound proofs')
+    await page.evaluate(()=>sessionStorage.setItem('nativeGoal',JSON.stringify({goal:window.goal,seq:window.seq,path:'/restored.jsonl'})))
+    await page.reload()
+    await trigger.waitFor()
+    assert.equal(await indicator.count(),1,'a completed goal survives a fresh renderer restart')
+    assert.equal(await trigger.getAttribute('aria-expanded'),'false','restart does not auto-open the retained panel')
+    assert.equal(await page.evaluate(()=>window.calls.length),0,'restoring a completed Goal grants no execution')
+    assert.equal(await page.evaluate(()=>{
+      const delayed=new window.PiStore(),state=window.store.getState()
+      delayed.applySnapshot({sessionPath:state.sessionPath,sessionId:'restored',cwd:'/tmp',messages:[],model:null,thinkingLevel:'off',isStreaming:false,goal:null,goalSeq:0})
+      delayed.dispatch({type:'goal_update',sessionPath:state.sessionPath,goal:state.goal,goalSeq:state.goalSeq})
+      return delayed.getState().goalUI.submitted
+    }),true,'late restored metadata cannot leave an existing goal hidden')
+    await trigger.click()
+    assert.equal(await page.locator('[data-goal-objective]').textContent(),'Second goal')
+    assert.equal(await page.locator('[data-goal-acceptance-label]').count(),1)
+    assert.equal(await page.locator('[data-goal-proof-toggle]').first().getAttribute('aria-expanded'),'false')
+    await capture(`completed-${locale}.png`)
     const beforeCompletedEnd = await page.evaluate(() => window.calls.length)
     await page.locator('[data-goal-action="end"]').click()
     await page.waitForFunction(() => !window.store.getState().goalUI.enabled)
     assert.equal(await trigger.count(), 0)
-    assert.equal(await page.evaluate(() => window.calls.length), beforeCompletedEnd, 'ending a completed mode changes presentation only')
+    assert.equal(await page.evaluate(() => window.calls.length), beforeCompletedEnd+1, 'End persists presentation independently of completion')
+    assert.equal(await page.evaluate(()=>window.calls.at(-1).action),'dismiss')
+    assert.equal(await page.evaluate(()=>window.store.getState().goal.status),'completed','End preserves the completed outcome')
+    await page.evaluate(()=>sessionStorage.setItem('nativeGoal',JSON.stringify({goal:window.goal,seq:window.seq,path:'/restored.jsonl'})))
+    await page.reload()
+    await editor.waitFor()
+    assert.equal(await trigger.count(),0,'an explicitly ended goal stays hidden after restart')
+    assert.equal(await indicator.count(),0)
+    assert.equal(await page.evaluate(()=>window.store.getState().goal.dismissed),true,'the goal record survives End')
+    await page.evaluate(()=>sessionStorage.removeItem('nativeGoal'))
   }
   await page.goto(url + '?locale=en')
   await page.locator('[data-main-composer]').waitFor()
@@ -258,8 +324,65 @@ try {
   await page.locator('[data-main-composer]').press('Enter')
   await page.waitForFunction(() => window.store.getState().goal.objective === 'A new submitted goal after stale completion')
   assert.equal(await page.evaluate(() => window.calls.at(-1).action), 'create')
+  const sendUncommitted = async (handled = false) => {
+    await page.goto(url + '?locale=en')
+    const editor = page.locator('[data-main-composer]')
+    await editor.waitFor()
+    await page.evaluate(handled => {
+      window.skipGoalCommit = true
+      window.handleGoalInput = handled
+      window.store.openGoalMode('/fixture.jsonl')
+    }, handled)
+    await editor.fill('Goal input awaiting SDK acceptance')
+    await editor.press('Enter')
+    await page.waitForFunction(() => window.store.getState().goal && !window.store.getState().goalUI.pending)
+    return editor
+  }
+  const handledEditor = await sendUncommitted(true)
+  assert.deepEqual(await page.evaluate(() => {
+    const state = window.store.getState()
+    return { messages: state.messages.length, awaiting: state.awaitingRun, status: state.goal.status, submitted: state.goalUI.submitted }
+  }), { messages: 0, awaiting: false, status: 'paused', submitted: true }, 'SDK-handled input releases the provisional bubble and spinner while preserving the pending Goal')
+  await handledEditor.fill('The editor remains usable')
+  assert.equal(await handledEditor.textContent(), 'The editor remains usable')
+
+  await sendUncommitted()
+  assert.equal(await page.evaluate(() => window.store.getState().messages.length), 1)
+  await page.evaluate(() => {
+    window.store.appendOptimisticUser('Another ordinary user message', [])
+    window.switchSession('/other.jsonl')
+    window.publish({ status: 'paused', reason: 'user', executing: false, pendingInput: { cwd: '/tmp', files: [], imageCount: 0, available: true } })
+  })
+  assert.deepEqual(await page.evaluate(() => {
+    const state = window.store.getState()
+    return { messages: state.messages.length, awaiting: state.awaitingRun, goal: state.goal }
+  }), { messages: 0, awaiting: false, goal: null }, 'a late Goal pause cannot change the foreground chat')
+  await page.evaluate(() => window.store.activateCachedSession('/fixture.jsonl'))
+  assert.deepEqual(await page.evaluate(() => {
+    const state = window.store.getState()
+    return { messages: state.messages.map(m => m.content), awaiting: state.awaitingRun, status: state.goal.status }
+  }), { messages: ['Another ordinary user message'], awaiting: true, status: 'paused' }, 'cleanup pins the Goal echo identity and leaves other provisional messages intact')
+
+  await sendUncommitted()
+  await page.evaluate(() => window.publish({ status: 'cancelled', reason: 'user', executing: false }))
+  assert.deepEqual(await page.evaluate(() => {
+    const state = window.store.getState()
+    return { messages: state.messages.length, awaiting: state.awaitingRun }
+  }), { messages: 0, awaiting: false }, 'End before the first user commit releases the provisional run even without pending-input metadata')
+
+  await sendUncommitted()
+  await page.evaluate(() => {
+    window.goal = { ...window.goal, status: 'paused', reason: 'interrupted', executing: false,
+      pendingInput: { cwd: '/tmp', files: [], imageCount: 0, available: true }, seq: ++window.seq }
+    window.store.applySnapshot({ sessionPath: '/fixture.jsonl', sessionId: 'fixture', cwd: '/tmp', messages: [], eventSequence: 2,
+      model: null, thinkingLevel: 'off', isStreaming: false, goal: window.goal, goalSeq: window.seq })
+  })
+  assert.deepEqual(await page.evaluate(() => {
+    const state = window.store.getState()
+    return { messages: state.messages.length, awaiting: state.awaitingRun, status: state.goal.status }
+  }), { messages: 0, awaiting: false, status: 'paused' }, 'a recovery snapshot settles unaccepted Goal input without an extra event')
   assert.deepEqual(errors, [])
-  console.log('PASS goals-ui: bottom-only selection, Goal entry after send, current user message, responsive drafts, End, pause/resume, limits, Plan, Escape and chat ownership in all locales')
+  console.log('PASS goals-ui: bottom-only selection, Goal entry after send, immediate/reconciled input, handled/paused/cancelled recovery, single acceptance section, persistent completion/End, live edits, limits, Plan, Escape and chat ownership in all locales')
 } finally {
   await app?.close(); await server?.close(); await rm(temporary, { recursive: true, force: true })
 }

@@ -447,14 +447,14 @@ export function Composer({
    */
   const stopAgentHandlers = useMemo<ShortcutHandlers>(
     () =>
-      busy && escapeStopsRun
+      (busy || goalPending) && escapeStopsRun
         ? {
             stopAgent: () => {
               void handleStop()
             }
           }
         : {},
-    [busy, escapeStopsRun, handleStop]
+    [busy, goalPending, escapeStopsRun, handleStop]
   )
   useShortcutHandlers(stopAgentHandlers)
 
@@ -614,7 +614,7 @@ export function Composer({
               onValueChange={handleChange}
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
-              loading={busy}
+              loading={busy || goalPending}
               submitDisabled={initializing || readOnly || pendingMode !== null || modePending || goalPending}
               disabled={readOnly}
               onStop={() => void handleStop()}

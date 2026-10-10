@@ -86,7 +86,7 @@ export const SessionTasks = memo(function SessionTasks({ todos, subagents = [], 
   const hasTasks = !!(showGoal || items.length || tasks.length || subagents.length || records.length || jevState)
   if (!hasTasks) return null
   const title = selected === 'goal' ? t('goal.title') : selected === 'jev' ? t('jev.panelTitle') : selected === 'todo' ? t('todo.title') : selected === 'bash' ? t('taskPanel.background') : selected === 'agents' ? t('taskPanel.agents') : t('askUser.recordsTitle')
-  const summary = selected === 'goal' ? t('goal.panelSummary') : selected === 'jev' ? t('jev.panelSummary') : selected === 'todo'
+  const summary = selected === 'goal' ? null : selected === 'jev' ? t('jev.panelSummary') : selected === 'todo'
     ? t('todo.progress', { done, total: items.length })
     : selected === 'bash'
       ? t('bashTask.summary', { count: tasks.length, running })
@@ -129,7 +129,7 @@ export const SessionTasks = memo(function SessionTasks({ todos, subagents = [], 
           <div className="flex min-h-12 items-center gap-3 border-b border-border/60 px-3 py-2">
             <div className="min-w-0 flex-1">
               <div className="text-sm font-medium">{title}</div>
-              <div className="text-xs text-muted-foreground">{summary}{selected === 'todo' && cancelled > 0 ? ` · ${t('todo.cancelledCount', { count: cancelled })}` : ''}</div>
+              {summary ? <div className="text-xs text-muted-foreground">{summary}{selected === 'todo' && cancelled > 0 ? ` · ${t('todo.cancelledCount', { count: cancelled })}` : ''}</div> : null}
             </div>
             {selected === 'todo' && (retained || unfinished) ? <span className="text-xs text-muted-foreground">{t(retained ? 'todo.retained' : working ? 'todo.working' : 'todo.paused')}</span> : null}
             <Button size="icon" variant="ghost" className="size-7" aria-label={t('taskPanel.close')} onClick={() => { focusTrigger(); close() }}>

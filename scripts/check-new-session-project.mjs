@@ -24,7 +24,7 @@ try {
   const preload = join(temporary, 'preload.mjs')
   await writeFile(preload, `import ${JSON.stringify(join(repo, 'out/preload/index.mjs'))};
 import {contextBridge,ipcRenderer} from 'electron';
-contextBridge.exposeInMainWorld('fixture',{calls:()=>ipcRenderer.invoke('fixture:calls'),goalCalls:()=>ipcRenderer.invoke('fixture:goalCalls'),resize:(w,h)=>ipcRenderer.invoke('fixture:resize',w,h)});`)
+contextBridge.exposeInMainWorld('fixture',{calls:()=>ipcRenderer.invoke('fixture:calls'),goalCalls:()=>ipcRenderer.invoke('fixture:goalCalls'),holdGoal:()=>ipcRenderer.invoke('fixture:holdGoal'),releaseGoal:()=>ipcRenderer.invoke('fixture:releaseGoal'),resize:(w,h)=>ipcRenderer.invoke('fixture:resize',w,h)});`)
   const main = join(temporary, 'main.cjs')
   const attachmentFile = join(temporary, 'attachment-sample.txt')
   await writeFile(attachmentFile, 'attached sample\n')
@@ -36,7 +36,9 @@ app.commandLine.appendSwitch('remote-debugging-port','0');
 app.whenReady().then(()=>{
  const model={providerId:'deepseek',providerName:'DeepSeek',id:'fixture',name:'DeepSeek V4.1 Flash',reasoning:true,input:['text'],contextWindow:128000,maxTokens:8192,available:true,costInputPerM:0,costOutputPerM:0};
  const sessions=[{id:'chat-0',path:'/fixture/chat-0',cwd:'/workspace/pi-app',projectless:false,label:'梳理项目结构',created:new Date().toISOString(),modified:new Date().toISOString(),messageCount:2}];
- const calls=[],goalCalls=[];
+ const calls=[],goalCalls=[];let holdGoal=false,releaseGoal=null;
+ ipcMain.handle('fixture:holdGoal',()=>{holdGoal=true;w.show();w.focus()});
+ ipcMain.handle('fixture:releaseGoal',()=>{holdGoal=false;releaseGoal?.();releaseGoal=null});
  let folders=['/workspace/pi-app','/workspace/piws'];
  const snapshot=(cwd='/workspace/pi-app')=>({sessionId:'fixture',sessionPath:'/fixture/chat-0',cwd,projectless:cwd.startsWith('/internal/'),messages:[],model,thinkingLevel:'high',availableThinkingLevels:['off','high'],isStreaming:false});
  ipcMain.handle('app:info',()=>({cwd:'/workspace/pi-app',folders:[...folders],version:'fixture',contextFiles:true,bashMaxWaitMs:10000}));
@@ -48,7 +50,7 @@ app.whenReady().then(()=>{
  ipcMain.handle('app:pickDirectory',()=>({cwd:'/workspace/new-project'}));
  ipcMain.handle('fixture:calls',()=>calls);
  ipcMain.handle('fixture:goalCalls',()=>goalCalls);
- ipcMain.handle('goal:action',(_,request)=>{goalCalls.push(request);return {ok:false,code:'unavailable'}});
+ ipcMain.handle('goal:action',async(_,request)=>{goalCalls.push(request);if(holdGoal)await new Promise(resolve=>releaseGoal=resolve);return {ok:false,code:'unavailable'}});
  ipcMain.handle('fixture:resize',(_,width,height)=>w.setBounds({width,height}));
  ipcMain.handle('pi:models',()=>[model]);ipcMain.handle('bash:list',()=>[]);ipcMain.handle('pi:providers',()=>[]);
  // Real reads label a workspace file relatively; the attachment card must
@@ -304,8 +306,33 @@ app.whenReady().then(()=>{
   assert.ok(rect.left >= 0 && rect.right <= rect.width, 'panel must stay inside the viewport: ' + JSON.stringify(rect))
   await screenshot('panel-open-narrow')
 
+  await send('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27})
+  await send('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27})
+  await click('[data-prompt-editor]')
+  await send('Input.insertText',{text:'Show this goal message immediately.'})
+  await click('button[aria-label="Add to prompt"]')
+  const goalOption=await evaluate(`(()=>{const n=[...document.querySelectorAll('button')].find(n=>n.innerText.trim()==='目标模式');const r=n.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`)
+  await clickAt(goalOption)
+  await evaluate('fixture.holdGoal()')
+  await send('Page.bringToFront')
+  await evaluate(`window.goalSendFrames=[];window.goalSentAt=performance.now();window.goalSample=true;(function sample(){if(!window.goalSample)return;const bubble=[...document.querySelectorAll('[data-user-bubble-body]')].find(n=>n.textContent.includes('Show this goal message immediately.'));window.goalSendFrames.push({ms:performance.now()-window.goalSentAt,bubble:Boolean(bubble),spinner:Boolean(document.querySelector('[data-spinner-loader]')),visibility:document.visibilityState});requestAnimationFrame(sample)})()`)
+  await send('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',windowsVirtualKeyCode:13})
+  await send('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13})
+  await waitFor(`fixture.goalCalls().then(c=>c.length===1)`)
+  await waitFor(`document.querySelector('[data-user-bubble-body]')`)
+  await pause(1000)
+  const frames=await evaluate('window.goalSample=false;window.goalSendFrames')
+  const painted=frames.find(frame=>frame.bubble)
+  assert(painted&&painted.ms<250,'Goal user bubble paints before held IPC replies: '+JSON.stringify(frames.slice(0,15)))
+  assert(frames.filter(frame=>frame.bubble).every(frame=>frame.spinner),'the waiting row appears with the optimistic Goal message')
+  assert.equal(await evaluate(`Boolean(document.querySelector('[data-task-trigger="goal"]'))`),false,'pending admission keeps the Goal panel hidden')
+  await evaluate('fixture.releaseGoal()')
+  await waitFor(`!document.querySelector('[data-user-bubble-body]')`)
+  await pause(300)
+  assert.equal(await evaluate(`document.querySelector('[data-prompt-editor]').textContent`),'Show this goal message immediately.','a refused Goal send restores its draft')
+  await screenshot('goal-send-refused')
   assert.deepEqual(exceptions, [])
-  console.log('PASS: new-session project picker — project/projectless/narrow Goal selection preserves landing, drafts and geometry; project switch, privacy and escape')
+  console.log('PASS: new-session project picker — project/projectless/narrow Goal selection preserves landing, drafts and geometry; project switch, privacy, Escape and immediate Goal bubble/rollback before held IPC')
 } finally {
   ws?.close()
   if (child && child.exitCode === null) { child.kill('SIGTERM'); await new Promise(resolve => { child.once('exit', resolve); setTimeout(resolve, 3000) }) }

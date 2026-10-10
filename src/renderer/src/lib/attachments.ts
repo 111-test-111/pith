@@ -1,5 +1,11 @@
 import type { FileKind, ImageContent } from '../../../shared/types'
 
+/** Match persisted file chips while their bounded contents are still loading. */
+export function optimisticEchoText(text: string, files: readonly string[]): string {
+  const blocks = files.map(file => `<file path="${file.replace(/^\//, '')}">(pending)</file>`).join('\n\n')
+  return blocks ? text ? `${text}\n\n${blocks}` : blocks : text
+}
+
 /** What a chip needs to describe a workspace document: the absolute path the
  * main process resolves at send time, plus the label the draft mentions. */
 export interface AttachmentTarget {

@@ -42,7 +42,7 @@ import { app, shell } from 'electron'
 import { settleWithin, SESSION_DISPOSE_TIMEOUT_MS } from '../shutdown'
 import { homedir } from 'node:os'
 import { open as openFile, stat as statPath } from 'node:fs/promises'
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync, openSync, fsyncSync, closeSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { BashTaskManager } from '../bash/manager'
 import { createManagedBashTools, APP_BASH_TOOL_NAMES } from './bash-tools'
@@ -105,8 +105,11 @@ import { ChangeScopes } from './change-scopes'
 import { TodoState, createTodoTool } from './todo'
 import { TODO_TOOL_NAME } from './todo-protocol'
 import { GoalRuntime } from './goals/runtime'
+import { GoalStorage } from './goals/storage'
+import { GoalInputError, type PreparedGoalInput } from './goals/input'
 import { createGoalTools, createGoalContextExtension } from './goals/tools'
-import { GOAL_GET, GOAL_UPDATE, GOAL_STEP, goalLive } from './goals/protocol'
+import { GOAL_ENTRY, GOAL_GET, GOAL_UPDATE, GOAL_STEP, goalFromBranch, goalLive } from './goals/protocol'
+import { preserveInitialSelections } from './session-selections'
 import { goalCanBeReplaced, validGoalCriteria, validGoalLimits, type GoalActionRequest, type GoalActionResult, type GoalInput, type GoalReason } from '../../shared/goal'
 import { JevCredentials } from './jev/credentials'
 import { JevService } from './jev/service'
@@ -405,6 +408,7 @@ function scheduledDelay(signal: AbortSignal, ms: number): Promise<void> {
 
 interface ManagedSession {
   goals?: GoalRuntime
+  goalEdit?: AbortController
   manualCompaction?: ManualCompaction
   trajectory?: TrajectoryRecorder
   jevWorkflow?: JevWorkflow
@@ -2210,7 +2214,7 @@ export class PiManager {
       if (!scheduledModel)
         throw new Error(`The scheduled task's model ${scheduledRole.model.provider}/${scheduledRole.model.modelId} is not configured`)
     }
-    const { session } = await createAgentSessionFromServices({ services, sessionManager,
+    const { session } = await preserveInitialSelections(sessionManager, () => createAgentSessionFromServices({ services, sessionManager,
       ...(isChild ? {
         tools: role!.resource.tools,
         ...(role!.model ? { model: role!.model } : {}),
@@ -2221,7 +2225,7 @@ export class PiManager {
         ...(scheduledRole?.thinkingLevel ? { thinkingLevel: scheduledRole.thinkingLevel as any } : {})
       } : {}),
       customTools
-    })
+    }))
     if (!isChild) parentSessionRef.session = session
     if (!isChild) installSubagentResultHook(session)
     if (isChild && role!.resource.thinkingLevel) {
@@ -2295,6 +2299,9 @@ export class PiManager {
         return seq
       },
       changed: (goal, goalSeq) => this.emit('pi:event', { type: 'goal_update', sessionPath: path, goal, goalSeq }),
+      accountingChanged: goalId => queueMicrotask(() => {
+        for (const other of this.sessions.values()) if (other !== managed && other.goals?.snapshot?.id === goalId) other.goals.syncAccounting()
+      }),
       available: () => !this.closing && !managed.disposing && !managed.initializing && !managed.lifecyclePromise &&
         plan.workCount <= (managed.goals?.preparing ? 1 : 0) &&
         session.isIdle && !managed.imageReplay && !managed.continuationRequest && !plan.restricted && !plan.submissionLocked &&
@@ -4178,13 +4185,57 @@ export class PiManager {
     const managed = this.sessions.get(request?.sessionPath)
     const goals = managed?.goals
     if (!managed || !goals || managed.subagentChild || managed.scheduledTask || this.closing || managed.disposing) return { ok: false, code: 'unavailable' }
-    if (!Number.isSafeInteger(request.expectedSeq) || request.expectedSeq !== goals.seq || request.goalId !== (goals.snapshot?.id ?? null)) return { ok: false, code: 'stale' }
+    const definition = request.action === 'definition' || request.action === 'criteria'
+    // Usage/status metadata changes during a run. Definition edits pin the
+    // stable goal ID + criteria revision instead of that hot publication clock.
+    if (!Number.isSafeInteger(request.expectedSeq) || !definition && request.expectedSeq !== goals.seq || request.goalId !== (goals.snapshot?.id ?? null)) return { ok: false, code: 'stale' }
     if (request.action === 'inspect') {
       if (managed.plan.branchWork || managed.initializing || managed.lifecyclePromise) return { ok: false, code: 'busy' }
       await goals.inspect()
       return { ok: true, goal: goals.snapshot, seq: goals.seq }
     }
     if (this.checkoutCoordinator.needsRecovery(managed.cwd)) return { ok: false, code: 'busy' }
+    if (request.action === 'dismiss') {
+      if (!goals.snapshot || !['completed', 'cancelled'].includes(goals.snapshot.status)) return { ok: false, code: 'invalid' }
+      if (managed.initializing || managed.lifecyclePromise || !managed.session.isIdle || goals.preparing) return { ok: false, code: 'busy' }
+      let release: () => void
+      try { release = managed.plan.beginWork('branch') } catch { return { ok: false, code: 'busy' } }
+      try {
+        goals.dismiss()
+        return goals.snapshot?.dismissed ? { ok: true, goal: goals.snapshot, seq: goals.seq } : { ok: false, code: 'storage' }
+      } finally { release() }
+    }
+    if (definition) {
+      const current = goals.snapshot
+      if (!current || current.status === 'cancelled') return { ok: false, code: 'invalid' }
+      if (request.criteriaRevision !== current.criteriaRevision) return { ok: false, code: 'stale' }
+      if (!validGoalCriteria(request.criteria) || request.criteria.some(c => c.id && !current.criteria.some(old => old.id === c.id)) ||
+        request.action === 'definition' && (typeof request.objective !== 'string' || !request.objective.trim() || request.objective.length > 8000)) return { ok: false, code: 'invalid' }
+      if (!current.accountingAvailable) return { ok: false, code: 'storage' }
+      if (managed.goalEdit || managed.plan.branchWork || managed.plan.transitionBusy || managed.initializing || managed.lifecyclePromise || managed.imageReplay || managed.continuationRequest) return { ok: false, code: 'busy' }
+      try { managed.plan.checkWorkAdmission() } catch { return { ok: false, code: 'busy' } }
+      const controller = managed.goalEdit = new AbortController()
+      try {
+        await managed.plan.editGoal(async () => {
+          if (controller.signal.aborted || this.closing || managed.disposing) throw new PlanAdmissionError('Goal edit cancelled', ['busy'])
+          if (goals.snapshot?.id !== current.id || goals.snapshot.criteriaRevision !== request.criteriaRevision) throw new Error('goal-edit-stale')
+          goals.criteria(request.criteria, request.action === 'definition' ? request.objective.trim() : current.objective)
+          if (goals.snapshot?.reason === 'storage') throw new Error('goal-edit-storage')
+          managed.jevWorkflow?.resume()
+        }, async () => {
+          this.stopManaged(managed, 'criteria')
+          await managed.session.abort()
+          await goals.idle()
+          await this.subagentRuntime.stopAll(managed.subagents)
+          await this.commandTasksInstance?.stopSession(managed.path)
+          await this.debugManagerInstance?.stopSession(managed.path)
+          await managed.rewind?.idle()
+        })
+        return { ok: true, goal: goals.snapshot, seq: goals.seq }
+      } catch (error) {
+        return { ok: false, code: goals.snapshot?.reason === 'storage' ? 'storage' : error instanceof PlanAdmissionError || controller.signal.aborted ? 'busy' : error instanceof Error && error.message === 'goal-edit-stale' ? 'stale' : 'storage' }
+      } finally { if (managed.goalEdit === controller) managed.goalEdit = undefined }
+    }
     if (request.action === 'pause' || request.action === 'cancel') {
       if (managed.plan.branchWork || managed.plan.transitionBusy) return { ok: false, code: 'busy' }
       if (!goals.snapshot) return { ok: false, code: 'invalid' }
@@ -4193,7 +4244,7 @@ export class PiManager {
       if (goals.snapshot?.reason === 'storage') return { ok: false, code: 'storage' }
       return { ok: true, goal: goals.snapshot, seq: goals.seq }
     }
-    if (!['create', 'resume', 'limits', 'criteria'].includes(request.action)) return { ok: false, code: 'invalid' }
+    if (!['create', 'resume', 'limits'].includes(request.action)) return { ok: false, code: 'invalid' }
     if (managed.initializing || managed.lifecyclePromise || !managed.session.isIdle || goals.preparing || managed.imageReplay || managed.continuationRequest || managed.plan.workCount) return { ok: false, code: 'busy' }
     if (request.action !== 'limits' && (managed.plan.restricted || managed.plan.submissionLocked)) return { ok: false, code: 'plan' }
     if ((request.action === 'create' || request.action === 'limits') && !validGoalLimits(request.limits)) return { ok: false, code: 'invalid' }
@@ -4207,25 +4258,21 @@ export class PiManager {
       const facts = this.planFacts(managed)
       if (facts.tasks || facts.subagents || facts.deliveries || facts.questions || facts.escalations || facts.queuedMessages) return { ok: false, code: 'busy' }
     } else {
-      if (!goals.snapshot || goals.snapshot.status === 'cancelled' || request.action !== 'criteria' && goals.snapshot.status === 'completed') return { ok: false, code: 'invalid' }
-      if (request.action === 'criteria') {
-        if (request.criteriaRevision !== goals.snapshot.criteriaRevision) return { ok: false, code: 'stale' }
-        if (!validGoalCriteria(request.criteria) || request.criteria.some(c => c.id && !goals.snapshot!.criteria.some(old => old.id === c.id))) return { ok: false, code: 'invalid' }
-        if (!goals.snapshot.accountingAvailable) return { ok: false, code: 'storage' }
-        const facts = this.planFacts(managed)
-        if (facts.tasks || facts.subagents || facts.deliveries || facts.questions || facts.escalations || facts.queuedMessages) return { ok: false, code: 'busy' }
-      }
+      if (!goals.snapshot || goals.snapshot.status === 'cancelled' || goals.snapshot.status === 'completed') return { ok: false, code: 'invalid' }
       if (request.action === 'resume' && !goals.snapshot.accountingAvailable) return { ok: false, code: 'storage' }
-      if (request.action === 'resume' && goals.quota()) return { ok: false, code: 'quota' }
+      if (request.action === 'resume' && goals.snapshot.pendingInput && !goals.snapshot.pendingInput.available) return { ok: false, code: 'attachments' }
+      if (request.action === 'resume' && goals.quota()) return { ok: false, code: goals.snapshot?.reason === 'storage' ? 'storage' : 'quota' }
     }
     let release: () => void
     try { release = managed.plan.beginWork('branch') } catch { return { ok: false, code: 'busy' } }
     try {
       if (!existsSync(managed.path)) this.materializeSession(managed.session.sessionManager)
       if (request.action === 'create') this.rememberFolder(managed.cwd)
-      if (request.action === 'create') { managed.jevWorkflow?.resume(); goals.create(request.objective.trim(), request.acceptance.trim(), request.limits, { images: request.images, files: request.files }) }
+      if (request.action === 'create') {
+        managed.jevWorkflow?.resume()
+        if (!await goals.create(request.objective.trim(), request.acceptance.trim(), request.limits, { images: request.images, files: request.files })) return { ok: false, code: goals.snapshot?.reason === 'storage' ? 'storage' : 'busy' }
+      }
       else if (request.action === 'limits') goals.limits(request.limits)
-      else if (request.action === 'criteria') { goals.criteria(request.criteria); managed.jevWorkflow?.resume() }
       else {
         const owners = [managed.notifications, managed.askUser, managed.subagents?.notifications].filter(owner => owner != null)
         // Re-arm preserved answers before checking pending work, while holding
@@ -4236,13 +4283,13 @@ export class PiManager {
       }
       if (goals.snapshot?.reason === 'storage') return { ok: false, code: 'storage' }
       return { ok: true, goal: goals.snapshot, seq: goals.seq }
-    } catch { return { ok: false, code: 'storage' } }
+    } catch (error) { return { ok: false, code: error instanceof GoalInputError ? 'attachments' : 'storage' } }
     finally { release() }
   }
 
   /** Uses the same SDK continuation, wake ownership and checkout lease as Continue. */
   private async runGoal(managed: ManagedSession, content: string, initial: boolean, dispatchId: string,
-    signal: AbortSignal, accepted: () => boolean, input?: GoalInput): Promise<void> {
+    signal: AbortSignal, accepted: () => boolean, input?: GoalInput & Partial<PreparedGoalInput>): Promise<void> {
     const session = managed.session
     const owners = [managed.notifications, managed.askUser, managed.subagents?.notifications].filter(owner => owner != null)
     for (const owner of owners) { owner.holdWake(); owner.resume() }
@@ -4274,7 +4321,7 @@ export class PiManager {
       managed.plan.checkWorkAdmission()
       managed.changeScopes.continue()
       if (initial) {
-        const blocks = await this.readFileBlocks(input?.files ?? [], managed.cwd)
+        const blocks = input?.fileBlocks ?? await this.readFileBlocks(input?.files ?? [], managed.cwd)
         if (!accepted() || signal.aborted || this.closing || managed.disposing) return
         dispatchingInitial = true
         let started = false
@@ -4472,12 +4519,25 @@ export class PiManager {
       const sessionManager = managed.session.sessionManager
       const file = sessionManager.getSessionFile()
       if (!file || !existsSync(file)) throw new Error('The session has not been saved yet')
+      managed.goals?.checkpointAccounting()
 
       // The SDK switches the receiver's file/id/branch when forking. Keep the
       // live source manager untouched, or it will append to the fork even after
       // that fork is deleted (recreating a message-only file without a header).
-      const forkedPath = SessionManager.open(file).createBranchedSession(entry.id)
+      const forkManager = SessionManager.open(file)
+      const forkedPath = forkManager.createBranchedSession(entry.id)
       if (!forkedPath) throw new Error('Failed to create the forked session')
+      for (const path of [forkedPath, dirname(forkedPath)]) {
+        const fd = openSync(path, 'r')
+        try { fsyncSync(fd) } finally { closeSync(fd) }
+      }
+      const sourceAccounting = new GoalStorage(app.getPath('userData'), sessionManager.getSessionId())
+      const forkAccounting = new GoalStorage(app.getPath('userData'), forkManager.getSessionId())
+      const inheritedIds = new Set(forkManager.getBranch().flatMap(e => {
+        const inherited = e.type === 'custom' && e.customType === GOAL_ENTRY ? goalFromBranch([e]) : null
+        return inherited ? [inherited.id] : []
+      }))
+      for (const id of inheritedIds) forkAccounting.linkFork(sourceAccounting, id)
 
       let baseLabel = managed.session.sessionName?.trim() || null
       if (!baseLabel) {
@@ -4515,7 +4575,8 @@ export class PiManager {
   }
 
   private stopManaged(managed: ManagedSession, reason: GoalReason): void {
-    managed.goals?.pause(reason)
+    if (reason !== 'criteria') managed.goalEdit?.abort()
+    managed.goals?.pause(reason === 'criteria' ? 'user' : reason)
     managed.manualCompaction?.cancel()
     managed.continuationRequest?.abort()
     managed.imageReplay?.controller.abort()

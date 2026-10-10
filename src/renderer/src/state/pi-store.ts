@@ -1,4 +1,5 @@
 import { isNothingToCompactError } from '../../../shared/compaction-errors'
+import { optimisticEchoText } from '../lib/attachments'
 import { DEFAULT_GOAL_LIMITS, validGoalLimits, type GoalErrorCode, type GoalInput, type GoalLimits, type GoalSnapshotDTO } from '../../../shared/goal'
 import type { CompactionProcessStateDTO, CompactionQueueStateDTO } from '../../../shared/compaction'
 import type {
@@ -332,19 +333,35 @@ export class PiStore {
   private jevStates = new Map<string, { seq: number; state: JevWorkflowDTO | null }>()
   private goalStates = new Map<string, { seq: number; goal: GoalSnapshotDTO | null }>()
   private goalUIStates = new Map<string, GoalUIState>()
+  private goalPresentationKeys = new Map<string, string>()
+  private goalEchoes = new Map<string, { goalId: string | null; message: UserMsg }>()
   private goalUIFor(path: string | null, goal?: GoalSnapshotDTO | null): GoalUIState {
     if (!path) return EMPTY_GOAL_UI
     let ui = this.goalUIStates.get(path)
     if (!ui) {
-      const submitted = !!goal && !['completed', 'cancelled'].includes(goal.status)
+      const submitted = !!goal && goal.status !== 'cancelled' && !goal.dismissed
       ui = { ...EMPTY_GOAL_UI, enabled: submitted, submitted, limits: goal?.limits ?? DEFAULT_GOAL_LIMITS }
       this.goalUIStates.set(path, ui)
+    }
+    if (goal !== undefined && !ui.pending) {
+      const hidden = !goal || goal.status === 'cancelled' || !!goal.dismissed
+      const key = goal ? `${goal.id}:${hidden}` : ''
+      if (key !== this.goalPresentationKeys.get(path)) {
+        // A restored branch may arrive after an empty startup snapshot. Keep
+        // completed goals discoverable too; only explicit End hides them.
+        const submitted = !hidden
+        ui = { ...ui, enabled: submitted || ui.enabled && !ui.submitted, submitted,
+          ...(submitted ? { limits: goal!.limits } : {}), error: null }
+        this.goalUIStates.set(path, ui)
+        this.goalPresentationKeys.set(path, key)
+      }
     }
     return ui
   }
   private setGoalUI(path: string, patch: Partial<GoalUIState>): void {
-    const goalUI = { ...this.goalUIFor(path), ...patch }
+    let goalUI = { ...this.goalUIFor(path), ...patch }
     this.goalUIStates.set(path, goalUI)
+    if (patch.pending === false) goalUI = this.goalUIFor(path, this.goalStates.get(path)?.goal)
     const cached = this.sessionStates.get(path)
     if (cached) this.sessionStates.set(path, { ...cached, goalUI })
     if (this.state.sessionPath === path) this.set({ goalUI })
@@ -369,27 +386,38 @@ export class PiStore {
       this.setGoalUI(path, { error: 'invalid' }); return false
     }
     const identity = this.goalStates.get(path)
+    const echo = this.appendOptimisticUser(optimisticEchoText(input.text, input.files ?? []), input.images ?? [])
+    this.goalEchoes.set(path, { goalId: null, message: echo })
+    let accepted = false
     this.setGoalUI(path, { pending: true, error: null })
     try {
       const result = await window.pi.goalAction({ sessionPath: path, expectedSeq: identity?.seq ?? 0, goalId: identity?.goal?.id ?? null,
         action: 'create', objective: input.text, acceptance: ui.acceptance.trim() || input.text, limits: ui.limits, images: input.images, files: input.files })
       if (!result.ok) { this.setGoalUI(path, { error: result.code }); return false }
+      this.goalEchoes.set(path, { goalId: result.goal?.id ?? null, message: echo })
       this.dispatch({ type: 'goal_update', sessionPath: path, goal: result.goal, goalSeq: result.seq })
       this.setGoalUI(path, { acceptance: '', submitted: true })
+      accepted = true
       return true
     } catch { this.setGoalUI(path, { error: 'unavailable' }); return false }
-    finally { this.setGoalUI(path, { pending: false }) }
+    finally {
+      if (!accepted) this.removeOptimisticUser(path, echo)
+      this.setGoalUI(path, { pending: false })
+      if (accepted) this.settleGoalEcho(path, this.goalStates.get(path)?.goal ?? null)
+      else this.goalEchoes.delete(path)
+    }
   }
   async endGoalMode(path: string): Promise<void> {
     const ui = this.goalUIFor(path)
     if (ui.pending) return
     const identity = this.goalStates.get(path)
-    if (!identity?.goal || ['completed', 'cancelled'].includes(identity.goal.status)) {
+    if (!identity?.goal || identity.goal.status === 'cancelled' || identity.goal.dismissed || !ui.submitted) {
       this.setGoalUI(path, { enabled: false, submitted: false, error: null }); return
     }
     this.setGoalUI(path, { pending: true, error: null })
     try {
-      const result = await window.pi.goalAction({ sessionPath: path, expectedSeq: identity.seq, goalId: identity.goal.id, action: 'cancel' })
+      const result = await window.pi.goalAction({ sessionPath: path, expectedSeq: identity.seq, goalId: identity.goal.id,
+        action: identity.goal.status === 'completed' ? 'dismiss' : 'cancel' })
       if (!result.ok) { this.setGoalUI(path, { error: result.code }); return }
       this.dispatch({ type: 'goal_update', sessionPath: path, goal: result.goal, goalSeq: result.seq })
       this.setGoalUI(path, { enabled: false, submitted: false })
@@ -492,6 +520,9 @@ export class PiStore {
     // switching back does not remount Markdown and tool trees after the instant
     // cached paint.
     const unchanged = cached?.eventSequence === snapshotSequence
+    const messages = unchanged ? cached.messages : [...snapshot.messages,
+      ...(cached?.messages.filter(message => (message as any).__optimistic && message.role === 'user' &&
+        !snapshot.messages.some(committed => committed.role === 'user' && committed.timestamp >= message.timestamp)) ?? [])]
     this.set({
       ...(unchanged ? cached : {}),
       ready: true,
@@ -520,14 +551,14 @@ export class PiStore {
       // The echo's pending run is a fact about THIS view: a snapshot for the
       // same session cannot disprove it (it was taken before the run started),
       // while another session's snapshot must not inherit it.
-      awaitingRun: this.state.sessionPath === sessionPath ? this.state.awaitingRun : false,
+      awaitingRun: cached?.awaitingRun ?? (this.state.sessionPath === sessionPath ? this.state.awaitingRun : false),
       subagentChild: snapshot.subagentChild === true,
       scheduledTaskSession: snapshot.scheduledTaskSession === true,
       subagentParentPath: snapshot.subagentParentPath ?? null,
       activeChangeScopeId: snapshot.activeChangeScopeId ?? null,
       contextUsage: unchanged ? cached.contextUsage : (snapshot.contextUsage ?? null),
       eventSequence: snapshotSequence,
-      messages: unchanged ? cached.messages : snapshot.messages,
+      messages,
       todos: unchanged ? cached.todos : (snapshot.todos ?? null),
       askUserRecords: unchanged ? cached.askUserRecords : (snapshot.askUserRecords ?? []),
       subagents,
@@ -549,6 +580,7 @@ export class PiStore {
     for (const event of pending) {
       if (event.type === 'subagents_update' || (event.eventSequence ?? 0) > snapshotSequence) this.dispatch(event)
     }
+    this.settleGoalEcho(sessionPath, this.goalStates.get(sessionPath)?.goal ?? null)
   }
 
   /** Local queue clear after a successful recall — the SDK's (empty)
@@ -643,11 +675,12 @@ export class PiStore {
     for (const event of pending) {
       if (event.type === 'subagents_update' || (event.eventSequence ?? 0) > this.state.eventSequence) this.dispatch(event)
     }
+    this.settleGoalEcho(sessionPath, this.goalStates.get(sessionPath)?.goal ?? null)
     return prev !== cached
   }
 
   /** Immediately show the outgoing prompt; replaced by the real message_end. */
-  appendOptimisticUser(text: string, images: UserMsg['content'] extends string ? never : any[]): void {
+  appendOptimisticUser(text: string, images: UserMsg['content'] extends string ? never : any[]): UserMsg {
     // SAFETY: the echo is a renderer-only row; `__optimistic` marks it for the
     // message_end swap and `UserMsg` carries no such field, so a cast is the
     // only way to keep the placeholder inside the transcript's message list.
@@ -661,6 +694,34 @@ export class PiStore {
     // fact in the UI, so the spinner and its sentence appear in the same
     // commit as the bubble instead of waiting for `agent_start`.
     this.set({ messages: [...this.state.messages, optimistic], awaitingRun: true })
+    return optimistic
+  }
+
+  private removeOptimisticUser(path: string, echo: UserMsg): void {
+    const remove = (state: PiState) => {
+      if (!state.messages.includes(echo)) return state
+      const messages = state.messages.filter(message => message !== echo)
+      return { ...state, messages, awaitingRun: messages.some(message => !!(message as any).__optimistic) }
+    }
+    const cached = this.sessionStates.get(path)
+    if (cached) this.sessionStates.set(path, remove(cached))
+    if (this.state.sessionPath === path) this.set(remove(this.state))
+  }
+
+  private settleGoalEcho(path: string, goal: GoalSnapshotDTO | null): void {
+    const echo = this.goalEchoes.get(path)
+    if (!echo || !echo.goalId) return
+    const state = this.state.sessionPath === path ? this.state : this.sessionStates.get(path)
+    if (!state?.messages.includes(echo.message)) { this.goalEchoes.delete(path); return }
+    // An extension may handle the input, or Stop may win before the first SDK
+    // user commit. Retain the durable Goal/input, but not a fictitious sent row.
+    const branchChanged = (!goal || goal.id !== echo.goalId) && !this.goalUIStates.get(path)?.pending
+    const unaccepted = goal?.id === echo.goalId && !goal.executing && (goal.status === 'cancelled' ||
+      !['active', 'verifying'].includes(goal.status) && !!goal.pendingInput)
+    if (branchChanged || unaccepted) {
+      this.removeOptimisticUser(path, echo.message)
+      this.goalEchoes.delete(path)
+    }
   }
 
   dispatch(event: PiEvent): void {
@@ -687,12 +748,14 @@ export class PiStore {
     }
     if (event.type === 'goal_update' && event.sessionPath) {
       const goal = this.mergeGoal(event.sessionPath, event.goal, event.goalSeq)
+      const goalUI = this.goalUIFor(event.sessionPath, goal.goal)
       const cached = this.sessionStates.get(event.sessionPath)
-      if (cached) this.sessionStates.set(event.sessionPath, { ...cached, ...goal })
-      if (event.sessionPath === this.state.sessionPath && goal.goalSeq !== this.state.goalSeq) this.set({ ...goal,
+      if (cached) this.sessionStates.set(event.sessionPath, { ...cached, ...goal, goalUI })
+      if (event.sessionPath === this.state.sessionPath && (goal.goalSeq !== this.state.goalSeq || goalUI !== this.state.goalUI)) this.set({ ...goal, goalUI,
         // A Goal can decide to pause after the settled event's continuation
         // hint. Clearing that hint is metadata, not a second transcript end.
         ...(goal.goal && !goal.goal.executing && !['active', 'verifying'].includes(goal.goal.status) ? { isStreaming: false } : {}) })
+      this.settleGoalEcho(event.sessionPath, goal.goal)
       return
     }
     if (event.type === 'plan_state_update' && event.sessionPath && event.plan) {

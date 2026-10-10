@@ -18,30 +18,31 @@ const sdk = fileURLToPath(import.meta.resolve('@earendil-works/pi-coding-agent')
  * The fake stream is installed inside the mocked createAgentSessionFromServices
  * so it exists before PiManager takes ownership of the session.
  */
-export async function createPlanFixture({ respond: initialRespond, extensionFactories = [], withRewind = false, withLibrary = false, keepRecentTokens = 20000, providerCallbacks = false, prepareAgentDir, loadDiscoveredExtensions = false, loadSkills = false, loadContextFiles = false, imageSkillPath } = {}) {
-  const temporary = await mkdtemp(join(tmpdir(), 'pith-plan-mode-'))
+export async function createPlanFixture({ respond: initialRespond, extensionFactories = [], withRewind = false, withLibrary = false, keepRecentTokens = 20000, providerCallbacks = false, prepareAgentDir, loadDiscoveredExtensions = false, loadSkills = false, loadContextFiles = false, imageSkillPath, temporaryRoot, reuseBundle = false, sessionPath, keepFiles = false } = {}) {
+  const temporary = temporaryRoot ?? await mkdtemp(join(tmpdir(), 'pith-plan-mode-'))
   const agentDir = join(temporary, 'agent')
   const project = join(temporary, 'project')
   const sessions = join(temporary, 'sessions')
   const userData = join(temporary, 'userData')
 
-  await mkdir(agentDir)
-  await mkdir(project)
-  await mkdir(sessions)
-  await mkdir(userData)
+  await mkdir(agentDir, { recursive: true })
+  await mkdir(project, { recursive: true })
+  await mkdir(sessions, { recursive: true })
+  await mkdir(userData, { recursive: true })
   if (prepareAgentDir) {
     try { await prepareAgentDir(agentDir) }
     catch (error) { await rm(temporary, { recursive: true, force: true }); throw error }
   }
 
   const outfile = join(temporary, 'modules.mjs')
-  await build({
+  if (!reuseBundle) await build({
     stdin: {
       contents: `export { PiManager } from './src/main/pi/manager';
 export { debugAdapterSpec } from './src/main/debug/adapters';
 export { startLibraryService } from './src/main/library/service';
 export { PlanStorage } from './src/main/pi/plan-storage';
 export { GoalStorage } from './src/main/pi/goals/storage';
+export { GoalInputStorage } from './src/main/pi/goals/input';
 export * from './src/main/pi/plan-protocol';
 export { PiStore } from './src/renderer/src/state/pi-store';
 export { SessionManager, ModelRuntime, SettingsManager, setPlanFixtureStream, registerPlanFixtureExtensionFactories } from '@earendil-works/pi-coding-agent';`,
@@ -104,10 +105,10 @@ export async function createAgentSessionFromServices(options){
     }]
   })
 
-  await build({ entryPoints: [join(planRepoRoot, 'src/main/pi/trajectory-worker.ts')], outfile: join(temporary, 'trajectory-worker.mjs'), bundle: true, platform: 'node', format: 'esm' })
-  if (withLibrary) await build({ entryPoints: [join(planRepoRoot, 'src/main/library/worker.ts')], outfile: join(temporary, 'library-worker.mjs'), bundle: true, platform: 'node', format: 'esm',
+  if (!reuseBundle) await build({ entryPoints: [join(planRepoRoot, 'src/main/pi/trajectory-worker.ts')], outfile: join(temporary, 'trajectory-worker.mjs'), bundle: true, platform: 'node', format: 'esm' })
+  if (withLibrary && !reuseBundle) await build({ entryPoints: [join(planRepoRoot, 'src/main/library/worker.ts')], outfile: join(temporary, 'library-worker.mjs'), bundle: true, platform: 'node', format: 'esm',
     plugins: [{ name: 'library-dependencies', setup(builder) { builder.onResolve({ filter: /^@earendil-works\/pi-coding-agent$|^proper-lockfile$/ }, args => ({ path: fileURLToPath(import.meta.resolve(args.path)), external: true })) } }] })
-  if (withRewind) await build({ entryPoints: [join(planRepoRoot, 'src/main/rewind/worker.ts')], outfile: join(temporary, 'rewind-worker.mjs'), bundle: true, platform: 'node', format: 'esm' })
+  if (withRewind && !reuseBundle) await build({ entryPoints: [join(planRepoRoot, 'src/main/rewind/worker.ts')], outfile: join(temporary, 'rewind-worker.mjs'), bundle: true, platform: 'node', format: 'esm' })
 
   const {
     PiManager,
@@ -203,7 +204,7 @@ export async function createAgentSessionFromServices(options){
   )
   app.runtime = async () => runtime
 
-  const manager = SessionManager.create(project, sessions)
+  const manager = sessionPath ? SessionManager.open(sessionPath) : SessionManager.create(project, sessions)
   const managed = await app.buildSession(manager)
   const { session } = managed
 
@@ -228,7 +229,7 @@ export async function createAgentSessionFromServices(options){
     },
     async close() {
       await app.dispose()
-      await rm(temporary, { recursive: true, force: true })
+      if (!keepFiles) await rm(temporary, { recursive: true, force: true })
     }
   }
 }

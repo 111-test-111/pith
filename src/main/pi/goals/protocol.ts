@@ -18,7 +18,7 @@ export interface GoalReceipt extends Omit<GoalUpdateInput, 'claims'> {
   claims: Array<{ criterionId: string; revision: number; summary: string; sources: GoalEvidenceRef[] }>
 }
 const statuses: GoalStatus[] = ['active', 'verifying', 'paused', 'blocked', 'completed', 'cancelled']
-const reasons: GoalReason[] = ['user', 'stopped', 'plan', 'rewound', 'interrupted', 'runs', 'tokens', 'no_progress', 'review', 'error', 'storage', 'criteria', 'evidence']
+const reasons: GoalReason[] = ['user', 'stopped', 'plan', 'rewound', 'interrupted', 'runs', 'tokens', 'no_progress', 'review', 'error', 'storage', 'criteria', 'evidence', 'input']
 const object = (v: unknown): Record<string, any> | null => v !== null && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, any> : null
 const id = (v: unknown, max = 160): v is string => typeof v === 'string' && !!v && v.length <= max
 const revision = (v: unknown): v is number => Number.isSafeInteger(v) && (v as number) >= 1
@@ -44,7 +44,8 @@ function record(value: unknown): GoalRecord | null {
   if (!g || ![1, 2].includes(g.version) || !id(g.id, 80) || typeof g.objective !== 'string' || !g.objective.trim() || g.objective.length > 8000 ||
     typeof g.acceptance !== 'string' || !g.acceptance.trim() || g.acceptance.length > 8000 || !statuses.includes(g.status) ||
     (g.reason !== null && !reasons.includes(g.reason)) || (g.evidence !== null && (typeof g.evidence !== 'string' || g.evidence.length > 8000)) ||
-    !validGoalLimits(g.limits) || !Number.isFinite(g.createdAt) || !Number.isFinite(g.updatedAt)) return null
+    !validGoalLimits(g.limits) || !Number.isFinite(g.createdAt) || !Number.isFinite(g.updatedAt) || (g.inputReceipt !== undefined && g.inputReceipt !== true) ||
+    (g.dismissed !== undefined && g.dismissed !== true)) return null
   if (g.version === 1) {
     // Legacy prose was never a bound proof. Keep identity/accounting but require
     // explicit review and Resume; recovery must not append or dispatch.
@@ -57,7 +58,8 @@ function record(value: unknown): GoalRecord | null {
   if (raw.some(c => !id(c.id, 80) || !revision(c.revision) || (c.proof !== null && !proof(c.proof)))) return null
   const criteria: GoalCriterion[] = raw.map(c => ({ id: c.id, text: c.text, revision: c.revision, proof: proof(c.proof) }))
   return { version: 2, id: g.id, objective: g.objective, acceptance: g.acceptance, criteriaRevision: g.criteriaRevision, criteria,
-    status: g.status, reason: g.reason, evidence: g.evidence, limits: structuredClone(g.limits), createdAt: g.createdAt, updatedAt: g.updatedAt }
+    status: g.status, reason: g.reason, evidence: g.evidence, limits: structuredClone(g.limits), createdAt: g.createdAt, updatedAt: g.updatedAt,
+    ...(g.inputReceipt ? { inputReceipt: true } : {}), ...(g.dismissed ? { dismissed: true } : {}) }
 }
 export function applyGoalReceipt(goal: GoalRecord, receipt: GoalReceipt, receiptId: string, timestamp: number): GoalRecord | null {
   if (!goalLive(goal) || receipt.goalId !== goal.id || receipt.criteriaRevision !== goal.criteriaRevision ||
