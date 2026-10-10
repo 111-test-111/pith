@@ -107,7 +107,7 @@ import { TODO_TOOL_NAME } from './todo-protocol'
 import { GoalRuntime } from './goals/runtime'
 import { createGoalTools, createGoalContextExtension } from './goals/tools'
 import { GOAL_GET, GOAL_UPDATE, GOAL_STEP, goalLive } from './goals/protocol'
-import { validGoalLimits, type GoalActionRequest, type GoalActionResult, type GoalInput, type GoalReason } from '../../shared/goal'
+import { goalCanBeReplaced, validGoalCriteria, validGoalLimits, type GoalActionRequest, type GoalActionResult, type GoalInput, type GoalReason } from '../../shared/goal'
 import { JevCredentials } from './jev/credentials'
 import { JevService } from './jev/service'
 import { JevWorkflow } from './jev/workflow'
@@ -2300,8 +2300,9 @@ export class PiManager {
         session.isIdle && !managed.imageReplay && !managed.continuationRequest && !plan.restricted && !plan.submissionLocked &&
         !this.checkoutCoordinator.needsRecovery(managed.cwd) && this.planToolAdmitted(managed),
       pending: () => { const f = this.planFacts(managed); return !!(f.tasks || f.subagents || f.deliveries || f.questions || f.escalations || f.queuedMessages) },
-      unfinishedTodos: () => !!managed.todos.snapshot?.items.some(t => t.status === 'pending' || t.status === 'in_progress'),
-      review: () => managed.jevWorkflow?.paused ? 'paused' : this.jevPreferences.mode !== 'workflow' || managed.jevWorkflow?.snapshot?.phase === 'completed' ? 'ready' : 'waiting',
+      unfinishedTodos: () => !!(managed.todos.snapshot?.items.length ? managed.todos.snapshot.items : managed.todos.snapshot?.retainedItems)?.some(t => t.status === 'pending' || t.status === 'in_progress'),
+      review: () => managed.jevWorkflow?.paused ? 'paused' : this.jevPreferences.mode !== 'workflow' ||
+        managed.jevWorkflow?.snapshot?.phase === 'completed' && managed.jevWorkflow.snapshot.goalReviewKey === managed.goals?.reviewKey() ? 'ready' : 'waiting',
       reserve: () => plan.beginWork('background'),
       stop: reason => this.stopManaged(managed, reason),
       run: (content, initial, dispatchId, signal, accepted, input) => this.runGoal(managed, content, initial, dispatchId, signal, accepted, input)
@@ -2420,9 +2421,9 @@ export class PiManager {
       if (event.type === 'message_end' && (event.message.role === 'user' || event.message.role === 'toolResult')) return
       observeEvent(event)
     })
-    const unsubscribeCommitted = session.agent.subscribe(event => {
+    const unsubscribeCommitted = session.agent.subscribe(async event => {
       if (event.type === 'message_end') managed.trajectory?.observe(event)
-      if (event.type === 'message_end' && event.message.role !== 'user' && event.message.role !== 'toolResult') managed.goals?.committed(event)
+      if (event.type === 'message_end' && event.message.role !== 'user' && event.message.role !== 'toolResult') await managed.goals?.committed(event)
       if (event.type === 'message_start' && event.message.role === 'user') plan.releaseSubmissionForUser()
       if (event.type !== 'message_end' || (event.message.role !== 'user' && event.message.role !== 'toolResult')) return
       const leaf = session.sessionManager.getLeafEntry()
@@ -2430,7 +2431,7 @@ export class PiManager {
       if (event.message.role === 'user') plan.observeCommittedUser(leaf.id)
       else if (parsePlanSubmission(event.message)) plan.observeCommittedSubmission(event.message.toolCallId)
       observeEvent(event)
-      managed.goals?.committed(event)
+      await managed.goals?.committed(event)
     })
     managed.unsubscribe = () => { unsubscribeSession(); unsubscribeCommitted() }
     managed.manualCompaction = new ManualCompaction(session, {
@@ -2462,6 +2463,8 @@ export class PiManager {
       canStart: () => !this.closing && !managed.disposing && !this.jevUpdating && notifications!.canStart,
       pending: () => { const facts = this.planFacts(managed); return !!(facts.tasks || facts.subagents || facts.deliveries || facts.questions || facts.escalations) },
       sealed: () => plan.submissionLocked,
+      goalContext: () => managed.goals?.reviewContext() ?? null,
+      goalEvidence: () => managed.goals?.workflowEvidence(),
       changed: jevWorkflow => this.emit('pi:event', serialize({ type: 'jev_workflow_update', sessionPath: path, jevWorkflow, jevWorkflowSeq: managed.jevWorkflow?.revision ?? 0 }))
     })
     managed.goals?.installStreamGuard()
@@ -4176,6 +4179,12 @@ export class PiManager {
     const goals = managed?.goals
     if (!managed || !goals || managed.subagentChild || managed.scheduledTask || this.closing || managed.disposing) return { ok: false, code: 'unavailable' }
     if (!Number.isSafeInteger(request.expectedSeq) || request.expectedSeq !== goals.seq || request.goalId !== (goals.snapshot?.id ?? null)) return { ok: false, code: 'stale' }
+    if (request.action === 'inspect') {
+      if (managed.plan.branchWork || managed.initializing || managed.lifecyclePromise) return { ok: false, code: 'busy' }
+      await goals.inspect()
+      return { ok: true, goal: goals.snapshot, seq: goals.seq }
+    }
+    if (this.checkoutCoordinator.needsRecovery(managed.cwd)) return { ok: false, code: 'busy' }
     if (request.action === 'pause' || request.action === 'cancel') {
       if (managed.plan.branchWork || managed.plan.transitionBusy) return { ok: false, code: 'busy' }
       if (!goals.snapshot) return { ok: false, code: 'invalid' }
@@ -4184,7 +4193,7 @@ export class PiManager {
       if (goals.snapshot?.reason === 'storage') return { ok: false, code: 'storage' }
       return { ok: true, goal: goals.snapshot, seq: goals.seq }
     }
-    if (!['create', 'resume', 'limits'].includes(request.action)) return { ok: false, code: 'invalid' }
+    if (!['create', 'resume', 'limits', 'criteria'].includes(request.action)) return { ok: false, code: 'invalid' }
     if (managed.initializing || managed.lifecyclePromise || !managed.session.isIdle || goals.preparing || managed.imageReplay || managed.continuationRequest || managed.plan.workCount) return { ok: false, code: 'busy' }
     if (request.action !== 'limits' && (managed.plan.restricted || managed.plan.submissionLocked)) return { ok: false, code: 'plan' }
     if ((request.action === 'create' || request.action === 'limits') && !validGoalLimits(request.limits)) return { ok: false, code: 'invalid' }
@@ -4194,11 +4203,18 @@ export class PiManager {
       if (typeof request.objective !== 'string' || typeof request.acceptance !== 'string' || !request.objective.trim() || !request.acceptance.trim() ||
         request.objective.length > 8000 || request.acceptance.length > 8000) return { ok: false, code: 'invalid' }
       const current = goals.snapshot
-      if (current && !['completed', 'cancelled'].includes(current.status)) return { ok: false, code: 'busy' }
+      if (!goalCanBeReplaced(current)) return { ok: false, code: 'busy' }
       const facts = this.planFacts(managed)
       if (facts.tasks || facts.subagents || facts.deliveries || facts.questions || facts.escalations || facts.queuedMessages) return { ok: false, code: 'busy' }
     } else {
-      if (!goals.snapshot || ['completed', 'cancelled'].includes(goals.snapshot.status)) return { ok: false, code: 'invalid' }
+      if (!goals.snapshot || goals.snapshot.status === 'cancelled' || request.action !== 'criteria' && goals.snapshot.status === 'completed') return { ok: false, code: 'invalid' }
+      if (request.action === 'criteria') {
+        if (request.criteriaRevision !== goals.snapshot.criteriaRevision) return { ok: false, code: 'stale' }
+        if (!validGoalCriteria(request.criteria) || request.criteria.some(c => c.id && !goals.snapshot!.criteria.some(old => old.id === c.id))) return { ok: false, code: 'invalid' }
+        if (!goals.snapshot.accountingAvailable) return { ok: false, code: 'storage' }
+        const facts = this.planFacts(managed)
+        if (facts.tasks || facts.subagents || facts.deliveries || facts.questions || facts.escalations || facts.queuedMessages) return { ok: false, code: 'busy' }
+      }
       if (request.action === 'resume' && !goals.snapshot.accountingAvailable) return { ok: false, code: 'storage' }
       if (request.action === 'resume' && goals.quota()) return { ok: false, code: 'quota' }
     }
@@ -4207,8 +4223,9 @@ export class PiManager {
     try {
       if (!existsSync(managed.path)) this.materializeSession(managed.session.sessionManager)
       if (request.action === 'create') this.rememberFolder(managed.cwd)
-      if (request.action === 'create') goals.create(request.objective.trim(), request.acceptance.trim(), request.limits, { images: request.images, files: request.files })
+      if (request.action === 'create') { managed.jevWorkflow?.resume(); goals.create(request.objective.trim(), request.acceptance.trim(), request.limits, { images: request.images, files: request.files }) }
       else if (request.action === 'limits') goals.limits(request.limits)
+      else if (request.action === 'criteria') { goals.criteria(request.criteria); managed.jevWorkflow?.resume() }
       else {
         const owners = [managed.notifications, managed.askUser, managed.subagents?.notifications].filter(owner => owner != null)
         // Re-arm preserved answers before checking pending work, while holding
@@ -5448,6 +5465,7 @@ export class PiManager {
           try {
             if (request.mode !== 'files') await this.rewindLeaf(managed, known.target, operation.id)
             const committed = await this.rewindClient.call('finish', managed.cwd, session.sessionId, operation.id, true)
+            await managed.goals?.inspect()
             this.emit('pi:rewind', { sessionPath: managed.path })
             void this.fileIndex?.refresh(true).catch(() => {})
             return { operation: committed, ...(this.activeSession === managed ? { snapshot: this.snapshot() } : {}) }

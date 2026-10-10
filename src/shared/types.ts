@@ -1747,6 +1747,8 @@ export interface JevWorkflowDTO {
   route?: JevWorkflowRoute
   decision?: 'continue' | 'retry' | 'verify' | 'stop'
   reason?: JevWorkflowReason
+  /** Independent review is scoped to these exact Goal criteria and evidence. */
+  goalReviewKey?: string
   corrections: number
   requests: number
   jevInput: number

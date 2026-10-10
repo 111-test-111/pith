@@ -5,7 +5,7 @@ import { resolve } from 'node:path'
 import type { AgentSession } from '@earendil-works/pi-coding-agent'
 import { BASH_COMPLETION_TYPE } from '../task-notifications'
 import { SUBAGENT_COMPLETION_TYPE } from '../subagents/protocol'
-import { ASK_USER_ANSWER_TYPE } from '../../../shared/ask-user'
+import { ASK_USER_ANSWER_TYPE, ASK_USER_TOOL_NAME, isAskUserToolDetails } from '../../../shared/ask-user'
 
 type Entry = ReturnType<AgentSession['sessionManager']['getBranch']>[number]
 type Message = AgentSession['agent']['state']['messages'][number]
@@ -44,6 +44,8 @@ export interface EvidenceItem {
   /** Same command/path has one latest result, not dozens of duplicate entries. */
   key: string
   versions?: Record<string, string>
+  /** Goal's committed-source validator supplies file-scoped freshness. */
+  current?: boolean
 }
 export interface WorkflowEvidence {
   request: string
@@ -56,15 +58,32 @@ export interface WorkflowEvidence {
   changedFiles: string[]
   externalChanges: string[]
   omitted: number
+  /** Computed before bounding so an omitted failing check cannot disappear. */
+  unresolvedChecks?: number
+  /** Private controller references, separate from the bounded public result view. */
+  references?: EvidenceItem[]
+  supersededIds?: string[]
 }
 
 /** Preserve compact evidence by identity across the complete selected branch.
  * Never slice a bash envelope full of IDs: extract its command, exit and output.
  * Mutations advance a generation; inspections/checks from before it are labeled
  * stale, while the actual edit patches remain available. */
-export async function collectJevEvidence(branch: Entry[], cwd: string): Promise<WorkflowEvidence> {
-  const start = branch.findLastIndex(e => e.type === 'message' && e.message.role === 'user')
-  const user = start >= 0 && branch[start].type === 'message' ? (branch[start] as Extract<Entry, { type: 'message' }>).message : undefined
+export interface EvidenceOptions {
+  start?: number
+  excludedTools?: readonly string[]
+  canonicalPaths?: boolean
+  fileHash?: (value: string | Uint8Array) => string
+  /** Keep existing criterion references ahead of inspection noise, within the same bounds. */
+  preferredIds?: readonly string[]
+  retainReferences?: boolean
+}
+export async function collectJevEvidence(branch: Entry[], cwd: string, options: EvidenceOptions = {}): Promise<WorkflowEvidence> {
+  const start = options.start ?? branch.findLastIndex(e => e.type === 'message' && e.message.role === 'user')
+  const fileHash = options.fileHash ?? digest
+  const filePath = (path: string) => options.canonicalPaths ? resolve(cwd, path) : path
+  const preferred = new Set(options.preferredIds)
+  const user = start >= 0 && branch[start]?.type === 'message' ? (branch[start] as Extract<Entry, { type: 'message' }>).message : undefined
   const priorContext: WorkflowEvidence['priorContext'] = []
   for (let i = start - 1; i >= 0 && priorContext.length < 2; i--) {
     const e = branch[i]
@@ -75,6 +94,7 @@ export async function collectJevEvidence(branch: Entry[], cwd: string): Promise<
   }
   const calls = new Map<string, { name: string; args: Record<string, any> }>()
   const items = new Map<string, EvidenceItem>()
+  const references = new Map<string, EvidenceItem>()
   const files = new Map<string, { expected?: string; generation: number }>()
   const mutations: string[] = []
   const childChanges = new Set<string>()
@@ -86,7 +106,10 @@ export async function collectJevEvidence(branch: Entry[], cwd: string): Promise<
     for (const id of data.ids) if (typeof id === 'string') stamped.set(id, data.versions)
   }
   let generation = 0
-  const add = (item: EvidenceItem) => { items.delete(item.key); items.set(item.key, item) }
+  const add = (item: EvidenceItem) => {
+    items.delete(item.key); items.set(item.key, item)
+    if (options.retainReferences && preferred.has(item.id)) references.set(item.id, item)
+  }
   for (const e of branch.slice(Math.max(0, start))) {
     if (e.type === 'message' && e.message.role === 'assistant') {
       for (const c of e.message.content) if (c.type === 'toolCall') calls.set(c.id, { name: c.name, args: record(c.arguments) ?? {} })
@@ -100,15 +123,15 @@ export async function collectJevEvidence(branch: Entry[], cwd: string): Promise<
       tool = e.customType; output = typeof e.content === 'string' ? e.content : e.content.filter(c => c.type === 'text').map(c => c.text).join('\n')
       details = record(e.details); args = {}
     } else continue
-    if (tool === 'todo_write') continue
+    if (tool === 'todo_write' || options.excludedTools?.includes(tool)) continue
     const parsed = json(output) ?? (tool === BASH_COMPLETION_TYPE ? json(output.slice(output.indexOf('\n') + 1)) : undefined)
     const task = record(details?.bashTask) ?? record(parsed?.task) ?? (typeof parsed?.command === 'string' ? parsed : undefined)
-    const path = typeof args.path === 'string' ? args.path : undefined
+    const path = typeof args.path === 'string' ? filePath(args.path) : undefined
     const command = typeof task?.command === 'string' ? task.command : typeof args.command === 'string' ? args.command : undefined
     const changed = !isError && ['edit', 'write'].includes(tool)
     if (changed) {
       generation++; mutations.push(e.id)
-      if (path) files.set(path, { generation, ...(tool === 'write' && typeof args.content === 'string' ? { expected: digest(args.content) } : {}) })
+      if (path) files.set(path, { generation, ...(tool === 'write' && typeof args.content === 'string' ? { expected: fileHash(args.content) } : {}) })
     }
     // Child change evidence is preserved even if a delegation itself failed.
     const childRun = record(details?.subagent)
@@ -118,12 +141,15 @@ export async function collectJevEvidence(branch: Entry[], cwd: string): Promise<
       const identity = `${childRun?.runId}:${child.filePath}:${digest(JSON.stringify([child.patch, child.added, child.removed]))}`
       if (childChanges.has(identity)) continue
       childChanges.add(identity)
-      generation++; mutations.push(identity); files.set(child.filePath, { generation })
-      add({ id: `${e.id}:${digest(child.filePath)}`, key: `change:${child.filePath}`, kind: 'change', tool, path: child.filePath,
+      const childPath = filePath(child.filePath)
+      generation++; mutations.push(identity); files.set(childPath, { generation })
+      add({ id: `${e.id}:${digest(child.filePath)}`, key: `change:${childPath}`, kind: 'change', tool, path: childPath,
         status: 'success', generation, excerpt: jevExcerpt(typeof child.patch === 'string' ? child.patch : 'Child recorded a file change.', 2400) })
     }
-    const status: EvidenceItem['status'] = task && ['running', 'stopping'].includes(task.status) ? 'pending'
-      : isError || (task && !['succeeded', 'running', 'stopping'].includes(task.status)) ? 'failure' : 'success'
+    const ask = tool === ASK_USER_TOOL_NAME && isAskUserToolDetails(details) ? details :
+      tool === ASK_USER_ANSWER_TYPE && isAskUserToolDetails(details?.askUser) ? details.askUser : undefined
+    const status: EvidenceItem['status'] = task && ['running', 'stopping'].includes(task.status) || ask?.status === 'pending' ? 'pending'
+      : isError || ask?.status === 'cancelled' || (task && !['succeeded', 'running', 'stopping'].includes(task.status)) ? 'failure' : 'success'
     const body = typeof parsed?.output === 'string' ? parsed.output : output
     const patch = typeof details?.patch === 'string' ? details.patch : typeof details?.diff === 'string' ? details.diff : undefined
     const inspection = ['read', 'grep', 'find', 'ls'].includes(tool)
@@ -147,7 +173,7 @@ export async function collectJevEvidence(branch: Entry[], cwd: string): Promise<
     try {
       const file = resolve(cwd, path), info = await stat(file)
       if (!info.isFile() || info.size > 2 * 1024 * 1024) return [path, `unread:${info.size}:${info.mtimeMs}`, false] as const
-      const content = await readFile(file), hash = digest(content)
+      const content = await readFile(file), hash = fileHash(content)
       if (changedPaths.has(path) && !content.includes(0) && isUtf8(content)) currentSources.set(path, jevExcerpt(content.toString('utf8'), 1600))
       return [path, hash, !!expected.expected && expected.expected !== hash] as const
     } catch { return [path, 'unavailable', !!expected.expected] as const }
@@ -160,6 +186,7 @@ export async function collectJevEvidence(branch: Entry[], cwd: string): Promise<
     ...(item.kind === 'change' && item.path && currentSources.has(item.path) ? { currentSource: currentSources.get(item.path) } : {}) }))
   const ranked = [...all.filter(i => i.kind === 'change').reverse(), ...all.filter(i => i.kind === 'check').reverse(),
     ...all.filter(i => i.kind === 'result').reverse(), ...all.filter(i => i.kind === 'inspection').reverse()]
+  ranked.sort((a, b) => Number(preferred.has(b.id)) - Number(preferred.has(a.id)))
   const selected: EvidenceItem[] = []
   let bytes = 0
   for (const item of ranked) {
@@ -170,10 +197,15 @@ export async function collectJevEvidence(branch: Entry[], cwd: string): Promise<
   return { request: jevExcerpt(user ? textOf(user) : 'Continue the current task.', 3500), priorContext,
     attachmentsOmitted: !!user && 'content' in user && typeof user.content !== 'string' && user.content.some(p => p.type === 'image'),
     revision, versions: Object.fromEntries(versions.map(([path, hash]) => [path, hash])), generation, items: selected, changedFiles: [...new Set(changedFiles)], externalChanges: versions.filter(v => v[2]).map(v => v[0]),
-    omitted: all.length - selected.length }
+    omitted: all.length - selected.length, unresolvedChecks: all.filter(i => i.kind === 'check' && i.status !== 'success').length,
+    ...(options.retainReferences ? { references: [...references.values()], supersededIds: [...references.values()].filter(item => {
+      const latest = items.get(item.key)!
+      return latest.id !== item.id && !(item.path && ['change', 'inspection'].includes(item.kind) && latest.status === 'success')
+    }).map(item => item.id) } : {}) }
 }
 
 export function evidenceIsCurrent(item: EvidenceItem, evidence: WorkflowEvidence, paths: string[]): boolean {
+  if (item.current !== undefined) return item.current
   if (item.kind === 'change') {
     const version = item.path ? evidence.versions[item.path] : undefined
     if (!item.path || !version || version === 'unavailable' || version.startsWith('unread:')) return false

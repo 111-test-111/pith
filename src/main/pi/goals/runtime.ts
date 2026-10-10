@@ -1,13 +1,14 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { AgentSession, AgentSessionEvent } from '@earendil-works/pi-coding-agent'
-import type { GoalInput, GoalLimits, GoalRecord, GoalReason, GoalSnapshotDTO } from '../../../shared/goal'
+import type { GoalCriterionInput, GoalInput, GoalLimits, GoalRecord, GoalReason, GoalSnapshotDTO } from '../../../shared/goal'
 import { statsFromEntries } from '../context-detail'
-import { collectJevEvidence } from '../jev/evidence'
+import { collectJevEvidence, jevExcerpt } from '../jev/evidence'
 import { BASH_COMPLETION_TYPE } from '../task-notifications'
 import { SUBAGENT_COMPLETION_TYPE } from '../subagents/protocol'
 import { ASK_USER_ANSWER_TYPE } from '../../../shared/ask-user'
 import type { PlanStorage } from '../plan-storage'
-import { GOAL_ENTRY, GOAL_GET, GOAL_UPDATE, GOAL_RECEIPT, goalFromBranch, goalLive } from './protocol'
+import { GOAL_ENTRY, GOAL_EVIDENCE, GOAL_GET, GOAL_UPDATE, applyGoalReceipt, parseGoalReceipt, goalFromBranch, goalLive, type GoalReceipt, type GoalUpdateInput } from './protocol'
+import { collectGoalEvidence, currentGoalSource, goalEvidenceView, makeGoalStamps, readGoalVersions, type GoalEvidenceState } from './evidence'
 import { GoalStorage, type GoalLedger } from './storage'
 
 interface Host {
@@ -44,6 +45,10 @@ export class GoalRuntime {
   private initialInput: GoalInput | null = null
   private countInitial = false
   private disposeStream: (() => void) | null = null
+  private proofState: GoalEvidenceState | null = null
+  private proofEpoch = 0
+  private beforeVersions = new Map<string, Record<string, string>>()
+  private disposeProofGuard: (() => void) | null = null
   seq = 0
   constructor(private host: Host) {
     this.store = new GoalStorage(host.userData, host.session.sessionId)
@@ -52,13 +57,18 @@ export class GoalRuntime {
   get preparing(): boolean { return !!this.job }
   get continuesAtSettled(): boolean {
     return this.live && !this.quota() && this.host.review() !== 'paused' &&
-      (this.goal?.status !== 'verifying' || this.host.pending() || this.host.unfinishedTodos() || this.host.review() !== 'ready')
+      (this.goal?.status !== 'verifying' || this.host.pending() || this.host.unfinishedTodos() || this.host.review() !== 'ready' ||
+        this.snapshot?.criteria.some(c => c.state !== 'verified') || !!this.snapshot?.evidenceBlocked)
   }
   get live(): boolean { return !this.failed && goalLive(this.goal) }
   get stopsWakes(): boolean { return !this.manualWakes && !!this.goal && !this.live && this.goal.status !== 'completed' }
   async idle(): Promise<void> { await this.jobPromise }
   get snapshot(): GoalSnapshotDTO | null {
-    return this.goal ? { ...structuredClone(this.goal), seq: this.seq, autoRuns: this.ledger?.autoRuns ?? 0,
+    const record = this.goal && structuredClone(this.goal)
+    const view = record && this.proofState && goalEvidenceView(this.proofState, record)
+    return record ? { ...record, criteria: view?.criteria ?? record.criteria.map(c => ({ ...c, state: c.proof ? 'stale' as const : 'pending' as const })),
+      evidenceResults: view?.results ?? [], evidenceOmitted: this.proofState?.evidence.omitted ?? 0, evidenceBlocked: view?.blocked ?? false,
+      seq: this.seq, autoRuns: this.ledger?.autoRuns ?? 0,
       tokens: this.ledger?.tokens ?? 0, accountingAvailable: !this.failed && !!this.ledger,
       executing: !this.host.session.isIdle || !!this.job, waiting: this.live && this.host.pending() } : null
   }
@@ -91,11 +101,13 @@ export class GoalRuntime {
     try { this.ledger = this.store.update(this.goal.id, change, initialize); return true }
     catch { this.fault(); return false }
   }
-  private invalidate(): void { this.generation++; this.job?.abort(); this.scheduled = false }
+  private invalidate(): void { this.generation++; this.job?.abort(); this.scheduled = false; this.beforeVersions.clear() }
   restore(reason: 'interrupted' | 'rewound'): void {
     this.invalidate()
     this.initialInput = null
     this.countInitial = false
+    this.proofState = null
+    this.proofEpoch++
     // Finish billing the outgoing goal before selecting another branch's fact.
     this.bill()
     if (this.ledger?.run) this.updateLedger(l => { l.run = null })
@@ -120,15 +132,19 @@ export class GoalRuntime {
       // Restoring must preserve the reviewed SDK leaf and Rewind's journal
       // endpoints. Recovery grants no execution; explicit Resume persists the
       // next transition. Reopening this active branch will pause it again.
-      if (goalLive(this.goal)) this.goal = { ...this.goal, status: 'paused', reason }
+      if (goalLive(this.goal) || reason === 'rewound' && this.goal.status === 'completed') this.goal = { ...this.goal, status: 'paused', reason, evidence: null }
     }
     this.evaluate = false
     this.publish(true)
+    void this.inspect()
   }
   create(objective: string, acceptance: string, limits: GoalLimits, input: GoalInput = {}): void {
     this.invalidate()
     const id = randomUUID()
-    this.goal = { version: 1, id, objective, acceptance, limits: structuredClone(limits),
+    this.proofState = null
+    this.proofEpoch++
+    this.goal = { version: 2, id, objective, acceptance, criteriaRevision: 1,
+      criteria: [{ id: randomUUID(), text: acceptance, revision: 1, proof: null }], limits: structuredClone(limits),
       status: 'active', reason: null, evidence: null, createdAt: Date.now(), updatedAt: Date.now() }
     this.failed = false
     this.initialInput = input
@@ -138,6 +154,83 @@ export class GoalRuntime {
     if (this.live) this.start()
   }
   limits(limits: GoalLimits): void { this.save({ limits: structuredClone(limits) }) }
+  criteria(input: GoalCriterionInput[]): void {
+    if (!this.goal) return
+    this.invalidate()
+    const criteria = input.map(item => {
+      const old = this.goal!.criteria.find(c => c.id === item.id)
+      return old && old.text === item.text.trim() ? old : { id: old?.id ?? randomUUID(), text: item.text.trim(), revision: (old?.revision ?? 0) + 1, proof: null }
+    })
+    this.save({ criteria, acceptance: criteria.map(c => c.text).join('\n'), criteriaRevision: this.goal.criteriaRevision + 1,
+      status: 'paused', reason: 'criteria', evidence: null })
+  }
+  /** Refresh only observations; inspecting/reopening cannot authorize execution. */
+  async inspect(): Promise<GoalSnapshotDTO | null> {
+    const goal = this.goal, generation = this.generation, epoch = ++this.proofEpoch
+    if (!goal) return null
+    try {
+      const state = await collectGoalEvidence(this.host.session.sessionManager.getBranch(), this.host.cwd, goal)
+      if (generation !== this.generation || epoch !== this.proofEpoch || goal.id !== this.goal?.id || goal.criteriaRevision !== this.goal.criteriaRevision) return this.snapshot
+      this.proofState = state
+      const view = goalEvidenceView(state, this.goal)
+      if (this.goal.status === 'completed' && (view.blocked || view.criteria.some(c => c.state !== 'verified'))) {
+        // Preserve exact checkout/recovery endpoints; no private entry on read.
+        this.goal = { ...this.goal, status: 'paused', reason: 'evidence', evidence: null }
+      }
+      this.publish()
+    } catch {
+      if (generation === this.generation && epoch === this.proofEpoch) {
+        this.proofState = null
+        if (this.goal?.status === 'completed') this.goal = { ...this.goal, status: 'paused', reason: 'evidence', evidence: null }
+        this.publish()
+      }
+    }
+    return this.snapshot
+  }
+  reviewContext() {
+    const goal = this.snapshot
+    if (!goal || !goalLive(goal)) return null
+    const context = { id: goal.id, criteriaRevision: goal.criteriaRevision, objective: goal.objective, evidenceBlocked: goal.evidenceBlocked,
+      criteria: goal.criteria.map(c => ({ id: c.id, revision: c.revision, text: c.text, state: c.state,
+        ...(c.proof ? { summary: c.proof.summary, evidenceIds: c.proof.sources.map(s => s.id) } : {}) })) }
+    return { ...context, key: createHash('sha256').update(JSON.stringify({ context, revision: this.proofState?.evidence.revision,
+      results: this.proofState?.evidence.items.map(i => [i.id, i.status]) })).digest('hex') }
+  }
+  reviewKey(): string | null { return this.reviewContext()?.key ?? null }
+  async workflowEvidence() {
+    if (!this.live) return undefined
+    await this.inspect()
+    const state = this.proofState
+    if (!state) return undefined
+    const items = new Map([...(state.evidence.references ?? []), ...state.evidence.items].map(item => {
+      const stamp = state.stamps.get(item.id)
+      return [item.id, { ...item, current: !!stamp && currentGoalSource(state, { id: item.id, stampId: stamp.stampId, hash: stamp.hash }, false) }] as const
+    }))
+    return { ...state.evidence, items: [...items.values()] }
+  }
+  async receipt(input: GoalUpdateInput, signal?: AbortSignal): Promise<GoalReceipt> {
+    const goal = this.goal, generation = this.generation
+    if (!goal || !this.live || goal.id !== input.goalId || goal.criteriaRevision !== input.criteriaRevision) throw new Error('Goal or acceptance criteria changed. Read get_goal again.')
+    const state = await collectGoalEvidence(this.host.session.sessionManager.getBranch(), this.host.cwd, goal, input.claims?.flatMap(c => c.evidenceIds))
+    if (signal?.aborted || generation !== this.generation || !this.live || goal.criteriaRevision !== this.goal?.criteriaRevision) throw new Error('Goal verification cancelled')
+    const claims = (input.claims ?? []).map(claim => {
+      const criterion = goal.criteria.find(c => c.id === claim.criterionId)
+      if (!criterion || !claim.evidence.trim() || claim.evidence.length > 1000 || !claim.evidenceIds.length || claim.evidenceIds.length > 8 || new Set(claim.evidenceIds).size !== claim.evidenceIds.length) throw new Error('Invalid criterion proof')
+      const sources = claim.evidenceIds.map(id => {
+        const stamp = state.stamps.get(id)
+        const ref = { id, stampId: stamp?.stampId ?? '', hash: stamp?.hash ?? '' }
+        if (!currentGoalSource(state, ref)) throw new Error(`Evidence ${id} is missing, failed, pending or stale. Obtain a fresh committed result.`)
+        return ref
+      })
+      return { criterionId: criterion.id, revision: criterion.revision, summary: jevExcerpt(claim.evidence.trim(), 1000), sources }
+    })
+    if (new Set(claims.map(c => c.criterionId)).size !== claims.length) throw new Error('Duplicate criterion proof')
+    const view = goalEvidenceView(state, goal)
+    if (input.status === 'complete' && (view.blocked || view.criteria.some(c => !claims.some(claim => claim.criterionId === c.id) && c.state !== 'verified'))) throw new Error('Every criterion needs current committed evidence and all checks must succeed.')
+    this.proofState = state
+    this.publish()
+    return { kind: 'pith-goal-result-v2', goalId: goal.id, criteriaRevision: goal.criteriaRevision, status: input.status, evidence: jevExcerpt(input.evidence.trim(), 8000), claims }
+  }
   quota(): GoalReason | null {
     if (!this.goal || !this.ledger) return null
     if (this.goal.limits.tokenBudget !== null && this.ledger.tokens >= this.goal.limits.tokenBudget) return 'tokens'
@@ -157,7 +250,7 @@ export class GoalRuntime {
   pause(reason: GoalReason, persist = true): void {
     this.manualWakes = false
     this.invalidate()
-    if (goalLive(this.goal)) {
+    if (goalLive(this.goal) || reason === 'rewound' && this.goal?.status === 'completed') {
       if (persist) this.save({ status: 'paused', reason })
       else { this.goal = { ...this.goal!, status: 'paused', reason }; this.publish() }
     }
@@ -193,7 +286,7 @@ export class GoalRuntime {
     this.publish()
   }
   /** Called after the SDK's awaited persistence subscriber, never its early public event. */
-  committed(event: AgentSessionEvent): void {
+  async committed(event: AgentSessionEvent): Promise<void> {
     if (event.type !== 'message_end') return
     this.bill()
     const message = event.message
@@ -206,11 +299,45 @@ export class GoalRuntime {
       message.role === 'custom' && [BASH_COMPLETION_TYPE, SUBAGENT_COMPLETION_TYPE, ASK_USER_ANSWER_TYPE].includes(message.customType))) {
       this.save({ status: 'active', reason: null, evidence: null })
     }
-    if (message.role !== 'toolResult' || message.toolName !== GOAL_UPDATE || message.isError || !this.live) return
-    const data = message.details as { kind?: string; goalId?: string; status?: string; evidence?: string } | undefined
-    if (data?.kind !== GOAL_RECEIPT || data.goalId !== this.goal?.id || !['complete', 'blocked'].includes(data.status ?? '') || typeof data.evidence !== 'string' || !data.evidence.trim()) return
-    this.save({ status: data.status === 'complete' ? 'verifying' : 'blocked', reason: null,
-      evidence: data.evidence.slice(0, 8000) })
+    if (!this.goal) return
+    const branch = this.host.session.sessionManager.getBranch()
+    const source = branch.findLast(e => e.type === 'message' ? e.message === message : e.type === 'custom_message' && message.role === 'custom' &&
+      e.customType === message.customType && JSON.stringify(e.content) === JSON.stringify(message.content))
+    if (message.role === 'toolResult' && message.toolName === GOAL_UPDATE && !message.isError && this.live && source) {
+      const receipt = parseGoalReceipt(message.details)
+      const next = receipt && applyGoalReceipt(this.goal, receipt, source.id, message.timestamp)
+      if (next) this.save(next)
+    } else if (source && this.live && (message.role === 'toolResult' || message.role === 'custom')) {
+      const generation = this.generation, goalId = this.goal.id
+      const state = await collectGoalEvidence(branch, this.host.cwd, this.goal)
+      if (generation !== this.generation || !this.live || this.goal?.id !== goalId) return
+      const items = makeGoalStamps(state, source.id)
+      if (message.role === 'custom' && message.customType === BASH_COMPLETION_TYPE) {
+        const taskId = (message.details as { taskId?: string; bashTask?: { id?: string } } | undefined)?.bashTask?.id ??
+          (message.details as { taskId?: string } | undefined)?.taskId
+        const origin = taskId && branch.findLast(e => e.type === 'message' && e.message.role === 'toolResult' &&
+          (e.message.details as { bashTask?: { id?: string } } | undefined)?.bashTask?.id === taskId)
+        const original = origin ? state.stamps.get(origin.id) : undefined
+        // Delivery may happen long after the command ran. Bind its result to
+        // the original observed version, never silently to newer source files.
+        for (const item of items) if (!original || original.unstable || original.generation !== item.generation ||
+          Object.entries(original.versions).some(([path, version]) => item.versions[path] !== version)) item.unstable = true
+      }
+      const before = message.role === 'toolResult' ? this.beforeVersions.get(message.toolCallId) : undefined
+      if (message.role === 'toolResult') this.beforeVersions.delete(message.toolCallId)
+      for (const item of items) {
+        const observed = state.evidence.items.find(e => e.id === item.id)
+        // Reads/checks must observe a stable version across execution and commit.
+        // Write/edit results deliberately change their file and bind afterward.
+        if (observed?.kind !== 'change' && before && Object.entries(before).some(([path, version]) =>
+          (item.scope === 'workspace' || observed?.path === path) && item.versions[path] !== version)) item.unstable = true
+      }
+      if (items.length) {
+        try { this.host.storage.append(GOAL_EVIDENCE, { version: 1, goalId, items }) }
+        catch { this.fault(); return }
+      }
+    }
+    if (message.role !== 'assistant') await this.inspect()
   }
   observe(event: AgentSessionEvent | { type: 'pi_error' }): void {
     if (this.disposed) return
@@ -239,19 +366,17 @@ export class GoalRuntime {
   private content(initial: boolean): string {
     const g = this.goal!
     return initial ? g.objective :
-      `Continue the current goal from the committed results; preserve completed work and use the existing Todo list. Goal and acceptance criteria (quoted JSON): ${JSON.stringify({ id: g.id, objective: g.objective, acceptance: g.acceptance })}. Check remaining work and verify it. Request completion through update_goal only with concrete evidence for every criterion; report a concrete external blocker if necessary. Respect user instructions and permissions.`
+      `Continue the current goal from the committed results; preserve completed work and use the existing Todo list. Read get_goal for criterion IDs, current revisions and committed evidence IDs. Goal and acceptance criteria (quoted JSON): ${JSON.stringify({ id: g.id, objective: g.objective, criteriaRevision: g.criteriaRevision, criteria: g.criteria.map(c => ({ id: c.id, revision: c.revision, text: c.text })) })}. Verify remaining criteria. Use update_goal with evidence IDs, never prose alone; report a concrete external blocker if necessary. Respect user instructions and permissions.`
   }
   private start(): void {
     const initial = this.initialInput !== null
     if (!this.live || this.disposed || this.job || !this.host.available() || this.host.pending()) return
     const review = this.host.review()
     if (review === 'paused') { this.pause('review'); return }
-    // Completion requires a committed receipt, no unfinished Todo and a settled review.
-    if (this.goal?.status === 'verifying' && !this.host.unfinishedTodos() && review === 'ready') {
-      this.save({ status: 'completed', reason: null }); return
-    }
     const quota = this.quota()
-    if (quota) { this.pause(quota); return }
+    // Final validation spends no new dispatch. Exhausted allowance may still
+    // settle a fully proven candidate, but cannot admit another model request.
+    if (quota && this.goal?.status !== 'verifying') { this.pause(quota); return }
     let release: () => void
     try { release = this.host.reserve() } catch { return }
     const controller = this.job = new AbortController()
@@ -261,6 +386,16 @@ export class GoalRuntime {
     const accepted = () => generation === this.generation && !controller.signal.aborted && this.live && !this.disposed && this.host.available() && !this.host.pending()
     this.jobPromise = (async () => {
       try {
+        await this.inspect()
+        if (!accepted()) return
+        if (this.goal?.status === 'verifying') {
+          const snapshot = this.snapshot!
+          if (!snapshot.evidenceBlocked && snapshot.criteria.every(c => c.state === 'verified')) {
+            if (!this.host.unfinishedTodos() && this.host.review() === 'ready') { this.save({ status: 'completed', reason: null }); return }
+          } else this.save({ status: 'active', reason: null, evidence: null })
+        }
+        const quota = this.quota()
+        if (quota) { this.pause(quota); return }
         if (!initial && this.evaluate) {
           const evidence = await collectJevEvidence(this.host.session.sessionManager.getBranch(), this.host.cwd)
           if (!accepted()) return
@@ -300,6 +435,21 @@ export class GoalRuntime {
   /** Bound every primary model request, including SDK/Jev continuations within a run. */
   installStreamGuard(): void {
     const agent = this.host.session.agent
+    const previousBefore = agent.beforeToolCall
+    const before: typeof previousBefore = async (context, signal) => {
+      const prior = await previousBefore?.(context, signal)
+      if (prior?.block || !this.live || [GOAL_GET, GOAL_UPDATE, 'todo_write'].includes(context.toolCall.name)) return prior
+      const generation = this.generation
+      const args = context.args as { path?: unknown }
+      const paths = [...Object.keys(this.proofState?.evidence.versions ?? {}), ...(typeof args?.path === 'string' ? [args.path] : [])]
+      const versions = await readGoalVersions(paths, this.host.cwd)
+      if (signal?.aborted || generation !== this.generation || !this.live) return { block: true, terminate: true, reason: 'Goal execution cancelled.' }
+      if (this.beforeVersions.size >= 256) this.beforeVersions.clear()
+      this.beforeVersions.set(context.toolCall.id, versions)
+      return prior
+    }
+    agent.beforeToolCall = before
+    this.disposeProofGuard = () => { if (agent.beforeToolCall === before) agent.beforeToolCall = previousBefore }
     const previous = agent.streamFunction
     const stream: typeof previous = async (model, context, options) => {
       this.bill()
@@ -322,6 +472,7 @@ export class GoalRuntime {
     this.initialInput = null
     this.disposed = true
     this.disposeStream?.()
+    this.disposeProofGuard?.()
     // The manager still observes committed abort results before removing subscribers.
   }
 }

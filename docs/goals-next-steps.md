@@ -2,13 +2,13 @@
 
 Keep one current goal per ordinary conversation and the existing Todo/continuation/task-panel ownership. The next release should strengthen completion evidence and recovery before expanding to multiple goals or scheduling.
 
-## 1. Acceptance criteria and evidence
+## 1. Acceptance criteria and evidence — implemented
 
-Add stable IDs and a revision to explicit acceptance criteria. Let the user review/edit criteria in the Goal panel; a change invalidates older completion candidates. Keep composer send-to-start immediate, with the submitted request as the default acceptance target.
+Stable criterion IDs/revisions, panel editing, per-row committed provenance and file-version bindings now ship in the native Goal implementation. Todo remains the work list and a structural completion gate; the existing Jev workflow reviews the explicit criteria and exact evidence revision. Stop, Plan, compaction, Rewind and reopening retain their ownership/accounting guarantees. See [implementation and validation](goals-implementation.md).
 
-Associate verification receipts with committed tool results, file versions and the criterion revision. Show unresolved criteria and their latest evidence in the existing panel. Keep Todo and pending-work drainage as structural gates. Referenced evidence supports review; it does not by itself prove arbitrary semantic claims. Use the existing Jev workflow for an independent review when enabled.
+Deterministic real-SDK fixtures include a deliberately failing check and a plausible false completion claim. They verify application refusal, not real-model task quality. Real-provider evaluation with these adversarial cases remains part of section 4; external Jev/provider calls are opt-in and are not asserted as covered by offline regressions.
 
-Acceptance: mutations, failed checks, late background outcomes, criterion edits and Rewind cannot complete from stale receipts; already verified unchanged criteria remain visible. Main cannot mark complete while a criterion, Todo item, question, child or delivery is unresolved. Real-model fixtures should include a deliberately failing check and a superficially plausible completion claim.
+Next prioritize the process-kill recovery matrix below, then shared owned-work billing. Keep one goal per ordinary conversation while these guarantees mature.
 
 ## 2. Process-kill recovery matrix
 

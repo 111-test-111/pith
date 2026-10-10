@@ -18,17 +18,19 @@ const idle = f => f.session.isIdle && !f.managed.goals.preparing
 const tool = (id, name, args) => ({ type: 'toolCall', id, name, arguments: args })
 const text = text => ({ type: 'text', text })
 const goal = f => f.managed.goals.snapshot
+const evidenceRead = (f, id = 'read-proof') => tool(id, 'read', { path: join(f.project, 'fixture-evidence.txt') })
+const completion = (f, evidence) => ({ goalId: goal(f).id, criteriaRevision: goal(f).criteriaRevision, status: 'complete', evidence, claims: goal(f).criteria.map(c => ({ criterionId: c.id, evidence, evidenceIds: goal(f).evidenceResults.filter(r => r.status === 'success').slice(0, 1).map(r => r.id) })) })
 const fixtures = []
-async function fixture(options) { const f = await createPlanFixture(options); fixtures.push(f); await f.managed.lifecyclePromise; return f }
+async function fixture(options) { const f = await createPlanFixture(options); fixtures.push(f); await f.managed.lifecyclePromise; await writeFile(join(f.project, 'fixture-evidence.txt'), 'A committed verification fixture.\n'); return f }
 try {
   const f = await fixture({ withRewind: true })
   await writeFile(join(f.project, 'baseline.txt'), 'baseline\n')
-  f.setRespond(n => n === 1 ? [text('Continue implementing.')] : n === 2 ?
-    [tool('goal-complete', 'update_goal', { goalId: goal(f).id, status: 'complete', evidence: 'Acceptance criterion verified against the actual result.' })] : [text('Implemented and verified.')])
+  f.setRespond(n => n === 1 ? [text('Continue implementing.')] : n === 2 ? [evidenceRead(f)] : n === 3 ?
+    [tool('goal-complete', 'update_goal', completion(f, 'Acceptance criterion verified against the actual result.'))] : [text('Implemented and verified.')])
   assert.equal((await create(f)).ok, true)
   await until(() => goal(f)?.status === 'completed' && idle(f), 'completed goal')
   assert.equal(goal(f).autoRuns, 1)
-  assert.equal(goal(f).tokens, 6)
+  assert.equal(goal(f).tokens, 8)
   const branch = f.manager.getBranch()
   assert.equal(branch.filter(e => e.type === 'message' && e.message.role === 'user').length, 1, 'only the explicit goal start adds a user turn')
   assert.equal(branch.filter(e => e.type === 'custom_message' && e.customType === 'pith_goal_step_v1').length, 1, 'automatic runs are hidden continuations')
@@ -51,10 +53,10 @@ try {
   assert.equal(rewind.error, undefined)
   assert.equal(goal(f).status, 'paused')
   assert.equal(goal(f).reason, 'rewound')
-  assert.equal(goal(f).tokens, 6)
+  assert.equal(goal(f).tokens, 8)
   assert.equal(goal(f).autoRuns, 1)
   await sleep(40)
-  assert.equal(f.requests.length, 3, 'Rewind never wakes the restored historical active goal')
+  assert.equal(f.requests.length, 4, 'Rewind never wakes the restored historical active goal')
 
   // Hold wake admission while the goal is live: the reviewed leaf must remain
   // valid, and file-only restore must preserve the exact conversation leaf.
@@ -80,7 +82,7 @@ try {
   assert.throws(() => f.app.prompt({ text: 'Racing user turn', images: [], files: [] }), /in progress/)
   f.app.abort()
   assert.equal(f.manager.getLeafId(), beforeFiles, 'Stop during Rewind cannot append a Goal transition')
-  assert.equal(f.requests.length, 3)
+  assert.equal(f.requests.length, 4)
   restoreGate.resolve()
   const filesRestore = await restoringFiles
   f.app.rewindClient.call = workerCall
@@ -106,20 +108,26 @@ try {
   await recovering.lifecyclePromise
   assert.equal(recovering.recoveryOnly, true)
   assert.equal(recovering.goals.snapshot.status, 'paused')
+  const recoveryLeaf = recovering.session.sessionManager.getLeafId()
+  for (const action of ['resume', 'pause', 'cancel', 'limits', 'criteria']) {
+    const result = await f.app.goalAction({ sessionPath: recovering.path, expectedSeq: recovering.goals.seq, goalId: recovering.goals.snapshot.id, action })
+    assert.equal(result.code, 'busy', 'Rewind crash recovery fences every Goal mutation')
+  }
+  assert.equal(recovering.session.sessionManager.getLeafId(), recoveryLeaf)
   const recoveredRewind = await f.app.rewindRecover(recovering.path, operationId)
   assert.equal(recoveredRewind.error, undefined, 'Goal restoration preserves Rewind crash-journal endpoints')
-  assert.equal(f.app.activeSession.goals.snapshot.tokens, 6)
+  assert.equal(f.app.activeSession.goals.snapshot.tokens, 8)
   assert.equal(f.app.activeSession.goals.snapshot.autoRuns, 1)
   assert.equal(f.app.activeSession.goals.snapshot.status, 'paused')
-  assert.equal(f.requests.length, 3)
+  assert.equal(f.requests.length, 4)
 
   const changed = await fixture()
-  changed.setRespond(n => n === 1 ? [tool('early-completion', 'update_goal', { goalId: goal(changed).id, status: 'complete', evidence: 'Original state verified.' })] :
-    n === 2 ? [tool('after-completion-write', 'write', { path: join(changed.project, 'result.txt'), content: 'changed after the receipt\n' })] :
-    n === 4 ? [tool('new-completion', 'update_goal', { goalId: goal(changed).id, status: 'complete', evidence: 'Rechecked the changed result.' })] : [text('Done.')])
+  changed.setRespond(n => n === 1 ? [evidenceRead(changed)] : n === 2 ? [tool('early-completion', 'update_goal', completion(changed, 'Original state verified.'))] :
+    n === 3 ? [tool('after-completion-write', 'write', { path: join(changed.project, 'result.txt'), content: 'changed after the receipt\n' })] :
+    n === 5 ? [tool('new-completion', 'update_goal', completion(changed, 'Rechecked the changed result.'))] : [text('Done.')])
   await create(changed)
   await until(() => goal(changed)?.status === 'completed' && idle(changed), 'fresh completion after mutation')
-  assert.equal(changed.requests.length, 5)
+  assert.equal(changed.requests.length, 6)
   assert.equal(goal(changed).evidence, 'Rechecked the changed result.', 'a later mutation invalidates an earlier completion receipt')
   assert.equal(await readFile(join(changed.project, 'result.txt'), 'utf8'), 'changed after the receipt\n')
 
@@ -216,7 +224,7 @@ try {
 
   const answered = await fixture()
   answered.setRespond(n => n === 1 ? [tool('async-goal-question', 'ask_user_question', { mode: 'async', questions: [{ question: 'Choose the output format', options: [{ label: 'Text' }, { label: 'JSON' }] }] })] :
-    n === 3 ? [tool('answered-complete', 'update_goal', { goalId: goal(answered).id, status: 'complete', evidence: 'The preserved answer was consumed and the selected format verified.' })] : [text('Waiting or verified.')])
+    n === 3 ? [evidenceRead(answered)] : n === 4 ? [tool('answered-complete', 'update_goal', completion(answered, 'The preserved answer was consumed and the selected format verified.'))] : [text('Waiting or verified.')])
   await create(answered, { maxAutoRuns: 1, tokenBudget: null })
   await until(() => goal(answered)?.waiting && idle(answered), 'goal waits for async question')
   assert.equal(answered.requests.length, 2)
@@ -228,7 +236,7 @@ try {
   assert.equal(answered.requests.length, 2, 'answer cannot wake a paused goal')
   assert.equal((await call(answered, 'resume')).ok, true)
   await until(() => goal(answered)?.status === 'completed' && idle(answered), 'Resume consumes preserved async answer')
-  assert.equal(answered.requests.length, 4)
+  assert.equal(answered.requests.length, 5)
   assert.equal(answered.manager.getBranch().filter(e => e.type === 'custom_message' && e.customType === 'ask_user_answer').length, 1)
   assert.equal(goal(answered).autoRuns, 0, 'the existing answer wake is not a duplicate goal continuation')
 
@@ -244,7 +252,7 @@ try {
   interrupted.session.agent.state.messages = [...interrupted.session.messages, unfinished]
   interrupted.managed.goals.restore('interrupted')
   assert.equal((await call(interrupted, 'limits', { limits: { maxAutoRuns: 3, tokenBudget: null } })).ok, true)
-  interrupted.setRespond(n => n === 3 ? [tool('interrupted-complete', 'update_goal', { goalId: goal(interrupted).id, status: 'complete', evidence: 'Continued the usable frontier and verified the result.' })] : [text('Verified.')])
+  interrupted.setRespond(n => n === 3 ? [evidenceRead(interrupted)] : n === 4 ? [tool('interrupted-complete', 'update_goal', completion(interrupted, 'Continued the usable frontier and verified the result.'))] : [text('Verified.')])
   assert.equal((await call(interrupted, 'resume')).ok, true)
   await until(() => goal(interrupted)?.status === 'completed' && idle(interrupted), 'Resume preserves interrupted frontier')
   const quoted = interrupted.requests[2].messages.findLast(m => m.role === 'user' && JSON.stringify(m.content).includes('unexecutedToolCall'))
@@ -317,12 +325,12 @@ try {
   assert.equal((await call(manual, 'resume')).code, 'busy')
   assert.equal((await manual.app.setSessionMode({ sessionPath: manual.managed.path, mode: 'plan' })).code, 'busy')
   assert.equal(goal(manual).status, 'active', 'a refused Plan transition cannot interrupt admitted manual preparation')
-  manual.setRespond(n => n === 4 ? [tool('manual-complete', 'update_goal', { goalId: goal(manual).id, status: 'complete', evidence: 'Verified the new user evidence.' })] : [text('Verified.')])
+  manual.setRespond(n => n === 4 ? [evidenceRead(manual)] : n === 5 ? [tool('manual-complete', 'update_goal', completion(manual, 'Verified the new user evidence.'))] : [text('Verified.')])
   manualGate.resolve()
   await until(() => goal(manual)?.status === 'completed' && idle(manual), 'manual work releases Goal verification')
-  assert.equal(manual.requests.length, 5)
+  assert.equal(manual.requests.length, 6)
   assert.equal(goal(manual).autoRuns, 2)
-  assert.equal(goal(manual).tokens, 10, 'a live Goal bills manual work once without counting an extra dispatch')
+  assert.equal(goal(manual).tokens, 12, 'a live Goal bills manual work once without counting an extra dispatch')
   assert(manual.requests[3].messages.some(message => message.role === 'user' && JSON.stringify(message.content).includes('Inspect my new evidence')))
 
   // Creation returns while attachments are still being read. The actual first
@@ -335,7 +343,7 @@ try {
   let attachmentPreparing = false
   const attachmentBlocks = attached.app.readFileBlocks.bind(attached.app)
   attached.app.readFileBlocks = async (...args) => { attachmentPreparing = true; await attachmentGate.promise; return attachmentBlocks(...args) }
-  attached.setRespond(n => n === 1 ? [tool('attachment-complete', 'update_goal', { goalId: goal(attached).id, status: 'complete', evidence: 'Verified the attached request.' })] : [text('Verified.')])
+  attached.setRespond(n => n === 1 ? [evidenceRead(attached)] : n === 2 ? [tool('attachment-complete', 'update_goal', completion(attached, 'Verified the attached request.'))] : [text('Verified.')])
   const image = { type: 'image', mimeType: 'image/png', data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==' }
   assert.equal((await call(attached, 'create', { objective: 'Verify my attachments', acceptance: 'Verify my attachments', limits: { maxAutoRuns: 2, tokenBudget: null }, files: [attachmentPath], images: [image] })).ok, true)
   await until(() => attachmentPreparing, 'initial attachment preparation')
@@ -351,7 +359,7 @@ try {
   assert.equal((await attached.app.rewindList(attached.managed.path)).value.checkpoints.length, 1)
 
   const transformed = await fixture({ extensionFactories: [pi => pi.on('input', event => ({ action: 'transform', text: `${event.text}\nExtension context.`, images: event.images }))] })
-  transformed.setRespond(n => n === 1 ? [text('Work remains.')] : n === 2 ? [tool('transformed-complete', 'update_goal', { goalId: goal(transformed).id, status: 'complete', evidence: 'Verified the transformed input.' })] : [text('Verified.')])
+  transformed.setRespond(n => n === 1 ? [text('Work remains.')] : n === 2 ? [evidenceRead(transformed)] : n === 3 ? [tool('transformed-complete', 'update_goal', completion(transformed, 'Verified the transformed input.'))] : [text('Verified.')])
   await create(transformed)
   await until(() => goal(transformed)?.status === 'completed' && idle(transformed), 'transformed initial Goal')
   assert.equal(goal(transformed).autoRuns, 1, 'SDK input transformation cannot turn continuations into repeated uncharged initial prompts')
@@ -375,7 +383,7 @@ try {
   await create(hooked)
   await until(() => hookPreparing, 'Goal SDK input hook preparation')
   hooked.setRespond(n => n === 1 ? [tool('hooked-question', 'ask_user_question', { mode: 'async', questions: [{ question: 'Choose output', options: [{ label: 'Text' }, { label: 'JSON' }] }] })] :
-    n === 3 ? [tool('hooked-complete', 'update_goal', { goalId: goal(hooked).id, status: 'complete', evidence: 'Consumed the superseding instructions and their answer.' })] : [text('Waiting or answered.')])
+    n === 3 ? [evidenceRead(hooked)] : n === 4 ? [tool('hooked-complete', 'update_goal', completion(hooked, 'Consumed the superseding instructions and their answer.'))] : [text('Waiting or answered.')])
   hooked.app.prompt({ text: 'Superseding user instructions', images: [], files: [] })
   await sleep(20)
   assert.equal(hooked.requests.length, 0)
@@ -384,7 +392,7 @@ try {
   const hookedQuestion = hooked.events.findLast(e => e.type === 'ask_user' && e.requests.length)?.requests[0]
   assert(hookedQuestion)
   assert.equal(hooked.app.respondAskUser(hookedQuestion.requestId, hooked.managed.path, { answers: [{ question: 'Choose output', selected: ['JSON'] }] }), true)
-  await until(() => hooked.requests.length === 4 && goal(hooked)?.status === 'completed' && idle(hooked), 'superseding prompt answer wake')
+  await until(() => hooked.requests.length === 5 && goal(hooked)?.status === 'completed' && idle(hooked), 'superseding prompt answer wake')
   assert(hooked.requests.every(request => !request.messages.some(message => message.role === 'user' && Array.isArray(message.content) && message.content.some(part => part.type === 'text' && part.text === 'Implement the requested change'))), 'the superseded initial prompt never reaches the provider')
   assert.equal(goal(hooked).autoRuns, 0)
 
@@ -406,8 +414,8 @@ try {
   assert.equal(goal(resent).autoRuns, 1)
 
   const todo = await fixture()
-  todo.setRespond(n => n === 1 ? [tool('todo-pending', 'todo_write', { todos: [{ content: 'Verify result', status: 'pending' }] })] :
-    n === 2 ? [tool('premature-complete', 'update_goal', { goalId: goal(todo).id, status: 'complete', evidence: 'Claimed completion with an unfinished task.' })] : [text('Not verified yet.')])
+  todo.setRespond(n => n === 1 ? [evidenceRead(todo)] : n === 2 ? [tool('todo-pending', 'todo_write', { todos: [{ content: 'Verify result', status: 'pending' }] })] :
+    n === 3 ? [tool('premature-complete', 'update_goal', completion(todo, 'Claimed completion with an unfinished task.'))] : [text('Not verified yet.')])
   await create(todo, { maxAutoRuns: 1, tokenBudget: null })
   await until(() => goal(todo)?.status === 'paused' && idle(todo), 'unfinished Todo keeps completion provisional')
   assert.notEqual(goal(todo).status, 'completed')
@@ -415,9 +423,10 @@ try {
 
   const reviewed = await fixture()
   let reviews = 0
+  const reviewGoals = []
   reviewed.app.jevService.options.fetch = async (_url, init) => {
     const input = JSON.parse(init.body)
-    if (input.questions.review) reviews++
+    if (input.questions.review) { reviews++; reviewGoals.push(JSON.parse(input.state).goal) }
     const answers = Object.fromEntries(Object.entries(input.questions).map(([id, question]) => {
       const choice = id === 'route' ? 'act' : 'complete'
       return [id, { type: 'choice', choice, confidence: 1, probabilities: Object.fromEntries(Object.keys(question.criteria).map(key => [key, key === choice ? 1 : 0])) }]
@@ -427,11 +436,25 @@ try {
   assert.equal((await reviewed.app.updateJevSettings({ apiKey: 'goal-fixture' })).ok, true)
   assert.equal((await reviewed.app.updateJevSettings({ preferences: { mode: 'workflow', choice: true, score: true, noul: true } })).ok, true)
   reviewed.setRespond(n => n === 1 ? [tool('reviewed-write', 'write', { path: join(reviewed.project, 'reviewed.txt'), content: 'verified change\n' })] :
-    n === 2 ? [tool('reviewed-complete', 'update_goal', { goalId: goal(reviewed).id, status: 'complete', evidence: 'The requested file was written and verified.' })] : [text('Implemented and verified.')])
+    n === 2 ? [tool('reviewed-complete', 'update_goal', completion(reviewed, 'The requested file was written and verified.'))] : [text('Implemented and verified.')])
   await create(reviewed)
   await until(() => goal(reviewed)?.status === 'completed' && idle(reviewed), 'Goal waits for Jev review')
   assert(reviews > 0)
   assert.equal(reviewed.managed.jevWorkflow.snapshot.phase, 'completed')
+  assert(reviewGoals.every(g => g?.id === goal(reviewed).id && g.criteriaRevision === 1 && g.criteria.length === 1), 'Jev reviews the explicit Goal criteria')
+  assert.equal(reviewed.managed.jevWorkflow.snapshot.goalReviewKey, reviewGoals.at(-1).key)
+  const reviewedKey = reviewGoals.at(-1).key, reviewedTokens = goal(reviewed).tokens
+  const reviewedAvailable = reviewed.managed.goals.host.available
+  reviewed.managed.goals.host.available = () => false
+  const criterion = goal(reviewed).criteria[0]
+  assert.equal((await call(reviewed, 'criteria', { criteriaRevision: 1, criteria: [{ id: criterion.id, text: 'Verify the revised requested file' }] })).ok, true)
+  assert.equal(goal(reviewed).criteria[0].proof, null)
+  assert.equal(goal(reviewed).tokens, reviewedTokens)
+  assert.equal(reviewed.managed.jevWorkflow.snapshot, null, 'criteria edits invalidate the old independent review')
+  assert.equal((await call(reviewed, 'resume')).ok, true)
+  assert.notEqual(reviewed.managed.goals.reviewKey(), reviewedKey)
+  assert.equal(reviewed.managed.goals.host.review(), 'waiting', 'an old completed Jev phase cannot certify edited criteria')
+  await call(reviewed, 'pause'); reviewed.managed.goals.host.available = reviewedAvailable
 
   const plan = await fixture()
   assert.equal((await plan.app.setSessionMode({ sessionPath: plan.managed.path, mode: 'plan' })).ok, true)

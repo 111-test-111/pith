@@ -8,6 +8,7 @@ import {
   useSyncExternalStore
 } from 'react'
 import { isNothingToCompactError } from '../../../../shared/compaction-errors'
+import { goalCanBeReplaced } from '../../../../shared/goal'
 import {
   ArrowsInLineHorizontal,
   ArrowsOutLineHorizontal,
@@ -589,7 +590,7 @@ const [alwaysOnTop, setAlwaysOnTop] = useState(false)
       // Sending always returns to the live edge, even if the user was reading
       // history when they hit send.
       setScrollResetKey((value) => value + 1)
-      if (goalUI.enabled && (!goal || goal.status === 'completed' || goal.status === 'cancelled')) {
+      if (goalUI.enabled && goalCanBeReplaced(goal)) {
         return store.startGoal({ text, images, files })
       }
       // Mirror the main process's file blocks so chips render on the optimistic echo.

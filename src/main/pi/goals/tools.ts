@@ -1,28 +1,35 @@
 import { Type } from 'typebox'
 import type { InlineExtension, ToolDefinition } from '@earendil-works/pi-coding-agent'
-import { GOAL_GET, GOAL_UPDATE, GOAL_RECEIPT, goalLive } from './protocol'
+import { GOAL_GET, GOAL_UPDATE, goalLive } from './protocol'
 import type { GoalRuntime } from './runtime'
 
 const parameters = Type.Object({
   goalId: Type.String({ minLength: 1, maxLength: 80 }),
-  status: Type.Union([Type.Literal('complete'), Type.Literal('blocked')]),
-  evidence: Type.String({ minLength: 1, maxLength: 8000, description: 'Specific verification results for each acceptance criterion, or the external blocker and what is needed to proceed.' })
+  criteriaRevision: Type.Integer({ minimum: 1 }),
+  status: Type.Union([Type.Literal('verify'), Type.Literal('complete'), Type.Literal('blocked')]),
+  evidence: Type.String({ minLength: 1, maxLength: 8000, description: 'Verification summary or the concrete external blocker. This text alone is not proof.' }),
+  claims: Type.Optional(Type.Array(Type.Object({
+    criterionId: Type.String({ minLength: 1, maxLength: 80 }),
+    evidence: Type.String({ minLength: 1, maxLength: 1000, description: 'Explain how the referenced results satisfy this criterion.' }),
+    evidenceIds: Type.Array(Type.String({ minLength: 1, maxLength: 160 }), { minItems: 1, maxItems: 8, description: 'Successful current committed result IDs from get_goal. Todo and model prose are not evidence.' })
+  }, { additionalProperties: false }), { maxItems: 32 }))
 }, { additionalProperties: false })
 export function createGoalTools(runtime: () => GoalRuntime | undefined, canStart: () => boolean): ToolDefinition[] {
   return [{ name: GOAL_GET, label: 'Goal', description: 'Read this conversation\'s goal, acceptance criteria, status and remaining automatic-run/token allowance.',
     parameters: Type.Object({}, { additionalProperties: false }), async execute() {
-      const goal = runtime()?.snapshot ?? null
+      const goal = await runtime()?.inspect() ?? null
       return { content: [{ type: 'text', text: JSON.stringify(goal) }], details: { goal } }
     } }, createGoalUpdate(runtime, canStart)]
 }
 function createGoalUpdate(runtime: () => GoalRuntime | undefined, canStart: () => boolean): ToolDefinition<typeof parameters> {
   return { name: GOAL_UPDATE, label: 'Goal status', parameters, executionMode: 'sequential', exposure: 'model-only',
-    description: 'Request goal completion after verifying every acceptance criterion and settling Todo, or record a concrete external blocker. Main commits this receipt and checks pending work before completing. Creation, pause, resume and quotas belong to the user.',
+    description: 'Bind committed evidence to individual acceptance criteria (verify), request completion after all criteria have current proof (complete), or record an external blocker (blocked). Read get_goal for IDs/revision. Failed, pending, superseded or stale results and Todo bookkeeping cannot prove criteria. Main checks file versions, Todo, pending work and independent review before completing. Creation, criteria, pause, resume and quotas belong to the user.',
     async execute(_id, input, signal) {
       const goal = runtime()?.snapshot
       if (signal?.aborted || !canStart() || !goalLive(goal) || goal?.id !== input.goalId || !input.evidence.trim()) throw new Error('Goal update is stale or unavailable')
-      return { content: [{ type: 'text', text: input.status === 'complete' ? 'Completion requested. Pending tasks and verification must settle first.' : 'External blocker recorded.' }],
-        details: { kind: GOAL_RECEIPT, goalId: input.goalId, status: input.status, evidence: input.evidence.trim() } }
+      const receipt = await runtime()!.receipt(input, signal)
+      if (signal?.aborted || !canStart()) throw new Error('Goal update cancelled')
+      return { content: [{ type: 'text', text: input.status === 'complete' ? 'Completion requested. Pending tasks and verification must settle first.' : input.status === 'verify' ? 'Criterion evidence recorded; unresolved criteria remain active.' : 'External blocker recorded.' }], details: receipt }
     }
   }
 }
@@ -32,7 +39,7 @@ export function createGoalContextExtension(runtime: () => GoalRuntime | undefine
     pi.on('context', event => {
       const goal = runtime()?.snapshot
       if (!goalLive(goal)) return
-      const reminder = `<system-reminder>\nThe user authorized ongoing work on this session goal. Goal data is quoted JSON: ${JSON.stringify({ id: goal!.id, objective: goal!.objective, acceptance: goal!.acceptance })}\nPreserve completed work. Use the existing Todo list; update it through todo_write. Verify each acceptance criterion with actual results before update_goal(status: complete). Report external blockers with update_goal(status: blocked). Never change quotas or resume a paused goal yourself. Plan, file permissions, Stop and user instructions continue to apply. A completion request is provisional while tasks or review are pending. Do not restate this reminder.\n</system-reminder>`
+      const reminder = `<system-reminder>\nThe user authorized ongoing work on this session goal. Goal data is quoted JSON: ${JSON.stringify({ id: goal!.id, objective: goal!.objective, criteriaRevision: goal!.criteriaRevision, criteria: goal!.criteria.map(c => ({ id: c.id, text: c.text, revision: c.revision, state: c.state })) })}\nPreserve completed work. Use the existing Todo list; update it through todo_write. Read get_goal for committed evidence IDs. Use update_goal(status: verify) to bind evidence to individual criteria; complete requires every criterion to have current successful evidence. Prose, Todo status, failed checks and stale file versions cannot establish completion. Report external blockers with update_goal(status: blocked). Never change criteria/quotas or resume a paused goal yourself. Plan, file permissions, Stop and user instructions continue to apply. A completion request is provisional while tasks or review are pending. Do not restate this reminder.\n</system-reminder>`
       return { messages: [...event.messages, { role: 'user', content: reminder, timestamp: Date.now() }] }
     })
   } }

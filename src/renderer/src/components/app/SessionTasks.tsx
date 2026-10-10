@@ -157,7 +157,7 @@ export const SessionTasks = memo(function SessionTasks({ todos, subagents = [], 
           ) : null}
           {selected === 'jev' && sessionPath ? <JevWorkflowPanel key={sessionPath} sessionPath={sessionPath} state={jevState} /> : null}
           {showGoal && goalUI && sessionPath && onGoalState && onGoalDraft && onGoalEnd ? <div hidden={selected !== 'goal'}>
-            <GoalPanel sessionPath={sessionPath} goal={goal} seq={goalSeq} busy={busy || goalInitializing || !!goal?.executing} restricted={goalRestricted}
+            <GoalPanel sessionPath={sessionPath} goal={goal} seq={goalSeq} busy={busy || goalInitializing || !!goal?.executing} restricted={goalRestricted} visible={open && selected === 'goal'}
               ui={goalUI} onDraft={onGoalDraft} onEnd={onGoalEnd} onState={onGoalState} />
           </div> : null}
           {selected === 'ask' ? <AskUserRecordList records={records} /> : null}

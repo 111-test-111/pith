@@ -16,6 +16,7 @@ const fixture = String.raw`<!doctype html><html><body style="margin:0"><div id="
 import React from 'react';import {createRoot} from 'react-dom/client';
 import {SessionTasks} from '/src/components/app/SessionTasks.tsx';import {Composer} from '/src/components/app/Composer.tsx';
 import {BashTasksProvider} from '/src/lib/bash-tasks.tsx';import {setReduceMotion} from '/src/lib/reduce-motion.ts';
+import {goalCanBeReplaced} from '/@fs${repo}/src/shared/goal.ts';
 import {I18nProvider} from '/src/i18n/index.tsx';import {PiStore} from '/src/state/pi-store.ts';import '/src/styles.css';
 const h=React.createElement;const locale=new URLSearchParams(location.search).get('locale')||'en';localStorage.setItem('pi-app:locale',locale);setReduceMotion(true);
 window.calls=[];window.stopCalls=0;window.seq=1;window.goal=null;window.reject=false;window.sent=[];
@@ -23,10 +24,11 @@ window.store=new PiStore();const snapshot=(path='/fixture.jsonl')=>({sessionPath
 window.store.applySnapshot(snapshot());
 window.pi={searchFiles:async()=>[],queueAction:async()=>{},listBashTasks:async()=>[],onBashTask:()=>()=>{},goalAction:async request=>{
 window.calls.push(request);if(window.hold)await new Promise(resolve=>window.release=resolve);if(window.reject)return {ok:false,code:'stale'};
-const now=Date.now();if(request.action==='create')window.goal={version:1,id:'g'+now,objective:request.objective,acceptance:request.acceptance,limits:request.limits,status:'active',reason:null,evidence:null,createdAt:now,updatedAt:now,autoRuns:0,tokens:0,waiting:false,executing:false,accountingAvailable:true};
+const now=Date.now();if(request.action==='create')window.goal={version:2,criteriaRevision:1,criteria:[{id:'c1',revision:1,text:request.acceptance,proof:null,state:'pending'}],evidenceResults:[],evidenceOmitted:0,evidenceBlocked:false,id:'g'+now,objective:request.objective,acceptance:request.acceptance,limits:request.limits,status:'active',reason:null,evidence:null,createdAt:now,updatedAt:now,autoRuns:0,tokens:0,waiting:false,executing:false,accountingAvailable:true};
 if(request.action==='pause')window.goal={...window.goal,status:'paused',reason:'user'};
 if(request.action==='resume')window.goal={...window.goal,status:'active',reason:null};
 if(request.action==='cancel')window.goal={...window.goal,status:'cancelled',reason:'user'};
+if(request.action==='criteria')window.goal={...window.goal,criteriaRevision:window.goal.criteriaRevision+1,status:'paused',reason:'criteria',evidence:null,criteria:request.criteria.map((row,index)=>{const old=window.goal.criteria.find(c=>c.id===row.id);return old&&old.text===row.text?old:{id:old?.id||'c'+(index+1),revision:(old?.revision||0)+1,text:row.text,proof:null,state:'pending'}})};
 if(request.action==='limits')window.goal={...window.goal,limits:request.limits};
 window.goal={...window.goal,seq:++window.seq};return {ok:true,goal:window.goal,seq:window.seq};}};
 window.publish=patch=>{window.goal={...window.goal,...patch,seq:++window.seq};window.store.dispatch({type:'goal_update',sessionPath:'/fixture.jsonl',goal:window.goal,goalSeq:window.seq})};
@@ -36,7 +38,7 @@ function App(){const state=React.useSyncExternalStore(window.store.subscribe,win
 return h(I18nProvider,null,h(BashTasksProvider,{sessionPath:state.sessionPath},h('div',{style:{display:'flex',flexDirection:'column',height:'100vh',padding:'30px 0',margin:'0 auto',maxWidth:'760px'}},
 h(SessionTasks,{key:state.sessionPath,sessionPath:state.sessionPath,todos:{items:[{id:'t1',content:'Existing task',status:'pending'}]},subagents:[],busy:false,goal:state.goal,goalSeq:state.goalSeq,goalAvailable:true,goalRestricted:restricted,goalUI:state.goalUI,onGoalDraft:draft=>window.store.setGoalDraft(state.sessionPath,draft),onGoalEnd:()=>window.store.endGoalMode(state.sessionPath),onGoalState:(sessionPath,goal,goalSeq)=>window.store.dispatch({type:'goal_update',sessionPath,goal,goalSeq})}),
 h('div',{'data-transcript':true,style:{flex:1,minHeight:0,background:'var(--background)'}},'Transcript stays in place'),
-h(Composer,{models:[],model:null,thinkingLevel:'off',availableThinkingLevels:['off'],busy:false,sessionPath:state.sessionPath,goalEnabled:state.goalUI.enabled,goalPending:state.goalUI.pending,goalError:state.goalUI.error,onGoalModeChange:enabled=>enabled?window.store.openGoalMode(state.sessionPath):window.store.endGoalMode(state.sessionPath),queued:{steering:[],followUp:[]},onSend:payload=>state.goalUI.enabled&&(!state.goal||['completed','cancelled'].includes(state.goal.status))?window.store.startGoal(payload):window.sent.push(payload),onQueue:()=>{},onRecallQueue:async()=>[],onModelChange:()=>{},onThinkingLevelChange:()=>{}}))))}
+h(Composer,{models:[],model:null,thinkingLevel:'off',availableThinkingLevels:['off'],busy:false,sessionPath:state.sessionPath,goalEnabled:state.goalUI.enabled,goalPending:state.goalUI.pending,goalError:state.goalUI.error,onGoalModeChange:enabled=>enabled?window.store.openGoalMode(state.sessionPath):window.store.endGoalMode(state.sessionPath),queued:{steering:[],followUp:[]},onSend:payload=>state.goalUI.enabled&&goalCanBeReplaced(state.goal)?window.store.startGoal(payload):window.sent.push(payload),onQueue:()=>{},onRecallQueue:async()=>[],onModelChange:()=>{},onThinkingLevelChange:()=>{}}))))}
 createRoot(document.getElementById('root')).render(h(App));
 </script></body></html>`
 let server, app
@@ -114,6 +116,36 @@ try {
     await page.waitForFunction(() => document.querySelector('[data-goal-action="resume"]').disabled)
     await page.evaluate(() => window.setRestricted(false))
     await page.waitForFunction(() => !document.querySelector('[data-goal-action="resume"]').disabled)
+    await page.locator('[data-goal-action="editCriteria"]').click()
+    await page.locator('[data-goal-action="addCriterion"]').click()
+    assert.equal(await page.locator('[data-goal-action="saveCriteria"]').isDisabled(), true, 'empty criteria cannot be saved')
+    const criterionInputs = page.locator('[data-goal-criterion-input]')
+    await criterionInputs.nth(1).fill('Check crash recovery')
+    await page.evaluate(() => window.reject = true)
+    await page.locator('[data-goal-action="saveCriteria"]').click()
+    await page.getByRole('alert').waitFor()
+    assert.equal(await criterionInputs.nth(1).inputValue(), 'Check crash recovery', 'a refused edit preserves the draft')
+    await page.evaluate(() => window.reject = false)
+    await page.locator('[data-goal-action="saveCriteria"]').click()
+    await page.waitForFunction(() => window.store.getState().goal.criteriaRevision === 2)
+    assert.equal(await page.locator('[data-goal-criterion]').count(), 2)
+    assert.equal(await page.evaluate(() => window.store.getState().goal.reason), 'criteria')
+    const criteriaCall = await page.evaluate(() => window.calls.find(c => c.action === 'criteria'))
+    assert.equal(criteriaCall.criteriaRevision, 1)
+    assert.deepEqual(criteriaCall.criteria, [{id:'c1',text:requestText},{text:'Check crash recovery'}])
+    await page.evaluate(() => window.publish({criteria:window.goal.criteria.map((c,i)=>i===0?{...c,state:'verified',proof:{revision:c.revision,summary:'Verified with a committed read',receiptId:'r1',sources:[{id:'read1',stampId:'s1',hash:'a'.repeat(64)}]},files:{'/tmp/result.txt':'b'.repeat(64)}}:c)}))
+    assert.equal(await page.locator('[data-criterion-state="verified"]').count(), 1)
+    assert.equal(await page.locator('[data-criterion-proof]').textContent(), 'Verified with a committed read')
+    assert.equal(await page.locator('[data-criterion-file]').count(), 1)
+    await page.locator('[data-goal-action="editCriteria"]').click()
+    await page.locator('[data-goal-criterion-input]').nth(1).fill('Check crash recovery and quotas')
+    await page.locator('[data-goal-action="saveCriteria"]').click()
+    await page.waitForFunction(() => window.store.getState().goal.criteriaRevision === 3)
+    assert.equal(await page.locator('[data-criterion-state="verified"]').count(), 1, 'unchanged proof remains visible')
+    await page.evaluate(() => window.setRestricted(true))
+    await page.waitForFunction(() => document.querySelector('[data-goal-action="editCriteria"]').disabled)
+    await page.evaluate(() => window.setRestricted(false))
+    if (process.env.PI_GOAL_SCREENSHOT_DIR) await page.screenshot({ path: join(process.env.PI_GOAL_SCREENSHOT_DIR, `criteria-${locale}.png`) })
     await page.locator('[data-goal-input="runs"]').fill('4')
     await page.locator('[data-goal-input="tokens"]').fill('10000')
     await page.locator('[data-task-trigger="todo"]').click()
@@ -206,6 +238,21 @@ try {
     assert.equal(await trigger.count(), 0)
     assert.equal(await page.evaluate(() => window.calls.length), beforeCompletedEnd, 'ending a completed mode changes presentation only')
   }
+  await page.goto(url + '?locale=en')
+  await page.locator('[data-main-composer]').waitFor()
+  await page.evaluate(() => {
+    const now=Date.now()
+    window.goal={version:2,id:'old-completed',objective:'Old completed goal',acceptance:'Old criterion',criteriaRevision:1,
+      criteria:[{id:'old-c',text:'Old criterion',revision:1,state:'stale',proof:{revision:1,summary:'Old proof',sources:[{id:'old-r',stampId:'old-s',hash:'a'.repeat(64)}],receiptId:'old-claim'}}],
+      evidenceResults:[],evidenceOmitted:0,evidenceBlocked:false,status:'paused',reason:'evidence',evidence:null,limits:{maxAutoRuns:20,tokenBudget:null},
+      createdAt:now,updatedAt:now,autoRuns:0,tokens:10,waiting:false,executing:false,accountingAvailable:true,seq:++window.seq}
+    window.store.dispatch({type:'goal_update',sessionPath:'/fixture.jsonl',goal:window.goal,goalSeq:window.seq})
+    window.store.openGoalMode('/fixture.jsonl')
+  })
+  await page.locator('[data-main-composer]').fill('A new submitted goal after stale completion')
+  await page.locator('[data-main-composer]').press('Enter')
+  await page.waitForFunction(() => window.store.getState().goal.objective === 'A new submitted goal after stale completion')
+  assert.equal(await page.evaluate(() => window.calls.at(-1).action), 'create')
   assert.deepEqual(errors, [])
   console.log('PASS goals-ui: bottom-only selection, Goal entry after send, current user message, responsive drafts, End, pause/resume, limits, Plan, Escape and chat ownership in all locales')
 } finally {

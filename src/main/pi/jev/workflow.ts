@@ -50,8 +50,10 @@ function savedState(value: unknown): JevWorkflowDTO | null {
   if (v.route !== undefined && !Object.hasOwn(ROUTES, v.route)) return null
   if (v.decision !== undefined && !Object.hasOwn(ACTIONS, v.decision)) return null
   if (v.reason !== undefined && ![...JEV_ERROR_CODES, 'limit', 'uncertain', 'interrupted', 'no_progress', 'blocked'].includes(v.reason)) return null
+  if (v.goalReviewKey !== undefined && (typeof v.goalReviewKey !== 'string' || !/^[a-f0-9]{64}$/.test(v.goalReviewKey))) return null
   return { ...Object.fromEntries(counts.map(k => [k, v[k]])), phase: v.phase,
-    ...(v.route ? { route: v.route } : {}), ...(v.decision ? { decision: v.decision } : {}), ...(v.reason ? { reason: v.reason } : {}) } as JevWorkflowDTO
+    ...(v.route ? { route: v.route } : {}), ...(v.decision ? { decision: v.decision } : {}), ...(v.reason ? { reason: v.reason } : {}),
+    ...(v.goalReviewKey ? { goalReviewKey: v.goalReviewKey } : {}) } as JevWorkflowDTO
 }
 
 interface Options {
@@ -62,6 +64,8 @@ interface Options {
   canStart(): boolean
   pending(): boolean
   sealed(): boolean
+  goalContext?(): ({ key: string } & Record<string, unknown>) | null
+  goalEvidence?(): Promise<WorkflowEvidence | undefined> | undefined
   changed(state: JevWorkflowDTO | null): void
 }
 
@@ -166,6 +170,7 @@ export class JevWorkflow {
       try {
         this.update({ phase: 'verifying' })
         const evidence = await this.collectEvidence(signal)
+        const goalReviewKey = this.options.goalContext?.()?.key
         if (epoch !== this.epoch) return { action: 'end' }
         const prior = this.progress()
         // Keep verification scoped to the deliverable, not each new temporary
@@ -183,6 +188,9 @@ export class JevWorkflow {
         let reason: JevWorkflowReason | undefined
         let ticket: ReviewTicket | undefined
         const request = this.fitRequest(evidence, context, targets, prior)
+        const submitted = JSON.parse(request.state) as { goal?: { criteria?: Array<{ evidenceIds?: string[] }> }; results?: Array<{ id: string }> }
+        const submittedIds = new Set(submitted.results?.map(item => item.id))
+        const missingGoalSources = submitted.goal?.criteria?.some(c => c.evidenceIds?.some(id => !submittedIds.has(id)))
         await this.evaluate(request, 'verifier', signal, result => {
           const review = result.answers.review
           if (review.type !== 'choice') throw new JevError('invalid_response')
@@ -192,6 +200,10 @@ export class JevWorkflow {
             return { choice: review.choice, effectiveChoice: 'needs_review' }
           }
           if (review.choice === 'complete' && !missing) {
+            if (missingGoalSources) {
+              reason = 'uncertain'
+              return { choice: review.choice, effectiveChoice: 'needs_review', override: 'missing_evidence' }
+            }
             decision = 'stop'
             return { choice: review.choice, effectiveChoice: 'stop' }
           }
@@ -210,7 +222,17 @@ export class JevWorkflow {
         if (epoch !== this.epoch || !this.enabled) return { action: 'end' }
         this.update({ decision })
         if (reason) { this.pause(reason); return { action: 'end' } }
-        if (decision === 'stop') { this.update({ phase: 'completed' }); return priorDecision }
+        if (decision === 'stop') {
+          // Files may change while the service is reviewing. Re-observe before
+          // accepting its answer; an old completed phase cannot certify edits.
+          if (goalReviewKey) {
+            await this.options.goalEvidence?.()
+            this.check(signal)
+            if (epoch !== this.epoch) return { action: 'end' }
+            if (goalReviewKey !== this.options.goalContext?.()?.key) { this.pause('uncertain'); return { action: 'end' } }
+          }
+          this.update({ phase: 'completed', goalReviewKey }); return priorDecision
+        }
         if (!ticket) throw new JevError('invalid_response')
         session.sessionManager.appendCustomEntry(PROGRESS, { anchor: this.anchor, ...ticket, scopePaths: paths })
         this.focus = `Original requirement: ${ticket.target.requirement}\nSpecific target (${ticket.target.id}): ${ticket.target.instruction}\nEvidence references: ${ticket.target.evidenceIds.join(', ') || 'original request'}.`
@@ -359,7 +381,7 @@ export class JevWorkflow {
   private missingEvidence(): boolean {
     // Todo bookkeeping is not project evidence. Failed real tool calls and
     // requests for human input may establish a blocker, which Jev must judge.
-    return this.requiresAction() && !this.currentMessages().some(m => m.role === 'toolResult' && m.toolName !== 'todo_write')
+    return this.requiresAction() && !this.currentMessages().some(m => m.role === 'toolResult' && !['todo_write', 'get_goal', 'update_goal'].includes(m.toolName))
   }
   private progress(): Array<ReviewTicket & { scopePaths: string[] }> {
     return this.options.session.sessionManager.getBranch().flatMap(e => {
@@ -370,7 +392,7 @@ export class JevWorkflow {
     })
   }
   private async collectEvidence(signal?: AbortSignal): Promise<WorkflowEvidence> {
-    const evidence = await collectJevEvidence(this.options.session.sessionManager.getBranch(), this.options.session.sessionManager.getCwd())
+    const evidence = await this.options.goalEvidence?.() ?? await collectJevEvidence(this.options.session.sessionManager.getBranch(), this.options.session.sessionManager.getCwd())
     this.check(signal)
     return evidence
   }
@@ -380,6 +402,7 @@ export class JevWorkflow {
       requiresAction: this.requiresAction(), missingProjectEvidence: this.missingEvidence(),
       attachmentsOmitted: evidence.attachmentsOmitted, revision: evidence.revision, currentGeneration: evidence.generation,
       externalChanges: evidence.externalChanges,
+      goal: this.options.goalContext?.() ?? undefined,
       results: reviewEvidenceItems(evidence, previous.at(-1)?.scopePaths ?? evidence.changedFiles),
       resultsOmitted: evidence.omitted,
       previousTargets: previous.slice(-24).map(p => ({ id: p.target.id, kind: p.target.kind, sameCode: ticketFor(p.target, evidence).footprint === p.footprint })),

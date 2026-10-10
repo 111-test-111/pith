@@ -76,6 +76,7 @@ export const suites = [
   suite('jev-skill', 'integration', 'jev', 'Skill adaptation stays reversible, preserves local edits and exposes executable native examples.'),
   suite('jev', 'integration', 'jev', 'SDK verification guidance, cancellation and continuation preserve branch and revision ownership.'),
   suite('goals', 'integration', 'tasks', 'Session goals reuse committed Todo and SDK continuation while preserving quotas, cancellation, Plan, Rewind and crash ownership.'),
+  suite('goal-evidence', 'integration', 'tasks', 'Criterion revisions and committed file-version proofs reject stale, failed or forged completion through Todo, Stop, Rewind and recovery.'),
   suite('goals-ui', 'ui', 'tasks', 'Goal selection stays in the composer; sending reveals a manually opened current-goal panel, preserves responsive drafts and ends through localized, session-pinned controls.', { requiresBuild: true, platforms: POSIX }),
   suite('library', 'integration', 'library', 'Conversation resources retain exact copies, JSON web sources, project provenance, quotas and deletion across history replay, format rebuild and archive migration.'),
   suite('library-ui', 'ui', 'library', 'Stable categories retain spaced images, paged image-group navigation, shared file/Web previews, focus, JSON export and confirmed clearing.', { requiresBuild: true }),

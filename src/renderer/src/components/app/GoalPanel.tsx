@@ -1,14 +1,14 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Input } from '@/components/motion/input'
 import { Button } from '@/components/motion/button'
 import { FORM_INPUT_LABEL } from '@/lib/form-standard'
 import { useI18n } from '@/i18n'
 import type { GoalUIState } from '@/state/pi-store'
 import { FadeScroll } from './FadeScroll'
-import { validGoalLimits, type GoalErrorCode, type GoalSnapshotDTO } from '../../../../shared/goal'
+import { GOAL_MAX_CRITERIA, validGoalCriteria, validGoalLimits, type GoalCriterionInput, type GoalErrorCode, type GoalSnapshotDTO } from '../../../../shared/goal'
 
-export function GoalPanel({ sessionPath, goal, seq, busy, restricted, ui, onDraft, onEnd, onState }: {
-  sessionPath: string; goal: GoalSnapshotDTO | null; seq: number; busy: boolean; restricted: boolean; ui: GoalUIState
+export function GoalPanel({ sessionPath, goal, seq, busy, restricted, visible, ui, onDraft, onEnd, onState }: {
+  sessionPath: string; goal: GoalSnapshotDTO | null; seq: number; busy: boolean; restricted: boolean; visible: boolean; ui: GoalUIState
   onDraft: (draft: Pick<GoalUIState, 'limits' | 'acceptance'>) => void
   onEnd: () => void
   onState: (path: string, goal: GoalSnapshotDTO | null, seq: number) => void
@@ -18,6 +18,23 @@ export function GoalPanel({ sessionPath, goal, seq, busy, restricted, ui, onDraf
   const [tokens, setTokens] = useState(ui.limits.tokenBudget == null ? '' : String(ui.limits.tokenBudget))
   const [acting, setActing] = useState(false)
   const [error, setError] = useState<GoalErrorCode | null>(null)
+  const [editing, setEditing] = useState(false)
+  const [criteria, setCriteria] = useState<Array<GoalCriterionInput & { key: string }>>([])
+  const nextKey = useRef(0)
+  useEffect(() => {
+    if (!visible || !goal) return
+    let disposed = false
+    void window.pi.goalAction({ sessionPath, expectedSeq: seq, goalId: goal.id, action: 'inspect' }).then(result => {
+      if (!disposed && result.ok) onState(sessionPath, result.goal, result.seq)
+    }).catch(() => {})
+    return () => { disposed = true }
+    // Opening refreshes disk observations; ordinary metadata must not loop IPC.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, sessionPath, goal?.id])
+  useEffect(() => {
+    setCriteria(goal?.criteria.map(c => ({ id: c.id, text: c.text, key: c.id })) ?? [])
+    setEditing(false)
+  }, [goal?.id, goal?.criteriaRevision])
   useEffect(() => {
     if (!goal) return
     setRuns(String(goal.limits.maxAutoRuns))
@@ -32,13 +49,15 @@ export function GoalPanel({ sessionPath, goal, seq, busy, restricted, ui, onDraf
     setRuns(nextRuns); setTokens(nextTokens)
     onDraft({ acceptance: ui.acceptance, limits: { maxAutoRuns: Number(nextRuns), tokenBudget: nextTokens.trim() ? Number(nextTokens) : null } })
   }
-  const act = async (action: 'pause' | 'resume' | 'limits') => {
+  const canEdit = !!goal && goal.status !== 'cancelled' && !busy && !pending && !restricted && !goal.waiting && goal.accountingAvailable
+  const act = async (action: 'pause' | 'resume' | 'limits' | 'criteria') => {
     if (pending || !goal) return
     setActing(true); setError(null)
     const identity = { sessionPath, expectedSeq: seq, goalId: goal.id }
     try {
-      const result = await window.pi.goalAction(action === 'limits' ? { ...identity, action, limits } : { ...identity, action })
-      if (result.ok) onState(sessionPath, result.goal, result.seq)
+      const result = await window.pi.goalAction(action === 'limits' ? { ...identity, action, limits } : action === 'criteria' ?
+        { ...identity, action, criteriaRevision: goal.criteriaRevision, criteria: criteria.map(({ id, text }) => ({ ...(id ? { id } : {}), text })) } : { ...identity, action })
+      if (result.ok) { onState(sessionPath, result.goal, result.seq); if (action === 'criteria') setEditing(false) }
       else setError(result.code)
     } catch { setError('unavailable') }
     finally { setActing(false) }
@@ -52,7 +71,34 @@ export function GoalPanel({ sessionPath, goal, seq, busy, restricted, ui, onDraf
           <p className="mt-1 text-xs font-medium">{t('goal.objective')}</p>
           <p className="whitespace-pre-wrap break-words" data-goal-objective>{goal.objective}</p>
           <p className="mt-1 text-xs font-medium">{t('goal.acceptance')}</p>
-          <p className="whitespace-pre-wrap break-words text-xs text-muted-foreground">{goal.acceptance === goal.objective ? t('goal.acceptanceFromRequest') : goal.acceptance}</p>
+          <p className="text-xs text-muted-foreground">{t('goal.criteriaProgress', { verified: goal.criteria.filter(c => c.state === 'verified').length, total: goal.criteria.length, revision: goal.criteriaRevision })}</p>
+          <div className="flex flex-col gap-3" data-goal-criteria>
+            {goal.criteria.map(c => <div key={c.id} className="flex flex-col gap-1.5 border-l border-border pl-3" data-goal-criterion={c.id} data-criterion-state={c.state}>
+              <p className="whitespace-pre-wrap break-words text-xs">{c.text}</p>
+              <span className="text-xs text-muted-foreground">{t(`goal.criterion.${c.state}`)}</span>
+              {c.proof ? <>
+                <p className="whitespace-pre-wrap break-words text-xs" data-criterion-proof>{c.proof.summary}</p>
+                <p className="break-all text-xs text-muted-foreground">{t('goal.evidenceSources', { ids: c.proof.sources.map(s => s.id).join(', ') })}</p>
+                {Object.entries(c.files ?? {}).map(([path, version]) => <p key={path} className="break-all font-mono text-xs text-muted-foreground" title={version} data-criterion-file={path}>{path} · {version.slice(0, 12)}</p>)}
+              </> : null}
+            </div>)}
+          </div>
+          {goal.evidenceBlocked ? <p role="status" className="text-xs text-destructive">{t('goal.failedChecks')}</p> : null}
+          {goal.evidenceOmitted ? <p className="text-xs text-muted-foreground">{t('goal.evidenceOmitted', { count: goal.evidenceOmitted })}</p> : null}
+          {!editing ? <Button className="self-start" size="sm" variant="secondary" disabled={!canEdit} data-goal-action="editCriteria" onClick={() => setEditing(true)}>{t('goal.editCriteria')}</Button> :
+            <div className="flex flex-col gap-3" data-goal-criteria-editor>
+              {criteria.map((c, index) => <div key={c.key} className="flex items-start gap-2">
+                <Input className="flex-1" multiline rows={2} maxLength={8000} classNames={FORM_INPUT_LABEL} label={t('goal.criterionLabel', { number: index + 1 })}
+                  value={c.text} disabled={!canEdit} onChange={text => setCriteria(rows => rows.map(row => row.key === c.key ? { ...row, text } : row))} data-goal-criterion-input={c.key} />
+                <Button size="sm" variant="ghost" disabled={!canEdit || criteria.length === 1} onClick={() => setCriteria(rows => rows.filter(row => row.key !== c.key))} data-goal-criterion-remove={c.key}>{t('goal.removeCriterion')}</Button>
+              </div>)}
+              <div className="flex flex-wrap gap-2">
+                <Button size="sm" variant="secondary" disabled={!canEdit || criteria.length >= GOAL_MAX_CRITERIA} data-goal-action="addCriterion" onClick={() => setCriteria(rows => [...rows, { key: `new-${++nextKey.current}`, text: '' }])}>{t('goal.addCriterion')}</Button>
+                <Button size="sm" disabled={!canEdit || !validGoalCriteria(criteria)} data-goal-action="saveCriteria" onClick={() => void act('criteria')}>{t('goal.saveCriteria')}</Button>
+                <Button size="sm" variant="ghost" disabled={pending} onClick={() => { setEditing(false); setCriteria(goal.criteria.map(c => ({ id: c.id, text: c.text, key: c.id }))) }}>{t('goal.discardCriteria')}</Button>
+              </div>
+              <p className="text-xs text-muted-foreground">{t('goal.criteriaHint')}</p>
+            </div>}
           {goal.reason ? <p role="status" className="text-xs text-muted-foreground">{t(`goal.reason.${goal.reason}`)}</p> : null}
           {goal.waiting ? <p className="text-xs text-muted-foreground">{t('goal.waiting')}</p> : null}
           {goal.evidence ? <p className="whitespace-pre-wrap break-words text-xs" data-goal-evidence>{goal.evidence}</p> : null}
