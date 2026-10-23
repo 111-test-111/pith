@@ -13,6 +13,7 @@ Pith is a desktop client for pi-agent, bringing coding conversations, files, ter
 - **Planning and Rewind**: review a submitted plan before explicitly approving execution; capture checkpoints before user messages, restore files, conversations or both, and undo or redo the latest restore.
 - **Parallel work**: task lists, managed background commands, independent subagents and scheduled tasks. Inspect, guide or continue subagent work; schedules run while the app is running and the computer is awake.
 - **Work panels**: interactive terminals, an embedded browser, a DAP debugger and picture in picture. Browser agent tools require enabling them in Settings and first-use consent; debugging requires enabling it and installing the relevant adapter.
+- **Remote work**: model-controlled persistent SSH terminals with password/key/agent login, keepalives and reconnect, visible in the sidebar. Remote tmux preserves jobs and shell state across disconnects; see [SSH setup](docs/ssh-implementation.md).
 - **Models and extensions**: API key / OAuth sign-in, custom providers and models, thinking levels, MCP, Skills and Pi extensions; optional Jev judgments and workflow integration.
 - **Run records**: inspect model requests, tool execution, context estimates, token usage and costs, and export execution records.
 - **Appearance and language**: English / Simplified Chinese, light / dark / system themes, accent colors, and square / squircle interface styles.
