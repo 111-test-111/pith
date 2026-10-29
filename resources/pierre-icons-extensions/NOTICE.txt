@@ -1,0 +1,13 @@
+Pith file-type icon additions and artwork overrides
+Copyright (c) 2026 Pith contributors
+
+These additions extend the Pierre file-type icons from @pierre/trees
+1.0.0-beta.4. Document silhouettes and the spreadsheet grid are adapted from
+Pierre Computer Company's default/table icons; PDF, W, chart, music and play
+marks and the revised spreadsheet header are Pith additions.
+The squircle Sass override is an independently drawn Pith S monogram.
+The unchanged Pierre palette supplies their light/dark colors.
+
+Distributed under Apache-2.0. See the Pierre LICENSE.txt and NOTICE.txt.
+These are application additions/overrides, not upstream Pierre artwork or official
+Microsoft, Adobe or media-format logos.

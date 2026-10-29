@@ -1,0 +1,112 @@
+{
+  "source": "Pierre Icons (@pierre/trees 1.0.0-beta.4), Apache-2.0",
+  "palette": {
+    "gray": {
+      "light": "#84848a",
+      "dark": "#adadb1"
+    },
+    "red": {
+      "light": "#d52c36",
+      "dark": "#ff6762"
+    },
+    "vermilion": {
+      "light": "#ff8c5b",
+      "dark": "#d5512f"
+    },
+    "orange": {
+      "light": "#d47628",
+      "dark": "#ffa359"
+    },
+    "yellow": {
+      "light": "#d5a910",
+      "dark": "#ffd452"
+    },
+    "green": {
+      "light": "#199f43",
+      "dark": "#5ecc71"
+    },
+    "teal": {
+      "light": "#17a5af",
+      "dark": "#64d1db"
+    },
+    "cyan": {
+      "light": "#1ca1c7",
+      "dark": "#68cdf2"
+    },
+    "blue": {
+      "light": "#1a85d4",
+      "dark": "#69b1ff"
+    },
+    "indigo": {
+      "light": "#693acf",
+      "dark": "#9d6afb"
+    },
+    "purple": {
+      "light": "#a631be",
+      "dark": "#d568ea"
+    },
+    "pink": {
+      "light": "#d32a61",
+      "dark": "#ff678d"
+    },
+    "mauve": {
+      "light": "#594c5b",
+      "dark": "#79697b"
+    }
+  },
+  "colors": {
+    "astro": "purple",
+    "babel": "yellow",
+    "bash": "green",
+    "biome": "blue",
+    "bootstrap": "indigo",
+    "browserslist": "yellow",
+    "bun": "mauve",
+    "c": "blue",
+    "claude": "orange",
+    "cpp": "blue",
+    "css": "indigo",
+    "database": "purple",
+    "default": "gray",
+    "docker": "blue",
+    "eslint": "indigo",
+    "font": "gray",
+    "git": "vermilion",
+    "go": "cyan",
+    "graphql": "pink",
+    "html": "orange",
+    "image": "pink",
+    "javascript": "yellow",
+    "json": "orange",
+    "markdown": "green",
+    "mcp": "teal",
+    "nextjs": "gray",
+    "npm": "red",
+    "oxc": "cyan",
+    "postcss": "red",
+    "prettier": "teal",
+    "python": "blue",
+    "react": "cyan",
+    "ruby": "red",
+    "rust": "orange",
+    "sass": "pink",
+    "stylelint": "gray",
+    "svelte": "red",
+    "svg": "orange",
+    "svgo": "green",
+    "swift": "orange",
+    "table": "teal",
+    "tailwind": "cyan",
+    "terraform": "indigo",
+    "text": "gray",
+    "typescript": "blue",
+    "vite": "purple",
+    "vscode": "blue",
+    "vue": "green",
+    "wasm": "indigo",
+    "webpack": "blue",
+    "yml": "red",
+    "zig": "orange",
+    "zip": "orange"
+  }
+}

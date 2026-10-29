@@ -1,0 +1,26 @@
+# Dependencies and local worktrees
+/node_modules/
+/.worktrees/
+
+# Build, packaging and generated file-type icons
+/out/
+/dist/
+/src/renderer/public/file-icons/
+/.vite/
+/.test-results/
+*.tsbuildinfo
+
+# Native debug-fixture outputs
+/scripts/debug-fixtures/dap-comparison/*/ledger
+/scripts/debug-fixtures/dap-comparison/*/index_test
+*.dSYM/
+__pycache__/
+*.pyc
+
+# Local configuration and machine files
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+Thumbs.db

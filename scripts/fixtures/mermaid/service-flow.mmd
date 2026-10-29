@@ -1,0 +1,42 @@
+flowchart TD
+    U([用户请求]) --> GW{{API 网关}}
+    GW -->|鉴权失败| E401[401 未授权]
+    GW -->|通过| RL[限流器]
+    RL -->|超阈值| E429[429 限流]
+    RL -->|放行| ROUTE{路由类型}
+
+    subgraph SVC["业务服务集群"]
+      direction TB
+      ROUTE -->|查询| QSVC[查询服务]
+      ROUTE -->|写入| WSVC[写入服务]
+      QSVC --> CACHE[(Redis 缓存)]
+      QSVC --> DB[(PostgreSQL)]
+      WSVC --> MQ[[消息队列]]
+      CACHE -.缓存未命中.-> DB
+      MQ --> WORKER[异步 Worker]
+      WORKER --> DB
+    end
+
+    subgraph OBS["可观测性"]
+      direction LR
+      LOG[日志采集]
+      MET[指标 Prometheus]
+      TRACE[链路追踪]
+    end
+
+    QSVC --> LOG
+    WSVC --> LOG
+    QSVC --> MET
+    WORKER --> TRACE
+    MQ --> TRACE
+
+    DB --> RESP[响应聚合]
+    CACHE --> RESP
+    RESP --> OUT([JSON 响应])
+
+    classDef err fill:#3d1f25,stroke:#f85149,color:#ffdcd7,stroke-width:1.5px
+    classDef cache fill:#3a2f18,stroke:#d29922,color:#ffe9b0
+    classDef store fill:#173a2c,stroke:#3fb950,color:#c9f7d8
+    class E401,E429 err
+    class CACHE,MQ cache
+    class DB store

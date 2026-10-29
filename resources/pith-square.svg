@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="blue" x1="96" y1="96" x2="928" y2="928" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#287AFF"/>
+      <stop offset=".48" stop-color="#1B61F2"/>
+      <stop offset="1" stop-color="#1546D9"/>
+    </linearGradient>
+  </defs>
+  <!-- Renderer-only square variant; keep the native packaging master rounded. -->
+  <rect x="96" y="96" width="832" height="832" fill="url(#blue)"/>
+  <!-- Selected code-pi mark, drawn as vectors without a font dependency.
+       Both variants share the same artwork, gradient and optical bounds. -->
+  <g transform="translate(96 96) scale(0.663476874)" fill="#FFFFFF">
+    <path d="M461 327H892C927 327 946 347 946 382C946 423 919 456 880 456H854C822 456 819 488 810 523C790 605 786 730 813 788C823 810 846 823 868 813C887 805 885 786 910 786C950 786 970 823 951 876C937 916 899 939 854 939C803 939 759 920 727 887C699 858 688 826 681 786C665 685 686 542 708 455H594C580 455 574 462 574 477V882C574 920 553 938 514 938H505C460 938 438 920 442 876C448 824 461 807 461 640V455C415 455 390 463 364 483C347 497 327 514 314 501C300 490 309 459 322 433C349 372 400 327 461 327Z"/>
+    <path d="M258 540 124 657 258 775M995 540 1129 657 995 775" fill="none" stroke="#FFFFFF" stroke-width="64" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

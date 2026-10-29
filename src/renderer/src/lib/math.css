@@ -1,0 +1,50 @@
+/* Formula layout is isolated from Markdown wrapping and the UI corner scale. */
+.markdown-math {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overflow-wrap: normal;
+  color: inherit;
+  padding-block: 0.2em;
+}
+.markdown-math-inline {
+  /* Inline-block + overflow:auto exports its bottom edge as the baseline.
+   * Inline grid exports the content's text/MathML baseline even when it scrolls. */
+  display: inline-grid;
+  vertical-align: baseline;
+  padding-block: 0;
+}
+.markdown-math-display {
+  display: block;
+  width: 100%;
+  margin-block: 0.5em;
+}
+.markdown-math-content {
+  display: block;
+  width: max-content;
+  min-width: 100%;
+}
+.markdown-math math {
+  /* The Settings math family leads this stack through --app-font-math; the
+   * bundled TeX Gyre DejaVu Math face below stays the default and the
+   * fallback for any family the machine does not have. */
+  font-family: var(--app-font-math, 'Pith Math', math);
+  overflow-wrap: normal;
+}
+/* Tailwind's universal padding reset overrides MathML's UA cell spacing.
+ * Restore it without overriding Temml's explicit aligned/small-array rules. */
+.markdown-math mtd {
+  padding-block: 0.5ex;
+}
+.markdown-math math *, .markdown-math math *::before, .markdown-math math *::after {
+  corner-shape: round;
+}
+/* TeX Gyre DejaVu Math is bundled for identical offline layout on macOS,
+ * Windows and Linux; see public/licenses/tex-gyre-dejavu-math.txt. */
+@font-face {
+  font-family: 'Pith Math';
+  src: url('../assets/math/texgyredejavu-math.woff2') format('woff2');
+  font-style: normal;
+  font-weight: normal;
+  font-display: swap;
+}

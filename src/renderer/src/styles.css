@@ -1,0 +1,943 @@
+@import "tailwindcss";
+@import "./sidebar-pane-layout.css";
+
+/* Native highlights track beUI token text through scrolling and panel resizing. */
+::highlight(file-search-matches) {
+  background-color: color-mix(in oklch, var(--primary) 22%, transparent);
+}
+::highlight(file-search-active) {
+  background-color: color-mix(in oklch, var(--primary) 42%, transparent);
+  text-decoration: underline;
+  text-decoration-color: var(--primary);
+}
+
+@custom-variant dark (&:is(.dark *));
+
+/* Transparent photo canvas: a faint alpha grid makes the edge of white and
+ * transparent images readable without giving every thumbnail a painted fill. */
+.library-image-gallery {
+  background-color: transparent;
+  background-image: repeating-conic-gradient(color-mix(in oklch, var(--foreground) 5%, transparent) 0% 25%, transparent 0% 50%);
+  background-size: 16px 16px;
+}
+@utility scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+
+/* ---------------------------------------------------------------------------
+ * Theme tokens (shadcn-style) — light & dark, with accent-color presets.
+ * ------------------------------------------------------------------------- */
+
+:root {
+  --app-titlebar-height: 52px;
+  --transcript-divider-gap: 1.5rem;
+  --transcript-actions-gap: 0.75rem;
+  /* Geometry is independent of color, font size and theme. Both beUI's
+   * existing size classes and app-owned semantic classes use this scale.
+   * Experimental square style (pi-app): every scale step is 0 so cards,
+   * buttons and inputs are hard-edged; only --app-radius-full remains a
+   * true circle for rings, dots, switch tracks and ripples. */
+  --app-corner-shape: squircle;
+  --app-radius-detail: 0px;
+  --app-radius-inner: 0px;
+  --app-radius-item: 0px;
+  --app-radius-control: var(--app-radius-item);
+  --app-radius-icon: var(--app-radius-item);
+  --app-radius-card: 0px;
+  --app-radius-window: 0px;
+  /* Capsule-by-design surfaces (avatars, chips, badges, pill tabs, selection
+   * marks) take their shape from the UI style: collapsed to a right angle in
+   * the square style, a true capsule in the squircle style. Single-icon buttons
+   * take the shared control radius instead. `rounded-full` remains the
+   * always-circular token. */
+  --app-radius-capsule: 0px;
+  --app-radius-full: 9999px;
+  --radius: var(--app-radius-detail);
+
+  /* One elevation family for menus, previews and dialogs. Real borders and
+   * focus rings remain separate; no second hairline is hidden in the shadow. */
+  --app-elevation-contact: oklch(0.15 0.015 264 / 0.10);
+  --app-elevation-ambient: oklch(0.15 0.015 264 / 0.12);
+  --app-shadow-overlay: 0 2px 6px -2px var(--app-elevation-contact),
+    0 12px 32px -8px var(--app-elevation-ambient);
+
+  /* Typefaces. The defaults below are what the app ships with; Settings →
+   * Appearance overwrites them at runtime (inline style on <html>) through
+   * lib/fonts.ts, and the `@theme inline` mapping below makes Tailwind's
+   * `font-sans`/`font-mono` utilities follow the change everywhere. All three
+   * are free-form in Settings, so these stand-ins must stay the same stacks
+   * lib/fonts.ts falls back to — the interface one is the system sans-serif,
+   * which is both the default and where an unknown or rejected family lands. */
+  --app-font-ui:
+    ui-sans-serif, system-ui, -apple-system, 'SF Pro Text', 'Segoe UI', Roboto,
+    'Helvetica Neue', Arial, sans-serif;
+  --app-font-mono:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New',
+    monospace;
+  /* MathML formulas (lib/math.css): the bundled TeX Gyre DejaVu Math face,
+   * registered there as `Pith Math`, then the platform's generic math face.
+   * The tail must keep an OpenType MATH table — MathML layout reads its
+   * metrics — so this never resolves to a plain text family. */
+  --app-font-math: 'Pith Math', math;
+
+  /* Independent text bases. lib/typography.ts also owns derived line metrics
+   * used by virtual source/diff rows and xterm. Keep rem-based geometry fixed. */
+  --app-text-ui-micro: 10px;
+  --app-text-ui-caption: 11px;
+  --app-text-ui-keycap: 14px;
+  --app-text-ui-xs: 12px;
+  --app-text-ui-sm: 14px;
+  --app-text-ui-base: 16px;
+  --app-text-ui-lg: 18px;
+  --app-text-ui-xl: 20px;
+  --app-text-ui-2xl: 24px;
+  --app-text-content: 14px;
+  --app-text-content-small: 12px;
+  --app-text-content-heading: 16px;
+  --app-text-code: 12px;
+  --app-text-terminal: 14px;
+  --app-line-ui: 20px;
+  --app-line-content: 24px;
+  --app-line-content-tight: 20px;
+  --app-line-code: 20px;
+
+}
+
+/* Code theme samples share the app palette but pin their own color mode. */
+:root,
+[data-code-theme-preview='light'] {
+  --background: oklch(0.984 0.003 264);
+  --foreground: oklch(0.216 0.02 264);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.216 0.02 264);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.216 0.02 264);
+  --muted: oklch(0.955 0.006 264);
+  --muted-foreground: oklch(0.52 0.02 264);
+  --secondary: oklch(0.955 0.006 264);
+  --secondary-foreground: oklch(0.216 0.02 264);
+  --accent: oklch(0.945 0.01 264);
+  --accent-foreground: oklch(0.216 0.02 264);
+  --destructive: oklch(0.577 0.215 27);
+  --border: oklch(0.9 0.008 264);
+  --input: oklch(0.9 0.008 264);
+
+  /* Terminal content has its own semantic palette, independent of the UI
+   * accent. Chromatic ANSI text meets 4.5:1 against --background in each mode.
+   * Keep ANSI black/white literal: TUIs also use them as background colors. */
+  --terminal-black: #242936;
+  --terminal-red: #bf2240;
+  --terminal-green: #166534;
+  --terminal-yellow: #855900;
+  --terminal-blue: #175cd3;
+  --terminal-magenta: #753ac1;
+  --terminal-cyan: #006b73;
+  --terminal-white: #d5dbe5;
+  --terminal-bright-black: #596273;
+  --terminal-bright-red: #d1243c;
+  --terminal-bright-green: #197239;
+  --terminal-bright-yellow: #926100;
+  --terminal-bright-blue: #215fe5;
+  --terminal-bright-magenta: #8741c5;
+  --terminal-bright-cyan: #087780;
+  --terminal-bright-white: #ffffff;
+  /* Opaque selection + explicit text works over ANSI and truecolor fills.
+   * The inactive selection keeps its contrast but loses the blue emphasis. */
+  --terminal-selection-background: #2459b8;
+  --terminal-selection-foreground: #ffffff;
+  --terminal-selection-inactive-background: #59667e;
+}
+
+/* Restored continuous-corner style (Superellipse UI). Values recovered from
+ * 397f6ed^ — the commit that squared the branch. The block must stay BELOW
+ * `:root`: it has the same specificity (0,1,0) and wins on source order alone,
+ * exactly like the [data-accent='…'] presets further down. */
+[data-corners='squircle'] {
+  --app-radius-detail: 4px;
+  --app-radius-inner: 10px;
+  --app-radius-item: 14px;
+  --app-radius-card: 20px;
+  --app-radius-window: 28px;
+  --app-radius-capsule: 9999px;
+}
+
+.dark,
+[data-code-theme-preview='dark'] {
+  --app-elevation-contact: oklch(0 0 0 / 0.30);
+  --app-elevation-ambient: oklch(0 0 0 / 0.40);
+  /* macOS Dark Aqua's window/control background (#1e1e1e) and under-page
+   * background (#282828) anchor neutral gray surfaces. Raised menus and
+   * interaction fills step up from them. Primary content and titles use
+   * bright white; secondary labels keep the muted hierarchy. */
+  --background: #1e1e1e;
+  --foreground: #ffffff;
+  --card: #282828;
+  --card-foreground: #ffffff;
+  --popover: #323232;
+  --popover-foreground: #ffffff;
+  --muted: #2c2c2c;
+  --muted-foreground: #a6a6a6;
+  --secondary: #2c2c2c;
+  --secondary-foreground: #ffffff;
+  --accent: #3a3a3a;
+  --accent-foreground: #ffffff;
+  --destructive: oklch(0.65 0.19 25);
+  --border: #454545;
+  --input: #454545;
+
+  --terminal-black: #1a202b;
+  --terminal-red: #f07886;
+  --terminal-green: #83cf98;
+  --terminal-yellow: #e5bd68;
+  --terminal-blue: #82aaff;
+  --terminal-magenta: #c69aef;
+  --terminal-cyan: #6dcbd6;
+  --terminal-white: #b7c0cd;
+  --terminal-bright-black: #8e8e8e;
+  --terminal-bright-red: #ff9aa6;
+  --terminal-bright-green: #a3e5b5;
+  --terminal-bright-yellow: #f2d48e;
+  --terminal-bright-blue: #a6c3ff;
+  --terminal-bright-magenta: #dfb8ff;
+  --terminal-bright-cyan: #97e3eb;
+  --terminal-bright-white: #f0f3f9;
+  --terminal-selection-background: #9ebcff;
+  --terminal-selection-foreground: #121826;
+  --terminal-selection-inactive-background: #8793ac;
+}
+
+[data-code-theme-preview='light'] { color-scheme: light; }
+[data-code-theme-preview='dark'] { color-scheme: dark; }
+
+/* Explicit preview colors also work when a light sample is inside a dark app. */
+[data-code-theme-preview='light'] [data-agent-code-token] {
+  color: var(--agent-code-light);
+}
+[data-code-theme-preview='dark'] [data-agent-code-token] {
+  color: var(--agent-code-dark);
+}
+
+/* Accent presets: indigo (default) / violet / pink / rose / orange / amber /
+ * green / emerald / teal / cyan / sky / blue, plus a runtime 'custom' slot fed
+ * by the Settings color well (lib/accent.ts writes the four derived values as
+ * inline custom properties on <html>; the fallbacks below are the default
+ * indigo, so a missing inline value can never blank the tokens).
+ * Chroma is deliberately kept a notch below the pure hue: these colors fill
+ * buttons, badges and links app-wide, and full saturation read as too loud. */
+
+:root {
+  --primary: oklch(0.52 0.185 275);
+  --primary-foreground: oklch(0.985 0.002 264);
+  --ring: oklch(0.52 0.185 275);
+}
+.dark {
+  --primary: oklch(0.685 0.145 275);
+  --primary-foreground: oklch(0.14 0.02 275);
+  --ring: oklch(0.685 0.145 275);
+}
+
+[data-accent='blue'] {
+  --primary: oklch(0.53 0.17 255);
+  --primary-foreground: oklch(0.985 0.002 255);
+  --ring: oklch(0.53 0.17 255);
+}
+.dark[data-accent='blue'] {
+  --primary: oklch(0.695 0.135 255);
+  --primary-foreground: oklch(0.14 0.02 255);
+  --ring: oklch(0.695 0.135 255);
+}
+
+[data-accent='violet'] {
+  --primary: oklch(0.51 0.21 300);
+  --primary-foreground: oklch(0.985 0.002 300);
+  --ring: oklch(0.51 0.21 300);
+}
+.dark[data-accent='violet'] {
+  --primary: oklch(0.715 0.15 300);
+  --primary-foreground: oklch(0.15 0.03 300);
+  --ring: oklch(0.715 0.15 300);
+}
+
+[data-accent='emerald'] {
+  --primary: oklch(0.52 0.125 163);
+  --primary-foreground: oklch(0.985 0.002 163);
+  --ring: oklch(0.52 0.125 163);
+}
+.dark[data-accent='emerald'] {
+  --primary: oklch(0.715 0.125 163);
+  --primary-foreground: oklch(0.14 0.03 163);
+  --ring: oklch(0.715 0.125 163);
+}
+
+[data-accent='amber'] {
+  --primary: oklch(0.61 0.135 65);
+  --primary-foreground: oklch(0.18 0.03 65);
+  --ring: oklch(0.61 0.135 65);
+}
+.dark[data-accent='amber'] {
+  --primary: oklch(0.795 0.135 75);
+  --primary-foreground: oklch(0.19 0.04 75);
+  --ring: oklch(0.795 0.135 75);
+}
+
+[data-accent='pink'] {
+  --primary: oklch(0.56 0.18 345);
+  --primary-foreground: oklch(0.985 0.002 345);
+  --ring: oklch(0.56 0.18 345);
+}
+.dark[data-accent='pink'] {
+  --primary: oklch(0.72 0.145 345);
+  --primary-foreground: oklch(0.15 0.03 345);
+  --ring: oklch(0.72 0.145 345);
+}
+
+[data-accent='rose'] {
+  --primary: oklch(0.55 0.175 15);
+  --primary-foreground: oklch(0.985 0.002 15);
+  --ring: oklch(0.55 0.175 15);
+}
+.dark[data-accent='rose'] {
+  --primary: oklch(0.705 0.15 15);
+  --primary-foreground: oklch(0.15 0.03 15);
+  --ring: oklch(0.705 0.15 15);
+}
+
+[data-accent='cyan'] {
+  --primary: oklch(0.54 0.115 215);
+  --primary-foreground: oklch(0.985 0.002 215);
+  --ring: oklch(0.54 0.115 215);
+}
+.dark[data-accent='cyan'] {
+  --primary: oklch(0.735 0.105 215);
+  --primary-foreground: oklch(0.14 0.03 215);
+  --ring: oklch(0.735 0.105 215);
+}
+
+[data-accent='orange'] {
+  --primary: oklch(0.57 0.16 50);
+  --primary-foreground: oklch(0.985 0.002 50);
+  --ring: oklch(0.57 0.16 50);
+}
+.dark[data-accent='orange'] {
+  --primary: oklch(0.74 0.14 55);
+  --primary-foreground: oklch(0.16 0.03 55);
+  --ring: oklch(0.74 0.14 55);
+}
+
+[data-accent='green'] {
+  --primary: oklch(0.53 0.13 148);
+  --primary-foreground: oklch(0.985 0.002 148);
+  --ring: oklch(0.53 0.13 148);
+}
+.dark[data-accent='green'] {
+  --primary: oklch(0.72 0.12 148);
+  --primary-foreground: oklch(0.14 0.03 148);
+  --ring: oklch(0.72 0.12 148);
+}
+
+[data-accent='teal'] {
+  --primary: oklch(0.53 0.105 190);
+  --primary-foreground: oklch(0.985 0.002 190);
+  --ring: oklch(0.53 0.105 190);
+}
+.dark[data-accent='teal'] {
+  --primary: oklch(0.725 0.095 190);
+  --primary-foreground: oklch(0.14 0.03 190);
+  --ring: oklch(0.725 0.095 190);
+}
+
+[data-accent='sky'] {
+  --primary: oklch(0.55 0.13 235);
+  --primary-foreground: oklch(0.985 0.002 235);
+  --ring: oklch(0.55 0.13 235);
+}
+.dark[data-accent='sky'] {
+  --primary: oklch(0.72 0.11 235);
+  --primary-foreground: oklch(0.14 0.03 235);
+  --ring: oklch(0.72 0.11 235);
+}
+
+[data-accent='custom'] {
+  --primary: var(--custom-primary, oklch(0.52 0.185 275));
+  --primary-foreground: var(--custom-primary-foreground, oklch(0.985 0.002 275));
+  --ring: var(--custom-primary, oklch(0.52 0.185 275));
+}
+.dark[data-accent='custom'] {
+  --primary: var(--custom-primary-dark, oklch(0.685 0.145 275));
+  --primary-foreground: var(--custom-primary-foreground-dark, oklch(0.14 0.02 275));
+  --ring: var(--custom-primary-dark, oklch(0.685 0.145 275));
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --font-sans: var(--app-font-ui);
+  --font-mono: var(--app-font-mono);
+  --font-math: var(--app-font-math);
+  --text-xs: var(--app-text-ui-xs);
+  --text-sm: var(--app-text-ui-sm);
+  --text-base: var(--app-text-ui-base);
+  --text-lg: var(--app-text-ui-lg);
+  --text-xl: var(--app-text-ui-xl);
+  --text-2xl: var(--app-text-ui-2xl);
+  --radius-xs: var(--app-radius-detail);
+  --radius-sm: var(--app-radius-detail);
+  --radius-md: var(--app-radius-inner);
+  --radius-lg: var(--app-radius-item);
+  --radius-xl: var(--app-radius-control);
+  --radius-2xl: var(--app-radius-card);
+  --radius-3xl: var(--app-radius-window);
+  --radius-4xl: var(--app-radius-window);
+  --radius-detail: var(--app-radius-detail);
+  --radius-inner: var(--app-radius-inner);
+  --radius-item: var(--app-radius-item);
+  --radius-control: var(--app-radius-control);
+  --radius-icon: var(--app-radius-icon);
+  --radius-card: var(--app-radius-card);
+  --radius-window: var(--app-radius-window);
+  --shadow-overlay: var(--app-shadow-overlay);
+}
+
+/* corner-shape does not inherit. Cover portals and pseudo-elements as well as
+ * the app root; unsupported engines retain the normal border-radius fallback.
+ * Keep this in base so explicit geometry utilities always win. */
+@layer base {
+  @supports (corner-shape: squircle) {
+    :where(*, *::before, *::after) {
+      corner-shape: var(--app-corner-shape);
+    }
+  }
+}
+
+/* Full means a real circle/capsule: switches, radio dots, avatars, activity
+ * indicators and ripples. Ordinary controls use rounded-control instead.
+ * As a utility this also handles before:/after: and other Tailwind variants.
+ *
+ * `!important` keeps the circle authoritative: Tailwind emits custom @utility
+ * rules *before* its own sorted radius scale, so a control that also carries a
+ * semantic radius (`size="icon"` adds rounded-icon) would otherwise come back
+ * a rounded square at the 14px token instead of a circle. */
+@utility rounded-full {
+  border-radius: var(--app-radius-full) !important;
+  corner-shape: round !important;
+}
+@utility rounded-capsule {
+  border-radius: var(--app-radius-capsule) !important;
+  corner-shape: round !important;
+}
+@utility corner-round {
+  corner-shape: round;
+}
+@utility rounded-inherit {
+  border-radius: inherit;
+  corner-shape: inherit;
+}
+
+/* Text fields keep their focus outline without repainting their frame. */
+@utility field-highlight {
+  @apply border-transparent ring-1 ring-ring/40;
+}
+
+/* Small UI annotations inherit their parent's leading, just like the former
+ * arbitrary pixel utilities. Code and prose opt into their own semantic base. */
+@utility text-micro { font-size: var(--app-text-ui-micro); }
+@utility text-caption { font-size: var(--app-text-ui-caption); }
+@utility text-keycap { font-size: var(--app-text-ui-keycap); }
+@utility text-content { font-size: var(--app-text-content); line-height: var(--app-line-content); }
+@utility text-content-tight { font-size: var(--app-text-content); line-height: var(--app-line-content-tight); }
+@utility text-content-small { font-size: var(--app-text-content-small); }
+@utility text-content-heading { font-size: var(--app-text-content-heading); line-height: var(--app-line-content); }
+@utility text-code { font-size: var(--app-text-code); line-height: var(--app-line-code); }
+@utility text-code-inline { font-size: var(--app-text-code); line-height: normal; }
+@utility text-terminal { font-size: var(--app-text-terminal); }
+@utility leading-content { line-height: var(--app-line-content); }
+@utility leading-content-tight { line-height: var(--app-line-content-tight); }
+@utility leading-code { line-height: var(--app-line-code); }
+@utility leading-ui-tight { line-height: calc(var(--app-line-ui) * 0.8); }
+@utility leading-ui { line-height: var(--app-line-ui); }
+@utility leading-ui-loose { line-height: calc(var(--app-line-ui) * 1.2); }
+
+/* The JSON tree borrows the terminal's chromatic palette: those hues already
+ * hold 4.5:1 on --background in both modes, and one source keeps them in step. */
+[data-file-json] [data-json-key] { color: var(--terminal-blue); }
+[data-file-json] [data-json-value='string'] { color: var(--terminal-green); }
+[data-file-json] [data-json-value='number'] { color: var(--terminal-cyan); }
+[data-file-json] [data-json-value='boolean'] { color: var(--terminal-magenta); }
+
+/* Action surfaces do not paint their own border. Selection controls and
+ * attachment previews retain their frame so they remain visible at rest. */
+:where(button:not([role='checkbox']):not([role='radio']):not([data-attachment-frame]), a[href], [role='button'], [role='tab'], [role='option'], [role='menuitem'], [role='treeitem']) {
+  border-color: transparent;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-background text-foreground antialiased;
+  font-family: var(--app-font-ui);
+  font-size: var(--app-text-ui-base);
+  overflow: hidden;
+}
+
+:root[data-pip='true'] body {
+  background: transparent;
+}
+
+/* On macOS the native vibrancy surface shows through the shared glass title
+ * row and sidebar. Content regions keep their own opaque backgrounds. */
+html[data-platform='darwin'] body {
+  background: transparent;
+}
+
+/* Full pages leave the title row clear for native glass, including while their
+ * motion container enters/exits. Keep the covered workspace title mounted but
+ * invisible until the page has left, so its text and controls cannot show
+ * through or accumulate another layer of the glass material. */
+.window-page {
+  background: linear-gradient(to bottom, transparent var(--app-titlebar-height), var(--background) var(--app-titlebar-height));
+}
+.workspace-window:has(> .window-page:not([hidden])) > .window-titlebar {
+  visibility: hidden;
+}
+
+[data-pip-drag] {
+  -webkit-app-region: drag;
+  user-select: none;
+}
+[data-pip-drag] button {
+  -webkit-app-region: no-drag;
+}
+
+/* The sidebar's "show more" row is a command, not content: a click must not
+ * leave its label text selected. */
+[data-resource-id^="more:"] {
+  user-select: none;
+}
+
+/* A single title row shared by the workspace, Settings and startup. Keep the
+ * macOS traffic lights clear even in fullscreen; the native controls return
+ * there when the pointer reaches the top edge. Windows/Linux expose their
+ * actual caption-button width through the Window Controls Overlay API. */
+.window-titlebar {
+  height: var(--app-titlebar-height);
+  padding-inline: 12px;
+  -webkit-app-region: drag;
+  user-select: none;
+}
+:root[data-platform="darwin"] .window-titlebar {
+  padding-left: 92px;
+}
+:root:is([data-platform="win32"], [data-platform="linux"]) .window-titlebar {
+  padding-right: max(148px, calc(100% - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100%) + 12px));
+}
+.window-titlebar :is(button, a, input, [role="button"], [data-window-interactive]) {
+  -webkit-app-region: no-drag;
+}
+/* Portalled beUI dialogs own the entire window while open, including the
+ * strip behind their backdrop. A press there must dismiss, never drag. */
+body:has([aria-modal="true"]:not([aria-hidden="true"])) .window-titlebar {
+  -webkit-app-region: no-drag;
+}
+
+/* Selection follows the accent color. */
+::selection {
+  background: color-mix(in oklch, var(--primary) 25%, transparent);
+}
+
+/* Window chrome glass (Settings → Appearance, default on): native vibrancy
+ * and the panel's neutral translucent veil carry the material. A faint accent
+ * wash only touches the corners, leaving the middle clear. Mixing the accent
+ * with transparent lets the macOS material and window backdrop show through.
+ * The wash is static, so the sidebar costs nothing per frame at rest. */
+.window-glass-wash {
+  background-image:
+    radial-gradient(110% 65% at 0% 0%, color-mix(in oklch, var(--primary) 6%, transparent) 0%, transparent 48%),
+    radial-gradient(100% 60% at 100% 100%, color-mix(in oklch, var(--primary) 3%, transparent) 0%, transparent 48%);
+}
+.dark .window-glass-wash {
+  background-image:
+    radial-gradient(110% 65% at 0% 0%, color-mix(in oklch, var(--primary) 8%, transparent) 0%, transparent 48%),
+    radial-gradient(100% 60% at 100% 100%, color-mix(in oklch, var(--primary) 4%, transparent) 0%, transparent 48%);
+}
+
+/* Session organization uses the existing theme, corners and compact glyphs.
+ * The viewport stays flush with the sidebar's bottom edge; only obscured rows
+ * receive useScrollFade's shared edge ramps. */
+.session-sidebar .sessions-tree [role="treeitem"] {
+  border-radius: var(--app-radius-item);
+  /* Session and group titles retain primary contrast even when unselected. */
+  color: var(--foreground);
+}
+.session-sidebar[data-details="true"] .sessions-tree [role="treeitem"]:has([data-session-row]) {
+  min-height: calc(var(--app-line-ui) * 2 + 10px);
+  padding-block: 5px;
+}
+.session-sidebar .sessions-tree [role="treeitem"][aria-selected="true"] {
+  background: color-mix(in oklch, var(--primary) 12%, transparent);
+  color: var(--foreground);
+}
+/* Keep the menu control distinct from the row's muted hover fill. */
+.session-sidebar .sessions-tree [role="treeitem"] button[aria-haspopup="dialog"]:is(:hover, :focus-visible, [aria-expanded="true"]) {
+  background: color-mix(in oklch, var(--muted) 86%, var(--foreground));
+  color: var(--foreground);
+}
+.session-sidebar .sessions-tree [role="treeitem"]:has([data-session-group]) {
+  min-height: 32px;
+  font-size: var(--app-text-ui-xs);
+  font-weight: 500;
+}
+.session-sidebar .sessions-tree [role="treeitem"][aria-level="1"]:has([data-session-group]) {
+  margin-top: 8px;
+}
+.session-sidebar .sessions-tree [role="treeitem"]:first-child {
+  margin-top: 0;
+}
+.session-group-count {
+  flex-shrink: 0;
+  color: var(--muted-foreground);
+  font-weight: 400;
+}
+.session-group-action {
+  opacity: 0;
+  color: var(--muted-foreground);
+  transition: opacity 120ms ease-out, color 120ms ease-out;
+}
+.session-sidebar [role="treeitem"]:is(:hover, :focus-within, [data-menu-open="true"]) .session-group-action {
+  opacity: 1;
+}
+.session-sidebar [role="treeitem"]:is(:hover, :focus-within, [data-menu-open="true"]) .session-group-count {
+  visibility: hidden;
+}
+.session-sidebar [role="treeitem"]:has([data-more-row]) {
+  min-height: 28px;
+  font-size: var(--app-text-ui-xs);
+}
+.session-sidebar [role="treeitem"]:has([data-more-row]):hover {
+  background: transparent;
+  color: var(--primary);
+}
+.session-archive-count {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline-end: 0;
+  min-width: 12px;
+  padding-inline: 2px;
+  background: var(--background);
+  border-radius: var(--app-radius-capsule);
+  line-height: 1.2;
+  color: var(--muted-foreground);
+}
+@media (hover: none) {
+  .session-group-action { opacity: 1; }
+  .session-sidebar [role="treeitem"]:has(.session-group-action) .session-group-count { visibility: hidden; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .session-group-action { transition: none; }
+}
+
+/* App-wide scrollbars are invisible: scrolling keeps working, the chrome never
+ * shows. Per-element `scrollbar-hide` is therefore redundant for app code, but
+ * the utility stays because vendored beUI components still reference it. */
+* {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+*::-webkit-scrollbar {
+  display: none;
+}
+/* xterm 6 draws its scrollbars as DOM instead of browser chrome. Keep the same
+ * app-wide policy here; terminal components carry no scrollbar styling. */
+.xterm-scrollable-element > .scrollbar {
+  display: none;
+}
+
+/* The transcript skips layout/paint for the turns outside the viewport: a long
+ * session is ~20k elements (Shiki spans, diff rows, tool output) and re-wrapping
+ * all of it is what makes a panel resize stutter — it is also pure waste while
+ * reading, when only the two or three rows on screen can be seen. `auto` keeps
+ * each row's last measured height, so scrolling stays stable and the transcript
+ * still pins to the live edge.
+ *
+ * Deliberately always on rather than toggled for the duration of a drag:
+ * switching it off again forces the browser to lay out every skipped row at
+ * once, which landed as a ~120ms freeze at the end of every resize. */
+[data-slot="message-group"] > * {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 400px;
+}
+
+/* The transcript's tail is the live edge, and that is the one place `auto` has
+ * nothing remembered to fall back on: a row mounts BELOW the fold (the scroller
+ * is still pinning to the end as it arrives), so the browser skipped it, painted
+ * the 400px fallback and only then replaced it with the real height. The pending
+ * row appeared far below where it belongs and snapped back a frame later — the
+ * visible bounce. The last two rows always lay out; every older row keeps the
+ * skip and its remembered size. `contain-intrinsic-size` deliberately stays:
+ * laying out here is what RECORDS that remembered size, so the rows can be
+ * skipped normally once newer rows push them up. */
+[data-slot="message-group"] > *:nth-last-child(-n + 2) {
+  content-visibility: visible;
+}
+
+/* A row stack (`data-transcript-rows`) is a column with `items-start` so a
+ * user bubble hugs its text instead of filling the column. That leaves every
+ * row at fit-content width, and a row whose content cannot wrap — a tool
+ * title, a task command — then grew PAST the column: the transcript clips
+ * horizontally (`overflow-x-clip`), so the row's trailing status mark and
+ * disclosure were cut off instead of the title truncating. Cap every row at
+ * the column width; a component's own narrower max-width (a bubble's 82%)
+ * still wins because this sits in `base`, under the utilities. */
+@layer base {
+  [data-transcript-rows] > * {
+    max-width: 100%;
+  }
+}
+
+/* Resolve this metric on the prose font BEFORE code switches to monospace.
+ * Registering the length makes descendants inherit its computed value;
+ * an unregistered 1cap would instead resolve against the code font. */
+@property --markdown-cap-height {
+  syntax: '<length>';
+  inherits: true;
+  initial-value: 0px;
+}
+[data-markdown], [data-markdown] :where(p, li, blockquote, th, td, h1, h2, h3, h4, h5, h6, strong, em, a) {
+  --markdown-cap-height: 1cap;
+}
+[data-markdown] [data-inline-code] {
+  /* Scale with the surrounding prose (including headings), while the body
+   * still uses the independent code preference. Align the two fonts' cap
+   * centres rather than aligning their unequal em boxes at the bottom.
+   * Keep native inline fragments so long code can wrap with its sentence. */
+  font-size: calc(1em * var(--app-text-code) / var(--app-text-content));
+  vertical-align: calc((var(--markdown-cap-height) - 1cap) / 2);
+}
+
+.mermaid-measure {
+  position: fixed;
+  top: 0;
+  left: -100000px;
+  width: 1200px;
+  visibility: hidden;
+  pointer-events: none;
+  contain: layout style;
+}
+
+[data-markdown] mark {
+  color: inherit;
+  background: color-mix(in oklch, var(--primary) 20%, transparent);
+}
+[data-markdown] kbd {
+  padding: 0.1em 0.35em;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-detail);
+  background: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+}
+[data-markdown] [data-footnotes] {
+  margin-block-start: 1.25rem;
+  padding-block-start: 0.75rem;
+  border-block-start: 1px solid var(--border);
+  color: var(--muted-foreground);
+  font-size: var(--app-text-content-small);
+  line-height: var(--app-line-content-tight);
+}
+[data-markdown] [data-footnotes] li > * + * {
+  margin-block-start: 0.5rem;
+}
+[data-markdown] [data-footnote-backref] {
+  white-space: nowrap;
+}
+[data-markdown-alert] {
+  border-color: var(--primary);
+}
+[data-markdown-alert-title] {
+  color: var(--primary);
+}
+[data-markdown-alert='warning'], [data-markdown-alert='caution'] {
+  border-color: var(--destructive);
+}
+[data-markdown-alert='warning'] > [data-markdown-alert-title],
+[data-markdown-alert='caution'] > [data-markdown-alert-title] {
+  color: var(--destructive);
+}
+
+/* Each transcript boundary owns one positive margin, with no flex gap to add
+ * to it. This lets fixed divider/action spacing coexist with either density
+ * without subtracting space or depending on the adjacent content's kind. */
+[data-transcript-rows] {
+  --transcript-row-height: max(1.5rem, var(--app-line-ui));
+  --transcript-roomy-gap: 1.5rem;
+  --transcript-gap: var(--transcript-roomy-gap);
+  display: flex;
+  flex-direction: column;
+  row-gap: 0;
+}
+html[data-compact-tools='true'] [data-transcript-rows] {
+  --transcript-gap: 0.25rem;
+}
+[data-transcript-rows] > * + * {
+  margin-block-start: var(--transcript-gap);
+}
+/* The outer stack contains message wrappers; read their exposed first/last
+ * row too, so SDK message boundaries never introduce a second rhythm. */
+[data-transcript-rows] > * + :where(
+  [data-row='text'],
+  [data-transcript-gap-before='roomy'],
+  :has(> [data-transcript-rows] > [data-transcript-gap-before='roomy']:first-child),
+  :has(> [data-row='text']),
+  :has(> [data-transcript-rows] > [data-row='text']:first-child)
+),
+[data-transcript-rows] > :where(
+  [data-row='text'],
+  [data-transcript-gap-after='roomy'],
+  :has(> [data-transcript-rows] > [data-transcript-gap-after='roomy']:last-child),
+  :has(> [data-row='text']),
+  :has(> [data-transcript-rows] > [data-row='text']:last-child)
+) + * {
+  margin-block-start: var(--transcript-roomy-gap);
+}
+/* The process divider owns the next content gap, even when the next row is a
+ * card, a notice, a tool or prose. Its open body uses the same token below. */
+[data-transcript-rows] > [data-transcript-gap-after='divider'] + * {
+  margin-block-start: var(--transcript-divider-gap);
+}
+/* Completion actions use the same spacing inside a reply, after Stop, or as
+ * the turn's standalone footer. An actions-only ending takes it at its outer
+ * boundary; the first child must not add a second margin. */
+* + [data-message-actions],
+[data-transcript-rows] > * + [data-transcript-gap-before='actions'] {
+  margin-block-start: var(--transcript-actions-gap);
+}
+.transcript-row {
+  min-height: var(--transcript-row-height, 2.25rem);
+}
+.transcript-label {
+  /* Flex centres the label's visible type area, not its font's asymmetric
+   * ascent/descent and leading. Symmetric font-relative padding keeps CJK
+   * glyphs and Latin descenders inside truncated labels. */
+  text-box-trim: trim-both;
+  text-box-edge: cap alphabetic;
+  padding-block: 0.25em;
+}
+[data-transcript-rows] [data-agent-trigger] {
+  height: var(--transcript-row-height);
+  flex-shrink: 0;
+  min-height: var(--transcript-row-height);
+  padding-block: 0;
+  line-height: var(--transcript-row-height);
+}
+[data-transcript-rows] [data-agent-body][aria-hidden='false'] {
+  /* Activity's live viewport can have a measured height. Its leading space is
+   * outside that height, just as for an auto-height tool or group body. */
+  box-sizing: content-box;
+  padding-block-start: var(--transcript-gap);
+}
+[data-transcript-rows] [data-agent-body][aria-hidden='false']:is(
+  [data-transcript-gap-before='roomy'],
+  :has(> [data-transcript-rows] > [data-row='text']:first-child)
+) {
+  padding-block-start: var(--transcript-roomy-gap);
+}
+[data-transcript-rows] [data-agent-body][aria-hidden='false'][data-transcript-gap-before='divider'] {
+  padding-block-start: var(--transcript-divider-gap);
+}
+[data-transcript-rows] [data-tool-body] {
+  padding-block: 0;
+}
+[data-transcript-rows] [data-diff-body] {
+  margin-block: 0;
+}
+[data-transcript-rows] [data-content='text'] [role='list'] {
+  display: flex;
+  flex-direction: column;
+  gap: var(--transcript-gap);
+  padding-block: 0;
+}
+[data-transcript-rows] [data-content='text'] [role='listitem'] {
+  margin-block: 0;
+}
+[data-transcript-rows] [data-content='text'] [role='listitem'] > * {
+  padding-block: 0;
+}
+/* Motion's global skip flag settles on its next frame. Disclosures must paint
+ * their final state in the commit frame, including a live preference change. */
+[data-disclosure-instant] {
+  /* Removing the animated transform also removes its containing block.
+   * Keep positioned descendants (including sr-only tool statuses) inside the
+   * disclosure's clip so a closed process cannot extend the scroll range. */
+  position: relative;
+  transform: none !important;
+  clip-path: none !important;
+  opacity: 1 !important;
+}
+
+/* reduced motion (Settings → Appearance, `lib/reduce-motion.ts`) — the CSS half of
+ * the switch; the same call sets motion's own global flag, which handles every
+ * JS animation. What is left for CSS is hover transitions and the few keyframes
+ * the app still carries (beui-text-shimmer, the theme View Transition's
+ * `::view-transition-*` reveal).
+ *
+ * Running-state motion is the ONE exception, because "this is still running" is
+ * information rather than decoration: `animate-spin` (every busy glyph in the
+ * app and in vendored beUI), `animate-pulse` (the dither Loader's particles,
+ * which re-add their own stagger in `components/motion/loader.tsx`) and
+ * `beui-text-shimmer` (the waiting row's sentence sweep) stay animated — the
+ * spinner's particles and its sentence are the row's whole signal. Only those
+ * three are exempt: a decorative keyframe cannot survive by being a Tailwind
+ * animation.
+ *
+ * Both pseudo-elements are matched, since a component's own `::before`/`::after`
+ * animation is otherwise untouched. `!important` is required: a vendored
+ * component injects its `<style>` at the same origin, and media queries inside
+ * those blocks (text-shimmer's own reduced-motion reset) must not be the only
+ * thing that stops it. `transition-delay` is zeroed with the duration, so a
+ * staggered reveal appears at once instead of sitting in its initial state.
+ */
+html[data-reduce-motion='true'] *:not(.animate-spin):not(.animate-pulse):not(.beui-text-shimmer),
+html[data-reduce-motion='true'] *:not(.animate-spin):not(.animate-pulse):not(.beui-text-shimmer)::before,
+html[data-reduce-motion='true'] *:not(.animate-spin):not(.animate-pulse):not(.beui-text-shimmer)::after {
+  animation: none !important;
+}
+html[data-reduce-motion='true'] *,
+html[data-reduce-motion='true'] *::before,
+html[data-reduce-motion='true'] *::after {
+  /* A nonzero duration also turns the default transition-property: all ON
+   * for elements with no transition utility. Even 1ms defers geometry by one
+   * frame (padding, gaps and heights jump again after an instant disclosure). */
+  transition-duration: 0s !important;
+  transition-delay: 0s !important;
+}
+/* The theme switch animates the document's own view-transition snapshots, which
+ * are pseudo-elements of <html> and so are not reached by the rules above. No
+ * animation leaves the new theme's snapshot in place immediately. */
+html[data-reduce-motion='true']::view-transition-old(root),
+html[data-reduce-motion='true']::view-transition-new(root) {
+  animation: none !important;
+}

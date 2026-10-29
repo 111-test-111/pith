@@ -1,0 +1,465 @@
+{
+  "format": "pith-session-replay-v2",
+  "source": "offline-synthetic-provider/real-sdk-session",
+  "scenario": {
+    "id": "cancelled-retry",
+    "description": "The driver aborts real SDK retry backoff; no next provider call may start.",
+    "tools": [],
+    "prompts": [
+      "Attempt an answer; I will cancel retry backoff."
+    ],
+    "cancelDuringRetry": true,
+    "retry": {
+      "enabled": true,
+      "maxRetries": 2,
+      "baseDelayMs": 100
+    }
+  },
+  "calls": [
+    {
+      "request": {
+        "model": {
+          "api": "openai-completions",
+          "baseUrl": "http://127.0.0.1:1",
+          "contextWindow": 200000,
+          "cost": {
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "input": 0,
+            "output": 0
+          },
+          "id": "offline-replay",
+          "input": [
+            "text"
+          ],
+          "maxTokens": 4096,
+          "name": "Offline replay",
+          "provider": "pith-replay",
+          "reasoning": false
+        },
+        "context": {
+          "messages": [
+            {
+              "content": "",
+              "role": "system",
+              "sections": {
+                "cwd": "<cwd>\n{{pith:workspace}}\n</cwd>",
+                "preamble": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools."
+              },
+              "timestamp": 0
+            },
+            {
+              "content": [
+                {
+                  "text": "Attempt an answer; I will cancel retry backoff.",
+                  "type": "text"
+                }
+              ],
+              "role": "user",
+              "timestamp": 0
+            }
+          ]
+        },
+        "options": {
+          "maxRetryDelayMs": 60000,
+          "sessionId": "{{session}}",
+          "toolExecution": "parallel",
+          "transport": "sse"
+        }
+      },
+      "exchanges": [
+        {
+          "kind": "payload",
+          "model": {
+            "api": "openai-completions",
+            "baseUrl": "http://127.0.0.1:1",
+            "contextWindow": 200000,
+            "cost": {
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "input": 0,
+              "output": 0
+            },
+            "id": "offline-replay",
+            "input": [
+              "text"
+            ],
+            "maxTokens": 4096,
+            "name": "Offline replay",
+            "provider": "pith-replay",
+            "reasoning": false
+          },
+          "before": {
+            "authorization": "[redacted]",
+            "messages": [
+              {
+                "content": "",
+                "role": "system",
+                "sections": {
+                  "cwd": "<cwd>\n{{pith:workspace}}\n</cwd>",
+                  "preamble": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools."
+                },
+                "timestamp": 0
+              },
+              {
+                "content": [
+                  {
+                    "text": "Attempt an answer; I will cancel retry backoff.",
+                    "type": "text"
+                  }
+                ],
+                "role": "user",
+                "timestamp": 0
+              }
+            ],
+            "model": "offline-replay"
+          },
+          "actual": {
+            "authorization": "[redacted]",
+            "messages": [
+              {
+                "content": "",
+                "role": "system",
+                "sections": {
+                  "cwd": "<cwd>\n{{pith:workspace}}\n</cwd>",
+                  "preamble": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools."
+                },
+                "timestamp": 0
+              },
+              {
+                "content": [
+                  {
+                    "text": "Attempt an answer; I will cancel retry backoff.",
+                    "type": "text"
+                  }
+                ],
+                "role": "user",
+                "timestamp": 0
+              }
+            ],
+            "model": "offline-replay"
+          }
+        },
+        {
+          "kind": "response",
+          "model": {
+            "api": "openai-completions",
+            "baseUrl": "http://127.0.0.1:1",
+            "contextWindow": 200000,
+            "cost": {
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "input": 0,
+              "output": 0
+            },
+            "id": "offline-replay",
+            "input": [
+              "text"
+            ],
+            "maxTokens": 4096,
+            "name": "Offline replay",
+            "provider": "pith-replay",
+            "reasoning": false
+          },
+          "response": {
+            "headers": {
+              "authorization": "[redacted]",
+              "content-type": "text/event-stream",
+              "x-request-id": "synthetic-request"
+            },
+            "status": 503
+          }
+        },
+        {
+          "kind": "chunk",
+          "event": {
+            "partial": {
+              "api": "openai-completions",
+              "content": [],
+              "errorMessage": "503 Service Unavailable (synthetic cancellation fixture)",
+              "model": "offline-replay",
+              "provider": "pith-replay",
+              "role": "assistant",
+              "stopReason": "pending",
+              "timestamp": 0,
+              "usage": {
+                "cacheRead": 3,
+                "cacheWrite": 0,
+                "cost": {
+                  "cacheRead": 0,
+                  "cacheWrite": 0,
+                  "input": 0,
+                  "output": 0,
+                  "total": 0
+                },
+                "input": 17,
+                "output": 9,
+                "totalTokens": 29
+              }
+            },
+            "type": "start"
+          }
+        },
+        {
+          "kind": "chunk",
+          "event": {
+            "error": {
+              "api": "openai-completions",
+              "content": [],
+              "errorMessage": "503 Service Unavailable (synthetic cancellation fixture)",
+              "model": "offline-replay",
+              "provider": "pith-replay",
+              "role": "assistant",
+              "stopReason": "error",
+              "timestamp": 0,
+              "usage": {
+                "cacheRead": 3,
+                "cacheWrite": 0,
+                "cost": {
+                  "cacheRead": 0,
+                  "cacheWrite": 0,
+                  "input": 0,
+                  "output": 0,
+                  "total": 0
+                },
+                "input": 17,
+                "output": 9,
+                "totalTokens": 29
+              }
+            },
+            "reason": "error",
+            "type": "error"
+          }
+        }
+      ],
+      "result": {
+        "api": "openai-completions",
+        "content": [],
+        "errorMessage": "503 Service Unavailable (synthetic cancellation fixture)",
+        "model": "offline-replay",
+        "provider": "pith-replay",
+        "role": "assistant",
+        "stopReason": "error",
+        "timestamp": 0,
+        "usage": {
+          "cacheRead": 3,
+          "cacheWrite": 0,
+          "cost": {
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "input": 0,
+            "output": 0,
+            "total": 0
+          },
+          "input": 17,
+          "output": 9,
+          "totalTokens": 29
+        }
+      }
+    }
+  ],
+  "expected": {
+    "transcript": [
+      {
+        "content": "",
+        "role": "system",
+        "sections": {
+          "cwd": "<cwd>\n{{pith:workspace}}\n</cwd>",
+          "preamble": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools."
+        },
+        "timestamp": 0
+      },
+      {
+        "content": [
+          {
+            "text": "Attempt an answer; I will cancel retry backoff.",
+            "type": "text"
+          }
+        ],
+        "role": "user",
+        "timestamp": 0
+      }
+    ],
+    "toolEvents": [],
+    "eventTypes": [
+      "agent_start",
+      "turn_start",
+      "message_start",
+      "message_end",
+      "message_start",
+      "message_end",
+      "message_start",
+      "message_end",
+      "turn_end",
+      "agent_end",
+      "auto_retry_start",
+      "entry_appended",
+      "auto_retry_end",
+      "agent_settled"
+    ],
+    "delivered": [],
+    "outputFiles": [],
+    "trajectories": [
+      {
+        "kind": "run",
+        "name": "run",
+        "status": "cancelled",
+        "captured": true,
+        "usage": {
+          "input": 17,
+          "output": 9,
+          "cacheRead": 3,
+          "cacheWrite": 0,
+          "cost": 0
+        },
+        "documents": {}
+      },
+      {
+        "kind": "user",
+        "name": "user",
+        "status": "completed",
+        "captured": true,
+        "documents": {
+          "context": {
+            "content": [
+              {
+                "text": "Attempt an answer; I will cancel retry backoff.",
+                "type": "text"
+              }
+            ],
+            "role": "user",
+            "timestamp": 0
+          }
+        }
+      },
+      {
+        "kind": "request",
+        "name": "offline-replay",
+        "status": "failed",
+        "captured": true,
+        "provider": "pith-replay",
+        "model": "offline-replay",
+        "stopReason": "error",
+        "httpStatus": 503,
+        "usage": {
+          "input": 17,
+          "output": 9,
+          "cacheRead": 3,
+          "cacheWrite": 0,
+          "cost": 0
+        },
+        "firstTokenObserved": false,
+        "documents": {
+          "context": {
+            "messages": [
+              {
+                "content": "",
+                "role": "system",
+                "sections": {
+                  "cwd": "<cwd>\n{{pith:workspace}}\n</cwd>",
+                  "preamble": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools."
+                },
+                "timestamp": 0
+              },
+              {
+                "content": [
+                  {
+                    "text": "Attempt an answer; I will cancel retry backoff.",
+                    "type": "text"
+                  }
+                ],
+                "role": "user",
+                "timestamp": 0
+              }
+            ]
+          },
+          "options": {
+            "api": "openai-completions",
+            "baseUrl": "http://127.0.0.1:1",
+            "maxRetryDelayMs": 60000,
+            "thinkingLevel": "off",
+            "timeoutMs": 300000,
+            "transport": "sse"
+          },
+          "output": {
+            "api": "openai-completions",
+            "content": [],
+            "errorMessage": "503 Service Unavailable (synthetic cancellation fixture)",
+            "model": "offline-replay",
+            "provider": "pith-replay",
+            "role": "assistant",
+            "stopReason": "error",
+            "timestamp": 0,
+            "usage": {
+              "cacheRead": 3,
+              "cacheWrite": 0,
+              "cost": {
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "input": 0,
+                "output": 0,
+                "total": 0
+              },
+              "input": 17,
+              "output": 9,
+              "totalTokens": 29
+            }
+          },
+          "payload": {
+            "authorization": "[redacted]",
+            "messages": [
+              {
+                "content": "",
+                "role": "system",
+                "sections": {
+                  "cwd": "<cwd>\n{{pith:workspace}}\n</cwd>",
+                  "preamble": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools."
+                },
+                "timestamp": 0
+              },
+              {
+                "content": [
+                  {
+                    "text": "Attempt an answer; I will cancel retry backoff.",
+                    "type": "text"
+                  }
+                ],
+                "role": "user",
+                "timestamp": 0
+              }
+            ],
+            "model": "offline-replay"
+          },
+          "response": {
+            "headers": {
+              "content-type": "text/event-stream",
+              "x-request-id": "synthetic-request"
+            },
+            "status": 503
+          }
+        }
+      },
+      {
+        "kind": "retry",
+        "name": "1",
+        "status": "cancelled",
+        "captured": true,
+        "documents": {
+          "event": {
+            "attempt": 1,
+            "delayMs": 100,
+            "errorMessage": "503 Service Unavailable (synthetic cancellation fixture)",
+            "maxAttempts": 2,
+            "type": "auto_retry_start"
+          },
+          "output": {
+            "attempt": 1,
+            "finalError": "Retry cancelled",
+            "success": false,
+            "type": "auto_retry_end"
+          }
+        }
+      }
+    ]
+  }
+}

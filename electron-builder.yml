@@ -1,0 +1,41 @@
+appId: app.pith.desktop
+productName: Pith
+directories:
+  output: dist
+  buildResources: resources
+files:
+  - out/**/*
+  - package.json
+  - LICENSE
+  - THIRD_PARTY_NOTICES.md
+  - LICENSES/**/*
+# node-pty's native module and macOS spawn-helper must be real filesystem files.
+# The optional DSH sandbox runners carry native helpers too: the Landlock
+# addon loads a .node binary and the Windows ACL runner is spawned as a script.
+asarUnpack:
+  - node_modules/node-pty/**/*
+  - node_modules/@deepseek-ai/node-addon-landlock-run/**/*
+  - node_modules/@deepseek-ai/dsh-sandbox-windows-acl/**/*
+extraResources:
+  - from: resources/icons
+    to: icons
+  - from: resources/skills
+    to: skills
+mac:
+  icon: resources/icons/icon.icns
+  category: public.app-category.developer-tools
+  target:
+    - dmg
+    - zip
+win:
+  icon: resources/icons/icon.ico
+  target:
+    - nsis
+linux:
+  icon: resources/icons
+  category: Development
+  target:
+    - AppImage
+    - deb
+nsis:
+  shortcutName: Pith

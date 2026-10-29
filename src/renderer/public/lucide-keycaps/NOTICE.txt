@@ -1,0 +1,13 @@
+Lucide Icons 1.50.0 — shortcut keycap SVG subset
+Source: https://registry.npmjs.org/lucide-static/-/lucide-static-1.50.0.tgz
+Project: https://github.com/lucide-icons/lucide
+
+Original upstream SVG paths are preserved. The shared app adapter renders
+their drawing data; ShortcutKeys uses Lucide's native stroke and balances
+the visible artwork against the interface font's capital height.
+
+The original SVGs and full upstream ISC / Feather MIT notice are bundled
+with the renderer. See LICENSE.txt.
+
+Regenerate drawing data offline after updating these SVGs:
+node scripts/generate-keycap-artwork.mjs

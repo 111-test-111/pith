@@ -1,0 +1,904 @@
+/**
+ * Page-view styles for the PDF preview: a trimmed copy of
+ * pdfjs-dist@5.7.284 web/pdf_viewer.css (Apache-2.0), kept down to the rules
+ * that can apply to page-view DOM — page containers, canvas wrapper, text
+ * layer, annotation layer and the viewer's scale variables. Toolbar, dialog,
+ * editor, thumbnail, outline, popup and form-widget rules are left out (that
+ * DOM is never mounted), and every scrollbar rule is dropped: pdf.js styles its
+ * scroller through id selectors, which would otherwise beat the app-wide
+ * invisible-scrollbar rule in styles.css. Literal 4px radii are mapped onto
+ * --app-radius-detail, the app's detail corner. Regenerate this file with the
+ * same selector lists when pdfjs-dist is upgraded.
+ */
+
+/* App overrides. pdf.js defines these layout variables on :root; scoping them
+ * to the viewer keeps pdf.js names out of the app's global namespace. */
+.pdfViewer {
+  --page-margin: 1px auto -8px;
+  --page-border: 9px solid transparent;
+  --pdfViewer-padding-bottom: 0;
+  --viewer-container-height: 0;
+
+  /* pdf.js scrollIntoView walks past ancestors with no overflow. A short PDF
+   * can fit its viewport completely, letting initial scale, zoom or links
+   * scroll the clipped workspace instead and hide the rail's chrome. Keep
+   * one pixel of scroll range inside the PDF viewport so that walk stops here. */
+  min-height: calc(100% + 1px);
+}
+
+/* The page box must keep the content-box model pdf.js is written against: its
+ * `border: 9px solid transparent` is the page gap, and the canvas, text layer
+ * and annotation layer all size themselves to the content box. Tailwind's
+ * global preflight sets `box-sizing: border-box` on everything, which shrank the
+ * canvas by that border while the overlays stayed at the full size — every
+ * highlight and annotation then drifted a few percent away from the glyphs it
+ * belongs to, worst at the bottom-right of a page. */
+.pdfViewer .page {
+  box-sizing: content-box;
+}
+
+
+
+.textLayer{
+  --csstools-color-scheme--light:initial;
+  color-scheme:only light;
+
+  position:absolute;
+  text-align:initial;
+  inset:0;
+  overflow:clip;
+  opacity:1;
+  line-height:1;
+  -webkit-text-size-adjust:none;
+     -moz-text-size-adjust:none;
+          text-size-adjust:none;
+  forced-color-adjust:none;
+  transform-origin:0 0;
+  caret-color:CanvasText;
+  z-index:0;
+}
+
+
+.textLayer.highlighting{
+    touch-action:none;
+  }
+
+
+.textLayer :is(span,br){
+    color:transparent;
+    position:absolute;
+    white-space:pre;
+    cursor:text;
+    transform-origin:0% 0%;
+  }
+
+
+.textLayer{
+  --min-font-size:1;
+  --text-scale-factor:calc(var(--total-scale-factor) * var(--min-font-size));
+  --min-font-size-inv:calc(1 / var(--min-font-size));
+}
+
+
+.textLayer  > :not(.markedContent),.textLayer .markedContent span:not(.markedContent){
+    z-index:1;
+
+    --font-height:0;
+    font-size:calc(var(--text-scale-factor) * var(--font-height));
+
+    --scale-x:1;
+    --rotate:0deg;
+    transform:rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+  }
+
+
+.textLayer .markedContent{
+    display:contents;
+  }
+
+
+.textLayer span[role="img"]{
+    -webkit-user-select:none;
+       -moz-user-select:none;
+            user-select:none;
+    cursor:default;
+  }
+
+
+.textLayer .highlight{
+    --highlight-bg-color:rgb(180 0 170 / 0.25);
+    --highlight-selected-bg-color:rgb(0 100 0 / 0.25);
+    --highlight-backdrop-filter:none;
+    --highlight-selected-backdrop-filter:none;
+  }
+
+
+.textLayer .highlight{
+
+    margin:-1px;
+    padding:1px;
+    background-color:var(--highlight-bg-color);
+    -webkit-backdrop-filter:var(--highlight-backdrop-filter);
+            backdrop-filter:var(--highlight-backdrop-filter);
+    border-radius:var(--app-radius-detail);
+  }
+
+
+.appended:is(.textLayer .highlight){
+      position:initial;
+    }
+
+
+.begin:is(.textLayer .highlight){
+      border-radius:var(--app-radius-detail) 0 0 var(--app-radius-detail);
+    }
+
+
+.end:is(.textLayer .highlight){
+      border-radius:0 var(--app-radius-detail) var(--app-radius-detail) 0;
+    }
+
+
+.middle:is(.textLayer .highlight){
+      border-radius:0;
+    }
+
+
+.selected:is(.textLayer .highlight){
+      background-color:var(--highlight-selected-bg-color);
+      -webkit-backdrop-filter:var(--highlight-selected-backdrop-filter);
+              backdrop-filter:var(--highlight-selected-backdrop-filter);
+      scroll-margin-top:50px;
+    }
+
+
+.textLayer ::-moz-selection{
+    background:rgba(0 0 255 / 0.25);
+    background:color-mix(in srgb, AccentColor, transparent 75%);
+  }
+
+
+.textLayer ::selection{
+    background:rgba(0 0 255 / 0.25);
+    background:color-mix(in srgb, AccentColor, transparent 75%);
+  }
+
+
+.textLayer br::-moz-selection{
+    background:transparent;
+  }
+
+
+.textLayer br::selection{
+    background:transparent;
+  }
+
+
+.textLayer .endOfContent{
+    display:block;
+    position:absolute;
+    inset:100% 0 0;
+    z-index:0;
+    cursor:default;
+    -webkit-user-select:none;
+       -moz-user-select:none;
+            user-select:none;
+  }
+
+
+.textLayer.selecting .endOfContent{
+    top:0;
+  }
+
+
+.textLayerImages{
+  position:absolute;
+  inset:0;
+  -webkit-user-select:none;
+     -moz-user-select:none;
+          user-select:none;
+}
+
+
+.textLayerImages canvas{
+    position:absolute;
+    transform-origin:0% 0%;
+  }
+
+
+.annotationLayer{
+  --csstools-color-scheme--light:initial;
+  color-scheme:only light;
+
+  --annotation-unfocused-field-background:url("data:image/svg+xml;charset=UTF-8,<svg width='1px' height='1px' xmlns='http://www.w3.org/2000/svg'><rect width='100%' height='100%' style='fill:rgba(0, 54, 255, 0.13);'/></svg>");
+  --input-focus-border-color:Highlight;
+  --input-focus-outline:1px solid Canvas;
+  --input-unfocused-border-color:transparent;
+  --input-disabled-border-color:transparent;
+  --input-hover-border-color:black;
+  --link-outline:none;
+}
+
+
+.annotationLayer{
+
+  position:absolute;
+  top:0;
+  left:0;
+  pointer-events:none;
+  transform-origin:0 0;
+}
+
+
+.annotationLayer[data-main-rotation="90"] .norotate{
+    transform:rotate(270deg) translateX(-100%);
+  }
+
+
+.annotationLayer[data-main-rotation="180"] .norotate{
+    transform:rotate(180deg) translate(-100%, -100%);
+  }
+
+
+.annotationLayer[data-main-rotation="270"] .norotate{
+    transform:rotate(90deg) translateY(-100%);
+  }
+
+
+.annotationLayer .annotationContent{
+    position:absolute;
+    width:100%;
+    height:100%;
+    pointer-events:none;
+  }
+
+
+.freetext:is(.annotationLayer .annotationContent){
+      background:transparent;
+      border:none;
+      inset:0;
+      overflow:visible;
+      white-space:nowrap;
+      font:10px sans-serif;
+      line-height:1.35;
+    }
+
+
+.annotationLayer section{
+    position:absolute;
+    text-align:initial;
+    pointer-events:auto;
+    box-sizing:border-box;
+    transform-origin:0 0;
+    -webkit-user-select:none;
+       -moz-user-select:none;
+            user-select:none;
+  }
+
+
+:is(.annotationLayer section):has(div.annotationContent) canvas.annotationContent{
+        display:none;
+      }
+
+
+:is(.annotationLayer section) .overlaidText{
+      position:absolute;
+      top:0;
+      left:0;
+      width:0;
+      height:0;
+      display:inline-block;
+      overflow:hidden;
+    }
+
+
+.textLayer.selecting ~ .annotationLayer section{
+    pointer-events:none;
+  }
+
+
+.annotationLayer :is(.linkAnnotation,.buttonWidgetAnnotation.pushButton) > a{
+    position:absolute;
+    font-size:1em;
+    top:0;
+    left:0;
+    width:100%;
+    height:100%;
+  }
+
+
+.annotationLayer :is(.linkAnnotation,.buttonWidgetAnnotation.pushButton):not(.hasBorder) > a:hover{
+    opacity:0.2;
+    background-color:rgb(255 255 0);
+  }
+
+
+.annotationLayer .linkAnnotation.hasBorder:hover{
+    background-color:rgb(255 255 0 / 0.2);
+  }
+
+
+.annotationLayer .hasBorder{
+    background-size:100% 100%;
+  }
+
+
+.annotationLayer .textAnnotation img{
+    position:absolute;
+    cursor:pointer;
+    width:100%;
+    height:100%;
+    top:0;
+    left:0;
+  }
+
+
+.annotationLayer .textWidgetAnnotation :is(input,textarea),.annotationLayer .choiceWidgetAnnotation select,.annotationLayer .buttonWidgetAnnotation:is(.checkBox,.radioButton) input{
+    background-image:var(--annotation-unfocused-field-background);
+    border:1px solid var(--input-unfocused-border-color);
+    box-sizing:border-box;
+    font:calc(9px * var(--total-scale-factor)) sans-serif;
+    height:100%;
+    margin:0;
+    vertical-align:top;
+    width:100%;
+  }
+
+
+.annotationLayer .textWidgetAnnotation :is(input,textarea):required,.annotationLayer .choiceWidgetAnnotation select:required,.annotationLayer .buttonWidgetAnnotation:is(.checkBox,.radioButton) input:required{
+    outline:1px solid red;
+  }
+
+
+.annotationLayer .choiceWidgetAnnotation select option{
+    padding:0;
+  }
+
+
+.annotationLayer .buttonWidgetAnnotation.radioButton input{
+    border-radius:50%;
+  }
+
+
+.annotationLayer .textWidgetAnnotation textarea{
+    resize:none;
+  }
+
+
+.annotationLayer .textWidgetAnnotation [disabled]:is(input,textarea),.annotationLayer .choiceWidgetAnnotation select[disabled],.annotationLayer .buttonWidgetAnnotation:is(.checkBox,.radioButton) input[disabled]{
+    background:none;
+    border:1px solid var(--input-disabled-border-color);
+    cursor:not-allowed;
+  }
+
+
+.annotationLayer .textWidgetAnnotation :is(input,textarea):hover,.annotationLayer .choiceWidgetAnnotation select:hover,.annotationLayer .buttonWidgetAnnotation:is(.checkBox,.radioButton) input:hover{
+    border:1px solid var(--input-hover-border-color);
+  }
+
+
+.annotationLayer .textWidgetAnnotation :is(input,textarea):hover,.annotationLayer .choiceWidgetAnnotation select:hover,.annotationLayer .buttonWidgetAnnotation.checkBox input:hover{
+    border-radius:var(--app-radius-detail);
+  }
+
+
+.annotationLayer .textWidgetAnnotation :is(input,textarea):focus,.annotationLayer .choiceWidgetAnnotation select:focus{
+    background:none;
+    border:1px solid var(--input-focus-border-color);
+    border-radius:var(--app-radius-detail);
+    outline:var(--input-focus-outline);
+  }
+
+
+.annotationLayer .buttonWidgetAnnotation:is(.checkBox,.radioButton) :focus{
+    background-image:none;
+    background-color:transparent;
+  }
+
+
+.annotationLayer .buttonWidgetAnnotation.checkBox :focus{
+    border:1px solid var(--input-focus-border-color);
+    border-radius:var(--app-radius-detail);
+    outline:var(--input-focus-outline);
+  }
+
+
+.annotationLayer .buttonWidgetAnnotation.radioButton :focus{
+    border:1px solid var(--input-focus-border-color);
+    outline:var(--input-focus-outline);
+  }
+
+
+.annotationLayer .buttonWidgetAnnotation.checkBox input:checked::before,.annotationLayer .buttonWidgetAnnotation.checkBox input:checked::after,.annotationLayer .buttonWidgetAnnotation.radioButton input:checked::before{
+    background-color:CanvasText;
+    content:"";
+    display:block;
+    position:absolute;
+  }
+
+
+.annotationLayer .buttonWidgetAnnotation.checkBox input:checked::before,.annotationLayer .buttonWidgetAnnotation.checkBox input:checked::after{
+    height:80%;
+    left:45%;
+    width:1px;
+  }
+
+
+.annotationLayer .buttonWidgetAnnotation.checkBox input:checked::before{
+    transform:rotate(45deg);
+  }
+
+
+.annotationLayer .buttonWidgetAnnotation.checkBox input:checked::after{
+    transform:rotate(-45deg);
+  }
+
+
+.annotationLayer .buttonWidgetAnnotation.radioButton input:checked::before{
+    border-radius:50%;
+    height:50%;
+    left:25%;
+    top:25%;
+    width:50%;
+  }
+
+
+.annotationLayer .textWidgetAnnotation input.comb{
+    font-family:monospace;
+    padding-left:2px;
+    padding-right:0;
+  }
+
+
+.annotationLayer .textWidgetAnnotation input.comb:focus{
+    width:103%;
+  }
+
+
+.annotationLayer .buttonWidgetAnnotation:is(.checkBox,.radioButton) input{
+    -webkit-appearance:none;
+       -moz-appearance:none;
+            appearance:none;
+  }
+
+
+.annotationLayer .richText > *{
+    white-space:pre-wrap;
+    font-size:calc(9px * var(--total-scale-factor));
+  }
+
+
+.annotationLayer section svg{
+    position:absolute;
+    width:100%;
+    height:100%;
+    top:0;
+    left:0;
+  }
+
+
+.annotationLayer .annotationTextContent{
+    position:absolute;
+    width:100%;
+    height:100%;
+    opacity:0;
+    color:transparent;
+    -webkit-user-select:none;
+       -moz-user-select:none;
+            user-select:none;
+    pointer-events:none;
+  }
+
+
+:is(.annotationLayer .annotationTextContent) span{
+      width:100%;
+      display:inline-block;
+    }
+
+
+.annotationLayer svg.quadrilateralsContainer{
+    contain:strict;
+    width:0;
+    height:0;
+    position:absolute;
+    top:0;
+    left:0;
+    z-index:-1;
+  }
+
+
+.xfaLayer{
+  --csstools-color-scheme--light:initial;
+  color-scheme:only light;
+
+  background-color:transparent;
+}
+
+
+.xfaLayer .highlight{
+  margin:-1px;
+  padding:1px;
+  background-color:rgb(239 203 237);
+  border-radius:var(--app-radius-detail);
+}
+
+
+.xfaLayer .highlight.appended{
+  position:initial;
+}
+
+
+.xfaLayer .highlight.begin{
+  border-radius:var(--app-radius-detail) 0 0 var(--app-radius-detail);
+}
+
+
+.xfaLayer .highlight.end{
+  border-radius:0 var(--app-radius-detail) var(--app-radius-detail) 0;
+}
+
+
+.xfaLayer .highlight.middle{
+  border-radius:0;
+}
+
+
+.xfaLayer .highlight.selected{
+  background-color:rgb(203 223 203);
+}
+
+
+.xfaLayer{
+  position:absolute;
+  text-align:initial;
+  top:0;
+  left:0;
+  transform-origin:0 0;
+  line-height:1.2;
+}
+
+
+.xfaLayer *{
+  color:inherit;
+  font:inherit;
+  font-style:inherit;
+  font-weight:inherit;
+  font-kerning:inherit;
+  letter-spacing:-0.01px;
+  text-align:inherit;
+  text-decoration:inherit;
+  box-sizing:border-box;
+  background-color:transparent;
+  padding:0;
+  margin:0;
+  pointer-events:auto;
+  line-height:inherit;
+}
+
+
+.xfaLayer *:required{
+  outline:1px solid red;
+}
+
+
+.xfaLayer div,
+.xfaLayer svg,
+.xfaLayer svg *{
+  pointer-events:none;
+}
+
+
+.xfaLayer a{
+  color:blue;
+}
+
+
+.canvasWrapper svg{
+    transform:none;
+  }
+
+
+.moving:is(.canvasWrapper svg){
+      z-index:100000;
+    }
+
+
+[data-main-rotation="90"]:is(.highlight:is(.canvasWrapper svg),.highlightOutline:is(.canvasWrapper svg)) mask,[data-main-rotation="90"]:is(.highlight:is(.canvasWrapper svg),.highlightOutline:is(.canvasWrapper svg)) use:not(.clip,.mask){
+          transform:matrix(0, 1, -1, 0, 1, 0);
+        }
+
+
+[data-main-rotation="180"]:is(.highlight:is(.canvasWrapper svg),.highlightOutline:is(.canvasWrapper svg)) mask,[data-main-rotation="180"]:is(.highlight:is(.canvasWrapper svg),.highlightOutline:is(.canvasWrapper svg)) use:not(.clip,.mask){
+          transform:matrix(-1, 0, 0, -1, 1, 1);
+        }
+
+
+[data-main-rotation="270"]:is(.highlight:is(.canvasWrapper svg),.highlightOutline:is(.canvasWrapper svg)) mask,[data-main-rotation="270"]:is(.highlight:is(.canvasWrapper svg),.highlightOutline:is(.canvasWrapper svg)) use:not(.clip,.mask){
+          transform:matrix(0, -1, 1, 0, 0, 1);
+        }
+
+
+.draw:is(.canvasWrapper svg){
+      position:absolute;
+      mix-blend-mode:normal;
+    }
+
+
+.draw[data-draw-rotation="90"]:is(.canvasWrapper svg){
+        transform:rotate(90deg);
+      }
+
+
+.draw[data-draw-rotation="180"]:is(.canvasWrapper svg){
+        transform:rotate(180deg);
+      }
+
+
+.draw[data-draw-rotation="270"]:is(.canvasWrapper svg){
+        transform:rotate(270deg);
+      }
+
+
+.highlight:is(.canvasWrapper svg){
+      --blend-mode:multiply;
+    }
+
+
+.highlight:is(.canvasWrapper svg){
+
+      position:absolute;
+      mix-blend-mode:var(--blend-mode);
+    }
+
+
+.highlight:is(.canvasWrapper svg):not(.free){
+        fill-rule:evenodd;
+      }
+
+
+.highlightOutline:is(.canvasWrapper svg){
+      position:absolute;
+      mix-blend-mode:normal;
+      fill-rule:evenodd;
+      fill:none;
+    }
+
+
+.highlightOutline.hovered:is(.canvasWrapper svg):not(.free):not(.selected){
+          stroke:var(--hover-outline-color);
+          stroke-width:var(--outline-width);
+        }
+
+
+.highlightOutline.selected:is(.canvasWrapper svg):not(.free) .mainOutline{
+            stroke:var(--outline-around-color);
+            stroke-width:calc(
+              var(--outline-width) + 2 * var(--outline-around-width)
+            );
+          }
+
+
+.highlightOutline.selected:is(.canvasWrapper svg):not(.free) .secondaryOutline{
+            stroke:var(--outline-color);
+            stroke-width:var(--outline-width);
+          }
+
+
+.highlightOutline.free.hovered:is(.canvasWrapper svg):not(.selected){
+          stroke:var(--hover-outline-color);
+          stroke-width:calc(2 * var(--outline-width));
+        }
+
+
+.highlightOutline.free.selected:is(.canvasWrapper svg) .mainOutline{
+            stroke:var(--outline-around-color);
+            stroke-width:calc(
+              2 * (var(--outline-width) + var(--outline-around-width))
+            );
+          }
+
+
+.highlightOutline.free.selected:is(.canvasWrapper svg) .secondaryOutline{
+            stroke:var(--outline-color);
+            stroke-width:calc(2 * var(--outline-width));
+          }
+
+
+.annotationLayer.disabled :is(.annotationCommentButton){
+  display:none;
+}
+
+
+.textLayer.highlighting{
+    cursor:var(--editorFreeHighlight-editing-cursor);
+  }
+
+
+.textLayer.highlighting:not(.free) span{
+      cursor:var(--editorHighlight-editing-cursor);
+    }
+
+
+[role="img"]:is(.textLayer.highlighting:not(.free) span){
+        cursor:var(--editorFreeHighlight-editing-cursor);
+      }
+
+
+.textLayer.highlighting.free span{
+      cursor:var(--editorFreeHighlight-editing-cursor);
+    }
+
+
+.pdfViewer{
+  --scale-factor:1;
+  --page-bg-color:unset;
+
+  padding-bottom:var(--pdfViewer-padding-bottom);
+
+  --hcm-highlight-filter:none;
+  --hcm-highlight-selected-filter:none;
+}
+
+
+.pdfViewer.copyAll{
+    cursor:wait;
+  }
+
+
+.pdfViewer .canvasWrapper{
+    overflow:hidden;
+    width:100%;
+    height:100%;
+  }
+
+
+:is(.pdfViewer .canvasWrapper) canvas{
+      position:absolute;
+      top:0;
+      left:0;
+      margin:0;
+      display:block;
+      width:100%;
+      height:100%;
+      contain:content;
+    }
+
+
+:is(:is(.pdfViewer .canvasWrapper) canvas) .structTree{
+        contain:strict;
+      }
+
+
+.detailView:is(:is(.pdfViewer .canvasWrapper) canvas){
+        image-rendering:pixelated;
+      }
+
+
+.pdfViewer .page{
+  --user-unit:1;
+  --total-scale-factor:calc(var(--scale-factor) * var(--user-unit));
+  --scale-round-x:1px;
+  --scale-round-y:1px;
+
+  direction:ltr;
+  width:816px;
+  height:1056px;
+  margin:var(--page-margin);
+  position:relative;
+  overflow:visible;
+  border:var(--page-border);
+  background-clip:content-box;
+  background-color:var(--page-bg-color, rgb(255 255 255));
+}
+
+
+.pdfViewer .dummyPage{
+  position:relative;
+  width:0;
+  height:var(--viewer-container-height);
+}
+
+
+.pdfViewer.noUserSelect{
+  -webkit-user-select:none;
+     -moz-user-select:none;
+          user-select:none;
+}
+
+
+.pdfViewer.removePageBorders .page{
+  margin:0 auto 10px;
+  border:none;
+}
+
+
+.pdfViewer.singlePageView{
+  display:inline-block;
+}
+
+
+.pdfViewer.singlePageView .page{
+  margin:0;
+  border:none;
+}
+
+
+.pdfViewer:is(.scrollHorizontal, .scrollWrapped),
+.spread{
+  margin-inline:3.5px;
+  text-align:center;
+}
+
+
+.pdfViewer.scrollHorizontal,
+.spread{
+  white-space:nowrap;
+}
+
+
+.pdfViewer.removePageBorders,
+.pdfViewer:is(.scrollHorizontal, .scrollWrapped) .spread{
+  margin-inline:0;
+}
+
+
+.spread :is(.page, .dummyPage),
+.pdfViewer:is(.scrollHorizontal, .scrollWrapped) :is(.page, .spread){
+  display:inline-block;
+  vertical-align:middle;
+}
+
+
+.spread .page,
+.pdfViewer:is(.scrollHorizontal, .scrollWrapped) .page{
+  margin-inline:var(--spreadHorizontalWrapped-margin-LR);
+}
+
+
+.pdfViewer.removePageBorders .spread .page,
+.pdfViewer.removePageBorders:is(.scrollHorizontal, .scrollWrapped) .page{
+  margin-inline:5px;
+}
+
+
+.pdfViewer .page.loadingIcon::after{
+  position:absolute;
+  top:0;
+  left:0;
+  content:"";
+  width:100%;
+  height:100%;
+  background:url("images/loading-icon.gif") center no-repeat;
+  display:none;
+  transition-property:display;
+  transition-delay:var(--loading-icon-delay);
+  z-index:5;
+  contain:strict;
+}
+
+
+.pdfViewer .page.loading::after{
+  display:block;
+}
+
+
+.pdfViewer .page:not(.loading)::after{
+  transition-property:none;
+  display:none;
+}
+
+
+.pdfPresentationMode .pdfViewer{
+  padding-bottom:0;
+}
+
+
+.pdfPresentationMode .spread{
+  margin:0;
+}
+
+
+.pdfPresentationMode .pdfViewer .page{
+  margin:0 auto;
+  border:2px solid transparent;
+}

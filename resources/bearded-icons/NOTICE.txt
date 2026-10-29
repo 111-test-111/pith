@@ -1,0 +1,7 @@
+Bearded Icons by BeardedBear
+Version: 1.22.0
+Revision: 8807eb4562da44eeaf0a6b24e028d67d4e461d7b
+Source: https://github.com/BeardedBear/bearded-icons/tree/8807eb4562da44eeaf0a6b24e028d67d4e461d7b
+Original file-type SVGs from icons/ are vendored unchanged.
+Filename and extension associations are adapted from icons.json.
+Distributed under GPL-3.0; see LICENSE.txt.

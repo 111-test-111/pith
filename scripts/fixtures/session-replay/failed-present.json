@@ -1,0 +1,1986 @@
+{
+  "format": "pith-session-replay-v2",
+  "source": "offline-synthetic-provider/real-sdk-session",
+  "scenario": {
+    "id": "failed-present",
+    "description": "A directory cannot become a deliverable; SDK tool failure persists and reaches the next request.",
+    "tools": [
+      "present"
+    ],
+    "prompts": [
+      "Present the output directory."
+    ],
+    "files": [
+      {
+        "path": "output",
+        "directory": true
+      }
+    ]
+  },
+  "calls": [
+    {
+      "request": {
+        "model": {
+          "api": "openai-completions",
+          "baseUrl": "http://127.0.0.1:1",
+          "contextWindow": 200000,
+          "cost": {
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "input": 0,
+            "output": 0
+          },
+          "id": "offline-replay",
+          "input": [
+            "text"
+          ],
+          "maxTokens": 4096,
+          "name": "Offline replay",
+          "provider": "pith-replay",
+          "reasoning": false
+        },
+        "context": {
+          "messages": [
+            {
+              "content": "",
+              "role": "system",
+              "sections": {
+                "cwd": "<cwd>\n{{pith:workspace}}\n</cwd>",
+                "preamble": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools."
+              },
+              "timestamp": 0,
+              "toolsAdded": [
+                {
+                  "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. You MUST present every successfully saved generated image, including committed files from a partially failed image call; split batches across calls when needed. For other deliverables, usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
+                  "name": "present",
+                  "parameters": {
+                    "properties": {
+                      "files": {
+                        "items": {
+                          "properties": {
+                            "description": {
+                              "description": "Brief description of the final deliverable.",
+                              "maxLength": 1000,
+                              "type": "string"
+                            },
+                            "path": {
+                              "description": "Existing regular file. Relative paths use the session working directory.",
+                              "maxLength": 4096,
+                              "minLength": 1,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "path"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 8,
+                        "minItems": 1,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "files"
+                    ],
+                    "type": "object"
+                  }
+                }
+              ]
+            },
+            {
+              "content": [
+                {
+                  "text": "Present the output directory.",
+                  "type": "text"
+                }
+              ],
+              "role": "user",
+              "timestamp": 0
+            }
+          ]
+        },
+        "options": {
+          "maxRetryDelayMs": 60000,
+          "sessionId": "{{session}}",
+          "toolExecution": "parallel",
+          "transport": "sse"
+        }
+      },
+      "exchanges": [
+        {
+          "kind": "payload",
+          "model": {
+            "api": "openai-completions",
+            "baseUrl": "http://127.0.0.1:1",
+            "contextWindow": 200000,
+            "cost": {
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "input": 0,
+              "output": 0
+            },
+            "id": "offline-replay",
+            "input": [
+              "text"
+            ],
+            "maxTokens": 4096,
+            "name": "Offline replay",
+            "provider": "pith-replay",
+            "reasoning": false
+          },
+          "before": {
+            "authorization": "[redacted]",
+            "messages": [
+              {
+                "content": "",
+                "role": "system",
+                "sections": {
+                  "cwd": "<cwd>\n{{pith:workspace}}\n</cwd>",
+                  "preamble": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools."
+                },
+                "timestamp": 0,
+                "toolsAdded": [
+                  {
+                    "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. You MUST present every successfully saved generated image, including committed files from a partially failed image call; split batches across calls when needed. For other deliverables, usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
+                    "name": "present",
+                    "parameters": {
+                      "properties": {
+                        "files": {
+                          "items": {
+                            "properties": {
+                              "description": {
+                                "description": "Brief description of the final deliverable.",
+                                "maxLength": 1000,
+                                "type": "string"
+                              },
+                              "path": {
+                                "description": "Existing regular file. Relative paths use the session working directory.",
+                                "maxLength": 4096,
+                                "minLength": 1,
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "path"
+                            ],
+                            "type": "object"
+                          },
+                          "maxItems": 8,
+                          "minItems": 1,
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "files"
+                      ],
+                      "type": "object"
+                    }
+                  }
+                ]
+              },
+              {
+                "content": [
+                  {
+                    "text": "Present the output directory.",
+                    "type": "text"
+                  }
+                ],
+                "role": "user",
+                "timestamp": 0
+              }
+            ],
+            "model": "offline-replay"
+          },
+          "actual": {
+            "authorization": "[redacted]",
+            "messages": [
+              {
+                "content": "",
+                "role": "system",
+                "sections": {
+                  "cwd": "<cwd>\n{{pith:workspace}}\n</cwd>",
+                  "preamble": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools."
+                },
+                "timestamp": 0,
+                "toolsAdded": [
+                  {
+                    "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. You MUST present every successfully saved generated image, including committed files from a partially failed image call; split batches across calls when needed. For other deliverables, usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
+                    "name": "present",
+                    "parameters": {
+                      "properties": {
+                        "files": {
+                          "items": {
+                            "properties": {
+                              "description": {
+                                "description": "Brief description of the final deliverable.",
+                                "maxLength": 1000,
+                                "type": "string"
+                              },
+                              "path": {
+                                "description": "Existing regular file. Relative paths use the session working directory.",
+                                "maxLength": 4096,
+                                "minLength": 1,
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "path"
+                            ],
+                            "type": "object"
+                          },
+                          "maxItems": 8,
+                          "minItems": 1,
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "files"
+                      ],
+                      "type": "object"
+                    }
+                  }
+                ]
+              },
+              {
+                "content": [
+                  {
+                    "text": "Present the output directory.",
+                    "type": "text"
+                  }
+                ],
+                "role": "user",
+                "timestamp": 0
+              }
+            ],
+            "model": "offline-replay"
+          }
+        },
+        {
+          "kind": "response",
+          "model": {
+            "api": "openai-completions",
+            "baseUrl": "http://127.0.0.1:1",
+            "contextWindow": 200000,
+            "cost": {
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "input": 0,
+              "output": 0
+            },
+            "id": "offline-replay",
+            "input": [
+              "text"
+            ],
+            "maxTokens": 4096,
+            "name": "Offline replay",
+            "provider": "pith-replay",
+            "reasoning": false
+          },
+          "response": {
+            "headers": {
+              "authorization": "[redacted]",
+              "content-type": "text/event-stream",
+              "x-request-id": "synthetic-request"
+            },
+            "status": 200
+          }
+        },
+        {
+          "kind": "chunk",
+          "event": {
+            "partial": {
+              "api": "openai-completions",
+              "content": [],
+              "model": "offline-replay",
+              "provider": "pith-replay",
+              "role": "assistant",
+              "stopReason": "pending",
+              "timestamp": 0,
+              "usage": {
+                "cacheRead": 3,
+                "cacheWrite": 0,
+                "cost": {
+                  "cacheRead": 0,
+                  "cacheWrite": 0,
+                  "input": 0,
+                  "output": 0,
+                  "total": 0
+                },
+                "input": 17,
+                "output": 9,
+                "totalTokens": 29
+              }
+            },
+            "type": "start"
+          }
+        },
+        {
+          "kind": "chunk",
+          "event": {
+            "contentIndex": 0,
+            "partial": {
+              "api": "openai-completions",
+              "content": [
+                {
+                  "arguments": {},
+                  "id": "{{pith:tool:1}}",
+                  "name": "present",
+                  "type": "toolCall"
+                }
+              ],
+              "model": "offline-replay",
+              "provider": "pith-replay",
+              "role": "assistant",
+              "stopReason": "pending",
+              "timestamp": 0,
+              "usage": {
+                "cacheRead": 3,
+                "cacheWrite": 0,
+                "cost": {
+                  "cacheRead": 0,
+                  "cacheWrite": 0,
+                  "input": 0,
+                  "output": 0,
+                  "total": 0
+                },
+                "input": 17,
+                "output": 9,
+                "totalTokens": 29
+              }
+            },
+            "type": "toolcall_start"
+          }
+        },
+        {
+          "kind": "chunk",
+          "event": {
+            "contentIndex": 0,
+            "delta": "{\"files\":[{\"pa",
+            "partial": {
+              "api": "openai-completions",
+              "content": [
+                {
+                  "arguments": {
+                    "files": [
+                      {
+                        "path": "output"
+                      }
+                    ]
+                  },
+                  "id": "{{pith:tool:1}}",
+                  "name": "present",
+                  "type": "toolCall"
+                }
+              ],
+              "model": "offline-replay",
+              "provider": "pith-replay",
+              "role": "assistant",
+              "stopReason": "pending",
+              "timestamp": 0,
+              "usage": {
+                "cacheRead": 3,
+                "cacheWrite": 0,
+                "cost": {
+                  "cacheRead": 0,
+                  "cacheWrite": 0,
+                  "input": 0,
+                  "output": 0,
+                  "total": 0
+                },
+                "input": 17,
+                "output": 9,
+                "totalTokens": 29
+              }
+            },
+            "type": "toolcall_delta"
+          }
+        },
+        {
+          "kind": "chunk",
+          "event": {
+            "contentIndex": 0,
+            "delta": "th\":\"output\"}]}",
+            "partial": {
+              "api": "openai-completions",
+              "content": [
+                {
+                  "arguments": {
+                    "files": [
+                      {
+                        "path": "output"
+                      }
+                    ]
+                  },
+                  "id": "{{pith:tool:1}}",
+                  "name": "present",
+                  "type": "toolCall"
+                }
+              ],
+              "model": "offline-replay",
+              "provider": "pith-replay",
+              "role": "assistant",
+              "stopReason": "pending",
+              "timestamp": 0,
+              "usage": {
+                "cacheRead": 3,
+                "cacheWrite": 0,
+                "cost": {
+                  "cacheRead": 0,
+                  "cacheWrite": 0,
+                  "input": 0,
+                  "output": 0,
+                  "total": 0
+                },
+                "input": 17,
+                "output": 9,
+                "totalTokens": 29
+              }
+            },
+            "type": "toolcall_delta"
+          }
+        },
+        {
+          "kind": "chunk",
+          "event": {
+            "contentIndex": 0,
+            "partial": {
+              "api": "openai-completions",
+              "content": [
+                {
+                  "arguments": {
+                    "files": [
+                      {
+                        "path": "output"
+                      }
+                    ]
+                  },
+                  "id": "{{pith:tool:1}}",
+                  "name": "present",
+                  "type": "toolCall"
+                }
+              ],
+              "model": "offline-replay",
+              "provider": "pith-replay",
+              "role": "assistant",
+              "stopReason": "pending",
+              "timestamp": 0,
+              "usage": {
+                "cacheRead": 3,
+                "cacheWrite": 0,
+                "cost": {
+                  "cacheRead": 0,
+                  "cacheWrite": 0,
+                  "input": 0,
+                  "output": 0,
+                  "total": 0
+                },
+                "input": 17,
+                "output": 9,
+                "totalTokens": 29
+              }
+            },
+            "toolCall": {
+              "arguments": {
+                "files": [
+                  {
+                    "path": "output"
+                  }
+                ]
+              },
+              "id": "{{pith:tool:1}}",
+              "name": "present",
+              "type": "toolCall"
+            },
+            "type": "toolcall_end"
+          }
+        },
+        {
+          "kind": "chunk",
+          "event": {
+            "message": {
+              "api": "openai-completions",
+              "content": [
+                {
+                  "arguments": {
+                    "files": [
+                      {
+                        "path": "output"
+                      }
+                    ]
+                  },
+                  "id": "{{pith:tool:1}}",
+                  "name": "present",
+                  "type": "toolCall"
+                }
+              ],
+              "model": "offline-replay",
+              "provider": "pith-replay",
+              "role": "assistant",
+              "stopReason": "toolUse",
+              "timestamp": 0,
+              "usage": {
+                "cacheRead": 3,
+                "cacheWrite": 0,
+                "cost": {
+                  "cacheRead": 0,
+                  "cacheWrite": 0,
+                  "input": 0,
+                  "output": 0,
+                  "total": 0
+                },
+                "input": 17,
+                "output": 9,
+                "totalTokens": 29
+              }
+            },
+            "reason": "toolUse",
+            "type": "done"
+          }
+        }
+      ],
+      "result": {
+        "api": "openai-completions",
+        "content": [
+          {
+            "arguments": {
+              "files": [
+                {
+                  "path": "output"
+                }
+              ]
+            },
+            "id": "{{pith:tool:1}}",
+            "name": "present",
+            "type": "toolCall"
+          }
+        ],
+        "model": "offline-replay",
+        "provider": "pith-replay",
+        "role": "assistant",
+        "stopReason": "toolUse",
+        "timestamp": 0,
+        "usage": {
+          "cacheRead": 3,
+          "cacheWrite": 0,
+          "cost": {
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "input": 0,
+            "output": 0,
+            "total": 0
+          },
+          "input": 17,
+          "output": 9,
+          "totalTokens": 29
+        }
+      }
+    },
+    {
+      "request": {
+        "model": {
+          "api": "openai-completions",
+          "baseUrl": "http://127.0.0.1:1",
+          "contextWindow": 200000,
+          "cost": {
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "input": 0,
+            "output": 0
+          },
+          "id": "offline-replay",
+          "input": [
+            "text"
+          ],
+          "maxTokens": 4096,
+          "name": "Offline replay",
+          "provider": "pith-replay",
+          "reasoning": false
+        },
+        "context": {
+          "messages": [
+            {
+              "content": "",
+              "role": "system",
+              "sections": {
+                "cwd": "<cwd>\n{{pith:workspace}}\n</cwd>",
+                "preamble": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools."
+              },
+              "timestamp": 0,
+              "toolsAdded": [
+                {
+                  "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. You MUST present every successfully saved generated image, including committed files from a partially failed image call; split batches across calls when needed. For other deliverables, usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
+                  "name": "present",
+                  "parameters": {
+                    "properties": {
+                      "files": {
+                        "items": {
+                          "properties": {
+                            "description": {
+                              "description": "Brief description of the final deliverable.",
+                              "maxLength": 1000,
+                              "type": "string"
+                            },
+                            "path": {
+                              "description": "Existing regular file. Relative paths use the session working directory.",
+                              "maxLength": 4096,
+                              "minLength": 1,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "path"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 8,
+                        "minItems": 1,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "files"
+                    ],
+                    "type": "object"
+                  }
+                }
+              ]
+            },
+            {
+              "content": [
+                {
+                  "text": "Present the output directory.",
+                  "type": "text"
+                }
+              ],
+              "role": "user",
+              "timestamp": 0
+            },
+            {
+              "api": "openai-completions",
+              "content": [
+                {
+                  "arguments": {
+                    "files": [
+                      {
+                        "path": "output"
+                      }
+                    ]
+                  },
+                  "id": "{{pith:tool:1}}",
+                  "name": "present",
+                  "type": "toolCall"
+                }
+              ],
+              "model": "offline-replay",
+              "provider": "pith-replay",
+              "role": "assistant",
+              "stopReason": "toolUse",
+              "thinkingLevel": "off",
+              "timestamp": 0,
+              "usage": {
+                "cacheRead": 3,
+                "cacheWrite": 0,
+                "cost": {
+                  "cacheRead": 0,
+                  "cacheWrite": 0,
+                  "input": 0,
+                  "output": 0,
+                  "total": 0
+                },
+                "input": 17,
+                "output": 9,
+                "totalTokens": 29
+              }
+            },
+            {
+              "content": [
+                {
+                  "text": "Cannot present output: expected an existing regular file, not a directory or symbolic link.",
+                  "type": "text"
+                }
+              ],
+              "details": {},
+              "isError": true,
+              "role": "toolResult",
+              "timestamp": 0,
+              "toolCallId": "{{pith:tool:1}}",
+              "toolName": "present"
+            }
+          ]
+        },
+        "options": {
+          "maxRetryDelayMs": 60000,
+          "sessionId": "{{session}}",
+          "toolExecution": "parallel",
+          "transport": "sse"
+        }
+      },
+      "exchanges": [
+        {
+          "kind": "payload",
+          "model": {
+            "api": "openai-completions",
+            "baseUrl": "http://127.0.0.1:1",
+            "contextWindow": 200000,
+            "cost": {
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "input": 0,
+              "output": 0
+            },
+            "id": "offline-replay",
+            "input": [
+              "text"
+            ],
+            "maxTokens": 4096,
+            "name": "Offline replay",
+            "provider": "pith-replay",
+            "reasoning": false
+          },
+          "before": {
+            "authorization": "[redacted]",
+            "messages": [
+              {
+                "content": "",
+                "role": "system",
+                "sections": {
+                  "cwd": "<cwd>\n{{pith:workspace}}\n</cwd>",
+                  "preamble": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools."
+                },
+                "timestamp": 0,
+                "toolsAdded": [
+                  {
+                    "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. You MUST present every successfully saved generated image, including committed files from a partially failed image call; split batches across calls when needed. For other deliverables, usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
+                    "name": "present",
+                    "parameters": {
+                      "properties": {
+                        "files": {
+                          "items": {
+                            "properties": {
+                              "description": {
+                                "description": "Brief description of the final deliverable.",
+                                "maxLength": 1000,
+                                "type": "string"
+                              },
+                              "path": {
+                                "description": "Existing regular file. Relative paths use the session working directory.",
+                                "maxLength": 4096,
+                                "minLength": 1,
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "path"
+                            ],
+                            "type": "object"
+                          },
+                          "maxItems": 8,
+                          "minItems": 1,
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "files"
+                      ],
+                      "type": "object"
+                    }
+                  }
+                ]
+              },
+              {
+                "content": [
+                  {
+                    "text": "Present the output directory.",
+                    "type": "text"
+                  }
+                ],
+                "role": "user",
+                "timestamp": 0
+              },
+              {
+                "api": "openai-completions",
+                "content": [
+                  {
+                    "arguments": {
+                      "files": [
+                        {
+                          "path": "output"
+                        }
+                      ]
+                    },
+                    "id": "{{pith:tool:1}}",
+                    "name": "present",
+                    "type": "toolCall"
+                  }
+                ],
+                "model": "offline-replay",
+                "provider": "pith-replay",
+                "role": "assistant",
+                "stopReason": "toolUse",
+                "thinkingLevel": "off",
+                "timestamp": 0,
+                "usage": {
+                  "cacheRead": 3,
+                  "cacheWrite": 0,
+                  "cost": {
+                    "cacheRead": 0,
+                    "cacheWrite": 0,
+                    "input": 0,
+                    "output": 0,
+                    "total": 0
+                  },
+                  "input": 17,
+                  "output": 9,
+                  "totalTokens": 29
+                }
+              },
+              {
+                "content": [
+                  {
+                    "text": "Cannot present output: expected an existing regular file, not a directory or symbolic link.",
+                    "type": "text"
+                  }
+                ],
+                "details": {},
+                "isError": true,
+                "role": "toolResult",
+                "timestamp": 0,
+                "toolCallId": "{{pith:tool:1}}",
+                "toolName": "present"
+              }
+            ],
+            "model": "offline-replay"
+          },
+          "actual": {
+            "authorization": "[redacted]",
+            "messages": [
+              {
+                "content": "",
+                "role": "system",
+                "sections": {
+                  "cwd": "<cwd>\n{{pith:workspace}}\n</cwd>",
+                  "preamble": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools."
+                },
+                "timestamp": 0,
+                "toolsAdded": [
+                  {
+                    "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. You MUST present every successfully saved generated image, including committed files from a partially failed image call; split batches across calls when needed. For other deliverables, usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
+                    "name": "present",
+                    "parameters": {
+                      "properties": {
+                        "files": {
+                          "items": {
+                            "properties": {
+                              "description": {
+                                "description": "Brief description of the final deliverable.",
+                                "maxLength": 1000,
+                                "type": "string"
+                              },
+                              "path": {
+                                "description": "Existing regular file. Relative paths use the session working directory.",
+                                "maxLength": 4096,
+                                "minLength": 1,
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "path"
+                            ],
+                            "type": "object"
+                          },
+                          "maxItems": 8,
+                          "minItems": 1,
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "files"
+                      ],
+                      "type": "object"
+                    }
+                  }
+                ]
+              },
+              {
+                "content": [
+                  {
+                    "text": "Present the output directory.",
+                    "type": "text"
+                  }
+                ],
+                "role": "user",
+                "timestamp": 0
+              },
+              {
+                "api": "openai-completions",
+                "content": [
+                  {
+                    "arguments": {
+                      "files": [
+                        {
+                          "path": "output"
+                        }
+                      ]
+                    },
+                    "id": "{{pith:tool:1}}",
+                    "name": "present",
+                    "type": "toolCall"
+                  }
+                ],
+                "model": "offline-replay",
+                "provider": "pith-replay",
+                "role": "assistant",
+                "stopReason": "toolUse",
+                "thinkingLevel": "off",
+                "timestamp": 0,
+                "usage": {
+                  "cacheRead": 3,
+                  "cacheWrite": 0,
+                  "cost": {
+                    "cacheRead": 0,
+                    "cacheWrite": 0,
+                    "input": 0,
+                    "output": 0,
+                    "total": 0
+                  },
+                  "input": 17,
+                  "output": 9,
+                  "totalTokens": 29
+                }
+              },
+              {
+                "content": [
+                  {
+                    "text": "Cannot present output: expected an existing regular file, not a directory or symbolic link.",
+                    "type": "text"
+                  }
+                ],
+                "details": {},
+                "isError": true,
+                "role": "toolResult",
+                "timestamp": 0,
+                "toolCallId": "{{pith:tool:1}}",
+                "toolName": "present"
+              }
+            ],
+            "model": "offline-replay"
+          }
+        },
+        {
+          "kind": "response",
+          "model": {
+            "api": "openai-completions",
+            "baseUrl": "http://127.0.0.1:1",
+            "contextWindow": 200000,
+            "cost": {
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "input": 0,
+              "output": 0
+            },
+            "id": "offline-replay",
+            "input": [
+              "text"
+            ],
+            "maxTokens": 4096,
+            "name": "Offline replay",
+            "provider": "pith-replay",
+            "reasoning": false
+          },
+          "response": {
+            "headers": {
+              "authorization": "[redacted]",
+              "content-type": "text/event-stream",
+              "x-request-id": "synthetic-request"
+            },
+            "status": 200
+          }
+        },
+        {
+          "kind": "chunk",
+          "event": {
+            "partial": {
+              "api": "openai-completions",
+              "content": [],
+              "model": "offline-replay",
+              "provider": "pith-replay",
+              "role": "assistant",
+              "stopReason": "pending",
+              "timestamp": 0,
+              "usage": {
+                "cacheRead": 3,
+                "cacheWrite": 0,
+                "cost": {
+                  "cacheRead": 0,
+                  "cacheWrite": 0,
+                  "input": 0,
+                  "output": 0,
+                  "total": 0
+                },
+                "input": 17,
+                "output": 9,
+                "totalTokens": 29
+              }
+            },
+            "type": "start"
+          }
+        },
+        {
+          "kind": "chunk",
+          "event": {
+            "contentIndex": 0,
+            "partial": {
+              "api": "openai-completions",
+              "content": [
+                {
+                  "text": "",
+                  "type": "text"
+                }
+              ],
+              "model": "offline-replay",
+              "provider": "pith-replay",
+              "role": "assistant",
+              "stopReason": "pending",
+              "timestamp": 0,
+              "usage": {
+                "cacheRead": 3,
+                "cacheWrite": 0,
+                "cost": {
+                  "cacheRead": 0,
+                  "cacheWrite": 0,
+                  "input": 0,
+                  "output": 0,
+                  "total": 0
+                },
+                "input": 17,
+                "output": 9,
+                "totalTokens": 29
+              }
+            },
+            "type": "text_start"
+          }
+        },
+        {
+          "kind": "chunk",
+          "event": {
+            "contentIndex": 0,
+            "delta": "The output is a directory, so i",
+            "partial": {
+              "api": "openai-completions",
+              "content": [
+                {
+                  "text": "The output is a directory, so i",
+                  "type": "text"
+                }
+              ],
+              "model": "offline-replay",
+              "provider": "pith-replay",
+              "role": "assistant",
+              "stopReason": "pending",
+              "timestamp": 0,
+              "usage": {
+                "cacheRead": 3,
+                "cacheWrite": 0,
+                "cost": {
+                  "cacheRead": 0,
+                  "cacheWrite": 0,
+                  "input": 0,
+                  "output": 0,
+                  "total": 0
+                },
+                "input": 17,
+                "output": 9,
+                "totalTokens": 29
+              }
+            },
+            "type": "text_delta"
+          }
+        },
+        {
+          "kind": "chunk",
+          "event": {
+            "contentIndex": 0,
+            "delta": "t cannot be delivered as a file.",
+            "partial": {
+              "api": "openai-completions",
+              "content": [
+                {
+                  "text": "The output is a directory, so it cannot be delivered as a file.",
+                  "type": "text"
+                }
+              ],
+              "model": "offline-replay",
+              "provider": "pith-replay",
+              "role": "assistant",
+              "stopReason": "pending",
+              "timestamp": 0,
+              "usage": {
+                "cacheRead": 3,
+                "cacheWrite": 0,
+                "cost": {
+                  "cacheRead": 0,
+                  "cacheWrite": 0,
+                  "input": 0,
+                  "output": 0,
+                  "total": 0
+                },
+                "input": 17,
+                "output": 9,
+                "totalTokens": 29
+              }
+            },
+            "type": "text_delta"
+          }
+        },
+        {
+          "kind": "chunk",
+          "event": {
+            "content": "The output is a directory, so it cannot be delivered as a file.",
+            "contentIndex": 0,
+            "partial": {
+              "api": "openai-completions",
+              "content": [
+                {
+                  "text": "The output is a directory, so it cannot be delivered as a file.",
+                  "type": "text"
+                }
+              ],
+              "model": "offline-replay",
+              "provider": "pith-replay",
+              "role": "assistant",
+              "stopReason": "pending",
+              "timestamp": 0,
+              "usage": {
+                "cacheRead": 3,
+                "cacheWrite": 0,
+                "cost": {
+                  "cacheRead": 0,
+                  "cacheWrite": 0,
+                  "input": 0,
+                  "output": 0,
+                  "total": 0
+                },
+                "input": 17,
+                "output": 9,
+                "totalTokens": 29
+              }
+            },
+            "type": "text_end"
+          }
+        },
+        {
+          "kind": "chunk",
+          "event": {
+            "message": {
+              "api": "openai-completions",
+              "content": [
+                {
+                  "text": "The output is a directory, so it cannot be delivered as a file.",
+                  "type": "text"
+                }
+              ],
+              "model": "offline-replay",
+              "provider": "pith-replay",
+              "role": "assistant",
+              "stopReason": "stop",
+              "timestamp": 0,
+              "usage": {
+                "cacheRead": 3,
+                "cacheWrite": 0,
+                "cost": {
+                  "cacheRead": 0,
+                  "cacheWrite": 0,
+                  "input": 0,
+                  "output": 0,
+                  "total": 0
+                },
+                "input": 17,
+                "output": 9,
+                "totalTokens": 29
+              }
+            },
+            "reason": "stop",
+            "type": "done"
+          }
+        }
+      ],
+      "result": {
+        "api": "openai-completions",
+        "content": [
+          {
+            "text": "The output is a directory, so it cannot be delivered as a file.",
+            "type": "text"
+          }
+        ],
+        "model": "offline-replay",
+        "provider": "pith-replay",
+        "role": "assistant",
+        "stopReason": "stop",
+        "timestamp": 0,
+        "usage": {
+          "cacheRead": 3,
+          "cacheWrite": 0,
+          "cost": {
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "input": 0,
+            "output": 0,
+            "total": 0
+          },
+          "input": 17,
+          "output": 9,
+          "totalTokens": 29
+        }
+      }
+    }
+  ],
+  "expected": {
+    "transcript": [
+      {
+        "content": "",
+        "role": "system",
+        "sections": {
+          "cwd": "<cwd>\n{{pith:workspace}}\n</cwd>",
+          "preamble": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools."
+        },
+        "timestamp": 0,
+        "toolsAdded": [
+          {
+            "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. You MUST present every successfully saved generated image, including committed files from a partially failed image call; split batches across calls when needed. For other deliverables, usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
+            "name": "present",
+            "parameters": {
+              "properties": {
+                "files": {
+                  "items": {
+                    "properties": {
+                      "description": {
+                        "description": "Brief description of the final deliverable.",
+                        "maxLength": 1000,
+                        "type": "string"
+                      },
+                      "path": {
+                        "description": "Existing regular file. Relative paths use the session working directory.",
+                        "maxLength": 4096,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "path"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 8,
+                  "minItems": 1,
+                  "type": "array"
+                }
+              },
+              "required": [
+                "files"
+              ],
+              "type": "object"
+            }
+          }
+        ]
+      },
+      {
+        "content": [
+          {
+            "text": "Present the output directory.",
+            "type": "text"
+          }
+        ],
+        "role": "user",
+        "timestamp": 0
+      },
+      {
+        "api": "openai-completions",
+        "content": [
+          {
+            "arguments": {
+              "files": [
+                {
+                  "path": "output"
+                }
+              ]
+            },
+            "id": "{{pith:tool:1}}",
+            "name": "present",
+            "type": "toolCall"
+          }
+        ],
+        "model": "offline-replay",
+        "provider": "pith-replay",
+        "role": "assistant",
+        "stopReason": "toolUse",
+        "thinkingLevel": "off",
+        "timestamp": 0,
+        "usage": {
+          "cacheRead": 3,
+          "cacheWrite": 0,
+          "cost": {
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "input": 0,
+            "output": 0,
+            "total": 0
+          },
+          "input": 17,
+          "output": 9,
+          "totalTokens": 29
+        }
+      },
+      {
+        "content": [
+          {
+            "text": "Cannot present output: expected an existing regular file, not a directory or symbolic link.",
+            "type": "text"
+          }
+        ],
+        "details": {},
+        "isError": true,
+        "role": "toolResult",
+        "timestamp": 0,
+        "toolCallId": "{{pith:tool:1}}",
+        "toolName": "present"
+      },
+      {
+        "api": "openai-completions",
+        "content": [
+          {
+            "text": "The output is a directory, so it cannot be delivered as a file.",
+            "type": "text"
+          }
+        ],
+        "model": "offline-replay",
+        "provider": "pith-replay",
+        "role": "assistant",
+        "stopReason": "stop",
+        "thinkingLevel": "off",
+        "timestamp": 0,
+        "usage": {
+          "cacheRead": 3,
+          "cacheWrite": 0,
+          "cost": {
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "input": 0,
+            "output": 0,
+            "total": 0
+          },
+          "input": 17,
+          "output": 9,
+          "totalTokens": 29
+        }
+      }
+    ],
+    "toolEvents": [
+      {
+        "args": {
+          "files": [
+            {
+              "path": "output"
+            }
+          ]
+        },
+        "toolCallId": "{{pith:tool:1}}",
+        "toolName": "present",
+        "type": "tool_execution_start"
+      },
+      {
+        "isError": true,
+        "result": {
+          "content": [
+            {
+              "text": "Cannot present output: expected an existing regular file, not a directory or symbolic link.",
+              "type": "text"
+            }
+          ],
+          "details": {}
+        },
+        "toolCallId": "{{pith:tool:1}}",
+        "toolName": "present",
+        "type": "tool_execution_end"
+      }
+    ],
+    "eventTypes": [
+      "agent_start",
+      "turn_start",
+      "message_start",
+      "message_end",
+      "message_start",
+      "message_end",
+      "message_start",
+      "message_update",
+      "message_update",
+      "message_update",
+      "message_update",
+      "message_end",
+      "tool_execution_start",
+      "tool_execution_end",
+      "message_start",
+      "message_end",
+      "turn_end",
+      "turn_start",
+      "message_start",
+      "message_update",
+      "message_update",
+      "message_update",
+      "message_update",
+      "message_end",
+      "turn_end",
+      "agent_end",
+      "agent_settled"
+    ],
+    "delivered": [],
+    "outputFiles": [],
+    "trajectories": [
+      {
+        "kind": "run",
+        "name": "run",
+        "status": "completed",
+        "captured": true,
+        "usage": {
+          "input": 34,
+          "output": 18,
+          "cacheRead": 6,
+          "cacheWrite": 0,
+          "cost": 0
+        },
+        "documents": {}
+      },
+      {
+        "kind": "user",
+        "name": "user",
+        "status": "completed",
+        "captured": true,
+        "documents": {
+          "context": {
+            "content": [
+              {
+                "text": "Present the output directory.",
+                "type": "text"
+              }
+            ],
+            "role": "user",
+            "timestamp": 0
+          }
+        }
+      },
+      {
+        "kind": "request",
+        "name": "offline-replay",
+        "status": "completed",
+        "captured": true,
+        "provider": "pith-replay",
+        "model": "offline-replay",
+        "stopReason": "toolUse",
+        "httpStatus": 200,
+        "usage": {
+          "input": 17,
+          "output": 9,
+          "cacheRead": 3,
+          "cacheWrite": 0,
+          "cost": 0
+        },
+        "firstTokenObserved": true,
+        "documents": {
+          "context": {
+            "messages": [
+              {
+                "content": "",
+                "role": "system",
+                "sections": {
+                  "cwd": "<cwd>\n{{pith:workspace}}\n</cwd>",
+                  "preamble": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools."
+                },
+                "timestamp": 0,
+                "toolsAdded": [
+                  {
+                    "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. You MUST present every successfully saved generated image, including committed files from a partially failed image call; split batches across calls when needed. For other deliverables, usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
+                    "name": "present",
+                    "parameters": {
+                      "properties": {
+                        "files": {
+                          "items": {
+                            "properties": {
+                              "description": {
+                                "description": "Brief description of the final deliverable.",
+                                "maxLength": 1000,
+                                "type": "string"
+                              },
+                              "path": {
+                                "description": "Existing regular file. Relative paths use the session working directory.",
+                                "maxLength": 4096,
+                                "minLength": 1,
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "path"
+                            ],
+                            "type": "object"
+                          },
+                          "maxItems": 8,
+                          "minItems": 1,
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "files"
+                      ],
+                      "type": "object"
+                    }
+                  }
+                ]
+              },
+              {
+                "content": [
+                  {
+                    "text": "Present the output directory.",
+                    "type": "text"
+                  }
+                ],
+                "role": "user",
+                "timestamp": 0
+              }
+            ]
+          },
+          "options": {
+            "api": "openai-completions",
+            "baseUrl": "http://127.0.0.1:1",
+            "maxRetryDelayMs": 60000,
+            "thinkingLevel": "off",
+            "timeoutMs": 300000,
+            "transport": "sse"
+          },
+          "output": {
+            "api": "openai-completions",
+            "content": [
+              {
+                "arguments": {
+                  "files": [
+                    {
+                      "path": "output"
+                    }
+                  ]
+                },
+                "id": "{{pith:tool:1}}",
+                "name": "present",
+                "type": "toolCall"
+              }
+            ],
+            "model": "offline-replay",
+            "provider": "pith-replay",
+            "role": "assistant",
+            "stopReason": "toolUse",
+            "timestamp": 0,
+            "usage": {
+              "cacheRead": 3,
+              "cacheWrite": 0,
+              "cost": {
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "input": 0,
+                "output": 0,
+                "total": 0
+              },
+              "input": 17,
+              "output": 9,
+              "totalTokens": 29
+            }
+          },
+          "payload": {
+            "authorization": "[redacted]",
+            "messages": [
+              {
+                "content": "",
+                "role": "system",
+                "sections": {
+                  "cwd": "<cwd>\n{{pith:workspace}}\n</cwd>",
+                  "preamble": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools."
+                },
+                "timestamp": 0,
+                "toolsAdded": [
+                  {
+                    "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. You MUST present every successfully saved generated image, including committed files from a partially failed image call; split batches across calls when needed. For other deliverables, usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
+                    "name": "present",
+                    "parameters": {
+                      "properties": {
+                        "files": {
+                          "items": {
+                            "properties": {
+                              "description": {
+                                "description": "Brief description of the final deliverable.",
+                                "maxLength": 1000,
+                                "type": "string"
+                              },
+                              "path": {
+                                "description": "Existing regular file. Relative paths use the session working directory.",
+                                "maxLength": 4096,
+                                "minLength": 1,
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "path"
+                            ],
+                            "type": "object"
+                          },
+                          "maxItems": 8,
+                          "minItems": 1,
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "files"
+                      ],
+                      "type": "object"
+                    }
+                  }
+                ]
+              },
+              {
+                "content": [
+                  {
+                    "text": "Present the output directory.",
+                    "type": "text"
+                  }
+                ],
+                "role": "user",
+                "timestamp": 0
+              }
+            ],
+            "model": "offline-replay"
+          },
+          "response": {
+            "headers": {
+              "content-type": "text/event-stream",
+              "x-request-id": "synthetic-request"
+            },
+            "status": 200
+          }
+        }
+      },
+      {
+        "kind": "tool",
+        "name": "present",
+        "status": "failed",
+        "captured": true,
+        "documents": {
+          "context": {
+            "files": [
+              {
+                "path": "output"
+              }
+            ]
+          },
+          "output": {
+            "content": [
+              {
+                "text": "Cannot present output: expected an existing regular file, not a directory or symbolic link.",
+                "type": "text"
+              }
+            ],
+            "details": {},
+            "isError": true,
+            "role": "toolResult",
+            "timestamp": 0,
+            "toolCallId": "{{pith:tool:1}}",
+            "toolName": "present"
+          }
+        }
+      },
+      {
+        "kind": "request",
+        "name": "offline-replay",
+        "status": "completed",
+        "captured": true,
+        "provider": "pith-replay",
+        "model": "offline-replay",
+        "stopReason": "stop",
+        "httpStatus": 200,
+        "usage": {
+          "input": 17,
+          "output": 9,
+          "cacheRead": 3,
+          "cacheWrite": 0,
+          "cost": 0
+        },
+        "firstTokenObserved": true,
+        "documents": {
+          "context": {
+            "messages": [
+              {
+                "content": "",
+                "role": "system",
+                "sections": {
+                  "cwd": "<cwd>\n{{pith:workspace}}\n</cwd>",
+                  "preamble": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools."
+                },
+                "timestamp": 0,
+                "toolsAdded": [
+                  {
+                    "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. You MUST present every successfully saved generated image, including committed files from a partially failed image call; split batches across calls when needed. For other deliverables, usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
+                    "name": "present",
+                    "parameters": {
+                      "properties": {
+                        "files": {
+                          "items": {
+                            "properties": {
+                              "description": {
+                                "description": "Brief description of the final deliverable.",
+                                "maxLength": 1000,
+                                "type": "string"
+                              },
+                              "path": {
+                                "description": "Existing regular file. Relative paths use the session working directory.",
+                                "maxLength": 4096,
+                                "minLength": 1,
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "path"
+                            ],
+                            "type": "object"
+                          },
+                          "maxItems": 8,
+                          "minItems": 1,
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "files"
+                      ],
+                      "type": "object"
+                    }
+                  }
+                ]
+              },
+              {
+                "content": [
+                  {
+                    "text": "Present the output directory.",
+                    "type": "text"
+                  }
+                ],
+                "role": "user",
+                "timestamp": 0
+              },
+              {
+                "api": "openai-completions",
+                "content": [
+                  {
+                    "arguments": {
+                      "files": [
+                        {
+                          "path": "output"
+                        }
+                      ]
+                    },
+                    "id": "{{pith:tool:1}}",
+                    "name": "present",
+                    "type": "toolCall"
+                  }
+                ],
+                "model": "offline-replay",
+                "provider": "pith-replay",
+                "role": "assistant",
+                "stopReason": "toolUse",
+                "thinkingLevel": "off",
+                "timestamp": 0,
+                "usage": {
+                  "cacheRead": 3,
+                  "cacheWrite": 0,
+                  "cost": {
+                    "cacheRead": 0,
+                    "cacheWrite": 0,
+                    "input": 0,
+                    "output": 0,
+                    "total": 0
+                  },
+                  "input": 17,
+                  "output": 9,
+                  "totalTokens": 29
+                }
+              },
+              {
+                "content": [
+                  {
+                    "text": "Cannot present output: expected an existing regular file, not a directory or symbolic link.",
+                    "type": "text"
+                  }
+                ],
+                "details": {},
+                "isError": true,
+                "role": "toolResult",
+                "timestamp": 0,
+                "toolCallId": "{{pith:tool:1}}",
+                "toolName": "present"
+              }
+            ]
+          },
+          "options": {
+            "api": "openai-completions",
+            "baseUrl": "http://127.0.0.1:1",
+            "maxRetryDelayMs": 60000,
+            "thinkingLevel": "off",
+            "timeoutMs": 300000,
+            "transport": "sse"
+          },
+          "output": {
+            "api": "openai-completions",
+            "content": [
+              {
+                "text": "The output is a directory, so it cannot be delivered as a file.",
+                "type": "text"
+              }
+            ],
+            "model": "offline-replay",
+            "provider": "pith-replay",
+            "role": "assistant",
+            "stopReason": "stop",
+            "timestamp": 0,
+            "usage": {
+              "cacheRead": 3,
+              "cacheWrite": 0,
+              "cost": {
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "input": 0,
+                "output": 0,
+                "total": 0
+              },
+              "input": 17,
+              "output": 9,
+              "totalTokens": 29
+            }
+          },
+          "payload": {
+            "authorization": "[redacted]",
+            "messages": [
+              {
+                "content": "",
+                "role": "system",
+                "sections": {
+                  "cwd": "<cwd>\n{{pith:workspace}}\n</cwd>",
+                  "preamble": "You are an offline regression fixture. Follow the user instruction and use only the supplied tools."
+                },
+                "timestamp": 0,
+                "toolsAdded": [
+                  {
+                    "description": "Declare existing files as final deliverables for the user, especially generated documents, spreadsheets, slides, images or reports. You MUST present every successfully saved generated image, including committed files from a partially failed image call; split batches across calls when needed. For other deliverables, usually present the 1–2 most important files after checking them. This also works for files created with bash. The user opens the current source files; their contents are not copied or versioned. A parent must present child-created files itself. Prefer a normal final response when no separate file is needed.",
+                    "name": "present",
+                    "parameters": {
+                      "properties": {
+                        "files": {
+                          "items": {
+                            "properties": {
+                              "description": {
+                                "description": "Brief description of the final deliverable.",
+                                "maxLength": 1000,
+                                "type": "string"
+                              },
+                              "path": {
+                                "description": "Existing regular file. Relative paths use the session working directory.",
+                                "maxLength": 4096,
+                                "minLength": 1,
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "path"
+                            ],
+                            "type": "object"
+                          },
+                          "maxItems": 8,
+                          "minItems": 1,
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "files"
+                      ],
+                      "type": "object"
+                    }
+                  }
+                ]
+              },
+              {
+                "content": [
+                  {
+                    "text": "Present the output directory.",
+                    "type": "text"
+                  }
+                ],
+                "role": "user",
+                "timestamp": 0
+              },
+              {
+                "api": "openai-completions",
+                "content": [
+                  {
+                    "arguments": {
+                      "files": [
+                        {
+                          "path": "output"
+                        }
+                      ]
+                    },
+                    "id": "{{pith:tool:1}}",
+                    "name": "present",
+                    "type": "toolCall"
+                  }
+                ],
+                "model": "offline-replay",
+                "provider": "pith-replay",
+                "role": "assistant",
+                "stopReason": "toolUse",
+                "thinkingLevel": "off",
+                "timestamp": 0,
+                "usage": {
+                  "cacheRead": 3,
+                  "cacheWrite": 0,
+                  "cost": {
+                    "cacheRead": 0,
+                    "cacheWrite": 0,
+                    "input": 0,
+                    "output": 0,
+                    "total": 0
+                  },
+                  "input": 17,
+                  "output": 9,
+                  "totalTokens": 29
+                }
+              },
+              {
+                "content": [
+                  {
+                    "text": "Cannot present output: expected an existing regular file, not a directory or symbolic link.",
+                    "type": "text"
+                  }
+                ],
+                "details": {},
+                "isError": true,
+                "role": "toolResult",
+                "timestamp": 0,
+                "toolCallId": "{{pith:tool:1}}",
+                "toolName": "present"
+              }
+            ],
+            "model": "offline-replay"
+          },
+          "response": {
+            "headers": {
+              "content-type": "text/event-stream",
+              "x-request-id": "synthetic-request"
+            },
+            "status": 200
+          }
+        }
+      }
+    ]
+  }
+}
