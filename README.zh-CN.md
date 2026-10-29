@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文
 
-Pith 是面向 Pi 编码代理（Pi coding agent）的独立、非官方 Electron 桌面客户端。它在主进程中内嵌 [Pi SDK](https://github.com/earendil-works/pi)（`@earendil-works/pi-coding-agent` 1.0.0），界面由复制进 renderer 的 beUI 组件、React 和 Tailwind CSS 构建。本项目与 Pi、beUI、DeepSeek、Z.AI、Pierre、Remix、Lucide 等上游项目没有隶属或背书关系。
+Pith 是面向 Pi 编码代理（Pi coding agent）的独立、非官方 Electron 桌面客户端。支持圆角（超椭圆）与直角两种界面风格，可在「设置 → 外观」中切换。它在主进程中内嵌 [Pi SDK](https://github.com/earendil-works/pi)（`@earendil-works/pi-coding-agent` 1.0.0），界面由复制进 renderer 的 beUI 组件、React 和 Tailwind CSS 构建。本项目与 Pi、beUI、DeepSeek、Z.AI、Pierre、Remix、Lucide 等上游项目没有隶属或背书关系。
 
 **状态**：早期开发（`0.1.0`）。本仓库只包含源代码与打包配置，尚未发布安装包、签名二进制或自动更新通道；功能和本地文件格式仍可能变化。
 
@@ -10,15 +10,15 @@ Pith 是面向 Pi 编码代理（Pi coding agent）的独立、非官方 Electro
 
 ## 应用截图
 
-实际启动 macOS 应用截取，使用独立的 Orbit 示例项目和预置演示会话。
+截图来自 2026-10-29 的当前桌面开发版，采用中文、直角界面，使用独立的 Orbit 示例项目和预置演示会话。部分界面更新领先于首次公开源码快照。
 
 **编码会话与并排源码预览**
 
-![Pith 的项目会话、格式化编码回复，以及带语法高亮的 TypeScript 源码预览](docs/screenshots/workspace.jpg)
+![Pith 的项目会话、格式化编码回复，以及带语法高亮的 TypeScript 源码预览](docs/screenshots/desktop-workspace.jpg)
 
 | 项目与会话 | Git 差异审阅 |
 | --- | --- |
-| ![Pith 的项目侧栏与编码会话，包含高亮代码和对比表格](docs/screenshots/conversations.jpg) | ![Pith 中并排显示的编码会话和 Git 差异预览，突出新增与删除的代码行](docs/screenshots/diff-review.jpg) |
+| ![Pith 的项目侧栏与编码会话，包含高亮代码和对比表格](docs/screenshots/desktop-conversations.jpg) | ![Pith 中并排显示的编码会话和 Git 差异预览，突出新增与删除的代码行](docs/screenshots/desktop-diff-review.jpg) |
 
 ## 功能
 

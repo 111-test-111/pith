@@ -2,7 +2,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-Pith is an independent, unofficial Electron desktop client for the Pi coding agent. It embeds the [Pi SDK](https://github.com/earendil-works/pi) (`@earendil-works/pi-coding-agent` 1.0.0) in the main process and builds its interface with beUI components vendored into the renderer, along with React and Tailwind CSS. The project is not affiliated with or endorsed by the Pi, beUI, DeepSeek, Z.AI, Pierre, Remix or Lucide projects.
+Pith is an independent, unofficial Electron desktop client for the Pi coding agent. It supports switching between rounded (squircle) and square UI styles in Settings → Appearance. It embeds the [Pi SDK](https://github.com/earendil-works/pi) (`@earendil-works/pi-coding-agent` 1.0.0) in the main process and builds its interface with beUI components vendored into the renderer, along with React and Tailwind CSS. The project is not affiliated with or endorsed by the Pi, beUI, DeepSeek, Z.AI, Pierre, Remix or Lucide projects.
 
 **Status:** early development (`0.1.0`). This repository contains source and packaging configuration only; no installers, signed binaries or auto-update feed are published. Features and local file formats may change.
 
@@ -10,15 +10,15 @@ This first public snapshot consolidates earlier local development into a new com
 
 ## Screenshots
 
-Captured from the running macOS app with an isolated Orbit demo project and staged conversations.
+Current desktop development build (2026-10-29), captured in Chinese with the square UI style, an isolated Orbit demo project and staged conversations. This UI includes local changes ahead of the initial public source snapshot.
 
 **Coding conversations with a side-by-side source preview**
 
-![Pith showing project conversations, a formatted coding response and a syntax-highlighted TypeScript source preview](docs/screenshots/workspace.jpg)
+![Pith showing project conversations, a formatted coding response and a syntax-highlighted TypeScript source preview](docs/screenshots/desktop-workspace.jpg)
 
 | Projects and conversations | Git diff review |
 | --- | --- |
-| ![Pith project sidebar and a coding conversation with highlighted code and a comparison table](docs/screenshots/conversations.jpg) | ![Pith showing a coding conversation beside a Git diff with added and removed lines](docs/screenshots/diff-review.jpg) |
+| ![Pith project sidebar and a coding conversation with highlighted code and a comparison table](docs/screenshots/desktop-conversations.jpg) | ![Pith showing a coding conversation beside a Git diff with added and removed lines](docs/screenshots/desktop-diff-review.jpg) |
 
 ## Features
 
