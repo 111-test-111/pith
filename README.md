@@ -8,6 +8,18 @@ Pith is an independent, unofficial Electron desktop client for the Pi coding age
 
 This first public snapshot consolidates earlier local development into a new commit dated at publication. It preserves third-party origins and notices; private checkpoints and uncommitted local work are not published.
 
+## Screenshots
+
+Captured from the running macOS app with an isolated Orbit demo project and staged conversations.
+
+**Coding conversations with a side-by-side source preview**
+
+![Pith showing project conversations, a formatted coding response and a syntax-highlighted TypeScript source preview](docs/screenshots/workspace.jpg)
+
+| Projects and conversations | Git diff review |
+| --- | --- |
+| ![Pith project sidebar and a coding conversation with highlighted code and a comparison table](docs/screenshots/conversations.jpg) | ![Pith showing a coding conversation beside a Git diff with added and removed lines](docs/screenshots/diff-review.jpg) |
+
 ## Features
 
 Pith hosts Pi agent sessions and adds desktop surfaces around them. Model execution, session files and native MCP come from the Pi SDK; Pith owns the Electron host, the configuration and inspection UI, and the local tool boundaries described below.

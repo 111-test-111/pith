@@ -8,6 +8,18 @@ Pith 是面向 Pi 编码代理（Pi coding agent）的独立、非官方 Electro
 
 首次公开快照将此前的本地开发整理为一个以实际公开时间创建的新提交，保留第三方来源和许可声明；不发布私人检查点或尚未提交的本地工作。
 
+## 应用截图
+
+实际启动 macOS 应用截取，使用独立的 Orbit 示例项目和预置演示会话。
+
+**编码会话与并排源码预览**
+
+![Pith 的项目会话、格式化编码回复，以及带语法高亮的 TypeScript 源码预览](docs/screenshots/workspace.jpg)
+
+| 项目与会话 | Git 差异审阅 |
+| --- | --- |
+| ![Pith 的项目侧栏与编码会话，包含高亮代码和对比表格](docs/screenshots/conversations.jpg) | ![Pith 中并排显示的编码会话和 Git 差异预览，突出新增与删除的代码行](docs/screenshots/diff-review.jpg) |
+
 ## 功能
 
 Pith 承载 Pi 的代理会话，并在其周围提供桌面工作界面。模型执行、会话文件和原生 MCP 来自 Pi SDK；Pith 负责 Electron 宿主、配置与检查界面，以及下文列出的本地工具边界。
