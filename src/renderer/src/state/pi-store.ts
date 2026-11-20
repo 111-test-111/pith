@@ -2,6 +2,7 @@ import { isNothingToCompactError } from '../../../shared/compaction-errors'
 import { optimisticEchoText } from '../lib/attachments'
 import { DEFAULT_GOAL_LIMITS, validGoalLimits, type GoalErrorCode, type GoalInput, type GoalLimits, type GoalSnapshotDTO } from '../../../shared/goal'
 import type { CompactionProcessStateDTO, CompactionQueueStateDTO } from '../../../shared/compaction'
+import type { VisionStateDTO, VisionErrorDTO } from '../../../shared/vision'
 import type {
   AssistantMsg,
   ChatMessage,
@@ -9,6 +10,7 @@ import type {
   ModelRefDTO,
   PiEvent,
   PlanStateDTO,
+  PromptPayload,
   JevWorkflowDTO,
   RewindErrorDTO,
   QueuedItemDTO,
@@ -57,6 +59,7 @@ export interface GoalUIState {
 const EMPTY_GOAL_UI: GoalUIState = { enabled: false, submitted: false, limits: DEFAULT_GOAL_LIMITS, acceptance: '', pending: false, error: null }
 
 export interface PiState {
+  vision: VisionStateDTO
   goalUI: GoalUIState
   goal: GoalSnapshotDTO | null
   goalSeq: number
@@ -115,7 +118,7 @@ export interface PiState {
   compactionQueue: CompactionQueueStateDTO
   compactionProcess: CompactionProcessStateDTO
   notice: Notice | null
-  error: string | RewindErrorDTO | null
+  error: string | RewindErrorDTO | VisionErrorDTO | null
 }
 
 /**
@@ -215,14 +218,22 @@ function mergeRoster(current: readonly SubagentRunDTO[], incoming: readonly Suba
 
 function insertByTimestamp(messages: ChatMessage[], incoming: ChatMessage): void {
   let index = messages.length
-  while (index > 0 && messages[index - 1].timestamp > incoming.timestamp) index -= 1
+  while (index > 0) {
+    const previous = messages[index - 1]
+    // A queued user message takes its transcript position on delivery.
+    const time = previous.role === 'user' && previous.queuedDelivery ? previous.completedAt ?? previous.timestamp : previous.timestamp
+    if (time <= incoming.timestamp) break
+    index -= 1
+  }
   messages.splice(index, 0, incoming)
 }
 
 const EMPTY_COMPACTION_QUEUE: CompactionQueueStateDTO = { queued: false, revision: 0 }
 const EMPTY_COMPACTION_PROCESS: CompactionProcessStateDTO = { process: null, revision: 0 }
+const EMPTY_VISION: VisionStateDTO = { progress: null, revision: 0 }
 
 const initialState: PiState = {
+  vision: EMPTY_VISION,
   goalUI: EMPTY_GOAL_UI,
   goal: null,
   goalSeq: 0,
@@ -393,7 +404,11 @@ export class PiStore {
     try {
       const result = await window.pi.goalAction({ sessionPath: path, expectedSeq: identity?.seq ?? 0, goalId: identity?.goal?.id ?? null,
         action: 'create', objective: input.text, acceptance: ui.acceptance.trim() || input.text, limits: ui.limits, images: input.images, files: input.files })
-      if (!result.ok) { this.setGoalUI(path, { error: result.code }); return false }
+      if (!result.ok) {
+        this.setGoalUI(path, { error: result.code })
+        if (result.visionError) this.setSessionError(path, result.visionError)
+        return false
+      }
       this.goalEchoes.set(path, { goalId: result.goal?.id ?? null, message: echo })
       this.dispatch({ type: 'goal_update', sessionPath: path, goal: result.goal, goalSeq: result.seq })
       this.setGoalUI(path, { acceptance: '', submitted: true })
@@ -433,6 +448,14 @@ export class PiStore {
   }
   private compactionQueues = new Map<string, CompactionQueueStateDTO>()
   private compactionProcesses = new Map<string, CompactionProcessStateDTO>()
+  private visionStates = new Map<string, VisionStateDTO>()
+  private mergeVision(path: string | null, next?: VisionStateDTO): VisionStateDTO {
+    if (!path) return EMPTY_VISION
+    const previous = this.visionStates.get(path)
+    const merged = next && (!previous || next.revision > previous.revision) ? next : previous
+    if (merged) this.visionStates.set(path, merged)
+    return merged ?? EMPTY_VISION
+  }
   private mergeCompactionProcess(path: string | null, next?: CompactionProcessStateDTO): CompactionProcessStateDTO {
     if (!path) return EMPTY_COMPACTION_PROCESS
     const previous = this.compactionProcesses.get(path)
@@ -501,12 +524,13 @@ export class PiStore {
     const goalUI = this.goalUIFor(sessionPath, goal.goal)
     const compactionQueue = this.mergeCompactionQueue(sessionPath, snapshot.compactionQueue)
     const compactionProcess = this.mergeCompactionProcess(sessionPath, snapshot.compactionProcess)
+    const vision = this.mergeVision(sessionPath, snapshot.vision)
     const previousCached = sessionPath ? this.sessionStates.get(sessionPath) : undefined
     const snapshotSequence = snapshot.eventSequence ?? 0
     // Roster revisions are independent of transcript revisions, and belong
     // only to this session. Never merge the outgoing chat into an incoming one.
     const subagents = mergeRoster(previousCached?.subagents ?? [], snapshot.subagents ?? [])
-    const cached = previousCached ? { ...previousCached, subagents, plan, jevWorkflow, ...goal, goalUI, compactionQueue, compactionProcess } : undefined
+    const cached = previousCached ? { ...previousCached, subagents, plan, jevWorkflow, ...goal, goalUI, compactionQueue, compactionProcess, vision } : undefined
     if (cached) this.sessionStates.set(sessionPath!, cached)
     // A readiness/event push can overtake an IPC snapshot of a cached session.
     // Keep the newer projection (including its sequence), then replay any
@@ -567,8 +591,9 @@ export class PiStore {
       queue: unchanged ? cached.queue : (snapshot.queue ?? { steering: [], followUp: [] }),
       compactionQueue,
       compactionProcess,
+      vision,
       notice: unchanged ? cached.notice : null,
-      error: unchanged ? cached.error : null
+      error: vision.error ?? (unchanged ? cached.error : null)
     })
     // An idle session has no tool executing: a run restored from disk (the
     // session was stopped, or the app died mid-execution) is a failure, not a
@@ -587,6 +612,20 @@ export class PiStore {
    * queue_update confirms it, but the IPC result is already authoritative. */
   clearQueue(): void {
     this.set({ queue: { steering: [], followUp: [] } })
+  }
+
+  /**
+   * A queued message the run consumed arrives with the queue_update that drops
+   * its row: echo the user row in the same commit, so the card and the bubble
+   * swap without a visible gap. Images stay off the wire (they never ride
+   * events), and the persisted message_end swaps the echo for the full payload
+   * a moment later. A removal the user asked for is never reported as delivery
+   * (main rebuilds those queues without consuming anything).
+   */
+  private echoDeliveredQueue(delivered: readonly QueuedItemDTO[]): void {
+    for (const item of delivered) {
+      this.appendOptimisticUser(optimisticEchoText(item.originalText || item.text, item.filePaths), [])
+    }
   }
 
   /**
@@ -665,7 +704,8 @@ export class PiStore {
       goalUI: this.goalUIFor(sessionPath, cached.goal),
       plan: this.mergePlanState(sessionPath, cached.plan),
       compactionQueue: this.mergeCompactionQueue(sessionPath, cached.compactionQueue),
-      compactionProcess: this.mergeCompactionProcess(sessionPath, cached.compactionProcess)
+      compactionProcess: this.mergeCompactionProcess(sessionPath, cached.compactionProcess),
+      vision: this.mergeVision(sessionPath, cached.vision)
     }
     this.shellState = shellOf(this.state, this.availableThinkingLevels)
     for (const listener of this.listeners) listener()
@@ -708,6 +748,31 @@ export class PiStore {
     if (this.state.sessionPath === path) this.set(remove(this.state))
   }
 
+  private setSessionError(path: string, error: PiState['error']): void {
+    const cached = this.sessionStates.get(path)
+    if (cached) this.sessionStates.set(path, { ...cached, error })
+    if (this.state.sessionPath === path) this.set({ error })
+  }
+
+  /** Rejected attachment admission restores the composer's exact draft. */
+  async sendPrompt(payload: PromptPayload): Promise<boolean> {
+    const path = this.state.sessionPath
+    if (!path) return false
+    const echo = payload.streamingBehavior ? null : this.appendOptimisticUser(optimisticEchoText(payload.text, payload.files), payload.images)
+    let accepted = false
+    try {
+      const result = await window.pi.prompt({ ...payload, sessionPath: path })
+      accepted = result.accepted
+      if (result.visionError) this.setSessionError(path, result.visionError)
+      return accepted
+    } catch (error) {
+      this.setSessionError(path, error instanceof Error ? error.message : String(error))
+      return false
+    } finally {
+      if (!accepted && echo) this.removeOptimisticUser(path, echo)
+    }
+  }
+
   private settleGoalEcho(path: string, goal: GoalSnapshotDTO | null): void {
     const echo = this.goalEchoes.get(path)
     if (!echo || !echo.goalId) return
@@ -725,6 +790,15 @@ export class PiStore {
   }
 
   dispatch(event: PiEvent): void {
+    if (event.type === 'vision_update' && event.sessionPath && event.vision) {
+      const vision = this.mergeVision(event.sessionPath, event.vision)
+      const cached = this.sessionStates.get(event.sessionPath)
+      const errorFor = (state: PiState): PiState['error'] => vision.error ??
+        (state.error && typeof state.error !== 'string' && 'kind' in state.error && state.error.kind === 'vision' ? null : state.error)
+      if (cached && vision !== cached.vision) this.sessionStates.set(event.sessionPath, { ...cached, vision, error: errorFor(cached) })
+      if (event.sessionPath === this.state.sessionPath && vision !== this.state.vision) this.set({ vision, error: errorFor(this.state) })
+      return
+    }
     if (event.type === 'compaction_process_update' && event.sessionPath && event.compactionProcess) {
       const compactionProcess = this.mergeCompactionProcess(event.sessionPath, event.compactionProcess)
       const cached = this.sessionStates.get(event.sessionPath)
@@ -830,11 +904,14 @@ export class PiStore {
           const messages = [...this.state.messages]
           const lastIndex = messages.length - 1
           const last = messages[lastIndex]
+          const scope = incoming.queuedDelivery === 'followUp' && event.changeScopeId
+            ? { activeChangeScopeId: event.changeScopeId } : {}
           // Swap the optimistic echo for the persisted message.
           if (last && (last as any).__optimistic && last.role === 'user') {
             messages[lastIndex] = incoming
-            this.set({ messages })
-          } else if (!last || last.role !== 'user' || last.timestamp !== incoming.timestamp) {
+            this.set({ messages, ...scope })
+          } else if (!last || last.role !== 'user' || (incoming.sessionEntryId
+            ? last.sessionEntryId !== incoming.sessionEntryId : last.timestamp !== incoming.timestamp)) {
             // A send the renderer believed idle can be queued as a steer when
             // the main process disagrees (double-send before agent_start
             // arrives); its message_end then lands mid-run with the echo no
@@ -848,7 +925,7 @@ export class PiStore {
                     !((m as any).__optimistic && m.role === 'user' && userProse(m.content) === prose)
                 )
               : messages
-            this.set({ messages: [...withoutEcho, incoming] })
+            this.set({ messages: [...withoutEcho, incoming], ...scope })
           }
         } else if (message.role === 'assistant') {
           const incoming = message as AssistantMsg
@@ -970,11 +1047,13 @@ export class PiStore {
         this.settleToolRuns()
         break
 
-      case 'queue_update':
+      case 'queue_update': {
         this.set({
           queue: { steering: [...event.steering], followUp: [...event.followUp] }
         })
+        if (event.delivered?.length) this.echoDeliveredQueue(event.delivered)
         break
+      }
 
       case 'auto_retry_start':
         this.set({
@@ -1031,7 +1110,7 @@ export class PiStore {
         // Main ships the full selected-branch transcript with the new summary;
         // compacted-out history remains visible even though it left model context.
         // The acknowledgement is the summary row itself — a session entry that
-        // renders where it happened (`chat-turns` places it by time) and is
+        // renders at its fixed slot inside the turn (`chat-turns`) and is
         // still there when the session is reopened, which a UI-only row was not.
         const messages = Array.isArray(event.messages) ? (event.messages as ChatMessage[]) : null
         const nothingToCompact = isNothingToCompactError(event.errorMessage)
@@ -1046,7 +1125,7 @@ export class PiStore {
       }
 
       case 'pi_error':
-        this.set({ error: event.rewindError ?? event.message, isStreaming: false, streaming: null, awaitingRun: false })
+        this.set({ error: event.visionError ?? event.rewindError ?? this.state.vision.error ?? event.message, isStreaming: false, streaming: null, awaitingRun: false })
         break
 
       default:
@@ -1055,6 +1134,11 @@ export class PiStore {
   }
 
   clearError(): void {
-    this.set({ error: null })
+    const { vision, sessionPath } = this.state
+    if (vision.error && sessionPath) {
+      const dismissed = { revision: vision.revision, progress: vision.progress }
+      this.visionStates.set(sessionPath, dismissed)
+      this.set({ error: null, vision: dismissed })
+    } else this.set({ error: null })
   }
 }

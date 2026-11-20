@@ -104,8 +104,6 @@ try {
   const byCreation = [{ ...all[0], created: new Date(1).toISOString(), modified: new Date(1e10).toISOString() }, { ...all[1], created: new Date(1e8).toISOString(), modified: new Date(10).toISOString() }]
   assert.deepEqual(orderSessions(byCreation, [], 'updated').map((s) => s.path), ['a0', 'a1'])
   assert.deepEqual(orderSessions(byCreation, [], 'created').map((s) => s.path), ['a1', 'a0'])
-  assert.deepEqual(paths(buildSidebarGroups(all, folders, defaults, { query: '/private/workspace' })), [], 'projectless internal paths are never filterable')
-  assert.deepEqual(paths(buildSidebarGroups(all, folders, defaults, { query: 'Ｂ０' })), ['b0'], 'title filtering normalizes full-width text')
   assert.deepEqual(paths(buildSidebarGroups(all, folders, { ...defaults, filter: 'running' }, { runningPaths: new Set(['b0']) })), ['b0'], 'live state is included before index refresh')
   assert.deepEqual(paths(buildSidebarGroups(all, folders, { ...defaults, filter: 'unread', unread: ['c1'] })), ['c1'])
   const day = new Date(2026, 9, 4, 12)

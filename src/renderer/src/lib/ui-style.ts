@@ -3,13 +3,14 @@ import { useSyncExternalStore } from 'react'
 /**
  * Interface style — Settings → Appearance. ONE global preference that drives
  * the corner/radius preset (`data-corners`) and UI glyphs through icons.tsx.
- * Square uses Remix Line and Bearded file types; squircle uses Hugeicons Stroke
- * Rounded and Pierre file types. Keyboard marks and brands keep their artwork.
+ * Square uses Remix Line and angular Pierre file types; rounded and squircle
+ * share Hugeicons Stroke Rounded and native Pierre file types. Keyboard marks
+ * and brands keep their artwork.
  *
  * The squircle values are recovered from 397f6ed^ (the parent of the commit
- * that squared the branch); the square style is the default and the two token
- * values that matter read `--app-radius-capsule: 0px`, which is what every
- * capsule-by-design site rendered before the token existed.
+ * that squared the branch). Rounded uses its own radius scale with ordinary
+ * circular arcs, never superellipses. Square remains the default; its capsule
+ * radius stays 0px so capsule-by-design sites keep their hard edges.
  *
  * A renderer preference like accent/locale/typefaces: localStorage plus a
  * subscribable store, so choosing it in Settings re-renders the interface with
@@ -19,12 +20,12 @@ import { useSyncExternalStore } from 'react'
  */
 
 const STORAGE_KEY = 'pi-app:ui-style'
-export const UI_STYLES = ['square', 'squircle'] as const
+export const UI_STYLES = ['square', 'rounded', 'squircle'] as const
 export type UiStyle = (typeof UI_STYLES)[number]
 const DEFAULT: UiStyle = 'square'
 
 function isStyle(value: string | null): value is UiStyle {
-  return value === 'square' || value === 'squircle'
+  return UI_STYLES.some((style) => style === value)
 }
 
 /** Write the derived corner attribute. Idempotent; safe to call on every change. */
@@ -74,14 +75,28 @@ export function setUiStyle(next: UiStyle): void {
   for (const listener of listeners) listener()
 }
 
+// Other renderer windows (including picture in picture) share this preference.
+// Re-read instead of writing back so a storage event cannot echo between windows.
+function onStorage(event: StorageEvent): void {
+  if (event.key !== STORAGE_KEY && event.key !== null) return
+  const next = read()
+  if (get() === next) return
+  current = next
+  applyUiStyle(next)
+  for (const listener of listeners) listener()
+}
+
+function subscribe(listener: () => void): () => void {
+  listeners.add(listener)
+  if (listeners.size === 1) window.addEventListener('storage', onStorage)
+  return () => {
+    listeners.delete(listener)
+    if (!listeners.size) window.removeEventListener('storage', onStorage)
+  }
+}
+
 /** Subscribable interface-style preference shared by the app shell and Settings. */
 export function useUiStyle(): [UiStyle, typeof setUiStyle] {
-  const style = useSyncExternalStore(
-    (listener) => {
-      listeners.add(listener)
-      return () => listeners.delete(listener)
-    },
-    get
-  )
+  const style = useSyncExternalStore(subscribe, get)
   return [style, setUiStyle]
 }

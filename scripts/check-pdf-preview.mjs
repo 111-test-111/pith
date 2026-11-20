@@ -106,6 +106,7 @@ const App=()=>{
 };
 createRoot(document.getElementById('root')).render(React.createElement(React.StrictMode,null,React.createElement(I18nProvider,null,React.createElement(App))));
 window.en=en;window.zh=zh;window.cwd=cwd;
+window.shown=selector=>Array.from(document.querySelectorAll(selector)).find(node=>!node.closest('[inert]'))??null;
 window.openFile=name=>files.open(cwd,{path:cwd+'/'+name});
 window.openPdfHref=href=>files.open(cwd,localFileTarget(href,cwd));window.files=files;
 window.__frames=[];window.__collectScrollFrames=async(ms)=>{
@@ -179,7 +180,7 @@ app.on('window-all-closed',()=>app.quit());`, resolveDir: repo, loader: 'ts' }, 
   const evaluate = async (expression) => { const r = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true }); if (r.exceptionDetails) throw new Error(JSON.stringify(r.exceptionDetails).slice(0, 600)); return r.result?.value }
   await send('Runtime.enable')
   const waitFor = async (expression, label) => { const end = Date.now() + 25000; while (Date.now() < end) { if (await evaluate(`Boolean(${expression})`).catch(() => false)) return true; await pause(100) } throw new Error('Timeout: ' + label + ' :: viewer=' + await evaluate(`document.querySelector('[data-file-pdf]')?.dataset.pdfError ?? 'none'`).catch(() => '?') + ' body=' + await evaluate('document.body.innerText').catch(() => '?') + ' ' + JSON.stringify(exceptions.slice(0, 4))) }
-  const click = async (selector) => { await evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`); await pause(120) }
+  const click = async (selector) => { await evaluate(`shown(${JSON.stringify(selector)}).click()`); await pause(120) }
   const shot = async (name) => { const dir = process.env.PI_PDF_SCREENSHOT_DIR; if (!dir) return; await mkdir(dir, { recursive: true }); const image = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }); await writeFile(join(dir, name + '.png'), Buffer.from(image.data, 'base64')) }
 
   await waitFor('window.__ready', 'fixture ready')
@@ -315,11 +316,11 @@ app.on('window-all-closed',()=>app.quit());`, resolveDir: repo, loader: 'ts' }, 
   // never scroll the containing workspace and move the rail chrome offscreen.
   const assertRailChrome = async label => {
     const geometry = await evaluate(`(()=>{
-      const workspace=document.querySelector('[data-pdf-workspace]').getBoundingClientRect();
-      const rail=document.querySelector('[data-panel=right]').getBoundingClientRect();
-      const scroller=document.querySelector('[data-pdf-scroller]');
+      const workspace=shown('[data-pdf-workspace]').getBoundingClientRect();
+      const rail=shown('[data-panel=right]').getBoundingClientRect();
+      const scroller=shown('[data-pdf-scroller]');
       const chrome=['[data-sidebar-tabs]','[data-file-toolbar]','[data-file-pdf-toolbar]'].map(selector=>{
-        const rect=document.querySelector(selector).getBoundingClientRect();return {selector,top:rect.top,bottom:rect.bottom,height:rect.height};
+        const rect=shown(selector).getBoundingClientRect();return {selector,top:rect.top,bottom:rect.bottom,height:rect.height};
       });
       const outsideScroll=[];for(let node=scroller.parentElement;node;node=node.parentElement){
         if(node.scrollTop||node.scrollLeft)outsideScroll.push({tag:node.tagName,classes:node.className,top:node.scrollTop,left:node.scrollLeft});
@@ -332,11 +333,11 @@ app.on('window-all-closed',()=>app.quit());`, resolveDir: repo, loader: 'ts' }, 
     for(const bar of geometry.chrome)assert.ok(bar.height>0&&bar.top>=geometry.workspaceTop&&bar.bottom<=geometry.workspaceBottom,label+': toolbar remains visible: '+JSON.stringify(bar))
   }
   await evaluate(`window.showRail({width:400,fullscreen:false});window.openFile('notes.md')`)
-  await waitFor(`document.querySelector('[data-file-markdown]')?.textContent.includes('Markdown delivery')`, 'Markdown in the docked rail')
+  await waitFor(`shown('[data-file-markdown]')?.textContent.includes('Markdown delivery')`, 'Markdown in the docked rail')
   await evaluate(`window.openFile('single-page.pdf')`)
-  await waitFor(`document.querySelector('[data-pdf-scroller] canvas')?.width > 0`, 'single-page PDF in the docked rail')
+  await waitFor(`shown('[data-pdf-scroller] canvas')?.width > 0`, 'single-page PDF in the docked rail')
   await pause(600)
-  assert.ok(await evaluate(`document.querySelector('[data-pdf-scroller] .page').clientHeight < document.querySelector('[data-pdf-scroller]').clientHeight`),'the regression PDF fits entirely inside the docked viewport')
+  assert.ok(await evaluate(`shown('[data-pdf-scroller] .page').clientHeight < shown('[data-pdf-scroller]').clientHeight`),'the regression PDF fits entirely inside the docked viewport')
   await assertRailChrome('opening a single-page PDF from Markdown')
   await shot('pdf-docked-single-page')
   for(const label of ['Zoom in','Zoom out','Fit page','Fit width']){
@@ -361,12 +362,27 @@ app.on('window-all-closed',()=>app.quit());`, resolveDir: repo, loader: 'ts' }, 
   await click('[data-file-pdf-toolbar] button[aria-label="Fit width"]')
   await assertRailChrome('returning to the docked PDF pane')
   await click('[data-sidebar-tab='+JSON.stringify('file:'+join(project,'notes.md'))+'] [role=tab]')
-  await waitFor(`document.querySelector('[data-file-markdown]')?.textContent.includes('Markdown delivery')`, 'switching back to Markdown through the rail tab strip')
+  await waitFor(`shown('[data-file-markdown]')?.textContent.includes('Markdown delivery')`, 'switching back to Markdown through the rail tab strip')
   await click('[data-sidebar-tab='+JSON.stringify('file:'+join(project,'single-page.pdf'))+'] [role=tab]')
-  await waitFor(`document.querySelector('[data-pdf-scroller] canvas')?.width > 0`, 'returning to the PDF through the rail tab strip')
+  await waitFor(`shown('[data-pdf-scroller] canvas')?.width > 0`, 'returning to the PDF through the rail tab strip')
   await pause(350)
   await assertRailChrome('returning to the PDF tab')
   console.log('PASS: short PDF opening, zoom, fit, links, resize, fullscreen and Markdown tab switches keep rail chrome visible and confine scrolling to the PDF viewport')
+
+  await evaluate(`window.openFile('doc.pdf')`)
+  await waitFor(`shown('[data-pdf-scroller] canvas')?.width > 0`, 'multi-page PDF in the rail')
+  await click('[data-file-pdf-toolbar] button[aria-label="Next page"]')
+  await waitFor(`shown('[data-pdf-page]')?.textContent === '2'`, 'PDF navigates away from the first page')
+  await click('[data-file-pdf-toolbar] button[aria-label="Zoom in"]')
+  await evaluate(`window.keptPdf={scroller:shown('[data-pdf-scroller]'),page:shown('[data-pdf-page]').textContent,scale:shown('[data-pdf-scale]').textContent};keptPdf.top=keptPdf.scroller.scrollTop`)
+  await click('[data-sidebar-tab='+JSON.stringify('file:'+join(project,'notes.md'))+'] [role=tab]')
+  assert.ok(await evaluate(`keptPdf.scroller.isConnected && keptPdf.scroller.closest('[inert]') && getComputedStyle(keptPdf.scroller).visibility==='hidden'`), 'inactive PDF stays mounted outside focus and paint')
+  await click('[data-sidebar-tab='+JSON.stringify('file:'+docPath)+'] [role=tab]')
+  assert.ok(await evaluate(`shown('[data-pdf-scroller]')===keptPdf.scroller && keptPdf.scroller.scrollTop===keptPdf.top && shown('[data-pdf-page]').textContent===keptPdf.page && shown('[data-pdf-scale]').textContent===keptPdf.scale`), 'PDF returns to the same viewport, page and zoom')
+  await click('[data-sidebar-tab='+JSON.stringify('file:'+join(project,'notes.md'))+'] [role=tab]')
+  await click('[data-sidebar-tab='+JSON.stringify('file:'+docPath)+'] button[aria-label^="Close "]')
+  await waitFor('!keptPdf.scroller.isConnected', 'closing the inactive PDF detaches its viewer')
+  console.log('PASS: PDF retains the same viewer, page and zoom on tab switches and unmounts on close')
 
   const locale = await evaluate(`(()=>{const keys=Object.keys(window.en).filter(k=>k.startsWith('files.pdf.'));return {keys,missing:keys.filter(k=>typeof window.zh[k]!=='string'),translated:keys.filter(k=>window.zh[k]!==window.en[k]).length}})()`)
   assert.deepEqual(locale.missing, [], 'every PDF string exists in zh-CN')

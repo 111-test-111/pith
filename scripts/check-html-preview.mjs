@@ -147,7 +147,7 @@ try {
     return r.result?.value
   }
   const wait = (expression, label) => until(() => evaluate(`Boolean(${expression})`), label)
-  const click = selector => evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`)
+  const click = selector => evaluate(`shown(${JSON.stringify(selector)}).click()`)
   let expectedGuestPath
   const guest = async expression => {
     let value
@@ -156,7 +156,7 @@ try {
     // guest on each attempt; never invoke a method on a missing/remounting node.
     await until(async () => {
       const result = await evaluate(`(async()=>{
-        const view=document.querySelector('[data-file-html] webview');
+        const view=shown('[data-file-html] webview');
         if(!view)return {ready:false};
         try{const url=new URL(view.getURL());if(url.protocol!=='http:'||view.isLoading())return {ready:false};if(${JSON.stringify(expectedGuestPath ?? null)}!==null&&decodeURIComponent(url.pathname)!==${JSON.stringify(expectedGuestPath ?? null)})return {ready:false}}catch{return {ready:false}};
         try{return await view.executeJavaScript(${JSON.stringify(`(()=>{if(document.readyState==='loading')return {ready:false};return {ready:true,value:(${expression})}})()`)})}
@@ -173,15 +173,20 @@ try {
   await evaluate('localStorage.setItem("pi-app:locale","en");localStorage.setItem("pi-app:reduce-motion","true")')
   await send('Page.reload') // shell only, before any guest
   await wait(`document.documentElement?.lang === 'en' && document.querySelector('[aria-label="Toggle sidebar"]')`, 'English shell')
+  await evaluate(`window.shownAll = selector => Array.from(document.querySelectorAll(selector)).filter(node => !node.closest('[data-sidebar-file-preview=retained]')); window.shown = selector => shownAll(selector)[0] ?? null`)
   if (!await evaluate('!!document.querySelector("[data-panel=right]")')) await click('[aria-label="Toggle sidebar"]')
   await evaluate(`Array.from(document.querySelectorAll('[data-panel=right] button')).find(b=>Array.from(b.querySelectorAll('span')).some(s=>s.textContent.trim()==='Files')).click()`)
-  await wait('document.querySelector("[data-file-tree]")?.textContent.includes("index.html")', 'file tree')
+  await wait('shown("[data-file-tree]")?.textContent.includes("index.html")', 'file tree')
+  const view = name => evaluate(`shownAll('[data-file-view-tabs] [role=tab]').find(e=>e.textContent===${JSON.stringify(name)}).click()`)
   const openTreeFile = async name => {
-    await evaluate(`Array.from(document.querySelectorAll('[data-file-tree] [role=treeitem]')).find(b=>b.getAttribute('aria-label')===${JSON.stringify(name)} || b.textContent.trim()===${JSON.stringify(name)}).click()`)
+    await evaluate(`shownAll('[data-file-tree] [role=treeitem]').find(b=>b.getAttribute('aria-label')===${JSON.stringify(name)} || b.textContent.trim()===${JSON.stringify(name)}).click()`)
+    await wait(`shown('[data-sidebar-tabs] [aria-selected=true]')?.textContent === ${JSON.stringify(name)} && shown('[data-file-view-tabs]')`, `${name} file tab`)
     expectedGuestPath = '/' + name
   }
   await openTreeFile('index.html')
-  await wait('document.querySelector("[data-file-html] webview") && !document.querySelector("[data-file-html] [role=status]")', 'HTML preview')
+  assert.equal(await evaluate('shown("[data-file-view-tabs] [aria-selected=true]").textContent'), 'Source')
+  await view('Preview')
+  await wait('shown("[data-file-html] webview") && !shown("[data-file-html] [role=status]")', 'HTML preview')
   await until(() => guest('window.moduleValue === 7 && window.dataValue === 42 && document.querySelector("#picture").naturalWidth === 40'), 'modules, fetch and image')
   assert.equal(await guest('getComputedStyle(document.querySelector("h1")).color'), 'rgb(12, 34, 56)')
   assert.equal(await guest('!!document.querySelector("#tail")'), true)
@@ -189,29 +194,29 @@ try {
   assert.equal(await guest('getComputedStyle(document.body).scrollbarWidth'), 'none')
   await guest('document.querySelector("#counter").click()')
   assert.equal(await guest('document.querySelector("#counter").textContent'), '1')
-  assert.equal(await evaluate('document.querySelector("[data-file-view-tabs] [aria-selected=true]").textContent'), 'Preview')
-  assert.equal(await evaluate('document.querySelector("[data-files-pane]").innerText.includes("Showing the first")'), false)
+  assert.equal(await evaluate('shown("[data-file-view-tabs] [aria-selected=true]").textContent'), 'Preview')
+  assert.equal(await evaluate('shown("[data-files-pane]").innerText.includes("Showing the first")'), false)
   const url = await guest('location.href')
   await guest('localStorage.setItem("preview-only","isolated")')
   assert.equal((await evaluate('window.pi.browserStatus()')).consentRequired, true, 'file preview does not grant browser consent')
   console.log('PASS: production IPC/UI renders full HTML, modules, CSS, images and interactions without the app bridge or scrollbar chrome')
 
-  const view = name => evaluate(`Array.from(document.querySelectorAll('[data-file-view-tabs] [role=tab]')).find(e=>e.textContent===${JSON.stringify(name)}).click()`)
   await view('Source')
-  await wait('document.querySelector("[data-file-source]")', 'source')
-  await wait('document.querySelector("[data-files-pane]").innerText.includes("Showing the first")', 'source truncation only')
+  await wait('shown("[data-file-source]")', 'source')
+  await wait('shown("[data-files-pane]").innerText.includes("Showing the first")', 'source truncation only')
   await openTreeFile('second.htm')
-  await wait('document.querySelector("[data-file-html] webview") && !document.querySelector("[data-file-html] [role=status]")', 'HTM preview')
-  await view('Diff')
-  await wait('document.querySelector("[data-file-diff]")?.textContent.includes("Second page updated")', 'HTML git diff')
-  await openTreeFile('index.html')
-  await wait('document.querySelector("[data-file-source]")', 'remembered source view')
   await view('Preview')
-  await wait('document.querySelector("[data-file-html] webview") && !document.querySelector("[data-file-html] [role=status]")', 'return to preview')
+  await wait('shown("[data-file-html] webview") && !shown("[data-file-html] [role=status]")', 'HTM preview')
+  await view('Diff')
+  await wait('shown("[data-file-diff]")?.textContent.includes("Second page updated")', 'HTML git diff')
+  await openTreeFile('index.html')
+  await wait('shown("[data-file-source]")', 'remembered source view')
+  await view('Preview')
+  await wait('shown("[data-file-html] webview") && !shown("[data-file-html] [role=status]")', 'return to preview')
   await writeFile(join(project, 'index.html'), html('Refreshed HTML'))
   await writeFile(join(project, 'assets/style.css'), 'h1{color:rgb(78,90,12)} body{font-family:sans-serif;padding:20px} #tail{margin-top:1200px}')
   await click('[aria-label="Refresh files"]')
-  await wait('document.querySelector("[data-file-html] webview") && !document.querySelector("[data-file-html] [role=status]")', 'refresh')
+  await wait('shown("[data-file-html] webview") && !shown("[data-file-html] [role=status]")', 'refresh')
   await until(() => guest('document.querySelector("h1")?.textContent === "Refreshed HTML" && getComputedStyle(document.querySelector("h1")).color === "rgb(78, 90, 12)"'), 'fresh HTML and stylesheet')
   if (process.env.PI_HTML_SCREENSHOT_DIR) {
     await mkdir(process.env.PI_HTML_SCREENSHOT_DIR, { recursive: true })
@@ -224,6 +229,8 @@ try {
   }
   console.log('PASS: source/preview/diff, remembered selection, source cap and refresh of HTML plus assets')
 
+  await guest('window.previewRevisitMarker = "retained"')
+  const previewGuestId = await evaluate(`shown('[data-file-html] webview').getWebContentsId()`)
   await click('[aria-label="Open in embedded browser"]')
   await wait('document.querySelector("[data-browser-consent]")', 'browser consent preserves pending URL')
   // Consent remains the browser's existing one-time user action.
@@ -234,42 +241,47 @@ try {
   }, 'preview opened in browser', 30_000)
   const browserGuestExpression = `Array.from(document.querySelectorAll('[data-browser-pane] webview')).find(w=>{try{return w.getURL()===${JSON.stringify(url)}}catch{return false}})`
   await wait(browserGuestExpression, 'browser guest finished attaching')
-  // Closing/unmounting the file pane cannot revoke the browser's resource URL.
+  // Hiding the file pane cannot revoke the browser's resource URL.
   assert.equal((await request(url)).status, 200)
   assert.equal(await evaluate(`${browserGuestExpression}.executeJavaScript('localStorage.getItem("preview-only")')`), null, 'file preview storage is separate from the signed-in browser')
-  console.log('PASS: one-click handoff survives first-use consent and file-pane unmount in the real embedded browser')
+  console.log('PASS: one-click handoff survives first-use consent in the real embedded browser')
 
   const returnToFile = async () => {
     await click(`[data-sidebar-tab="file:${project}/index.html"] [role=tab]`)
-    await wait('document.querySelector("[data-file-html] webview") && !document.querySelector("[data-file-html] [role=status]")', 'return from browser')
+    await wait('shown("[data-file-html] webview") && !shown("[data-file-html] [role=status]")', 'return from browser')
   }
+  await returnToFile()
+  assert.equal(await evaluate(`shown('[data-file-html] webview').getWebContentsId()`), previewGuestId, 'tab switching preserves the same HTML guest')
+  assert.equal(await guest('window.previewRevisitMarker'), 'retained', 'the guest keeps its in-page state')
   for (const linkId of ['next', 'new']) {
     await returnToFile()
     const before = (await evaluate('window.pi.browserStatus()')).pages.length
     await evaluate('window.__htmlLinks=[];window.pi.onHtmlPreviewLink(link=>window.__htmlLinks.push(link))')
-    await evaluate('window.__htmlConsole=[];document.querySelector("[data-file-html] webview").addEventListener("console-message",e=>window.__htmlConsole.push(e.message))')
+    await evaluate('window.__htmlConsole=[];shown("[data-file-html] webview").addEventListener("console-message",e=>window.__htmlConsole.push(e.message))')
     await guest(`document.querySelector('#${linkId}').click()`)
     await until(async () => {
       const status = await evaluate('window.pi.browserStatus()')
       return status.pages.length > before && status.pages.some(p => p.url === new URL('second.htm', url).href)
     }, `${linkId} link opens in browser`, 30_000).catch(async error => {
-      console.log('Link diagnostics', await evaluate('JSON.stringify({links:window.__htmlLinks,html:document.querySelector("[data-file-html]")?.innerText})'))
+      console.log('Link diagnostics', await evaluate('JSON.stringify({links:window.__htmlLinks,html:shown("[data-file-html]")?.innerText})'))
       console.log('Browser status', await evaluate('window.pi.browserStatus()'))
-      console.log('Guest diagnostics', await evaluate('JSON.stringify({console:window.__htmlConsole,url:document.querySelector("[data-file-html] webview")?.getURL()})'))
+      console.log('Guest diagnostics', await evaluate('JSON.stringify({console:window.__htmlConsole,url:shown("[data-file-html] webview")?.getURL()})'))
       throw error
     })
     assert.equal(await evaluate('location.protocol'), 'file:', 'the app shell never navigates')
   }
   await returnToFile()
   await openTreeFile('empty.html')
-  await wait('document.querySelector("[data-file-html] webview") && !document.querySelector("[data-file-html] [role=status]")', 'empty HTML')
+  await view('Preview')
+  await wait('shown("[data-file-html] webview") && !shown("[data-file-html] [role=status]")', 'empty HTML')
   assert.equal(await guest('document.body.innerText'), '')
   await openTreeFile('space #中文%.HTML')
-  await wait('document.querySelector("[data-file-html] webview") && !document.querySelector("[data-file-html] [role=status]")', 'encoded path preview')
+  await view('Preview')
+  await wait('shown("[data-file-html] webview") && !shown("[data-file-html] [role=status]")', 'encoded path preview')
   assert.equal(await guest('document.querySelector("h1").textContent'), 'Encoded path')
   await rm(join(project, 'space #中文%.HTML'))
   await click('[aria-label="Refresh files"]')
-  await wait('document.querySelector("[data-file-html][role=status]")', 'missing file state')
+  await wait('shown("[data-file-html][role=status]")', 'missing file state')
   console.log('PASS: same-window/new-window links hand off, empty/encoded HTML works, deleted file reports an error')
 
   // Same narrow, capped Electron isolated-world teardown allowance as

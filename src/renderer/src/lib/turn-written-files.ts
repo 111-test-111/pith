@@ -10,7 +10,7 @@ import { previewKindOf } from '../../../shared/preview'
  * "changed N files" list.
  *
  * Direct edit/write results and persisted child-run text writes share this
- * projection. Generated images stay in their result cards and Library.
+ * projection. Generated images stay in their result cards.
  */
 const WRITE_TOOL_NAMES = new Set(['edit', 'write'])
 
@@ -225,8 +225,8 @@ function promptLabel(text: string, limit = 60): string | null {
 
 /**
  * Every turn of a session that changed files, oldest first — the review tab's
- * model. Use the transcript's cumulative scopes, which can span user-steer
- * folds and idle task continuations. A scope with no changed file is omitted.
+ * model. Use the transcript's cumulative scopes, which include steering and
+ * idle task continuations. A scope with no changed file is omitted.
  */
 export function extractReviewTurns(
   messages: readonly ChatMessage[],
@@ -246,7 +246,7 @@ export function extractReviewTurns(
   }
 
   const turns: ReviewTurn[] = []
-  for (const scope of collectChangeScopes(buildTurns([...messages])).values()) {
+  for (const scope of collectChangeScopes(buildTurns(messages)).values()) {
     const rounds = scope.assistants
     const files = extractTurnWrittenFiles(rounds, toolResults, cwd, scope.completions)
     if (files.length > 0) {

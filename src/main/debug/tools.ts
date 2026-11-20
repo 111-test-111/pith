@@ -1,5 +1,5 @@
 import type { AgentSessionServices, ToolDefinition } from '@earendil-works/pi-coding-agent'
-import type { DebugManager } from './manager'
+import type { DebugManager, DebugStartOptions } from './manager'
 import { detectDebugAdapters, readLaunchConfigurations, type DebugLaunchConfiguration } from './adapters'
 import { escalationHintMarker, planFileDenialMarker, sandboxDenialMarker } from '../sandbox/escalation'
 import type { SandboxMode } from '../sandbox/types'
@@ -43,13 +43,7 @@ export interface DebugToolOptions {
   runInTerminal: () => DebugRunInTerminal | undefined
 }
 
-export type DebugRunInTerminal = (input: {
-  title: string
-  cwd: string
-  args: string[]
-  env?: Record<string, string | null>
-  signal?: AbortSignal
-}) => Promise<{ shellProcessId: number; terminalId: string; dispose?: () => Promise<void> }>
+export type DebugRunInTerminal = NonNullable<DebugStartOptions['runInTerminal']>
 
 const json = (value: unknown): string => JSON.stringify(value)
 

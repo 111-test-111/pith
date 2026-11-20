@@ -8,7 +8,6 @@ export interface StorageScanOptions {
   /** Supplied by the owning main service, never by a renderer path argument. */
   appData: string
   agentData: string
-  library: string
   sessionData: string
 }
 
@@ -22,8 +21,7 @@ export const isWithin = (path: string, root: string): boolean => {
 function classifier(options: StorageScanOptions): (path: string) => ResourceStorageCategory {
   const candidates: { root: string; category: ResourceStorageCategory }[] = [
     { root: options.appData, category: 'other' }, { root: options.agentData, category: 'configuration' },
-    { root: options.sessionData, category: 'browser' }, { root: options.library, category: 'library' },
-    { root: join(options.appData, 'library'), category: 'library' },
+    { root: options.sessionData, category: 'browser' },
     { root: join(options.appData, 'rewind'), category: 'rewind' },
     { root: join(options.appData, 'bash-tasks'), category: 'logs' },
     { root: join(options.appData, 'workspace'), category: 'workspace' },
@@ -42,7 +40,6 @@ function classifier(options: StorageScanOptions): (path: string) => ResourceStor
   const segments = relative(base, path).split(sep), first = segments[0], name = basename(path)
   if (base === options.appData) {
     if (/^trajectory\.sqlite(?:-(?:wal|shm|journal))?$/.test(first)) return 'trajectory'
-    if (/^library\.sqlite(?:-(?:wal|shm|journal))?$/.test(first)) return 'library'
     if (/^(?:session-search\.sqlite(?:-(?:wal|shm|journal))?|session-list-cache\.json)$/.test(first)) return 'indexes'
     if (/^(?:app-settings\.json|jev-auth\.json|browser-import\.json|subagents|runtime\.lock)$/.test(first)) return 'configuration'
   }
@@ -77,7 +74,7 @@ export async function scanStorage(input: StorageScanOptions, allocationSupported
   }
   const pathFor = (path: string): string => canonical.get(resolve(path)) ?? resolve(path)
   const options: StorageScanOptions = { appData: pathFor(input.appData), agentData: pathFor(input.agentData),
-    library: pathFor(input.library), sessionData: pathFor(input.sessionData), roots }
+    sessionData: pathFor(input.sessionData), roots }
   const entries: ResourceStorageEntryDTO[] = RESOURCE_STORAGE_CATEGORIES.map(category => ({ category,
     logicalBytes: 0, allocatedBytes: allocationSupported ? 0 : null, files: 0 }))
   const byCategory = new Map(entries.map(entry => [entry.category, entry]))

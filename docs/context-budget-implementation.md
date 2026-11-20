@@ -21,7 +21,7 @@ The inspector's `contextBudget` reports before/after estimates, omitted UTF-16 u
 
 `src/main/pi/image-safety.ts` validates tool images before new persistence. An undecodable image becomes a bounded text note, preserving other blocks. Historical malformed images are repaired only in the request copy. Text-only models receive text notes instead of image blocks; valid images for image-capable models remain byte-for-byte intact.
 
-Calls flow **Plan → text-only image guard → budget → trajectory → provider**. Install wrappers in the corresponding reverse nesting order and dispose in reverse installation order. Plan instructions count toward overhead before budgeting; trajectory records the actual transformed request. The original tool output remains available independently.
+Calls flow **Plan → vision bridge → text-only image guard → presentation metadata guard → budget → trajectory → provider**. The [vision bridge](vision-bridge.md) supplies image evidence only for text-only sessions; native image requests pass through unchanged. Install wrappers in the corresponding reverse nesting order and dispose in reverse installation order. Plan instructions and vision evidence count toward overhead before budgeting; trajectory records the actual transformed request. The original tool output remains available independently.
 
 ## Verification
 

@@ -325,7 +325,7 @@ export function TrajectoryPane({ store, agentRuns }: { store: PiStore; agentRuns
   const hasInspector = Boolean(selected && inspected && inspected.path === path)
   return <div ref={paneRef} data-trajectory-pane className="sidebar-pane-container flex h-full min-h-0 min-w-0 flex-col text-foreground">
     <div data-trajectory-toolbar className="trajectory-toolbar shrink-0 border-b border-border px-3 py-2">
-      {agentRuns?.size ? <div className="trajectory-source"><Select value={path ?? ''} onValueChange={value => setSource(value === parentPath ? null : value)}><SelectTrigger className="h-8 w-full text-xs" aria-label={t('trajectory.source')}><SelectValue className="min-w-0 truncate" /></SelectTrigger><SelectContent portal>
+      {agentRuns?.size ? <div className="trajectory-source"><Select value={path ?? ''} onValueChange={value => setSource(value === parentPath ? null : value)} textClassName="text-xs"><SelectTrigger className="h-8 w-full" aria-label={t('trajectory.source')}><SelectValue className="min-w-0 truncate" /></SelectTrigger><SelectContent portal>
         {parentPath ? <SelectItem value={parentPath}>{t('trajectory.currentSession')}</SelectItem> : null}
         {[...agentRuns].map(([path, run]) => <SelectItem key={path} value={path}>{run.description || run.profile}</SelectItem>)}
       </SelectContent></Select></div> : null}
@@ -333,8 +333,8 @@ export function TrajectoryPane({ store, agentRuns }: { store: PiStore; agentRuns
         <Button variant="ghost" size="icon" className="size-7 shrink-0" aria-label={t('trajectory.refresh')} title={t('trajectory.refresh')} disabled={busy} onClick={() => setEpoch(value => value + 1)}><RefreshCw className="size-4" /></Button>
       </div>
       <div className="trajectory-filters flex items-center gap-2">
-        <Select value={kind} onValueChange={value => setKind(value as TrajectoryPresentationKind | 'all')}><SelectTrigger className="h-8 min-w-0 flex-1 text-xs" aria-label={t('trajectory.kind')}><SelectValue /></SelectTrigger><SelectContent portal><SelectItem value="all">{t('trajectory.allKinds')}</SelectItem>{KINDS.map(kind => <SelectItem key={kind} value={kind}>{t(`trajectory.kind.${kind}`)}</SelectItem>)}</SelectContent></Select>
-        <Select value={status} onValueChange={value => setStatus(value as TrajectoryStatus | 'all')}><SelectTrigger className="h-8 min-w-0 flex-1 text-xs" aria-label={t('trajectory.status')}><SelectValue /></SelectTrigger><SelectContent portal><SelectItem value="all">{t('trajectory.allStatuses')}</SelectItem>{STATUSES.map(status => <SelectItem key={status} value={status}>{t(`trajectory.status.${status}`)}</SelectItem>)}</SelectContent></Select>
+        <Select value={kind} onValueChange={value => setKind(value as TrajectoryPresentationKind | 'all')} textClassName="text-xs"><SelectTrigger className="h-8 min-w-0 flex-1" aria-label={t('trajectory.kind')}><SelectValue /></SelectTrigger><SelectContent portal><SelectItem value="all">{t('trajectory.allKinds')}</SelectItem>{KINDS.map(kind => <SelectItem key={kind} value={kind}>{t(`trajectory.kind.${kind}`)}</SelectItem>)}</SelectContent></Select>
+        <Select value={status} onValueChange={value => setStatus(value as TrajectoryStatus | 'all')} textClassName="text-xs"><SelectTrigger className="h-8 min-w-0 flex-1" aria-label={t('trajectory.status')}><SelectValue /></SelectTrigger><SelectContent portal><SelectItem value="all">{t('trajectory.allStatuses')}</SelectItem>{STATUSES.map(status => <SelectItem key={status} value={status}>{t(`trajectory.status.${status}`)}</SelectItem>)}</SelectContent></Select>
       </div>
     </div>
     <div ref={workspaceRef} data-trajectory-workspace data-has-detail={hasInspector} className="pane-workspace">

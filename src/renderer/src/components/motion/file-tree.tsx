@@ -29,6 +29,7 @@ type FileTreeItem = {
   name: string;
   // local patch (pi-app): app-owned middle ellipsis without losing the full name.
   label?: ReactNode;
+  description?: string;
   type: "file" | "folder";
   children?: FileTreeItem[];
   icon?: ReactNode;
@@ -41,6 +42,8 @@ export interface FileTreeFolderProps {
   name: string;
   // local patch (pi-app): presentation slot; name remains the accessible label.
   label?: ReactNode;
+  // local patch (pi-app): announce Git details alongside the ordinary name.
+  description?: string;
   icon?: ReactNode;
   disabled?: boolean;
   children?: ReactNode;
@@ -52,6 +55,8 @@ export interface FileTreeFileProps {
   name: string;
   // local patch (pi-app): presentation slot; name remains the accessible label.
   label?: ReactNode;
+  // local patch (pi-app): same optional details slot as folders.
+  description?: string;
   icon?: ReactNode;
   disabled?: boolean;
   className?: string;
@@ -156,6 +161,7 @@ function itemsFromChildren(children: ReactNode): FileTreeItem[] {
         name: props.name,
         // local patch (pi-app): preserve the app's label presentation.
         label: props.label,
+        description: props.description,
         type: "folder",
         icon: props.icon,
         disabled: props.disabled,
@@ -172,6 +178,7 @@ function itemsFromChildren(children: ReactNode): FileTreeItem[] {
         name: props.name,
         // local patch (pi-app): preserve the app's label presentation.
         label: props.label,
+        description: props.description,
         type: "file",
         icon: props.icon,
         disabled: props.disabled,
@@ -448,6 +455,9 @@ export function FileTree({
                 data-tree-value={row.item.value}
                 // local patch (pi-app): elided labels retain their full name.
                 aria-label={row.item.name}
+                // local patch (pi-app): status stays out of the accessible name.
+                aria-description={row.item.description}
+                title={row.item.description}
                 aria-level={row.depth + 1}
                 aria-posinset={row.position}
                 aria-setsize={row.setSize}

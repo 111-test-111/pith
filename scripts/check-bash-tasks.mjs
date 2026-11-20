@@ -46,7 +46,7 @@ export { CheckoutCoordinator } from './src/main/rewind/coordinator';`, resolveDi
       }))
       builder.onResolve({ filter: /^playwright-core(\/|$)/ }, args => ({ path: fileURLToPath(import.meta.resolve(args.path)), external: true }))
       builder.onResolve({ filter: /^electron$/ }, () => ({ path: 'electron', namespace: 'fixture' }))
-      builder.onResolve({ filter: /^proper-lockfile$|^@resvg\/resvg-js$/ }, args => ({ path: fileURLToPath(import.meta.resolve(args.path)), external: true }))
+      builder.onResolve({ filter: /^proper-lockfile$|^@resvg\/resvg-js$|^ssh2$|^@xterm\/headless$/ }, args => ({ path: fileURLToPath(import.meta.resolve(args.path)), external: true }))
       builder.onLoad({ filter: /.*/, namespace: 'fixture' }, () => ({ contents:
         `export const app = { getPath() { return ${JSON.stringify(temporary)} } }; export const shell = {};` }))
     } }]
@@ -222,6 +222,7 @@ export { CheckoutCoordinator } from './src/main/rewind/coordinator';`, resolveDi
     app.emit = (_channel, event) => { routed.push(event) }
     app.sessions = new Map()
     app.planSequences = new Map()
+    app.visionRevisions = new Map()
     app.sessionBuilds = new Map()
     app.disabledExtensions = new Set()
     app.navigationEpoch = 0
@@ -416,6 +417,30 @@ export { CheckoutCoordinator } from './src/main/rewind/coordinator';`, resolveDi
   assert(queue.session.messages.some((m) => m.role === 'user' && JSON.stringify(m).includes('fixture-image')))
   const queueRounds = queue.app.snapshotOf(queue.app.activeSession).messages.filter((m) => m.role === 'assistant')
   assert(queueRounds.every((m) => m.changeScopeId === queueRounds[0].changeScopeId), 'user steer preserves cumulative change scope')
+
+  const delivered = await setup('queued-delivery', (n, _context, _options, { session }) =>
+    stream(message(text(`Reply ${n}`)), 0, n === 1 ? async () => {
+      await session.followUp('same queued text')
+      await session.steer('same queued text')
+      await session.steer('second steering message')
+    } : undefined))
+  delivered.session.agent.steeringMode = 'one-at-a-time'
+  await delivered.session.prompt('open the original turn')
+  assert.equal(delivered.calls(), 4)
+  const deliveryEvents = delivered.routed.filter(event => event.type === 'message_end' && event.message.role === 'user')
+  assert.deepEqual(deliveryEvents.map(event => event.message.queuedDelivery), [undefined, 'steer', 'steer', 'followUp'],
+    'identical texts in the two SDK queues keep their actual delivery modes')
+  const deliveredSnapshot = delivered.app.snapshotOf(delivered.app.activeSession)
+  const [opening, steered, steeredAgain, followedUp] = deliveredSnapshot.messages.filter(message => message.role === 'assistant')
+  assert.equal(steered.changeScopeId, opening.changeScopeId)
+  assert.equal(steeredAgain.changeScopeId, opening.changeScopeId)
+  assert.notEqual(followedUp.changeScopeId, opening.changeScopeId)
+  assert.equal(deliveryEvents.at(-1).changeScopeId, followedUp.changeScopeId, 'follow-up switches scopes before its assistant starts')
+  const reader = Object.assign(Object.create(PiManager.prototype), { sessions: new Map() })
+  const readOnly = reader.peekSession(delivered.path)
+  assert.deepEqual(readOnly.messages, deliveredSnapshot.messages, 'a disk-only peek restores the same delivery, scope and time stamps')
+  assert.ok(delivered.session.messages.every(message => !('queuedDelivery' in message)), 'queue presentation stays out of model messages')
+  console.log('PASS: identical queued prompts retain their delivery modes, steers share a scope, and a follow-up starts a durable new scope inside one SDK run.')
 
   const server = await setup('server-scope', (n) => n === 1
     ? stream(message([call('server-task', nodeCommand('setInterval(()=>{},1000)'), 'background')]))

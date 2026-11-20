@@ -32,7 +32,6 @@ export function GitGraphView({ state, store }: { state: GitState; store: GitStor
   const dates = useMemo(() => new Intl.DateTimeFormat(locale, { year: 'numeric', month: 'short', day: 'numeric' }), [locale])
   const start = first * ROW_HEIGHT, height = Math.max(0, (last - first + 1) * ROW_HEIGHT)
   return <section data-git-graph className="flex min-h-0 min-w-0 flex-1 flex-col">
-    <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border/60 px-3 py-2"><span className="text-xs font-medium">{t('git.graph')}</span><span className="truncate text-xs text-muted-foreground">{t('git.graphScope')}</span></div>
     <div ref={split.ref} className="git-graph-body min-h-0 min-w-0 flex-1" data-has-commit={!!state.commit}>
       <div data-git-master data-pane-master className="git-master flex min-h-0 min-w-0 flex-col">
         {state.graphError ? <div role="alert" className="flex shrink-0 items-center gap-2 px-3 py-2"><p className="min-w-0 flex-1 text-xs text-destructive">{t(`git.error.${state.graphError.code}`)}</p><Button variant="outline" size="sm" className="h-7 text-xs" disabled={state.graphLoading} onClick={() => void store.loadGraph()}>{t('git.retry')}</Button></div> : null}

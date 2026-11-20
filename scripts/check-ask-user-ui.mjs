@@ -46,6 +46,8 @@ import {createRoot} from 'react-dom/client';
 import {AskUserPanel, AskUserResultCard} from '/src/components/app/AskUserPanel.tsx';
 import {AskUserRecordList} from '/src/components/app/AskUserRecordList.tsx';
 import {ToolCallView} from '/src/components/app/ToolCallView.tsx';
+import {ChatView} from '/src/components/app/ChatView.tsx';
+import {PiStore} from '/src/state/pi-store.ts';
 import {I18nProvider} from '/src/i18n/index.tsx';
 import '/src/styles.css';
 
@@ -247,6 +249,49 @@ window.probeRow = () => {
 };
 
 const h = React.createElement;
+// Real transcript/store wiring: async outcomes arrive independently of the
+// asking call's immutable pending receipt, including after a session reopen.
+window.pi = { onBashTask: () => () => {}, listBashTasks: async () => [] };
+window.asyncStore = new PiStore();
+window.asyncSequence = 0;
+window.asyncInitialRecords = ['async-first', 'async-second'].map((toolCallId, index) => ({
+  toolCallId, status: 'pending', mode: 'async', answers: null,
+  questions: [{ ...window.QUESTIONS[0], question: index ? 'Another pending question' : window.QUESTIONS[0].question }],
+  at: 1700000001000 + index
+}));
+window.asyncMessages = [
+  { role: 'user', timestamp: 1700000000000, content: 'Ask two independent questions' },
+  { role: 'assistant', timestamp: 1700000000500, stopReason: 'toolUse', content: window.asyncInitialRecords.map(record => ({
+    type: 'toolCall', id: record.toolCallId, name: 'ask_user_question', arguments: { mode: 'async', questions: record.questions }
+  })) },
+  ...window.asyncInitialRecords.map(record => ({
+    role: 'toolResult', toolCallId: record.toolCallId, toolName: 'ask_user_question', timestamp: record.at,
+    content: [{ type: 'text', text: 'The question is with the user (async mode).' }],
+    details: { kind: 'pi-app-ask-user', status: 'pending', mode: 'async', questions: record.questions, answers: null }
+  }))
+];
+window.restoreAsyncRows = (records, sessionPath = '/tmp/async-chat.jsonl') => window.asyncStore.applySnapshot({
+  sessionId: sessionPath, sessionPath, cwd: '/tmp', projectless: false, model: null, thinkingLevel: 'off',
+  messages: window.asyncMessages, isStreaming: true, askUserRecords: records, eventSequence: ++window.asyncSequence
+});
+window.settleAsyncRow = (toolCallId, status, reason) => {
+  const records = window.asyncStore.getState().askUserRecords.map(record => record.toolCallId !== toolCallId ? record : {
+    ...record, status, ...(reason ? { reason } : {}), at: 1700000002000 + window.asyncSequence,
+    answers: status === 'answered' ? [{ question: record.questions[0].question, selected: ['Postgres'] }] : null
+  });
+  const { toolCallId: id, at, ...details } = records.find(record => record.toolCallId === toolCallId);
+  window.asyncStore.dispatch({ type: 'message_end', sessionPath: window.asyncStore.getState().sessionPath,
+    eventSequence: ++window.asyncSequence, askUserRecords: records,
+    message: { role: 'custom', customType: 'ask_user_answer', display: true, timestamp: at,
+      content: 'Async question outcome', details: { toolCallId: id, askUser: { kind: 'pi-app-ask-user', ...details } } }
+  });
+};
+window.probeAsyncRows = () => [...document.querySelectorAll('[data-ask-user-row]')].map(row => ({
+  text: row.textContent, kind: row.querySelector('[data-ask-user-kind]')?.getAttribute('data-ask-user-kind')
+}));
+window.restoreAsyncRows(window.asyncInitialRecords.map((record, index) => params.get('restored') && !index
+  ? { ...record, status: 'answered', answers: [{ question: record.questions[0].question, selected: ['Postgres'] }] }
+  : record));
 const cardMode = params.get('card');
 const details = cardMode === 'pending'
   ? { kind: 'pi-app-ask-user', status: 'pending', questions: window.QUESTIONS, answers: null, mode: 'async' }
@@ -259,6 +304,8 @@ const details = cardMode === 'pending'
 createRoot(document.getElementById('root')).render(
   h(I18nProvider, null, cardMode
     ? h(AskUserResultCard, { details })
+    : params.get('panel') === 'async-row'
+      ? h('div', { style: { display: 'flex', flexDirection: 'column', height: 700 } }, h(ChatView, { store: window.asyncStore }))
     : params.get('panel') === 'records'
       ? h(AskUserRecordList, { records: window.RECORDS })
       : params.get('panel') === 'row'
@@ -725,6 +772,39 @@ app.on('window-all-closed',()=>app.quit());`
   assert.match(askRow.text, /Which database should the migration target/, 'and the first question')
   assert.match(askRow.text, /Answered/, 'with the outcome chip')
   assert.equal(askRow.hasCard, false, 'but never the Q&A record itself')
+
+  // --- async answers update the existing transcript row, with the original
+  //     receipt still pending; other calls and sessions keep their own state.
+  await load('?panel=async-row&locale=zh-CN')
+  await frame()
+  const asyncRows = () => evaluate('window.probeAsyncRows()')
+  assert.deepEqual((await asyncRows()).map(row => row.kind), ['pending', 'pending'])
+  await evaluate("window.originalAsyncRow = document.querySelector('[data-ask-user-row]'); window.settleAsyncRow('async-first', 'answered')")
+  await frame()
+  const answeredRows = await asyncRows()
+  assert.deepEqual(answeredRows.map(row => row.kind), ['answered', 'pending'], 'an async answer replaces only its own waiting chip')
+  assert.match(answeredRows[0].text, /已回答/, 'the updated outcome stays localized')
+  assert.ok(await evaluate("window.originalAsyncRow === document.querySelector('[data-ask-user-row]')"), 'the answer updates the mounted row')
+  assert.equal(await evaluate("window.asyncStore.getState().messages.find(message => message.role === 'toolResult').details.status"), 'pending', 'the model receipt remains unchanged')
+
+  await evaluate('window.answeredAsyncRecords = window.asyncStore.getState().askUserRecords; window.restoreAsyncRows(window.asyncInitialRecords, "/tmp/other-async-chat.jsonl")')
+  await frame()
+  assert.deepEqual((await asyncRows()).map(row => row.kind), ['pending', 'pending'], 'switching chats cannot reuse another chat’s outcome')
+  await load('?panel=async-row&locale=en&restored=1')
+  await frame()
+  assert.deepEqual((await asyncRows()).map(row => row.kind), ['answered', 'pending'], 'a cold session reads the persisted async outcome')
+  await evaluate('window.answeredAsyncRecords = window.asyncStore.getState().askUserRecords; window.restoreAsyncRows(window.asyncInitialRecords)')
+  await frame()
+  assert.deepEqual((await asyncRows()).map(row => row.kind), ['pending', 'pending'], 'restoring the pre-answer branch restores waiting')
+  await evaluate('window.restoreAsyncRows(window.answeredAsyncRecords)')
+  await frame()
+  assert.deepEqual((await asyncRows()).map(row => row.kind), ['answered', 'pending'], 'a restored outcome overrides its pending receipt')
+  for (const reason of ['dismissed', 'timeout', 'aborted']) {
+    await evaluate('window.restoreAsyncRows(window.asyncInitialRecords)')
+    await evaluate(`window.settleAsyncRow('async-second', 'cancelled', ${JSON.stringify(reason)})`)
+    await frame()
+    assert.deepEqual((await asyncRows()).map(row => row.kind), ['pending', reason], `an async ${reason} updates its own chip`)
+  }
 
   assert.deepEqual(exceptions, [], 'no renderer exceptions')
   console.log('check-ask-user-ui: the panel renders, collapses, dismisses and answers as designed')

@@ -5,6 +5,7 @@ import App from './App'
 import { initFonts } from './lib/fonts'
 import { initFontSizes } from './lib/typography'
 import { initReduceMotion } from './lib/reduce-motion'
+import { initSidebarGlass } from './lib/sidebar-glass'
 import { initCompactTools } from './lib/compact-tools'
 import { isLocale } from './i18n'
 import './styles.css'
@@ -26,6 +27,12 @@ initFontSizes()
 // setting it before the first render is what keeps the boot free of entrance
 // animations.
 initReduceMotion()
+
+// Same for the window chrome: the page background steps aside for native glass
+// only while the translucent title row and sidebar are on, and that decision is
+// pure CSS on the root element — setting it before the first render keeps a
+// page transition from flashing the system material.
+initSidebarGlass()
 
 // Same for compact tool-call display: the transcript's row spacing is styled off
 // this attribute, so setting it before the first render avoids a re-spacing

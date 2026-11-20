@@ -1,6 +1,6 @@
 import { TrajectoryPane } from './TrajectoryPane'
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
-import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
+import { memo, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { AnimatePresence, motion, useIsPresent, useReducedMotion } from 'motion/react'
 import {
   CalendarCheck,
   Chart,
@@ -50,32 +50,22 @@ import { ScheduledSessionPane } from './ScheduledSessionPane'
 import { GitPane } from './git/GitPane'
 import type { GitStore } from '@/state/git-store'
 import type { FileBrowserStore } from '@/state/file-browser-store'
+import { FilePreviewRetention } from '@/state/file-preview-retention'
+import { FilePreviewActivity } from '@/lib/file-preview-activity'
 import type { TerminalStore } from '@/state/terminal-store'
 import type { DebugStore } from '@/state/debug-store'
 import type { SideChatStore } from '@/state/side-chat-store'
 import type { PiStore } from '@/state/pi-store'
 import type { BrowserStore } from '@/lib/browser/store'
-import { useBrowserKeepAlivePref } from '@/lib/browser/keep-alive'
+import { agentPathForTab, filePathForTab, scheduledPathForTab, type SidebarTabKind, type SidebarTabId } from '@/lib/sidebar-tabs'
 import { getOpenBrowserPagesRevision } from '@/lib/browser/session'
 import type { SubagentRunDTO } from '../../../../shared/types'
 
+export { agentTabId, agentPathForTab, fileTabId, filePathForTab, scheduledTabId, scheduledPathForTab } from '@/lib/sidebar-tabs'
+export type { SidebarTabKind, SidebarTabId } from '@/lib/sidebar-tabs'
+
 /** Fallback width before the workspace has applied the user's panel layout. */
 export const SIDEBAR_PANEL_WIDTH = 400
-
-/** The panes the right rail can host. Besides the fixed kinds, the rail hosts
- * one tab per open FILE and per open SUBAGENT SESSION (both keyed by path). */
-export type SidebarTabKind = 'review' | 'context' | 'terminal' | 'browser' | 'files' | 'chat' | 'debug' | 'trajectory' | 'git'
-export type SidebarTabId = SidebarTabKind | `file:${string}` | `agent:${string}` | `scheduled:${string}`
-export const fileTabId = (path: string): SidebarTabId => `file:${path}`
-export const filePathForTab = (id: SidebarTabId | null): string | null => id?.startsWith('file:') ? id.slice(5) : null
-/** A subagent child session shown READ-ONLY beside the chat: opening it here
- * keeps the visible conversation in place instead of navigating away from it. */
-export const agentTabId = (path: string): SidebarTabId => `agent:${path}`
-export const agentPathForTab = (id: SidebarTabId | null): string | null => id?.startsWith('agent:') ? id.slice(6) : null
-/** A scheduled run's session shown READ-ONLY beside the chat: the session
- * itself never lists in the sidebar/search, so the tasks view opens it here. */
-export const scheduledTabId = (path: string): SidebarTabId => `scheduled:${path}`
-export const scheduledPathForTab = (id: SidebarTabId | null): string | null => id?.startsWith('scheduled:') ? id.slice(10) : null
 
 interface SidebarTabSpec {
   id: SidebarTabKind
@@ -97,27 +87,20 @@ export interface SidebarPaneProps {
   terminals: TerminalStore
   onNewTerminal: () => void
   onTerminalsEmpty: () => void
-  /** The embedded browser's store, owned by the workspace (it outlives the
-   *  pane: an unmount kills the guests and the open-pages snapshot restores
-   *  them after a fold; explicit close follows the restore-tabs preference);
-   *  only tab close folds the rail entry. */
+  /** Browser state for the visible conversation. Other conversations may
+   * still host live guests in independent hidden layers. */
   browserStore: BrowserStore
-  /** The browser's last page closed: the tab folds away (no extra teardown). */
-  onBrowserEmpty: () => void
+  onBrowserEmpty: (store: BrowserStore) => void
   /** The workspace store, for panes that read the session's transcript. */
   store: PiStore
-  /** The debug session mirror, owned by the workspace. */
   debug: DebugStore
-  /** Turn the review pane should open on (from the transcript's Review action). */
   reviewTurnId: number | null
-  /** The side chat's store, or null while its pane is not open. */
+  onReviewTurnChange: (id: number | null) => void
+  reviewWrapLines: boolean
+  onReviewWrapLinesChange: (wrap: boolean) => void
+  reviewCollapsed: Record<string, boolean>
+  onReviewCollapsedChange: (collapsed: Record<string, boolean>) => void
   sideChat: SideChatStore | null
-  sideChatDraft: string
-  onSideChatDraftChange: (value: string) => void
-  /** True while the side chat is bound to the session the workspace shows. */
-  sideChatOnCurrentSession: boolean
-  /** Rebind the side chat to the current session, clearing its thread. */
-  onSideChatRebind: () => void
   /** This session's subagent runs, keyed by the CHILD session file: it names
    * the rail's agent tabs and feeds the pane's status header. */
   agentRuns: ReadonlyMap<string, SubagentRunDTO>
@@ -137,7 +120,9 @@ export const SIDEBAR_TABS: SidebarTabSpec[] = [
     labelKey: 'sidebar.review',
     shortcutId: 'openReview',
     icon: CheckSquareOffset,
-    render: (props) => <ReviewPane store={props.store} focusTurnId={props.reviewTurnId} />
+    render: (props) => <ReviewPane store={props.store} focusTurnId={props.reviewTurnId} onSelectTurn={props.onReviewTurnChange}
+      wrapLines={props.reviewWrapLines} onWrapLinesChange={props.onReviewWrapLinesChange}
+      savedCollapsed={props.reviewCollapsed} onCollapsedChange={props.onReviewCollapsedChange} />
   },
   {
     id: 'context',
@@ -165,12 +150,8 @@ export const SIDEBAR_TABS: SidebarTabSpec[] = [
     labelKey: 'sidebar.browser',
     shortcutId: 'openBrowser',
     icon: Globe,
-    // Never rendered through this registry: the pane content area below hosts
-    // the browser pane itself in a keep-alive layer, because its webviews are
-    // process-backed and die on unmount. A second instance here would
-    // double-host every page. (Were it ever rendered, this slot is by
-    // construction the active pane — hence `active`.)
-    render: (props) => <BrowserPane store={props.browserStore} onEmpty={props.onBrowserEmpty} active />
+    // Browser guests are hosted in the retained layers below.
+    render: () => null
   },
   {
     id: 'files',
@@ -184,16 +165,7 @@ export const SIDEBAR_TABS: SidebarTabSpec[] = [
     labelKey: 'sidebar.chat',
     shortcutId: 'openSideChat',
     icon: ChatAdd,
-    render: (props) =>
-      props.sideChat ? (
-        <SideChatPane
-          store={props.sideChat}
-          draft={props.sideChatDraft}
-          onDraftChange={props.onSideChatDraftChange}
-          onCurrentSession={props.sideChatOnCurrentSession}
-          onRebind={props.onSideChatRebind}
-        />
-      ) : null
+    render: (props) => props.sideChat ? <SideChatPane store={props.sideChat} /> : null
   }
 ]
 
@@ -242,6 +214,7 @@ function SidebarPicker({ onOpen }: { onOpen: (kind: SidebarTabKind) => void }) {
 /** Horizontal tab strip: beUI Tabs' underline indicator, one close button per
  * tab and the add button that re-opens the picker. */
 function SidebarTabStrip({
+  presented,
   tabs,
   active,
   pickerOpen,
@@ -252,6 +225,7 @@ function SidebarTabStrip({
   onCloseAll,
   onTogglePicker
 }: {
+  presented: boolean
   tabs: SidebarTabId[]
   active: SidebarTabId | null
   pickerOpen: boolean
@@ -284,7 +258,7 @@ function SidebarTabStrip({
     // 44 including the border the other strip adds on top.
     <ContextMenu>
       <ContextMenuTrigger>
-        <div data-sidebar-tabs className="flex shrink-0 items-center gap-1 border-b border-border bg-background pr-1.5"
+        <div inert={!presented} data-sidebar-tabs className="flex shrink-0 items-center gap-1 border-b border-border bg-background pr-1.5"
           onContextMenu={(event) => {
             const wrapper = (event.target as HTMLElement).closest<HTMLElement>('[data-sidebar-tab]')
             menuTab.current = (wrapper?.getAttribute('data-sidebar-tab') as SidebarTabId | null) ?? null
@@ -394,6 +368,10 @@ interface SidebarPanelProps {
   edgeActive?: boolean
   tabs: SidebarTabId[]
   activeTab: SidebarTabId | null
+  scopeKey: string
+  pickerOpen: boolean
+  onTogglePicker: () => void
+  browserHosts: readonly BrowserStore[]
   onSelectTab: (kind: SidebarTabId) => void
   onOpenTab: (kind: SidebarTabKind) => void
   onCloseTab: (kind: SidebarTabId) => void
@@ -402,6 +380,75 @@ interface SidebarPanelProps {
   /** Pane payloads, owned by the workspace (see SidebarPaneProps). */
   pane: SidebarPaneProps
 }
+
+function BrowserLayer({ store, onEmpty, current, active }: {
+  store: BrowserStore
+  onEmpty: (store: BrowserStore) => void
+  current: boolean
+  active: boolean
+}) {
+  const interactive = useIsPresent() && active
+  const layer = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    const focused = document.activeElement
+    if (!interactive && focused instanceof HTMLElement && layer.current?.contains(focused)) focused.blur()
+  }, [interactive])
+
+  return (
+    <div ref={layer} aria-hidden={!interactive || undefined}
+      data-browser-workspace={store.sessionId ?? ''}
+      className={cn('absolute inset-0', !interactive && 'pointer-events-none opacity-0')}>
+      <BrowserPane store={store} current={current} active={interactive} onEmpty={() => onEmpty(store)} />
+    </div>
+  )
+}
+
+function PresentedContent({ children }: { children: ReactNode }) {
+  return useIsPresent() ? children : null
+}
+
+const FilePreviewLayer = memo(function FilePreviewLayer({ active, files, path, store, debug }: {
+  active: boolean
+  files: FileBrowserStore
+  path: string
+  store: PiStore
+  debug: DebugStore
+}) {
+  const present = useIsPresent()
+  const layer = useRef<HTMLDivElement>(null)
+  const size = useRef<{ width: number; height: number } | undefined>(undefined)
+  useLayoutEffect(() => {
+    const element = layer.current
+    if (!element) return
+    if (!active) {
+      const focused = document.activeElement
+      if (focused instanceof HTMLElement && element.contains(focused)) focused.blur()
+      const selection = document.getSelection()
+      if (selection?.anchorNode && element.contains(selection.anchorNode)) selection.removeAllRanges()
+      return
+    }
+    const { width, height } = element.getBoundingClientRect()
+    size.current = { width, height }
+    const observer = new ResizeObserver(([box]) => {
+      const { width, height } = box.contentRect
+      size.current = { width, height }
+    })
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [active, present])
+
+  if (!present) return null
+
+  // A collapsed rail or another conversation's layout must not resize hidden
+  // scrollports and clamp their offsets or change the fit of a PDF.
+  return <div ref={layer} data-sidebar-file-preview={active ? 'active' : 'retained'}
+    inert={!active} aria-hidden={!active || undefined} style={active ? undefined : size.current}
+    className={cn('absolute inset-0', !active && 'invisible pointer-events-none')}>
+    <FilePreviewActivity.Provider value={active}>
+      <FilesPane files={files} store={store} debug={debug} filePath={path} />
+    </FilePreviewActivity.Provider>
+  </div>
+})
 
 /**
  * Right rail below the app header: a horizontal tab strip over the active
@@ -417,6 +464,10 @@ export function SidebarPanel({
   edgeActive = false,
   tabs,
   activeTab,
+  scopeKey,
+  pickerOpen,
+  onTogglePicker,
+  browserHosts = [],
   onSelectTab,
   onOpenTab,
   onCloseTab,
@@ -426,50 +477,20 @@ export function SidebarPanel({
 }: SidebarPanelProps) {
   const { t } = useI18n()
   const reduce = useReducedMotion()
-  const { browserKeepAlive } = useBrowserKeepAlivePref()
-  /** The add button's picker, shown over the pane area (never over the strip). */
-  const [pickerOpen, setPickerOpen] = useState(false)
-  // A conversation link also reveals an already-active file while the + picker
-  // is open; activeTab alone does not change in that case.
-  useEffect(() => pane.files.subscribeOpen(() => setPickerOpen(false)), [pane.files])
   const hasTabs = tabs.length > 0
-  /** Keep-alive across rail FOLDS (Settings → Browser): with the pref on and a
-   *  browser tab present, a folded rail keeps this aside mounted at width 0 /
-   *  opacity 0 instead of exiting — the same opacity form the rail-tab
-   *  keep-alive layer already uses, so the webviews (and their guests)
-   *  survive the fold exactly as they survive a tab switch. The inner column
-   *  keeps its fixed width, so the fold CLIPS and never resizes: in-progress
-   *  page activity never pauses and the expand is pixel-identical. Closing the
-   *  browser tab, or turning the pref off, still takes the exit path below. */
-  const browserHoldAlive = !open && browserKeepAlive && tabs.includes('browser')
-  /** The browser pane's keep-alive layer is interactive only while the rail is
-   *  OPEN, its tab is the active one and the picker is closed; otherwise it
-   *  stays mounted but invisible (see the pane content area). */
-  const browserPaneLive = open && hasTabs && !pickerOpen && activeTab === 'browser'
-  const asideRef = useRef<HTMLElement | null>(null)
-  // A fold that KEEPS the pane mounted must not leave DOM focus inside the
-  // invisible aside — keystrokes aimed at the chat would land in a webview
-  // nobody can see. Blur whatever the pane held; an exiting fold needs no
-  // help (its DOM goes away and focus falls back to the body).
-  useEffect(() => {
-    if (open || !browserHoldAlive) return
-    const host = asideRef.current
-    const active = document.activeElement
-    if (host && active instanceof HTMLElement && host.contains(active) && active !== document.body) {
-      active.blur()
-    }
-  }, [open, browserHoldAlive])
-
-  const openTab = (kind: SidebarTabKind) => {
-    setPickerOpen(false)
-    onOpenTab(kind)
-  }
+  const browserPaneLive = open && !pickerOpen && activeTab === 'browser'
+  const filePath = open && !pickerOpen ? filePathForTab(activeTab) : null
+  const [filePreviews] = useState(() => new FilePreviewRetention())
+  const retainedFiles = useSyncExternalStore(filePreviews.subscribe, filePreviews.getSnapshot)
+  // Keep DOM order stable independently of recency, especially for webviews.
+  const fileLayers = [...retainedFiles].sort((a, b) => a.id - b.id)
+  useLayoutEffect(() => { filePreviews.show(pane.files, filePath) }, [filePreviews, pane.files, filePath, retainedFiles])
+  useEffect(() => filePreviews.clear, [filePreviews])
 
   return (
     <AnimatePresence initial={false}>
-      {open || browserHoldAlive ? (
+      {open || browserHosts.length > 0 || retainedFiles.length > 0 ? (
         <motion.aside
-          ref={asideRef}
           key="sidebar-panel"
           aria-label={t('sidebar.title')}
           aria-hidden={!open || undefined}
@@ -523,53 +544,38 @@ export function SidebarPanel({
             )}
             style={{ width: fullscreen ? '100%' : resizing ? 'var(--panel-right)' : width }}
           >
-            {hasTabs ? (
-              <SidebarTabStrip
-                tabs={tabs}
-                active={activeTab}
-                pickerOpen={pickerOpen}
-                agentRuns={pane.agentRuns}
-                onSelect={(kind) => {
-                  setPickerOpen(false)
-                  onSelectTab(kind)
-                }}
-                onClose={onCloseTab}
-                onCloseOthers={onCloseOtherTabs}
-                onCloseAll={onCloseAllTabs}
-                onTogglePicker={() => setPickerOpen((current) => !current)}
-              />
-            ) : null}
+            <PresentedContent>
+              {hasTabs ? (
+                <SidebarTabStrip
+                  key={scopeKey}
+                  presented={open}
+                  tabs={tabs}
+                  active={activeTab}
+                  pickerOpen={pickerOpen}
+                  agentRuns={pane.agentRuns}
+                  onSelect={onSelectTab}
+                  onClose={onCloseTab}
+                  onCloseOthers={onCloseOtherTabs}
+                  onCloseAll={onCloseAllTabs}
+                  onTogglePicker={onTogglePicker}
+                />
+              ) : null}
+            </PresentedContent>
 
             <div className="sidebar-pane-container relative min-h-0 min-w-0 flex-1">
-              {/* The browser pane mounts at this one stable tree position for as
-                  long as its rail tab EXISTS. While another tab is active it
-                  lives in a hidden-but-painted layer — opacity, never
-                  display:none/visibility, because the embedded-browser iron
-                  rule keeps agent pages interactive/screenshotable at full
-                  speed — so switching rail tabs never unmounts its
-                  process-backed webviews. Closing the browser tab unmounts it;
-                  folding the rail does too UNLESS the keep-alive pref holds
-                  the folded aside mounted (see browserHoldAlive above) — the
-                  open-pages snapshot re-materializes pages on the next mount
-                  in that case: the same strip in the pane's first commit,
-                  entries carrying their original owners (an agent page
-                  re-registers under `agent:<sessionId>`, so its session's
-                  tools find it again). The registry's browser render above is
-                  therefore never called. `active` threads `browserPaneLive`
-                  so the pane's global shortcuts register only while the tab
-                  is on screen. */}
-              {tabs.includes('browser') ? (
-                <div
-                  aria-hidden={!browserPaneLive || undefined}
-                  className={cn('absolute inset-0', !browserPaneLive && 'pointer-events-none opacity-0')}
-                >
-                  <BrowserPane key={getOpenBrowserPagesRevision()} store={pane.browserStore} onEmpty={pane.onBrowserEmpty} active={browserPaneLive} />
-                </div>
-              ) : null}
-              {!hasTabs || pickerOpen ? (
-                <SidebarPicker onOpen={openTab} />
-              ) : (
-                activeTab && (activeTab !== 'trajectory' || open) && activeTab !== 'browser' && (() => {
+              {browserHosts.map(browser => (
+                <BrowserLayer key={JSON.stringify([browser.sessionId, getOpenBrowserPagesRevision(browser.sessionId)])}
+                  store={browser} onEmpty={pane.onBrowserEmpty}
+                  current={browser === pane.browserStore} active={browser === pane.browserStore && browserPaneLive} />
+              ))}
+              {fileLayers.map(entry => (
+                <FilePreviewLayer key={entry.id} files={entry.files} path={entry.path} store={pane.store} debug={pane.debug}
+                  active={entry.deadline === null && entry.files === pane.files && entry.path === filePath} />
+              ))}
+              <PresentedContent key={scopeKey}>
+                {open && (!hasTabs || pickerOpen ? (
+                  <SidebarPicker onOpen={onOpenTab} />
+                ) : activeTab && activeTab !== 'browser' && !filePath && (() => {
                   const agentPath = agentPathForTab(activeTab)
                   if (agentPath) {
                     return (
@@ -584,12 +590,9 @@ export function SidebarPanel({
                   if (scheduledPath) {
                     return <ScheduledSessionPane sessionPath={scheduledPath} />
                   }
-                  const path = filePathForTab(activeTab)
-                  return path
-                    ? <FilesPane files={pane.files} store={pane.store} debug={pane.debug} filePath={path} />
-                    : specFor(activeTab as SidebarTabKind).render(pane)
-                })()
-              )}
+                  return specFor(activeTab as SidebarTabKind).render(pane)
+                })())}
+              </PresentedContent>
             </div>
           </div>
         </motion.aside>

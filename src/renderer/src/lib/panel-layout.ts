@@ -32,7 +32,13 @@ export const RIGHT_PANEL_MAX = 720
  */
 export const CHAT_MIN = 560
 
-export const DEFAULT_PANEL_LAYOUT: PanelLayout = { left: 256, right: 400 }
+/**
+ * Default split for a fresh profile. The left panel is sized from the session
+ * sidebar's view row — three view tabs plus group creation, the archive toggle
+ * and expand/collapse all. At 256px that row clipped the third tab's label in
+ * Chinese locales once the list controls moved beside the archive toggle.
+ */
+export const DEFAULT_PANEL_LAYOUT: PanelLayout = { left: 280, right: 400 }
 
 const STORAGE_KEY = 'pi-app:panel-layout'
 

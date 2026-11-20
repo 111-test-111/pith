@@ -32,7 +32,6 @@ export function normalizeFontSizes(raw: unknown, fallback: Readonly<FontSizeSett
 export function codeLineHeight(size: number): number { return Math.round(size * 20 / 12) }
 export function contentLineHeight(size: number): number { return Math.round(size * 24 / 14) }
 export function compactContentSize(size: number): number { return Math.max(10, Math.round(size * 12 / 14)) }
-export function terminalFontSize(size: number): number { return size + 2 }
 
 function read(): FontSizeSettings {
   try { return normalizeFontSizes(JSON.parse(window.localStorage.getItem(FONT_SIZE_STORAGE_KEY) ?? '{}')) }
@@ -50,7 +49,7 @@ function apply(sizes: FontSizeSettings): void {
     '--app-text-content-small': compactContentSize(sizes.content),
     '--app-text-content-heading': Math.round(sizes.content * 16 / 14),
     '--app-text-code': sizes.code,
-    '--app-text-terminal': terminalFontSize(sizes.code),
+    '--app-text-terminal': sizes.code,
     '--app-line-ui': Math.round(sizes.ui * 20 / 14),
     '--app-line-content': contentLineHeight(sizes.content),
     '--app-line-content-tight': Math.round(sizes.content * 20 / 14),

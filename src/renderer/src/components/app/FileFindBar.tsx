@@ -1,10 +1,11 @@
-import { useRef, useState, type RefObject } from 'react'
+import { useRef, type RefObject } from 'react'
 import { Button } from '@/components/motion/button'
 import { Input } from '@/components/motion/input'
 import { Tooltip } from '@/components/motion/tooltip'
 import { MorphPopover, MorphPopoverContent, MorphPopoverTrigger } from '@/components/motion/popover-morph'
 import { ArrowDown, ArrowUp, Settings2, X } from '@/lib/icons'
 import { useI18n } from '@/i18n'
+import { useFilePreviewPopup } from '@/lib/file-preview-activity'
 import { cn } from '@/lib/utils'
 import type { FileSearchOptions, FileSearchResult } from '@/lib/file-search'
 
@@ -16,7 +17,7 @@ export function FileFindBar({ inputRef, query, options, result, current, searchi
   onQuery: (value: string) => void; onOptions: (value: FileSearchOptions) => void; onMove: (direction: number) => void; onClose: () => void
 }) {
   const { t } = useI18n()
-  const [settings, setSettings] = useState(false)
+  const { open: settings, onOpenChange: setSettings } = useFilePreviewPopup()
   const settingsRef = useRef<HTMLButtonElement>(null)
   const error = result.error ? t(`files.searchError.${result.error}`) : undefined
   const symbol = (mode: typeof modes[number]) => <span aria-hidden className={mode === 'wholeWord' ? 'underline underline-offset-2' : undefined}>{t(`files.findSymbol.${mode}`)}</span>

@@ -61,7 +61,7 @@ function SearchFolderGroup({ cwd, projectless, open, onToggle, count, children }
           className="h-10 w-full min-w-0 justify-start gap-2 rounded-lg px-2 text-left focus-visible:ring-inset">
           <ChevronRight aria-hidden="true" className={cn('size-3.5 shrink-0 text-muted-foreground transition-transform motion-reduce:transition-none', open && 'rotate-90')} />
           {projectless ? <MessageSquare aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" /> : <Folder aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />}
-          <span className="max-w-[45%] shrink-0 truncate text-base font-semibold text-foreground">{name}</span>
+          <span className="max-w-[45%] shrink-0 truncate text-sm font-semibold text-foreground">{name}</span>
           <span className="min-w-0 truncate text-caption font-normal text-muted-foreground/70">{projectless ? null : cwd}</span>
           {count !== undefined ? <span className="ml-auto shrink-0 text-caption font-normal tabular-nums text-muted-foreground/70">{count}</span> : null}
         </Button>
@@ -294,7 +294,7 @@ export function SessionSearch({ sessions, activePath, runningPaths, onOpen, open
         }}>
           <div className="flex h-14 shrink-0 items-center gap-2 px-5 pr-16">
             <Search aria-hidden="true" className="size-4 text-primary" />
-            <h2 className="text-sm font-semibold text-foreground">{t('sessionSearch.label')}</h2>
+            <h2 className="text-base font-semibold text-foreground">{t('sessionSearch.label')}</h2>
             <p id={descriptionId} className="sr-only">{t('sessionSearch.description')}</p>
           </div>
           <div className="shrink-0 px-3 pb-1">

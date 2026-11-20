@@ -7,6 +7,7 @@ export interface GitState {
   view: 'changes' | 'history' | 'graph'
   returnView: 'changes' | 'history'
   splitWidths: Partial<Record<GitState['view'], number>>
+  wrapLines: boolean
   loading: boolean
   repository: GitRepository | null
   error: Failure | null
@@ -32,7 +33,7 @@ export interface GitState {
   draft: string
   output: string
 }
-const initial = (cwd: string | null): GitState => ({ cwd, view: 'changes', returnView: 'changes', splitWidths: {}, loading: false, repository: null, error: null, actionError: null, busy: null, selection: null, diff: null, diffRevision: null, diffLoading: false, diffError: null, branches: [], branchesLoading: false, history: { head: null, commits: [], next: null }, historyLoading: false, historyError: null, graph: null, graphLoading: false, graphError: null, commit: null, commitFiles: [], commitFilesLoading: false, commitError: null, draft: '', output: '' })
+const initial = (cwd: string | null, wrapLines: boolean): GitState => ({ cwd, view: 'changes', returnView: 'changes', splitWidths: {}, wrapLines, loading: false, repository: null, error: null, actionError: null, busy: null, selection: null, diff: null, diffRevision: null, diffLoading: false, diffError: null, branches: [], branchesLoading: false, history: { head: null, commits: [], next: null }, historyLoading: false, historyError: null, graph: null, graphLoading: false, graphError: null, commit: null, commitFiles: [], commitFilesLoading: false, commitError: null, draft: '', output: '' })
 const failure = (): Failure => ({ ok: false, code: 'command' })
 const MAX_DIFF_BYTES = 8 * 1024 * 1024
 
@@ -45,7 +46,7 @@ function reconcileBranches(branches: GitBranch[], repo: GitRepository): GitBranc
 
 /** Workspace-owned read cache and drafts; pane mounts/width do not own requests. */
 export class GitStore {
-  private state = initial(null)
+  private state: GitState
   private cache = new Map<string, GitState>()
   private listeners = new Set<() => void>()
   private refreshing = new Map<string, Promise<void>>()
@@ -63,6 +64,11 @@ export class GitStore {
   private disposed = false
   private timer: ReturnType<typeof setInterval> | null = null
   private visible = false
+
+  constructor(wrapLines = true, private readonly onWrapLinesChange?: () => void) {
+    this.state = initial(null, wrapLines)
+  }
+
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => this.listeners.delete(listener) }
   getState = () => this.state
   private clearDiffCache(cwd?: string): void {
@@ -92,7 +98,8 @@ export class GitStore {
     if (cwd === this.state.cwd) return
     ++this.diffVersion; ++this.historyVersion; ++this.commitVersion; ++this.branchVersion; ++this.graphVersion
     const cached = cwd ? this.cache.get(cwd) : null
-    this.state = { ...(cached ?? initial(cwd)), diffLoading: false, historyLoading: false, commitFilesLoading: false, branchesLoading: false, graphLoading: false }
+    const { wrapLines } = this.state
+    this.state = { ...(cached ?? initial(cwd, wrapLines)), wrapLines, diffLoading: false, historyLoading: false, commitFilesLoading: false, branchesLoading: false, graphLoading: false }
     if (cwd) {
       this.cache.delete(cwd); this.cache.set(cwd, this.state)
       while (this.cache.size > 8) { const key = [...this.cache.keys()].find(key => key !== cwd && !this.cache.get(key)?.busy); if (!key) break; this.cache.delete(key); this.clearDiffCache(key); if (!this.refreshing.has(key)) this.readVersions.delete(key) }
@@ -146,6 +153,11 @@ export class GitStore {
     }
   }
   setDraft(draft: string): void { this.publish(this.state.cwd, { draft }) }
+  setWrapLines(wrapLines: boolean): void {
+    if (wrapLines === this.state.wrapLines) return
+    this.publish(this.state.cwd, { wrapLines })
+    this.onWrapLinesChange?.()
+  }
   setSplitWidth(view: GitState['view'], width: number, cwd = this.state.cwd): void {
     const previous = cwd ? this.cache.get(cwd) : this.state
     width = Math.round(width)

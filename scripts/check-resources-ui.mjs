@@ -16,13 +16,12 @@ const repo = fileURLToPath(new URL('..', import.meta.url)), temp = await mkdtemp
 const screenshots = process.env.PI_RESOURCES_SCREENSHOT_DIR
 let application, server
 try {
-  const profile = join(temp, 'profile'), agentData = join(temp, 'agent'), library = join(temp, 'external archive')
-  for (const path of [profile, join(agentData, 'sessions', 'one'), join(library, 'objects'), join(temp, 'logs'), join(temp, 'crashes')]) await mkdir(path, { recursive: true })
+  const profile = join(temp, 'profile'), agentData = join(temp, 'agent')
+  for (const path of [profile, join(agentData, 'sessions', 'one'), join(temp, 'logs'), join(temp, 'crashes')]) await mkdir(path, { recursive: true })
   const session = join(agentData, 'sessions', 'one', 'chat.jsonl'), sessionBytes = '会话 fixture\n'.repeat(300)
   await writeFile(session, sessionBytes)
-  await writeFile(join(library, 'objects', 'copy.bin'), Buffer.alloc(8193, 1))
   await writeFile(join(profile, 'trajectory.sqlite-wal'), Buffer.alloc(4097, 1))
-  await writeFile(join(profile, 'app-settings.json'), JSON.stringify({ library: { enabled: true, directory: library, maxBytes: 1024 ** 3 } }))
+  await writeFile(join(profile, 'app-settings.json'), JSON.stringify({}))
   // Use the built worker and its generated shared chunks, preserving relative
   // URLs. Only the small main fixture is separately bundled for isolation.
   await cp(join(repo, 'out/main'), join(temp, 'main'), { recursive: true })
@@ -78,7 +77,6 @@ const window=new BrowserWindow({width:1200,height:960,show:false,webPreferences:
   assert(initial.runtime.value.processes.some(row => row.pid === initial.helper && row.kind === 'child' && row.residentBytes > 0), 'actual app child processes reach the typed preload')
   assert(initial.runtime.value.cpuPercent > 0, 'actual CPU workload reaches the resource display')
   assert.equal(initial.storage.value.entries.find(row => row.category === 'sessions').logicalBytes, Buffer.byteLength(sessionBytes))
-  assert.equal(initial.storage.value.entries.find(row => row.category === 'library').logicalBytes, 8193, 'configured external archive is included by production service')
   assert.equal(initial.storage.value.entries.find(row => row.category === 'trajectory').logicalBytes, 4097)
   await storageDetails.click()
   await page.locator('[data-resource-storage]').waitFor()
@@ -124,7 +122,7 @@ const window=new BrowserWindow({width:1200,height:960,show:false,webPreferences:
   await page.waitForFunction(() => document.querySelector('[data-resource-allocated]')?.textContent !== 'Unavailable')
   await panel.getByRole('button', { name: 'Details', exact: true }).last().click()
   await page.locator('#resource-storage-paths').waitFor()
-  assert((await page.locator('#resource-storage-paths').innerText()).includes('external archive'))
+  assert((await page.locator('#resource-storage-paths').innerText()).includes('profile'))
   const memoryBeforeFailure = await page.locator('[data-resource-memory]').innerText()
   await application.evaluate(() => { globalThis.resourceFailures.runtime = true })
   await panel.getByRole('alert').filter({ hasText: 'Could not refresh running resources' }).waitFor()
@@ -135,7 +133,7 @@ const window=new BrowserWindow({width:1200,height:960,show:false,webPreferences:
   for (const [locale, style, dark] of [['en', 'square', false], ['zh-CN', 'square', false], ['zh-TW', 'squircle', true]]) {
     await page.evaluate(([locale, style, dark]) => { window.setLocale(locale); window.setUiStyle(style); document.documentElement.classList.toggle('dark', dark) }, [locale, style, dark])
     await page.waitForTimeout(200)
-    assert.equal(await page.locator('[data-resource-storage] tbody tr').count(), 12, 'all storage categories remain rendered in each locale')
+    assert.equal(await page.locator('[data-resource-storage] tbody tr').count(), 11, 'all storage categories remain rendered in each locale')
     assert.equal(await page.locator('[data-resource-settings]').evaluate(node => node.scrollWidth <= node.clientWidth + 1), true, 'resource page fits its settings column')
     if (screenshots) {
       await storageDetails.click()

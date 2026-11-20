@@ -4,6 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { mock } from 'node:test'
 import { build } from 'esbuild'
 const repo=resolve(dirname(fileURLToPath(import.meta.url)),'..')
 const temp=await mkdtemp(join(tmpdir(),'pith-file-cache-'))
@@ -133,8 +134,8 @@ try {
   assert.equal(cache.directorySnapshot('/project').size,0,'clear rejects outstanding cache writes')
   console.log('PASS: entry/byte limits, pagination after eviction and clear races')
 
-  await build({stdin:{contents:`export {FileBrowserStore} from './src/renderer/src/state/file-browser-store';export {localFileTarget} from './src/renderer/src/lib/file-navigation';export {resolveFromCwd} from './src/renderer/src/lib/tool-path';`,resolveDir:repo,loader:'ts'},outfile:join(temp,'navigation.mjs'),bundle:true,platform:'node',format:'esm',tsconfig:join(repo,'tsconfig.web.json'),logLevel:'silent'})
-  const {FileBrowserStore,localFileTarget,resolveFromCwd}=await import(pathToFileURL(join(temp,'navigation.mjs')))
+  await build({stdin:{contents:`export {FileBrowserStore} from './src/renderer/src/state/file-browser-store';export {FilePreviewRetention} from './src/renderer/src/state/file-preview-retention';export {localFileTarget} from './src/renderer/src/lib/file-navigation';export {resolveFromCwd} from './src/renderer/src/lib/tool-path';`,resolveDir:repo,loader:'ts'},outfile:join(temp,'navigation.mjs'),bundle:true,platform:'node',format:'esm',tsconfig:join(repo,'tsconfig.web.json'),logLevel:'silent'})
+  const {FileBrowserStore,FilePreviewRetention,localFileTarget,resolveFromCwd}=await import(pathToFileURL(join(temp,'navigation.mjs')))
   const homeTarget=localFileTarget('%7E/资料/Assignment%201%23%25.pdf#L12','/project')
   assert.deepEqual(homeTarget,{path:'~/资料/Assignment 1#%.pdf',line:12},'decode URL/line syntax without rebasing the home marker')
   assert.equal(resolveFromCwd('~/../docs/file.txt','/project'),'~/../docs/file.txt','dot segments wait until the home directory is known')
@@ -175,5 +176,89 @@ try {
   assert.equal(errors,1,'resolution failures report an error without opening a fabricated path')
   assert.equal(files.getSnapshot().active,'/home/user/second.txt')
   assert.deepEqual(opened,['/home/user/资料/Assignment 1#%.pdf','/home/user/资料/Assignment 1#%.pdf','/project/new.txt','/home/user/second.txt'])
+  // A view hint (a changed-file row handing its file to the rail) lands the tab
+  // on that view: it beats the view an earlier visit remembered, and never
+  // overrides the source landing a line anchor implies. A separate store keeps
+  // these opens out of the navigation log above.
+  const views=new FileBrowserStore()
+  const viewOf=path=>views.getSnapshot().tabs.find(tab=>tab.path===path)?.view
+  views.open('/project',{path:'/project/notes.ts'})
+  assert.equal(viewOf('/project/notes.ts'),'source','a plain source file still opens on source')
+  views.open('/project',{path:'/project/notes.ts'},'diff')
+  assert.equal(viewOf('/project/notes.ts'),'diff','an explicit view hint lands the tab on that view')
+  views.setView('/project/notes.ts','source')
+  views.open('/project',{path:'/project/notes.ts'})
+  assert.equal(viewOf('/project/notes.ts'),'source','without a hint the tab keeps the view the user chose')
+  views.open('/project',{path:'/project/notes.ts'},'diff')
+  assert.equal(viewOf('/project/notes.ts'),'diff','a later hint overrides a remembered view')
+  views.open('/project',{path:'/project/notes.ts',line:4},'diff')
+  assert.equal(viewOf('/project/notes.ts'),'source','a line anchor always lands on source')
+  // Tree expansion belongs to browsing surfaces: the default open reveals the
+  // file by expanding every ancestor up to the workspace root and shows that
+  // tab's tree column, while conversation navigation (expandTree: false) leaves
+  // the tree untouched and opens preview-first.
+  const trees=new FileBrowserStore()
+  trees.open('/project',{path:'/project/src/deep/notes.ts'})
+  assert.deepEqual(trees.getSnapshot().expanded,['/project/src/deep','/project/src','/project'],'a browsing open reveals every ancestor up to the root')
+  assert.equal(trees.getSnapshot().tabs[0].treeOpen,true,'a browsing open shows the tree column for its tab')
+  const chat=new FileBrowserStore()
+  chat.open('/project',{path:'/project/src/deep/notes.ts'},undefined,{expandTree:false})
+  assert.deepEqual(chat.getSnapshot().expanded,[],'conversation navigation leaves the tree as the user arranged it')
+  assert.equal(chat.getSnapshot().tabs[0].treeOpen,false,'a conversation link opens its tab with the tree column folded')
+  // The fold is per tab and only a browsing open overrides it: a tree the user
+  // expanded by hand survives later conversation navigation of the same file.
+  chat.toggleTree('/project/src/deep/notes.ts')
+  chat.open('/project',{path:'/project/src/deep/notes.ts'},undefined,{expandTree:false})
+  assert.equal(chat.getSnapshot().tabs[0].treeOpen,true,'conversation navigation keeps a tree the user expanded')
+  chat.toggleTree('/project/src/deep/notes.ts')
+  chat.open('/project',{path:'/project/src/deep/notes.ts'})
+  assert.equal(chat.getSnapshot().tabs[0].treeOpen,true,'browsing the same file shows the tree column again')
+  const browsing=new FileBrowserStore()
+  browsing.open('/project',{path:'/project/src/other.ts'})
+  assert.deepEqual(browsing.getSnapshot().expanded,['/project/src','/project'],'a later browsing open still reveals its ancestors')
+  assert.equal(browsing.getSnapshot().tabs[0].treeOpen,true,'and shows the tree column for its tab')
   console.log('PASS: home links/tool paths, literal tildes, canonical tabs, line navigation, failure reporting and navigation races')
+
+  const retention = new FilePreviewRetention()
+  const left = new FileBrowserStore(), right = new FileBrowserStore()
+  const same = { cwd: '/project', path: '/project/shared.txt' }
+  const additional = [1, 2, 3].map(n => `${same.cwd}/${n}.txt`)
+  window.pi.readFileDocument = async ({ path }) => document(path, 'retained document')
+  mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 0 })
+  try {
+    left.open(same.cwd, same)
+    right.open(same.cwd, same)
+    for (const path of additional) right.open(same.cwd, { path })
+    await left.cache.readDocument(same)
+    await right.cache.readDocument(same)
+    retention.show(left, same.path)
+    const leftPreview = retention.getSnapshot()[0]
+    retention.show(right, same.path)
+    const rightPreview = retention.getSnapshot().at(-1)
+    assert.notEqual(rightPreview.id, leftPreview.id, 'the same path in two conversations owns two viewers')
+    mock.timers.tick(89_999)
+    retention.show(left, same.path)
+    assert.equal(retention.getSnapshot().at(-1).id, leftPreview.id, 'returning before expiry reuses the viewer')
+    mock.timers.tick(90_000)
+    assert.deepEqual(retention.getSnapshot().map(entry => entry.id), [leftPreview.id], 'the timer releases the background viewer and keeps the active viewer')
+    assert.equal(right.cache.document(same), undefined, 'expiry frees the inactive conversation cache')
+    assert.ok(left.cache.document(same), 'the active conversation cache stays usable')
+    assert.ok(right.getSnapshot().tabs.some(tab => tab.path === same.path), 'expiry keeps the tab available')
+
+    retention.show(right, same.path)
+    assert.notEqual(retention.getSnapshot().at(-1).id, rightPreview.id, 'revisiting after expiry mounts a new viewer')
+    retention.show(left, same.path)
+    for (const path of additional) retention.show(right, path)
+    assert.equal(retention.getSnapshot().length, 4, 'one active viewer and at most three idle viewers across conversations')
+    assert.ok(retention.getSnapshot().some(entry => entry.id === leftPreview.id), 'revisiting updates recency even within one timer tick')
+    assert.ok(!retention.getSnapshot().some(entry => entry.files === right && entry.path === same.path), 'the least recently used viewer is released first')
+    left.close(same.path)
+    assert.ok(!retention.getSnapshot().some(entry => entry.files === left), 'closing an idle tab releases it immediately')
+    right.clear()
+    assert.deepEqual(retention.getSnapshot(), [], 'disposing a conversation drops all its previews')
+  } finally {
+    retention.clear()
+    mock.timers.reset()
+  }
+  console.log('PASS: preview identity, idle expiry, cross-conversation recency and close cleanup')
 } finally {delete globalThis.window;await rm(temp,{recursive:true,force:true})}

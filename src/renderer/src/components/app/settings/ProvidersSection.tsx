@@ -7,6 +7,8 @@ import { Tooltip } from '@/components/motion/tooltip'
 import { EASE_OUT } from '@/lib/ease'
 import { useI18n } from '@/i18n'
 import type { DefaultModelDTO, ModelDTO, ProviderDTO } from '../../../../../shared/types'
+import type { VisionModelSelection } from '../../../../../shared/vision'
+import type { SessionNamingModelSelection } from '../../../../../shared/session-naming'
 import { ProviderIcon } from '../ProviderIcon'
 import { ModelPicker } from '../ModelPicker'
 import { useModelsConfig } from './providers/use-models-config'
@@ -17,7 +19,8 @@ import { ProviderCard, ProviderNotice, ProviderPanel, PROVIDER_INPUT_CLASS_NAMES
 
 const DEFAULT_MODEL_SLOTS = [
   { id: 'main', label: 'settings.mainDefaultModel', reserved: false },
-  { id: 'vision', label: 'settings.visionDefaultModel', reserved: true },
+  { id: 'vision', label: 'settings.visionDefaultModel', reserved: false },
+  { id: 'naming', label: 'settings.sessionNamingModel', reserved: false },
   { id: 'advisor', label: 'settings.advisorDefaultModel', reserved: true }
 ] as const
 
@@ -27,6 +30,10 @@ export function ProvidersSection() {
   const [providers, setProviders] = useState<ProviderDTO[]>([])
   const [models, setModels] = useState<ModelDTO[]>([])
   const [defaultModel, setDefaultModel] = useState<DefaultModelDTO | null>(null)
+  const [visionModel, setVisionModel] = useState<VisionModelSelection | null>(null)
+  const [visionSaving, setVisionSaving] = useState(false)
+  const [namingModel, setNamingModel] = useState<SessionNamingModelSelection | null>(null)
+  const [namingSaving, setNamingSaving] = useState(false)
   const [loading, setLoading] = useState(true)
   const [readError, setReadError] = useState<string | null>(null)
   const [selection, setSelection] = useState<string | null>(null)
@@ -45,14 +52,16 @@ export function ProvidersSection() {
     const epoch = ++refreshEpoch.current
     setLoading(true)
     try {
-      const [providerRows, modelRows, defaults] = await Promise.allSettled([
-        window.pi.providers(), window.pi.models(), window.pi.defaultModel()
+      const [providerRows, modelRows, defaults, vision, naming] = await Promise.allSettled([
+        window.pi.providers(), window.pi.models(), window.pi.defaultModel(), window.pi.visionModel(), window.pi.sessionNamingModel()
       ])
       if (epoch !== refreshEpoch.current) return
       if (providerRows.status === 'fulfilled') setProviders(providerRows.value)
       if (modelRows.status === 'fulfilled') setModels(modelRows.value)
       if (defaults.status === 'fulfilled') setDefaultModel(defaults.value)
-      const failure = [providerRows, modelRows, defaults].find(result => result.status === 'rejected')
+      if (vision.status === 'fulfilled') setVisionModel(vision.value)
+      if (naming.status === 'fulfilled') setNamingModel(naming.value)
+      const failure = [providerRows, modelRows, defaults, vision, naming].find(result => result.status === 'rejected')
       setReadError(failure?.status === 'rejected'
         ? failure.reason instanceof Error ? failure.reason.message : String(failure.reason) : null)
     } catch (error) {
@@ -74,6 +83,26 @@ export function ProvidersSection() {
     }
   }
 
+  const applyVisionModel = async (model: ModelDTO | null) => {
+    setVisionSaving(true)
+    ++refreshEpoch.current
+    try {
+      setVisionModel(await window.pi.setVisionModel(model ? { providerId: model.providerId, modelId: model.id } : null))
+      setReadError(null)
+    } catch { setReadError(t('vision.settingsFailed')) }
+    finally { setVisionSaving(false); setLoading(false) }
+  }
+
+  const applyNamingModel = async (model: ModelDTO | null) => {
+    setNamingSaving(true)
+    ++refreshEpoch.current
+    try {
+      setNamingModel(await window.pi.setSessionNamingModel(model ? { providerId: model.providerId, modelId: model.id } : null))
+      setReadError(null)
+    } catch { setReadError(t('settings.sessionNamingModelFailed')) }
+    finally { setNamingSaving(false); setLoading(false) }
+  }
+
   const sorted = useMemo(() => [...providers].sort(
     (a, b) => Number(b.authenticated) - Number(a.authenticated) || a.name.localeCompare(b.name)
   ), [providers])
@@ -83,21 +112,23 @@ export function ProvidersSection() {
   const shown = configured.filter(p => !keyword || (p.name + ' ' + p.id).toLocaleLowerCase().includes(keyword))
 
   const defaultValue = defaultModel ? defaultModel.providerId + '/' + defaultModel.modelId : null
+  const visionValue = visionModel ? visionModel.providerId + '/' + visionModel.modelId : null
+  const namingValue = namingModel ? namingModel.providerId + '/' + namingModel.modelId : null
+  const visionModels = models.filter(model => model.input.includes('image'))
   const selected = selection ? providers.find(p => p.id === selection) : null
   const goBack = () => { setSelection(null); setAddingCustom(false); void refresh() }
 
   return (
     <div ref={sectionRef} data-provider-settings className="space-y-5 text-xs">
       {(cfg.saveError && !addingCustom) || cfg.loadError || readError ? (
-        <ProviderNotice tone="error">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <span>{t(cfg.loadError || readError ? 'settings.providerLoadFailed' : 'settings.saveFailed')}: {cfg.saveError || cfg.loadError || readError}</span>
-            <Button variant="ghost" size="sm" onClick={() => {
-              if (cfg.loadError) void cfg.reload()
-              if (cfg.saveError) void cfg.flush()
-              if (readError) void refresh()
-            }}>{t('settings.providerRetry')}</Button>
-          </div>
+        <ProviderNotice tone="error" action={
+          <Button variant="ghost" size="sm" onClick={() => {
+            if (cfg.loadError) void cfg.reload()
+            if (cfg.saveError) void cfg.flush()
+            if (readError) void refresh()
+          }}>{t('settings.providerRetry')}</Button>
+        }>
+          {t(cfg.loadError || readError ? 'settings.providerLoadFailed' : 'settings.saveFailed')}: {cfg.saveError || cfg.loadError || readError}
         </ProviderNotice>
       ) : null}
 
@@ -190,18 +221,19 @@ export function ProvidersSection() {
                     <div key={slot.id} data-default-model-slot={slot.id} className="flex items-center gap-4 px-4 py-3">
                       <p className="min-w-0 flex-1 text-xs font-medium text-foreground">{t(slot.label)}</p>
                       <ModelPicker
-                        models={slot.reserved ? [] : models}
-                        value={slot.reserved ? null : defaultValue}
-                        onChange={applyDefaultModel}
+                        models={slot.reserved ? [] : slot.id === 'vision' ? visionModels : models}
+                        value={slot.reserved ? null : slot.id === 'vision' ? visionValue : slot.id === 'naming' ? namingValue : defaultValue}
+                        onChange={slot.id === 'vision' ? applyVisionModel : slot.id === 'naming' ? applyNamingModel : applyDefaultModel}
+                        onInheritModel={slot.id === 'vision' ? () => void applyVisionModel(null) : slot.id === 'naming' ? () => void applyNamingModel(null) : undefined}
                         ariaLabel={t(slot.label)}
-                        inheritLabel={t(slot.reserved ? 'settings.defaultModelReserved' : 'settings.defaultModelAuto')}
-                        unknownModelLabel={defaultValue ?? undefined}
+                        inheritLabel={t(slot.reserved ? 'settings.defaultModelReserved' : slot.id === 'vision' ? 'vision.disabled' : slot.id === 'naming' ? 'settings.sessionNamingModelAuto' : 'settings.defaultModelAuto')}
+                        unknownModelLabel={(slot.id === 'vision' ? visionValue : slot.id === 'naming' ? namingValue : defaultValue) ?? undefined}
                         panelId={'default-model-picker-' + slot.id}
                         textClassName="text-xs"
                         optionTextClassName="text-xs"
                         className="w-56 max-w-[55%] shrink-0"
                         triggerClassName="h-10 w-full justify-start border border-border/70 bg-background"
-                        disabled={slot.reserved}
+                        disabled={slot.reserved || (slot.id === 'vision' && (loading || visionSaving)) || (slot.id === 'naming' && (loading || namingSaving))}
                         portal
                       />
                     </div>

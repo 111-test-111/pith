@@ -5,7 +5,14 @@ import '@xterm/xterm/css/xterm.css'
 import { terminalTheme } from './terminal-theme'
 import { TerminalColorSchemeAddon } from './terminal-color-scheme'
 import { TerminalFit } from './terminal-fit'
-import { getFontSizes, terminalFontSize } from './typography'
+import { getFontSizes } from './typography'
+import type { SshTerminalSnapshot } from '../../../shared/ssh'
+
+export interface TerminalTransport {
+  input(data: string, binary: boolean): void
+  resize(cols: number, rows: number): void
+  ack(chars: number): void
+}
 
 /** One emulator survives DOM detach/reattach. React only renders its chrome. */
 export class TerminalRuntime {
@@ -17,13 +24,15 @@ export class TerminalRuntime {
   private observer: ResizeObserver
   private appearance: MutationObserver
   private disposed = false
+  private restoring = false
+  private finishRestore?: () => void
   private theme = terminalTheme()
   private colorScheme: TerminalColorSchemeAddon
 
-  constructor(private id: string, onTitle: (title: string) => void) {
+  constructor(private id: string, onTitle: (title: string) => void, private transport?: TerminalTransport) {
     this.element.className = 'h-full w-full min-w-0 min-h-0'
     this.terminal = new Terminal({
-      cols: 80, rows: 24, fontSize: terminalFontSize(getFontSizes().code), lineHeight: 1.2,
+      cols: 80, rows: 24, fontSize: getFontSizes().code, lineHeight: 1.2,
       fontFamily: getComputedStyle(document.documentElement).getPropertyValue('--app-font-mono').trim(),
       theme: this.theme, scrollback: 10_000, smoothScrollDuration: 100,
       cursorBlink: true, cursorStyle: 'bar', macOptionIsMeta: true, minimumContrastRatio: 4.5,
@@ -37,7 +46,9 @@ export class TerminalRuntime {
     this.sizing = new TerminalFit(this.terminal, this.fit, this.element, () => Boolean(this.webgl))
     this.terminal.onData((data) => this.input(data))
     this.terminal.onBinary((data) => this.input(data, true))
-    this.terminal.onResize(({ cols, rows }) => window.pi.terminalResize(id, cols, rows))
+    this.terminal.onResize(({ cols, rows }) => {
+      if (!this.restoring) transport ? transport.resize(cols, rows) : window.pi.terminalResize(id, cols, rows)
+    })
     this.terminal.onTitleChange(onTitle)
     this.terminal.attachCustomKeyEventHandler((event) => {
       const copy = event.key.toLowerCase() === 'c' && (event.metaKey || (event.ctrlKey && event.shiftKey))
@@ -65,7 +76,8 @@ export class TerminalRuntime {
     while (start < data.length) {
       let end = Math.min(start + 8192, data.length)
       if (end < data.length && /[\uD800-\uDBFF]/.test(data[end - 1])) end--
-      window.pi.terminalInput(this.id, data.slice(start, end), binary)
+      if (this.transport) this.transport.input(data.slice(start, end), binary)
+      else window.pi.terminalInput(this.id, data.slice(start, end), binary)
       start = end
     }
   }
@@ -100,7 +112,7 @@ export class TerminalRuntime {
     if (this.disposed) return
     const font = getComputedStyle(document.documentElement).getPropertyValue('--app-font-mono').trim()
     if (this.terminal.options.fontFamily !== font) this.terminal.options.fontFamily = font
-    const fontSize = terminalFontSize(getFontSizes().code)
+    const fontSize = getFontSizes().code
     if (this.terminal.options.fontSize !== fontSize) this.terminal.options.fontSize = fontSize
     const theme = terminalTheme()
     if (theme !== this.theme) {
@@ -114,7 +126,7 @@ export class TerminalRuntime {
   }
 
   private scheduleFit(): void {
-    if (!this.disposed) this.sizing.schedule()
+    if (!this.disposed && !this.restoring) this.sizing.schedule()
   }
 
   focus(): void { if (this.element.isConnected) this.terminal.focus() }
@@ -123,14 +135,40 @@ export class TerminalRuntime {
     Terminal.strings.tooMuchOutput = tooMuchOutput
     this.terminal.textarea?.setAttribute('aria-label', promptLabel)
   }
-  write(data: string): void {
+  write(data: string, acknowledge = true): void {
     this.terminal.write(data, () => {
-      if (!this.disposed) window.pi.terminalAck(this.id, data.length)
+      if (!this.disposed && acknowledge) {
+        if (this.transport) this.transport.ack(data.length)
+        else window.pi.terminalAck(this.id, data.length)
+      }
     })
+  }
+  /** Restore at the source geometry before fitting; resizing during replay
+   * changes wrapped lines and moves the cursor before live deltas resume. */
+  async restore(snapshot: SshTerminalSnapshot): Promise<void> {
+    if (this.disposed) return
+    this.restoring = true
+    this.sizing.cancel()
+    try {
+      await new Promise<void>(resolve => {
+        this.finishRestore = resolve
+        this.terminal.write('', () => {
+          if (this.disposed) { resolve(); return }
+          this.terminal.reset()
+          this.terminal.resize(snapshot.cols, snapshot.rows)
+          this.terminal.write(snapshot.data, resolve)
+        })
+      })
+    } finally {
+      this.finishRestore = undefined
+      this.restoring = false
+      this.scheduleFit()
+    }
   }
   stop(): void { this.terminal.options.disableStdin = true }
   dispose(): void {
     this.disposed = true
+    this.finishRestore?.()
     this.detach()
     this.sizing.dispose()
     this.appearance.disconnect()

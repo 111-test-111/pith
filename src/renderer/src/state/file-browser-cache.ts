@@ -1,5 +1,6 @@
 import type { TableSheet } from '../../../shared/table'
 import type { FileBrowserRequest, FileDirectoryDTO, FileDocumentDTO, FileGitDiffDTO } from '../../../shared/types'
+import type { GitChange } from '../../../shared/git'
 import { fileDirname } from '@/lib/file-navigation'
 import type { BinaryPreviewQuery, BinaryPreviewValue, PreviewResult } from '../../../shared/file-preview'
 
@@ -60,6 +61,8 @@ export class FileBrowserCache {
   private directoryRequests = new Map<string, Promise<FileDirectoryDTO>>()
   private documentRequests = new Map<string, Promise<FileDocumentDTO>>()
   private diffRequests = new Map<string, Promise<FileGitDiffDTO>>()
+  private treeGitSnapshot?: { cwd: string; changes: GitChange[] | null }
+  private treeGitRequest?: { cwd: string; promise: Promise<GitChange[] | null> }
   private directoryBytes = 0
   private documentBytes = 0
   private diffBytes = 0
@@ -99,7 +102,23 @@ export class FileBrowserCache {
       const path = key.split('\0')[1]
       if (path === root || path.startsWith(root.replace(/\/$/, '') + '/')) this.diffRequests.delete(key)
     }
+    if (this.treeGitRequest?.cwd === root) this.treeGitRequest = undefined
   }
+
+  treeGit(cwd: string) { return this.treeGitSnapshot?.cwd === cwd ? this.treeGitSnapshot.changes : undefined }
+
+  readTreeGit(cwd: string) {
+    if (this.treeGitRequest?.cwd === cwd) return this.treeGitRequest.promise
+    const promise = Promise.resolve().then(() => window.pi.gitTreeStatus({ cwd }))
+      .then(result => result.ok ? result.value : null, () => null)
+      .then(changes => {
+        if (this.treeGitRequest?.promise === promise) this.treeGitSnapshot = { cwd, changes }
+        return changes
+      }).finally(() => { if (this.treeGitRequest?.promise === promise) this.treeGitRequest = undefined })
+    this.treeGitRequest = { cwd, promise }
+    return promise
+  }
+
   async readDirectory(request: FileBrowserRequest, append = false, displayed?: FileDirectoryDTO): Promise<FileDirectoryDTO> {
     const previous = this.directories.get(request.path)
     const base = displayed ?? previous?.value
@@ -237,6 +256,7 @@ export class FileBrowserCache {
   clear() {
     for (const entry of this.binaryRequests.values()) window.pi.cancelBinaryPreview(entry.id)
     this.binaries.clear(); this.binaryRequests.clear(); this.binaryBytes = 0
+    this.treeGitSnapshot = undefined; this.treeGitRequest = undefined
     this.directories.clear(); this.documents.clear(); this.diffs.clear(); this.tables.clear(); this.directoryRequests.clear(); this.documentRequests.clear(); this.diffRequests.clear(); this.directoryBytes = 0; this.documentBytes = 0; this.diffBytes = 0; this.tableBytes = 0
   }
 

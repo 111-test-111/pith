@@ -41,7 +41,7 @@ function formatCost(cost: number): string | null {
 }
 
 /**
- * Composer context-usage ring (bottom-right of the input box): a 14px arc of
+ * Composer context-usage ring (bottom-right of the input box): a 16px arc of
  * the context window that fills as the session grows. Hovering opens a beUI
  * Tooltip with the full readout — percent used, estimated tokens of the window
  * (the in-flight message included), cache hit rate and session cost — all
@@ -66,7 +66,9 @@ export function ContextRing({ usage, onOpen }: { usage: ContextUsageDTO | null; 
   if (!usage || !usage.contextWindow) return null
 
   const percent = usage.percent
-  const radius = 5.5
+  // A wider ring with a thinner band: the arc reads as a ring rather than a
+  // heavy dot beside the other 14/16px composer controls.
+  const radius = 6.6
   const circumference = 2 * Math.PI * radius
   const used = percent !== null ? Math.min(Math.max(percent, 0), 100) / 100 : 0
   // Tokens are an estimate; fall back to a percent-derived count when the SDK
@@ -138,15 +140,15 @@ export function ContextRing({ usage, onOpen }: { usage: ContextUsageDTO | null; 
         aria-label={t('context.label')}
         onClick={onOpen}
       >
-        <svg width={14} height={14} viewBox="0 0 16 16" style={{ transform: 'rotate(-90deg)' }} aria-hidden="true">
-          <circle cx={8} cy={8} r={radius} fill="none" strokeWidth={2.4} className="stroke-muted-foreground/30" />
+        <svg width={16} height={16} viewBox="0 0 16 16" style={{ transform: 'rotate(-90deg)' }} aria-hidden="true">
+          <circle cx={8} cy={8} r={radius} fill="none" strokeWidth={2} className="stroke-muted-foreground/30" />
           {used > 0 ? (
             <circle
               cx={8}
               cy={8}
               r={radius}
               fill="none"
-              strokeWidth={2.4}
+              strokeWidth={2}
               strokeLinecap="round"
               strokeDasharray={`${used * circumference} ${circumference}`}
               className="stroke-primary transition-[stroke-dasharray] duration-500"

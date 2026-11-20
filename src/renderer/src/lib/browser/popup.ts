@@ -2,11 +2,15 @@
 import type { BrowserPopupInfo } from '../../../../shared/browser.ts'
 import type { BrowserStore } from './store.ts'
 
-export function subscribeBrowserPopups(store: BrowserStore, onPopup?: (payload: BrowserPopupInfo) => void): () => void {
+export function subscribeBrowserPopups(
+  resolve: (owner: string | undefined) => BrowserStore,
+  onPopup?: (store: BrowserStore, payload: BrowserPopupInfo) => void
+): () => void {
   const pi = typeof window !== 'undefined' ? window.pi : undefined
   if (!pi?.onBrowserPopup) return () => {}
   return pi.onBrowserPopup((payload) => {
+    const store = resolve(payload.owner)
     store.pushPopup(payload)
-    onPopup?.(payload)
+    onPopup?.(store, payload)
   })
 }

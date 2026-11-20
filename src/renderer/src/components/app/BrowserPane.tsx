@@ -1,15 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { JSX } from 'react'
-import { useTheme } from 'next-themes'
 import { Bot, Globe, Plus, X } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
 import { Tabs, TabsList, TabsTrigger } from '@/components/motion/tabs'
 import { Tooltip } from '@/components/motion/tooltip'
 import { useI18n } from '@/i18n'
 import { cn } from '@/lib/utils'
-import { createBrowserPageId, HUMAN_OWNER, buildMarkerUrl, parseMarkerUrl } from '../../../../shared/browser.ts'
+import { createBrowserPageId, isHumanBrowserOwner, buildMarkerUrl, parseMarkerUrl } from '../../../../shared/browser.ts'
 import { getOpenBrowserPagesRevision, readOpenBrowserPages, snapshotOpenPages, writeOpenBrowserPages, type OpenBrowserPageEntry } from '@/lib/browser/session'
-import { BROWSER_OPEN_LINK_EVENT, drainPendingBrowserOpenLinks } from '@/lib/browser/open-link'
 import { getBrowserZoom, nextBrowserZoom, setBrowserZoom } from '@/lib/browser/zoom'
 import { dispatchGuestIdentity } from '@/lib/shortcuts/shortcut-dispatcher'
 import type { BrowserPanePage, BrowserStore } from '@/lib/browser/store'
@@ -17,13 +15,6 @@ import { BrowserPageView, isEditableTarget, type BrowserNavPatch, type BrowserPa
 import { LabelTooltip } from './LabelTooltip'
 import { MiddleEllipsis } from './MiddleEllipsis'
 
-/** Status poll cadence (pi-web BrowserTab parity). pendingCreates are enqueued
- *  WITHOUT a browser:state push, so this poll is what materializes pages the
- *  service is waiting on (agent page creation, the + button's createPage):
- *  rendering the pending row mounts its marker webview, which completes the
- *  registration. The service's own 1s reconcile keeps the registry fresh;
- *  this poll only reads status. */
-const BROWSER_POLL_MS = 2_500
 /** Local placeholders need the same TTL discipline as server pendingCreates: failed/discarded popups or restores must not leave permanent blank rows/guests. */
 const PENDING_ROW_TTL_MS = 20_000
 /** Placeholder sweep cadence matches status polling. */
@@ -95,8 +86,7 @@ function applyNavPatch(
 /**
  * The embedded browser pane: a page strip (beUI segment tabs) over one
  * always-mounted webview per page, with the consent gate in front. Data flows
- * in through the workspace-owned `BrowserStore` (`browser:state` pushes + the
- * poll below); display truth for titles/URLs/favicons is this pane's own
+ * in through the session's `BrowserStore`; display truth for titles/URLs/favicons is this pane's own
  * `localNav` map, fed by webview events (server meta is only the fallback).
  *
  * `active` (threaded by SidebarPanel's keep-alive layer) is true only while
@@ -107,11 +97,13 @@ function applyNavPatch(
 export function BrowserPane({
   store,
   onEmpty,
-  active
+  active,
+  current
 }: {
   store: BrowserStore
   onEmpty: () => void
   active: boolean
+  current: boolean
 }): JSX.Element {
   const { t } = useI18n()
   const state = useSyncExternalStore(store.subscribe, store.getState)
@@ -155,19 +147,13 @@ export function BrowserPane({
   const awaitingCreateRef = useRef(false)
   // Human selection/close and newer + clicks supersede an older create receipt.
   const createSelectionRevisionRef = useRef(0)
-  // ---- Task 8: first-status latch / open-pages restore / empty transition ----
-  // Status snapshot that predates THIS mount: the workspace-owned store keeps
-  // its last value across a rail collapse (which unmounts this pane and kills
-  // its webviews — every registry page is hosted by a webview in THIS pane, so
-  // a pre-mount status describes a world whose guests are all dead). The
-  // latch, the empty transition, the snapshot write AND the page model itself
-  // (see `pages`) consume only statuses that arrived after the mount — a stale
-  // snapshot reading as non-empty must never suppress a restore, and its dead
-  // rows must never render.
+  // Registry pages from a previous host may still be awaiting removal after a
+  // fold. Fresh pending creates remain valid and need this host to attach.
   const staleStatusRef = useRef(status)
+  const previousPageIds = useRef(new Set(status?.pages.map(page => page.id)))
   /** A tab close invalidates this instance even while its exit animation
    * keeps it mounted. A fold retains the snapshot for reconstruction. */
-  const openPagesRevisionRef = useRef(getOpenBrowserPagesRevision())
+  const openPagesRevisionRef = useRef(getOpenBrowserPagesRevision(store.sessionId))
   /** First-status latch: fired (or deliberately skipped) once per mount. */
   const autoFilledRef = useRef(false)
   /** A restore sits between its ensure-call and its row materialization: the
@@ -190,19 +176,6 @@ export function BrowserPane({
     aliveRef.current = true
     return () => { aliveRef.current = false }
   }, [])
-
-  const { resolvedTheme } = useTheme()
-  // Guest pages follow the app theme: main injects Emulation.setEmulatedMedia
-  // per registered page and replays it on every registration, so this one
-  // call — on mount and on each resolvedTheme change — covers every current
-  // and future guest. Errors are swallowed across the bridge. Skip until
-  // next-themes has resolved: resolvedTheme is undefined during its
-  // pre-resolution pass, and sending 'light' there would emulate the wrong
-  // scheme for one frame in a dark app.
-  useEffect(() => {
-    if (!resolvedTheme) return
-    void window.pi.browserTheme(resolvedTheme === 'dark' ? 'dark' : 'light')
-  }, [resolvedTheme])
 
   // ONE zoom action shared by both shortcut paths (the window capture listener
   // below and the guest relay from main): key → ladder step. The store change
@@ -302,7 +275,9 @@ export function BrowserPane({
   // layer can still hold focus, and acting there would change the global zoom or
   // open a find bar nobody can see.
   useEffect(() => {
-    return window.pi.onBrowserGuestShortcut(({ key, identity }) => {
+    if (!current) return
+    return window.pi.onBrowserGuestShortcut(({ key, identity, owner }) => {
+      if (owner && !store.owns(owner)) return
       // The pane's rail tab is hidden (keep-alive): a browser-owned key that
       // is also an app-level command (default ⌘P → files pane) falls through
       // to the app dispatcher; zoom/find/print stay off while invisible.
@@ -314,48 +289,16 @@ export function BrowserPane({
       if (key === 'f') selectedPageActionsRef.current?.openFind()
       else if (key === 'p') selectedPageActionsRef.current?.print()
     })
-  }, [active, handleZoomShortcut])
-
-  // Focus handshake before agent keys: main waits for acknowledgement. CDP keys otherwise reach the shell widget too, where Esc can stop the agent. Only DOM focus on the webview isolates them; webContents.focus/bringToFront do not. Resolve the reported wcId and always acknowledge, even without a matching element, so keys cannot hang.
-  useEffect(() => {
-    return window.pi.onBrowserFocusGuest(({ webContentsId, requestId }) => {
-      const elements = [...document.querySelectorAll('webview')] as unknown as Array<{
-        getWebContentsId?: () => number
-        focus: () => void
-      }>
-      const element = elements.find((candidate) => {
-        try { return candidate.getWebContentsId?.() === webContentsId } catch { return false }
-      })
-      element?.focus()
-      void window.pi.browserFocusGuestDone(requestId)
-    })
-  }, [])
-
-  // Workspace wiring keeps the store fed; this pane owns the poll (a closed
-  // tab has no webviews to host, so pendingCreates may simply time out).
-  useEffect(() => {
-    void window.pi.browserStatus().then((next) => store.applyStatus(next)).catch(() => {})
-    const timer = setInterval(() => {
-      void window.pi.browserStatus().then((next) => store.applyStatus(next)).catch(() => {})
-    }, BROWSER_POLL_MS)
-    return () => clearInterval(timer)
-  }, [store])
+  }, [active, current, handleZoomShortcut, store])
 
   // Merged page model (pi-web BrowserTab semantics): serverPages ∪
   // pendingCreates (materialized pending rows) ∪ localPending (popups and restored rows) ∪
   // optimistic − closedIds. Identify optimistic pages by MEMBERSHIP in
   // state.optimistic (T6-①), never by reading `pending === false` as
   // "materialized".
-  // The MOUNT-TIME status is a dead world (staleStatusRef): its pages and
-  // pendingCreates render as NOTHING. Rendering them painted rows whose
-  // webviews sat at their marker forever (nothing re-navigates a server row)
-  // until the service sweep dropped them — the blank-then-reload interlude a
-  // rail fold used to show. The restore rows below take their place in the
-  // same commit.
   const pages = useMemo<BrowserPanePage[]>(() => {
     if (!status) return []
-    const live = status !== staleStatusRef.current
-    const serverPages = live ? status.pages : []
+    const serverPages = status.pages.filter(page => !previousPageIds.current.has(page.id))
     const known = new Set(serverPages.map((page) => page.id))
     // ONE materialization branch (Ruling D): server pendingCreates AND local
     // popup/restore rows become pending rows through the same `pendingRowOf`
@@ -363,7 +306,7 @@ export function BrowserPane({
     // registration, so there is exactly one render path for "pending page →
     // marker webview".
     const pending = [
-      ...(live ? status.pendingCreates : [])
+      ...status.pendingCreates
         .filter((entry) => !known.has(entry.id))
         .map((entry) => pendingRowOf(entry.id, entry.owner)),
       ...localPending
@@ -440,21 +383,21 @@ export function BrowserPane({
   // supersedes createPage's eventual receipt, so it cannot steal focus back.
   useEffect(() => {
     if (!awaitingCreateRef.current || !status) return
-    const fresh = status.pendingCreates.find((entry) => !closedIds.has(entry.id))
+    const fresh = status.pendingCreates.find((entry) => entry.owner === store.humanOwner && !closedIds.has(entry.id))
     if (!fresh) return
     awaitingCreateRef.current = false
     setSelectedPageId(fresh.id)
-  }, [state, status, closedIds])
+  }, [state, status, closedIds, store])
 
   // onEmpty at most once per pane mount: closePage's direct call and the
   // empty-after-first-status transition share this guard.
   const fireEmpty = useCallback(() => {
-    if (emptyFiredRef.current || openPagesRevisionRef.current !== getOpenBrowserPagesRevision()) return
+    if (emptyFiredRef.current || openPagesRevisionRef.current !== getOpenBrowserPagesRevision(store.sessionId)) return
     emptyFiredRef.current = true
     // Closing the last page must not leave a restorable page behind.
-    writeOpenBrowserPages([], openPagesRevisionRef.current)
+    writeOpenBrowserPages([], openPagesRevisionRef.current, store.sessionId)
     onEmptyRef.current()
-  }, [])
+  }, [store])
 
   const handleNavChange = useCallback((id: string, patch: BrowserNavPatch) => {
     setLocalNav((prev) => applyNavPatch(prev, id, patch))
@@ -485,17 +428,14 @@ export function BrowserPane({
    *  next tick and the strip still paints at once. A failed connect still
    *  materializes the rows — they show their urls, and the TTL sweep reaps
    *  what could not register. */
-  const restoreOpenPages = useCallback(() => {
+  const restoreOpenPages = useCallback((targets: readonly OpenBrowserPageEntry[]) => {
     // Set SYNCHRONOUSLY, before any status push can arrive: the snapshot
     // write is fenced off until the rows exist (see restoreInFlightRef).
     restoreInFlightRef.current = true
     void window.pi.browserEnsureService()
       .catch(() => { /* rows still materialize; the TTL sweep reaps unregistered ones */ })
       .then(() => {
-        if (!aliveRef.current || openPagesRevisionRef.current !== getOpenBrowserPagesRevision()) return
-        const saved = readOpenBrowserPages()
-        const targets: ReadonlyArray<OpenBrowserPageEntry> =
-          saved.length > 0 ? saved : [{ owner: HUMAN_OWNER }]
+        if (!aliveRef.current || openPagesRevisionRef.current !== getOpenBrowserPagesRevision(store.sessionId)) return
         const rows = targets.map((entry) => pendingRowOf(createBrowserPageId(), entry.owner, entry.url))
         // Paint restored row chrome together, but delay each webview src to avoid batch guest-spawn races (restoreSpawnDelaysRef).
         restoreSpawnDelaysRef.current = new Map(rows.map((row, index) => [row.id, Math.min(index, 8) * RESTORE_SPAWN_STAGGER_MS]))
@@ -521,42 +461,17 @@ export function BrowserPane({
         setSelectedPageId(rows[selected >= 0 ? selected : 0].id)
         restoreInFlightRef.current = false
       })
-  }, [])
+  }, [store])
 
-  // First-paint auto-fill (mount-once): decide from LOCAL knowledge before
-  // any server round trip — the restore rows and their marker webviews render
-  // in the pane's FIRST commit, so reopening the tab (or expanding a folded
-  // rail) shows the previous strip at once: urls prewritten, count, order and
-  // active tab intact, the wait being only the guests reloading their content.
-  // The pre-mount status is a DEAD world (staleStatusRef) and never a reason
-  // to decline — a rail collapse kills every guest with the pane, so its rows
-  // cannot come back. Only a consent gate we KNOW is closed, or a live popup
-  // queue still waiting to materialize, keep the latch armed below. A null
-  // status is unknown, not closed: rows materialize behind the consent card
-  // and are simply there when the grant lifts it.
+  // Restore this session's navigation after consent. A real incoming page
+  // (agent request, popup or chat link) can fill a fresh pane by itself.
   useEffect(() => {
-    if (autoFilledRef.current) return
-    const storeState = store.getState()
-    if (storeState.popups.length > 0) return
-    if (storeState.status?.consentRequired) return
+    if (autoFilledRef.current || !status || status.consentRequired) return
     autoFilledRef.current = true
-    restoreOpenPages()
-  }, [restoreOpenPages])
-
-  // Status-latch fallback (once per mount, for the cases first-paint
-  // declined): the FIRST FRESH status with consent past and an empty model
-  // restores the snapshot the same way. Live arrivals win — a fresh status
-  // that already carries pages/pendingCreates (an agent createPage that
-  // auto-opened the rail, queued popups already materialized) skips the
-  // restore.
-  useEffect(() => {
-    if (autoFilledRef.current) return
-    if (!status || status === staleStatusRef.current) return
-    if (status.consentRequired) return
-    autoFilledRef.current = true
-    if (pages.length > 0 || status.pendingCreates.length > 0 || store.getState().optimistic.length > 0) return
-    restoreOpenPages()
-  }, [pages, status, store, restoreOpenPages])
+    const saved = readOpenBrowserPages(store.sessionId).filter(entry => store.owns(entry.owner))
+    if (saved.length) restoreOpenPages(saved)
+    else if (!pages.length && !state.popups.length && !state.links.length) restoreOpenPages([{ owner: store.humanOwner }])
+  }, [pages, status, state.popups, state.links, store, restoreOpenPages])
 
   // Empty after the first real status (pointer T7-④): once the merged model
   // HAS been non-empty post-mount, it going empty for ANY reason — server-side
@@ -565,7 +480,7 @@ export function BrowserPane({
   // in flight never counts either — its rows ARE the model from their first
   // commit, so there is no async window of legitimate emptiness to own.
   useEffect(() => {
-    if (!status || status === staleStatusRef.current || status.consentRequired) return
+    if (!status || status.consentRequired) return
     if (pages.length > 0) {
       sawPagesRef.current = true
       return
@@ -600,23 +515,21 @@ export function BrowserPane({
         }),
         effectiveSelectedId
       ),
-      openPagesRevisionRef.current
+      openPagesRevisionRef.current,
+      store.sessionId
     )
-  }, [localNav, pages, status, effectiveSelectedId])
+  }, [localNav, pages, status, effectiveSelectedId, store])
 
   const newPage = useCallback(() => {
     const selectionRevision = ++createSelectionRevisionRef.current
     awaitingCreateRef.current = true
-    // Pull once right away: the pendingCreate enqueue does not push state, so
-    // the poll alone would add up to one BROWSER_POLL_MS of dead air.
-    void window.pi.browserStatus().then((next) => store.applyStatus(next)).catch(() => {})
-    void window.pi.browserCreatePage()
+    void window.pi.browserCreatePage(undefined, store.sessionId ?? undefined)
       .then((meta) => {
         if (selectionRevision === createSelectionRevisionRef.current) awaitingCreateRef.current = false
         // The pane unmounted mid-round-trip (rail fold / tab close): the store
         // outlives this instance, so without the guard the resolved page's
         // optimistic row would leak into a pane that never mounts it.
-        if (!aliveRef.current || openPagesRevisionRef.current !== getOpenBrowserPagesRevision()) return
+        if (!aliveRef.current || openPagesRevisionRef.current !== getOpenBrowserPagesRevision(store.sessionId)) return
         if (selectionRevision === createSelectionRevisionRef.current) setSelectedPageId(meta.id)
         // Round trip done — the registry has the page. If the push is still
         // in flight, an optimistic row keeps the strip from flashing; the
@@ -734,8 +647,9 @@ export function BrowserPane({
    *  front, host gone) drops the url like the restore latch does; the pane's
    *  own consent/empty state is the fallback surface. */
   const openLinkInNewPage = useCallback((url: string) => {
-    void window.pi.browserCreatePage(url)
+    void window.pi.browserCreatePage(url, store.sessionId ?? undefined)
       .then((meta) => {
+        if (!aliveRef.current || openPagesRevisionRef.current !== getOpenBrowserPagesRevision(store.sessionId)) return
         setSelectedPageId(meta.id)
         setLocalNav((prev) => {
           const shown = prev[meta.id]?.url ?? ''
@@ -744,7 +658,7 @@ export function BrowserPane({
         })
       })
       .catch(() => { /* nothing to host it — the consent/empty state shows */ })
-  }, [])
+  }, [store])
 
   /** Popup materialization (the corrected flow): never `browserCreatePage` —
    *  a CLIENT-SIDE tempId plus a local pending row through the same Ruling D
@@ -761,7 +675,7 @@ export function BrowserPane({
       // Owner inheritance via the wcId map: the opener's live page wins; an
       // opener already gone (its row left the model, the map pruned) falls
       // back to human.
-      const owner = wcIdMapRef.current.get(popup.openerWebContentsId)?.owner ?? HUMAN_OWNER
+      const owner = popup.owner ?? wcIdMapRef.current.get(popup.openerWebContentsId)?.owner ?? store.humanOwner
       const tempId = createBrowserPageId()
       setLocalPending((prev) => [...prev, { id: tempId, owner, navigateTo: popup.url }])
       localPendingAtRef.current.set(tempId, Date.now())
@@ -773,28 +687,11 @@ export function BrowserPane({
     }
   }, [store])
 
-  // Open-link drain: on mount (backstop for clicks that happened before this
-  // pane existed — Workspace only opens the tab) and on every event while
-  // mounted (the pane is up — drain immediately).
+  // Links wait in their owning store while a pane mounts or awaits consent.
   useEffect(() => {
-    const drain = () => {
-      // Draining before consent would consume the queue and then drop every URL
-      // on ConsentRequiredError — the link the user clicked would vanish. Leave
-      // the queue alone; granting consent flips `consentRequired`, which re-runs
-      // this effect and drains it then.
-      if (consentRequired) return
-      const urls = drainPendingBrowserOpenLinks()
-      if (urls.length === 0) return
-      for (const url of urls) openLinkInNewPage(url)
-      // Pull once right away: the pendingCreate enqueue does not push state,
-      // so the poll alone would add up to one BROWSER_POLL_MS of dead air
-      // (same trick as newPage).
-      void window.pi.browserStatus().then((next) => store.applyStatus(next)).catch(() => {})
-    }
-    drain()
-    window.addEventListener(BROWSER_OPEN_LINK_EVENT, drain)
-    return () => window.removeEventListener(BROWSER_OPEN_LINK_EVENT, drain)
-  }, [consentRequired, openLinkInNewPage, store])
+    if (consentRequired || !state.links.length) return
+    for (const url of store.drainLinks()) openLinkInNewPage(url)
+  }, [consentRequired, openLinkInNewPage, state.links, store])
 
   // Popup drain: on mount (popups queued while the pane was closed survive in
   // the store) and whenever the queue is non-empty while mounted — including
@@ -868,7 +765,7 @@ export function BrowserPane({
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background" data-browser-pane>
-      <div className="flex shrink-0 items-center gap-1 px-2 py-1.5">
+      <div inert={!active} className="flex shrink-0 items-center gap-1 px-2 py-1.5">
         <div ref={stripScrollRef} data-browser-strip-scroll className="min-w-0 flex-1 overflow-x-auto p-1">
           <Tabs
             value={effectiveSelectedId ?? ''}
@@ -877,10 +774,10 @@ export function BrowserPane({
               awaitingCreateRef.current = false
               setSelectedPageId(id)
             }}
-            variant="segment"
+            variant="underline"
             className="w-max"
           >
-            <TabsList className="gap-1 bg-muted/60 p-0.5">
+            <TabsList className="gap-1 border-b-0">
               {pages.map((page) => {
                 const nav = localNav[page.id]
                 const url = displayUrlOf(page, nav)
@@ -894,7 +791,6 @@ export function BrowserPane({
                     <LabelTooltip content={url || undefined} wrap>
                       <TabsTrigger
                         value={page.id}
-                        indicatorClassName="bg-background shadow-xs"
                         className={cn('h-7 min-h-0 gap-1.5 pl-2.5 pr-7', isActive && 'text-foreground')}
                       >
                         {nav?.favicon ? (
@@ -904,7 +800,7 @@ export function BrowserPane({
                             aria-hidden="true"
                             className="size-3.5 shrink-0 rounded-detail object-contain"
                           />
-                        ) : page.owner !== HUMAN_OWNER ? (
+                        ) : !isHumanBrowserOwner(page.owner) ? (
                           <Bot aria-hidden="true" className="size-4 shrink-0" />
                         ) : (
                           <Globe aria-hidden="true" className="size-3.5 shrink-0" />
@@ -941,7 +837,7 @@ export function BrowserPane({
         ) : null}
       </div>
       {status === null ? null : consentRequired ? (
-        <div className="flex min-h-0 flex-1 items-center justify-center p-6">
+        <div inert={!active} className="flex min-h-0 flex-1 items-center justify-center p-6">
           <div className="w-full max-w-sm rounded-card border border-border p-5 text-center" data-browser-consent>
             <p className="text-sm font-medium text-foreground">{t('browser.consentTitle')}</p>
             <p className="mt-2 text-sm leading-ui-loose text-muted-foreground">{t('browser.consentBody')}</p>
@@ -949,7 +845,7 @@ export function BrowserPane({
           </div>
         </div>
       ) : pages.length === 0 ? (
-        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
+        <div inert={!active} className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
           <Globe aria-hidden="true" className="size-6 text-muted-foreground/70" />
           <p className="text-sm text-muted-foreground">{t('browser.emptyHint')}</p>
           <Button variant="outline" size="sm" onClick={newPage}>{t('browser.newPage')}</Button>

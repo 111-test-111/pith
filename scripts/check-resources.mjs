@@ -15,11 +15,11 @@ try {
   const module = join(temp, 'resources.mjs')
   await build({ stdin: { contents: "export * from './src/main/resources/storage'; export * from './src/main/resources/processes'; export * from './src/main/resources/runtime'; export * from './src/renderer/src/lib/resource-format';", resolveDir: repo }, outfile: module, bundle: true, platform: 'node', format: 'esm' })
   const { scanStorage, storageCategory, RuntimeSampler, parseCpuTime, parsePs, linuxCpu, parseWindowsProcesses, descendants, collectProcessTree, resourceBytes } = await import(pathToFileURL(module))
-  const appData = join(temp, 'data'), agentData = join(temp, 'agent'), library = join(temp, 'external archive'), sessionData = join(temp, 'browser'), logs = join(temp, 'logs')
-  const options = { appData, agentData, library, sessionData, roots: [
-    { kind: 'app', path: appData }, { kind: 'pi', path: agentData }, { kind: 'library', path: library },
+  const appData = join(temp, 'data'), agentData = join(temp, 'agent'), sessionData = join(temp, 'browser'), logs = join(temp, 'logs')
+  const options = { appData, agentData, sessionData, roots: [
+    { kind: 'app', path: appData }, { kind: 'pi', path: agentData },
     { kind: 'browser', path: sessionData }, { kind: 'logs', path: logs }, { kind: 'crashes', path: join(temp, 'not-created') },
-    { kind: 'library', path: join(appData, 'library') }, { kind: 'app', path: appData }
+    { kind: 'app', path: appData }
   ] }
   const data = new Map([
     [join(agentData, 'sessions', 'project', 'chat.jsonl'), Buffer.from('会话\n{"secret":"never-read"}\n')],
@@ -27,7 +27,7 @@ try {
     [join(appData, 'trajectory.sqlite'), Buffer.alloc(41)], [join(appData, 'trajectory.sqlite-wal'), Buffer.alloc(79)],
     [join(appData, 'trajectory.sqlite-shm'), Buffer.alloc(23)], [join(appData, 'session-search.sqlite-wal'), Buffer.alloc(29)],
     [join(appData, 'library.sqlite'), Buffer.alloc(67)], [join(appData, 'library', 'objects', 'old.bin'), Buffer.alloc(19)],
-    [join(library, 'objects', 'copy.bin'), Buffer.alloc(97)], [join(sessionData, 'Partitions', 'pith-browser', 'Cookies'), Buffer.alloc(31)],
+    [join(sessionData, 'Partitions', 'pith-browser', 'Cookies'), Buffer.alloc(31)],
     [join(sessionData, 'Partitions', 'pith-browser', 'Cache', 'Cache_Data', 'blob'), Buffer.alloc(71)],
     [join(appData, 'rewind', 'blobs', 'one'), Buffer.alloc(89)], [join(appData, 'workspace', 'generated.png'), Buffer.alloc(37)],
     [join(appData, 'bash-tasks', 'task.log'), Buffer.alloc(17)], [join(logs, 'main.log'), Buffer.alloc(43)],
@@ -36,7 +36,7 @@ try {
   for (const [path, bytes] of data) { await mkdir(join(path, '..'), { recursive: true }); await writeFile(path, bytes) }
   const sparse = join(appData, 'unknown-new-persistence', 'sparse.bin'), handle = await open(sparse, 'w')
   await handle.truncate(16 * 1024 ** 2); await handle.close()
-  await link(join(agentData, 'sessions', 'project', 'chat.jsonl'), join(library, 'objects', 'hard-link.jsonl'))
+  await link(join(agentData, 'sessions', 'project', 'chat.jsonl'), join(appData, 'library', 'objects', 'hard-link.jsonl'))
   let extraLinkBytes = 0, extraLinks = 0
   if (process.platform !== 'win32') {
     const outside = join(temp, 'outside-project'); await mkdir(outside); await writeFile(join(outside, 'ignored.bin'), Buffer.alloc(8192))
@@ -55,7 +55,6 @@ try {
   assert.equal(scan.entries.find(entry => entry.category === 'sessions').logicalBytes, data.get(join(agentData, 'sessions', 'project', 'chat.jsonl')).length,
     'cross-category hard links have stable session attribution')
   assert.equal(scan.entries.find(entry => entry.category === 'trajectory').logicalBytes, 41 + 79 + 23, 'SQLite sidecars are included')
-  assert.equal(scan.entries.find(entry => entry.category === 'library').logicalBytes, 67 + 19 + 97, 'both external archive and old default archive are measured')
   assert.equal(scan.entries.find(entry => entry.category === 'cache').logicalBytes, 71)
   assert.equal(storageCategory(join(appData, 'unknown'), { ...options, sessionData: appData }), 'other', 'shared Chromium userData does not swallow unrelated files')
   if (process.platform !== 'win32') {
@@ -66,7 +65,7 @@ try {
       seen.add(key); allocated += info.blocks * 512
       if (info.isDirectory()) for (const name of await readdir(path)) await oracle(join(path, name))
     }
-    for (const path of [appData, agentData, library, sessionData, logs]) await oracle(await realpath(path))
+    for (const path of [appData, agentData, sessionData, logs]) await oracle(await realpath(path))
     assert.equal(scan.allocatedBytes, allocated, 'allocated bytes match an independent inode/block oracle, including directories')
     assert.equal(scan.entries.reduce((sum, entry) => sum + entry.allocatedBytes, 0), allocated)
     assert(scan.allocatedBytes < scan.logicalBytes, 'sparse file lengths are not confused with disk allocation')

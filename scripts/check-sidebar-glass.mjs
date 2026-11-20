@@ -28,9 +28,9 @@ const fixture = `<!doctype html><html><body><div id="root"></div><script type="m
 import React from 'react';import {createRoot} from 'react-dom/client';import {flushSync} from 'react-dom';
 import {AnimatedSidebarProvider,AnimatedSidebar,AnimatedSidebarContent,AnimatedSidebarInset} from '/src/components/motion/animated-sidebar.tsx';
 import {SidebarGlassWash,sidebarGlassPanelClassName} from '/src/components/app/SidebarGlass.tsx';
-import {useSidebarGlass} from '/src/lib/sidebar-glass.ts';
+import {initSidebarGlass,useSidebarGlass} from '/src/lib/sidebar-glass.ts';
 import '/src/styles.css';
-window.pi={platform:'darwin'};
+window.pi={platform:'darwin'};document.documentElement.dataset.platform='darwin';initSidebarGlass();
 const sessions=['Refactor the rewind engine','Fix sidebar drag reorder','Write release notes','Investigate terminal flicker','Update beUI components'];
 function Shell(){
   const [glass,setGlass]=useSidebarGlass();window.setGlass=setGlass;
@@ -55,6 +55,7 @@ window.read=()=>{
     wash:!!wash,washFirst:wash?wash.previousElementSibling===null:null,washBeforePanel:wash?wash.nextElementSibling===panel:null,
     washImage:wc?wc.backgroundImage:null,washPointer:wc?wc.pointerEvents:null,washPosition:wc?wc.position:null,
     filter:pc?pc.backdropFilter:null,panelBg:pc?pc.backgroundColor:null,
+    chromeGlass:document.documentElement.dataset.chromeGlass,bodyBg:getComputedStyle(document.body).backgroundColor,
     stored:(()=>{try{return localStorage.getItem('pi-app:sidebar-glass')}catch{return null}})()};
 };
 </script></body></html>`
@@ -127,6 +128,8 @@ try {
   assert.match(on.washImage, /radial-gradient/, 'the wash carries the themed gradient')
   assert.match(on.filter, /blur/, 'the panel surface is frosted: ' + on.filter)
   assert.ok(alphaOf(on.panelBg) > 0 && alphaOf(on.panelBg) < 1, 'the panel surface is translucent: ' + on.panelBg)
+  assert.equal(on.chromeGlass, 'on', 'the root flag mirrors the translucent chrome preference')
+  assert.equal(alphaOf(on.bodyBg), 0, 'the page background steps aside for the native material: ' + on.bodyBg)
   await shoot('light-on.png')
 
   // 2. The wash follows the live theme and accent: both change its resolved
@@ -154,6 +157,8 @@ try {
   assert.equal(off.filter, 'none', 'no backdrop filter when glass is off')
   assert.equal(alphaOf(off.panelBg), 1, 'the panel surface is opaque when glass is off: ' + off.panelBg)
   assert.equal(off.stored, 'off', 'the off value persists to localStorage')
+  assert.equal(off.chromeGlass, 'off', 'the root flag follows the live toggle')
+  assert.equal(alphaOf(off.bodyBg), 1, 'opaque chrome paints the theme background so page transitions cannot flash the system material: ' + off.bodyBg)
   await shoot('light-off.png')
   await evaluate(`document.documentElement.classList.add('dark')`)
   await pause(100)
@@ -170,6 +175,8 @@ try {
   assert.ok(alphaOf(onAgain.panelBg) < 1)
   assert.equal(onAgain.stored, 'on')
   assert.equal(onAgain.washImage, lightWash, 'the restored wash matches the original')
+  assert.equal(onAgain.chromeGlass, 'on', 'turning it back on restores the translucent window background')
+  assert.equal(alphaOf(onAgain.bodyBg), 0, 'the page background steps aside again')
 
   // 5. A reload restores the STORED value: off survives the round trip.
   await evaluate(`window.setGlass(false)`)
@@ -181,6 +188,8 @@ try {
   assert.equal(reloaded.stored, 'off')
   assert.ok(!reloaded.wash, 'glass stays off after reload')
   assert.equal(reloaded.filter, 'none')
+  assert.equal(reloaded.chromeGlass, 'off', 'the boot hook restores the opaque window background')
+  assert.equal(alphaOf(reloaded.bodyBg), 1, 'a stored off preference boots opaque, with no flash window')
 
   // 6. A value other than 'off' (garbage) falls back to the default: on.
   await evaluate(`localStorage.setItem('pi-app:sidebar-glass','banana')`)

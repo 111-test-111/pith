@@ -102,8 +102,8 @@ export const MarkdownMermaid = memo(function MarkdownMermaid({ code, streaming }
       <FileCode2 aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground/70" />
       <span className="sr-only min-w-0 truncate text-micro font-medium uppercase tracking-wide text-muted-foreground/55 @min-[26em]/mermaid:not-sr-only">Mermaid</span>
       <div className="ml-auto flex shrink-0 items-center gap-1">
-        <Tabs value={view} onValueChange={setView} variant="segment">
-          <TabsList className="bg-transparent">
+        <Tabs value={view} onValueChange={setView} variant="underline">
+          <TabsList className="border-b-0 bg-transparent">
             <TabsTrigger value="preview" className="min-h-0 px-2 py-1 text-xs">{t('mermaid.preview')}</TabsTrigger>
             <TabsTrigger value="source" className="min-h-0 px-2 py-1 text-xs">{t('mermaid.source')}</TabsTrigger>
           </TabsList>

@@ -7,11 +7,12 @@ export async function checkTurnFoldUi(evaluate, pause, capture = async () => {})
     window.foldRead = () => {
       const group = document.querySelector('#turn-fixture [data-assistant-group]');
       const column = group.querySelector('[data-slot="message-content"]');
-      const body = group.querySelector('[data-turn-process]');
+      const bodies = [...group.querySelectorAll('[data-turn-process]')];
+      const body = bodies[0];
       return {
         groups: document.querySelectorAll('#turn-fixture [data-assistant-group]').length,
         folded: body?.textContent ?? '',
-        tail: [...column.children].filter(row => !body || !row.contains(body)).map(row => row.textContent).join(' '),
+        tail: [...column.children].filter(row => !bodies.some(body => row.contains(body))).map(row => row.textContent).join(' '),
         hidden: body?.parentElement.getAttribute('aria-hidden'),
         height: body?.parentElement.getBoundingClientRect().height,
         inert: body?.parentElement.inert,
@@ -62,6 +63,139 @@ export async function checkTurnFoldUi(evaluate, pause, capture = async () => {})
   assert.ok(state.height > 0, 'expanding restores the whole process')
   await toggle()
   assertClosed(await read(), 're-collapsed recovered turn')
+
+  // A subagent delivery can trail a completed reply, then be followed by a
+  // different execution scope. It must never sit outside every process fold.
+  const childMessage = timestamp => ({
+    role: 'custom', customType: 'subagent_message', display: true, timestamp, content: 'MODEL_ONLY_CHILD_MESSAGE',
+    details: { kind: 'pi-app-subagent-message', sessionId: 'fold-child', runId: 'fold-child-run',
+      description: 'Fold regression progress', profile: 'implementer', message: 'A delayed report from the child.', sentAt: '2025-01-01T00:00:03.000Z' }
+  })
+  const childCompletion = timestamp => ({
+    role: 'custom', customType: 'subagent_completion', display: true, timestamp, content: 'MODEL_ONLY_CHILD_COMPLETION',
+    details: { subagent: { runId: 'fold-child-run', sessionId: 'fold-child', sessionPath: '/ui/child', parentSessionPath: '/ui/session',
+      profile: 'implementer', model: 'fixture', description: 'Fold regression completion', task: 'Check folding', status: 'completed',
+      runInBackground: true, createdAt: '2025-01-01T00:00:00.000Z', completedAt: '2025-01-01T00:00:04.000Z' } }
+  })
+  const assertNoticeOwnership = async (count, label) => {
+    const rows = await evaluate(`Array.from(document.querySelectorAll('#turn-fixture [data-subagent-message],#turn-fixture [data-subagent-completion]')).map(row=>{const body=row.closest('[data-turn-process]');return{inside:!!body,hidden:body?.parentElement.getAttribute('aria-hidden'),inert:body?.parentElement.inert}})`)
+    assert.equal(rows.length, count, label + ': every notice renders exactly once')
+    assert.ok(rows.every(row => row.inside && row.hidden === 'true' && row.inert), label + ': every notice belongs to a collapsed process')
+  }
+  for (const notice of [childMessage(40), childCompletion(41)]) {
+    await snapshot(`window.round(30,window.prose('Completed before notice')),${JSON.stringify(notice)}`, false, false)
+    state = await read()
+    assertClosed(state, 'trailing ' + notice.customType)
+    assert.match(state.tail, /Completed before notice/, 'the completed reply remains outside the fold')
+    assert.doesNotMatch(state.tail, /Fold regression/, 'no subagent row leaks below the reply')
+    await assertNoticeOwnership(1, notice.customType)
+    await toggle()
+    assert.equal((await read()).hidden, 'false', 'the notice is accessible by expanding its owning turn')
+    if (notice.customType === 'subagent_message') {
+      await evaluate(`document.querySelector('#turn-fixture [data-subagent-message] button').click()`)
+      await pause(260)
+      assert.match((await read()).folded, /A delayed report from the child\./, 'expanding the notice retains its complete payload')
+    }
+    await toggle()
+    await assertNoticeOwnership(1, 're-collapsed ' + notice.customType)
+  }
+  for (const steer of [false, true]) {
+    await snapshot(`window.round(30,window.prose('Completed before notice')),${JSON.stringify(childMessage(40))},${JSON.stringify(childCompletion(41))},
+      ${steer ? "{role:'user',timestamp:50,queuedDelivery:'steer',content:'Additional instruction'}," : ''}window.round(60,window.prose('Continuation answer'),'${steer ? 'scope-a' : 'scope-b'}')`, false, false)
+    assertClosed(await read(), 'notice before ' + (steer ? 'user steer' : 'new execution scope'))
+    assert.equal((await read()).groups, steer ? 1 : 2, 'steers stay with their turn and independent scopes still divide the transcript')
+    await assertNoticeOwnership(2, 'notices between execution scopes')
+    assert.ok((await read()).folded.indexOf('Fold regression progress') < (await read()).folded.indexOf('Fold regression completion'), 'notice order stays intact inside the fold')
+  }
+  await snapshot(`window.round(30,window.prose('Reply before wake')),${JSON.stringify(childMessage(40))},
+    window.round(50,window.prose('Handling the progress report')),window.round(60,window.prose('Final continuation reply'))`, false, false)
+  state = await read()
+  assertClosed(state, 'continued child-message wake')
+  assert.equal(state.groups, 1, 'the wake and its work share the original fold')
+  assert.match(state.folded, /Reply before wake.*Fold regression progress.*Handling the progress report/s)
+  assert.match(state.tail, /Final continuation reply/)
+  await assertNoticeOwnership(1, 'continued child-message wake')
+
+  await snapshot(JSON.stringify(childMessage(40)), false, false)
+  assertClosed(await read(), 'notice-only settled turn')
+  await assertNoticeOwnership(1, 'notice-only turn without a following assistant')
+  // Live deliveries stay in sequence and remain visible; settlement moves
+  // them into the same fold even without another assistant message.
+  await snapshot(`window.round(30,window.prose('Live answer')),${JSON.stringify(childMessage(40))}`, true, false)
+  assert.equal((await read()).hidden, undefined, 'a live delivery never folds early')
+  assert.match((await read()).tail, /Fold regression progress/)
+  await evaluate(`window.turnStep({type:'agent_settled'})`)
+  await pause(80)
+  assertClosed(await read(), 'delivery-only settlement')
+  await assertNoticeOwnership(1, 'settled live delivery')
+  // Also cover delivery after settlement, and the restored transcript path.
+  await snapshot(`window.round(30,window.prose('Reply already settled'))`, false, false)
+  await evaluate(`window.turnStep({type:'message_end',message:${JSON.stringify(childMessage(40))}})`)
+  await pause(80)
+  await assertNoticeOwnership(1, 'late message event')
+  await snapshot(`window.round(30,window.prose('Reply already settled')),${JSON.stringify(childMessage(40))}`, false, false)
+  await assertNoticeOwnership(1, 'restored late delivery')
+  // Q&A answers intentionally render only in their record panel; counting
+  // one as process would produce a meaningless duration header with no body.
+  await snapshot(`window.round(30,window.prose('Plain answer')),{role:'custom',customType:'ask_user_answer',display:true,timestamp:40,content:'HIDDEN_QA_RECEIPT'}`, false, false)
+  assert.equal((await read()).hidden, undefined, 'a hidden Q&A receipt creates no empty fold')
+  assert.doesNotMatch((await read()).tail, /HIDDEN_QA_RECEIPT/)
+  console.log('PASS: late subagent messages/completions fold exactly once, preserve payload/order across scopes and reopening, remain live until settlement and never expose hidden Q&A receipts.')
+
+  await snapshot(`
+    window.round(2000,window.prose('Work before either steer')),
+    {role:'user',timestamp:3000,queuedDelivery:'steer',content:'First steering bubble'},
+    window.round(5000,window.prose('Work between the steers')),
+    {role:'user',timestamp:7000,queuedDelivery:'steer',content:'Second steering bubble'},
+    {role:'user',timestamp:8000,queuedDelivery:'steer',content:'Third steering bubble'},
+    window.round(10500,window.prose('Work after the last steer')),
+    {...window.round(12000,[{type:'thinking',thinking:'Final reasoning'},...window.prose('Answer after both steers')]),completedAt:16010}`)
+  await evaluate(`document.documentElement.dataset.compactTools='true';
+    window.keptSteers=[...document.querySelectorAll('#turn-fixture [data-turn-steer]')];true`)
+  for (const open of [false, true, false]) {
+    if (open !== ((await read()).hidden === 'false')) await toggle()
+    const steers = await evaluate(`(() => {
+      const group = document.querySelector('#turn-fixture [data-assistant-group]');
+      const column = group.firstElementChild;
+      const rows = [...column.children].filter(row => !row.hidden);
+      const bubbles = rows.filter(row => row.hasAttribute('data-turn-steer'));
+      const bubbleBounds = row => (row.querySelector(':scope > [data-slot="message-content"] > [data-slot="message-bubble"]') ?? row).getBoundingClientRect();
+      const triggers = [...column.querySelectorAll(':scope > [data-transcript-gap-after="divider"] > div > button')];
+      const bodies = [...column.querySelectorAll('[data-turn-process]')].map(body => body.parentElement);
+      return {
+        headers: triggers.map(trigger => trigger.textContent),
+        controls: triggers[0].getAttribute('aria-controls').split(' ').length,
+        hidden: bodies.map(body => body.inert),
+        sharedGroup: bubbles.every(bubble => bubble.parentElement === column),
+        sameBubbles: bubbles.every((bubble,index) => bubble === window.keptSteers[index]),
+        gaps: bubbles.map(row => {
+          const index = rows.indexOf(row);
+          const bubble = bubbleBounds(row);
+          return [bubble.top - bubbleBounds(rows[index-1]).bottom, bubbleBounds(rows[index+1]).top - bubble.bottom];
+        }),
+        clearance: bubbles.flatMap(row => {
+          const next = rows[rows.indexOf(row)+1];
+          if (!next.hasAttribute('data-turn-steer')) return [];
+          const button = row.querySelector('[data-message-actions="overlay"] button').getBoundingClientRect();
+          return [[button.top - bubbleBounds(row).bottom, bubbleBounds(next).top - button.bottom]];
+        }),
+        order: rows.map(row => row.textContent).join(' '),
+      };
+    })()`)
+    assert.deepEqual(steers.headers, ['Took 16s'], 'the steers share the original prompt-to-reply duration')
+    assert.equal(steers.controls, steers.hidden.length, 'the only trigger announces every controlled process section')
+    assert.ok(steers.hidden.every(value => value === !open), 'every folded process section follows the same trigger')
+    assert.equal(steers.sharedGroup && steers.sameBubbles, true, 'steers remain visible in the same DOM nodes while toggling')
+    assert.deepEqual(steers.gaps, open ? [[24,24],[24,36],[36,24]] : [[24,36],[36,36],[36,24]],
+      'consecutive bubbles have room for actions, including across a folded process section')
+    assert.deepEqual(steers.clearance, open ? [[6,6]] : [[6,6],[6,6]], 'action buttons have equal clearance from both bubbles')
+    assert.match(steers.order, open
+      ? /Work before either steer.*First steering bubble.*Work between the steers.*Second steering bubble.*Third steering bubble.*Answer after both steers/s
+      : /First steering bubble.*Second steering bubble.*Third steering bubble.*Answer after both steers/s)
+    await capture(open ? 'turn-steers-expanded' : 'turn-steers-folded')
+  }
+  await evaluate(`document.documentElement.dataset.compactTools='false'`)
+  console.log('PASS: multiple steers stay visible with room for actions between adjacent bubbles, preserved order and one elapsed-time disclosure.')
 
   // With no completed reply, even partial prose is process. Include both a
   // contentless terminal round and a stop/error on the prose's own round.

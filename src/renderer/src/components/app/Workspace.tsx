@@ -13,20 +13,13 @@ import { optimisticEchoText } from '@/lib/attachments'
 import {
   ArrowsInLineHorizontal,
   ArrowsOutLineHorizontal,
-  Chat01,
-  BookOpen,
-  CalendarCheck,
-  ChevronDown,
   ChevronRight,
   Folder,
-  FolderInput,
-  MessageSquarePlus,
   PanelLeftClose,
   PanelLeftOpen,
   PanelRightClose,
   PanelRightOpen,
-  Pin,
-  PinOff,
+  PinLocation,
   PictureInPicture2,
   Minimize2,
   RefreshCw,
@@ -38,12 +31,7 @@ import { SessionsSidebar } from './SessionsSidebar'
 import {
   AnimatedSidebar,
   AnimatedSidebarContent,
-  AnimatedSidebarGroup,
-  AnimatedSidebarGroupContent,
   AnimatedSidebarInset,
-  AnimatedSidebarMenu,
-  AnimatedSidebarMenuButton,
-  AnimatedSidebarMenuItem,
   AnimatedSidebarTrigger
 } from '@/components/motion/animated-sidebar'
 import { ThemeButton } from './ThemeButton'
@@ -81,10 +69,10 @@ import { BROWSER_ANNOTATION_EVENT } from './BrowserAnnotate'
 import type { NewSessionContext } from './NewSession'
 import { EditMessageDialog, type EditMessagePayload } from './EditMessageDialog'
 import { SettingsPage } from './settings/SettingsPage'
-import { LibraryPage } from './LibraryPage'
 import { ScheduledTasksView } from './scheduled-tasks/ScheduledTasksView'
 import { useScheduledTasks } from '@/state/scheduled-tasks-store'
-import { SidebarPanel, agentTabId, fileTabId, filePathForTab, type SidebarTabKind, type SidebarTabId } from './SidebarPanel'
+import { SidebarPanel } from './SidebarPanel'
+import { agentTabId, type SidebarTabKind, type SidebarTabId } from '@/lib/sidebar-tabs'
 import { SessionSearch } from './SessionSearch'
 import { AppCommandPalette } from './CommandPalette'
 import {
@@ -113,18 +101,11 @@ import {
   savePanelLayout,
   type PanelLayout
 } from '@/lib/panel-layout'
-import { SideChatStore } from '@/state/side-chat-store'
-import { TerminalStore } from '@/state/terminal-store'
+import { watchSshTerminals } from '@/state/terminal-store'
 import { DebugStore } from '@/state/debug-store'
-import { FileBrowserStore } from '@/state/file-browser-store'
-import { GitStore } from '@/state/git-store'
-import { BrowserStore } from '@/lib/browser/store'
-import { closeOpenBrowserPages } from '@/lib/browser/session'
-import { getBrowserRestoreTabsPref } from '@/lib/browser/restore-tabs'
-import { subscribeBrowserPopups } from '@/lib/browser/popup'
-import { subscribeBrowserDownloads } from '@/lib/browser/downloads'
-import { BROWSER_OPEN_LINK_EVENT } from '@/lib/browser/open-link'
-import { HUMAN_OWNER } from '../../../../shared/browser'
+import { WorkspacePanes, paneSessionKey } from '@/state/workspace-panes'
+import { useWorkspaceBrowsers } from '@/lib/browser/use-workspace-browsers'
+import type { FileView } from '@/state/file-browser-store'
 import { FileNavigationProvider, type FileTarget } from '@/lib/file-navigation'
 import { AuthBridge } from './AuthBridge'
 import { isInlineAuthClaimed } from '@/lib/inline-auth'
@@ -132,7 +113,7 @@ import { AlertTriangle, ArrowLeftFromLine } from '@/lib/icons'
 import { RewindDialog } from './RewindDialog'
 import { ConfirmDialog } from './ConfirmDialog'
 import { SystemPromptDialog } from './SystemPromptDialog'
-import type { AuthNotifyDTO, AuthPromptDTO, BrowserStatusDTO } from '../../../../shared/types'
+import type { AuthNotifyDTO, AuthPromptDTO } from '../../../../shared/types'
 import type { UiStyle } from '@/lib/ui-style'
 
 interface WorkspaceProps {
@@ -225,7 +206,6 @@ export function Workspace({ store, accent, onAccentChange, uiStyle, onUiStyleCha
   const [allowMidRunChanges, setAllowMidRunChanges] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsSection, setSettingsSection] = useState<string | null>(null)
-  const [libraryOpen, setLibraryOpen] = useState(false)
 const [alwaysOnTop, setAlwaysOnTop] = useState(false)
   /** ⌘K palette and ⌘⇧F session search: controlled here so the shortcut
    * dispatcher owns their toggle keys (each surface re-admits its own key
@@ -236,17 +216,45 @@ const [alwaysOnTop, setAlwaysOnTop] = useState(false)
   // badge count rides the push-fed store.
   const [scheduledOpen, setScheduledOpen] = useState(false)
   const { unreadCount: scheduledUnread } = useScheduledTasks()
-  const [sidePanelMode, setSidePanelMode] = useState<'closed' | 'docked' | 'fullscreen'>('closed')
+  const [panes] = useState(() => new WorkspacePanes())
+  const scope = panes.forSession(paneSessionKey(shell))
+  const { cwd: scopeCwd, sessionId: scopeSessionId, subagentParentPath } = shell
+  useLayoutEffect(() => {
+    panes.identify(scope.key, { cwd: scopeCwd, sessionId: scopeSessionId, subagentParentPath })
+  }, [panes, scope.key, scopeCwd, scopeSessionId, subagentParentPath])
+  const { mode: sidePanelMode, tabs: sidePanelTabs, active: sidePanelTab, pickerOpen, reviewTurnId, reviewWrapLines } =
+    useSyncExternalStore(scope.subscribe, scope.getSnapshot)
   const sidePanelOpen = sidePanelMode !== 'closed'
   const sidePanelFullscreen = sidePanelMode === 'fullscreen'
-  // Every closing path clears fullscreen atomically, including closing the
-  // last tab and the command palette. Opening an already-open tab keeps it.
-  const setSidePanelOpen = useCallback((value: boolean | ((open: boolean) => boolean)) => {
-    setSidePanelMode((mode) => {
-      const open = typeof value === 'function' ? value(mode !== 'closed') : value
-      return open ? (mode === 'closed' ? 'docked' : mode) : 'closed'
-    })
-  }, [])
+  const setSidePanelOpen = scope.setOpen
+  const { files, git, terminals } = scope
+  const { current: browserStore, hosts: browserHosts, open: openBrowser, close: closeBrowser, onEmpty: onBrowserEmpty, forget: forgetBrowser } =
+    useWorkspaceBrowsers(store, panes, scope, sessions, sidePanelTabs.includes('browser'), sidePanelOpen)
+  const sideChat = sidePanelTab === 'chat' ? scope.chat(shell.sessionPath) : null
+  const conversationVisible = !settingsOpen && !scheduledOpen && !sidePanelFullscreen
+  const conversationVisibleRef = useRef(conversationVisible)
+  const isViewingSession = useCallback((path: string) =>
+    store.getShell().sessionPath === path && conversationVisibleRef.current &&
+    document.visibilityState === 'visible' && document.hasFocus(), [store])
+  const markFocusedSessionRead = useCallback(() => {
+    const path = store.getShell().sessionPath
+    if (!path || !isViewingSession(path)) return
+    persistSidebarPreferences((current) => current.unread.includes(path) ? setSessionUnread(current, path, false) : current)
+  }, [store, isViewingSession, persistSidebarPreferences])
+  // A selected chat can still be unseen behind another page or an unfocused
+  // window. Returning to its transcript acknowledges the completed response.
+  useLayoutEffect(() => {
+    conversationVisibleRef.current = conversationVisible
+    markFocusedSessionRead()
+  }, [conversationVisible, markFocusedSessionRead])
+  useEffect(() => {
+    window.addEventListener('focus', markFocusedSessionRead)
+    document.addEventListener('visibilitychange', markFocusedSessionRead)
+    return () => {
+      window.removeEventListener('focus', markFocusedSessionRead)
+      document.removeEventListener('visibilitychange', markFocusedSessionRead)
+    }
+  }, [markFocusedSessionRead])
   /** Left session sidebar open state — controlled so the shell knows how much
    * room the panels actually take, and so the resize strip can toggle it. */
   const [sidebarOpen, setSidebarOpen] = useState(true)
@@ -275,95 +283,38 @@ const [alwaysOnTop, setAlwaysOnTop] = useState(false)
    * a drag runs (see `applyPanelWidth`), and from the layout effect otherwise. */
   const leftPanelRef = useRef<HTMLElement | null>(null)
   const rightPanelRef = useRef<HTMLElement | null>(null)
-  /** Panes hosted by the right rail; state lives here so closing and
-   * re-opening the rail restores the same tabs. */
-  const [sidePanelTabs, setSidePanelTabs] = useState<SidebarTabId[]>([])
-  const [sidePanelTab, setSidePanelTab] = useState<SidebarTabId | null>(null)
-  const [terminals] = useState(() => new TerminalStore())
   const [debugStore] = useState(() => new DebugStore())
-  const [files] = useState(() => new FileBrowserStore())
-  const [git] = useState(() => new GitStore())
-  useEffect(() => () => git.dispose(), [git])
-  useEffect(() => () => terminals.dispose(), [terminals])
   useEffect(() => () => debugStore.dispose(), [debugStore])
-  // DAP runInTerminal: a debug adapter asks for a real terminal to host the
-  // debuggee. Spawn the tab first (opening the terminal pane auto-births a tab
-  // only when none exists, and ours already does), and answer main with the
-  // shell's pid. Main owns cancellation and command delivery.
+  const paneMount = useRef(0)
+  useEffect(() => {
+    const mount = ++paneMount.current
+    window.addEventListener('pagehide', panes.flush)
+    return () => {
+      window.removeEventListener('pagehide', panes.flush)
+      // React may immediately reattach this effect to the same stores.
+      queueMicrotask(() => { if (paneMount.current === mount) panes.dispose() })
+    }
+  }, [panes])
+  useEffect(() => watchSshTerminals(path => panes.forSession(path).terminals, path => {
+    const owner = panes.forSession(path)
+    if (!owner.getSnapshot().tabs.includes('terminal')) {
+      owner.open('terminal', paneSessionKey(store.getShell()) === path)
+    }
+  }), [panes, store])
   useEffect(() => {
     return window.pi.onDebugTerminalRequest((request) => {
-      void terminals.spawnForDebug(request.cwd, request.title).then((result) => {
+      const owner = panes.forSession(request.sessionPath)
+      void owner.terminals.spawnForDebug(request.cwd, request.title).then((result) => {
         if ('error' in result) {
           window.pi.debugTerminalResponse({ requestId: request.requestId, error: result.error })
           return
         }
         window.pi.debugTerminalResponse({ requestId: request.requestId, shellProcessId: result.pid, terminalId: result.id })
-        openSidePanelTabRef.current?.('terminal')
+        owner.open('terminal', paneSessionKey(store.getShell()) === request.sessionPath)
       })
     })
-  }, [terminals])
-  // The embedded browser's store lives as long as the workspace. Its pane is
-  // kept mounted across rail tab switches (SidebarPanel's hidden layer), so
-  // pages survive those; closing the browser tab unmounts the pane and
-  // destroys its guest pages, and so does folding the rail — unless the
-  // keep-alive pref holds the folded aside mounted (SidebarPanel), in which
-  // case the guests simply live on. Folds always reconstruct from the snapshot;
-  // explicit tab closes retain it only when restore-tabs is enabled. Saved
-  // entries retain their owners (including `agent:<sessionId>`), repainting
-  // the strip as the pane mounts while the content reloads.
-  const [browserStore] = useState(() => new BrowserStore())
-  /** The tab list as a ref: the browser-state subscription below registers
-   * once and must read the open state without re-subscribing per change. */
-  const sidePanelTabsRef = useRef<SidebarTabId[]>([])
-  /** Agent pendingCreate ids the auto-open has already reacted to — a
-   * deliberate close is not fought over the same pending batch (already-seen
-   * ids never reopen); a NEW pending create opens again. */
-  const browserAutoOpenedRef = useRef(new Set<string>())
-  /** Latest rail opener; `openSidePanelTab` is defined further down, so the
-   * subscription reads it through this ref. */
-  const openSidePanelTabRef = useRef<((kind: SidebarTabKind) => void) | null>(null)
-  useEffect(() => {
-    sidePanelTabsRef.current = sidePanelTabs
-  }, [sidePanelTabs])
-  useEffect(() => {
-    const applyBrowserStatus = (status: BrowserStatusDTO) => {
-      browserStore.applyStatus(status)
-      // An agent-created page (browser_navigate & co.) needs a pane to host its
-      // guest webview: auto-open the browser tab while it is closed. Human
-      // pendingCreates never trigger this — the user is already driving.
-      const agentPending = status.pendingCreates.filter((p) => p.owner !== HUMAN_OWNER)
-      if (agentPending.length > 0) {
-        const open = !sidePanelTabsRef.current.includes('browser')
-          && agentPending.some((p) => !browserAutoOpenedRef.current.has(p.id))
-        for (const p of agentPending) browserAutoOpenedRef.current.add(p.id)
-        if (open) openSidePanelTabRef.current?.('browser')
-      } else {
-        browserAutoOpenedRef.current.clear()
-      }
-    }
-    const unsubscribeState = window.pi.onBrowserState(applyBrowserStatus)
-    // Open a closed browser pane only for a newly received popup event, never for queued content. Queues survive pane closure and drain on remount; a user-closed pane must not reopen repeatedly for the same batch.
-    const unsubscribePopups = subscribeBrowserPopups(browserStore, () => {
-      if (!sidePanelTabsRef.current.includes('browser')) openSidePanelTabRef.current?.('browser')
-    })
-    // Keep the latest five download events in the store; the toolbar-level indicator survives page switching.
-    const unsubscribeDownloads = subscribeBrowserDownloads(browserStore)
-    void window.pi.browserStatus().then((status) => applyBrowserStatus(status)).catch(() => {})
-    return () => {
-      unsubscribeState()
-      unsubscribePopups()
-      unsubscribeDownloads()
-    }
-  }, [browserStore])
-  const newTerminal = useCallback(() => {
-    const current = store.getShell()
-    terminals.create(current.projectless ? null : current.cwd)
-  }, [store, terminals])
-  /** The side chat's exchanges — created with its tab, dropped with it. */
-  const [sideChat, setSideChat] = useState<SideChatStore | null>(null)
-  /** Composer draft of the side chat; kept here so switching panel tabs (or
-   * collapsing the rail) does not discard what was typed. */
-  const [sideChatDraft, setSideChatDraft] = useState('')
+  }, [panes, store])
+
   /** Browser annotation → composer draft insert (Task 16). The MAIN
    * composer's draft state is fully internal to Composer — there is no
    * external setter and no shared store — so the narrowest intrusion is a
@@ -385,10 +336,6 @@ const [alwaysOnTop, setAlwaysOnTop] = useState(false)
     window.addEventListener(BROWSER_ANNOTATION_EVENT, onAnnotation)
     return () => window.removeEventListener(BROWSER_ANNOTATION_EVENT, onAnnotation)
   }, [])
-  /** The turn the review tab should show — set by a transcript Review click. */
-  const [reviewTurnId, setReviewTurnId] = useState<number | null>(null)
-  /** The live side chat, for handlers that must not depend on its identity. */
-  const sideChatRef = useRef<SideChatStore | null>(null)
   const [authPrompt, setAuthPrompt] = useState<AuthPromptDTO | null>(null)
   const [authNotify, setAuthNotify] = useState<AuthNotifyDTO[]>([])
   const [rewindTarget, setRewindTarget] = useState<{ path: string; messageTimestamp?: number; messageEntryId?: string; mode?: RewindMode } | null>(null)
@@ -493,13 +440,17 @@ const [alwaysOnTop, setAlwaysOnTop] = useState(false)
       if (path) {
         if (event.type === 'agent_start') {
           setLiveSessionPaths((current) => (current.has(path) ? current : new Set(current).add(path)))
-        } else if (event.type === 'agent_settled' || event.type === 'pi_error') {
+        } else if ((event.type === 'agent_settled' && !event.continuing) || event.type === 'pi_error') {
           setLiveSessionPaths((current) => {
             if (!current.has(path)) return current
             const next = new Set(current)
             next.delete(path)
             return next
           })
+        }
+        if (event.type === 'agent_settled' && !event.continuing && !event.userAborted &&
+          !event.subagentChild && !isViewingSession(path)) {
+          persistSidebarPreferences((current) => current.unread.includes(path) ? current : setSessionUnread(current, path, true))
         }
       }
       // A materialized new session is already listed; refresh again as soon
@@ -508,6 +459,8 @@ const [alwaysOnTop, setAlwaysOnTop] = useState(false)
       if (
         event.type === 'agent_start' ||
         event.type === 'agent_end' ||
+        event.type === 'agent_settled' ||
+        event.type === 'pi_error' ||
         event.type === 'session_info_changed' ||
         (event.type === 'message_end' && event.message?.role === 'user')
       ) {
@@ -551,7 +504,7 @@ const [alwaysOnTop, setAlwaysOnTop] = useState(false)
       offDismiss()
       offNotify()
     }
-  }, [refreshModels, refreshSessions, refreshFolders])
+  }, [refreshModels, refreshSessions, refreshFolders, isViewingSession, persistSidebarPreferences])
 
   useEffect(() => {
     if (settingsOpen) return
@@ -581,9 +534,7 @@ const [alwaysOnTop, setAlwaysOnTop] = useState(false)
       if (goalUI.enabled && goalCanBeReplaced(goal)) {
         return store.startGoal({ text, images, files })
       }
-      // Mirror the main process's file blocks so chips render on the optimistic echo.
-      store.appendOptimisticUser(optimisticEchoText(text, files), images)
-      void window.pi.prompt({ text, images, files })
+      return store.sendPrompt({ text, images, files })
     },
     [store]
   )
@@ -601,9 +552,9 @@ const [alwaysOnTop, setAlwaysOnTop] = useState(false)
       files: string[]
       streamingBehavior: StreamingBehavior
     }) => {
-      void window.pi.prompt(payload)
+      return store.sendPrompt(payload)
     },
-    []
+    [store]
   )
 
   /** Recall queued messages: main clears the SDK queues and returns them
@@ -849,175 +800,49 @@ const [alwaysOnTop, setAlwaysOnTop] = useState(false)
     [store, refreshSessions, t]
   )
 
-  /**
-   * Open the side chat. It is renderer state only — the questions are no-tools
-   * completions over this session's committed context, so there is no session
-   * to create and nothing to clean up when the tab closes.
-   */
-  const openSideChat = useCallback(() => {
-    if (sideChatRef.current) return
-    const created = new SideChatStore(store.getShell().sessionPath)
-    sideChatRef.current = created
-    setSideChatDraft('')
-    setSideChat(created)
-  }, [store])
+  /** A pane is opened in the conversation that created the action. */
+  const newTerminal = useCallback(() => {
+    terminals.create(shell.projectless ? null : shell.cwd)
+  }, [shell.cwd, shell.projectless, terminals])
 
-  /** Stable so a shell re-render (a panel resize) never re-renders the
-   * transcript: `ChatView` is memoized on its props. */
+  const openSidePanelTab = useCallback((kind: SidebarTabKind) => {
+    if (kind === 'browser') { openBrowser(); return }
+    if (kind === 'terminal' && terminals.getSnapshot().tabs.length === 0) newTerminal()
+    scope.open(kind)
+  }, [scope, terminals, newTerminal, openBrowser])
+
+  /** Stable during shell updates so the transcript keeps its own render cadence. */
   const dismissChatError = useCallback(() => store.clearError(), [store])
 
-  /** Destroy the side chat: stop its answer and drop every exchange. */
-  const closeSideChat = useCallback(() => {
-    const current = sideChatRef.current
-    sideChatRef.current = null
-    setSideChatDraft('')
-    setSideChat(null)
-    current?.dispose()
-  }, [])
-
-  /**
-   * Point the side chat at the session the workspace is showing now. The thread
-   * and its context belong to the session it was asked against, so rebinding
-   * starts over: closing the old store aborts any running answer and drops the
-   * exchanges, then a new store binds to the current session. A click while the
-   * two already match does nothing.
-   */
-  const rebindSideChat = useCallback(() => {
-    const current = sideChatRef.current
-    const target = store.getShell().sessionPath
-    if (current && current.boundSessionPath === target) return
-    closeSideChat()
-    openSideChat()
-  }, [closeSideChat, openSideChat, store])
-
-  /** Open a pane in the right rail (idempotent) and make it the active tab. */
-  const openSidePanelTabId = useCallback((id: SidebarTabId) => {
-    // The setting may have changed while the browser was already closed.
-    // A folded browser still owns its rail tab and must retain its snapshot.
-    if (id === 'browser' && !sidePanelTabsRef.current.includes(id) && !getBrowserRestoreTabsPref()) {
-      closeOpenBrowserPages(false)
-    }
-    setSidePanelTabs((current) => (current.includes(id) ? current : [...current, id]))
-    setSidePanelTab(id)
-    // A tab opened from the chat (a subagent session) must reveal the rail; the
-    // picker path is already inside it, where this is a no-op.
-    setSidePanelOpen(true)
-  }, [])
-
-  const openSidePanelTab = useCallback(
-    (kind: SidebarTabKind) => {
-      openSidePanelTabId(kind)
-      // A side chat is born with its tab.
-      if (kind === 'chat') openSideChat()
-      if (kind === 'terminal' && terminals.getSnapshot().tabs.length === 0) newTerminal()
-    },
-    [openSidePanelTabId, openSideChat, terminals, newTerminal]
-  )
-  // The browser-state subscription registered earlier reads the opener through
-  // its ref — synced here, after the callback it wraps exists.
-  useEffect(() => {
-    openSidePanelTabRef.current = openSidePanelTab
-  })
-
-  // Ordinary HTTP(S) chat clicks open the browser pane through open-link. The queue also covers events preceding subscription: BrowserPane drains on later mount.
-  useEffect(() => {
-    const open = () => openSidePanelTabRef.current?.('browser')
-    window.addEventListener(BROWSER_OPEN_LINK_EVENT, open)
-    return () => window.removeEventListener(BROWSER_OPEN_LINK_EVENT, open)
-  }, [])
-
-  /**
-   * A delegation's "open session" shows the child BESIDE the chat. Navigating
-   * the visible conversation to a read-only child used to lose the user's place
-   * in the parent for what is usually a glance; the pane's own action still
-   * offers the full view when that is what they want.
-   */
   const openAgentPane = useCallback((path: string) => {
-    openSidePanelTabId(agentTabId(path))
-  }, [openSidePanelTabId])
-  /** The rail's agent tabs are keyed by the CHILD session file. */
+    scope.open(agentTabId(path))
+  }, [scope])
   const agentRuns = useMemo(
     () => new Map((shell.subagents ?? []).map((run) => [run.sessionPath, run])),
     [shell.subagents]
   )
 
-  /** Local conversation links reveal the files pane and preserve other tabs. */
-  const openFile = useCallback((target: FileTarget) => {
-    files.open(store.getShell().cwd ?? '', target)
-  }, [files, store])
+  const openFile = useCallback((target: FileTarget, view?: FileView) => {
+    files.open(shell.cwd ?? '', target, view, { expandTree: false })
+  }, [files, shell.cwd])
 
   useEffect(() => files.subscribeOpenError(() => {
     toast.error({ title: t('files.error.unreadable') })
   }), [files, toast, t])
 
-  useEffect(() => files.subscribeOpen(path => {
-    const id = fileTabId(path)
-    setSidePanelTabs(current => {
-      if (current.includes(id)) return current.filter(tab => tab !== 'files')
-      return current.includes('files') ? current.map(tab => tab === 'files' ? id : tab) : [...current, id]
-    })
-    setSidePanelTab(id)
-    setSidePanelOpen(true)
-  }), [files])
-
-  const selectSidePanelTab = useCallback((id: SidebarTabId) => {
-    const path = filePathForTab(id)
-    if (path) files.select(path)
-    setSidePanelTab(id)
-  }, [files])
-
-  /** Close a pane; the neighbour to its left takes over as the active tab. */
-  const closeSidePanelTab = useCallback(
-    (kind: SidebarTabId) => {
-      const index = sidePanelTabs.indexOf(kind)
-      if (index < 0) return
-      if (kind === 'browser') {
-        closeOpenBrowserPages(getBrowserRestoreTabsPref())
-        const browserState = browserStore.getState()
-        const ids = new Set([
-          ...(browserState.status?.pages ?? []).map(page => page.id),
-          ...(browserState.status?.pendingCreates ?? []).map(page => page.id),
-          ...browserState.optimistic.map(page => page.id)
-        ])
-        for (const id of ids) void window.pi.browserClosePage(id).catch(() => {})
-      }
-      const next = sidePanelTabs.filter((tab) => tab !== kind)
-      setSidePanelTabs(next)
-      setSidePanelTab((active) =>
-        active === kind ? (next[index - 1] ?? next[index] ?? null) : active
-      )
-      // Closing the side-chat tab destroys the thread — nothing outlives it.
-      if (kind === 'chat') closeSideChat()
-      if (kind === 'terminal') terminals.dispose()
-      const filePath = filePathForTab(kind)
-      if (filePath) files.close(filePath)
-      // An empty rail has nothing to show (and its picker is one button away in
-      // the header), so closing the last tab folds it away.
-      if (next.length === 0) setSidePanelOpen(false)
-    },
-    [sidePanelTabs, closeSideChat, terminals, files, browserStore]
-  )
-
-  /**
-   * Close every tab but one. Each tab keeps its own teardown (the side chat is
-   * destroyed, the terminal disposed, the file closed), so this loops through
-   * the same path rather than dropping the list.
-   */
-  const closeOtherSidePanelTabs = useCallback(
-    (keep: SidebarTabId) => {
-      for (const tab of sidePanelTabs) if (tab !== keep) closeSidePanelTab(tab)
-      setSidePanelTabs([keep])
-      setSidePanelTab(keep)
-    },
-    [sidePanelTabs, closeSidePanelTab]
-  )
-
+  const selectSidePanelTab = scope.select
+  const closeSidePanelTabs = useCallback((tabs: SidebarTabId[]) => {
+    if (tabs.includes('browser')) closeBrowser(browserStore)
+    scope.close(tabs)
+  }, [browserStore, closeBrowser, scope])
+  const closeSidePanelTab = useCallback((id: SidebarTabId) => closeSidePanelTabs([id]), [closeSidePanelTabs])
+  const closeOtherSidePanelTabs = useCallback((keep: SidebarTabId) => {
+    closeSidePanelTabs(scope.getSnapshot().tabs.filter(id => id !== keep))
+    scope.select(keep)
+  }, [closeSidePanelTabs, scope])
   const closeAllSidePanelTabs = useCallback(() => {
-    for (const tab of sidePanelTabs) closeSidePanelTab(tab)
-    setSidePanelTabs([])
-    setSidePanelTab(null)
-    setSidePanelOpen(false)
-  }, [sidePanelTabs, closeSidePanelTab])
+    closeSidePanelTabs(scope.getSnapshot().tabs)
+  }, [closeSidePanelTabs, scope])
 
   useEffect(() => {
     const onResize = () => setViewportWidth(window.innerWidth)
@@ -1158,11 +983,10 @@ const [alwaysOnTop, setAlwaysOnTop] = useState(false)
    */
   const openReview = useCallback(
     (turnId: number) => {
-      setReviewTurnId(turnId)
-      openSidePanelTab('review')
-      setSidePanelOpen(true)
+      scope.review(turnId)
+      scope.open('review')
     },
-    [openSidePanelTab]
+    [scope]
   )
 
   /** Top-level action starts a chat without a project; project + passes cwd. */
@@ -1189,10 +1013,10 @@ const [alwaysOnTop, setAlwaysOnTop] = useState(false)
       const snapshot: SessionSnapshotDTO = await opening
       if (request !== navigationRequest.current) return
       store.applySnapshot(snapshot)
-      persistSidebarPreferences((current) => current.unread.includes(path) ? setSessionUnread(current, path, false) : current)
+      markFocusedSessionRead()
       void refreshFolders()
     },
-    [store, refreshFolders, persistSidebarPreferences]
+    [store, refreshFolders, markFocusedSessionRead]
   )
 
   /** History's View conversation navigates the main transcript. The task
@@ -1200,8 +1024,7 @@ const [alwaysOnTop, setAlwaysOnTop] = useState(false)
   const openScheduledConversation = useCallback(async (path: string) => {
     await openSession(path)
     setScheduledOpen(false)
-    setSidePanelOpen(false)
-  }, [openSession, setSidePanelOpen])
+  }, [openSession])
 
   /** Runs after the confirm dialog's Delete press; trash is reversible. */
   const confirmDelete = useCallback(async () => {
@@ -1214,8 +1037,17 @@ const [alwaysOnTop, setAlwaysOnTop] = useState(false)
         target.kind === 'session'
           ? await window.pi.deleteSession(target.id)
           : await window.pi.deleteFolder(target.id)
+      const affected = sessions.filter(session => target.kind === 'session' ? session.path === target.id : session.cwd === target.id)
+      const removed = new Set(affected.map(session => session.path))
+      if (target.kind === 'session') removed.add(target.id)
+      const browsers = new Set(affected.map(session => session.id))
+      for (const [path, owner] of panes.ownedBy(target.kind, target.id)) {
+        removed.add(path)
+        if (owner.sessionId) browsers.add(owner.sessionId)
+      }
+      for (const path of removed) panes.forget(path)
+      for (const id of browsers) forgetBrowser(id)
       if (snapshot && request === navigationRequest.current) store.applySnapshot(snapshot)
-      const removed = new Set(target.kind === 'session' ? [target.id] : sessions.filter((s) => s.cwd === target.id).map((s) => s.path))
       persistSidebarPreferences((current) => forgetSidebarSessions(current, removed))
     } catch (error) {
       console.error('delete failed', error)
@@ -1223,7 +1055,7 @@ const [alwaysOnTop, setAlwaysOnTop] = useState(false)
       void refreshSessions()
       void refreshFolders()
     }
-  }, [pendingDelete, store, refreshSessions, refreshFolders, sessions, persistSidebarPreferences])
+  }, [pendingDelete, store, refreshSessions, refreshFolders, sessions, persistSidebarPreferences, panes, forgetBrowser])
 
   const deleteSessionCount = useMemo(
     () => (pendingDelete?.kind === 'folder' ? sessions.filter((s) => s.cwd === pendingDelete.id).length : 0),
@@ -1245,9 +1077,10 @@ const [alwaysOnTop, setAlwaysOnTop] = useState(false)
 
   /**
    * Sidebar tree: one folder node per known folder (opened in the app or with
-   * sessions on disk), active folder first, each listing its sessions. The
-   * active folder is only listed while it is known or still has sessions —
-   * deleting a project drops it until a new session shows up there.
+   * sessions on disk), each listing its sessions. Project rows keep the stored
+   * folder order; only the sessions inside each project follow activity.
+   * Discovered folders (never opened here) take a stable path order after the
+   * known ones. A project drops out once it is neither known nor has sessions.
    */
   const folderGroups = useMemo(() => {
     const byFolder = new Map<string, SessionSummaryDTO[]>()
@@ -1257,18 +1090,14 @@ const [alwaysOnTop, setAlwaysOnTop] = useState(false)
       list.push(session)
       byFolder.set(session.cwd, list)
     }
-    const activeListed =
-      shell.cwd != null && (folders.includes(shell.cwd) || byFolder.has(shell.cwd))
-    const ordered = [
-      ...(shell.cwd && activeListed ? [shell.cwd] : []),
-      ...folders.filter((f) => f !== shell.cwd),
-      ...[...byFolder.keys()].filter((f) => f !== shell.cwd && !folders.includes(f))
-    ]
+    const discovered = [...byFolder.keys()]
+      .filter((folder) => !folders.includes(folder))
+      .sort((a, b) => a.localeCompare(b))
     const seen = new Set<string>()
-    return ordered
-      .filter((f) => !seen.has(f) && seen.add(f))
+    return [...folders, ...discovered]
+      .filter((folder) => !seen.has(folder) && seen.add(folder))
       .map((cwd) => ({ cwd, sessions: byFolder.get(cwd) ?? [] }))
-  }, [sessions, folders, shell.cwd])
+  }, [sessions, folders])
 
   const sessionsByPath = useMemo(() => new Map(sessions.map((session) => [session.path, session])), [sessions])
 
@@ -1416,7 +1245,7 @@ const [alwaysOnTop, setAlwaysOnTop] = useState(false)
       {/* The title row owns the shell's top rule: it spans the whole window,
           sidebar included, so the line under the header reaches the app's left
           edge. The content pane therefore carries no top border of its own. */}
-      <WindowTitlebar className="border-b border-border/50" inert={libraryOpen || settingsOpen || scheduledOpen}>
+      <WindowTitlebar className="border-b border-border/50" inert={settingsOpen || scheduledOpen}>
         <Tooltip content={t('workspace.toggleSessions')}>
           <AnimatedSidebarTrigger aria-label={t('workspace.toggleSessions')} className="size-8 text-muted-foreground hover:bg-muted hover:text-foreground">
             {sidebarOpen ? <PanelLeftClose className="size-4" /> : <PanelLeftOpen className="size-4" />}
@@ -1524,7 +1353,10 @@ const [alwaysOnTop, setAlwaysOnTop] = useState(false)
               data-titlebar-action="always-on-top"
               onClick={() => void window.pi.setAlwaysOnTop(!alwaysOnTop).then(setAlwaysOnTop)}
             >
-              {alwaysOnTop ? <Pin className="size-4" /> : <PinOff className="size-4" />}
+              {/* One glyph in both states: pinned reads from the accent-tinted
+                  mark, so the toggle never swaps its silhouette under the
+                  pointer. */}
+              <PinLocation className={cn('size-4', alwaysOnTop && 'text-primary/70')} />
             </Button>
           </Tooltip>
           <Tooltip content={t('workspace.settings')} className={settingsOpen ? 'hidden' : undefined}>
@@ -1546,7 +1378,7 @@ const [alwaysOnTop, setAlwaysOnTop] = useState(false)
               aria-pressed={sidePanelFullscreen}
               data-titlebar-action="sidebar-fullscreen"
               disabled={!sidePanelOpen}
-              onClick={() => setSidePanelMode((mode) => mode === 'closed' ? mode : mode === 'fullscreen' ? 'docked' : 'fullscreen')}
+              onClick={scope.toggleFullscreen}
             >
               {sidePanelFullscreen ? <ArrowsInLineHorizontal className="size-4" /> : <ArrowsOutLineHorizontal className="size-4" />}
             </Button>
@@ -1559,7 +1391,7 @@ const [alwaysOnTop, setAlwaysOnTop] = useState(false)
           </Tooltip>
         </div>
       </WindowTitlebar>
-      <div className="flex min-h-0 flex-1" inert={libraryOpen}>
+      <div className="flex min-h-0 flex-1">
       <AnimatedSidebar
         ariaLabel={t('workspace.sessions')}
         collapsible="offcanvas"
@@ -1579,44 +1411,6 @@ const [alwaysOnTop, setAlwaysOnTop] = useState(false)
             last row must reach the panel's bottom line, not stop 8px above it
             (the row's own leading keeps the text off the edge). */}
         <AnimatedSidebarContent className="gap-5 overflow-hidden px-2 pb-0 pt-2">
-          <AnimatedSidebarGroup className="shrink-0 px-1 py-0">
-            <AnimatedSidebarGroupContent>
-              <AnimatedSidebarMenu className="gap-1">
-                <AnimatedSidebarMenuItem>
-                  <AnimatedSidebarMenuButton
-                    icon={<MessageSquarePlus className="size-4" />}
-                    onSelect={() => void newSession()}
-                    // No resting background: a permanent box on the row read as
-                    // a floating grey slab against the glass panel. It wears no
-                    // emphasis of its own either: the primary action reads from
-                    // its position and glyph, and the vendored button's
-                    // `font-medium` plus a full-contrast `text-foreground` made
-                    // this single row heavier and darker than every other
-                    // sidebar label, so both are explicitly turned back to the
-                    // sidebar's shared tone and weight.
-                    className="font-normal"
-                  >
-                    {t('workspace.newChat')}
-                  </AnimatedSidebarMenuButton>
-                </AnimatedSidebarMenuItem>
-                <AnimatedSidebarMenuItem>
-                  <AnimatedSidebarMenuButton
-                    icon={<FolderInput className="size-4" />}
-                    onSelect={() => void changeFolder()}
-                    className="font-normal"
-                  >
-                    {t('workspace.openFolder')}
-                  </AnimatedSidebarMenuButton>
-                </AnimatedSidebarMenuItem>
-                <AnimatedSidebarMenuItem>
-                  <AnimatedSidebarMenuButton icon={<BookOpen className="size-4" />} onSelect={() => setLibraryOpen(true)} className="font-normal">
-                    {t('library.title')}
-                  </AnimatedSidebarMenuButton>
-                </AnimatedSidebarMenuItem>
-              </AnimatedSidebarMenu>
-            </AnimatedSidebarGroupContent>
-          </AnimatedSidebarGroup>
-
           <SessionsSidebar
             sessions={sessions}
             folders={folderGroups}
@@ -1669,7 +1463,7 @@ const [alwaysOnTop, setAlwaysOnTop] = useState(false)
           sidebar's right border, so the strip's 3px overlap costs it nothing. */}
       <AnimatedSidebarInset className="isolate min-h-0 overflow-hidden bg-background md:-ml-[3px]">
         <div className="flex min-h-0 flex-1">
-          <div data-pip-source="conversation" className="flex min-h-0 min-w-0 flex-1 flex-col" inert={sidePanelFullscreen} aria-hidden={sidePanelFullscreen || undefined}>
+          <div data-pip-source="conversation" className="chat-layout flex min-h-0 min-w-0 flex-1 flex-col" inert={sidePanelFullscreen} aria-hidden={sidePanelFullscreen || undefined}>
             {!isNewSession || shell.goalUI.submitted ? (
               <ChatView
                 onRefinePlan={shell.scheduledTaskSession ? undefined : () => window.dispatchEvent(new CustomEvent('pith:refine-plan', { detail: { sessionPath: shell.sessionPath } }))}
@@ -1727,7 +1521,7 @@ const [alwaysOnTop, setAlwaysOnTop] = useState(false)
               readOnlyKind={shell.scheduledTaskSession ? 'scheduled' : 'subagent'}
               readOnlyParentPath={shell.subagentParentPath}
               onOpenSession={(path) => void openSession(path)}
-              escapeStopsRun={!settingsOpen && !scheduledOpen && !libraryOpen && !authPrompt}
+              escapeStopsRun={!settingsOpen && !scheduledOpen && !authPrompt}
               plan={shell.plan}
               onPlanState={(path, plan) => store.dispatch({ type: 'plan_state_update', sessionPath: path, plan })}
               sandboxMode={shell.sandboxMode}
@@ -1781,6 +1575,10 @@ const [alwaysOnTop, setAlwaysOnTop] = useState(false)
             edgeActive={activeEdge.right}
             tabs={sidePanelTabs}
             activeTab={sidePanelTab}
+            scopeKey={scope.key}
+            pickerOpen={pickerOpen}
+            onTogglePicker={scope.togglePicker}
+            browserHosts={browserHosts}
             onSelectTab={selectSidePanelTab}
             onOpenTab={openSidePanelTab}
             onCloseTab={closeSidePanelTab}
@@ -1794,17 +1592,15 @@ const [alwaysOnTop, setAlwaysOnTop] = useState(false)
               onNewTerminal: newTerminal,
               onTerminalsEmpty: () => closeSidePanelTab('terminal'),
               browserStore,
-              // Per-kind teardown is `closeSidePanelTab`'s job; the browser
-              // pane owns none (its store lives with the workspace).
-              onBrowserEmpty: () => closeSidePanelTab('browser'),
+              onBrowserEmpty,
               store,
               reviewTurnId,
+              onReviewTurnChange: scope.review,
+              reviewWrapLines,
+              onReviewWrapLinesChange: scope.setReviewWrapLines,
+              reviewCollapsed: scope.reviewCollapsed,
+              onReviewCollapsedChange: scope.setReviewCollapsed,
               sideChat,
-              sideChatDraft,
-              onSideChatDraftChange: setSideChatDraft,
-              sideChatOnCurrentSession:
-                sideChat != null && sideChat.boundSessionPath === shell.sessionPath,
-              onSideChatRebind: rebindSideChat,
               agentRuns,
               onOpenSessionInChat: (path) => void openSession(path)
             }}
@@ -1812,10 +1608,6 @@ const [alwaysOnTop, setAlwaysOnTop] = useState(false)
         </div>
       </AnimatedSidebarInset>
       </div>
-
-      <LibraryPage open={libraryOpen} onBack={() => setLibraryOpen(false)}
-        onSettings={() => { setLibraryOpen(false); setSettingsSection('library'); setSettingsOpen(true) }}
-        onOpenSession={async path => { await openSession(path); setLibraryOpen(false) }} />
 
       <SettingsPage
         open={settingsOpen}

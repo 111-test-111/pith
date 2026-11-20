@@ -39,6 +39,7 @@ import {
   SelectorTargetError,
   SnapshotScopeError,
   StaleSnapshotError,
+  TypeTargetNotInteractableError,
   TypeTextTooLongError,
   type AgentActionResult
 } from './service.ts'
@@ -103,6 +104,7 @@ export function browserToolErrorText(error: unknown): string {
     error instanceof SnapshotScopeError ||
     error instanceof SelectorTargetError ||
     error instanceof AxTargetError ||
+    error instanceof TypeTargetNotInteractableError ||
     error instanceof StaleSnapshotError ||
     error instanceof InvalidRefError ||
     error instanceof PageNotFoundError
@@ -124,6 +126,7 @@ function errorResult(error: unknown): BrowserToolResult {
     [BrowserHostUnavailableError, 'BROWSER_HOST_UNAVAILABLE'], [TypeTextTooLongError, 'TEXT_TOO_LONG'],
     [SnapshotScopeError, 'INVALID_SCOPE'], [SelectorTargetError, 'INVALID_SELECTOR_TARGET'],
     [AxTargetError, 'INVALID_AX_TARGET'], [NoFilePickerError, 'NO_FILE_PICKER'],
+    [TypeTargetNotInteractableError, 'TYPE_TARGET_NOT_INTERACTABLE'],
     [FilePickerInsteadOfClickError, 'FILE_PICKER_REQUIRES_UPLOAD']
   ] as const
   const code = codes.find(([ErrorType]) => error instanceof ErrorType)?.[1] ?? 'BROWSER_FAILED'
@@ -199,7 +202,6 @@ const refDescription = 'Ref from the snapshot, e.g. e5'
 const selectorDescription =
   'Playwright selector for unlisted targets (iframes, micro-frontends, hidden file inputs). '
   + 'Searches all frames; must match exactly one element (narrow with :visible or >> nth=0). '
-  + 'Closed shadow roots require ax. Provide only one of ref, selector or ax'
 
 // Accessibility targets reach closed shadow-root controls for click/hover only.
 const axDescription =
@@ -207,17 +209,30 @@ const axDescription =
   + 'Use the exact screen-reader name; role disambiguates shared names. Sends a real pointer event '
   + 'inside the hit-tested element box; covered/hidden targets fail. Provide only one of ref, selector or ax'
 const targetRefParam = (description: string) => Type.Optional(Type.String({ description }))
-const targetSelectorParam = () => Type.Optional(Type.String({ description: selectorDescription }))
+const targetSelectorParam = (allowAx = false) => Type.Optional(Type.String({
+  description: selectorDescription + (allowAx
+    ? 'For visible closed shadow-root controls, use ax. Provide only one of ref, selector or ax'
+    : 'Provide only one of ref or selector. This action does not support ax or controls inside closed shadow roots')
+}))
 const targetAxParam = () => Type.Optional(Type.Object({
   name: Type.String({ description: 'Accessible name (the visible label), e.g. "Save draft"' }),
   role: Type.Optional(Type.String({ description: 'Accessible role (button/link/checkbox) to disambiguate a name' }))
 }, { description: axDescription }))
 
-export function validateTargetParams(params: { ref?: string; selector?: string; ax?: unknown }): string | null {
+export function validateTargetParams(params: { ref?: string; selector?: string; ax?: unknown }, allowAx = false): string | null {
   const ax = params.ax as { name?: unknown; role?: unknown } | undefined
+  if (!allowAx && ax !== undefined) {
+    return 'error: ax is supported only by browser_click and browser_hover. Provide ref or selector for this action'
+  }
+  for (const key of ['ref', 'selector'] as const) {
+    if (params[key] !== undefined && (typeof params[key] !== 'string' || params[key].trim() === '')) {
+      return `error: ${key} must be a non-empty string`
+    }
+  }
+  const targets = allowAx ? 'ref, selector or ax' : 'ref or selector'
   const given = [params.ref ? 1 : 0, params.selector ? 1 : 0, ax !== undefined ? 1 : 0].reduce((sum, n) => sum + n, 0)
-  if (given === 0) return 'error: provide ref, selector or ax'
-  if (given > 1) return 'error: provide only one of ref, selector or ax'
+  if (given === 0) return `error: provide ${targets}`
+  if (given > 1) return `error: provide only one of ${targets}`
   if (ax !== undefined) {
     if (ax === null || typeof ax !== 'object') return 'error: ax must be an object like { name: "Save draft" }'
     if (typeof ax.name !== 'string' || ax.name.trim() === '') return 'error: ax.name must be a non-empty string'
@@ -230,14 +245,14 @@ export function validateTargetParams(params: { ref?: string; selector?: string; 
 
 const clickParameters = Type.Object({
   ref: targetRefParam(refDescription),
-  selector: targetSelectorParam(),
+  selector: targetSelectorParam(true),
   ax: targetAxParam(),
   maxChars: maxCharsParam(),
   offset: offsetParam()
 })
 const hoverParameters = Type.Object({
   ref: targetRefParam(refDescription),
-  selector: targetSelectorParam(),
+  selector: targetSelectorParam(true),
   ax: targetAxParam(),
   maxChars: maxCharsParam(),
   offset: offsetParam()
@@ -415,7 +430,7 @@ export function createBrowserTools(deps: BrowserToolsDeps): ToolDefinition[] {
     parameters: clickParameters,
     executionMode: 'sequential',
     async execute(_id, params) {
-      const invalid = validateTargetParams(params)
+      const invalid = validateTargetParams(params, true)
       if (invalid) return validationError(invalid)
       const window = { maxChars: params.maxChars, offset: params.offset }
       if (params.ax) return run(service.agentClickAx(owner, params.ax, window))
@@ -426,7 +441,7 @@ export function createBrowserTools(deps: BrowserToolsDeps): ToolDefinition[] {
   } satisfies ToolDefinition<typeof clickParameters>, {
     name: 'browser_type',
     label: 'Browser Type',
-    description: `Replace an input's text using ref or selector; submit=true presses Enter. Returns a snapshot. Each character is replayed as a real key event; maximum ${TYPE_TEXT_MAX_CHARS} characters.${UNTRUSTED_NOTE}`,
+    description: `Replace a rendered input's text using ref or selector; submit=true presses Enter. Does not support ax. A hidden or zero-size input must be revealed or expanded before typing; changing selectors or scrolling cannot restore its size. Returns a snapshot. Each character is replayed as a real key event; maximum ${TYPE_TEXT_MAX_CHARS} characters.${UNTRUSTED_NOTE}`,
     parameters: typeParameters,
     executionMode: 'sequential',
     async execute(_id, params) {
@@ -525,7 +540,7 @@ export function createBrowserTools(deps: BrowserToolsDeps): ToolDefinition[] {
     parameters: hoverParameters,
     executionMode: 'sequential',
     async execute(_id, params) {
-      const invalid = validateTargetParams(params)
+      const invalid = validateTargetParams(params, true)
       if (invalid) return validationError(invalid)
       const window = { maxChars: params.maxChars, offset: params.offset }
       if (params.ax) return run(service.agentHoverAx(owner, params.ax, window))
@@ -554,11 +569,10 @@ export function createBrowserTools(deps: BrowserToolsDeps): ToolDefinition[] {
     parameters: uploadParameters,
     executionMode: 'sequential',
     async execute(_id, params) {
-
-      const resolved = await resolveUploadPaths(params.files, deps.cwd)
-      if (!resolved.ok) return validationError(resolved.error, 'INVALID_UPLOAD_PATH')
       const invalid = validateTargetParams(params)
       if (invalid) return validationError(invalid)
+      const resolved = await resolveUploadPaths(params.files, deps.cwd)
+      if (!resolved.ok) return validationError(resolved.error, 'INVALID_UPLOAD_PATH')
       const window = { maxChars: params.maxChars, offset: params.offset }
       return params.selector
         ? run(service.agentUploadSelector(owner, params.selector, resolved.paths, window))

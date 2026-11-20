@@ -8,9 +8,9 @@
 | --- | --- |
 | Interface | Navigation, chat lists, file trees, tabs, buttons, menus, settings/forms, tool titles, status, hints, statistics and chart labels |
 | Content | User/assistant messages, the native prompt editor and message editing, reasoning, plans, Markdown/notebook prose, subtitles and formulas; compact table cells use a derived size |
-| Code | Inline/fenced code, source and raw file views, line numbers, diffs, tool output, logs, debug expressions/values, assembly/memory and raw trajectory JSON |
+| Code | Inline/fenced code, source and raw file views, line numbers, diffs, tool output, logs, local/SSH terminals, debug expressions/values, assembly/memory and raw trajectory JSON |
 
-A monospace family does not imply the code size: paths, token counts, durations and status metadata remain interface text. Code-block language/copy controls remain interface text. Terminal body text uses the code base plus a fixed offset to retain its existing density. Font families are still independently configured through `lib/fonts.ts`.
+A monospace family does not imply the code size: paths, token counts, durations and status metadata remain interface text. Code-block language/copy controls remain interface text. Local and SSH terminal body text uses the same code size as source files and fenced code. Font families are still independently configured through `lib/fonts.ts`.
 
 PDF pages, HTML previews, browser guests, image/media canvases and font specimens keep their own authored text or zoom. Their surrounding controls follow interface text.
 
@@ -29,6 +29,8 @@ Source and diff virtualizers use the actual code row height for rows, spacers an
 The native plaintext prompt editor remains mounted; its existing observer recalculates measured line boxes. Multiline beUI inputs size rows with `lh`. The existing terminal runtime updates xterm font options and schedules a fit, preserving emulator and PTY ownership, scrollback and mount lifetime.
 
 All single-line fields share the sessions sidebar filter's text and insets through [`lib/input-style.ts`](../src/renderer/src/lib/input-style.ts): the small interface text role, symmetric vertical padding and horizontal padding, including numeric fields, branch creation, searches and editable pickers. Height follows the chosen text role's line box; consumers supply widths, font families, alignment and adornments while the shared style owns text size and padding. Icons reserve additional text space. Input actions fill that height, and containing toolbars can grow with enlarged interface text. Multiline fields retain their separate row, text and padding geometry.
+
+Dropdown option names use the same text role as the selected value in their trigger. `Select` carries that role through `textClassName` on the root, including portalled lists; model and permission pickers share their trigger scale with their option names too. Secondary descriptions and group headings retain their annotation roles. Horizontal tab and segmented choices use the beUI underline variant.
 
 Markdown inline code scales with its containing text using the code/content ratio, so body code keeps the code preference and heading code grows with its heading. A registered inherited cap-height metric aligns the monospace run with the surrounding type; native inline fragments retain wrapping. Fenced code and other code views retain their independent base.
 

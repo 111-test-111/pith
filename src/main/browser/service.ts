@@ -12,7 +12,7 @@ import {
   type BrowserPagesState,
 } from './pages.ts'
 import {
-  createBrowserPageId, isAllowedNavigationUrl, isSameDocumentUrl, parseMarkerUrl, HUMAN_OWNER,
+  createBrowserPageId, isAllowedNavigationUrl, isHumanBrowserOwner, isSameDocumentUrl, parseMarkerUrl,
   type BrowserPageMeta, type BrowserSeenPayload, type ElementAtInfo,
 } from '../../shared/browser.ts'
 import { diffSnapshotLines, emptySnapshotNote, focusChangedNote, ingestSnapshot, isAiRef, noDomChangeNote, pageIssuesNote, parseSnapshotRefs, scrollPositionNote, snapshotBeyondCapNote, snapshotOffsetPastEndNote, snapshotTruncationNote, TYPE_TEXT_MAX_CHARS, uploadNote, type EmptySnapshotDiagnostics, type IngestedSnapshot, type PageIssueLike, type ScrollPosition } from './tools-core.ts'
@@ -73,6 +73,7 @@ declare const window: {
   scrollX: number
   scrollY: number
   scrollBy(x: number, y: number): void
+  getComputedStyle(element: DomElementLike): { display: string; visibility: string }
 }
 declare const location: { reload(): void }
 declare const CSS: { escape(value: string): string }
@@ -121,7 +122,28 @@ export class TypeTextTooLongError extends Error {
   }
 }
 
+export class TypeTargetNotInteractableError extends Error {
+  constructor(target: string, reason: string) {
+    super(`${target} cannot receive browser_type: ${reason}. No typing was attempted. `
+      + 'Reveal or expand the control with browser_click on a visible control, or widen the Browser pane, '
+      + 'then read browser_snapshot before typing again. Do not retry typing with different selectors or '
+      + 'scroll the same hidden/zero-size input until its layout changes.')
+    this.name = 'TypeTargetNotInteractableError'
+  }
+}
+
+interface TypeTargetLayout {
+  width: number
+  height: number
+  viewportWidth: number
+  viewportHeight: number
+  display: string
+  visibility: string
+}
+
 type BoundedEvaluation<T> = { status: 'ok'; value: T } | { status: 'timeout' } | { status: 'error' }
+
+type LocatorAction = 'click' | 'hover' | 'type' | 'select' | 'upload'
 
 export type AxTarget = { name: string; role?: string }
 export type TargetSpec =
@@ -668,7 +690,7 @@ export class BrowserService {
     // The renderer is the only sender, but these two fields stay self-consistent
     // anyway: `owner` decides which session's pages a row joins, and
     // webContentsId is the key the human-input relay bumps to invalidate refs.
-    if (owner !== HUMAN_OWNER && !/^agent:.+$/.test(owner)) return null
+    if (!isHumanBrowserOwner(owner) && !/^agent:.+$/.test(owner)) return null
     const rawWcId = entry.webContentsId
     const webContentsId = typeof rawWcId === 'number' && Number.isInteger(rawWcId) && rawWcId > 0 ? rawWcId : undefined
     if (!isAllowedNavigationUrl(url) && parseMarkerUrl(url) === null) return null
@@ -801,7 +823,7 @@ export class BrowserService {
   noteWindowPopup(openerWebContentsId: number, url: string): void {
     if (this.disposed) return
     const opener = this.state.pages.find((p) => p.webContentsId === openerWebContentsId)
-    if (!opener || opener.owner === HUMAN_OWNER) return
+    if (!opener || isHumanBrowserOwner(opener.owner)) return
     const list = this.windowPopups.get(opener.owner) ?? []
     list.push(url)
     this.windowPopups.set(opener.owner, list)
@@ -1292,6 +1314,7 @@ export class BrowserService {
   private async resolveTarget(
     owner: string,
     target: TargetSpec,
+    action: LocatorAction,
   ): Promise<{ pageId: string; locator: LocatorLike; note: string | null }> {
     if (target.kind === 'ref') {
       const { pageId, locator } = this.resolveRef(owner, target.ref)
@@ -1304,13 +1327,13 @@ export class BrowserService {
     const pageId = this.agentActivePageId(owner)
     if (!pageId) throw new StaleSnapshotError('no active page; call browser_navigate first')
     const page = this.requireRuntime(pageId).page
-    const found = await this.resolveSelectorTarget(page, target.selector)
+    const found = await this.resolveSelectorTarget(page, target.selector, action)
     return { pageId, locator: found.locator, note: found.note }
   }
 
   /** Search bounded frames, preferring a unique visible match, then a unique hidden
    * match (for file inputs). Ambiguity is an error; closed shadow roots require AX. */
-  private async resolveSelectorTarget(page: PageLike, selector: string): Promise<{ locator: LocatorLike; note: string }> {
+  private async resolveSelectorTarget(page: PageLike, selector: string, action: LocatorAction): Promise<{ locator: LocatorLike; note: string }> {
     const frames = page.frames().slice(0, MAX_TARGET_FRAMES)
     const visibleSingle: Array<{ locator: LocatorLike; where: string }> = []
     const single: Array<{ locator: LocatorLike; where: string }> = []
@@ -1366,11 +1389,18 @@ export class BrowserService {
       throw new SelectorTargetError(`selector could not be evaluated in any frame: ${selector} — ${failure}`)
     }
     const cap = frames.length === MAX_TARGET_FRAMES ? ` (first ${MAX_TARGET_FRAMES} frames scanned)` : ''
+    const guidance = action === 'click' || action === 'hover'
+      ? `If the control is visible on screen but inside a closed shadow root, browser_${action} can target `
+        + 'its accessible name: ax: { name: "<the visible label>" }. Otherwise locate it with browser_screenshot.'
+      : action === 'type'
+        ? 'browser_type supports ref or selector only; it does not support ax. A :visible selector can also miss '
+          + 'a collapsed or zero-size input. Inspect browser_screenshot, reveal or expand the control with '
+          + 'browser_click on a visible control, or widen the Browser pane, then read browser_snapshot. '
+          + 'Do not keep retrying typing with different selectors until a rendered input is available.'
+        : `browser_${action} supports ref or selector only; it does not support ax or controls inside closed shadow roots. `
+          + 'Inspect browser_screenshot and read browser_snapshot to locate a reachable control.'
     throw new SelectorTargetError(
-      `selector matched nothing in ${frames.length} frame(s)${cap}: ${selector}. A control inside a closed shadow root cannot `
-      + `be reached by any selector (Playwright cannot pierce it), and it is normally missing from the snapshot too — `
-      + `if it is visible on screen, target it by its accessible name instead: ax: { name: "<the visible label>" }. `
-      + `Otherwise locate it with browser_screenshot.`,
+      `selector matched nothing in ${frames.length} frame(s)${cap}: ${selector}. ${guidance}`,
     )
   }
 
@@ -1634,7 +1664,7 @@ export class BrowserService {
   }
 
   private async clickTarget(owner: string, target: TargetSpec, window?: TargetWindowOpts): Promise<AgentActionResult> {
-    const { pageId, locator, note } = await this.resolveTarget(owner, target)
+    const { pageId, locator, note } = await this.resolveTarget(owner, target, 'click')
     const label = targetLabel(target)
     return this.withPageLock(pageId, async () => {
       const page = this.requireRuntime(pageId).page
@@ -1694,7 +1724,7 @@ export class BrowserService {
   }
 
   private async uploadTarget(owner: string, target: TargetSpec, files: string[], window?: TargetWindowOpts): Promise<AgentActionResult> {
-    const { pageId, locator, note } = await this.resolveTarget(owner, target)
+    const { pageId, locator, note } = await this.resolveTarget(owner, target, 'upload')
     const label = targetLabel(target)
     return this.withPageLock(pageId, async () => {
       const page = this.requireRuntime(pageId).page
@@ -1756,6 +1786,35 @@ export class BrowserService {
     return this.typeTarget(owner, { kind: 'selector', selector }, text, submit, window)
   }
 
+  // Diagnose collapsed inputs before sending any pointer/keyboard events. Offscreen
+  // inputs with a layout box remain eligible for Playwright's ordinary scrolling.
+  private async assertTypeTargetLayout(locator: LocatorLike, target: TargetSpec): Promise<void> {
+    const measured = await this.withBudget(() => locator.evaluate((el: DomElementLike) => {
+      const box = el.getBoundingClientRect()
+      const style = window.getComputedStyle(el)
+      return {
+        width: box.width, height: box.height,
+        viewportWidth: window.innerWidth, viewportHeight: window.innerHeight,
+        display: style.display, visibility: style.visibility,
+      }
+    }, undefined, { timeout: MEASURE_TIMEOUT_MS }), MEASURE_TIMEOUT_MS + 250)
+    const layout = measured as TypeTargetLayout | null
+    if (!layout || ![layout.width, layout.height, layout.viewportWidth, layout.viewportHeight].every(Number.isFinite)
+      || typeof layout.display !== 'string' || typeof layout.visibility !== 'string') {
+      throw new Error(`browser_type could not measure ${targetLabel(target)} within ${MEASURE_TIMEOUT_MS + 250}ms; `
+        + 'the page may be unresponsive or the element detached. Wait for the page and read browser_snapshot before retrying.')
+    }
+    const dimensions = `${layout.width}×${layout.height} CSS px in a ${layout.viewportWidth}×${layout.viewportHeight} CSS px frame viewport`
+    if (layout.width <= 0 || layout.height <= 0) {
+      const zero = layout.width <= 0 ? 'width' : 'height'
+      throw new TypeTargetNotInteractableError(targetLabel(target), `the input has zero ${zero} (${dimensions})`)
+    }
+    if (layout.display === 'none' || layout.visibility === 'hidden' || layout.visibility === 'collapse') {
+      throw new TypeTargetNotInteractableError(targetLabel(target),
+        `the input is hidden (display: ${layout.display}; visibility: ${layout.visibility}; ${dimensions})`)
+    }
+  }
+
   // Focus and select all through real events, then pressSequentially; never use fill.
   private async typeTarget(
     owner: string,
@@ -1766,9 +1825,9 @@ export class BrowserService {
   ): Promise<AgentActionResult> {
 
     if (text.length > TYPE_TEXT_MAX_CHARS) throw new TypeTextTooLongError(text.length)
-    const { pageId, locator, note } = await this.resolveTarget(owner, target)
+    const { pageId, locator, note } = await this.resolveTarget(owner, target, 'type')
     return this.withPageLock(pageId, async () => {
-
+      await this.assertTypeTargetLayout(locator, target)
       await this.focusGuestForKeys(pageId)
 
       const page = this.requireRuntime(pageId).page
@@ -1789,7 +1848,7 @@ export class BrowserService {
   }
 
   private async hoverTarget(owner: string, target: TargetSpec, window?: TargetWindowOpts): Promise<AgentActionResult> {
-    const { pageId, locator, note } = await this.resolveTarget(owner, target)
+    const { pageId, locator, note } = await this.resolveTarget(owner, target, 'hover')
     return this.withPageLock(pageId, async () => {
       await locator.hover({ timeout: AGENT_ACTION_TIMEOUT_MS, force: true })
       return this.finishAgentAction(owner, pageId, { ...window, notes: [...(window?.notes ?? []), note] })
@@ -1838,7 +1897,7 @@ export class BrowserService {
   }
 
   private async selectTarget(owner: string, target: TargetSpec, values: string[], window?: TargetWindowOpts): Promise<AgentActionResult> {
-    const { pageId, locator, note } = await this.resolveTarget(owner, target)
+    const { pageId, locator, note } = await this.resolveTarget(owner, target, 'select')
     return this.withPageLock(pageId, async () => {
       await locator.selectOption(values, { timeout: AGENT_ACTION_TIMEOUT_MS, force: true })
       return this.finishAgentAction(owner, pageId, { ...window, notes: [...(window?.notes ?? []), note] })

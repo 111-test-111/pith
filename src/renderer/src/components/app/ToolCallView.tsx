@@ -1,11 +1,14 @@
 import { JEV_ERROR_CODES } from '../../../../shared/types'
+import { visionToolError } from '../../../../shared/vision'
 import { submittedPlanRef } from '@/lib/plan-submissions'
 import { useBashTask, bashTaskStatus } from '@/lib/bash-tasks'
 import { BashCommandHeader, BashTaskRow } from './BashTaskView'
-import { memo, useMemo, useState, type ReactNode } from 'react'
+import { memo, useContext, useMemo, useState, type ReactNode } from 'react'
 import { FileDiff } from '@/components/agents/file-diff'
+import { DiffLayoutButton, DiffWrapButton } from './DiffControls'
 import { ToolResult, ToolResultOutput, type ToolResultStatus } from '@/components/agents/tool-result'
-import { parseUnifiedDiff, countDiffChanges, synthesizeWritePatch } from '@/lib/diff'
+import { parseUnifiedDiff, countDiffChanges, diffContentLines, synthesizeWritePatch } from '@/lib/diff'
+import type { DiffLayout } from '@/lib/diff-layout'
 import { basename } from '@/lib/format'
 import { displayToolDir, resolveFromCwd } from '@/lib/tool-path'
 import { useFileNavigation } from '@/lib/file-navigation'
@@ -13,7 +16,7 @@ import { ToolIcon } from '@/lib/tool-icons'
 import { cn } from '@/lib/utils'
 import { TRANSCRIPT_ROW, TRANSCRIPT_ROW_WIDTH } from '@/lib/transcript-rhythm'
 import { firstAskUserQuestionText, isAskUserToolDetails, askUserRecordKind } from '../../../../shared/ask-user'
-import { AskUserKindChip } from './AskUserRecordList'
+import { AskUserKindChip, AskUserRecordsContext } from './AskUserRecordList'
 import { ImagePreviewGroup, PreviewThumb } from './ImagePreview'
 import { ImageGenerationResult } from './ImageGenerationResult'
 import { ToolFileOutput } from './ToolFileOutput'
@@ -258,6 +261,8 @@ interface LazyDiffProps {
  * collapsed. Historical sessions commonly contain many large edit results. */
 function LazyDiff({ file, diff, status, tool }: LazyDiffProps) {
   const [open, setOpen] = useState(false)
+  const [layout, setLayout] = useState<DiffLayout>('stacked')
+  const [wrap, setWrap] = useState(true)
   // Counts for the collapsed header; parsing the full diff into rows stays
   // deferred until the user opens it.
   const changes = useMemo(() => countDiffChanges(diff), [diff])
@@ -271,13 +276,19 @@ function LazyDiff({ file, diff, status, tool }: LazyDiffProps) {
   // Large diffs stay plain: asynchronously tokenizing the complete patch after
   // the body appears causes a second expensive repaint. Small diffs retain the
   // existing highlighted presentation.
-  const highlight = diff.length <= 32_000 && lines.length <= 400
+  const highlight = diff.length <= 32_000 && diffContentLines(lines).length <= 400
   return (
     <FileDiff
       lazyContent
       icon={<ToolIcon name={tool} className="text-muted-foreground" />}
       file={file}
       lines={lines}
+      layout={layout}
+      wrap={wrap}
+      headerAction={open ? <span className="flex items-center gap-1">
+        <DiffLayoutButton className="size-6" layout={layout} onChange={setLayout} />
+        <DiffWrapButton className="size-6" wrap={wrap} onChange={setWrap} />
+      </span> : null}
       additions={changes.added}
       deletions={changes.removed}
       status={status}
@@ -306,6 +317,25 @@ function askUserDetails(result: ToolResultMsg | undefined, run: ToolRun | undefi
     if (isAskUserToolDetails(source)) return source
   }
   return null
+}
+
+function AskUserRow({ call, result, run }: Pick<ToolCallViewProps, 'call' | 'result' | 'run'>) {
+  const { t } = useI18n()
+  // An async result remains a pending receipt. Its later outcome lives in the
+  // branch record, which must also update this row through memoized parents.
+  const details = useContext(AskUserRecordsContext).get(call.id) ?? askUserDetails(result, run)
+  const firstQuestion = firstAskUserQuestionText(call.arguments)
+  const title = [t('askUser.rowVerb'), firstQuestion].filter(Boolean).join(' · ')
+  return (
+    <div
+      data-ask-user-row
+      className={cn(TRANSCRIPT_ROW, TRANSCRIPT_ROW_WIDTH, 'flex-row items-center gap-2')}
+    >
+      <ToolIcon name="ask_user_question" className="size-4 text-muted-foreground" />
+      <span className="min-w-0 flex-1 truncate text-sm text-foreground">{title}</span>
+      <AskUserKindChip kind={details ? askUserRecordKind(details) : 'pending'} />
+    </div>
+  )
 }
 
 /**
@@ -371,6 +401,15 @@ export const ToolCallView = memo(function ToolCallView({ call, result, run, cwd 
   if (submittedPlanRef(result)) return null
 
   switch (call.name) {
+    case 'vision_analyze': {
+      const error = visionToolError(result?.details ?? run?.partial?.details)
+      return <ToolResult animateChanges={false} lazyContent open={open} onOpenChange={setOpen}
+        title={t('vision.tool')} status={status} icon={<ToolIcon name="vision_analyze" />} meta={meta}
+        collapseOnComplete={false} contentClassName={WRAP_OUTPUT}>
+        {renderOutput(error ? t(`vision.error.${error.code}`, { model: error.model ?? '', detail: error.detail ?? '' })
+          : status === 'running' ? t('tool.runningPlaceholder') : output || placeholder(t('tool.noOutput')))}
+      </ToolResult>
+    }
     case 'image':
       return <ToolResult animateChanges={false} lazyContent open={open} onOpenChange={setOpen}
         title={t(args.action === 'edit' ? 'imageGeneration.edit' : 'imageGeneration.generate')}
@@ -385,25 +424,12 @@ export const ToolCallView = memo(function ToolCallView({ call, result, run, cwd 
         {renderOutput(error ? t(`jev.error.${error}`) : output || placeholder(t('tool.noOutput')))}
       </ToolResult>
     }
-    case 'ask_user_question': {
+    case 'ask_user_question':
       // The row names the question instead of the bare tool name — the first
       // question is what the user needs to recognize while it waits for them —
       // and stops there: the Q&A record itself lives in the strip's own panel
       // (`AskUserRecordList`), never in the transcript.
-      const details = askUserDetails(result, run)
-      const firstQuestion = firstAskUserQuestionText(args)
-      const title = [t('askUser.rowVerb'), firstQuestion].filter(Boolean).join(' · ')
-      return (
-        <div
-          data-ask-user-row
-          className={cn(TRANSCRIPT_ROW, TRANSCRIPT_ROW_WIDTH, 'flex-row items-center gap-2')}
-        >
-          <ToolIcon name="ask_user_question" className="size-4 text-muted-foreground" />
-          <span className="min-w-0 flex-1 truncate text-sm text-foreground">{title}</span>
-          <AskUserKindChip kind={details ? askUserRecordKind(details) : 'pending'} />
-        </div>
-      )
-    }
+      return <AskUserRow call={call} result={result} run={run} />
     case 'present': {
       return <ToolResult animateChanges={false} lazyContent title={t('present.tool')} status={status} icon={<ToolIcon name="present" />} meta={meta} open={open} onOpenChange={setOpen} collapseOnComplete={false} contentClassName={WRAP_OUTPUT}>
         {renderOutput(output || placeholder(t('tool.noOutput')))}

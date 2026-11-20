@@ -43,7 +43,7 @@ export class CheckoutCoordinator {
   private exclusive = new Map<string, 'snapshot' | 'restore' | 'git'>()
   /** An owned process whose cleanup could not be proved fences this app lifetime. */
   private uncertain = new Set<string>()
-  fence(cwd: string): void { this.uncertain.add(checkoutRoot(cwd)) }
+  fence(cwd: string): void { this.uncertain.add(checkoutRoot(cwd)); this.wake() }
   private closed = false
   private terminalHostLost = false
   markTerminalHostLost(): void { this.terminalHostLost = true }
@@ -57,15 +57,22 @@ export class CheckoutCoordinator {
   async ready(): Promise<void> { await this.readiness; if (this.initializationError) throw this.initializationError }
   needsRecovery(cwd: string): boolean { return this.recovery.has(checkoutRoot(cwd)) }
   private waiters = new Set<() => void>()
+  private wake(): void { for (const wake of [...this.waiters]) wake() }
+  private waitForChange(signal?: AbortSignal, timeoutMs?: number): Promise<void> {
+    return new Promise((resolve, reject) => {
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const cleanup = () => { this.waiters.delete(wake); signal?.removeEventListener('abort', abort); clearTimeout(timer) }
+      const wake = () => { cleanup(); resolve() }
+      const abort = () => { cleanup(); reject(new RewindFailure('cancelled')) }
+      if (signal?.aborted) { abort(); return }
+      this.waiters.add(wake); signal?.addEventListener('abort', abort, { once: true })
+      if (timeoutMs !== undefined) timer = setTimeout(() => { cleanup(); reject(new RewindFailure('busy')) }, timeoutMs)
+    })
+  }
   async enter(cwd: string, kind: Kind, sessionPath?: string, signal?: AbortSignal): Promise<() => void> {
     await this.ready()
     while (this.exclusive.get(checkoutRoot(cwd)) === 'snapshot' && !this.closed) {
-      if (signal?.aborted) throw new RewindFailure('cancelled')
-      await new Promise<void>((resolve, reject) => {
-        const wake = () => { this.waiters.delete(wake); signal?.removeEventListener('abort', abort); resolve() }
-        const abort = () => { this.waiters.delete(wake); reject(new RewindFailure('cancelled')) }
-        this.waiters.add(wake); signal?.addEventListener('abort', abort, { once: true })
-      })
+      await this.waitForChange(signal)
     }
     if (signal?.aborted) throw new RewindFailure('cancelled')
     return this.acquire(cwd, kind, sessionPath)
@@ -76,7 +83,7 @@ export class CheckoutCoordinator {
     if (operationId) throw new RewindFailure('recovery', [], operationId)
     if (this.closed || this.uncertain.has(root) || this.exclusive.has(root) || (kind === 'terminal' && (this.uncertain.size > 0 || [...this.exclusive.values()].some(purpose => purpose !== 'snapshot')))) throw new RewindFailure('busy')
     const lease: Lease = { root, kind, sessionPath }; this.leases.add(lease)
-    return () => { this.leases.delete(lease) }
+    return () => { if (this.leases.delete(lease)) this.wake() }
   }
   /** `busy` and the named reason the UI shows read the same facts. */
   restoreBlockers(cwd: string): RestoreBlockers {
@@ -103,6 +110,26 @@ export class CheckoutCoordinator {
     if (purpose === 'snapshot') return blockers.closing || blockers.recovery || blockers.exclusive || blockers.writers > 0
     return blockers.closing || blockers.recovery || blockers.exclusive || blockers.writers > 0 || blockers.terminal || blockers.runs > 0
   }
+  /** Hold the user-message barrier while existing writers finish, then capture
+   * before this turn can run any tools. Do not reserve the snapshot window
+   * while waiting: a process/subagent may need more tools to finish its work.
+   * A persistent writer has a bounded wait; Stop/disposal cancels it promptly. */
+  async withSnapshot<T>(cwd: string, operation: () => Promise<T>, signal?: AbortSignal, timeoutMs = 30_000): Promise<T> {
+    await this.ready()
+    const deadline = Date.now() + timeoutMs
+    const root = checkoutRoot(cwd)
+    while (true) {
+      if (signal?.aborted) throw new RewindFailure('cancelled')
+      const pending = this.recovery.get(root)
+      if (pending) throw new RewindFailure('recovery', [], pending)
+      const exclusive = this.exclusive.get(root)
+      if (this.closed || this.uncertain.has(root) || (exclusive && exclusive !== 'snapshot')) throw new RewindFailure('busy')
+      if (!exclusive && !this.busy(cwd, 'snapshot')) return this.withExclusive(cwd, 'snapshot', operation)
+      const remaining = deadline - Date.now()
+      if (remaining <= 0) throw new RewindFailure('busy')
+      await this.waitForChange(signal, remaining)
+    }
+  }
   /** Snapshots are fenced only by work that can write the checkout: an
    * executing tool, a managed process, or a whole subagent run. Another
    * session's in-flight model turn (a plain 'run' lease) must not starve
@@ -115,12 +142,16 @@ export class CheckoutCoordinator {
     const blocked = blockers.closing || blockers.exclusive || blockers.writers > 0 || (purpose !== 'snapshot' && (blockers.terminal || blockers.runs > 0))
     if (blocked) throw new RewindFailure('busy')
     const root = checkoutRoot(cwd); this.exclusive.set(root, purpose)
-    try { return await operation() } finally { this.exclusive.delete(root); for (const wake of [...this.waiters]) wake() }
+    try { return await operation() } finally { this.exclusive.delete(root); this.wake() }
   }
   setRecovery(cwd: string, operationId?: string): void {
     if (operationId) this.recovery.set(checkoutRoot(cwd), operationId)
     else this.recovery.delete(checkoutRoot(cwd))
+    this.wake()
   }
   canStart(cwd: string): boolean { return !this.closed && !this.uncertain.has(checkoutRoot(cwd)) && !this.recovery.has(checkoutRoot(cwd)) && !this.exclusive.has(checkoutRoot(cwd)) }
-  close(): void { this.closed = true; for (const wake of [...this.waiters]) wake() }
+  /** Persistent remote owners can survive snapshots, but cannot start while
+   * a restore changes their conversation/checkout ownership. */
+  isRestoring(cwd: string): boolean { return this.exclusive.get(checkoutRoot(cwd)) === 'restore' }
+  close(): void { this.closed = true; this.wake() }
 }

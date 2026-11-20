@@ -9,6 +9,22 @@ export function agentOwner(sessionId: string): string {
   return `agent:${sessionId}`
 }
 
+export function humanBrowserOwner(sessionId?: string | null): string {
+  return sessionId ? `human:${encodeURIComponent(sessionId)}` : HUMAN_OWNER
+}
+
+export function isHumanBrowserOwner(owner: string): boolean {
+  return owner === HUMAN_OWNER || /^human:[^/#?\s]+$/.test(owner)
+}
+
+export function browserOwnerSessionId(owner: string | undefined): string | undefined {
+  if (owner?.startsWith('agent:')) return owner.slice(6) || undefined
+  if (owner?.startsWith('human:')) {
+    try { return decodeURIComponent(owner.slice(6)) || undefined } catch { return undefined }
+  }
+  return undefined
+}
+
 export function buildMarkerUrl(owner: string, pageId: string): string {
   return `${BROWSER_MARKER_PREFIX}${owner}/${pageId}`
 }
@@ -146,6 +162,7 @@ export interface ElementAtInfo {
 export interface BrowserPopupInfo {
   url: string
   openerWebContentsId: number
+  owner?: string
 }
 
 /** Browser-partition download completion/failure. Main supplies diagnostic error data; the pane displays a localized failure message instead of passing it through. */
@@ -153,11 +170,13 @@ export interface BrowserDownloadInfo {
   path: string
   filename: string
   error?: string
+  owner?: string
 }
 
 /** Browser-owned keys intercepted while the guest has focus (⌘±/0, ⌘F, ⌘P). */
 export interface BrowserGuestShortcutInfo {
   key: string
+  owner?: string
   /** Full shortcut identity in renderer bindingIdentity form. An overlapping app binding may forward to the app dispatcher when the pane is inactive. */
   identity?: string
 }

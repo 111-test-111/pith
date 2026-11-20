@@ -83,6 +83,8 @@ export interface AgentActivityProps {
   defaultOpen?: boolean;
   /** Called when the completed activity disclosure changes state. */
   onOpenChange?: (open: boolean) => void;
+  // local patch (pi-app): one transcript trigger can control several process sections.
+  externalContentIds?: string;
   /** Collapse the disclosure when status changes from working to complete. */
   collapseOnComplete?: boolean;
   /** Optional label shown while the run is active. */

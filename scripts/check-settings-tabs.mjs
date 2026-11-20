@@ -98,8 +98,6 @@ window.savedDefaultModels = [];
 window.deferredModelSaves = [];
 window.deferredModelInventories = [];
 window.pi = {
-  libraryStatus: () => count('libraryStatus', { ok: true, value: { preferences: { enabled: true, directory: null, maxBytes: 2*1024**3 }, directory: '/fixture/library', usedBytes: 0, total: 0, unsaved: 0, projects: [], scanning: false, scanErrors: 0, lastScanAt: null } }),
-  onLibraryChanged: () => () => {},
   pictureInPicturePreferences: () => count('pictureInPicturePreferences', pip),
   setPictureInPicturePreferences: (update) => {
     window.calls.push('setPictureInPicturePreferences');
@@ -119,6 +117,10 @@ window.pi = {
   }}),
   appInfo: () => count('appInfo', appInfo),
   setStartup: (v) => count('setStartup', v),
+  setAutoNameSessions: (v) => {
+    if (window.autoNameFailure) return Promise.reject(new Error('fixture naming save failed'));
+    appInfo.autoNameSessions = v; return count('setAutoNameSessions', v);
+  },
   setSubagentsEnabled: (v) => count('setSubagentsEnabled', v),
   setBrowserAgentTools: (v) => count('setBrowserAgentTools', v),
   setBrowserSearchEngine: (v) => { appInfo.browserSearchEngine = v; return count('setBrowserSearchEngine', v) },
@@ -168,6 +170,13 @@ window.pi = {
   },
   models: () => count('models', [{ providerId: 'openai', providerName: 'OpenAI', id: 'gpt-6.1-sol', name: 'GPT-6.1 Sol', reasoning: true, thinkingLevels: ['low', 'medium', 'high'], input: ['text', 'image'], contextWindow: 200000, maxTokens: 16384, available: true, costInputPerM: 0, costOutputPerM: 0 }]),
   defaultModel: () => count('defaultModel', window.defaultModelChoice),
+  visionModel: () => count('visionModel', window.visionModelChoice ?? null),
+  sessionNamingModel: () => count('sessionNamingModel', window.namingModelChoice ?? null),
+  setSessionNamingModel: (value) => {
+    if (window.namingModelFailure) return Promise.reject(new Error('fixture model save failed'));
+    window.namingModelChoice = value; return count('setSessionNamingModel', value);
+  },
+  setVisionModel: (value) => { window.visionModelChoice = value; return count('setVisionModel', value) },
   modelsConfig: () => count('modelsConfig', window.modelConfig),
   saveModelsConfig: (config) => {
     window.savedModelsConfigs.push(structuredClone(config));
@@ -373,7 +382,7 @@ app.on('window-all-closed',()=>app.quit());`
   //    data reads: General populated, the rest empty.
   await pause(500)
   let panels = await evaluate('window.panels()')
-  assert.equal(panels.length, 17, 'all registered section panels exist in the DOM')
+  assert.equal(panels.length, 16, 'all registered section panels exist in the DOM')
   assert.equal(panels.filter((p) => !p.hidden).length, 1, 'exactly one panel is active')
   assert.ok(panels[0].inputs >= 2, 'General (first section) is the mounted one')
   assert.ok(panels.slice(1).every((p) => p.content === 0), 'unvisited panels render no section content (header scaffold only)')
@@ -381,11 +390,30 @@ app.on('window-all-closed',()=>app.quit());`
   assert.equal(await evaluate('window.callsOf("subagentProfiles")'), 0, 'no subagent profile read on open')
   assert.equal(await evaluate('window.callsOf("usageStats")'), 0, 'no usage aggregation on open')
   assert.equal(await evaluate('window.callsOf("providers")'), 0, 'no providers read on open')
-  assert.equal(await evaluate('window.callsOf("libraryStatus")'), 0, 'an unvisited Library makes no IPC reads')
+
+  // Automatic naming is opt-in by default for existing settings, persists
+  // through its own bridge, and retains the last value after a failed save.
+  const namingCheckbox = `document.querySelector('[role="checkbox"][aria-label="' + window.en['settings.autoNameSessions'] + '"]')`
+  assert.equal(await evaluate(`${namingCheckbox}.getAttribute('aria-checked')`), 'true')
+  await evaluate(`${namingCheckbox}.click()`)
+  await waitFor(`${namingCheckbox}.getAttribute('aria-checked') === 'false' && !${namingCheckbox}.disabled`, 'automatic naming is disabled')
+  assert.equal(await evaluate('window.callsOf("setAutoNameSessions")'), 1)
+  await evaluate(`window.autoNameFailure = true; ${namingCheckbox}.click()`)
+  await waitFor(`document.body.textContent.includes(window.en['settings.autoNameSessionsFailed'])`, 'a failed naming preference save is localized')
+  assert.equal(await evaluate(`${namingCheckbox}.getAttribute('aria-checked')`), 'false')
+  await evaluate(`window.autoNameFailure = false; ${namingCheckbox}.click()`)
+  await waitFor(`${namingCheckbox}.getAttribute('aria-checked') === 'true' && !${namingCheckbox}.disabled`, 'automatic naming is re-enabled')
 
   // 2. A draft held in General survives tab round trips: the deactivated
   //    panel keeps its React state instead of remounting from props.
   assert.equal(await evaluate(`window.typeWait('12.5')`), '12.5', 'the wait field accepts a typed draft')
+  await evaluate(`window.openTab(window.en['settings.appearance'])`)
+  const diffRadio = (key) => `[...document.querySelectorAll('[role=radio]')].find(r=>r.closest('label').textContent.trim()===window.en[${JSON.stringify(key)}])`
+  assert.equal(await evaluate(`${diffRadio('settings.diffStyleDetailed')}.getAttribute('aria-checked')`), 'true', 'new profiles use the detailed diff')
+  await evaluate(`${diffRadio('settings.diffStyleSimple')}.click()`)
+  await waitFor(`${diffRadio('settings.diffStyleSimple')}.getAttribute('aria-checked')==='true' && localStorage.getItem('pi-app:diff-style')==='simple'`, 'simplified diff preference persists')
+  await evaluate(`${diffRadio('settings.diffStyleDetailed')}.click()`)
+  await waitFor(`localStorage.getItem('pi-app:diff-style')==='detailed'`, 'detailed diff preference persists')
 
   // 3. The new Notifications page owns both native alerts and sounds; General
   //    stays mounted but no longer carries those controls.
@@ -399,7 +427,7 @@ app.on('window-all-closed',()=>app.quit());`
   assert.equal(await evaluate('window.callsOf("pictureInPicturePreferences")'), 0)
   await evaluate(`window.openTab('Picture in picture')`)
   panels = await evaluate('window.panels()')
-  assert.ok(!panels[7].hidden && panels[7].content > 0, 'Picture in picture is a lazily mounted section')
+  assert.ok(!panels[6].hidden && panels[6].content > 0, 'Picture in picture is a lazily mounted section')
   assert.equal(await evaluate('window.callsOf("pictureInPicturePreferences")'), 1)
   assert.equal(await evaluate('window.waitValue()'), '12.5', 'the General draft survives Picture in picture')
   if (process.env.PI_PIP_SETTINGS_SCREENSHOT_DIR) {
@@ -426,7 +454,7 @@ app.on('window-all-closed',()=>app.quit());`
   await evaluate(`window.openTab('Tools')`)
   panels = await evaluate('window.panels()')
   assert.equal(panels.filter((p) => !p.hidden).length, 1)
-  assert.ok(panels[9].tools >= 2, 'Tools renders its list once visited')
+  assert.ok(panels[8].tools >= 2, 'Tools renders its list once visited')
   assert.ok(panels[0].hidden && panels[0].inputs >= 2, 'General stays mounted while hidden')
   assert.equal(await evaluate('window.callsOf("toolsCatalog")'), 1, 'catalog fetched on first visit')
   assert.equal(await evaluate('window.waitValue()'), '12.5', 'the hidden General draft is intact')
@@ -435,9 +463,9 @@ app.on('window-all-closed',()=>app.quit());`
   //    its catalog refresh rides the SAME catalog read Tools started.
   await evaluate(`window.openTab('Subagents')`)
   panels = await evaluate('window.panels()')
-  assert.ok(!panels[10].hidden, 'Subagents is the active panel')
-  assert.ok(panels[10].inputs >= 1, 'Subagents renders its concurrency field (the toggle is a checkbox button)')
-  assert.ok(panels[10].content > 0, 'Subagents renders its profile list once visited')
+  assert.ok(!panels[9].hidden, 'Subagents is the active panel')
+  assert.ok(panels[9].inputs >= 1, 'Subagents renders its concurrency field (the toggle is a checkbox button)')
+  assert.ok(panels[9].content > 0, 'Subagents renders its profile list once visited')
   assert.equal(await evaluate('window.callsOf("subagentProfiles")'), 1, 'profiles fetched on first visit')
   assert.equal(await evaluate('window.callsOf("toolsCatalog")'), 2, 'Subagents shares the catalog: its first visit refreshes it once, like Skills')
   assert.ok(panels[0].hidden && panels[0].inputs >= 2, 'General stays mounted while hidden')
@@ -447,19 +475,11 @@ app.on('window-all-closed',()=>app.quit());`
   //    the deactivated panels' subtrees are kept, not torn down.
   await evaluate(`window.openTab('Usage')`)
   panels = await evaluate('window.panels()')
-  assert.ok(!panels[14].hidden, 'Usage is the active panel')
+  assert.ok(!panels[13].hidden, 'Usage is the active panel')
   assert.ok((await evaluate('window.callsOf("usageStats")')) >= 1, 'usage fetched on first visit')
   assert.equal(await evaluate('window.callsOf("toolsCatalog")'), 2, 'a hidden Tools/Subagents panel does not refetch the catalog')
   assert.equal(await evaluate('window.callsOf("subagentProfiles")'), 1, 'a hidden Subagents panel does not refetch profiles')
-  assert.ok(panels[9].tools >= 2, 'the hidden Tools list is still mounted')
-
-  await evaluate(`window.openTab('Library')`)
-  assert.equal(await evaluate('window.callsOf("libraryStatus")'), 1, 'Library first visit reads its independent archive status')
-  await evaluate(`(()=>{const input=document.querySelector('input[aria-label="Maximum archive size"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'3072');input.dispatchEvent(new Event('input',{bubbles:true}))})()`)
-  await evaluate(`window.openTab('Usage')`)
-  await evaluate(`window.openTab('Library')`)
-  assert.equal(await evaluate(`document.querySelector('input[aria-label="Maximum archive size"]').value`), '3072', 'Library retains an unapplied capacity draft when revisited')
-  assert.equal(await evaluate('window.callsOf("libraryStatus")'), 1, 'revisiting Library reuses its mounted status subscription')
+  assert.ok(panels[8].tools >= 2, 'the hidden Tools list is still mounted')
 
   // 8. Returning to Tools reuses the mounted panel; the General draft still
   //    survives the second round trip.
@@ -736,11 +756,13 @@ app.on('window-all-closed',()=>app.quit());`
   }
   await evaluate('document.querySelector("[data-provider-detail] button").click()')
   await waitFor('!document.querySelector("[data-provider-detail]")', 'overview returns')
-  await waitFor('document.querySelectorAll("[data-default-model-slot]").length === 3', 'all three default model controls appear')
+  await waitFor('document.querySelectorAll("[data-default-model-slot]").length === 4', 'all four default model controls appear')
   assert.deepEqual(await evaluate('[...document.querySelectorAll("[data-default-model-slot]")].map(row => ({slot:row.dataset.defaultModelSlot,disabled:row.querySelector("button").disabled}))'), [
-    {slot:'main',disabled:false}, {slot:'vision',disabled:true}, {slot:'advisor',disabled:true}
-  ], 'only the main session model is active; Vision and Advisor are placeholders')
-  await evaluate('document.querySelector("[data-default-model-slot=vision] button").click(); document.querySelector("[data-default-model-slot=advisor] button").click()')
+    {slot:'main',disabled:false}, {slot:'vision',disabled:false}, {slot:'naming',disabled:false}, {slot:'advisor',disabled:true}
+  ], 'main, vision and naming model pickers are active; Advisor is a placeholder')
+  // Vision persists through its own IPC pair (covered by the vision-ui check);
+  // only the Advisor slot is still a placeholder control here.
+  await evaluate('document.querySelector("[data-default-model-slot=advisor] button").click()')
   assert.deepEqual(await evaluate('window.savedDefaultModels'), [], 'placeholder controls never update the effective default')
   await evaluate('document.querySelector("[data-default-model-slot=main] button").click()')
   await waitFor('!!document.querySelector("#default-model-picker-main[aria-hidden=false] [data-model-option]")', 'main session default uses the shared model picker')
@@ -754,6 +776,25 @@ app.on('window-all-closed',()=>app.quit());`
   await waitFor('document.getElementById("default-model-picker-main").getAttribute("aria-hidden") === "false"', 'the shared default picker reopens')
   await evaluate('document.querySelector("#default-model-picker-main [data-model-option]").focus(); window.dispatchEvent(new KeyboardEvent("keydown", {key:"Escape",bubbles:true}))')
   await waitFor('document.getElementById("default-model-picker-main").getAttribute("aria-hidden") === "true"', 'Escape closes the shared default picker')
+
+  const namingTrigger = 'document.querySelector("[data-default-model-slot=naming] button")'
+  assert.equal(await evaluate(`${namingTrigger}.textContent.trim()`), await evaluate('window.en["settings.sessionNamingModelAuto"]'))
+  await evaluate(`${namingTrigger}.click()`)
+  await waitFor('!!document.querySelector("#default-model-picker-naming[aria-hidden=false] [data-model-option]")', 'the naming model picker opens')
+  await evaluate(`document.querySelector('#default-model-picker-naming [data-model-option="openai/gpt-6.1-sol"]').click()`)
+  await waitFor(`${namingTrigger}.textContent.includes('GPT-6.1 Sol') && !${namingTrigger}.disabled`, 'the naming model persists')
+  assert.deepEqual(await evaluate('window.namingModelChoice'), { providerId: 'openai', modelId: 'gpt-6.1-sol' })
+  assert.equal(await evaluate('window.savedDefaultModels.length'), 1, 'the naming model does not change the main default')
+  await evaluate(`window.namingModelFailure = true; ${namingTrigger}.click()`)
+  await waitFor('document.getElementById("default-model-picker-naming").getAttribute("aria-hidden") === "false"', 'the naming picker reopens')
+  await evaluate(`[...document.querySelectorAll('#default-model-picker-naming [role=option]')].find(row=>row.textContent.trim()===window.en['settings.sessionNamingModelAuto']).click()`)
+  await waitFor(`document.body.textContent.includes(window.en['settings.sessionNamingModelFailed']) && !${namingTrigger}.disabled`, 'a failed naming model save is localized')
+  assert.equal(await evaluate(`${namingTrigger}.textContent.includes('GPT-6.1 Sol')`), true, 'the saved model survives a rejected clear')
+  await evaluate(`window.namingModelFailure = false; ${namingTrigger}.click()`)
+  await waitFor('document.getElementById("default-model-picker-naming").getAttribute("aria-hidden") === "false"', 'the naming picker reopens after a failed save')
+  await evaluate(`[...document.querySelectorAll('#default-model-picker-naming [role=option]')].find(row=>row.textContent.trim()===window.en['settings.sessionNamingModelAuto']).click()`)
+  await waitFor(`${namingTrigger}.textContent.trim()===window.en['settings.sessionNamingModelAuto'] && !${namingTrigger}.disabled`, 'the naming model returns to session inheritance')
+  assert.equal(await evaluate('window.namingModelChoice'), null)
   assert.equal(await evaluate('document.activeElement.getAttribute("aria-label")'), await evaluate('window.en["settings.mainDefaultModel"]'), 'the default picker restores its trigger focus')
   await providerShot('providers-overview')
   await evaluate('window.changeLocale("zh-CN")')

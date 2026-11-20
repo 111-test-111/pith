@@ -131,9 +131,12 @@ export function textReadLimit(kind: PreviewKind): number {
 }
 
 /** What a freshly opened tab shows first: a rendered view where there is one
- * (a patch is worth reading as a diff, not as raw hunks), source otherwise. */
+ * (a patch is worth reading as a diff, not as raw hunks), source otherwise. An
+ * HTML document is the one exception: it opens on its source, since the pane is
+ * for inspecting the file and its confined rendered view stays one tab away. */
 export function opensOnPreview(path: string): boolean {
-  return hasPreviewView(previewKindOf(path))
+  const kind = previewKindOf(path)
+  return kind !== 'html' && hasPreviewView(kind)
 }
 
 /**

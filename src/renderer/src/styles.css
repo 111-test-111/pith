@@ -35,6 +35,8 @@
 
 :root {
   --app-titlebar-height: 52px;
+  --chat-column-width: 48rem;
+  --chat-gutter: 0.75rem;
   --transcript-divider-gap: 1.5rem;
   --transcript-actions-gap: 0.75rem;
   /* Geometry is independent of color, font size and theme. Both beUI's
@@ -52,7 +54,7 @@
   --app-radius-window: 0px;
   /* Capsule-by-design surfaces (avatars, chips, badges, pill tabs, selection
    * marks) take their shape from the UI style: collapsed to a right angle in
-   * the square style, a true capsule in the squircle style. Single-icon buttons
+   * the square style, a true capsule in rounded and squircle. Single-icon buttons
    * take the shared control radius instead. `rounded-full` remains the
    * always-circular token. */
   --app-radius-capsule: 0px;
@@ -100,7 +102,7 @@
   --app-text-content-small: 12px;
   --app-text-content-heading: 16px;
   --app-text-code: 12px;
-  --app-text-terminal: 14px;
+  --app-text-terminal: var(--app-text-code);
   --app-line-ui: 20px;
   --app-line-content: 24px;
   --app-line-content-tight: 20px;
@@ -108,24 +110,79 @@
 
 }
 
+/* Transcript, composer and requests share the conversation's own measure.
+ * Opening a rail changes this container, independently of the window. */
+.chat-layout {
+  container-type: inline-size;
+  container-name: chat;
+}
+.chat-column {
+  width: 100%;
+  min-width: 0;
+  max-width: var(--chat-column-width);
+  margin-inline: auto;
+}
+.chat-gutter { padding-inline: var(--chat-gutter); }
+@container chat (min-width: 40rem) {
+  .chat-gutter { --chat-gutter: 1.25rem; }
+}
+
+/* The editor has its own fill so muted hover fills remain visible inside it.
+ * Focusing the native editor keeps the same frame, color and geometry. */
+.composer-surface {
+  background: var(--composer-background);
+  border: 0;
+  box-shadow: none;
+  transition: none;
+}
+
+[data-queue-panel] {
+  background: color-mix(in oklab, var(--composer-background) 65%, var(--background));
+  border: 1px solid color-mix(in oklab, var(--foreground) 9%, transparent);
+  border-start-start-radius: var(--app-radius-card);
+  border-start-end-radius: var(--app-radius-card);
+}
+[data-queue-panel] + .composer-surface {
+  border-start-start-radius: 0;
+  border-start-end-radius: 0;
+}
+
+/* Only parser text belonging to a fresh streaming delta receives this fade. */
+@keyframes stream-text-arrival {
+  from { opacity: 0.32; }
+  to { opacity: 1; }
+}
+.stream-text-arrival { animation: stream-text-arrival 160ms ease-out both; }
+[data-reduce-motion='true'] .stream-text-arrival { animation: none; }
+@media (prefers-reduced-motion: reduce) {
+  .stream-text-arrival { animation: none; }
+}
+
 /* Code theme samples share the app palette but pin their own color mode. */
 :root,
 [data-code-theme-preview='light'] {
   --background: oklch(0.984 0.003 264);
-  --foreground: oklch(0.216 0.02 264);
+  --foreground: #000000;
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.216 0.02 264);
+  --card-foreground: #000000;
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.216 0.02 264);
+  --popover-foreground: #000000;
   --muted: oklch(0.955 0.006 264);
+  --composer-background: oklch(0.93 0.006 264);
   --muted-foreground: oklch(0.52 0.02 264);
   --secondary: oklch(0.955 0.006 264);
-  --secondary-foreground: oklch(0.216 0.02 264);
+  --secondary-foreground: #000000;
   --accent: oklch(0.945 0.01 264);
-  --accent-foreground: oklch(0.216 0.02 264);
+  --accent-foreground: #000000;
   --destructive: oklch(0.577 0.215 27);
   --border: oklch(0.9 0.008 264);
   --input: oklch(0.9 0.008 264);
+
+  /* Git colors carry the same meanings across accent presets. */
+  --git-tree-modified: #0064cf;
+  --git-tree-added: #007834;
+  --git-tree-removed: #c62824;
+  --git-tree-folder: #92c2ff;
 
   /* Terminal content has its own semantic palette, independent of the UI
    * accent. Chromatic ANSI text meets 4.5:1 against --background in each mode.
@@ -151,6 +208,20 @@
   --terminal-selection-background: #2459b8;
   --terminal-selection-foreground: #ffffff;
   --terminal-selection-inactive-background: #59667e;
+}
+
+/* Ordinary circular corners use a tighter scale than superellipses. The
+ * window step still covers native window corners in full-window previews.
+ * Set the shape explicitly: retaining :root's squircle would only change
+ * radii, including in portals and pseudo-elements, not the corner geometry. */
+[data-corners='rounded'] {
+  --app-corner-shape: round;
+  --app-radius-detail: 2px;
+  --app-radius-inner: 4px;
+  --app-radius-item: 8px;
+  --app-radius-card: 12px;
+  --app-radius-window: 28px;
+  --app-radius-capsule: 9999px;
 }
 
 /* Restored continuous-corner style (Superellipse UI). Values recovered from
@@ -181,6 +252,7 @@
   --popover: #323232;
   --popover-foreground: #ffffff;
   --muted: #2c2c2c;
+  --composer-background: #242424;
   --muted-foreground: #a6a6a6;
   --secondary: #2c2c2c;
   --secondary-foreground: #ffffff;
@@ -189,6 +261,11 @@
   --destructive: oklch(0.65 0.19 25);
   --border: #454545;
   --input: #454545;
+
+  --git-tree-modified: #67b2ff;
+  --git-tree-added: #4fd57c;
+  --git-tree-removed: #ff7a73;
+  --git-tree-folder: #659bd5;
 
   --terminal-black: #1a202b;
   --terminal-red: #f07886;
@@ -220,6 +297,67 @@
 }
 [data-code-theme-preview='dark'] [data-agent-code-token] {
   color: var(--agent-code-dark);
+}
+
+[data-diff-hunk], [data-diff-hunk-spacer] {
+  contain: inline-size;
+  height: var(--app-line-code);
+  overflow: clip;
+  background: color-mix(in oklab, var(--primary) 9%, var(--muted));
+  color: var(--muted-foreground);
+}
+
+[data-diff-split] {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-auto-rows: minmax(var(--app-line-code), auto);
+}
+
+[data-diff-side] {
+  display: grid;
+  grid-row: 1 / span var(--diff-split-rows);
+  grid-template-rows: subgrid;
+  min-inline-size: 0;
+  overflow-x: auto;
+}
+
+[data-diff-side='after'] { border-inline-start: 1px solid var(--border); }
+[data-diff-side] > * { min-inline-size: var(--diff-side-width, 0); }
+[data-diff-blank] { background: color-mix(in oklab, var(--background) 35%, transparent); }
+
+[data-diff-hunk] code {
+  position: sticky;
+  inset-inline-start: 0;
+  display: inline-block;
+  max-inline-size: 100%;
+  padding-inline: 0.75rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: top;
+  white-space: nowrap;
+  font: inherit;
+}
+
+[data-diff-change='added'] { --diff-inline-color: var(--color-emerald-500); }
+[data-diff-change='removed'] { --diff-inline-color: var(--color-rose-500); }
+
+[data-diff-inline] {
+  background: color-mix(in srgb, var(--diff-inline-color) 34%, transparent);
+  color: var(--foreground);
+  border-radius: var(--app-radius-detail);
+  box-decoration-break: clone;
+}
+
+/* Muted syntax colors can lose contrast over the stronger mark fill.
+ * Preserve the token's hue and limit its lightness against that fill. */
+[data-diff-inline] [data-agent-code-token],
+[data-code-theme-preview='light'] [data-diff-inline] [data-agent-code-token] {
+  color: oklch(from var(--agent-code-light) min(l, 0.39) c h / 1);
+}
+
+:where(.dark) [data-diff-inline] [data-agent-code-token],
+[data-code-theme-preview='dark'] [data-diff-inline] [data-agent-code-token] {
+  color: oklch(from var(--agent-code-dark) max(l, 0.92) c h / 1);
 }
 
 /* Accent presets: indigo (default) / violet / pink / rose / orange / amber /
@@ -392,6 +530,10 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+  --color-git-tree-modified: var(--git-tree-modified);
+  --color-git-tree-added: var(--git-tree-added);
+  --color-git-tree-removed: var(--git-tree-removed);
+  --color-git-tree-folder: var(--git-tree-folder);
   --font-sans: var(--app-font-ui);
   --font-mono: var(--app-font-mono);
   --font-math: var(--app-font-math);
@@ -424,7 +566,9 @@
  * Keep this in base so explicit geometry utilities always win. */
 @layer base {
   @supports (corner-shape: squircle) {
-    :where(*, *::before, *::after) {
+    /* Pseudo-elements cannot be arguments of :where(); select them outside
+     * it so their geometry does not silently fall back to ordinary round. */
+    :where(*), :where(*)::before, :where(*)::after {
       corner-shape: var(--app-corner-shape);
     }
   }
@@ -498,7 +642,7 @@ body,
 }
 
 body {
-  @apply bg-background text-foreground antialiased;
+  @apply bg-background text-foreground;
   font-family: var(--app-font-ui);
   font-size: var(--app-text-ui-base);
   overflow: hidden;
@@ -509,8 +653,12 @@ body {
 }
 
 /* On macOS the native vibrancy surface shows through the shared glass title
- * row and sidebar. Content regions keep their own opaque backgrounds. */
-html[data-platform='darwin'] body {
+ * row and sidebar. Content regions keep their own opaque backgrounds. Only the
+ * translucent preference leaves the page background clear: with it off, the
+ * window paints the theme background, so the title row behind a page transition
+ * (a full page keeps its own top strip clear) can never flash the system
+ * material. A missing flag keeps today's default, translucent. */
+html[data-platform='darwin']:not([data-chrome-glass='off']) body {
   background: transparent;
 }
 
@@ -593,17 +741,17 @@ body:has([aria-modal="true"]:not([aria-hidden="true"])) .window-titlebar {
   /* Session and group titles retain primary contrast even when unselected. */
   color: var(--foreground);
 }
-.session-sidebar[data-details="true"] .sessions-tree [role="treeitem"]:has([data-session-row]) {
-  min-height: calc(var(--app-line-ui) * 2 + 10px);
-  padding-block: 5px;
+.session-sidebar .sessions-tree [role="treeitem"]:has([data-session-row]) {
+  min-height: calc(var(--app-line-ui) + 8px);
 }
 .session-sidebar .sessions-tree [role="treeitem"][aria-selected="true"] {
   background: color-mix(in oklch, var(--primary) 12%, transparent);
   color: var(--foreground);
 }
-/* Keep the menu control distinct from the row's muted hover fill. */
+/* Row actions carry no frame: the row's own hover fill shows through and the
+ * glyph alone answers the pointer, so a floated control never paints a second
+ * rectangle inside the row. */
 .session-sidebar .sessions-tree [role="treeitem"] button[aria-haspopup="dialog"]:is(:hover, :focus-visible, [aria-expanded="true"]) {
-  background: color-mix(in oklch, var(--muted) 86%, var(--foreground));
   color: var(--foreground);
 }
 .session-sidebar .sessions-tree [role="treeitem"]:has([data-session-group]) {
@@ -627,11 +775,43 @@ body:has([aria-modal="true"]:not([aria-hidden="true"])) .window-titlebar {
   color: var(--muted-foreground);
   transition: opacity 120ms ease-out, color 120ms ease-out;
 }
-.session-sidebar [role="treeitem"]:is(:hover, :focus-within, [data-menu-open="true"]) .session-group-action {
+/* This rule is unlayered, so it outranks the button variant's layered
+ * `hover:text-foreground`: without this the glyph kept its muted tone while the
+ * pointer was on it. Hover and keyboard focus both strengthen it, and nothing
+ * paints a frame. */
+.session-group-action:is(:hover, :focus-visible) {
+  color: var(--foreground);
+  background: transparent;
+}
+/* Keyboard focus only, never plain `:focus-within`: a pointer click on a
+ * project header lands on the row itself (the tree keeps a roving tabindex),
+ * so `:focus-within` kept the new-chat action painted after the pointer had
+ * left the row — while the row menu, gated on `:focus-visible`, hid correctly.
+ * The row's own `:focus-visible` covers arrow/Tab focus, `:has(...)` covers a
+ * tabbed-to action inside the row. */
+.session-sidebar [role="treeitem"]:is(:hover, :focus-visible, :has(:focus-visible), [data-menu-open="true"]) .session-group-action {
   opacity: 1;
 }
-.session-sidebar [role="treeitem"]:is(:hover, :focus-within, [data-menu-open="true"]) .session-group-count {
+.session-sidebar [role="treeitem"]:is(:hover, :focus-visible, :has(:focus-visible), [data-menu-open="true"]) .session-group-count {
   visibility: hidden;
+}
+/* An active row yields its trailing chrome in place: the count and the
+ * disclosure arrow keep their slots (nothing shifts, and at rest the arrow sits
+ * exactly where it always did) while the floated row actions take that space,
+ * and the title's tail fades earlier so no glyph can read under a button. */
+.session-sidebar .sessions-tree [role="treeitem"]:is(:hover, :focus-visible, :has(:focus-visible), [data-menu-open="true"]) .session-group-chevron {
+  visibility: hidden;
+}
+/* The row actions float over the trailing edge, so an active row ends its
+ * content BEFORE them: a session row moves its whole trailing cluster — title,
+ * unread dot and a running spinner — left by the action's width, and a project
+ * row gives its title the room its count and arrow no longer need. The title
+ * keeps its existing gradient fade, which now ends clear of the button. */
+.session-sidebar .sessions-tree [role="treeitem"]:is(:hover, :focus-visible, :has(:focus-visible), [data-menu-open="true"]) [data-session-row] {
+  margin-right: 2rem;
+}
+.session-sidebar .sessions-tree [role="treeitem"]:is(:hover, :focus-visible, :has(:focus-visible), [data-menu-open="true"]) [data-session-group] [data-resource-label] {
+  margin-right: 1.75rem;
 }
 .session-sidebar [role="treeitem"]:has([data-more-row]) {
   min-height: 28px;
@@ -641,20 +821,15 @@ body:has([aria-modal="true"]:not([aria-hidden="true"])) .window-titlebar {
   background: transparent;
   color: var(--primary);
 }
-.session-archive-count {
-  position: absolute;
-  inset-block-start: 0;
-  inset-inline-end: 0;
-  min-width: 12px;
-  padding-inline: 2px;
-  background: var(--background);
-  border-radius: var(--app-radius-capsule);
-  line-height: 1.2;
-  color: var(--muted-foreground);
-}
 @media (hover: none) {
   .session-group-action { opacity: 1; }
   .session-sidebar [role="treeitem"]:has(.session-group-action) .session-group-count { visibility: hidden; }
+  /* A finger never hovers, so the always-visible actions take the trailing
+   * space outright: the arrow yields in place and the title tail fades early,
+   * exactly as it does under a pointer. */
+  .session-sidebar [role="treeitem"]:has(.session-group-action) .session-group-chevron { visibility: hidden; }
+  .session-sidebar [role="treeitem"] [data-session-row] { margin-right: 2rem; }
+  .session-sidebar [role="treeitem"] [data-session-group] [data-resource-label] { margin-right: 1.75rem; }
 }
 @media (prefers-reduced-motion: reduce) {
   .session-group-action { transition: none; }
@@ -748,6 +923,25 @@ body:has([aria-modal="true"]:not([aria-hidden="true"])) .window-titlebar {
   contain: layout style;
 }
 
+/* Share link decoration across Markdown surfaces, including beUI message wrappers. */
+[data-markdown] a {
+  text-decoration: none;
+}
+@media (hover: hover) {
+  [data-markdown] a:hover:not(:has(> [data-markdown-file-icon])) {
+    text-decoration: underline dotted;
+    text-underline-offset: 3px;
+  }
+}
+/* Include the trailing gap in the image's native selection box. */
+[data-markdown-file-icon] > img {
+  display: inline;
+  box-sizing: content-box;
+  inline-size: 1em;
+  block-size: 1em;
+  padding-inline-end: 0.25em;
+  vertical-align: calc((1cap - 1em) / 2);
+}
 [data-markdown] mark {
   color: inherit;
   background: color-mix(in oklch, var(--primary) 20%, transparent);
@@ -831,12 +1025,24 @@ html[data-compact-tools='true'] [data-transcript-rows] {
 /* Completion actions use the same spacing inside a reply, after Stop, or as
  * the turn's standalone footer. An actions-only ending takes it at its outer
  * boundary; the first child must not add a second margin. */
-* + [data-message-actions],
+* + [data-message-actions]:not([data-message-actions='overlay']),
 [data-transcript-rows] > * + [data-transcript-gap-before='actions'] {
   margin-block-start: var(--transcript-actions-gap);
 }
 .transcript-row {
   min-height: var(--transcript-row-height, 2.25rem);
+}
+/* Reserve room for the first bubble's hover actions when two user bubbles
+ * touch the same gap. A folded process section can sit between them in the DOM. */
+[data-transcript-rows] > :is(
+  [data-turn-steer] + [data-from='user'],
+  [data-turn-steer] + [hidden] + [data-from='user']
+) {
+  margin-block-start: calc(var(--transcript-roomy-gap) + var(--transcript-actions-gap));
+}
+[data-turn-steer]:has(+ [data-from='user'], + [hidden] + [data-from='user']) > [data-message-actions='overlay'] {
+  /* Padding keeps the hover target connected to the bubble. */
+  padding-block-start: calc(var(--transcript-actions-gap) / 2);
 }
 .transcript-label {
   /* Flex centres the label's visible type area, not its font's asymmetric

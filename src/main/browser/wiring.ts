@@ -111,16 +111,12 @@ function popupWindowOptions(features: string): BrowserWindowConstructorOptions {
 }
 
 export type BrowserEmit = (channel: string, payload: unknown) => void
-/** Capture provenance when a download starts; the returned receipt runs only
- * after completion. Wiring stays independent of archive/settings ownership. */
-export type BrowserDownloadCollector = (owner?: string) => ((path: string, url: string) => void) | undefined
 
 // Install listeners once; refresh window/emit references after macOS window recreation.
 let wiringInstalled = false
 let sessionWired = false
 let shellWin: BrowserWindow | null = null
 let activeEmit: BrowserEmit | null = null
-let activeDownloadCollector: BrowserDownloadCollector | undefined
 
 let markerDropLogged = false
 function dropForgedMarker(url: string): void {
@@ -130,7 +126,9 @@ function dropForgedMarker(url: string): void {
 }
 
 // Track native popup contents so nested popups inherit guest routing and cleanup.
-const popupContents = new Set<number>()
+const popupContents = new Map<number, string | undefined>()
+const browserOwnerFor = (id: number): string | undefined =>
+  getBrowserService()?.ownerForWebContents(id) ?? popupContents.get(id)
 
 const relayedAt = new Map<number, number>()
 const INPUT_RELAY_THROTTLE_MS = 300
@@ -181,7 +179,8 @@ function wireContents(contents: WebContents): void {
       if (popupOpensWindow(details.disposition, details.features)) {
         return { action: 'allow', overrideBrowserWindowOptions: popupWindowOptions(details.features) }
       }
-      activeEmit?.('browser:popup', { url, openerWebContentsId: contents.id })
+      const owner = browserOwnerFor(contents.id)
+      activeEmit?.('browser:popup', { url, openerWebContentsId: contents.id, owner })
       return { action: 'deny' }
     }
     return { action: 'deny' }
@@ -191,7 +190,7 @@ function wireContents(contents: WebContents): void {
     // Bind native popup lifetime to its opener and report its URL to the agent service.
     contents.on('did-create-window', (window, details) => {
       const popupId = window.webContents.id
-      popupContents.add(popupId)
+      popupContents.set(popupId, browserOwnerFor(contents.id))
       window.webContents.once('destroyed', () => popupContents.delete(popupId))
       contents.once('destroyed', () => {
         if (!window.isDestroyed()) window.close()
@@ -228,7 +227,7 @@ function wireContents(contents: WebContents): void {
     if (key === '=' || key === '+' || key === '-' || key === '0' || key === 'f' || key === 'p') {
       event.preventDefault()
 
-      activeEmit?.('browser:guest-shortcut', { key, identity })
+      activeEmit?.('browser:guest-shortcut', { key, identity, owner: browserOwnerFor(contents.id) })
       return
     }
 
@@ -262,14 +261,12 @@ function wireBrowserSession(): void {
       seq += 1
     }
     item.setSavePath(target)
-    const owner = contents ? getBrowserService()?.ownerForWebContents(contents.id) : undefined
-    const onCompleted = activeDownloadCollector?.(owner)
+    const owner = contents ? browserOwnerFor(contents.id) : undefined
     item.once('done', (_e, state) => {
       if (state === 'completed') {
-        activeEmit?.('browser:download', { path: target, filename })
-        onCompleted?.(target, item.getURL())
+        activeEmit?.('browser:download', { path: target, filename, owner })
       }
-      else activeEmit?.('browser:download', { path: target, filename, error: state })
+      else activeEmit?.('browser:download', { path: target, filename, error: state, owner })
     })
   })
 
@@ -279,10 +276,9 @@ function wireBrowserSession(): void {
 }
 
 /** Install independently of service initialization; lazy input relay is a no-op until ready. */
-export function installBrowserWiring(win: BrowserWindow, emit: BrowserEmit, collectDownload?: BrowserDownloadCollector): void {
+export function installBrowserWiring(win: BrowserWindow, emit: BrowserEmit): void {
   shellWin = win
   activeEmit = emit
-  activeDownloadCollector = collectDownload
   if (!wiringInstalled) {
     wiringInstalled = true
     const { app } = electron()

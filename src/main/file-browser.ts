@@ -129,7 +129,13 @@ export async function readFileGitDiff(request: FileBrowserRequest): Promise<File
       return { gitRoot: root, patch, binary: /^Binary files .* differ$/m.test(patch) }
     }
     // Untracked files and newly staged files are additions relative to HEAD.
-    const content = await readFileText(path, textReadLimit(previewKindOf(path)))
+    const content = await readFileText(path, textReadLimit(previewKindOf(path))).catch(error => {
+      if (errorCode(error) === 'missing') return null
+      throw error
+    })
+    // A staged addition may be gone from the working tree already. Neither
+    // endpoint of the HEAD comparison then contains the file.
+    if (!content) return { gitRoot: root, patch: '', binary: false }
     if (content.error) return { gitRoot: root, patch: '', binary: content.error === 'binary', error: content.error === 'binary' ? undefined : content.error }
     if (content.truncated) return { gitRoot: root, patch: '', binary: false, error: 'tooLarge' }
     const patch = await git(root, ['diff', '--no-index', '--no-ext-diff', '--no-textconv', '--unified=3', '--', '/dev/null', rel], true)

@@ -111,7 +111,7 @@ function OutputView({ output }: { output: NotebookOutput }) {
 function CellView({ cell, language, index, tab, store }: { cell: NotebookCell; language: string; index: number; tab: FileTab; store: FileBrowserStore }) {
   const source = join(cell.source)
   if (cell.cell_type === 'markdown') return <div data-notebook-cell={index} data-notebook-markdown className="px-1">
-    <FileNavigationProvider cwd={tab.cwd} openFile={target => store.open(tab.cwd, target)}>
+    <FileNavigationProvider cwd={tab.cwd} openFile={(target, view) => store.open(tab.cwd, target, view, { expandTree: tab.treeOpen })}>
       <FileBaseDirectory.Provider value={fileDirname(tab.path)}><Markdown>{source}</Markdown></FileBaseDirectory.Provider>
     </FileNavigationProvider>
   </div>

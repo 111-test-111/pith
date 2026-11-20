@@ -340,6 +340,9 @@ try {
   // turn preserves the composer text/images, uses a user checkpoint, and is
   // excluded from the automatic continuation count.
   const attached = await fixture({ withRewind: true })
+  // This attachment-persistence check uses the existing native image path.
+  // Text-only admission and auxiliary billing are covered by check-vision.
+  attached.session.agent.state.model = { ...attached.session.model, input: ['text', 'image'] }
   const attachmentPath = join(attached.project, 'attachment.txt')
   await writeFile(attachmentPath, 'Attached evidence\n')
   const attachmentGate = deferred()

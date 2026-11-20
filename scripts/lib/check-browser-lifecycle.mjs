@@ -50,9 +50,10 @@ let root;
 window.mountBrowser = entries => {
   writeOpenBrowserPages(entries);
   window.store = new BrowserStore();
+  window.store.applyStatus(status);
   root = createRoot(document.getElementById('root'));
   root.render(h(React.StrictMode, null, h(Witness), h(I18nProvider, null,
-    h(BrowserPane, {store: window.store, active: true, onEmpty: () => {window.emptyCalls++;}}))));
+    h(BrowserPane, {store: window.store, active: true, current: true, onEmpty: () => {window.emptyCalls++;}}))));
 };
 window.unmountBrowser = () => root.unmount();
 window.readSnapshot = readOpenBrowserPages;

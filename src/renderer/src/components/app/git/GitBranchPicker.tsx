@@ -35,9 +35,9 @@ export function GitBranchPicker({ state, store, disabled }: { state: GitState; s
     if (disabled || !state.branches.some(item => item.name === branch && !item.current && !item.worktree && item.name !== repo.branch)) return
     setOpen(false); void store.execute('switch', { branch })
   }
-  return <MorphPopover open={open} onOpenChange={openChange}>
+  return <MorphPopover open={open} onOpenChange={openChange} className="min-w-10 max-w-full">
     <MorphPopoverTrigger>
-      <Button variant="ghost" size="sm" className="h-8 min-w-0 max-w-40 justify-start gap-1 px-1 text-xs font-medium" aria-label={t('git.switchBranch')} title={repo.branch ?? t('git.detached')} disabled={disabled || !repo.head}><GitFork aria-hidden className="size-3.5 shrink-0" /><span className="truncate">{repo.branch ?? t('git.detached')}</span><ChevronDown aria-hidden className="size-3 shrink-0 text-muted-foreground" /></Button>
+      <Button variant="ghost" size="sm" className="h-8 min-w-0 max-w-full justify-start gap-1 px-1.5 text-xs font-medium" aria-label={t('git.switchBranch')} title={repo.branch ?? t('git.detached')} disabled={disabled || !repo.head}><GitFork aria-hidden className="size-3.5 shrink-0" /><span className="min-w-0 truncate">{repo.branch ?? t('git.detached')}</span><ChevronDown aria-hidden className="size-3 shrink-0 text-muted-foreground" /></Button>
     </MorphPopoverTrigger>
     <MorphPopoverContent side="bottom" align="start" className="w-72 max-w-[calc(100vw-2rem)] overflow-hidden">
       <div data-git-branches>

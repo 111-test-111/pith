@@ -21,11 +21,11 @@ export interface ResourceRuntimeDTO {
 }
 
 export const RESOURCE_STORAGE_CATEGORIES = [
-  'sessions', 'rewind', 'trajectory', 'library', 'browser', 'cache',
+  'sessions', 'rewind', 'trajectory', 'browser', 'cache',
   'indexes', 'logs', 'workspace', 'extensions', 'configuration', 'other'
 ] as const
 export type ResourceStorageCategory = typeof RESOURCE_STORAGE_CATEGORIES[number]
-export type ResourceStorageRootKind = 'app' | 'pi' | 'library' | 'browser' | 'logs' | 'crashes'
+export type ResourceStorageRootKind = 'app' | 'pi' | 'browser' | 'logs' | 'crashes'
 export interface ResourceStorageRootDTO {
   kind: ResourceStorageRootKind
   path: string

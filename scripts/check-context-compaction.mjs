@@ -162,7 +162,15 @@ try {
   await Promise.all([steeringCompact, steeringRun])
   assert(JSON.stringify(f.requests.at(-1).messages).includes('Keep this queued instruction intact.'))
   assert.equal(f.session.pendingMessageCount, 0)
-  console.log('PASS: steering sent during summary generation reaches the next model request.')
+  // The queue_update that drops a consumed row names it, so the renderer can
+  // echo the user row in the same commit as the card's removal. Earlier recalls
+  // in this run must not have reported anything as delivered.
+  const delivered = f.events.filter(event => event.type === 'queue_update' && event.delivered?.length)
+  assert.equal(delivered.length, 1, 'one queue_update reports the consumed row: ' + JSON.stringify(delivered.map(event => event.delivered)))
+  assert.equal(delivered[0].delivered[0].text, 'Keep this queued instruction intact.')
+  assert.equal(delivered[0].steering.length, 0, 'the delivered row has already left the mirror')
+  assert.equal(delivered[0].delivered[0].imageCount, 0, 'images never ride the delivery event')
+  console.log('PASS: steering sent during summary generation reaches the next model request and reports its delivery.')
 
   // A final text-only response also supplies a complete boundary.
   const baseStream = f.session.agent.streamFunction

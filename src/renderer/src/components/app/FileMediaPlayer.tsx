@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type SyntheticEvent } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type SyntheticEvent } from 'react'
 import { Button } from '@/components/motion/button'
 import { RangeSlider } from '@/components/motion/range-slider'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/motion/select'
@@ -7,6 +7,7 @@ import { Maximize2, Minimize2, MusicNote, Pause, Play, Volume2, VolumeX } from '
 import { useI18n } from '@/i18n'
 import { basename } from '@/lib/format'
 import { cn } from '@/lib/utils'
+import { useFilePreviewActive, useFilePreviewPopup } from '@/lib/file-preview-activity'
 import { mediaUrl } from '../../../../shared/media'
 import { MiddleEllipsis } from './MiddleEllipsis'
 import { RunningLoader } from './RunningLoader'
@@ -24,6 +25,8 @@ function mediaTime(seconds: number): string {
  * The same element survives pane resizing, refreshes and full-screen changes. */
 export function FileMediaPlayer({ path, kind }: { path: string; kind: 'audio' | 'video' }) {
   const { t } = useI18n()
+  const active = useFilePreviewActive()
+  const speedPopup = useFilePreviewPopup()
   const mediaRef = useRef<HTMLMediaElement | null>(null)
   const surfaceRef = useRef<HTMLDivElement>(null)
   const lastVolume = useRef(1)
@@ -32,7 +35,19 @@ export function FileMediaPlayer({ path, kind }: { path: string; kind: 'audio' | 
   const [buffering, setBuffering] = useState(false)
   const [fullscreen, setFullscreen] = useState(false)
   const [playback, setPlayback] = useState({ ready: false, playing: false, time: 0, duration: 0, volume: 1, muted: false, rate: 1 })
-  const setMediaRef = useCallback((node: HTMLMediaElement | null) => { mediaRef.current = node }, [])
+  const setMediaRef = useCallback((node: HTMLMediaElement | null) => {
+    const previous = mediaRef.current
+    mediaRef.current = node
+    if (node || !previous) return
+    previous.pause()
+    // A real unmount releases the seekable stream. React's development ref
+    // replay reattaches the same, still-connected node.
+    queueMicrotask(() => {
+      if (previous.isConnected) return
+      previous.removeAttribute('src')
+      previous.load()
+    })
+  }, [])
 
   const sync = useCallback((media: HTMLMediaElement) => {
     if (media.volume > 0) lastVolume.current = media.volume
@@ -47,6 +62,12 @@ export function FileMediaPlayer({ path, kind }: { path: string; kind: 'audio' | 
     })
   }, [])
   const onMediaChange = (event: SyntheticEvent<HTMLMediaElement>) => sync(event.currentTarget)
+
+  useLayoutEffect(() => {
+    if (active) return
+    mediaRef.current?.pause()
+    if (surfaceRef.current && document.fullscreenElement === surfaceRef.current) void document.exitFullscreen().catch(() => {})
+  }, [active])
 
   useEffect(() => {
     const update = () => setFullscreen(surfaceRef.current !== null && document.fullscreenElement === surfaceRef.current)
@@ -171,7 +192,7 @@ export function FileMediaPlayer({ path, kind }: { path: string; kind: 'audio' | 
             </Button></Tooltip>
             <RangeSlider value={muted ? 0 : Math.round(playback.volume * 100)} min={0} max={100} step={1} showTicks={false} onValueChange={changeVolume} aria-label={t('files.media.volume')} formatValueText={value => `${value}%`} className="h-6 min-w-0 flex-1" />
           </div>
-          <Select value={String(playback.rate)} onValueChange={changeRate} className="file-media-speed" disabled={!playback.ready}>
+          <Select {...speedPopup} value={String(playback.rate)} onValueChange={changeRate} className="file-media-speed" disabled={!playback.ready}>
             <SelectTrigger aria-label={t('files.media.speed')} className="h-7 gap-1 rounded-control px-2 py-0 text-xs tabular-nums"><SelectValue /></SelectTrigger>
             <SelectContent portal={!fullscreen} portalAlign="end" portalWidth={112} className={cn('rounded-control', fullscreen && 'left-auto w-28')}>
               <ul>{RATES.map(rate => <SelectItem key={rate} value={String(rate)} className="rounded-inner text-xs">{`${rate}×`}</SelectItem>)}</ul>

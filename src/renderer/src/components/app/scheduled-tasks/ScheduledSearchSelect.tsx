@@ -34,13 +34,13 @@ export const ScheduledSearchSelect = memo(function ScheduledSearchSelect({
 
   return (
     <Combobox value={value} onValueChange={onChange} query={query} onQueryChange={setQuery}>
-      <ComboboxTrigger className={`min-w-0 text-sm ${invalid ? 'text-destructive hover:bg-destructive/10' : ''}`}>
+      <ComboboxTrigger className={`min-w-0 ${invalid ? 'text-destructive hover:bg-destructive/10' : ''}`}>
         <ComboboxInput aria-label={label} placeholder={label}  />
       </ComboboxTrigger>
       <ComboboxContent>
         <ComboboxList ariaLabel={label}>
           {visible.map((option) => (
-            <ComboboxItem key={option.value} value={option.value} textValue={option.label} className="text-sm">{option.label}</ComboboxItem>
+            <ComboboxItem key={option.value} value={option.value} textValue={option.label}>{option.label}</ComboboxItem>
           ))}
           <ComboboxEmpty>{t('scheduledTasks.editor.noMatches')}</ComboboxEmpty>
         </ComboboxList>

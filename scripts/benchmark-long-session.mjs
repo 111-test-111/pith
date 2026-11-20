@@ -118,6 +118,7 @@ try {
   await writeFile(join(rendererRoot, 'index.html'), `<html><body><div id="root"></div><script type="module" src="${join(repo, 'scripts/lib/long-session/renderer.jsx').replaceAll('\\', '/')}"></script></body></html>`)
   await viteBuild({ configFile: false, root: rendererRoot, logLevel: 'error',
     publicDir: join(repo, 'src/renderer/public'), resolve: { alias: { '@': join(repo, 'src/renderer/src') } },
+    worker: { format: 'es' },
     plugins: [react(), tailwindcss()], build: { outDir: rendererOut, emptyOutDir: true, chunkSizeWarningLimit: 10000 } })
   const serving = await serve(rendererOut); server = serving.server
   for (const turns of config.sizes) {

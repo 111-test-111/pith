@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useEffectEvent, useRef, useState } from 'react'
 import { FileText, LoaderCircle } from '@/lib/icons'
 import { basename } from '@/lib/format'
 import { requestBrowserOpenLink } from '@/lib/browser/open-link'
 import { useI18n } from '@/i18n'
+import { useFilePreviewActive } from '@/lib/file-preview-activity'
 import type { FileTab } from '@/state/file-browser-store'
 import type { HtmlPreviewDTO } from '../../../../shared/types'
 import { HTML_PREVIEW_PARTITION } from '../../../../shared/html-preview'
@@ -31,11 +32,19 @@ export function FileHtml({ tab, refresh, onFind }: { tab: FileTab; refresh: numb
 
 function HtmlGuest({ url, name, onFind }: { url: string; name: string; onFind: () => void }) {
   const { t } = useI18n()
+  const active = useFilePreviewActive()
   const ref = useRef<HTMLWebViewElement>(null)
-  const find = useRef(onFind)
-  find.current = onFind
   const [loading, setLoading] = useState(true)
   const [failed, setFailed] = useState(false)
+  const focusFind = useEffectEvent(() => { if (active) onFind() })
+  const openLink = useEffectEvent((url: string) => { if (active) requestBrowserOpenLink(url) })
+  useEffect(() => {
+    if (loading) return
+    // A retained guest can finish loading while hidden. Keep its DOM and let
+    // audio reach the user only while its preview is visible.
+    try { (ref.current as HTMLWebViewElement & { setAudioMuted(muted: boolean): void })?.setAudioMuted(!active) }
+    catch { /* Guest may have failed to attach. */ }
+  }, [active, loading])
   useEffect(() => {
     const guest = ref.current
     if (!guest) return
@@ -57,8 +66,8 @@ function HtmlGuest({ url, name, onFind }: { url: string; name: string; onFind: (
     guest.addEventListener('did-fail-load', fail)
     guest.addEventListener('render-process-gone', fail)
     guest.addEventListener('did-navigate', navigated)
-    const offLink = window.pi.onHtmlPreviewLink(link => { if (link.webContentsId === id()) requestBrowserOpenLink(link.url) })
-    const offFind = window.pi.onHtmlPreviewFind(contentsId => { if (contentsId === id()) find.current() })
+    const offLink = window.pi.onHtmlPreviewLink(link => { if (link.webContentsId === id()) openLink(link.url) })
+    const offFind = window.pi.onHtmlPreviewFind(contentsId => { if (contentsId === id()) focusFind() })
     // Attach listeners before starting the first navigation (including cache hits).
     guest.setAttribute('src', url)
     return () => {

@@ -1,8 +1,10 @@
 import { memo, useEffect, useMemo, useRef, useState, useSyncExternalStore, type RefObject } from 'react'
-import { ChevronLeft, ChevronRight, Diff } from '@/lib/icons'
+import { ChevronLeft, ChevronRight, Diff, WrapText } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
 import { Tooltip } from '@/components/motion/tooltip'
 import { useNearViewport } from '@/lib/hooks/use-near-viewport'
+import type { DiffLayout } from '@/lib/diff-layout'
+import { cn } from '@/lib/utils'
 import {
   extractReviewTurns,
   sumWrittenFileStats,
@@ -11,6 +13,7 @@ import {
 import type { PiStore } from '@/state/pi-store'
 import { useI18n } from '@/i18n'
 import { ReviewCollapseButton, ReviewFileHeader, ReviewDiffBody } from './ReviewDiff'
+import { DiffLayoutButton } from './DiffControls'
 
 /** Diff row height, matching `FileDiff`'s own 20px line box. */
 const DIFF_LINE_PX = 20
@@ -31,9 +34,13 @@ function placeholderHeight(file: WrittenFile): number {
 
 interface ReviewPaneProps {
   store: PiStore
-  /** Turn the pane should select — set when the transcript's Review action
-   * opens the tab, so it lands on the turn the user asked about. */
+  /** Selection also receives the transcript's Review action. */
   focusTurnId: number | null
+  onSelectTurn?: (id: number | null) => void
+  wrapLines: boolean
+  onWrapLinesChange: (wrap: boolean) => void
+  savedCollapsed?: Record<string, boolean>
+  onCollapsedChange?: (collapsed: Record<string, boolean>) => void
 }
 
 /**
@@ -49,7 +56,7 @@ interface ReviewPaneProps {
  * they scroll near the viewport, so a long session's worth of changes opens
  * instantly and only pays for what is being looked at.
  */
-export const ReviewPane = memo(function ReviewPane({ store, focusTurnId }: ReviewPaneProps) {
+export const ReviewPane = memo(function ReviewPane({ store, focusTurnId, onSelectTurn, wrapLines, onWrapLinesChange, savedCollapsed, onCollapsedChange }: ReviewPaneProps) {
   const { t } = useI18n()
   // Select the message log itself, not the whole state: its identity only
   // changes at message boundaries, so an answer streaming in the background
@@ -68,15 +75,20 @@ export const ReviewPane = memo(function ReviewPane({ store, focusTurnId }: Revie
     [messages, cwd, approvalOpeningEntryId]
   )
 
-  const [selectedId, setSelectedId] = useState<number | null>(focusTurnId)
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
+  const [localSelectedId, setLocalSelectedId] = useState(focusTurnId)
+  const selectedId = onSelectTurn ? focusTurnId : localSelectedId
+  const setSelectedId = onSelectTurn ?? setLocalSelectedId
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>(() => savedCollapsed ?? {})
+  const [layout, setLayout] = useState<DiffLayout>('stacked')
+  const updateCollapsed = (next: Record<string, boolean>) => {
+    setCollapsed(next)
+    onCollapsedChange?.(next)
+  }
   const bodyRef = useRef<HTMLDivElement | null>(null)
 
-  // Re-anchor whenever the transcript asks for a turn (a Review click while the
-  // tab is already open), and whenever the list itself is rebuilt.
   useEffect(() => {
-    if (focusTurnId !== null) setSelectedId(focusTurnId)
-  }, [focusTurnId, turns])
+    if (!onSelectTurn) setLocalSelectedId(focusTurnId)
+  }, [focusTurnId, onSelectTurn])
 
   // A selection that no longer exists (session switch, rewind) falls back to the
   // newest turn rather than showing nothing.
@@ -108,8 +120,7 @@ export const ReviewPane = memo(function ReviewPane({ store, focusTurnId }: Revie
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {/* Turn switcher: which turn is being reviewed, its totals, and one
-          collapse-all for its files. */}
+      {/* Turn switcher, totals and controls shared by all file bodies. */}
       <div className="flex h-11 shrink-0 items-center gap-1 border-b border-border px-1.5">
         <Tooltip content={t('review.prevTurn')}>
           <Button
@@ -150,11 +161,18 @@ export const ReviewPane = memo(function ReviewPane({ store, focusTurnId }: Revie
             <ChevronRight aria-hidden="true" className="size-4" />
           </Button>
         </Tooltip>
-        <ReviewCollapseButton allCollapsed={allCollapsed} onClick={() => setCollapsed(previous => {
-          const next = { ...previous }
+        {turn.files.some(file => file.patch) ? <DiffLayoutButton layout={layout} onChange={setLayout} /> : null}
+        <Tooltip content={t('files.wrap')}>
+          <Button variant="ghost" size="icon" aria-label={t('files.wrap')} aria-pressed={wrapLines}
+            className={cn('shrink-0', wrapLines && 'bg-muted text-primary')} onClick={() => onWrapLinesChange(!wrapLines)}>
+            <WrapText aria-hidden="true" className="size-4" />
+          </Button>
+        </Tooltip>
+        <ReviewCollapseButton allCollapsed={allCollapsed} onClick={() => {
+          const next = { ...collapsed }
           for (const file of turn.files) next[collapseKey(file)] = !allCollapsed
-          return next
-        })} />
+          updateCollapsed(next)
+        }} />
       </div>
 
       {/* One scroll container for the whole review, vertical only: the file
@@ -171,9 +189,12 @@ export const ReviewPane = memo(function ReviewPane({ store, focusTurnId }: Revie
             key={`${turn.id}:${file.filePath}`}
             file={file}
             scrollRootRef={bodyRef}
+            layoutKey={collapsed}
+            wrap={wrapLines}
+            layout={layout}
             collapsed={Boolean(collapsed[collapseKey(file)])}
             onToggle={() =>
-              setCollapsed((previous) => ({ ...previous, [collapseKey(file)]: !previous[collapseKey(file)] }))
+              updateCollapsed({ ...collapsed, [collapseKey(file)]: !collapsed[collapseKey(file)] })
             }
           />
         ))}
@@ -187,12 +208,18 @@ function ReviewFile({
   file,
   collapsed,
   onToggle,
-  scrollRootRef
+  scrollRootRef,
+  layoutKey,
+  wrap,
+  layout
 }: {
   file: WrittenFile
   collapsed: boolean
   onToggle: () => void
   scrollRootRef: RefObject<HTMLElement | null>
+  layoutKey: unknown
+  wrap: boolean
+  layout: DiffLayout
 }) {
   const { t } = useI18n()
   const { ref, near } = useNearViewport<HTMLElement>(scrollRootRef)
@@ -202,7 +229,7 @@ function ReviewFile({
 
       {collapsed ? null : file.patch ? (
         near ? (
-          <ReviewDiffBody patch={file.patch} displayPath={file.displayPath} scrollRootRef={scrollRootRef} />
+          <ReviewDiffBody patch={file.patch} displayPath={file.displayPath} scrollRootRef={scrollRootRef} layoutKey={layoutKey} wrap={wrap} layout={layout} />
         ) : (
           <div aria-hidden="true" style={{ height: placeholderHeight(file) }} />
         )

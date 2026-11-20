@@ -9,6 +9,7 @@ import { failure } from './types'
 export class RewindRecorder {
   error?: RewindErrorDTO
   private disposed = false
+  private readonly shutdown = new AbortController()
   private unsubscribeAgent?: () => void
   private label = ''
   private messageTimestamp?: number
@@ -68,12 +69,12 @@ export class RewindRecorder {
     // Unlike session.subscribe(), agent listeners are awaited by the SDK.
     // User admission covers ordinary prompts, steers and follow-ups alike;
     // Tools and continuations within that turn do not add more timepoints.
-    this.unsubscribeAgent = agent.subscribe(async event => {
+    this.unsubscribeAgent = agent.subscribe(async (event, signal) => {
       if (event.type === 'message_start' && event.message.role === 'user') {
         const user = event.message
         this.messageTimestamp = user.timestamp
         this.label = (typeof user.content === 'string' ? user.content : user.content.filter(part => part.type === 'text').map(part => part.text).join('\n')).slice(0, 200)
-        const checkpoint = await this.capture()
+        const checkpoint = await this.capture(AbortSignal.any([signal, this.shutdown.signal]))
         if (checkpoint) this.messageCheckpoints.set(user, checkpoint.id)
       } else if (event.type === 'message_end' && event.message.role === 'user') {
         const checkpointId = this.messageCheckpoints.get(event.message)
@@ -117,19 +118,19 @@ export class RewindRecorder {
       this.releases.clear()
     }
   }
-  private async capture(): Promise<RewindCheckpointDTO | undefined> {
+  private async capture(signal: AbortSignal): Promise<RewindCheckpointDTO | undefined> {
     const task = this.pending.then(async () => {
       const { session, cwd, client, coordinator } = this.options
       if (this.disposed || !this.options.enabled()) return
       let checkpoint: RewindCheckpointDTO | undefined
       try {
-        await coordinator.withExclusive(cwd, 'snapshot', async () => {
+        await coordinator.withSnapshot(cwd, async () => {
           // Resolve the exact selected leaf inside the barrier. Capturing and
           // deduplicating a checkpoint must not append hidden session entries.
           const entryId = session.sessionManager.getLeafId()
           checkpoint = await client.call('checkpoint', cwd, { sessionId: session.sessionId, trigger: 'before-turn',
             entryId, description: this.label, messageTimestamp: this.messageTimestamp })
-        }, false)
+        }, signal)
         this.error = undefined
       } catch (error) {
         this.error = failure(error)
@@ -145,5 +146,5 @@ export class RewindRecorder {
     if (event.type === 'tool_execution_end') this.endNestedToolCall(event.toolCallId)
   }
   async idle(): Promise<void> { await this.pending }
-  dispose(): void { this.disposed = true; this.unsubscribeAgent?.(); for (const release of this.releases.values()) release(); this.releases.clear() }
+  dispose(): void { this.disposed = true; this.shutdown.abort(); this.unsubscribeAgent?.(); for (const release of this.releases.values()) release(); this.releases.clear() }
 }

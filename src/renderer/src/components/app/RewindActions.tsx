@@ -1,15 +1,15 @@
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
-import { AlertTriangle, ArrowLeftFromLine, ChevronDown, Info } from '@/lib/icons'
+import { ArrowLeftFromLine, ChevronDown, Info } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
 import { MorphPopover, MorphPopoverContent, MorphPopoverTrigger } from '@/components/motion/popover-morph'
 import { useI18n } from '@/i18n'
 import type { RewindMode } from '../../../../shared/types'
 
 /** One restore action with an explicit mode choice; choosing never executes. */
-export function RewindActions({ mode, onModeChange, onRestore, actionLabel, disabled, modeDisabled, conversationUnavailable, fileWarning, information, infoDisabled, actionRef }: {
+export function RewindActions({ mode, onModeChange, onRestore, actionLabel, disabled, modeDisabled, conversationUnavailable, information, infoDisabled, actionRef }: {
   mode: RewindMode; onModeChange: (mode: RewindMode) => void; onRestore: () => void
   actionLabel?: string; disabled: boolean; modeDisabled: boolean; conversationUnavailable?: boolean
-  fileWarning: boolean; information: ReactNode; infoDisabled: boolean; actionRef: RefObject<HTMLButtonElement | null>
+  information: ReactNode; infoDisabled: boolean; actionRef: RefObject<HTMLButtonElement | null>
 }) {
   const { t } = useI18n()
   const [open, setOpen] = useState<'mode' | 'info' | null>(null)
@@ -57,9 +57,10 @@ export function RewindActions({ mode, onModeChange, onRestore, actionLabel, disa
             const index = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (current + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length
             buttons[index]?.focus()
           }}>
-            {(['conversation', 'all', 'files'] as const).filter(value => value !== mode).map(value => <Button key={value} data-rewind-mode={value} variant={fileWarning && value !== 'conversation' ? 'destructive' : 'ghost'} size="sm" className="w-full justify-start gap-3 px-2.5 text-sm font-normal" disabled={conversationUnavailable && value !== 'files'} onClick={() => { onModeChange(value); setOpen(null); actionRef.current?.focus() }}>
+            {/* Every target offers the same row: a file-changing mode is not a
+                different kind of choice, so it wears no warning mark or tone. */}
+            {(['conversation', 'all', 'files'] as const).filter(value => value !== mode).map(value => <Button key={value} data-rewind-mode={value} variant="ghost" size="sm" className="w-full justify-start gap-3 px-2.5 text-xs font-normal" disabled={conversationUnavailable && value !== 'files'} onClick={() => { onModeChange(value); setOpen(null); actionRef.current?.focus() }}>
               <span className="flex-1 text-left">{t(`rewind.mode.${value}`)}</span>
-              {fileWarning && value !== 'conversation' ? <AlertTriangle data-rewind-mode-warning role="img" aria-label={t('rewind.modeConflict')} className="size-4 shrink-0 text-destructive" /> : null}
             </Button>)}
           </div>
         </MorphPopoverContent>

@@ -554,6 +554,17 @@ export class GoalRuntime {
       this.updateLedger(l => { if (l.run?.id === dispatchId) l.run.state = 'started' })
     }
   }
+  /** Auxiliary visual requests spend the same session allowance as primary requests. */
+  admitModelRequest(signal?: AbortSignal): boolean {
+    this.bill()
+    const owned = this.live || !this.manualWakes || (!this.failed && !!this.ledger?.run)
+    if (signal?.aborted) return false
+    if (owned && (this.failed || this.ledger?.independent?.unresolved.length || this.ledger?.run && this.goal?.limits.tokenBudget !== null && this.ledger.tokens >= (this.goal?.limits.tokenBudget ?? Infinity))) {
+      if (!this.failed) this.pause(this.ledger?.independent?.unresolved.length ? 'accounting' : 'tokens')
+      return false
+    }
+    return true
+  }
   /** Bound every primary model request, including SDK/Jev continuations within a run. */
   installStreamGuard(): void {
     const agent = this.host.session.agent
@@ -574,11 +585,8 @@ export class GoalRuntime {
     this.disposeProofGuard = () => { if (agent.beforeToolCall === before) agent.beforeToolCall = previousBefore }
     const previous = agent.streamFunction
     const stream: typeof previous = async (model, context, options) => {
-      this.bill()
-      const owned = this.live || !this.manualWakes || (!this.failed && !!this.ledger?.run)
       const cancelled = !!options?.signal?.aborted
-      if (cancelled || owned && (this.failed || this.ledger?.independent?.unresolved.length || this.ledger?.run && this.goal?.limits.tokenBudget !== null && this.ledger.tokens >= (this.goal?.limits.tokenBudget ?? Infinity))) {
-        if (!cancelled && !this.failed) this.pause(this.ledger?.independent?.unresolved.length ? 'accounting' : 'tokens')
+      if (!this.admitModelRequest(options?.signal)) {
         const message = { role: 'assistant' as const, content: [], api: model.api, provider: model.provider, model: model.id,
           stopReason: 'aborted' as const, errorMessage: cancelled ? 'GOAL_CANCELLED' : 'GOAL_TOKEN_BUDGET', timestamp: Date.now(),
           usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } }

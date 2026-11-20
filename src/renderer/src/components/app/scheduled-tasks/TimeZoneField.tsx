@@ -67,7 +67,7 @@ export const TimeZoneField = memo(function TimeZoneField({
                 key={zone}
                 variant="ghost"
                 size="sm"
-                className="h-8 w-full justify-start truncate px-2 text-sm"
+                className="h-8 w-full justify-start truncate px-2 text-xs"
                 onClick={() => { onChange(zone); setOpen(false) }}
               >
                 {zone}

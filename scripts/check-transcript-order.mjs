@@ -19,7 +19,7 @@ try {
   const outfile = join(temporary, 'modules.mjs')
   await build({
     stdin: {
-      contents: `export { PiStore } from './src/renderer/src/state/pi-store';\nexport { buildTurns } from './src/renderer/src/lib/chat-turns';`,
+      contents: `export { PiStore } from './src/renderer/src/state/pi-store';\nexport { buildTurns, collectChangeScopes } from './src/renderer/src/lib/chat-turns';`,
       resolveDir: resolve('.')
     },
     bundle: true,
@@ -27,7 +27,7 @@ try {
     format: 'esm',
     outfile
   })
-  const { PiStore, buildTurns } = await import(pathToFileURL(outfile).href)
+  const { PiStore, buildTurns, collectChangeScopes } = await import(pathToFileURL(outfile).href)
 
   const user = (timestamp, content = 'keep going') => ({ role: 'user', content, timestamp })
   const round = (timestamp, content, extra = {}) => ({
@@ -134,6 +134,86 @@ try {
   assert.equal(echo.getState().messages.length, 1, 'the echo is replaced, never duplicated')
   assert.equal(echo.getState().messages[0].__optimistic, undefined)
   console.log('PASS: the optimistic user echo is still replaced by its persisted message.')
+
+  // 5. A manual summary is an ordinary process row inside an ongoing turn.
+  //    It fixes its position between rounds without ending the display group.
+  const compact = new PiStore()
+  const before = round(110, [call('before')], { changeScopeId: 'scope', completedAt: 115 })
+  const checkpoint = {
+    role: 'compactionSummary', timestamp: 120, sessionEntryId: 'checkpoint',
+    summary: 'Keep the completed inspection.', tokensBefore: 1000
+  }
+  const compacted = [user(100), before, result(116, 'before'), checkpoint]
+  compact.applySnapshot(snapshot('/compact', compacted, 1))
+  const atCompletion = buildTurns(compact.getState().messages)
+  assert.deepEqual(atCompletion.map(turn => turn.role), ['user', 'assistant'],
+    'compaction must not end the assistant display group')
+  assert.deepEqual(atCompletion[1].insertions, [{ beforeRound: 1, message: checkpoint }])
+  const after = round(130, [{ type: 'text', text: 'Continued after compaction.' }], {
+    changeScopeId: 'scope', completedAt: 140, stopReason: 'stop'
+  })
+  compact.dispatch(event('/compact', 2, after))
+  compact.dispatch({ type: 'agent_settled', sessionPath: '/compact', eventSequence: 3 })
+  const afterContinuation = buildTurns(compact.getState().messages)
+  assert.deepEqual(afterContinuation.map(turn => turn.role), ['user', 'assistant'],
+    'compaction and continuation belong to one assistant display group')
+  assert.deepEqual(afterContinuation.map(turn => turn.key), atCompletion.map(turn => turn.key),
+    'the original assistant group keeps its identity')
+  assert.deepEqual(afterContinuation[1].assistants, [before, after])
+  assert.deepEqual(afterContinuation[1].insertions, atCompletion[1].insertions,
+    'the summary stays between the original output and the continued round')
+  const scope = collectChangeScopes(afterContinuation).get('scope')
+  assert.deepEqual(scope.assistants, [before, after], 'a summary boundary does not split file ownership')
+  assert.equal(scope.ownerKey, afterContinuation.at(-1).key)
+  assert.equal(scope.prompt, compacted[0], 'the scope retains its original checkpoint prompt')
+  const reopened = new PiStore()
+  reopened.applySnapshot(snapshot('/compact', [...compacted, after], 3, false))
+  assert.deepEqual(buildTurns(reopened.getState().messages), afterContinuation, 'reopening keeps the same summary boundary')
+  console.log('PASS: manual summaries stay between rounds in the same turn through continuation, settlement and reopening.')
+
+  // 6. Persisted branch order wins over timing: a queued steer can have been
+  //    created while compaction was running, before the summary was saved.
+  const steering = { ...user(118, 'A queued steer delivered after the summary.'), queuedDelivery: 'steer' }
+  const secondSteer = { ...steering, content: 'Another steer at the same round boundary.' }
+  const steered = buildTurns([...compacted, steering, secondSteer, after])
+  assert.deepEqual(steered.map(turn => turn.role), ['user', 'assistant'], 'queued steers share the opening turn')
+  assert.deepEqual(steered[1].assistants, [before, after])
+  assert.deepEqual(steered[1].insertions.map(({ beforeRound, message }) => [beforeRound, message]),
+    [[1, checkpoint], [1, steering], [1, secondSteer]], 'steers retain their delivered order after compaction')
+  assert.equal(collectChangeScopes(steered).get('scope').prompt, compacted[0], 'review stays anchored to the opening user')
+  const sameTick = buildTurns([user(100), before, checkpoint, { ...after, timestamp: 120 }])
+  assert.deepEqual(sameTick[1].insertions, [{ beforeRound: 1, message: checkpoint }],
+    'a summary and its continuation sharing a millisecond keep persisted order')
+  const delivery = { role: 'custom', customType: 'bash_task_completion', display: true, timestamp: 121, content: 'Finished' }
+  const withDelivery = buildTurns([...compacted, delivery, after])
+  assert.deepEqual(withDelivery[1].insertions, [{ beforeRound: 1, message: checkpoint }, { beforeRound: 1, message: delivery }],
+    'compaction and background completion rows share persisted order at the same round boundary')
+  console.log('PASS: summaries respect persisted branch order across queued steering and equal timestamps.')
+
+  // 7. Older model-context snapshots put the summary first. Place that legacy
+  //    header by message time before grouping, retaining its slot in the turn.
+  const legacy = { ...checkpoint, sessionEntryId: undefined }
+  const legacyTurns = buildTurns([legacy, ...compacted.slice(0, -1), after])
+  assert.deepEqual(legacyTurns.map(turn => turn.role), ['user', 'assistant'])
+  assert.deepEqual(legacyTurns[1].insertions, [{ beforeRound: 1, message: legacy }])
+  const branch = { role: 'branchSummary', timestamp: 120, summary: 'Branch checkpoint.', fromId: null }
+  assert.deepEqual(buildTurns([branch, ...compacted.slice(0, -1), after]).map(turn => turn.role),
+    ['user', 'assistant', 'info', 'assistant'], 'legacy branch summaries use the same boundary rule')
+  console.log('PASS: legacy context headers retain their historical slot inside the turn; branch summaries retain their own boundary.')
+
+  const followUp = { ...user(101, 'Queued before the opening response started.'), queuedDelivery: 'followUp', completedAt: 150 }
+  compact.dispatch({ ...event('/compact', 4, followUp), changeScopeId: 'follow-up-scope' })
+  assert.equal(compact.getState().activeChangeScopeId, 'follow-up-scope', 'delivery switches the scope before the next partial')
+  const later = round(155, [{ type: 'text', text: 'Follow-up reply.' }], { changeScopeId: 'follow-up-scope' })
+  compact.dispatch(event('/compact', 5, later))
+  const retry = { ...errored(145, 'late retry'), changeScopeId: 'scope' }
+  compact.dispatch(event('/compact', 6, retry))
+  const followed = buildTurns(compact.getState().messages)
+  assert.deepEqual(followed.map(turn => turn.role), ['user', 'assistant', 'user', 'assistant'])
+  assert.deepEqual(followed[1].assistants, [before, after, retry], 'late retry stays above the queued follow-up')
+  assert.deepEqual(followed[3].assistants, [later])
+  assert.equal(collectChangeScopes(followed).get('follow-up-scope').prompt, followUp)
+  console.log('PASS: follow-up delivery opens a separate scope and preserves earlier assistant history.')
 } finally {
   await rm(temporary, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
 }

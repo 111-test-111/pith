@@ -81,7 +81,7 @@ try {
     assert.equal(await indicator.count(), 0)
     const defaultHint = await editor.getAttribute('aria-placeholder')
     const selectMode = async () => {
-      await page.getByRole('button', { name: 'Add to prompt', exact: true }).click()
+      await page.locator('[data-composer-actions-trigger]').click()
       await page.getByRole('button', { name: label, exact: true }).click()
       await page.waitForFunction(() => window.store.getState().goalUI.enabled)
       assert.equal(await trigger.count(), 0, 'selection hides the Goal entry, including any ended previous goal')

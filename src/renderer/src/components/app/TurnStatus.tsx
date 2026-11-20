@@ -1,3 +1,4 @@
+import { createContext, useContext } from 'react'
 import { RunningLoader } from './RunningLoader'
 import { TextShimmer } from '@/components/motion/text-shimmer'
 import { useI18n } from '@/i18n'
@@ -33,6 +34,8 @@ export interface TurnStatusProps {
   seedKey?: string
 }
 
+export const TurnStatusLabelContext = createContext<string | null>(null)
+
 /**
  * The one "turn in progress" indicator: a single spinner row, strictly one line
  * tall, always rendered below the turn's output. It replaces the earlier
@@ -58,7 +61,8 @@ export function TurnStatus({ className, waitingUser = false, step = THINKING_STE
   const { t, locale } = useI18n()
   const [verbsEnabled] = useSpinnerVerbs()
   const verb = useLiveSpinnerVerb(verbsEnabled, step, seedKey)
-  const label = waitingUser ? t('askUser.waiting') : verb ? spinnerVerbLabel(verb, locale) : null
+  const override = useContext(TurnStatusLabelContext)
+  const label = waitingUser ? t('askUser.waiting') : override ?? (verb ? spinnerVerbLabel(verb, locale) : null)
 
   return (
     // `data-spinner-verb` names the sentence this row is playing and
@@ -73,6 +77,7 @@ export function TurnStatus({ className, waitingUser = false, step = THINKING_STE
       data-row="process"
       data-transcript-gap-before="roomy"
       data-spinner-waiting-user={waitingUser ? 'true' : undefined}
+      data-vision-progress={override ? 'true' : undefined}
       data-spinner-verb={verb?.id}
       data-spinner-loader={verb ? 'dither-plus' : 'spinner'}
     >
@@ -80,7 +85,7 @@ export function TurnStatus({ className, waitingUser = false, step = THINKING_STE
         variant={verb ? 'dither-plus' : 'spinner'}
         // `size-4` — the same square as the transcript's tool glyphs.
         size={16}
-        label={t('chat.working')}
+        label={!waitingUser && override ? override : t('chat.working')}
         className="shrink-0 text-primary"
       />
       {label ? (

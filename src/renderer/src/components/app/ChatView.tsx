@@ -3,6 +3,7 @@ import { visibleSubmissionIds } from '@/lib/plan-submissions'
 import { BashTasksProvider } from '@/lib/bash-tasks'
 import { ImageReplaysProvider } from '@/lib/image-replays'
 import { SessionTasks } from './SessionTasks'
+import { AskUserRecordsContext } from './AskUserRecordList'
 import { memo, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, useSyncExternalStore } from 'react'
 import { AlertTriangle, RefreshCw, X } from '@/lib/icons'
 import { MessageGroup } from '@/components/agents/message'
@@ -17,13 +18,13 @@ import type {
 } from '../../../../shared/types'
 import type { Notice, PiStore, PiState } from '@/state/pi-store'
 import { useI18n } from '@/i18n'
-import { buildTurns, collectChangeScopes, type ChatTurn } from '@/lib/chat-turns'
+import { buildTurns, collectChangeScopes, isTurnSteer, type ChatTurn } from '@/lib/chat-turns'
 import { extractReviewTurns } from '@/lib/turn-written-files'
 import { extractUserDisplay } from '@/lib/user-message'
 import { AssistantGroup, BashItem, CustomItem, SummaryItem, UserItem } from './MessageItems'
 import { RowReveal } from './RowReveal'
 import { SummaryDisclosureContext, SummaryRow } from './SummaryRow'
-import { TurnStatus } from './TurnStatus'
+import { TurnStatus, TurnStatusLabelContext } from './TurnStatus'
 import { TRANSCRIPT_ROW_WIDTH } from '@/lib/transcript-rhythm'
 import { continuationTarget } from '../../../../shared/continuation'
 
@@ -79,6 +80,8 @@ type TranscriptMenuTarget =
  * app already renders: user rows carry `data-rail-id` (the turn key),
  * assistant rows `data-assistant-group` (the turn's first timestamp). */
 function transcriptMenuRow(element: HTMLElement): TranscriptMenuRow | null {
+  const userRow = element.closest<HTMLElement>('[data-rail-id]')
+  if (userRow) return { kind: 'user', key: userRow.getAttribute('data-rail-id') ?? '' }
   const assistantRow = element.closest<HTMLElement>('[data-assistant-group]')
   if (assistantRow) {
     return {
@@ -86,8 +89,7 @@ function transcriptMenuRow(element: HTMLElement): TranscriptMenuRow | null {
       stamp: assistantRow.getAttribute('data-assistant-group') ?? ''
     }
   }
-  const userRow = element.closest<HTMLElement>('[data-rail-id]')
-  return userRow ? { kind: 'user', key: userRow.getAttribute('data-rail-id') ?? '' } : null
+  return null
 }
 
 /** The user message that opened a turn: retry/fork targets. Scanning stops at a
@@ -110,24 +112,25 @@ function resolveTranscriptMenu(
 ): TranscriptMenuTarget | null {
   if (!row) return null
   if (row.kind === 'user') {
-    const turn = displayTurns.find(
-      (candidate) => candidate.role === 'user' && candidate.key === row.key
-    )
-    return turn?.role === 'user'
-      ? { kind: 'user', message: turn.user, text: extractUserDisplay(turn.user.content).text }
-      : null
+    for (const turn of displayTurns) {
+      const message = turn.role === 'user' && turn.key === row.key ? turn.user
+        : turn.role === 'assistant' ? turn.insertions?.find(item => isTurnSteer(item) && item.key === row.key)?.message
+        : undefined
+      if (message?.role === 'user') return { kind: 'user', message, text: extractUserDisplay(message.content).text }
+    }
+    return null
   }
   const turn = displayTurns.find(
     (candidate) =>
       candidate.role === 'assistant' &&
       String(
-        candidate.assistants[0]?.timestamp ?? candidate.notices?.[0]?.message.timestamp ?? 0
+        candidate.assistants[0]?.timestamp ?? candidate.insertions?.[0]?.message.timestamp ?? 0
       ) === row.stamp
   )
   if (turn?.role !== 'assistant') return null
   return {
     kind: 'assistant',
-    copyText: finalReplyText(turn.assistants),
+    copyText: finalReplyText(turn.assistants.slice(turn.insertions?.findLast(isTurnSteer)?.beforeRound)),
     retryFrom: retryFromFor(displayTurns, turn),
     forkAt: turn.assistants[turn.assistants.length - 1]
   }
@@ -137,18 +140,15 @@ const RAIL_TITLE_LIMIT = 56
 const RAIL_DESCRIPTION_LIMIT = 88
 
 /**
- * Localized text for an in-flight retry notice. The main process ships the key
- * and its parameters (never prose), and raw SDK error text rides along as a
- * detail suffix. Compaction is not here: it renders as a tool row (`SummaryRow`)
- * in the same slot, because that is what it is.
+ * Localized text for a retry FAILURE. A run that is only reconnecting never
+ * renders a notice: the ordinary waiting row already says the turn is alive, and
+ * an attempt counter above the composer reads as a status line the user cannot
+ * act on. The main process still ships the key (never prose), and raw SDK error
+ * text rides along as a detail suffix. Compaction is not here: it renders as a
+ * tool row (`SummaryRow`) in the same slot, because that is what it is.
  */
 function noticeText(notice: Notice, t: ReturnType<typeof useI18n>['t']): string {
-  const base = notice.key === 'retrying'
-    ? t('chat.noticeRetrying', {
-        attempt: notice.params?.attempt ?? 0,
-        maxAttempts: notice.params?.maxAttempts ?? 0
-      })
-    : t('chat.noticeRetryFailed')
+  const base = t('chat.noticeRetryFailed')
   return notice.detail ? `${base} · ${notice.detail}` : base
 }
 
@@ -215,6 +215,10 @@ export const ChatView = memo(function ChatView({
     }
     return map
   }, [state.messages])
+  const askUserRecordsByCall = useMemo(
+    () => new Map(state.askUserRecords.map(record => [record.toolCallId, record])),
+    [state.askUserRecords]
+  )
 
   const running = state.isStreaming || Boolean(state.streaming)
   /**
@@ -286,7 +290,7 @@ export const ChatView = memo(function ChatView({
       for (let next = index + 1; next < turns.length; next++) {
         const candidate = turns[next]
         if (candidate.role !== 'assistant') break
-        assistants.push(...candidate.assistants)
+        assistants.push(...candidate.assistants.slice(candidate.insertions?.findLast(isTurnSteer)?.beforeRound))
       }
       userTurns.push({ turn, assistants })
     }
@@ -299,7 +303,7 @@ export const ChatView = memo(function ChatView({
         ariaLabel: t('chat.navGoTo', { index: index + 1, count: userTurns.length })
       }
     })
-  }, [turns, t])
+  }, [turns, hiddenUserKey, t])
   const streaming = state.streaming
   const lastTurn = turns[turns.length - 1]
   /** Retry target for the error banner: the newest user turn. */
@@ -312,10 +316,10 @@ export const ChatView = memo(function ChatView({
   })()
   /**
    * A run that ENDED on a retry failure is not status chrome: the turn's own
-   * group renders it as unframed error prose inside the folded process.
-   * The in-flight retry notice stays in the framed status row
-   * below, and so does a failure that has no settled assistant turn to host it.
-   * A compaction is neither: it is a tool row of its own (below).
+   * group renders it as unframed error prose inside the folded process, and a
+   * failure that has no settled assistant turn to host it keeps the framed
+   * status row below. An in-flight retry renders nothing at all. A compaction
+   * is neither: it is a tool row of its own (below).
    */
   const failureNotice =
     state.notice && state.notice.key === 'retryFailed' ? noticeText(state.notice, t) : null
@@ -348,7 +352,7 @@ export const ChatView = memo(function ChatView({
   const missingPlan = state.plan?.latest && !visibleSubmissionIds(state.messages).has(state.plan.latest.submissionEntryId) ? state.plan.latest : null
   const recoveredIndex = missingPlan ? displayTurns.findIndex(turn => {
     const time = turn.role === 'user' ? turn.user.timestamp : turn.role === 'assistant'
-      ? (turn.assistants[0]?.timestamp ?? turn.notices?.[0]?.message.timestamp ?? 0) : turn.message.timestamp
+      ? (turn.assistants[0]?.timestamp ?? turn.insertions?.[0]?.message.timestamp ?? 0) : turn.message.timestamp
     return time > missingPlan.submittedAt
   }) : -1
   const recoveryCard = missingPlan && state.sessionPath && state.plan
@@ -463,7 +467,7 @@ export const ChatView = memo(function ChatView({
       <AssistantGroup
         key={turn.key}
         messages={messages}
-        notices={turn.notices}
+        insertions={turn.insertions}
         writtenMessages={changes?.assistants}
         writtenCompletions={changes?.completions}
         writtenReviewId={changes?.reviewId}
@@ -478,6 +482,8 @@ export const ChatView = memo(function ChatView({
         failure={turn === lastTurn ? failureNotice ?? undefined : undefined}
         onResend={state.subagentChild ? undefined : onResend}
         onFork={state.subagentChild ? undefined : onFork}
+        onEdit={menuEdit}
+        onRewind={menuRewind}
         showActions={!busy}
         actionsAlwaysVisible={isLast && !live}
         cwd={state.cwd}
@@ -516,14 +522,16 @@ export const ChatView = memo(function ChatView({
       initialScrollKey={state.sessionPath ? `${state.sessionPath}#${scrollResetKey}` : null}
       label={t('chat.transcriptAria')}
       className="min-h-0 flex-1"
-      viewportClassName="px-3 py-5 sm:px-5"
+      viewportClassName="chat-gutter py-5"
       // `clip` (not `hidden`): hidden forces overflow-y to `auto`, turning the
       // column into a nested scroll container whose scrollbar flashes on
       // session switches. clip never creates a scroll container.
-      contentClassName="mx-auto min-h-full w-full max-w-3xl overflow-x-clip"
+      contentClassName="chat-column min-h-full overflow-x-clip"
     >
       <PlanPresentationContext.Provider value={state.plan && state.sessionPath ? { state: state.plan, sessionPath: state.sessionPath, onRefine: onRefinePlan, onReviewExecution: reviewExecution } : null}>
       <SummaryDisclosureContext.Provider value={summaryDisclosures.current}>
+      <TurnStatusLabelContext.Provider value={state.vision.progress ? t('vision.analyzing', { count: state.vision.progress.imageCount, model: state.vision.progress.modelId }) : null}>
+      <AskUserRecordsContext.Provider value={askUserRecordsByCall}>
       <MessageGroup data-transcript-rows>
         {displayTurns.flatMap((turn, index) => [index === recoveredIndex ? recoveryCard : null, renderTurn(turn)])}
         {recoveredIndex < 0 ? recoveryCard : null}
@@ -538,7 +546,7 @@ export const ChatView = memo(function ChatView({
           <TurnStatus seedKey={spinnerSeed} />
         ) : null}
 
-        {state.notice && state.notice.key !== 'compacting' && state.notice.key !== 'compactFailed' && !failureHosted ? (
+        {state.notice && state.notice.key !== 'compacting' && state.notice.key !== 'compactFailed' && state.notice.key !== 'retrying' && !failureHosted ? (
           <RowReveal animate>
             <div
               data-turn-notice
@@ -554,7 +562,9 @@ export const ChatView = memo(function ChatView({
             <div className="flex items-start justify-between gap-3 rounded-xl border border-destructive/40 bg-destructive/10 px-3 py-2.5 text-sm text-destructive">
               <span className="flex items-start gap-2">
                 <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-                {typeof state.error === 'string' ? state.error : t(`rewind.error.${state.error.code}`)}
+                {typeof state.error === 'string' ? state.error : 'kind' in state.error
+                  ? t(`vision.error.${state.error.code}`, { model: state.error.model ?? '', detail: state.error.detail ?? '' })
+                  : t(`rewind.error.${state.error.code}`)}
               </span>
               <span className="flex items-center gap-0.5">
                 {lastUserTurn && !busy && !state.subagentChild ? (
@@ -576,6 +586,8 @@ export const ChatView = memo(function ChatView({
           </RowReveal>
         ) : null}
       </MessageGroup>
+      </AskUserRecordsContext.Provider>
+      </TurnStatusLabelContext.Provider>
       </SummaryDisclosureContext.Provider>
       </PlanPresentationContext.Provider>
     </MessageScroller>

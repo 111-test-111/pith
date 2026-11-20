@@ -1,6 +1,6 @@
 /** Composer-height scroll following: isolated Electron + real ChatView/Composer.
  *
- * When the composer grows or shrinks with pasted/removed attachments, the
+ * When the composer grows or shrinks with attachments or the queue, the
  * transcript viewport above it must keep a reader who is at the live edge
  * pinned to the bottom — instantly — and leave a reader who scrolled away
  * exactly where they were. Covers both directions for the image tray and the
@@ -32,6 +32,7 @@ const fixture = String.raw`<!doctype html><html><body style="margin:0"><div id="
 import React from 'react'; import {createRoot} from 'react-dom/client';
 import {Composer} from '/src/components/app/Composer.tsx';
 import {ChatView} from '/src/components/app/ChatView.tsx';
+import {AskUserPanel} from '/src/components/app/AskUserPanel.tsx';
 import {ImagePreviewProvider} from '/src/components/app/ImagePreview.tsx';
 import {PiStore} from '/src/state/pi-store.ts';
 import {I18nProvider} from '/src/i18n/index.tsx'; import '/src/styles.css';
@@ -56,11 +57,16 @@ for(let i=0;i<28;i++){
 window.store.applySnapshot({sessionPath:'/fixture.jsonl',sessionId:'fixture',cwd:'/tmp',projectless:false,model:null,thinkingLevel:'off',isStreaming:false,eventSequence:1,plan:window.plan,messages:turns});
 function App(){
  const [plan]=React.useState(window.plan);
+ const [showQuestion,setShowQuestion]=React.useState(false);
+ const [queued,setQueued]=React.useState({steering:[],followUp:[]});
+ window.setShowQuestion=setShowQuestion;
+ window.setQueued=setQueued;
  return h(I18nProvider,null,h(ImagePreviewProvider,null,
-  h('div',{style:{display:'flex',flexDirection:'column',height:'760px',width:'720px',margin:'0 auto'}},
+  h('div',{id:'conversation',className:'chat-layout',style:{display:'flex',flexDirection:'column',height:'760px',width:'720px',margin:'0 auto'}},
    h('div',{style:{flex:'1 1 0%',minHeight:0,display:'flex',flexDirection:'column'}},
     h(ChatView,{store:window.store})),
-   h(Composer,{models:[],model:null,thinkingLevel:'off',availableThinkingLevels:['off'],busy:false,plan,sessionPath:'/fixture.jsonl',queued:{steering:[],followUp:[]},onSend:p=>window.sent.push(p),onQueue:p=>window.sent.push(p),onRecallQueue:async()=>[],onModelChange:()=>{},onThinkingLevelChange:()=>{}}))));
+   showQuestion?h(AskUserPanel,{request:{requestId:'alignment',sessionPath:'/fixture.jsonl',createdAt:0,questions:[{question:'Which layout should we use?',options:[{label:'Compact'},{label:'Regular'}]}]},onEngage:()=>{},onRespond:()=>{}}):null,
+   h(Composer,{models:[],model:null,thinkingLevel:'off',availableThinkingLevels:['off'],busy:false,plan,sessionPath:'/fixture.jsonl',queued,onSend:p=>window.sent.push(p),onQueue:p=>window.sent.push(p),onRecallQueue:async()=>[],onModelChange:()=>{},onThinkingLevelChange:()=>{}}))));
 }
 createRoot(document.getElementById('root')).render(h(App));
 </script></body></html>`
@@ -104,6 +110,69 @@ try {
   // A DOM predicate can resolve before ResizeObserver's pre-paint delivery.
   // Sample the first painted frame, after that delivery (no smooth-scroll wait).
   const afterPaint = () => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => setTimeout(resolve, 0))))
+
+  // Focusing the borderless surface must keep its geometry and fill stable,
+  // while the native editor and selection retain their identity in both themes.
+  const surface = () => page.evaluate(() => {
+    const editor=document.querySelector('[data-prompt-editor]')
+    const form=editor.closest('form'), style=getComputedStyle(form)
+    const bounds=form.getBoundingClientRect()
+    return {fill:style.backgroundColor,pageFill:getComputedStyle(form.closest('.chat-gutter')).backgroundColor,
+      borders:[style.borderTopWidth,style.borderRightWidth,style.borderBottomWidth,style.borderLeftWidth],
+      shadow:style.boxShadow,transition:style.transitionDuration,transform:style.transform,
+      bounds:[bounds.x,bounds.y,bounds.width,bounds.height]}
+  })
+  for (const dark of [false,true]) {
+    await page.evaluate(dark => {
+      document.documentElement.classList.toggle('dark',dark)
+      document.querySelector('[data-prompt-editor]').blur()
+    },dark)
+    await afterPaint()
+    const before=await surface()
+    assert.notEqual(before.fill,before.pageFill,'editor fill is distinct from the page')
+    assert.deepEqual(before.borders,['0px','0px','0px','0px'])
+    assert.equal(before.shadow,'none')
+    assert.equal(before.transition,'0s')
+    await page.evaluate(() => {
+      const editor=document.querySelector('[data-prompt-editor]')
+      window.surfaceEditor=editor
+      editor.focus({preventScroll:true})
+      const range=document.createRange();range.selectNodeContents(editor);range.collapse(false)
+      getSelection().removeAllRanges();getSelection().addRange(range)
+    })
+    await afterPaint()
+    assert.deepEqual(await surface(),before,'focus keeps the borderless surface unchanged')
+    assert.ok(await page.evaluate(() => document.activeElement===window.surfaceEditor && getSelection().anchorNode===window.surfaceEditor),'native focus and selection survive')
+  }
+  await page.evaluate(() => document.documentElement.classList.remove('dark'))
+
+  // The browser stays wide while the conversation shrinks, as when a rail
+  // opens. Requests, transcript and editor must retain the same two edges.
+  await page.evaluate(() => { window.originalEditor=document.querySelector('[data-prompt-editor]'); window.setShowQuestion(true) })
+  await page.locator('[data-ask-user="alignment"]').waitFor()
+  for (const width of [820, 620, 480, 720]) {
+    await page.evaluate(width => { document.getElementById('conversation').style.width=width+'px' }, width)
+    await afterPaint()
+    const columns = await page.evaluate(() => {
+      const rect=el=>{const r=el.getBoundingClientRect();return{left:r.left,right:r.right,width:r.width}}
+      return {
+        transcript:rect(document.querySelector('[data-slot="message-scroller"] .chat-column')),
+        editor:rect(document.querySelector('[data-prompt-editor]').closest('form')),
+        request:rect(document.querySelector('[data-ask-user="alignment"] .chat-column')),
+        stable:window.originalEditor===document.querySelector('[data-prompt-editor]')
+      }
+    })
+    for (const part of ['editor','request']) {
+      assert.ok(Math.abs(columns.transcript.left-columns[part].left)<=1 && Math.abs(columns.transcript.right-columns[part].right)<=1, `${width}px conversation aligns ${part}: ${JSON.stringify(columns)}`)
+    }
+    assert.ok(columns.stable, 'resizing preserves the native editor')
+    assert.ok(columns.transcript.width<=768, 'reading column stays bounded')
+  }
+  await page.locator('[data-ask-user-action="collapse"]').click()
+  await afterPaint()
+  assert.ok(await page.evaluate(() => Math.abs(document.querySelector('[data-ask-user="alignment"] .chat-column').getBoundingClientRect().left-document.querySelector('[data-prompt-editor]').closest('form').getBoundingClientRect().left)<=1), 'collapsed questions keep the shared alignment')
+  await page.evaluate(() => window.setShowQuestion(false))
+  await afterPaint()
   const scrollTo = (top) => page.evaluate((next) => new Promise(resolve => {
     const v = document.querySelector('[data-slot="message-scroller"] section')
     const previous = v.scrollTop
@@ -119,6 +188,17 @@ try {
       painted()
     }
   }), top)
+  const scrollAway = async () => {
+    // A reader's wheel gesture cancels the scroller's programmatic follow
+    // before the native scroll arrives. Setting scrollTop alone skips that.
+    await viewport.hover()
+    await page.mouse.wheel(0, -100_000)
+    await page.waitForFunction(() => document.querySelector('[data-slot="message-scroller"] section').scrollTop === 0)
+    await page.mouse.wheel(0, 50)
+    await page.waitForFunction(() => document.querySelector('[data-slot="message-scroller"] section').scrollTop > 0)
+    await afterPaint()
+    return (await state()).top
+  }
 
   // The transcript overflows and opens pinned to the live edge.
   await page.waitForFunction(() => {
@@ -136,16 +216,12 @@ try {
   assert.ok(grown.distance <= 1, 'at the bottom, an attached image keeps the transcript pinned immediately: ' + JSON.stringify(grown))
 
   // 2. Away + grow: a reader who scrolled up keeps their exact position.
-  await scrollTo(50)
-  await page.waitForFunction(() => {
-    const v = document.querySelector('[data-slot="message-scroller"] section')
-    return v.scrollHeight - v.scrollTop - v.clientHeight > 56
-  })
+  const awayTop = await scrollAway()
   await page.setInputFiles('input[accept="image/*"]', pngPathB)
   await page.waitForFunction(() => document.querySelectorAll('form img').length === 2)
   await afterPaint()
   const awayGrown = await state()
-  assert.equal(awayGrown.top, 50, 'scrolled away, another attachment never moves the scrollbar: ' + JSON.stringify(awayGrown))
+  assert.equal(awayGrown.top, awayTop, 'scrolled away, another attachment never moves the scrollbar: ' + JSON.stringify(awayGrown))
 
   // 3. Following + shrink (removing the last image collapses the tray): still pinned.
   await scrollTo(Number.MAX_SAFE_INTEGER)
@@ -161,21 +237,17 @@ try {
   assert.ok(shrunk.distance <= 1, 'at the bottom, removing the attachments keeps the transcript pinned: ' + JSON.stringify(shrunk))
 
   // 4. Away + shrink (file card this time): the position is untouched.
-  await scrollTo(50)
-  await page.waitForFunction(() => {
-    const v = document.querySelector('[data-slot="message-scroller"] section')
-    return v.scrollHeight - v.scrollTop - v.clientHeight > 56
-  })
+  const fileTop = await scrollAway()
   await page.setInputFiles('input[type=file]:not([accept])', txtPath)
   await page.waitForFunction(() => document.querySelectorAll('[data-attachment-card]').length === 1)
   await afterPaint()
   const fileGrown = await state()
-  assert.equal(fileGrown.top, 50, 'scrolled away, an attached file card never moves the scrollbar: ' + JSON.stringify(fileGrown))
+  assert.equal(fileGrown.top, fileTop, 'scrolled away, an attached file card never moves the scrollbar: ' + JSON.stringify(fileGrown))
   await page.getByRole('button', { name: 'Remove src/notes.txt' }).click()
   await page.waitForFunction(() => document.querySelectorAll('[data-attachment-card]').length === 0)
   await afterPaint()
   const fileShrunk = await state()
-  assert.equal(fileShrunk.top, 50, 'scrolled away, removing the file card never moves the scrollbar: ' + JSON.stringify(fileShrunk))
+  assert.equal(fileShrunk.top, fileTop, 'scrolled away, removing the file card never moves the scrollbar: ' + JSON.stringify(fileShrunk))
 
   // 5. Back at the live edge, a fresh paste pins again (state machine recovered).
   await scrollTo(Number.MAX_SAFE_INTEGER)
@@ -203,8 +275,27 @@ try {
   const wheelShrunk = await state()
   assert.equal(wheelShrunk.top, wheelAway.top, 'a real wheel gesture prevents attachment resizing from re-enabling follow: ' + JSON.stringify(wheelShrunk))
 
+  const queueTop = await scrollAway()
+  await page.evaluate(() => window.setQueued({ steering: Array.from({ length: 6 }, (_, index) => ({
+    text: `Queued instruction ${index}`, originalText: `Queued instruction ${index}`, imageCount: 0, filePaths: []
+  })), followUp: [] }))
+  const queueToggle = page.locator('[data-queue-toggle]')
+  await queueToggle.waitFor()
+  await afterPaint()
+  assert.equal((await state()).top, queueTop, 'arrival of the queue strip preserves the reading position')
+  await queueToggle.click()
+  await afterPaint()
+  assert.equal((await state()).top, queueTop, 'opening the queue preserves the reading position')
+  await scrollTo(Number.MAX_SAFE_INTEGER)
+  await queueToggle.click()
+  await afterPaint()
+  assert.ok((await state()).distance <= 1, 'closing the queue keeps a reader at the live edge')
+  await queueToggle.click()
+  await afterPaint()
+  assert.ok((await state()).distance <= 1, 'opening the queue again keeps a reader at the live edge')
+
   assert.deepEqual(errors, [])
-  console.log('PASS: composer attachment resize keeps the transcript pinned at the live edge, untouched when scrolled away')
+  console.log('PASS: composer attachment and queue resize keep the transcript pinned at the live edge, untouched when scrolled away')
 } finally {
   await app?.close().catch(() => {})
   await server?.close().catch(() => {})

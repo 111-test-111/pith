@@ -31,6 +31,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { EASE_OUT } from "@/lib/ease";
+import { useFilePreviewActive } from "@/lib/file-preview-activity";
 import { useDismiss } from "@/lib/hooks/use-dismiss";
 import { useHoverGesture } from "@/lib/hooks/use-hover-gesture";
 import { useTapGesture } from "@/lib/hooks/use-tap-gesture";
@@ -170,10 +171,13 @@ export function Tooltip({
   side = "top",
   align = "center",
   delay = 120,
-  disabled = false,
+  disabled: disabledProp = false,
   className,
   wrapperClassName,
 }: TooltipProps) {
+  // local patch (pi-app): close portalled labels when their file pane is hidden.
+  const active = useFilePreviewActive();
+  const disabled = disabledProp || !active;
   const [open, setOpen] = useState(false);
   const id = useId();
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);

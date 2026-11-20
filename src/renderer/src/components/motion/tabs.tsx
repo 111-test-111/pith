@@ -9,6 +9,7 @@ import {
   useId,
   useMemo,
   useState,
+  type ComponentPropsWithRef,
   type ReactNode,
 } from "react";
 import { EASE_OUT } from "@/lib/ease";
@@ -115,12 +116,13 @@ export function TabsTrigger({
   children,
   className,
   indicatorClassName,
+  ...buttonProps
 }: {
   value: string;
   children: ReactNode;
   className?: string;
   indicatorClassName?: string;
-}) {
+} & Omit<ComponentPropsWithRef<"button">, "value" | "children" | "className" | "onClick" | "type" | "role" | "aria-selected">) {
   const { value: current, setValue, layoutId, variant } = useTabs();
   const active = current === value;
   // local patch (pi-app): a tab's fill takes the scale's radius, so no tab
@@ -133,6 +135,8 @@ export function TabsTrigger({
   if (variant === "underline") {
     return (
       <button
+        // local patch (pi-app): preserve trigger labels, state and data hooks when composing app tabs.
+        {...buttonProps}
         type="button"
         role="tab"
         aria-selected={active}
@@ -193,6 +197,7 @@ export function TabsTrigger({
         />
       ) : null}
       <button
+        {...buttonProps}
         type="button"
         role="tab"
         aria-selected={active}

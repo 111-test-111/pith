@@ -1,4 +1,5 @@
 import type { ImageContent } from './types'
+import type { VisionErrorDTO } from './vision'
 
 /** Goal is a session fact, independent of permission/Plan mode and Todo. */
 export type GoalStatus = 'active' | 'verifying' | 'paused' | 'blocked' | 'completed' | 'cancelled'
@@ -93,7 +94,7 @@ export type GoalActionRequest = {
   { action: 'definition'; criteriaRevision: number; objective: string; criteria: GoalCriterionInput[] }
 )
 export type GoalErrorCode = 'invalid' | 'stale' | 'busy' | 'plan' | 'quota' | 'storage' | 'unavailable' | 'attachments' | 'accounting'
-export type GoalActionResult = { ok: true; goal: GoalSnapshotDTO | null; seq: number } | { ok: false; code: GoalErrorCode }
+export type GoalActionResult = { ok: true; goal: GoalSnapshotDTO | null; seq: number } | { ok: false; code: GoalErrorCode; visionError?: VisionErrorDTO }
 /** A completed goal remains replaceable if later observations invalidate its
  * bound proofs. Explicit Pause, criteria edits and Rewind keep their ownership. */
 export function goalCanBeReplaced(goal: GoalRecord | null | undefined): boolean {

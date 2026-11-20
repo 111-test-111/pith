@@ -48,7 +48,7 @@ try {
           external: true
         }))
         builder.onResolve({ filter: /^electron$/ }, () => ({ path: 'electron', namespace: 'fixture' }))
-        builder.onResolve({ filter: /^proper-lockfile$|^@resvg\/resvg-js$/ }, args => ({ path: import.meta.resolve(args.path), external: true }))
+        builder.onResolve({ filter: /^proper-lockfile$|^@resvg\/resvg-js$|^ssh2$|^@xterm\/headless$/ }, args => ({ path: import.meta.resolve(args.path), external: true }))
         builder.onResolve({ filter: /^playwright-core(\/|$)|^chromium-bidi(\/|$)/ }, args => ({
           path: import.meta.resolve(args.path), external: true
         }))

@@ -4,8 +4,10 @@ import { CenterMorphModal, CenterMorphModalContent } from '@/components/motion/c
 import { Button } from '@/components/motion/button'
 import { AgentDisclosure } from '@/components/agents/agent-disclosure'
 import { RewindPatchCache, type RewindTotals } from '@/lib/rewind-preview'
+import type { DiffLayout } from '@/lib/diff-layout'
 import { refreshViewportVisibility, useViewportVisibility } from '@/lib/hooks/use-viewport-visibility'
 import { ReviewCollapseButton, ReviewFileHeader, ReviewDiffBody } from './ReviewDiff'
+import { DiffLayoutButton, DiffWrapButton } from './DiffControls'
 import { RewindActions } from './RewindActions'
 import { useI18n } from '@/i18n'
 import { cn } from '@/lib/utils'
@@ -130,11 +132,12 @@ function PreviewTotals({ path, preview, cache }: { path: string; preview: Rewind
   </span>
 }
 
-function DiffRow({ path, preview, change, neighbors, collapsed, layoutKey, onToggle, scrollRootRef, cache, onRestore, restoreDisabled }: {
+function DiffRow({ path, preview, change, neighbors, collapsed, layoutKey, onToggle, scrollRootRef, cache, onRestore, restoreDisabled, wrap }: {
   path: string; preview: RewindPreviewDTO; change: RewindChangeDTO; collapsed: boolean; onToggle: () => void
   scrollRootRef: RefObject<HTMLElement | null>; cache: RewindPatchCache
   onRestore?: () => void; restoreDisabled?: boolean
   neighbors: RewindChangeDTO[]; layoutKey: unknown
+  wrap: boolean
 }) {
   const { t } = useI18n()
   const { ref, visible, checkVisibility } = useViewportVisibility<HTMLElement>(scrollRootRef)
@@ -145,6 +148,7 @@ function DiffRow({ path, preview, change, neighbors, collapsed, layoutKey, onTog
   const subscribe = useCallback((listener: () => void) => cache.subscribe(key, listener), [cache, key])
   const snapshot = useCallback(() => cache.peek(key), [cache, key])
   const result = useSyncExternalStore(subscribe, snapshot)
+  const [layout, setLayout] = useState<DiffLayout>('stacked')
   const [error, setError] = useState<RewindErrorDTO>()
   const bodyHeight = useRef(100)
   const bodyRef = useRef<HTMLDivElement>(null)
@@ -162,8 +166,14 @@ function DiffRow({ path, preview, change, neighbors, collapsed, layoutKey, onTog
     return () => { cancelled = true }
   }, [visible, path, preview.token, change, cache])
   useLayoutEffect(() => {
-    if (visible && !collapsed && bodyRef.current) bodyHeight.current = bodyRef.current.offsetHeight
-  }, [visible, collapsed, result, error])
+    const body = bodyRef.current
+    if (!visible || collapsed || !body) return
+    const measure = () => { bodyHeight.current = body.offsetHeight }
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(body)
+    return () => observer.disconnect()
+  }, [visible, collapsed])
   useLayoutEffect(() => visible && !collapsed ? cache.pin(key) : undefined, [visible, collapsed, cache, key])
   useEffect(() => {
     if (collapsed || !visible) return
@@ -186,11 +196,14 @@ function DiffRow({ path, preview, change, neighbors, collapsed, layoutKey, onTog
     <ReviewFileHeader pathTooltip={false} displayPath={change.path || t('rewind.indexMetadata')} collapsed={collapsed} onToggle={onToggle} contentId={contentId} added={stats?.added} removed={stats?.removed} showZeroStats={!!stats}
       statsLabel={change.binary || stats?.binary ? t('rewind.binaryLabel') : statsFailed ? t('rewind.statsUnavailable') : !stats ? t('rewind.statsLoading') : undefined}
       detail={<span className="shrink-0 text-xs text-muted-foreground">{change.stage ? t('rewind.indexStage', { stage: change.stage }) : t(`rewind.area.${change.area}`)}</span>}
-      action={onRestore ? <Button data-rewind-file-restore={change.path} variant="ghost" size="icon" className="size-6 shrink-0" disabled={restoreDisabled} aria-label={t('rewind.restoreFile', { path: change.path })} onClick={onRestore}><ArrowLeftFromLine aria-hidden="true" className="size-3.5" /></Button> : null} />
+      action={<>
+        {result?.patch && !change.binary ? <DiffLayoutButton layout={layout} onChange={setLayout} className="size-6" /> : null}
+        {onRestore ? <Button data-rewind-file-restore={change.path} variant="ghost" size="icon" className="size-6 shrink-0" disabled={restoreDisabled} aria-label={t('rewind.restoreFile', { path: change.path })} onClick={onRestore}><ArrowLeftFromLine aria-hidden="true" className="size-3.5" /></Button> : null}
+      </>} />
     {collapsed ? null : !visible ? <div id={contentId} data-rewind-placeholder aria-hidden="true" style={{ height: bodyHeight.current }} /> : <div id={contentId} ref={bodyRef}>
       {change.beforeMode !== change.afterMode || change.binary || (result && !result.patch) ? <p className="px-3 py-2 text-xs text-muted-foreground">{t(`rewind.change.${change.kind}`)} · {t('rewind.fileMetadata', { bytes: change.bytes, before: change.beforeMode?.toString(8) ?? '—', after: change.afterMode?.toString(8) ?? '—' })}</p> : null}
       {change.binary ? <p className="px-3 pb-2 text-xs text-muted-foreground">{t('rewind.binary')}</p> : error ? <ErrorMessage error={error} /> : result ? <>
-        {result.patch ? <ReviewDiffBody patch={result.patch} displayPath={change.path} scrollRootRef={scrollRootRef} layoutKey={layoutKey} /> : <p className="px-3 pb-2 text-xs text-muted-foreground">{t(result.binary ? 'rewind.binary' : 'rewind.metadataOnly')}</p>}
+        {result.patch ? <ReviewDiffBody patch={result.patch} displayPath={change.path} scrollRootRef={scrollRootRef} layoutKey={layoutKey} layout={layout} wrap={wrap} /> : <p className="px-3 pb-2 text-xs text-muted-foreground">{t(result.binary ? 'rewind.binary' : 'rewind.metadataOnly')}</p>}
         {result.truncated ? <p className="px-3 py-2 text-xs text-muted-foreground">{t('rewind.truncated')}</p> : null}
       </> : <p role="status" className="px-3 pb-2 text-xs text-muted-foreground">{t('rewind.loading')}</p>}
     </div>}
@@ -218,6 +231,7 @@ export function RewindDialog({ sessionPath, messageTimestamp, messageEntryId, in
   const { t, locale } = useI18n()
   const [list, setList] = useState<RewindListDTO>()
   const [preview, setPreview] = useState<RewindPreviewDTO>()
+  const [wrap, setWrap] = useState(true)
   const [filePreview, setFilePreview] = useState<RewindPreviewDTO>()
   const [mode, setMode] = useState<RewindMode>('conversation')
   const [error, setError] = useState<RewindErrorDTO>()
@@ -302,12 +316,20 @@ export function RewindDialog({ sessionPath, messageTimestamp, messageEntryId, in
     } catch { if (generation === epoch.current) setError({ code: 'storage' }) }
     finally { if (generation === epoch.current) setLoading(false) }
   }
-  // The anchored open selects its checkpoint by itself. `files`/`all` ride
-  // along as the preselected mode; `conversation` is the ordinary default and
-  // stays unnamed so `conversationUnavailable` can still fall back to `files`.
+  // The window opens on a preview, never on an empty list: an anchored open
+  // lands on its own turn's before-turn checkpoint, and every other open lands
+  // on the NEWEST checkpoint (main sorts them newest first) — that is the state
+  // the caller came to inspect, and asking for a second click showed nothing.
+  // `files`/`all` ride along as the preselected mode; `conversation` is the
+  // ordinary default and stays unnamed so `conversationUnavailable` can still
+  // fall back to `files`. A busy engine or an uncommitted operation holds the
+  // automatic choice back until the interval reports a quiet repository.
   useEffect(() => {
-    if (!sessionPath || messageEntryId === undefined || autoSelected.current || !list) return
-    const target = list.checkpoints.find(cp => cp.trigger === 'before-turn' && cp.messageEntryId === messageEntryId)
+    if (!sessionPath || autoSelected.current || !list?.checkpoints.length) return
+    if (list.busy || list.pending.length) return
+    const target = messageEntryId === undefined
+      ? list.checkpoints[0]
+      : list.checkpoints.find(cp => cp.trigger === 'before-turn' && cp.messageEntryId === messageEntryId)
     if (!target) return
     autoSelected.current = true
     void select(target.id, undefined, initialMode === 'files' || initialMode === 'all' ? initialMode : undefined)
@@ -357,6 +379,7 @@ export function RewindDialog({ sessionPath, messageTimestamp, messageEntryId, in
   // The banner names the one fact that refuses the restore. No reason (an older
   // payload) keeps the generic busy sentence rather than guessing at one.
   const busyReason = list?.busy ? list.busyReason : undefined
+  const captureBusy = list?.error?.code === 'busy'
   const blocked = list?.busy ? { code: 'busy' as const } : mode !== 'conversation' ? preview?.blocked : undefined
   const excluded = preview?.excluded ?? []
   const partialPaths = !filePreview && mode !== 'conversation' ? preview?.uncovered ?? [] : []
@@ -409,13 +432,13 @@ export function RewindDialog({ sessionPath, messageTimestamp, messageEntryId, in
                 {preview ? <>
                   <span data-rewind-change-count aria-label={t('rewind.changeCount', { count: preview.changes.length })} className="shrink-0 whitespace-nowrap text-xs tabular-nums text-muted-foreground"><span className="hidden @min-[500px]:inline">{t('rewind.changeCount', { count: preview.changes.length })}</span><span className="@min-[500px]:hidden">{preview.changes.length}</span></span>
                   <PreviewTotals key={preview.token} path={sessionPath!} preview={preview} cache={cache} />
+                  {preview.changes.some(change => !change.binary) ? <DiffWrapButton wrap={wrap} onChange={setWrap} /> : null}
                   <ReviewCollapseButton allCollapsed={allCollapsed} onClick={() => setCollapsed(Object.fromEntries(preview.changes.map(change => [changeKey(change), !allCollapsed])))} />
                 </> : null}
                 <RewindActions key={preview?.token} mode={mode} onModeChange={setMode} onRestore={requestCommit} actionRef={restoreButtonRef}
                   actionLabel={executing ? t('rewind.executing') : preview?.action === 'undo' ? t('rewind.confirmUndo') : preview?.action === 'redo' ? t('rewind.confirmRedo') : undefined}
                   disabled={!preview || loading || fileLoading || executing || !!blocked || emptyPartialFiles || !!list?.pending.length || needsRefresh}
-                  modeDisabled={!preview || loading || fileLoading || executing || confirming || !!preview.action} conversationUnavailable={preview?.conversationUnavailable}
-                  fileWarning={!!preview?.changes.length || !!preview?.blocked || !!preview?.uncovered?.length} infoDisabled={!preview || confirming}
+                  modeDisabled={!preview || loading || fileLoading || executing || confirming || !!preview.action} conversationUnavailable={preview?.conversationUnavailable} infoDisabled={!preview || confirming}
                   information={<>
                     {preview?.scopeRoot ? <p className="break-all font-medium text-foreground">{t('rewind.scopeRoot', { path: preview.scopeRoot })}</p> : null}
                     <p className="leading-ui">{t('rewind.coverageDescription')}</p>
@@ -435,7 +458,7 @@ export function RewindDialog({ sessionPath, messageTimestamp, messageEntryId, in
               {error || success || list?.error || list?.pending.length || !preview || loading ? <div className="space-y-4 p-5">
                 {error ? <ErrorMessage error={error} /> : null}
                 {needsRefresh && preview ? <Button variant="outline" size="sm" onClick={() => void select(preview.checkpointId, preview.action, mode)}>{t('rewind.refreshPreview')}</Button> : null}
-                {list?.error && !error ? <ErrorMessage error={list.error} /> : null}
+                {list?.error && !error ? <ErrorMessage error={list.error} message={captureBusy ? t('rewind.captureBusy') : undefined} /> : null}
                 {success ? <p role="status" className="flex items-center gap-2 text-sm"><Check className="size-4 shrink-0 text-primary" />{success.status === 'committed' && success.skipped?.length ? t('rewind.partialSuccess', { count: success.skipped.length }) : t('rewind.success')}</p> : null}
                 {list?.pending.map(op => <div key={op.id} className="space-y-3 rounded-card border border-destructive/30 p-4">
                   <p className="text-sm font-medium">{t('rewind.recovery')}</p><p className="text-xs leading-ui text-muted-foreground">{t('rewind.recoveryDescription')}</p>
@@ -453,11 +476,11 @@ export function RewindDialog({ sessionPath, messageTimestamp, messageEntryId, in
                     <p className="text-xs leading-ui text-muted-foreground">{t('rewind.uncoveredDescription')}</p>
                     <UncoveredFiles paths={preview.uncovered} />
                   </div> : null}
-                  {blocked && blocked.code !== 'uncovered' && blocked.code !== error?.code && blocked.code !== list?.error?.code ? <ErrorMessage error={blocked} message={busyReason ? t(`rewind.busy.${busyReason}`) : undefined} /> : null}
+                  {blocked && blocked.code !== 'uncovered' && blocked.code !== error?.code && (captureBusy || blocked.code !== list?.error?.code) ? <ErrorMessage error={blocked} message={busyReason ? t(`rewind.busy.${busyReason}`) : undefined} /> : null}
                 </div>
                 {/* Mode controls the restore action, never the file preview. */}
                 <>
-                  {!preview.changes.length ? <p className="px-4 py-3 text-xs text-muted-foreground">{t(preview.uncovered?.length ? 'rewind.noCoveredChanges' : 'rewind.noChanges')}</p> : preview.changes.slice(0, visibleRows).map((change, index) => <DiffRow key={`${preview.token}:${changeKey(change)}`} path={sessionPath!} preview={preview} change={change} neighbors={preview.changes.slice(index + 1, index + 3)} collapsed={!!collapsed[changeKey(change)]} layoutKey={collapsed} onToggle={() => setCollapsed(previous => ({ ...previous, [changeKey(change)]: !previous[changeKey(change)] }))} scrollRootRef={bodyRef} cache={cache}
+                  {!preview.changes.length ? <p className="px-4 py-3 text-xs text-muted-foreground">{t(preview.uncovered?.length ? 'rewind.noCoveredChanges' : 'rewind.noChanges')}</p> : preview.changes.slice(0, visibleRows).map((change, index) => <DiffRow key={`${preview.token}:${changeKey(change)}`} path={sessionPath!} preview={preview} change={change} wrap={wrap} neighbors={preview.changes.slice(index + 1, index + 3)} collapsed={!!collapsed[changeKey(change)]} layoutKey={collapsed} onToggle={() => setCollapsed(previous => ({ ...previous, [changeKey(change)]: !previous[changeKey(change)] }))} scrollRootRef={bodyRef} cache={cache}
                     onRestore={change.singleFile && !preview.action ? () => void requestFile(change.path) : undefined}
                     restoreDisabled={executing || loading || fileLoading || !!list?.busy || !!list?.pending.length || needsRefresh || (!!preview.blocked && preview.blocked.code !== 'uncovered')} />)}
                   {visibleRows < preview.changes.length ? <div className="p-4"><Button variant="ghost" size="sm" onClick={() => setVisibleRows(value => value + 100)}>{t('rewind.showMore')}</Button></div> : null}

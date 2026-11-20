@@ -116,6 +116,9 @@ export function GeneralSection() {
   const [startup, setStartup] = useState<StartupSessionMode>('resume')
   const [savingStartup, setSavingStartup] = useState(false)
   const [startupError, setStartupError] = useState(false)
+  const [autoNameSessions, setAutoNameSessions] = useState(true)
+  const [savingAutoName, setSavingAutoName] = useState(false)
+  const [autoNameError, setAutoNameError] = useState(false)
   const [version, setVersion] = useState<string | null>(null)
   // DSH file sandbox: the mode is read from appInfo and applied through the
   // setter; the status below it says what this host can actually enforce.
@@ -148,7 +151,7 @@ export function GeneralSection() {
   useEffect(() => {
     void window.pi
       .appInfo()
-      .then((info) => { setVersion(info.version); setCheckpoints(info.checkpointsEnabled); setDebugEnabled(info.debugEnabled); setStartup(info.startup); setWaitSeconds(formatSeconds(info.bashMaxWaitMs)); setSavedWait(info.bashMaxWaitMs); setSandboxMode(info.sandboxMode); setSandbox(info.sandbox); setAskTimeout(String(info.askUserTimeoutSeconds ?? ASK_USER_DEFAULT_TIMEOUT_S)); setSavedAskTimeout(info.askUserTimeoutSeconds ?? ASK_USER_DEFAULT_TIMEOUT_S); setResponseTimeout(String(info.responseTimeoutSeconds ?? RESPONSE_TIMEOUT_DEFAULT_S)); setSavedResponseTimeout(info.responseTimeoutSeconds ?? RESPONSE_TIMEOUT_DEFAULT_S); setAllowMidRunChanges(info.allowMidRunChanges === true) })
+      .then((info) => { setVersion(info.version); setCheckpoints(info.checkpointsEnabled); setDebugEnabled(info.debugEnabled); setStartup(info.startup); setAutoNameSessions(info.autoNameSessions !== false); setWaitSeconds(formatSeconds(info.bashMaxWaitMs)); setSavedWait(info.bashMaxWaitMs); setSandboxMode(info.sandboxMode); setSandbox(info.sandbox); setAskTimeout(String(info.askUserTimeoutSeconds ?? ASK_USER_DEFAULT_TIMEOUT_S)); setSavedAskTimeout(info.askUserTimeoutSeconds ?? ASK_USER_DEFAULT_TIMEOUT_S); setResponseTimeout(String(info.responseTimeoutSeconds ?? RESPONSE_TIMEOUT_DEFAULT_S)); setSavedResponseTimeout(info.responseTimeoutSeconds ?? RESPONSE_TIMEOUT_DEFAULT_S); setAllowMidRunChanges(info.allowMidRunChanges === true) })
       .catch(() => {})
   }, [])
 
@@ -182,6 +185,22 @@ export function GeneralSection() {
             {t('settings.startupFailed')}
           </p>
         ) : null}
+        <SettingsRow label={t('settings.autoNameSessions')} description={t('settings.autoNameSessionsDesc')}>
+          <Checkbox
+            mark="square"
+            checked={autoNameSessions}
+            disabled={savingAutoName}
+            aria-label={t('settings.autoNameSessions')}
+            onCheckedChange={value => {
+              setSavingAutoName(true)
+              setAutoNameError(false)
+              void window.pi.setAutoNameSessions(value === true)
+                .then(setAutoNameSessions, () => setAutoNameError(true))
+                .finally(() => setSavingAutoName(false))
+            }}
+          />
+        </SettingsRow>
+        {autoNameError ? <p role="alert" className="px-4 text-xs text-destructive">{t('settings.autoNameSessionsFailed')}</p> : null}
         <SettingsRow label={t('settings.behavior')} description={t('settings.behaviorDesc')}>
           <RadioGroup
             orientation="horizontal"
@@ -336,7 +355,7 @@ export function GeneralSection() {
             variant="ghost"
             size="sm"
             aria-label={t('settings.openProjectPage')}
-            onClick={() => void window.pi.openExternal('https://github.com/earendil-works/pi-coding-agent')}
+            onClick={() => void window.pi.openExternal('https://github.com/111-test-111/pith')}
           >
             {t('settings.openProjectPage')}
           </Button>

@@ -35,6 +35,12 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - name: SSH persistence fixture dependency (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y tmux
+      - name: SSH persistence fixture dependency (macOS)
+        if: runner.os == 'macOS'
+        run: command -v tmux || brew install tmux
       - run: npm run build
       - run: npm run test:core -- --strict-skips
       - name: Required kernel sandbox enforcement (macOS)
@@ -90,8 +96,8 @@ jobs:
         with:
           node-version: 24
           cache: npm
-      - name: Video fixture dependency
-        run: brew install ffmpeg
+      - name: Video and SSH fixture dependencies
+        run: brew install ffmpeg tmux
       - run: npm ci
       - run: npm run test:ui -- --strict-skips
       - uses: actions/upload-artifact@v7

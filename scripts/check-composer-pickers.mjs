@@ -500,7 +500,7 @@ app.whenReady().then(()=>{
     // The page is removed on exit completion; an exit that never completes
     // leaves an invisible full-window container behind, so the wait is on the
     // container itself, not just its back button.
-    await waitFor(`!document.querySelector('.window-page.absolute.inset-0.z-40')`)
+    await waitFor(`!document.querySelector('.window-page[data-shortcut-passthrough="openSettings"]')`)
     await waitFor(`!document.querySelector('button[aria-label="Back to chat"]')`)
   }
   const fixtureCalls = () => evaluate(`window.fixture.calls()`)

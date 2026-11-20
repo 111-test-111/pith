@@ -5,18 +5,21 @@ import { useCodeThemes } from '@/lib/code-theme-settings'
 import { FileDiff, type FileDiffLine } from '@/components/agents/file-diff'
 import { Button } from '@/components/motion/button'
 import { MorphPopover, MorphPopoverContent } from '@/components/motion/popover-morph'
-import { NumberTicker } from '@/components/motion/number-ticker'
-import { parseUnifiedDiff } from '@/lib/diff'
+import { diffContentLines, parseUnifiedDiff } from '@/lib/diff'
+import type { DiffLayout } from '@/lib/diff-layout'
+import { useFileNavigation } from '@/lib/file-navigation'
 import { useHoverGesture } from '@/lib/hooks/use-hover-gesture'
 import { sumWrittenFileStats, type WrittenFile } from '@/lib/turn-written-files'
 import { cn } from '@/lib/utils'
 import { useI18n } from '@/i18n'
+import { DiffLayoutButton, DiffWrapButton } from './DiffControls'
 
-const VISIBLE_FILE_LIMIT = 5
+const VISIBLE_FILE_LIMIT = 3
 const PREVIEW_OPEN_DELAY_MS = 600
 const PREVIEW_CLOSE_DELAY_MS = 160
 const PREVIEW_PREFETCH_DELAY_MS = 160
 const PREVIEW_MAX_HEIGHT = 320
+const PREVIEW_TOOLBAR_HEIGHT = 28
 const PREVIEW_FLIP_MARGIN = 24
 /** Free strips beside the panel let the pointer sweep along adjacent rows. */
 const PREVIEW_SIDE_MARGIN = 30
@@ -35,9 +38,10 @@ function previewData(file: WrittenFile): PreviewData {
   const cached = previewCache.get(file)
   if (cached) return cached
   const lines = file.patch ? parseUnifiedDiff(file.patch) : []
-  const code = lines.length <= PREVIEW_HIGHLIGHT_MAX_LINES &&
+  const contentLines = diffContentLines(lines)
+  const code = contentLines.length <= PREVIEW_HIGHLIGHT_MAX_LINES &&
     (file.patch?.length ?? 0) <= PREVIEW_HIGHLIGHT_MAX_CHARS
-    ? lines.map((line) => line.content).join('\n')
+    ? contentLines.map((line) => line.content).join('\n')
     : null
   const data = { lines, code }
   previewCache.set(file, data)
@@ -49,16 +53,9 @@ function hasPreview(file: WrittenFile): boolean {
   return Boolean(file.patch?.trim() && previewData(file).lines.length)
 }
 
-/**
- * A diff stat whose digits roll: file edits stream in one call at a time, so
- * the turn's +N/−N counts grow while the user watches them.
- *
- * `startOnView` stays on — a turn restored from a snapshot or scrolled back
- * into view reveals its counts instead of appearing pre-settled — and the
- * stagger is shortened so a live update never reads as lag.
- */
+/** These cards contain settled writes, so counts are final on the first paint. */
 function LineStat({ value, sign }: { value: number; sign: '+' | '−' }) {
-  return <NumberTicker value={value} prefix={sign} duration={0.5} stagger={0.02} />
+  return <>{sign}{value}</>
 }
 
 function LineStats({ added, removed, className }: { added: number; removed: number; className?: string }) {
@@ -80,13 +77,19 @@ function LineStats({ added, removed, className }: { added: number; removed: numb
 }
 
 /** Snapshot ready tokens on entry: a cold preview stays plain for this visit. */
-const WrittenFileDiff = memo(function WrittenFileDiff({ file }: { file: WrittenFile }) {
+const WrittenFileDiff = memo(function WrittenFileDiff({ file, layout, onLayoutChange, wrap, onWrapChange }: {
+  file: WrittenFile; layout: DiffLayout; onLayoutChange: (layout: DiffLayout) => void; wrap: boolean; onWrapChange: (wrap: boolean) => void
+}) {
   const [{ lines, code }] = useState(() => previewData(file))
   const [themes] = useCodeThemes()
   // A theme change starts a new snapshot; a cold visit still stays plain.
   const tokens = useMemo(() => code ? getCachedAgentCodeTokens(code, PREVIEW_LANGUAGE, themes) ?? null : null, [code, themes])
   if (!lines.length) return null
-  return (
+  return <>
+    <div data-written-diff-toolbar className="flex h-7 items-center justify-end gap-1 border-b border-border/60 px-1">
+      <DiffLayoutButton layout={layout} onChange={onLayoutChange} className="size-6" />
+      <DiffWrapButton wrap={wrap} onChange={onWrapChange} className="size-6" />
+    </div>
     <FileDiff
       headerless
       open
@@ -96,13 +99,15 @@ const WrittenFileDiff = memo(function WrittenFileDiff({ file }: { file: WrittenF
       edgeFade={false}
       file={file.displayPath}
       lines={lines}
+      layout={layout}
+      wrap={wrap}
       additions={file.added}
       deletions={file.removed}
       status="complete"
       maxHeight={PREVIEW_MAX_HEIGHT}
       bodyClassName="rounded-none"
     />
-  )
+  </>
 })
 
 type Preview = {
@@ -123,7 +128,7 @@ const WrittenFileRow = memo(function WrittenFileRow({
   onLeave: () => void
   onFocus: (file: WrittenFile, anchor: HTMLButtonElement) => void
   onBlur: () => void
-  onClick: (file: WrittenFile, anchor: HTMLButtonElement) => void
+  onClick: (file: WrittenFile) => void
 }) {
   const id = useId()
   const hover = useHoverGesture()
@@ -134,6 +139,7 @@ const WrittenFileRow = memo(function WrittenFileRow({
   const canPreview = Boolean(file.patch?.trim())
   return (
     <li
+      data-written-file={file.filePath}
       className="min-w-0"
       onPointerEnter={(event: ReactPointerEvent<HTMLLIElement>) => {
         if (hover.enter(event) && buttonRef.current) onEnter(file, buttonRef.current)
@@ -150,14 +156,15 @@ const WrittenFileRow = memo(function WrittenFileRow({
         className="h-8 w-full justify-start gap-2 rounded-none px-3 font-normal"
         // beUI's transition-colors otherwise trails an instant preview swap.
         style={{ transition: 'none' }}
-        aria-haspopup={canPreview ? 'dialog' : undefined}
+        // The row's activation is navigation, not the dialog: `aria-expanded`
+        // keeps describing the preview the hover/focus path reveals.
         aria-expanded={canPreview ? active : undefined}
         aria-controls={active ? contentId : undefined}
-        onClick={(event) => onClick(file, event.currentTarget)}
+        onClick={() => onClick(file)}
         onFocus={(event) => onFocus(file, event.currentTarget)}
         onBlur={onBlur}
       >
-        <span className="min-w-0 flex-1 truncate text-left text-sm">
+        <span className="min-w-0 truncate text-left text-sm">
           {dir ? <span className="text-muted-foreground/60">{dir}/</span> : null}
           <span className="text-foreground">{name}</span>
         </span>
@@ -177,13 +184,15 @@ export const TurnWrittenFiles = memo(function TurnWrittenFiles({
   onUndo?: () => void
 }) {
   const { t } = useI18n()
+  const { openDiff } = useFileNavigation()
   const contentId = useId()
   const [expanded, setExpanded] = useState(false)
   const visible = useMemo(() => expanded ? files : files.slice(0, VISIBLE_FILE_LIMIT), [expanded, files])
   const listRef = useRef<HTMLUListElement>(null)
   const [preview, setPreview] = useState<Preview | null>(null)
+  const [previewLayout, setPreviewLayout] = useState<DiffLayout>('stacked')
+  const [previewWrap, setPreviewWrap] = useState(true)
   const previewRef = useRef<Preview | null>(null)
-  const pinned = useRef(false)
   // Portal boundary events can arrive in either order; never merge these flags.
   const rowOver = useRef(false)
   const panelOver = useRef(false)
@@ -201,7 +210,6 @@ export const TurnWrittenFiles = memo(function TurnWrittenFiles({
     clearTimers()
     prefetchCancel.current?.()
     previewRef.current = null
-    pinned.current = false
     panelOver.current = false
     setPreview(null)
     if (closeActivePreview === close) closeActivePreview = null
@@ -223,7 +231,7 @@ export const TurnWrittenFiles = memo(function TurnWrittenFiles({
     // Short diffs shrink naturally; the shared popover measures the new anchor
     // and content together before paint, keeping its row-facing edge flush.
     const side = previewRef.current?.side ?? (
-      rect && window.innerHeight - rect.bottom >= PREVIEW_MAX_HEIGHT + PREVIEW_FLIP_MARGIN
+      rect && window.innerHeight - rect.bottom >= PREVIEW_MAX_HEIGHT + PREVIEW_TOOLBAR_HEIGHT + PREVIEW_FLIP_MARGIN
         ? 'bottom' : 'top'
     )
     const width = Math.max(1, Math.min(
@@ -231,7 +239,6 @@ export const TurnWrittenFiles = memo(function TurnWrittenFiles({
       window.innerWidth - 24
     ))
     const next = { file, anchor, side, width }
-    pinned.current = false
     previewRef.current = next
     setPreview(next)
     return true
@@ -239,7 +246,6 @@ export const TurnWrittenFiles = memo(function TurnWrittenFiles({
 
   const scheduleClose = useCallback(() => {
     clearTimers()
-    if (pinned.current) return
     closeTimer.current = window.setTimeout(() => {
       const focused = document.activeElement
       const anchor = previewRef.current?.anchor
@@ -312,10 +318,12 @@ export const TurnWrittenFiles = memo(function TurnWrittenFiles({
   const onBlur = useCallback(() => {
     scheduleClose()
   }, [scheduleClose])
-  const onClick = useCallback((file: WrittenFile, anchor: HTMLButtonElement) => {
-    if (previewRef.current?.file.filePath === file.filePath && pinned.current) close()
-    else if (show(file, anchor)) pinned.current = true
-  }, [close, show])
+  /** A click navigates: the hover preview closes and the file's diff opens in
+   * the rail, where it gets the pane's full width and scroll range. */
+  const onClick = useCallback((file: WrittenFile) => {
+    close()
+    openDiff(file.filePath)
+  }, [close, openDiff])
 
   useEffect(() => () => {
     clearTimers()
@@ -342,28 +350,26 @@ export const TurnWrittenFiles = memo(function TurnWrittenFiles({
       contentId={contentId}
       className="w-full text-sm"
     >
-      <div className="w-full overflow-hidden rounded-2xl border border-border/70">
-        <div className="flex items-center gap-3 border-b border-border/60 px-3 py-2.5" onPointerDown={close}>
-          <span aria-hidden="true" className="grid size-9 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground">
-            <Diff className="size-5" />
-          </span>
-          <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-            <span className="truncate text-sm font-medium text-foreground">
+      <div data-written-files className="w-full overflow-hidden rounded-2xl border border-border/70">
+        <div data-written-files-header className="flex items-center gap-2 border-b border-border/60 px-3 py-1 text-content" onPointerDown={close}>
+          <Diff aria-hidden="true" className="size-[1em] shrink-0 text-muted-foreground" />
+          <span className="flex min-w-0 flex-1 items-baseline gap-2">
+            <span className="truncate font-medium text-foreground">
               {t(files.length === 1 ? 'tool.filesChangedOne' : 'tool.filesChangedMany', { count: files.length })}
             </span>
-            {stats ? <LineStats added={stats.added} removed={stats.removed} className="font-normal" /> : null}
+            {stats ? <LineStats added={stats.added} removed={stats.removed} className="text-content font-normal" /> : null}
           </span>
           <span className="flex shrink-0 items-center gap-1.5">
             {hidden > 0 ? (
-              <Button variant="ghost" size="sm" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>
+              <Button variant="ghost" size="sm" data-written-files-more aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>
                 {expanded ? t('tool.filesShowLess') : t('tool.filesShowMore')}
                 <ChevronDown aria-hidden="true" className={cn('size-3.5 transition-transform', expanded && 'rotate-180')} />
               </Button>
             ) : null}
             {onUndo ? (
-              <Button variant="ghost" size="sm" onClick={onUndo}>{t('tool.filesUndo')}</Button>
+              <Button variant="ghost" size="sm" data-written-files-action="undo" onClick={onUndo}>{t('tool.filesUndo')}</Button>
             ) : null}
-            <Button variant="ghost" size="sm" onClick={onReview}>{t('tool.filesReview')}</Button>
+            <Button variant="ghost" size="sm" data-written-files-action="review" onClick={onReview}>{t('tool.filesReview')}</Button>
           </span>
         </div>
         <ul ref={listRef} data-plain-list>
@@ -397,7 +403,7 @@ export const TurnWrittenFiles = memo(function TurnWrittenFiles({
             onFocusCapture={clearTimers}
             onBlurCapture={scheduleClose}
           >
-            <WrittenFileDiff key={preview.file.filePath} file={preview.file} />
+            <WrittenFileDiff key={preview.file.filePath} file={preview.file} layout={previewLayout} onLayoutChange={setPreviewLayout} wrap={previewWrap} onWrapChange={setPreviewWrap} />
           </div>
         ) : null}
       </MorphPopoverContent>

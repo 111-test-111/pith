@@ -278,11 +278,25 @@ const longFoldTurn = [
   }).flat()
 ];
 const turns = { longFold: longFoldTurn, boundary: boundaryTurn, leadingProse: [visibleTurn[0], round(5, [{ type: 'text', text: 'Starting with a plan.' }]), ...visibleTurn.slice(1)], invisible: invisibleTurn, visible: visibleTurn, reasoning: invisibleTurn, mixed: mixedTurn, images: imageTurn, failure: imageFailureTurn, long: longTurn, compact: compactTurn, compaction: compactTurn, notice: noticeTurn, groupOpen: groupOpenTurn };
-const messages = turns[caseName] ?? invisibleTurn;
+const streamFadeTurn = [
+  ...Array.from({length:6}, (_,index) => [
+    {role:'user',timestamp:index*10,content:'Historical question '+index},
+    round(index*10+1,[{type:'text',text:'Historical answer '+index+'.'}])
+  ]).flat(),
+  {role:'user',timestamp:100,content:'Stream a reply.'},
+  round(101,[{type:'text',text:'Stable **bold** text.\\n\\nLive prefix'}])
+];
+const messages = caseName === 'streamFade' ? streamFadeTurn : turns[caseName] ?? invisibleTurn;
 if (params.has('settled')) messages.push(round(60, [{ type: 'text', text: 'All done.' }]));
 
 window.store = new PiStore();
-window.store.applySnapshot({ sessionId: 'rhythm', sessionPath: '/ui/rhythm', cwd: '/ui', projectless: false, messages, isStreaming: !params.has('settled'), activeChangeScopeId: 'scope-a', model: null, thinkingLevel: 'off', eventSequence: 1 });
+window.store.applySnapshot({ sessionId: 'rhythm', sessionPath: '/ui/rhythm', cwd: '/ui', projectless: false, messages, isStreaming: !params.has('settled'), activeChangeScopeId: 'scope-a', model: null, thinkingLevel: 'off', eventSequence: 1,
+  ...(caseName==='streamFade'&&!params.has('settled')?{messages:messages.slice(0,-1),streaming:messages.at(-1)}:{}) });
+window.streamSequence=1;
+window.setStreamText=(source)=>{
+  messages[messages.length-1]=round(101,[{type:'text',text:source}]);
+  flushSync(()=>window.store.applySnapshot({sessionId:'rhythm',sessionPath:'/ui/rhythm',cwd:'/ui',projectless:false,messages:messages.slice(0,-1),streaming:messages.at(-1),isStreaming:true,activeChangeScopeId:'scope-a',model:null,thinkingLevel:'off',eventSequence:++window.streamSequence}));
+};
 if (caseName === 'compaction') window.store.dispatch({type:'compaction_start',sessionPath:'/ui/rhythm',eventSequence:2,reason:'manual'});
 flushSync(() => createRoot(document.getElementById('root')).render(
   React.createElement(I18nProvider, null, React.createElement(ImagePreviewProvider, null,
@@ -894,6 +908,47 @@ app.on('window-all-closed',()=>app.quit());`
 
   if (!process.env.PI_RHYTHM_INSTANT_ONLY) {
   // --- the reported turn: a round that opens with a bare space between tools
+  // New text fades without replaying restored paragraphs, moving existing
+  // inline content, splitting graphemes or decorating code/math renderers.
+  await load('?case=streamFade')
+  assert.equal(await evaluate(`document.querySelectorAll('[data-stream-text]').length`), 0, 'mounting a live snapshot adopts all existing text')
+  await evaluate(`window.stableBold=document.querySelector('[data-assistant-group="101"] strong');true`)
+  await evaluate(`window.setStreamText('Stable **bold** text.\\n\\nLive prefix 新增文字')`)
+  const arrival = await evaluate(`(()=>{const node=document.querySelector('[data-stream-text]');window.firstArrival=node;return {text:node?.textContent,opacity:node?Number(getComputedStyle(node).opacity):1,bold:window.stableBold===document.querySelector('[data-assistant-group="101"] strong'),duration:node?.getAnimations()[0]?.effect.getTiming().duration}})()`)
+  assert.equal(arrival.text, ' 新增文字', 'only the appended suffix enters')
+  assert.ok(arrival.opacity < 1 && arrival.opacity >= .3, 'the first visible suffix has a short opacity fade: ' + JSON.stringify(arrival))
+  assert.equal(arrival.duration, 160)
+  assert.equal(arrival.bold, true, 'stable Markdown keeps its existing inline DOM')
+  await pause(60)
+  await evaluate(`window.setStreamText('Stable **bold** text.\\n\\nLive prefix 新增文字 and more')`)
+  assert.equal(await evaluate(`window.firstArrival===document.querySelector('[data-stream-text]')`), true, 'another delta preserves the earlier fade')
+  assert.equal(await evaluate(`document.querySelectorAll('[data-assistant-group]:not([data-assistant-group="101"]) [data-stream-text]').length`), 0, 'historical turns never acquire entrances')
+  await pause(200)
+  assert.ok(await evaluate(`[...document.querySelectorAll('[data-stream-text]')].every(node=>getComputedStyle(node).opacity==='1')`), 'all arrivals finish without continuing timers')
+  await evaluate(`window.setStreamText('**Pending');window.setStreamText('**Pending**')`)
+  assert.equal(await evaluate(`document.querySelector('[data-assistant-group="101"] strong')?.textContent`), 'Pending', 'closing an emphasis delimiter preserves the parsed result')
+  assert.equal(await evaluate(`document.querySelectorAll('[data-stream-text]').length`), 0, 'a Markdown rewrite never replays the existing word')
+  await evaluate(`window.setStreamText('Emoji ');window.setStreamText('Emoji 👨‍👩‍👧‍👦 é')`)
+  assert.equal(await evaluate(`document.querySelector('[data-stream-text]')?.textContent`), '👨‍👩‍👧‍👦 é', 'arrival boundaries preserve emoji and combining marks')
+  await evaluate(`window.setStreamText('Code: \`foo');window.setStreamText('Code: \`foobar\`')`)
+  assert.equal(await evaluate(`document.querySelector('[data-inline-code]')?.textContent`), 'foobar')
+  assert.equal(await evaluate(`document.querySelectorAll('[data-inline-code] [data-stream-text]').length`), 0, 'code uses its existing renderer')
+  await evaluate(`window.setInstant(true);window.setStreamText('Reduced motion');window.setStreamText('Reduced motion adds immediately')`)
+  assert.equal(await evaluate(`document.querySelectorAll('[data-stream-text]').length`), 0, 'the app motion preference makes new text immediate')
+  await evaluate(`window.setInstant(false)`)
+  await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] })
+  await pause(50)
+  await evaluate(`window.setStreamText('OS motion');window.setStreamText('OS motion adds immediately')`)
+  assert.equal(await evaluate(`document.querySelectorAll('[data-stream-text]').length`), 0, 'the OS preference independently makes new text immediate')
+  await send('Emulation.setEmulatedMedia', { features: [] })
+  await pause(50)
+  const burst = await evaluate(`(()=>{let source='Burst ';window.setStreamText(source);const start=performance.now();for(let i=0;i<120;i++){source+='字';window.setStreamText(source)}return {ms:performance.now()-start,text:document.querySelector('[data-assistant-group="101"] [data-markdown]').textContent,spans:document.querySelectorAll('[data-stream-text]').length}})()`)
+  assert.equal(burst.text, 'Burst ' + '字'.repeat(120), 'rapid deltas preserve every character')
+  assert.ok(burst.spans<=16, 'arrival metadata stays bounded during a burst: ' + JSON.stringify(burst))
+  assert.ok(burst.ms<5000, 'a burst does not block the renderer: ' + JSON.stringify(burst))
+  await load('?case=streamFade&settled=1')
+  assert.equal(await evaluate(`document.querySelectorAll('[data-stream-text]').length`), 0, 'completed history renders static on restoration')
+
   await load()
   await pause(300)
   const invisible = await evaluate('window.rows()')
@@ -1405,11 +1460,16 @@ app.on('window-all-closed',()=>app.quit());`
     await pause(250)
     const boundaries = await evaluate(`(() => {
       const rows = [...document.querySelector('[data-slot="message-group"]').children];
-      return rows.map((row, i) => ({ text: row.innerText.slice(0, 50), gap: i ? row.getBoundingClientRect().top - rows[i-1].getBoundingClientRect().bottom : 0 }));
+      const summary = document.querySelector('[data-summary-row="compaction"]');
+      const summaryRow = summary.closest('[data-row="process"]');
+      return { rows:rows.map((row, i) => ({ text: row.innerText.slice(0, 50), gap: i ? row.getBoundingClientRect().top - rows[i-1].getBoundingClientRect().bottom : 0 })),
+        hosted:!!summary.closest('[data-assistant-group]'), gap:summaryRow.getBoundingClientRect().top-summaryRow.previousElementSibling.getBoundingClientRect().bottom };
     })()`)
-    assert.equal(boundaries.length, 6, JSON.stringify(boundaries))
-    assert.deepEqual(boundaries.slice(1).map(row => row.gap), [24, 24, compact ? 4 : 24, 24, 24],
-      'message boundaries, summaries and user turns share the same spacing rule: ' + JSON.stringify(boundaries))
+    assert.equal(boundaries.rows.length, 5, JSON.stringify(boundaries))
+    assert.equal(boundaries.hosted, true, 'compaction shares the assistant turn instead of creating a message boundary')
+    assert.equal(boundaries.gap, 24, 'a summary after prose uses the ordinary prose-to-process gap')
+    assert.deepEqual(boundaries.rows.slice(1).map(row => row.gap), [24, compact ? 4 : 24, 24, 24],
+      'tool rows, messages and user turns share the same spacing rule: ' + JSON.stringify(boundaries))
   }
   // The turn rule spans the whole chat column in both corner styles. It is
   // decoration on the header, so it neither rounds with the button nor adds

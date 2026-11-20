@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useLayoutEffect, useState } from 'react'
 import { Button } from '@/components/motion/button'
 import { Tooltip } from '@/components/motion/tooltip'
 import { Maximize2, PictureInPicture2, Pin, PinOff, ZoomIn, ZoomOut } from '@/lib/icons'
@@ -19,7 +19,8 @@ export function PictureInPicture() {
   const [uiStyle] = useUiStyle()
 
   useEffect(() => { applyAccent(accent, customAccent) }, [accent, customAccent])
-  useEffect(() => { applyUiStyle(uiStyle) }, [uiStyle])
+  // Match the main window before the first paint, including a rounded boot.
+  useLayoutEffect(() => { applyUiStyle(uiStyle) }, [uiStyle])
 
   useEffect(() => {
     const onFocus = () => setFocused(true)

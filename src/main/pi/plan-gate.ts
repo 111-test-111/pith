@@ -35,6 +35,7 @@ import { AGENT_STEER_TOOL_NAME, MESSAGE_PARENT_TOOL_NAME, SUBAGENT_TOOL_NAME } f
 import { ASK_USER_TOOL_NAME } from '../../shared/ask-user'
 import { PRESENT_TOOL_NAME } from '../../shared/present'
 import { IMAGE_TOOL_NAME } from '../../shared/image'
+import { VISION_TOOL_NAME } from '../../shared/vision'
 import { SCHEDULED_TASK_TOOL_NAME } from './scheduled-tasks/tool'
 import { hasPlanOpening, cancelledPlanOpening } from './plan-approval-access'
 import type { PlanController } from './plan-mode'
@@ -66,6 +67,8 @@ export interface PlanGateOptions {
   appDefinitions: readonly ToolDefinition[]
   /** Frozen role ceiling (subagent children); undefined means no ceiling. */
   roleCeiling: () => readonly string[] | undefined
+  /** Service/model availability is rechecked even for held execute references. */
+  toolAvailable?: (name: string) => boolean
 }
 
 export interface PlanGate {
@@ -122,6 +125,7 @@ const PLAN_APP_TOOLS: ReadonlySet<string> = new Set([
   SUBAGENT_TOOL_NAME,
   AGENT_STEER_TOOL_NAME,
   MESSAGE_PARENT_TOOL_NAME,
+  VISION_TOOL_NAME,
   // Only the root's app-owned submission definition is admitted.
   'submit_plan'
 ])
@@ -145,6 +149,7 @@ const MODEL_ONLY_APP_TOOLS: ReadonlySet<string> = new Set([
   'update_goal',
   PRESENT_TOOL_NAME,
   IMAGE_TOOL_NAME,
+  VISION_TOOL_NAME,
   TODO_TOOL_NAME,
   ASK_USER_TOOL_NAME,
   'submit_plan',
@@ -289,6 +294,7 @@ function createGate(options: PlanGateOptions): PlanGate {
    * parameters (refused before any approval exists).
    */
   const checkCall = (name: string, params: unknown, provenance: PlanToolProvenance): string | null => {
+    if (options.toolAvailable?.(name) === false) return `The ${name} tool is not available for this model.`
     try {
       controller.checkWorkAdmission()
     } catch (error) {
@@ -354,6 +360,7 @@ function createGate(options: PlanGateOptions): PlanGate {
     const seen = new Set<string>()
     for (const tool of registry) {
       const name = tool.name
+      if (options.toolAvailable?.(name) === false) continue
       if (name === 'submit_plan' && (!restricted || child())) continue
       if (seen.has(name)) continue
       if (ceiling && !ceiling.includes(name)) continue

@@ -9,7 +9,7 @@ import {
   type DragEvent as ReactDragEvent,
   type ReactNode
 } from 'react'
-import { CalendarCheck, Check, Compass, Subagent, ImagePlus, LinkSimple, Loader2, NotebookPen, X } from '@/lib/icons'
+import { CalendarCheck, Check, Target, Subagent, ImagePlus, LinkSimple, Loader2, NotebookPen, X } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
 import { PromptInput } from '@/components/agents/prompt-input'
 import type { PromptEditorHandle } from '@/lib/hooks/use-prompt-editor'
@@ -31,7 +31,7 @@ import type {
   ThinkingLevel
 } from '../../../../shared/types'
 import { DEFAULT_SANDBOX_MODE, type SandboxMode, type SandboxStatusDTO, type SessionSnapshotDTO } from '../../../../shared/types'
-import { FileMention, type MentionState } from './FileMention'
+import { ComposerActions } from './ComposerActions'
 import { ImagePreviewGroup, PreviewThumb } from './ImagePreview'
 import { FileAttachmentCard } from './FileAttachmentCard'
 import { ModelPicker } from './ModelPicker'
@@ -112,7 +112,7 @@ interface ComposerProps {
     images: ImageContent[]
     files: string[]
     streamingBehavior: StreamingBehavior
-  }) => void
+  }) => void | Promise<boolean>
   /** Clear the session's queues; resolves with the recalled messages and
    * their full payloads (images, file paths). */
   onRecallQueue: (stopping?: boolean) => Promise<RecalledItemDTO[]>
@@ -240,10 +240,6 @@ export function Composer({
   const [value, setValue] = useState('')
   const [images, setImages] = useState<ImageAttachment[]>([])
   const [files, setFiles] = useState<FileAttachment[]>([])
-  const [mention, setMention] = useState<MentionState | null>(null)
-  const [mentionHits, setMentionHits] = useState<FileHitDTO[]>([])
-  const [mentionLoading, setMentionLoading] = useState(false)
-  const [mentionIndex, setMentionIndex] = useState(0)
   const [dragOver, setDragOver] = useState(false)
   const imageInputRef = useRef<HTMLInputElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -258,8 +254,6 @@ export function Composer({
     window.addEventListener('pith:refine-plan', refine)
     return () => window.removeEventListener('pith:refine-plan', refine)
   }, [sessionPath, readOnly, plan?.mode])
-  const inputContainerRef = useRef<HTMLDivElement>(null)
-  const debounceRef = useRef<number>(0)
 
   const addImageFile = useCallback((file: globalThis.File) => {
     // A read-only (subagent child) view never accepts new attachments; only
@@ -294,48 +288,17 @@ export function Composer({
   )
   const removeImage = (id: string) => setImages((c) => c.filter((a) => a.id !== id))
   const removeFile = (id: string) => {
-    const target = files.find((f) => f.id === id)
     setFiles((c) => c.filter((a) => a.id !== id))
-    if (target) {
-      setValue((v) => v.replace(`@${target.relPath}`, '').replace(/ {2,}/g, ' ').trimStart())
-    }
   }
 
-  // ---- @mention detection -------------------------------------------------
-  const detectMention = useCallback((next: string, caret: number) => {
-    const before = next.slice(0, caret)
-    const match = /(^|\s)@([^\s@]{0,80})$/.exec(before)
-    if (!match) {
-      setMention(null)
-      return
-    }
-    setMention({ query: match[2], triggerIndex: caret - match[2].length - 1 })
-  }, [])
-
-  useEffect(() => {
-    if (!mention) return
-    window.clearTimeout(debounceRef.current)
-    debounceRef.current = window.setTimeout(async () => {
-      setMentionLoading(true)
-      try {
-        const hits = await window.pi.searchFiles(mention.query)
-        setMentionHits(hits)
-        setMentionIndex(0)
-      } finally {
-        setMentionLoading(false)
-      }
-    }, 120)
-    return () => window.clearTimeout(debounceRef.current)
-  }, [mention])
-
-  const selectMention = (hit: FileHitDTO) => {
-    if (!mention) return
+  const selectSkill = (name: string) => {
+    if (readOnly) return
     const editor = editorRef.current
-    const caret = editor?.selectionStart ?? value.length
-    const start = mention.triggerIndex
-    editor?.replaceRange(start, caret, `@${hit.relPath} `)
-    setMention(null)
-    addFileHit(hit)
+    if (!editor) return
+    // The SDK expands one leading skill command. Replace that prefix when
+    // choosing another skill, preserving the request and native undo history.
+    const prefix = /^\s*\/skill:\S+(?:[ \t]|(?=\n|$))/.exec(editor.value)
+    editor.replaceRange(0, prefix?.[0].length ?? 0, `/skill:${name} `)
   }
 
   // ---- submit ---------------------------------------------------------------
@@ -356,7 +319,9 @@ export function Composer({
     if (initializing || readOnly || pendingMode !== null || modePending || goalPending) return
     if (!text && !images.length && !files.length) return
     const payload = {
-      text,
+      // Main appends file blocks; the SDK requires a space after the skill
+      // name to treat those blocks as arguments when there is no request text.
+      text: files.length && /^\/skill:\S+$/.test(text) ? `${text} ` : text,
       images: images.map((a) => a.image),
       files: files.map((f) => f.path)
     }
@@ -365,7 +330,6 @@ export function Composer({
     setValue('')
     setImages([])
     setFiles([])
-    setMention(null)
     if (result && typeof result.then === 'function') void result.then(accepted => {
       if (accepted || currentPath.current !== sessionPath) return
       // The IPC may fail after typing has resumed. Preserve any newer draft.
@@ -379,8 +343,7 @@ export function Composer({
    * Merge recalled messages back into the composer: the original draft texts
    * (file blocks stripped — they restore as chips) go first, then whatever
    * draft text was already typed. Image attachments rebuild from base64;
-   * file chips re-stat through the file index, and a failed stat is
-   * non-fatal — the draft's @mention still references the file.
+   * file chips re-stat through the file index; a failed stat keeps the draft.
    */
   const mergeRecalled = useCallback(
     async (items: RecalledItemDTO[]) => {
@@ -388,7 +351,6 @@ export function Composer({
       if (recalledText) {
         setValue((current) => (current ? `${recalledText}\n\n${current}` : recalledText))
       }
-      setMention(null)
       const restoredImages = items
         .flatMap((item) => item.images)
         .map((image) => ({
@@ -411,7 +373,7 @@ export function Composer({
                 ]
           )
         } catch {
-          /* keep the @mention reference in the draft */
+          /* keep the recalled draft */
         }
       }
     },
@@ -468,32 +430,6 @@ export function Composer({
 
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLSpanElement>) => {
     if (event.nativeEvent.isComposing) return
-    if (mention) {
-      if (mentionHits.length) {
-        if (event.key === 'ArrowDown') {
-          event.preventDefault()
-          setMentionIndex((i) => (i + 1) % mentionHits.length)
-          return
-        }
-        if (event.key === 'ArrowUp') {
-          event.preventDefault()
-          setMentionIndex((i) => (i - 1 + mentionHits.length) % mentionHits.length)
-          return
-        }
-        if (event.key === 'Enter' || event.key === 'Tab') {
-          event.preventDefault()
-          selectMention(mentionHits[mentionIndex])
-          return
-        }
-      }
-      if (event.key === 'Escape') {
-        // Consume Esc (even with no hits while loading/empty) so the global
-        // stop shortcut doesn't fire while the mention popup is open.
-        event.preventDefault()
-        setMention(null)
-        return
-      }
-    }
     // While busy, Cmd/Ctrl+Enter queues with the inverse of the preferred
     // behavior. preventDefault keeps PromptInput's own Enter submit away.
     if (
@@ -508,12 +444,6 @@ export function Composer({
     }
   }
 
-  const handleChange = (next: string) => {
-    setValue(next)
-    const caret = editorRef.current?.selectionStart ?? next.length
-    detectMention(next, caret)
-  }
-
   // Browser annotation insert (Task 16): append the composed annotation text
   // to the internal draft and put the caret at its end — keep-the-draft
   // semantics (an existing draft is kept with a \n\n separator). Keyed on the
@@ -526,7 +456,6 @@ export function Composer({
     const current = editor.value
     const start = current.trim() ? current.trimEnd().length : 0
     editor.replaceRange(start, current.length, start ? `\n\n${text}` : text)
-    setMention(null)
   }, [appendDraft])
 
   // ---- paste & drag/drop --------------------------------------------------
@@ -550,37 +479,15 @@ export function Composer({
     }
   }
 
-  // ---- queued messages ----------------------------------------------------
-
   return (
-    <div className={cn('relative isolate shrink-0 bg-background px-3 pb-3', start && '@container flex min-h-0 flex-1 flex-col overflow-hidden px-6')}>
+    <div className={cn('chat-gutter relative isolate shrink-0 bg-background pb-3', start && '@container flex min-h-0 flex-1 flex-col overflow-hidden')}>
       {start ? <ShaderBackdrop variant="dithering" /> : null}
       {/* Keep the composer in one tree position when the first turn begins;
           moving it between landing/transcript branches discards draft state. */}
-      <div className={cn('mx-auto w-full min-w-0 max-w-3xl', start && 'my-auto max-w-2xl py-8')}>
+      <div className={cn('chat-column', start && 'my-auto py-8')}>
         {start ? <NewSessionHeader {...start} /> : null}
         {approval}
-        <div ref={inputContainerRef} className="relative w-full" onDragOver={(e) => { e.preventDefault(); setDragOver(true) }} onDragLeave={() => setDragOver(false)} onDrop={handleDrop}>
-          {mention ? (
-            <FileMention
-              hits={mentionHits}
-              loading={mentionLoading}
-              activeIndex={mentionIndex}
-              onActiveIndexChange={setMentionIndex}
-              onSelect={selectMention}
-              onClose={() => setMention(null)}
-            />
-          ) : null}
-
-          <QueuePanel
-            steering={queued.steering}
-            followUp={queued.followUp}
-            compactionQueued={compactionQueued}
-            onPromote={handlePromoteQueued}
-            onRemove={handleRemoveQueued}
-            onRecall={() => void handleRecall()}
-          />
-
+        <div className="relative w-full" onDragOver={(e) => { e.preventDefault(); setDragOver(true) }} onDragLeave={() => setDragOver(false)} onDrop={handleDrop}>
           {modeError && <p role="alert" className="mb-2 text-xs text-destructive">{t(planErrorKey(modeError))}</p>}
           {goalEnabled && goalError && <p role="alert" data-goal-error="" className="mb-2 text-xs text-destructive">{t(`goal.error.${goalError}`)}</p>}
           {plan?.mode === 'plan' && plan.shellEnforcement !== 'full' && <p className="mb-2 text-xs text-muted-foreground">{t('plan.shellUnavailable')}</p>}
@@ -603,15 +510,24 @@ export function Composer({
           ) : null}
 
           <div
-            className={dragOver ? 'rounded-2xl ring-1 ring-primary/60 transition-shadow' : 'transition-shadow'}
+            className={cn('rounded-card', dragOver && 'ring-1 ring-primary/60')}
           >
+            <QueuePanel
+              key={sessionPath}
+              steering={queued.steering}
+              followUp={queued.followUp}
+              compactionQueued={compactionQueued}
+              onPromote={handlePromoteQueued}
+              onRemove={handleRemoveQueued}
+              onRecall={() => void handleRecall()}
+            />
             <PromptInput
               aria-label={t('composer.inputAria')}
-              className={start ? 'bg-card' : undefined}
+              className="composer-surface"
               minRows={start ? 3 : 2}
               value={value}
               inputRef={editorRef}
-              onValueChange={handleChange}
+              onValueChange={setValue}
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
               loading={busy || goalPending}
@@ -664,6 +580,52 @@ export function Composer({
               }
               leadingAction={
                 <span className="flex min-w-0 items-center gap-1">
+                  <ComposerActions
+                    sessionPath={sessionPath}
+                    initializing={initializing}
+                    disabled={readOnly || busy || goalPending}
+                    onSkillSelect={selectSkill}
+                    actions={[
+                      {
+                        value: 'toggle-plan',
+                        label: (
+                          <span className="flex w-full items-center justify-between gap-2">
+                            <span>{t('composer.planMode')}</span>
+                            {effectiveMode === 'plan' ? <Check aria-hidden="true" className="size-3.5 shrink-0 text-primary" /> : null}
+                          </span>
+                        ),
+                        icon: <NotebookPen />,
+                        disabled: readOnly || busy || modePending || !sessionPath || (plan?.blockers.switch.some((blocker) => blocker !== 'initializing') ?? false)
+                      },
+                      ...(onGoalModeChange ? [{
+                        value: 'toggle-goal',
+                        label: <span className="flex w-full items-center justify-between gap-2"><span>{t('composer.goalMode')}</span>
+                          {goalEnabled ? <Check aria-hidden="true" className="size-3.5 shrink-0 text-primary" /> : null}</span>,
+                        icon: <Target />,
+                        disabled: readOnly || goalPending || !sessionPath || (!goalEnabled && busy)
+                      }] : []),
+                      {
+                        value: 'attach-image',
+                        label: t('composer.attachImage'),
+                        icon: <ImagePlus />
+                      },
+                      {
+                        value: 'attach-file',
+                        label: t('composer.attachFile'),
+                        icon: <LinkSimple />
+                      }
+                    ]}
+                    onAction={(action) => {
+                      if (action === 'toggle-plan') {
+                        editorRef.current?.focus({ preventScroll: true })
+                        void changeMode(effectiveMode === 'plan' ? 'normal' : 'plan')
+                      } else if (action === 'toggle-goal') {
+                        editorRef.current?.focus({ preventScroll: true })
+                        onGoalModeChange?.(!goalEnabled)
+                      } else if (action === 'attach-image') imageInputRef.current?.click()
+                      else if (action === 'attach-file') fileInputRef.current?.click()
+                    }}
+                  />
                   <ModelPicker
                     models={models}
                     value={model ? `${model.providerId}/${model.id}` : null}
@@ -701,7 +663,7 @@ export function Composer({
                     onMouseDown={event => event.preventDefault()} onClick={() => { editorRef.current?.focus({ preventScroll: true }); onGoalModeChange?.(false) }}
                     className="group h-8 gap-1.5 px-2 text-xs text-primary hover:bg-muted hover:text-primary">
                     <span aria-hidden="true" className="relative size-4 shrink-0">
-                      <Compass className="absolute inset-0 size-4 transition-opacity group-hover:opacity-0" />
+                      <Target className="absolute inset-0 size-4 transition-opacity group-hover:opacity-0" />
                       <X className="absolute inset-0 size-4 opacity-0 transition-opacity group-hover:opacity-100" />
                     </span>
                     <span>{t('goal.title')}</span>
@@ -733,46 +695,6 @@ export function Composer({
                   ) : <ContextRing usage={contextUsage ?? null} onOpen={onOpenContext} />}
                 </span>
               }
-              actions={[
-                {
-                  value: 'toggle-plan',
-                  label: (
-                    <span className="flex w-full items-center justify-between gap-2">
-                      <span>{t('composer.planMode')}</span>
-                      {effectiveMode === 'plan' ? <Check aria-hidden="true" className="size-3.5 shrink-0 text-primary" /> : null}
-                    </span>
-                  ),
-                  icon: <NotebookPen />,
-                  disabled: readOnly || busy || modePending || !sessionPath || (plan?.blockers.switch.some((blocker) => blocker !== 'initializing') ?? false)
-                },
-                ...(onGoalModeChange ? [{
-                  value: 'toggle-goal',
-                  label: <span className="flex w-full items-center justify-between gap-2"><span>{t('composer.goalMode')}</span>
-                    {goalEnabled ? <Check aria-hidden="true" className="size-3.5 shrink-0 text-primary" /> : null}</span>,
-                  icon: <Compass />,
-                  disabled: readOnly || goalPending || !sessionPath || (!goalEnabled && busy)
-                }] : []),
-                {
-                  value: 'attach-image',
-                  label: t('composer.attachImage'),
-                  icon: <ImagePlus />
-                },
-                {
-                  value: 'attach-file',
-                  label: t('composer.attachFile'),
-                  icon: <LinkSimple />
-                }
-              ]}
-              onAction={(action) => {
-                if (action === 'toggle-plan') {
-                  editorRef.current?.focus({ preventScroll: true })
-                  void changeMode(effectiveMode === 'plan' ? 'normal' : 'plan')
-                } else if (action === 'toggle-goal') {
-                  editorRef.current?.focus({ preventScroll: true })
-                  onGoalModeChange?.(!goalEnabled)
-                } else if (action === 'attach-image') imageInputRef.current?.click()
-                else if (action === 'attach-file') fileInputRef.current?.click()
-              }}
             />
           </div>
 
@@ -780,10 +702,6 @@ export function Composer({
             <div className="pointer-events-none absolute inset-0 grid place-items-center rounded-2xl bg-background/70 text-sm font-medium text-primary">
               {t('composer.dropImages')}
             </div>
-          ) : null}
-
-          {mentionLoading ? (
-            <Loader2 className="absolute right-3 top-3 size-3.5 animate-spin text-muted-foreground" />
           ) : null}
 
           <input

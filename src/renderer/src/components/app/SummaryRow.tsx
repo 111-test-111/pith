@@ -1,5 +1,5 @@
 import { createContext, useContext, useMemo, useState } from 'react'
-import { ArrowLeftFromLine, Minimize2 } from '@/lib/icons'
+import { ArrowLeftFromLine, ArrowRight, Minimize2 } from '@/lib/icons'
 import { ToolResult } from '@/components/agents/tool-result'
 import { Markdown } from '@/lib/markdown'
 import { formatTokenCount } from '@/lib/format'
@@ -51,8 +51,16 @@ export function SummaryRow({ kind, status, summary, tokensBefore, detail, proces
     }
   }
   const Icon = kind === 'compaction' ? Minimize2 : ArrowLeftFromLine
-  const meta = tokensBefore && tokensBefore > 0
-    ? t('chat.summaryTokensBefore', { tokens: formatTokenCount(tokensBefore) })
+  const before = tokensBefore ?? process?.tokensBefore
+  const after = status === 'success' ? process?.tokensAfter : undefined
+  const meta = before !== undefined
+    ? <span className="inline-flex items-center gap-1.5 tabular-nums">
+        <span>{t('chat.summaryTokensBefore', { tokens: formatTokenCount(before) })}</span>
+        {after !== undefined ? <>
+          <ArrowRight aria-hidden="true" className="size-3 shrink-0" />
+          <span>{t('chat.summaryTokensAfter', { tokens: formatTokenCount(after) })}</span>
+        </> : null}
+      </span>
     : undefined
   const { body, read, modified } = useMemo(() => splitSummaryFiles(summary ?? ''), [summary])
   // Only a settled summary carries the SDK's trailing file sections.

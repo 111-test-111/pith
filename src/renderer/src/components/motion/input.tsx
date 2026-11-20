@@ -12,14 +12,16 @@ import {
 } from "motion/react";
 import {
   forwardRef,
+  useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
   useRef,
   useState,
   type FocusEvent,
   type InputHTMLAttributes,
+  type MutableRefObject,
   type ReactNode,
-  type Ref,
   type TextareaHTMLAttributes,
 } from "react";
 import { cn } from "@/lib/utils";
@@ -59,6 +61,9 @@ export interface InputProps extends Omit<
   multiline?: boolean;
   // local patch (pi-app): visible rows for the multiline variant.
   rows?: number;
+  // local patch (pi-app): a growing multiline field stops at this many lines and
+  // scrolls instead, so a long message never pushes the surrounding layout.
+  maxRows?: number;
   // local patch (pi-app): attachment previews (images, file cards) render
   // INSIDE the multiline field's frame, above the first text line — pasting
   // grows the field itself instead of stacking a strip below it.
@@ -85,6 +90,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
     type,
     multiline = false,
     rows = 6,
+    maxRows,
     attachments,
     ...rest
   },
@@ -110,6 +116,50 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
   // local patch (pi-app): use the textarea's own computed line box. Message
   // editing follows content size, while record fields follow interface size.
   const multilineHeight = `calc(${rows} * 1lh)`;
+
+  // local patch (pi-app): a growing field measures its own content instead of
+  // using `rows` as a hard height. The <textarea> carries no vertical padding
+  // (the field does), so content height is exactly `lines * line-height`.
+  const [textareaNode, setTextareaNode] = useState<HTMLTextAreaElement | null>(null);
+  const setTextarea = useCallback(
+    (node: HTMLTextAreaElement | null) => {
+      setTextareaNode(node);
+      if (typeof ref === "function") {
+        (ref as (instance: HTMLInputElement | null) => void)(node as unknown as HTMLInputElement | null);
+      } else if (ref) {
+        (ref as MutableRefObject<HTMLInputElement | null>).current = node as unknown as HTMLInputElement | null;
+      }
+    },
+    [ref],
+  );
+  useLayoutEffect(() => {
+    const el = textareaNode;
+    if (!el || !multiline || !maxRows) return;
+    const update = () => {
+      const lineHeight = Number.parseFloat(getComputedStyle(el).lineHeight) || 0;
+      if (!lineHeight) return;
+      const ceiling = maxRows * lineHeight;
+      const floor = rows * lineHeight;
+      // Measure the content box, then settle on the clamped height. Writing the
+      // height before reading `scrollHeight` keeps the measurement independent
+      // of the box's current size.
+      el.style.height = "auto";
+      const content = el.scrollHeight;
+      el.style.height = `${Math.min(Math.max(content, floor), ceiling)}px`;
+      el.style.overflowY = content > ceiling + 0.5 ? "auto" : "hidden";
+    };
+    update();
+    // Re-wrap when the field changes width: a narrower pane fits fewer
+    // characters per line, so the content height changes without new input.
+    let lastWidth = el.clientWidth;
+    const observer = new ResizeObserver(() => {
+      if (el.clientWidth === lastWidth) return;
+      lastWidth = el.clientWidth;
+      update();
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [textareaNode, multiline, maxRows, rows, value]);
 
   // Shake the field when an error appears.
   useEffect(() => {
@@ -196,7 +246,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
 
         {multiline ? (
           <textarea
-            ref={ref as unknown as Ref<HTMLTextAreaElement>}
+            ref={setTextarea}
             id={id}
             rows={rows}
             value={value}
@@ -204,7 +254,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
             aria-invalid={hasError || undefined}
             aria-describedby={errorMessage ? `${id}-error` : undefined}
             {...(rest as TextareaHTMLAttributes<HTMLTextAreaElement>)}
-            style={{ height: multilineHeight }}
+            style={maxRows ? undefined : { height: multilineHeight }}
             onChange={(e) => handleChange(e.target.value)}
             onFocus={(event) => {
               setFocused(true);

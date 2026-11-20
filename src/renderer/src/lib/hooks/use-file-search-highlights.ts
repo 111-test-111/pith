@@ -1,14 +1,16 @@
 import { useLayoutEffect, type RefObject } from 'react'
 import type { FileMatch } from '../file-search'
+import { useFilePreviewActive } from '../file-preview-activity'
 
 const allName = 'file-search-matches', activeName = 'file-search-active'
 
 /** Paint matches over beUI's token text with native CSS Highlights. Neither
  * searching nor resizing replaces syntax spans or introduces overlay geometry. */
 export function useFileSearchHighlights(viewport: RefObject<HTMLDivElement | null>, lineStarts: number[], matches: FileMatch[], current: number, renderVersion: unknown, start: number, end: number) {
+  const visible = useFilePreviewActive()
   useLayoutEffect(() => {
     const element = viewport.current
-    if (!element || !matches.length) return
+    if (!visible || !element || !matches.length) return
     const all = new Highlight(), active = new Highlight()
     active.priority = 1
     let selectedRange: Range | undefined
@@ -57,5 +59,5 @@ export function useFileSearchHighlights(viewport: RefObject<HTMLDivElement | nul
       if (CSS.highlights.get(allName) === all) CSS.highlights.delete(allName)
       if (CSS.highlights.get(activeName) === active) CSS.highlights.delete(activeName)
     }
-  }, [viewport, lineStarts, matches, current, renderVersion, start, end])
+  }, [visible, viewport, lineStarts, matches, current, renderVersion, start, end])
 }

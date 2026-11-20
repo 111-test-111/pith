@@ -61,6 +61,13 @@ const patches = [
     '    servers: () => readonly McpResourceServer[];\n    /** local patch (pi-app): diagnostic for an inaccessible resource server. */\n    unavailableReason?: (name: string) => string;']
 ]
 
+// The raw exception must be captured before each provider reduces it to errorMessage.
+const providerErrorAdapters = [
+  'anthropic-messages', 'openai-completions', 'openai-responses', 'openai-codex-responses',
+  'azure-openai-responses', 'google-generative-ai', 'google-vertex', 'mistral-conversations',
+  'bedrock-converse-stream', 'system-one-shared'
+]
+
 export async function preparePiSdk(root = dirname(dirname(fileURLToPath(import.meta.resolve('@earendil-works/pi-coding-agent'))))) {
   const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))
   if (manifest.version !== '1.0.0') throw new Error(`Review pi-app SDK patches before using Pi ${manifest.version}; expected 1.0.0`)
@@ -71,6 +78,30 @@ export async function preparePiSdk(root = dirname(dirname(fileURLToPath(import.m
     if (source.split(before).length !== 2) throw new Error(`Pi SDK patch drift: ${relative}; refusing to modify the package`)
     changes.set(path, source.replace(before, after))
   }
+  const aiRoot = join(root, 'node_modules/@earendil-works/pi-ai')
+  const aiManifest = JSON.parse(await readFile(join(aiRoot, 'package.json'), 'utf8'))
+  if (aiManifest.version !== '1.0.0') throw new Error(`Review pi-app provider error patches before using pi-ai ${aiManifest.version}; expected 1.0.0`)
+  for (const adapter of providerErrorAdapters) {
+    const relative = `dist/api/${adapter}.js`, path = join(aiRoot, relative)
+    const original = await readFile(path, 'utf8')
+    const before = `output.stopReason = ${adapter === 'bedrock-converse-stream' ? 'options.signal' : 'options?.signal'}?.aborted ? "aborted" : "error";`
+    const indent = adapter === 'system-one-shared' ? '        ' : '            '
+    const after = `${before}\n${indent}appendProviderErrorDiagnostic(output, error); // local patch (pi-app): retain raw cause before stringification.`
+    let source = original
+    if (!source.includes(after)) {
+      if (source.split(before).length !== 2) throw new Error(`Pi SDK patch drift: pi-ai/${relative}; refusing to modify the package`)
+      source = source.replace(before, after)
+    }
+    const importLine = 'import { appendProviderErrorDiagnostic } from "../utils/pi-app-provider-errors.js";\n'
+    if (!source.startsWith(importLine)) source = importLine + source
+    if (source !== original) changes.set(path, source)
+  }
+  const helperPath = join(aiRoot, 'dist/utils/pi-app-provider-errors.js')
+  const helper = await readFile(new URL('../src/main/pi/provider-errors.mjs', import.meta.url), 'utf8')
+  let installedHelper
+  try { installedHelper = await readFile(helperPath, 'utf8') }
+  catch (error) { if (error.code !== 'ENOENT') throw error }
+  if (helper !== installedHelper) changes.set(helperPath, helper)
   for (const [path, source] of changes) await writeFile(path, source)
   return changes.size
 }

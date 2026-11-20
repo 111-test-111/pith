@@ -21,6 +21,8 @@ let server, child, browser, page
 const errors = []
 try {
   await previewFixtures(project)
+  await writeFile(join(project, '默认应用 #100%.txt'), 'Native application icon fixture\n')
+  await writeFile(join(project, 'no-default.txt'), 'Missing application fixture\n')
   await writeFile(join(project, 'many.zip'), zipFixture(Array.from({ length: 4800 }, (_, i) => ({ name: `src/deep/file-${String(i).padStart(4, '0')}.ts`, data: `export const number = ${i}\n` }))))
   await symlink(join(repo, 'node_modules'), join(temp, 'node_modules'))
   const fixturePath = '/__file_preview.html'
@@ -43,11 +45,13 @@ window.ready=true;</script></body></html>`
 import {listFileDirectory,readFileDocument,readFileGitDiff} from ${JSON.stringify(join(repo, 'src/main/file-browser.ts'))};
 import {readTableStat,readTableSlice,readTableRange} from ${JSON.stringify(join(repo, 'src/main/table.ts'))};
 import {FilePreviewService} from ${JSON.stringify(join(repo, 'src/main/file-preview/service.ts'))};
+import {fileDefaultApp} from ${JSON.stringify(join(repo, 'src/main/file-default-app.ts'))};
 const previews=new FilePreviewService(pathToFileURL(${JSON.stringify(join(repo, 'out/main/file-preview-worker.mjs'))}));
 app.setPath('userData',${JSON.stringify(join(temp, 'profile'))});app.commandLine.appendSwitch('remote-debugging-port','0');
-const io={documents:[],previews:[],cancels:[],saves:[]};app.whenReady().then(()=>{
+const io={documents:[],previews:[],cancels:[],saves:[],defaultApps:[]};app.whenReady().then(()=>{
 ipcMain.handle('app:info',()=>({io}));ipcMain.handle('files:directory',(_,r,offset)=>listFileDirectory(r,offset));
 ipcMain.handle('files:document',(_,r)=>{io.documents.push(r);return readFileDocument(r)});ipcMain.handle('files:gitDiff',(_,r)=>readFileGitDiff(r));
+ipcMain.handle('files:defaultApp',(_,r)=>{io.defaultApps.push(r);return r.path.endsWith('/no-default.txt')?null:fileDefaultApp(r)});
 ipcMain.handle('files:binaryPreview',(event,r)=>{io.previews.push(r);return previews.read(event.sender.id,r)});ipcMain.on('files:cancelBinaryPreview',(event,id)=>{io.cancels.push(id);previews.cancel(event.sender.id,id)});
 ipcMain.handle('files:tableStat',(_,r)=>readTableStat(r));ipcMain.handle('files:tableSlice',(_,r,o,n)=>readTableSlice(r,o,n));ipcMain.handle('files:tableRange',(_,r,b,e)=>readTableRange(r,b,e));
 ipcMain.handle('files:saveCopy',(_,path)=>{io.saves.push(path);return {status:'cancelled'}});ipcMain.handle('shell:showInFolder',()=>{});ipcMain.handle('shell:openPath',()=>'');
@@ -64,6 +68,35 @@ w.loadURL(${JSON.stringify(`http://127.0.0.1:${server.httpServer.address().port}
   const open = async name => { await page.evaluate(name => window.openFile(name), name) }
   const view = async label => { await page.locator('[data-file-view-tabs]').getByRole('tab', { name: label, exact: true }).click() }
   const screenshot = async name => { if (!process.env.PI_FILE_PREVIEW_SCREENSHOT_DIR) return; await mkdir(process.env.PI_FILE_PREVIEW_SCREENSHOT_DIR, { recursive: true }); await page.screenshot({ path: join(process.env.PI_FILE_PREVIEW_SCREENSHOT_DIR, name + '.png') }) }
+  await open('默认应用 #100%.txt')
+  await page.locator('[data-file-source]').waitFor()
+  const defaultApp = await page.evaluate(project => window.pi.fileDefaultApp({ cwd: project, path: '默认应用 #100%.txt' }), project)
+  const defaultButton = page.getByRole('button', { name: 'Open in default app', exact: true })
+  if (process.platform === 'darwin') {
+    assert.ok(defaultApp?.name, 'Launch Services identifies the file-type application')
+    assert.match(defaultApp.icon, /^data:image\/png;base64,/)
+    await page.waitForFunction(icon => {
+      const image = document.querySelector('[aria-label="Open in default app"] img')
+      return image?.src === icon && image.complete && image.naturalWidth > 0
+    }, defaultApp.icon)
+    assert.equal(await defaultButton.locator('img').evaluate(image => {
+      const adjacent = document.querySelector('[aria-label="Open enclosing folder"] svg')
+      const logo = image.getBoundingClientRect(), glyph = adjacent.getBoundingClientRect()
+      return logo.width > glyph.width && logo.width <= glyph.width * 1.2 && logo.width === logo.height
+    }), true, 'the native logo is slightly larger than adjacent glyphs without changing the button geometry')
+    await screenshot('native-default-app')
+    const reads = await page.evaluate(async () => (await window.pi.appInfo()).io.defaultApps.length)
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+    await page.waitForFunction(reads => window.pi.appInfo().then(info => info.io.defaultApps.length > reads), reads)
+  } else {
+    assert.equal(defaultApp, null, 'unsupported native file associations retain the toolbar fallback')
+  }
+  assert.equal(await page.evaluate(project => window.pi.fileDefaultApp({ cwd: project, path: 'bad\0.txt' }), project), null, 'invalid native lookup fails without affecting preview actions')
+  await open('no-default.txt')
+  await page.waitForFunction(() => document.querySelector('[data-file-source]')?.textContent.includes('Missing application fixture'))
+  assert.equal(await defaultButton.locator('img').count(), 0, 'file switches never retain the previous application logo')
+  assert.equal(await defaultButton.locator('svg').count(), 1, 'a missing association preserves the working open button')
+  console.log('PASS: native default-file application IPC, literal Unicode/URL paths, decoded toolbar artwork, focus revalidation and missing-association fallback')
   for (const [name, format] of [['config.jsonc', 'jsonc'], ['events.jsonl', 'jsonl'], ['config.yaml', 'yaml'], ['config.toml', 'toml'], ['config.xml', 'xml']]) {
     await open(name); await view('Preview')
     await page.locator(`[data-file-structured="${format}"] [data-file-json-tree]`).waitFor()

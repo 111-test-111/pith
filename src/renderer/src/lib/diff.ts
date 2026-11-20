@@ -1,8 +1,25 @@
 import type { FileDiffLine } from '@/components/agents/file-diff'
+import { pairDiffLines } from './diff-inline'
+
+export const DIFF_HUNK_RANGE = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/
+const HAS_HUNKS = /^@@ /m
 
 /** Shared gutter metric for full diffs and page-scrolled row windows. */
 export function diffGutterColumns(lines: FileDiffLine[]): number {
   return lines.reduce((digits, line) => Math.max(digits, String(line.oldLine ?? 0).length, String(line.newLine ?? 0).length), 2)
+}
+
+export function diffGutterWidth(columns: number): string {
+  return `max(2.25rem, calc(${columns}ch + 0.5rem))`
+}
+
+export function diffContentLines(lines: FileDiffLine[]): FileDiffLine[] {
+  return lines.some(line => line.type === 'hunk') ? lines.filter(line => line.type !== 'hunk') : lines
+}
+
+/** Hunk headings occupy layout rows, but do not enter the syntax grammar. */
+export function diffCodeText(lines: FileDiffLine[]): string {
+  return diffContentLines(lines).map(line => line.content).join('\n')
 }
 
 /**
@@ -14,22 +31,34 @@ export function parseUnifiedDiff(diff: string): FileDiffLine[] {
   let oldLine = 0
   let newLine = 0
   let counter = 0
-  const hasHunks = diff.includes('@@')
+  const hasHunks = HAS_HUNKS.test(diff)
   let inHunk = !hasHunks
+  let heading: string | undefined
 
-  for (const raw of diff.split('\n')) {
+  for (const row of diff.split('\n')) {
+    const raw = row.endsWith('\r') ? row.slice(0, -1) : row
+    if (raw.startsWith('diff --git ')) {
+      inHunk = false
+      heading = undefined
+      continue
+    }
     if (raw.startsWith('@@')) {
       inHunk = true
-      const match = /@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(raw)
+      const match = DIFF_HUNK_RANGE.exec(raw)
+      heading = match ? raw : undefined
       if (match) {
         oldLine = Number(match[1])
-        newLine = Number(match[2])
+        newLine = Number(match[3])
       }
       continue
     }
     if (!inHunk || raw === '' || (!hasHunks && (raw.startsWith('--- ') || raw.startsWith('+++ ')))) continue
     if (raw.startsWith('\\')) continue // "\ No newline at end of file"
 
+    if (heading !== undefined) {
+      lines.push({ id: `h${counter}`, type: 'hunk', content: heading })
+      heading = undefined
+    }
     if (raw.startsWith('+')) {
       lines.push({
         id: `d${counter++}`,
@@ -54,6 +83,7 @@ export function parseUnifiedDiff(diff: string): FileDiffLine[] {
       })
     }
   }
+  pairDiffLines(lines)
   return lines
 }
 
@@ -97,9 +127,10 @@ export function diffStats(lines: FileDiffLine[]): { added: number; removed: numb
 export function countDiffChanges(diff: string): { added: number; removed: number } {
   let added = 0
   let removed = 0
-  const hasHunks = diff.includes('@@')
+  const hasHunks = HAS_HUNKS.test(diff)
   let inHunk = !hasHunks
   for (const raw of diff.split('\n')) {
+    if (raw.startsWith('diff --git ')) { inHunk = false; continue }
     if (raw.startsWith('@@')) { inHunk = true; continue }
     if (!inHunk || (!hasHunks && (raw.startsWith('--- ') || raw.startsWith('+++ ')))) continue
     if (raw.startsWith('+')) added++

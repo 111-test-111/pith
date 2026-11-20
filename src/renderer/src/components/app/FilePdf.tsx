@@ -8,7 +8,7 @@ import { cn } from '@/lib/utils'
 import { opensInFilePane } from '../../../../shared/preview'
 import type { FileTab } from '@/state/file-browser-store'
 import type { PdfStatDTO } from '../../../../shared/types'
-import type { PDFDocumentProxy } from 'pdfjs-dist'
+import type { PDFDocumentLoadingTask, PDFDocumentProxy } from 'pdfjs-dist'
 import type { PDFViewer as PdfViewer } from 'pdfjs-dist/web/pdf_viewer.mjs'
 
 /**
@@ -31,11 +31,6 @@ const ZOOM_STEP = 1.25
 
 type PdfStatus = 'loading' | 'password' | 'ready' | 'error'
 
-interface PdfRuntime {
-  viewer: PdfViewer
-  doc: PDFDocumentProxy
-}
-
 function ToolButton({ label, icon: Icon, onClick, disabled }: { label: string; icon: IconComponent; onClick: () => void; disabled?: boolean }) {
   return <Tooltip content={label}><Button variant="ghost" size="icon" className="size-7 shrink-0" aria-label={label} disabled={disabled} onClick={onClick}><Icon aria-hidden className="size-3.5" /></Button></Tooltip>
 }
@@ -50,7 +45,7 @@ export function FilePdf({ tab, onOpenFile }: { tab: FileTab; /** Opens a linked 
   const { t } = useI18n()
   const scrollerRef = useRef<HTMLDivElement>(null)
   const viewerRef = useRef<HTMLDivElement>(null)
-  const runtimeRef = useRef<PdfRuntime | null>(null)
+  const runtimeRef = useRef<PdfViewer | null>(null)
   const passwordRef = useRef<((password: string) => void) | null>(null)
   const [status, setStatus] = useState<PdfStatus>('loading')
   const [pages, setPages] = useState(0)
@@ -66,8 +61,9 @@ export function FilePdf({ tab, onOpenFile }: { tab: FileTab; /** Opens a linked 
     const scroller = scrollerRef.current
     const viewerEl = viewerRef.current
     if (!scroller || !viewerEl) return
-    let disposed = false
-    let teardown: (() => void) | null = null
+    const controller = new AbortController()
+    const { signal } = controller
+    let loadingTask: PDFDocumentLoadingTask | undefined
     const request = { cwd: tab.cwd, path: tab.path }
     setStatus('loading')
     setFailure('')
@@ -91,11 +87,11 @@ export function FilePdf({ tab, onOpenFile }: { tab: FileTab; /** Opens a linked 
           import('pdfjs-dist/build/pdf.worker.min.mjs?url'),
           import('./pdf-viewer.css')
         ])
-        if (disposed) return
+        if (signal.aborted) return
         pdfjs.GlobalWorkerOptions.workerSrc = worker.default
 
         const stat = await window.pi.pdfStat(request)
-        if (disposed) return
+        if (signal.aborted) return
         if (stat.error || !stat.size) {
           setFileError(stat.error)
           setFailure(stat.error ?? 'empty')
@@ -103,7 +99,7 @@ export function FilePdf({ tab, onOpenFile }: { tab: FileTab; /** Opens a linked 
           return
         }
         const initial = new Uint8Array(await window.pi.pdfRange(request, 0, Math.min(CHUNK_BYTES, stat.size)))
-        if (disposed) return
+        if (signal.aborted) return
 
         // pdf.js asks for byte ranges; its own reader sends `bytes=begin-(end-1)`,
         // so the end is EXCLUSIVE and the worker checks every answer against its
@@ -111,49 +107,49 @@ export function FilePdf({ tab, onOpenFile }: { tab: FileTab; /** Opens a linked 
         class RangeTransport extends pdfjs.PDFDataRangeTransport {
           constructor() { super(stat.size, initial, false) }
           requestDataRange(begin: number, end: number) {
+            if (signal.aborted) return
             window.pi.pdfRange(request, begin, end)
-              .then(data => this.onDataRange(begin, new Uint8Array(data)))
+              .then(data => { if (!signal.aborted) this.onDataRange(begin, new Uint8Array(data)) })
               // The type declares `abort()`, but the runtime forwards the reason
               // so a failed read surfaces as a load error instead of a stall.
-              .catch(error => (this.abort as (reason?: unknown) => void)(error))
+              .catch(error => { if (!signal.aborted) (this.abort as (reason?: unknown) => void)(error) })
           }
         }
         // `disableAutoFetch` keeps pdf.js from pulling the rest of the document in
         // the background: a preview reads the pages that are actually shown, so
         // opening a 500 MB scan does not read 500 MB.
-        const loadingTask = pdfjs.getDocument({ range: new RangeTransport(), rangeChunkSize: CHUNK_BYTES, disableAutoFetch: true })
+        loadingTask = pdfjs.getDocument({ range: new RangeTransport(), rangeChunkSize: CHUNK_BYTES, disableAutoFetch: true })
         loadingTask.onPassword = (updatePassword: (password: string) => void, reason: number) => {
-          if (disposed) return
+          if (signal.aborted) return
           passwordRef.current = updatePassword
           setWrongPassword(reason === pdfjs.PasswordResponses.INCORRECT_PASSWORD)
           setStatus('password')
         }
         const doc = await loadingTask.promise
-        if (disposed) { void loadingTask.destroy(); return }
+        if (signal.aborted) return
 
         const eventBus = new viewerModule.EventBus()
         const linkService = new viewerModule.PDFLinkService({ eventBus })
         // A link to the outside world must leave the app: the window-open handler
         // routes it to the system browser instead of replacing our UI.
         linkService.externalLinkTarget = viewerModule.LinkTarget.BLANK
-        const viewer = new viewerModule.PDFViewer({
+        // The viewer's abort signal detaches its observers and listeners even
+        // when the document has already been detached from the viewer.
+        const viewerOptions = {
           container: scroller,
           viewer: viewerEl,
           eventBus,
           linkService,
+          abortSignal: signal,
           // Links and annotation appearance render; form fields stay read-only.
           annotationMode: pdfjs.AnnotationMode.ENABLE,
           textLayerMode: 1
-        })
+        }
+        const viewer = new viewerModule.PDFViewer(viewerOptions)
+        runtimeRef.current = viewer
         // An in-document link (a table of contents entry, a cross-reference) only
         // navigates once the link service holds both the viewer and the document.
         linkService.setViewer(viewer)
-        teardown = () => {
-          // `setDocument(null)` is the documented teardown; the type only admits a
-          // document.
-          try { viewer.setDocument(null as unknown as PDFDocumentProxy) } catch { /* already gone */ }
-          try { viewer.cleanup() } catch { /* already gone */ }
-        }
         // The scale can only be applied once the viewer has built its first page:
         // setting it right after setDocument is silently dropped, which leaves
         // every page at zero height and nothing ever renders.
@@ -162,43 +158,44 @@ export function FilePdf({ tab, onOpenFile }: { tab: FileTab; /** Opens a linked 
         eventBus.on('scalechanging', (event: { scale: number }) => setScale(event.scale))
         viewer.setDocument(doc)
         linkService.setDocument(doc, null)
-        runtimeRef.current = { viewer, doc }
         setPages(doc.numPages)
         setStatus('ready')
       } catch (error) {
-        if (!disposed) { setFailure(String(error)); setStatus('error') }
+        if (!signal.aborted) { setFailure(String(error)); setStatus('error') }
       }
     })()
 
     return () => {
-      disposed = true
       passwordRef.current = null
-      const runtime = runtimeRef.current
+      const viewer = runtimeRef.current
       runtimeRef.current = null
-      teardown?.()
-      if (runtime) void runtime.doc.destroy().catch(() => { /* already destroyed */ })
+      // pdf.js accepts null here to detach the document and cancel page renders.
+      try { viewer?.setDocument(null as unknown as PDFDocumentProxy) } catch { /* already gone */ }
+      controller.abort()
+      // A pending load, including a password prompt, owns a worker too.
+      void loadingTask?.destroy().catch(() => { /* already destroyed */ })
     }
   }, [tab.cwd, tab.path])
 
   const zoom = useCallback((factor: number) => {
-    const viewer = runtimeRef.current?.viewer
+    const viewer = runtimeRef.current
     if (!viewer) return
     viewer.currentScale = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, viewer.currentScale * factor))
   }, [])
 
   const fit = useCallback((value: 'page-width' | 'page-fit') => {
-    const viewer = runtimeRef.current?.viewer
+    const viewer = runtimeRef.current
     if (viewer) viewer.currentScaleValue = value
   }, [])
 
   const turn = useCallback((delta: number) => {
-    const viewer = runtimeRef.current?.viewer
+    const viewer = runtimeRef.current
     if (!viewer) return
     viewer.currentPageNumber = Math.min(Math.max(1, viewer.currentPageNumber + delta), viewer.pagesCount)
   }, [])
 
   const goTo = useCallback((target: number) => {
-    const viewer = runtimeRef.current?.viewer
+    const viewer = runtimeRef.current
     if (!viewer || !Number.isFinite(target)) return
     viewer.currentPageNumber = Math.min(Math.max(Math.round(target), 1), viewer.pagesCount)
   }, [])

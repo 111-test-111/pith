@@ -64,11 +64,12 @@ await f.managed.lifecyclePromise;
 const path=join(f.project,'report # 你好.txt');await writeFile(path,'delivered');
 for(let i=0;i<120;i++)await f.session.prompt('question '+i);
 await f.managed.trajectory.flush();
-globalThis.files=[{path,size:9,description:'report'}];globalThis.cancel=true;globalThis.saved=[];globalThis.opened=[];
+globalThis.files=[{path,size:9,description:'report'}];globalThis.cancel=true;globalThis.saved=[];globalThis.opened=[];globalThis.revealed=[];
 dialog.showSaveDialog=async()=>globalThis.cancel?{canceled:true}:{canceled:false,filePath:${JSON.stringify(out)}};
 registerTrajectoryIpc(f.app);
 ipcMain.handle('files:saveCopy',(_e,path)=>{globalThis.saved.push(path);return {status:'ok'}});
 ipcMain.handle('shell:openPath',(_e,path)=>{globalThis.opened.push(path);return ''});
+ipcMain.handle('shell:showInFolder',(_e,path)=>{globalThis.revealed.push(path)});
 const win=new BrowserWindow({width:980,height:800,show:false,webPreferences:{preload:${JSON.stringify(join(repo, 'out/preload/index.mjs'))},contextIsolation:true,sandbox:false}});
 await win.loadURL(${JSON.stringify(url)}+'?session='+encodeURIComponent(f.managed.path));
 }).catch(error=>{console.error(error);app.exit(1)});`)
@@ -95,8 +96,10 @@ await win.loadURL(${JSON.stringify(url)}+'?session='+encodeURIComponent(f.manage
   assert.deepEqual(await page.evaluate(() => window.previewPaths), [])
   const cardButtons = page.locator('[data-presented-file] button')
   assert.equal(await cardButtons.last().getAttribute('aria-label'), 'Preview report # 你好.txt')
-  const previewBox = await cardButtons.last().boundingBox(), nameBox = await filename.boundingBox(), saveBox = await cardButtons.nth(1).boundingBox()
+  const previewBox = await cardButtons.last().boundingBox(), nameBox = await filename.boundingBox(), saveBox = await page.getByRole('button', { name: 'Save as', exact: true }).boundingBox()
   assert(previewBox.y > nameBox.y && previewBox.x > saveBox.x, 'preview is the bottom-right card action')
+  await page.getByRole('button', { name: 'Open enclosing folder', exact: true }).click()
+  assert.deepEqual(await app.evaluate(() => globalThis.revealed), [files[0].path])
   await page.getByRole('button', { name: /Preview report/ }).click()
   assert.deepEqual(await page.evaluate(() => window.previewPaths), [files[0].path])
   await page.getByRole('button', { name: 'Save as', exact: true }).click()

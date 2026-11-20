@@ -226,6 +226,11 @@ export function JsonTree({ value }: { value: StructuredValue }) {
   const [pages, setPages] = useState<Record<string, number>>({})
   const root = isContainer(value) ? value : null
   const rows = useMemo(() => root ? flatten(root, explicit, force, pages, ROW_BUDGET) : [], [root, explicit, force, pages])
+  // One control, two states: the bar always offers the opposite of what the
+  // tree shows. A folded container still reports itself as a row, so "all
+  // open" is simply "no row reached by the walk is folded" — derived, never a
+  // remembered flag that a later row click could contradict.
+  const allOpen = root !== null && rows.length > 0 && rows.every(row => row.type !== 'container' || row.open)
   const scroll = useRef<HTMLDivElement>(null)
   const virtualizer = useVirtualizer({
     count: rows.length,
@@ -239,15 +244,14 @@ export function JsonTree({ value }: { value: StructuredValue }) {
   // than a parse error the user cannot act on.
   const onToggle = (path: string, open: boolean) => setExplicit(current => ({ ...current, [path]: !open }))
   const onMore = (path: string) => setPages(current => ({ ...current, [path]: (current[path] ?? PAGE) + PAGE }))
-  const foldAll = (open: boolean) => { setExplicit({}); setPages({}); setForce(open) }
+  const foldAll = () => { setExplicit({}); setPages({}); setForce(!allOpen) }
   return <div data-file-json className="flex min-h-0 flex-1 flex-col">
     {root ? <div data-file-json-bar className="flex h-9 shrink-0 items-center gap-2 border-b border-border/40 px-3">
       <span data-json-summary className="text-xs text-muted-foreground">
         {t(Array.isArray(root) ? 'files.json.items' : 'files.json.keys', { count: Array.isArray(root) ? root.length : Object.keys(root).length })}
       </span>
       <div className="ms-auto flex items-center gap-0.5">
-        <Tooltip content={t('files.json.expandAll')}><Button variant="ghost" size="icon" className="size-7 shrink-0" aria-label={t('files.json.expandAll')} data-json-expand-all onClick={() => foldAll(true)}><ChevronsUpDown aria-hidden className="size-3.5" /></Button></Tooltip>
-        <Tooltip content={t('files.json.collapseAll')}><Button variant="ghost" size="icon" className="size-7 shrink-0" aria-label={t('files.json.collapseAll')} data-json-collapse-all onClick={() => foldAll(false)}><ChevronsDownUp aria-hidden className="size-3.5" /></Button></Tooltip>
+        <Tooltip content={t(allOpen ? 'files.json.collapseAll' : 'files.json.expandAll')}><Button variant="ghost" size="icon" className="size-7 shrink-0" aria-label={t(allOpen ? 'files.json.collapseAll' : 'files.json.expandAll')} data-json-fold-all={allOpen ? 'collapse' : 'expand'} onClick={foldAll}>{allOpen ? <ChevronsDownUp aria-hidden className="size-3.5" /> : <ChevronsUpDown aria-hidden className="size-3.5" />}</Button></Tooltip>
       </div>
     </div> : null}
     <div ref={scroll} data-file-json-tree className="min-h-0 flex-1 overflow-auto p-3 font-mono text-code">

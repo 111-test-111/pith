@@ -43,9 +43,9 @@ app.whenReady().then(()=>{
  const snapshot=(cwd='/workspace/pi-app')=>({sessionId:'fixture',sessionPath:'/fixture/chat-0',cwd,projectless:cwd.startsWith('/internal/'),messages:[],model,thinkingLevel:'high',availableThinkingLevels:['off','high'],isStreaming:false});
  ipcMain.handle('app:info',()=>({cwd:'/workspace/pi-app',folders:[...folders],version:'fixture',contextFiles:true,bashMaxWaitMs:10000}));
  ipcMain.handle('pi:init',()=>snapshot('/workspace/pi-app'));
- // The real manager remembers every folder it activates, so a project picked
- // on the landing page shows up in the sidebar before it has a session.
- ipcMain.handle('pi:newSession',(_,cwd)=>{calls.push(cwd??null);if(cwd)folders=[cwd,...folders.filter(f=>f!==cwd)];return snapshot(cwd??'/internal/private-workspace')});
+ // The real manager remembers every folder it activates; new folders append to
+ // the project order instead of jumping ahead of existing projects.
+ ipcMain.handle('pi:newSession',(_,cwd)=>{calls.push(cwd??null);if(cwd)folders=[...folders.filter(f=>f!==cwd),cwd];return snapshot(cwd??'/internal/private-workspace')});
  ipcMain.handle('pi:listSessions',()=>sessions);
  ipcMain.handle('app:pickDirectory',()=>({cwd:'/workspace/new-project'}));
  ipcMain.handle('fixture:calls',()=>calls);
@@ -132,7 +132,7 @@ app.whenReady().then(()=>{
       window.goalLandingRefs={editor,form:editor.closest('form'),project:document.querySelector('${TRIGGER}'),shader:document.querySelector('[data-shader-backdrop]')};
       return {rect:window.goalLandingRefs.form.getBoundingClientRect().toJSON(),placeholder:editor.getAttribute('aria-placeholder'),title:document.querySelector('[data-window-titlebar]').innerText};
     })()`)
-    await click('button[aria-label="Add to prompt"]')
+    await click('[data-composer-actions-trigger]')
     const option = await evaluate(`(()=>{const button=[...document.querySelectorAll('button')].find(n=>n.innerText.trim()==='目标模式');if(!button)return null;const r=button.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`)
     assert(option, 'the + panel offers Goal mode on the landing page')
     await clickAt(option)
@@ -310,7 +310,7 @@ app.whenReady().then(()=>{
   await send('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27})
   await click('[data-prompt-editor]')
   await send('Input.insertText',{text:'Show this goal message immediately.'})
-  await click('button[aria-label="Add to prompt"]')
+  await click('[data-composer-actions-trigger]')
   const goalOption=await evaluate(`(()=>{const n=[...document.querySelectorAll('button')].find(n=>n.innerText.trim()==='目标模式');const r=n.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`)
   await clickAt(goalOption)
   await evaluate('fixture.holdGoal()')

@@ -283,7 +283,7 @@ app.on('window-all-closed',()=>app.quit());`)
   assert.equal(green[1].fill,blue[1].fill,'accent changes do not retint explicit fills')
   assert.equal(green[2].fill,blue[2].fill,'accent changes do not retint explicit cylinder fills')
   const samples={}
-  for(const dark of [false,true]) for(const style of ['square','squircle']) {
+  for(const dark of [false,true]) for(const style of ['square','rounded','squircle']) {
     // Switch away and back to also exercise a cached theme/corner result.
     await render('Plain Markdown')
     await page.evaluate(({dark,style})=>{document.documentElement.classList.toggle('dark',dark);document.documentElement.dataset.accent='blue';window.setUiStyle(style)},{dark,style})
@@ -296,10 +296,11 @@ app.on('window-all-closed',()=>app.quit());`)
       const frames=await inspect(kind==='flow'?selectors:['rect.actor','foreignObject'])
       const first=kind==='flow'?frames[0]:frames.find(Boolean)
       assert.ok(first,'participant/node artwork exists')
-      if(style==='squircle') {
+      if(style!=='square') {
         assert.equal(first.shape,'div','rectangular frames use native CSS geometry')
         const appCorner=await page.getByRole('tab',{name:'Preview',exact:true}).evaluate(element=>getComputedStyle(element).getPropertyValue('corner-shape'))
         assert.equal(first.corner,appCorner,'the diagram uses the same native corner shape as the app')
+        assert.equal(first.corner,style==='rounded'?'superellipse(1)':'superellipse(2)','ordinary rounded diagrams never keep superellipse corners')
         assert.notEqual(first.radius,'0px')
       } else assert.notEqual(first.shape,'div','square frames retain crisp SVG rectangles')
       if(kind==='sequence') {
@@ -355,7 +356,7 @@ app.on('window-all-closed',()=>app.quit());`)
   await appearance(()=>{document.documentElement.style.removeProperty('--app-font-ui');window.setFontSizes({ui:14,content:14,code:12})})
   if(process.env.PI_MERMAID_SCREENSHOT_DIR) await writeFile(join(process.env.PI_MERMAID_SCREENSHOT_DIR,'styles.json'),JSON.stringify(samples))
   await appearance(()=>document.documentElement.classList.remove('dark'))
-  console.log('PASS: complex ELK flow/sequence diagrams, square/native squircle, restrained app accents, explicit colors and live interface fonts')
+  console.log('PASS: complex ELK flow/sequence diagrams, square/rounded/native squircle, restrained app accents, explicit colors and live interface fonts')
 
   await render('---\ntitle: 示例\n---\n\n# Markdown 文件\n\n'+fence(flow),{file:true,width:360})
   await ready()
@@ -439,9 +440,14 @@ app.on('window-all-closed',()=>app.quit());`)
   await ready()
   const photo=page.getByRole('button',{name:'Preview image First',exact:true})
   await page.waitForFunction(()=>[...document.querySelectorAll('#fixture img')].every(image=>image.complete&&image.naturalWidth>0))
+  const photoPaint = () => photo.evaluate(element => {
+    const image = getComputedStyle(element.querySelector('img'))
+    return { opacity: image.opacity, filter: image.filter, background: getComputedStyle(element).backgroundColor }
+  })
+  const normalPaint = await photoPaint()
   await photo.hover()
   assert.equal(await photo.evaluate(element=>getComputedStyle(element).cursor),'zoom-in','ordinary images retain their preview cursor')
-  await page.waitForFunction(()=>getComputedStyle(document.querySelector('[aria-label="Preview image First"] span')).backgroundColor!=='rgba(0, 0, 0, 0)')
+  assert.deepEqual(await photoPaint(),normalPaint,'ordinary thumbnails keep their colors on hover')
   await photo.click()
   await page.getByRole('dialog',{name:'First',exact:true}).waitFor()
   await page.getByLabel('Image 1 of 3',{exact:true}).waitFor()

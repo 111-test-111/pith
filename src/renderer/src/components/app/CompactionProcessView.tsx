@@ -3,7 +3,7 @@ import type { CompactionProcessDTO, CompactionStatus } from '../../../../shared/
 import { useI18n } from '@/i18n'
 import { Circle, ArrowRight } from '@/lib/icons'
 import { StatusRing } from '@/lib/status-ring'
-import { formatTokenCount, formatCost } from '@/lib/format'
+import { formatTokenCount } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useReduceMotion, useSystemReducedMotion } from '@/lib/reduce-motion'
 
@@ -42,13 +42,11 @@ export function CompactionProcessView({ process, detail }: { process?: Compactio
       : process?.range?.previousSummary ? t('chat.compactionUpdateSummary') : undefined },
     { key: 'apply', status: applying }
   ]
-  const requests = process?.requests ?? []
-  const input = process?.usage?.inputTokens ?? requests.reduce((sum, request) => sum + (request.inputTokens ?? 0), 0)
-  const output = process?.usage?.outputTokens ?? requests.reduce((sum, request) => sum + (request.outputTokens ?? 0), 0)
-  const cost = process?.usage?.cost ?? requests.reduce((sum, request) => sum + (request.cost ?? 0), 0)
   const before = process?.tokensBefore
   const after = process?.tokensAfter
-  const scale = Math.max(before ?? 0, after ?? 0, 1)
+  const remainingRatio = before !== undefined && before > 0 && after !== undefined
+    ? Math.min(1, after / before)
+    : undefined
 
   return <section data-compaction-process aria-label={t('chat.compactionProcess')} className="p-3 text-xs">
     <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
@@ -82,29 +80,10 @@ export function CompactionProcessView({ process, detail }: { process?: Compactio
             {after !== undefined ? <><ArrowRight aria-hidden="true" className="size-3" /><span>{t('chat.compactionTokens', { tokens: formatTokenCount(after) })}</span></> : null}
           </span>
         </div>
-        <div aria-hidden="true" className="mt-1.5 flex flex-col gap-1">
-          <div className="h-1 rounded-capsule bg-muted-foreground/25" style={{ width: `${before / scale * 100}%` }} />
-          {after !== undefined ? <div className="h-1 rounded-capsule bg-primary/70" style={{ width: `${after / scale * 100}%` }} /> : null}
+        <div data-compaction-context-bar aria-hidden="true" className="mt-1.5 h-1 rounded-capsule bg-muted-foreground/25">
+          {remainingRatio !== undefined ? <div data-compaction-context-fill className="h-full rounded-capsule bg-primary/70"
+            style={{ width: `${remainingRatio * 100}%` }} /> : null}
         </div>
-      </div> : null}
-      {requests.length ? <div data-compaction-requests className="mt-3 border-t border-border/50 pt-2.5">
-        <p className="text-muted-foreground">{t('chat.compactionRequests', { count: process.requestCount })}</p>
-        {requests.slice(-4).map((request, index) => <div key={request.id} data-compaction-request={request.id} data-state={request.status}
-          className="mt-1.5 flex min-w-0 items-center gap-2">
-          <span aria-hidden="true"><StatusRing status={request.status} reduce={reduce} className="size-3" /></span>
-          <span className="min-w-0 flex-1 truncate text-foreground/80" title={[request.provider, request.model].filter(Boolean).join(' / ')}>
-            {t('chat.compactionRequest', { index: process.requestCount - Math.min(4, requests.length) + index + 1 })}
-            {request.model ? <> · {request.model}</> : null}
-          </span>
-          <span className="sr-only">{t(`chat.compactionStatus.${request.status}`)}</span>
-          {request.endedAt !== undefined ? <span className="shrink-0 tabular-nums text-muted-foreground">{t('chat.compactionDuration', {
-            seconds: (Math.max(0, request.endedAt - request.startedAt) / 1000).toFixed(1)
-          })}</span> : null}
-        </div>)}
-        {requests.some(request => request.inputTokens !== undefined) ? <p data-compaction-usage className="mt-2 text-muted-foreground">
-          {t('chat.compactionUsage', { input: formatTokenCount(input), output: formatTokenCount(output) })}
-          {cost > 0 ? <> · {formatCost(cost)}</> : null}
-        </p> : null}
       </div> : null}
     </> : <p className="mt-2 text-muted-foreground">{t('chat.compactionProcessUnavailable')}</p>}
     {detail ? <p data-compaction-error className="mt-2 whitespace-pre-wrap break-words text-rose-600 dark:text-rose-400">{detail}</p> : null}

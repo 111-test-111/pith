@@ -7,7 +7,7 @@ import { join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { build } from 'esbuild'
 import { Type } from 'typebox'
-import { SessionManager, ModelRuntime, SettingsManager, createExtensionRuntime, createAgentSessionFromServices } from '@earendil-works/pi-coding-agent'
+import { SessionManager, ModelRuntime, SettingsManager, createExtensionRuntime, createAgentSessionFromServices, sessionEntryToContextMessages } from '@earendil-works/pi-coding-agent'
 
 const temporary = await mkdtemp(join(tmpdir(), 'pith-subagent-integration-'))
 const sessionsDir = join(temporary, 'sessions')
@@ -38,6 +38,7 @@ export { installSubagentResultHook } from './src/main/pi/subagents/tools';
 export { createManagedBashTools } from './src/main/pi/bash-tools';
 export { BashTaskManager } from './src/main/bash/manager';
 export { TaskNotifications } from './src/main/pi/task-notifications';
+export { ChangeScopes } from './src/main/pi/change-scopes';
 export { PiStore } from './src/renderer/src/state/pi-store';
 export { buildTurns, collectChangeScopes } from './src/renderer/src/lib/chat-turns';
 export { extractTurnWrittenFiles, extractReviewTurns } from './src/renderer/src/lib/turn-written-files';`, resolveDir: resolve('.') },
@@ -52,11 +53,12 @@ export { extractTurnWrittenFiles, extractReviewTurns } from './src/renderer/src/
         path: fileURLToPath(import.meta.resolve(args.path)), external: true
       }))
       builder.onResolve({ filter: /^electron$/ }, () => ({ path: 'electron', namespace: 'fixture' }))
-      builder.onResolve({ filter: /^proper-lockfile$|^@resvg\/resvg-js$/ }, args => ({ path: fileURLToPath(import.meta.resolve(args.path)), external: true }))
+      builder.onResolve({ filter: /^proper-lockfile$|^@resvg\/resvg-js$|^ssh2$|^@xterm\/headless$/ }, args => ({ path: fileURLToPath(import.meta.resolve(args.path)), external: true }))
       builder.onLoad({ filter: /.*/, namespace: 'fixture' }, () => ({ contents: `export const app={getPath(){return ${JSON.stringify(temporary)}}}; export const shell={};` }))
     } }] })
   const { PiManager, CheckoutCoordinator, loadSettings, saveSettings, SubagentRuntime, SubagentParentState, PiStore, buildTurns, collectChangeScopes, BashTaskManager, TaskNotifications, createManagedBashTools,
-    extractTurnWrittenFiles, extractReviewTurns, installSubagentResultHook, currentDiskRun, SUBAGENT_RUN_TYPE, SUBAGENT_RESULT_TYPE } = await import(pathToFileURL(bundle))
+    ChangeScopes, extractTurnWrittenFiles, extractReviewTurns, installSubagentResultHook, currentDiskRun, SUBAGENT_RUN_TYPE, SUBAGENT_RESULT_TYPE,
+    SUBAGENT_MESSAGE_TYPE } = await import(pathToFileURL(bundle))
 
   // Both independent clocks, both IPC arrival orders, and unrelated sessions.
   {
@@ -110,7 +112,7 @@ export { extractTurnWrittenFiles, extractReviewTurns } from './src/renderer/src/
   }
   console.log('PASS: panel Steer/Resume actions use the typed PiManager route and fail closed before runtime dispatch.')
 
-  // One derivation for transcript + Review, across user-steer display groups.
+  // One derivation for transcript + Review, including work on either side of a steer.
   {
     const run = { sessionId: 'child', runId: 'r1', writtenFilesScope: 'run', writtenFiles: [{ filePath: join(temporary, 'one.ts'), displayPath: 'one.ts', added: 1, removed: 0, patch: '--- a/one.ts\n+++ b/one.ts\n@@ -0,0 +1 @@\n+one\n' }] }
     const completion = { role: 'custom', customType: 'subagent_completion', display: true, timestamp: 3, content: 'done', details: { subagent: run } }
@@ -119,7 +121,7 @@ export { extractTurnWrittenFiles, extractReviewTurns } from './src/renderer/src/
       { ...assistant(text('after steer')), timestamp: 5, changeScopeId: 'scope' }
     ]
     const messages = [{ role: 'user', content: 'task', timestamp: 1 }, rounds[0], completion,
-      { role: 'user', content: 'steer', timestamp: 4 }, rounds[1]]
+      { role: 'user', content: 'steer', timestamp: 4, queuedDelivery: 'steer' }, rounds[1]]
     const scope = [...collectChangeScopes(buildTurns(messages)).values()][0]
     assert.equal(scope.completions.length, 1)
     assert.equal(scope.ownerKey, buildTurns(messages).at(-1).key)
@@ -363,6 +365,101 @@ export { extractTurnWrittenFiles, extractReviewTurns } from './src/renderer/src/
   assert.equal(app.sessions.get(child.getSessionFile()), managed, 'resume retains the one managed instance')
   managed.unsubscribe(); managed.notifications.dispose()
   console.log('PASS: real SDK read-only admission, atomic stale-run rejection, serial resume, one SessionManager, stopped-owner recovery, per-run writes and branch coverage.')
+
+  // Exercise the real parent wake route, including the change scope announced
+  // before the first reply and the user steer consumed during a later wake.
+  {
+    const manager = SessionManager.create(temporary, sessionsDir); await materialize(manager)
+    const sender = SessionManager.create(temporary, sessionsDir, { parentSession: manager.getSessionFile() })
+    app.jevPreferences.mode = 'off'
+    app.rewindClient = { call: async () => undefined }
+    const parent = await app.buildSession(manager, false)
+    const { session } = parent
+    sessions.push(session)
+    await parent.lifecyclePromise
+    const starts = []
+    app.routeEvent = (owner, event) => {
+      if (owner === parent && event.type === 'agent_start') starts.push(event.changeScopeId)
+    }
+    const send = message => app.deliverSubagentMessage(parent.path, sender, message)
+    const readTurns = () => buildTurns(app.transcriptOf(parent))
+    const wakeStarted = deferred(), releaseWake = deferred()
+    let requests = 0
+    session.agent.streamFunction = () => {
+      const reply = stream(assistant(text(`Parent reply ${++requests}`)))
+      if (requests !== 3) return reply
+      return { ...reply, async *[Symbol.asyncIterator]() {
+        wakeStarted.resolve()
+        await releaseWake.promise
+        yield* reply
+      } }
+    }
+    await session.prompt('delegate the work')
+    const scope = starts[0]
+    assert.ok(scope)
+    assert.deepEqual(await send('first progress report'), { delivered: true })
+    assert.deepEqual(starts, [scope, scope], 'an idle child message reopens the preceding scope before it streams')
+    const firstWake = readTurns()
+    assert.deepEqual(firstWake.map(turn => turn.role), ['user', 'assistant'])
+    assert.equal(firstWake[1].assistants.length, 2)
+    assert.deepEqual(firstWake[1].insertions.map(({ beforeRound, message }) => [beforeRound, message.details.message]),
+      [[1, 'first progress report']], 'the wake notice is inside the group before its reply')
+
+    const nextWake = send('second progress report')
+    try {
+      await Promise.race([wakeStarted.promise, nextWake.then(() => assert.fail('the second wake never streamed'))])
+      await session.steer('manual steer')
+    } finally { releaseWake.resolve() }
+    assert.deepEqual(await nextWake, { delivered: true })
+    const steered = readTurns()
+    assert.deepEqual(steered.map(turn => turn.role), ['user', 'assistant'])
+    assert.deepEqual(steered[1].insertions.map(({ message }) => message.role === 'user' ? message.queuedDelivery : message.details.message),
+      ['first progress report', 'second progress report', 'steer'])
+    assert.equal(steered[1].assistants.length, 4, 'the steer and the wake share the original display group')
+    assert.ok(steered[1].assistants.every(round => round.changeScopeId === scope), 'steer preserves cumulative file ownership')
+    await session.prompt('a new request')
+    assert.notEqual(starts.at(-1), scope, 'an independent prompt opens its own scope')
+    parent.unsubscribe()
+  }
+  console.log('PASS: idle child progress wakes and a subsequent user steer share the original fold.')
+
+  // A saved split scope can also be reopened by a completion. All of its
+  // rounds still belong to the original exchange when the branch is restored.
+  {
+    const legacy = SessionManager.inMemory(temporary)
+    const scope = (id, phase) => legacy.appendCustomEntry('pith_change_scope', { id, phase })
+    const user = content => legacy.appendMessage({ role: 'user', content, timestamp: ++timestamp })
+    scope('original')
+    user('initial request')
+    legacy.appendMessage(assistant(text('initial reply')))
+    scope('original', 'end')
+    scope('split-wake')
+    legacy.appendMessage({ role: 'system', content: '', timestamp: ++timestamp })
+    legacy.appendCustomMessageEntry(SUBAGENT_MESSAGE_TYPE, 'progress report', true)
+    legacy.appendMessage(assistant(text('first continuation')))
+    scope('split-wake', 'end')
+    scope('split-wake')
+    legacy.appendCustomMessageEntry('bash_task_completion', 'command finished', true)
+    legacy.appendMessage(assistant(text('completion reply')))
+    user('manual steer')
+    legacy.appendMessage(assistant(text('steered reply')))
+    scope('split-wake', 'end')
+    scope('new')
+    user('new request')
+    legacy.appendCustomMessageEntry(SUBAGENT_MESSAGE_TYPE, 'progress during a user run', true)
+    legacy.appendMessage(assistant(text('new reply')))
+    scope('new', 'end')
+
+    const restored = new ChangeScopes(legacy)
+    const turns = buildTurns(legacy.getBranch().flatMap(sessionEntryToContextMessages)
+      .filter(message => message.role !== 'system').map(message => restored.stamp(message)))
+    assert.deepEqual(turns.map(turn => turn.role), ['user', 'assistant', 'user', 'assistant', 'user', 'assistant'])
+    assert.deepEqual(turns[1].assistants.map(message => message.changeScopeId), ['original', 'original', 'original'])
+    assert.deepEqual(turns[1].insertions.map(({ beforeRound }) => beforeRound), [1, 2])
+    assert.equal(turns[3].assistants[0].changeScopeId, 'original')
+    assert.equal(turns[5].assistants[0].changeScopeId, 'new')
+  }
+  console.log('PASS: reopening a legacy split restores its notices and rounds without merging user message groups.')
 
   // A live run's lease fences restores: rewindRestore can only enter its
   // exclusive window (where stopAll runs) once nothing is running — the

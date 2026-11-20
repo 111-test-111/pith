@@ -2,21 +2,20 @@
 
 English | [简体中文](README.zh-CN.md)
 
-Pith is a desktop client for pi-agent, bringing coding conversations, files, terminals and task management into one window. Electron hosts the Pi SDK, with a beUI interface built on React and Tailwind CSS.
+Pith is a desktop client for pi-agent, bringing coding conversations, files, terminals and task management into one window. It supports switching between square, rounded and squircle UI styles in Settings → Appearance. Electron hosts the Pi SDK, with a beUI interface built on React and Tailwind CSS.
 
 ## Features
 
 - **Projects and conversations**: organize sessions by folder or start a projectless chat; search history, stream responses, inspect thinking and tools, steer, stop, continue, retry and fork.
 - **Files and changes**: mention files, attach inputs and preview code, Markdown, math, notebooks, images and PDFs; review turn changes and diffs, and open files delivered by the agent.
 - **Git workbench**: inspect repository changes and history, stage or unstage files, review discard confirmations, commit, switch branches and fetch/pull/push from the right panel.
-- **Library**: collect user attachments, explicit deliveries, generated images and web sources by project; browse a stable photo wall, search records, hide unavailable content and keep local copies with a configurable directory and size limit. Downloads retain their source URL under Web.
 - **Planning and Rewind**: review a submitted plan before explicitly approving execution; capture checkpoints before user messages, restore files, conversations or both, and undo or redo the latest restore.
 - **Parallel work**: task lists, managed background commands, independent subagents and scheduled tasks. Inspect, guide or continue subagent work; schedules run while the app is running and the computer is awake.
 - **Work panels**: interactive terminals, an embedded browser, a DAP debugger and picture in picture. Browser agent tools require enabling them in Settings and first-use consent; debugging requires enabling it and installing the relevant adapter.
 - **Remote work**: model-controlled persistent SSH terminals with password/key/agent login, keepalives and reconnect, visible in the sidebar. Remote tmux preserves jobs and shell state across disconnects; see [SSH setup](docs/ssh-implementation.md).
 - **Models and extensions**: API key / OAuth sign-in, custom providers and models, thinking levels, MCP, Skills and Pi extensions; optional Jev judgments and workflow integration.
 - **Run records**: inspect model requests, tool execution, context estimates, token usage and costs, and export execution records.
-- **Appearance and language**: English / Simplified Chinese, light / dark / system themes, accent colors, and square / squircle interface styles.
+- **Appearance and language**: English / Simplified Chinese, light / dark / system themes, accent colors, and square / rounded / squircle interface styles.
 
 ## Run from source
 
@@ -63,7 +62,7 @@ After verification, `npm run clean` returns the checkout to an unbuilt state. Th
 
 Use beUI components and place app compositions in `components/app/`. Add every new user-visible string to both the English and Simplified Chinese dictionaries. The main process owns the SDK and system capabilities; the renderer accesses them only through preload IPC. See [AGENTS.md](AGENTS.md) for the full contribution rules.
 
-UI glyphs use Remix Icon Line in the square interface and Hugeicons Stroke Rounded in the squircle interface, through one semantic adapter. Remix drawings favour centered, compact silhouettes and retain their native filled outlines; its Remix Icon License v1.0 ships in `src/renderer/public/licenses/remix-icons.txt`. Shortcut keycaps use a small local Lucide SVG subset without an additional dependency, with original artwork and licenses in `src/renderer/public/lucide-keycaps/`. File-type icons use app-owned square Pierre adaptations in square and native Codex Pierre Icons with a local Sass override in squircle, with local document/media additions and the same Pierre light/dark palette. Brand and provider marks retain their own SVGs. Original artwork and licenses are vendored in `resources/bearded-icons/` (GPL-3.0) and `resources/pierre-icons/` (Apache-2.0); additions and overrides live separately in `resources/pierre-icons-extensions/`, and square adaptations in `resources/pierre-icons-square/` with their own attribution notices. Selected language/brand icons retain their complete native artwork in both styles. Bearded artwork/maps remain available for rollback. `npm ci`, development and builds prepare `src/renderer/public/file-icons/` offline, including licenses and addition notices; this generated directory stays outside version control. See [file icons](docs/file-icons.md) for exceptions and snapshot maintenance.
+UI glyphs use Remix Icon Line in the square interface and Hugeicons Stroke Rounded in rounded and squircle interfaces, through one semantic adapter. Remix drawings favour centered, compact silhouettes and retain their native filled outlines; its Remix Icon License v1.0 ships in `src/renderer/public/licenses/remix-icons.txt`. Shortcut keycaps use a small local Lucide SVG subset without an additional dependency, with original artwork and licenses in `src/renderer/public/lucide-keycaps/`. File-type icons use app-owned square Pierre adaptations in square and native Codex Pierre Icons with a local Sass override in rounded and squircle, with local document/media additions and the same Pierre light/dark palette. Brand and provider marks retain their own SVGs. Original artwork and licenses are vendored in `resources/bearded-icons/` (GPL-3.0) and `resources/pierre-icons/` (Apache-2.0); additions and overrides live separately in `resources/pierre-icons-extensions/`, and square adaptations in `resources/pierre-icons-square/` with their own attribution notices. Selected language/brand icons retain their complete native artwork in all three styles. Bearded artwork/maps remain available for rollback. `npm ci`, development and builds prepare `src/renderer/public/file-icons/` offline, including licenses and addition notices; this generated directory stays outside version control. See [file icons](docs/file-icons.md) for exceptions and snapshot maintenance.
 
 ## Packaging
 
@@ -76,7 +75,7 @@ npm run dist:linux   # AppImage + deb
 
 Packaging scripts build first and write artifacts to `dist/`. Configuration covers macOS, Windows and Linux. Validate native dependencies, terminals and sandbox behavior on the target platform before release. The distributor supplies signing and macOS notarization credentials.
 
-`resources/pith.svg` is the native application icon master. `npm run icons` regenerates the tracked PNG, ICO and ICNS assets. `resources/pith-square.svg` provides the hard-edge tile variant. The new-chat header uses the background-free `resources/pith-mark.svg`, tinted with the live app accent in either interface style. Dock and packaging icons use the rounded master. Routine builds do not need to regenerate native icons.
+`resources/pith.svg` is the native application icon master. `npm run icons` regenerates the tracked PNG, ICO and ICNS assets. `resources/pith-square.svg` provides the hard-edge tile variant. The new-chat header uses the background-free `resources/pith-mark.svg`, tinted with the live app accent in every interface style. Dock and packaging icons use the rounded master. Routine builds do not need to regenerate native icons.
 
 ## Documentation and license
 

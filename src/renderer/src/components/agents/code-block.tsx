@@ -38,9 +38,13 @@ export interface CodeBlockProps {
   wrap?: boolean;
   // local patch (pi-app): app-owned headers can control the live wrap mode.
   onWrapChange?: (wrap: boolean) => void;
+  wrapLabel?: string;
   copyable?: boolean;
   // local patch (pi-app): app compositions can own one shared header.
   showHeader?: boolean;
+  // local patch (pi-app): fenced diffs share the code header and raw copy action.
+  headerAction?: ReactNode;
+  body?: ReactNode;
   onCopy?: () => void | Promise<void>;
   className?: string;
 }
@@ -55,8 +59,11 @@ export function CodeBlock({
   maxHeight = 280,
   wrap = false,
   onWrapChange,
+  wrapLabel = "Wrap lines",
   copyable = true,
   showHeader = true,
+  headerAction,
+  body,
   onCopy,
   className,
 }: CodeBlockProps) {
@@ -73,13 +80,13 @@ export function CodeBlock({
   const streaming = status === "streaming";
   // local patch (pi-app): skip shiki while the block is still streaming —
   // lines render as plain text and get highlighted once on completion.
-  const tokens = useAgentCodeTokens(code, language, status !== "streaming");
+  const tokens = useAgentCodeTokens(body ? "" : code, language, !body && !streaming);
   const highlighted = useMemo(
     () => new Set(highlightLines),
     [highlightLines],
   );
   let offset = 0;
-  const lines = code.split("\n").map((content) => {
+  const lines = body ? [] : code.split("\n").map((content) => {
     const line = { content, offset };
     offset += content.length + 1;
     return line;
@@ -144,9 +151,9 @@ export function CodeBlock({
         </span>
         <motion.button
           type="button"
-          aria-label="Wrap lines"
+          aria-label={wrapLabel}
           aria-pressed={wrapped}
-          title="Wrap lines"
+          title={wrapLabel}
           onClick={() => onWrapChange ? onWrapChange(!wrapped) : setWrapped(!wrapped)}
           transition={SPRING_PRESS}
           className={cn(
@@ -156,6 +163,7 @@ export function CodeBlock({
         >
           <WrapText className="size-3.5" />
         </motion.button>
+        {headerAction}
         {copyable || onCopy ? (
           <motion.button
             type="button"
@@ -178,7 +186,7 @@ export function CodeBlock({
         ) : null}
       </div> : null}
 
-      <div
+      {body ?? <div
         ref={viewportRef}
         role={streaming ? "log" : undefined}
         aria-live={streaming ? "polite" : undefined}
@@ -229,7 +237,7 @@ export function CodeBlock({
             })}
           </code>
         </pre>
-      </div>
+      </div>}
     </div>
   );
 }

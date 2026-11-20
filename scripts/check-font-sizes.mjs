@@ -128,8 +128,8 @@ try {
   await pause(250)
   const initial=await evaluate('read()')
   assert.deepEqual(initial.sizes,{ui:14,content:14,code:12})
-  for(const key of ['ui','content','editor','terminal'])assert.equal(initial[key],14,key+' preserves default density')
-  for(const key of ['inline','fenced','source','diff','table','path'])assert.equal(initial[key],12,key+' preserves default density')
+  for(const key of ['ui','content','editor'])assert.equal(initial[key],14,key+' preserves default density')
+  for(const key of ['inline','fenced','source','diff','terminal','table','path'])assert.equal(initial[key],12,key+' preserves default density')
   assert.equal(initial.rem,16,'rem geometry stays fixed')
   assert.equal(initial.caption,11)
   assert.equal(initial.sourceHeight,20)
@@ -161,7 +161,7 @@ try {
   assert.equal((await evaluate('read()')).ui,14,'uncommitted draft does not change typography')
   await evaluate(`finish('ui','Enter')`);await waitFor(`read().ui===18`)
   let state=await evaluate('read()')
-  assert.equal(state.content,14);assert.equal(state.source,12);assert.equal(state.terminal,14);assert.equal(state.path,15);assert.equal(state.caption,14);assert.equal(state.rem,16)
+  assert.equal(state.content,14);assert.equal(state.source,12);assert.equal(state.terminal,12);assert.equal(state.path,15);assert.equal(state.caption,14);assert.equal(state.rem,16)
   await mirror.waitFor(`document.querySelector('[data-font-size-field="ui"]').value==='18'`)
   assert.deepEqual(await mirror.evaluate('getComputedStyle(document.documentElement).getPropertyValue("--app-text-ui-sm").trim()'),'18px','other window receives storage event')
 
@@ -173,7 +173,7 @@ try {
 
   await evaluate('scrollRows()');await pause(120)
   const before=await evaluate('anchors()');assert.ok(await evaluate(`document.querySelector('#review [data-slot="file-diff-viewport"]').textContent.includes('diff 201')`),'page-scrolled review mounts the reading window')
-  await edit('code','24','Enter');await waitFor(`read().source===24 && read().terminal===26`);await pause(180)
+  await edit('code','24','Enter');await waitFor(`read().source===24 && read().terminal===24`);await pause(180)
   const after=await evaluate('anchors()');state=await evaluate('read()')
   for(const key of ['source','diff','review'])assert.ok(Math.abs(before[key]-after[key])<0.1,key+' preserves reading line: '+JSON.stringify({before,after}))
   assert.equal(state.inline,24);assert.equal(state.fenced,24);assert.equal(state.content,20);assert.equal(state.path,15);assert.equal(state.sourceHeight,40);assert.equal(state.diffHeight,40)
@@ -201,7 +201,7 @@ try {
 
   await evaluate('window.ready=false');await send('Page.reload');await waitFor('window.ready===true && !!document.querySelector("[data-table-row]")')
   assert.deepEqual(await evaluate('window.bootSizes'),{ui:18,content:24,code:10},'stored sizes apply before React mounts')
-  assert.equal((await evaluate('read()')).terminal,12,'terminal starts from stored code size')
+  assert.equal((await evaluate('read()')).terminal,10,'terminal starts from stored code size')
   await evaluate(`localStorage.setItem('pi-app:font-sizes',JSON.stringify({ui:'18',content:20,code:999}));`)
   await evaluate('window.ready=false');await send('Page.reload');await waitFor('window.ready===true && !!document.querySelector("[data-table-row]")')
   assert.deepEqual((await evaluate('read()')).sizes,{ui:14,content:20,code:12},'invalid stored fields independently fall back')
@@ -220,7 +220,7 @@ try {
   await evaluate(`setSizes({ui:20,content:24,code:24});document.getElementById('settings').style.width='320px'`);await pause(150)
   assert.ok(await evaluate(`(()=>{const box=document.getElementById('settings');return box.scrollWidth<=box.clientWidth+1&&[...box.querySelectorAll('input')].every(el=>el.type==='text'&&el.getBoundingClientRect().right<=box.getBoundingClientRect().right+1)})()`),'numeric rows fit a narrow panel at maximum sizes without native spinners')
   if(process.env.PI_FONT_SIZES_SCREENSHOT_DIR){await mkdir(process.env.PI_FONT_SIZES_SCREENSHOT_DIR,{recursive:true});const shot=await send('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});await writeFile(join(process.env.PI_FONT_SIZES_SCREENSHOT_DIR,'large-fonts.png'),Buffer.from(shot.data,'base64'))}
-  await evaluate(`document.querySelector('[data-font-size-reset]').click()`);await waitFor('read().ui===14 && read().content===14 && read().source===12')
+  await evaluate(`document.querySelector('[data-font-size-reset]').click()`);await waitFor('read().ui===14 && read().content===14 && read().source===12 && read().terminal===12')
   await mirror.waitFor(`document.querySelector('[data-font-size-field="ui"]').value==='14' && document.querySelector('[data-font-size-field="content"]').value==='14'`)
   assert.ok(await evaluate(`document.querySelector('[data-font-size-reset]').disabled`),'reset returns to defaults')
   assert.deepEqual(primary.exceptions,[]);assert.deepEqual(mirror.exceptions,[])

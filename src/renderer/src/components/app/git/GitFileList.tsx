@@ -2,7 +2,7 @@ import { useMemo, useRef } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { Button } from '@/components/motion/button'
 import { Tooltip } from '@/components/motion/tooltip'
-import { Plus, Minus, RotateCcw } from '@/lib/icons'
+import { Plus, Minus, Trash2 } from '@/lib/icons'
 import { useI18n } from '@/i18n'
 import { useScrollFade } from '@/lib/hooks/use-scroll-fade'
 import { FileTypeIcon } from '../FileTypeIcon'
@@ -48,12 +48,12 @@ export function GitFileList({ files, selection, disabled, onSelect, onStage, onU
           </> : <>
             <Button variant="ghost" size="sm" className={cn('h-8 min-w-0 flex-1 justify-start gap-2 px-1.5 font-normal', selection?.path === item.file.path && selection.area === (item.group === 'staged' ? 'staged' : 'unstaged') && 'bg-primary/10')} aria-pressed={selection?.path === item.file.path && selection.area === (item.group === 'staged' ? 'staged' : 'unstaged')} data-git-path={item.file.path} data-git-area={item.group} onClick={() => onSelect({ path: item.file.path, area: item.group === 'staged' ? 'staged' : 'unstaged' })}>
               <FileTypeIcon path={item.file.path} variant="tree" className="size-4 shrink-0" />
-              <LabelTooltip content={item.file.oldPath ? `${item.file.oldPath} → ${item.file.path}` : item.file.path} wrapperClassName="min-w-0 flex-1"><span className="block truncate text-left text-xs">{item.file.path}</span></LabelTooltip>
+              <LabelTooltip content={item.file.oldPath ? `${item.file.oldPath} → ${item.file.path}` : item.file.path} wrapperClassName="min-w-0"><span className="block truncate text-left text-xs">{item.file.path}</span></LabelTooltip>
               <GitLineCounts stats={[layerStats(item.file, item.group)]} />
-              <GitStatus status={item.file.untracked ? '?' : item.group === 'staged' ? item.file.index : item.file.worktree} conflict={item.file.conflict} />
+              <span className="ml-auto flex shrink-0"><GitStatus status={item.file.untracked ? '?' : item.group === 'staged' ? item.file.index : item.file.worktree} conflict={item.file.conflict} /></span>
             </Button>
             {item.group === 'staged' ? action(t('git.unstageFile', { path: item.file.path }), Minus, () => onUnstage([item.file.path])) : action(t(item.file.conflict ? 'git.resolveFile' : 'git.stageFile', { path: item.file.path }), Plus, () => onStage([item.file.path]))}
-            {!item.file.conflict && !item.file.submodule && item.group !== 'staged' && !item.file.path.endsWith('/') ? action(t('git.discardFile', { path: item.file.path }), RotateCcw, () => onDiscard([item.file.path])) : null}
+            {!item.file.conflict && !item.file.submodule && item.group !== 'staged' && !item.file.path.endsWith('/') ? action(t('git.discardFile', { path: item.file.path }), Trash2, () => onDiscard([item.file.path])) : null}
           </>}
         </div>
       })}

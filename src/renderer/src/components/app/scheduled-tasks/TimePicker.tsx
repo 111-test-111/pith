@@ -1,6 +1,7 @@
 import { memo, useState } from 'react'
 import { Clock } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
+import { Tabs, TabsList, TabsTrigger } from '@/components/motion/tabs'
 import { MorphPopover, MorphPopoverContent, MorphPopoverTrigger } from '@/components/motion/popover-morph'
 import { useI18n } from '@/i18n'
 import { cn } from '@/lib/utils'
@@ -38,14 +39,12 @@ export function TimeGrid({
   return (
     <div className="flex flex-col gap-2" data-time-picker-phase={phase}>
       <div className="flex items-center justify-between gap-2 border-b border-border/60 pb-2">
-        <div className="flex items-center gap-1">
-          <Button variant={phase === 'hour' ? 'secondary' : 'ghost'} size="sm" className={cn('h-7 px-2 text-xs', phase === 'hour' && 'bg-primary/15 hover:bg-primary/25')} aria-pressed={phase === 'hour'} onClick={() => onPhaseChange('hour')}>
-            {t('scheduledTasks.editor.hour')}
-          </Button>
-          <Button variant={phase === 'minute' ? 'secondary' : 'ghost'} size="sm" className={cn('h-7 px-2 text-xs', phase === 'minute' && 'bg-primary/15 hover:bg-primary/25')} aria-pressed={phase === 'minute'} onClick={() => onPhaseChange('minute')}>
-            {t('scheduledTasks.editor.minute')}
-          </Button>
-        </div>
+        <Tabs value={phase} onValueChange={value => onPhaseChange(value as TimePart)} variant="underline">
+          <TabsList className="h-7 border-b-0">
+            <TabsTrigger value="hour" className="h-7 min-h-0 px-2 text-xs">{t('scheduledTasks.editor.hour')}</TabsTrigger>
+            <TabsTrigger value="minute" className="h-7 min-h-0 px-2 text-xs">{t('scheduledTasks.editor.minute')}</TabsTrigger>
+          </TabsList>
+        </Tabs>
         <span className="text-xs font-medium tabular-nums text-foreground">{padTimePart(hour)}:{padTimePart(minute)}</span>
       </div>
       <div className={cn('grid min-h-48 gap-1', phase === 'hour' ? 'grid-cols-6 content-center' : 'grid-cols-10 content-start')} data-time-picker-grid={phase}>

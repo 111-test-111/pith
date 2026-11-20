@@ -2,6 +2,8 @@
 
 Rewind captures a checkpoint immediately before each user turn. `recorder.ts` awaits the SDK `message_start` barrier, then binds the checkpoint to the persisted user entry at `message_end`. Tools, open/resume and background completions never create checkpoints. Disabling checkpoints stops new capture without removing existing history.
 
+If another writer or snapshot occupies the checkout, capture holds that user-message barrier for up to 30 seconds and retries admission when leases are released. Existing tools, processes and subagents can keep working until the snapshot window is acquired; plain model runs do not block capture. SDK Stop and recorder disposal cancel the wait. Persistent contention still reports a capture failure, separately from the current restore blocker; completing the work later cannot recreate a missing before-turn backup.
+
 ## Restore contract
 
 Previews describe **current → saved** state. Conversation-only restore selects the complete SDK branch and restores its Todo/change projections. Files mode restores raw working files and Git staging; combined mode coordinates both with compensation. HEAD does not move. Single-file restore extracts an immutable child plan from the reviewed preview and preserves raw staging and conversation; main and worker independently enforce files mode.
@@ -34,7 +36,7 @@ Exclusions include ignored/dependency/build paths, oversized or dense untracked 
 
 `<userData>/rewind` is a backup store, not an encrypted vault. Worker-owned filesystem/hash/diff operations use CAS deduplication and bounded caches. Keep 50 checkpoints per session, 100 full terminal transactions per checkout, unfinished transactions, and bounded idempotence records. At most 24 previews expire after 15 minutes; unreferenced CAS maintenance has a 24-hour grace period.
 
-Review and Rewind share `ReviewDiff.tsx`. Headers/counts load independently from capped patch text; totals include all preview files/stages and binary counts. A fixed toolbar stays outside the scrollport. Restoration mode changes execution scope, not preview visibility.
+Review and Rewind share `ReviewDiff.tsx`. Checkpoint text patches switch between stacked and side-by-side layouts through their file headers. Both layouts follow the detailed or simplified diff setting and reuse the loaded patch. Headers and counts load independently from capped patch text. Totals include every preview file and stage, including binary counts. A fixed toolbar stays outside the scrollport. Restore mode determines which changes are applied.
 
 IPC prioritizes visible bodies, header statistics, adjacent prefetch, then totals in batches up to 16. The shared body cache is 64 entries / roughly 8 MiB; collapsed entries can reopen synchronously while retained. Large diff rows are windowed; remote bodies are not parsed/mounted. Nested confirmations keep the parent mounted, suspend its trap and share scroll locking.
 

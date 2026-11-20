@@ -129,6 +129,8 @@ app.whenReady().then(()=>{
   await waitFor(main.evaluate, `document.querySelector('[data-prompt-editor]')`)
   await main.evaluate(`localStorage.setItem('pi-app:locale','en')`)
   await main.evaluate(`localStorage.setItem('theme',${JSON.stringify(process.env.PI_PIP_THEME === 'dark' ? 'dark' : 'light')})`)
+  // A new PiP renderer must read the saved style rather than booting square.
+  await main.evaluate(`localStorage.setItem('pi-app:ui-style','rounded')`)
   const probe = (selector, color) => `(()=>{
     const host=document.querySelector(${JSON.stringify(selector)});
     if(!host)return false;
@@ -157,6 +159,19 @@ app.whenReady().then(()=>{
   const conversationBounds = await main.evaluate(`document.querySelector('[data-pip-source="conversation"]').getBoundingClientRect().toJSON()`)
   assert.equal(await main.evaluate(probe('[data-pip-source="conversation"]', '#e02020')), true)
   const compact = await openCompact()
+  assert.equal(await compact.evaluate(`document.documentElement.dataset.corners`), 'rounded', 'a new PiP renderer restores the rounded preference')
+  assert.equal(await compact.evaluate(`getComputedStyle(document.querySelector('[data-pip-controls]')).cornerShape`), 'superellipse(1)', 'PiP uses ordinary rounded corners at boot')
+  // Exercise the real cross-window storage transport. A write in the main
+  // renderer must update the already-mounted PiP geometry AND icon family;
+  // no synthetic storage event is dispatched to the receiving window.
+  for (const style of ['square', 'squircle', 'rounded']) {
+    await main.evaluate(`localStorage.setItem('pi-app:ui-style',${JSON.stringify(style)})`)
+    await waitFor(compact.evaluate, `document.documentElement.dataset.corners===${JSON.stringify(style)}`)
+    const appearance = await compact.evaluate(`(()=>{const control=document.querySelector('[data-pip-controls]'),css=getComputedStyle(control);return{shape:css.cornerShape,radius:parseFloat(css.borderTopLeftRadius),family:control.querySelector('[data-app-icon]').dataset.iconFamily}})()`)
+    assert.equal(appearance.shape, style === 'rounded' ? 'superellipse(1)' : 'superellipse(2)', `${style}: PiP follows the live corner shape`)
+    assert.equal(appearance.radius > 0, style !== 'square', `${style}: PiP follows the live radius`)
+    assert.equal(appearance.family, style === 'square' ? 'remix' : 'hugeicons', `${style}: PiP follows the live icon family`)
+  }
   const state = await compact.evaluate(`window.pi.pictureInPictureState()`)
   assert.equal(state.sessionPath, '/fixture/chat')
   assert.equal(state.source, 'conversation')

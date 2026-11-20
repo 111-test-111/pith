@@ -43,11 +43,14 @@ export function ProviderCard({ children, className }: { children: ReactNode; cla
 }
 
 export function ProviderNotice({
-  children, tone = 'neutral'
+  children, tone = 'neutral', action
 }: {
   children: ReactNode
   tone?: 'neutral' | 'success' | 'error'
+  action?: ReactNode
 }) {
+  const icon = tone === 'error' ? <AlertCircle className="size-3.5" />
+    : tone === 'success' ? <CheckCircle2 className="size-3.5" /> : null
   return (
     <div
       role={tone === 'error' ? 'alert' : 'status'}
@@ -58,9 +61,12 @@ export function ProviderNotice({
             : 'bg-muted/60 text-muted-foreground'
       )}
     >
-      {tone === 'error' ? <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
-        : tone === 'success' ? <CheckCircle2 className="mt-0.5 size-3.5 shrink-0" /> : null}
+      {/* Icon and action share the notice's first line box, so the message keeps
+       * its own 20px line: a taller compact control overflows that box into the
+       * notice's padding instead of dragging the whole row off the text. */}
+      {icon ? <span className="flex h-[1lh] shrink-0 items-center">{icon}</span> : null}
       <div className="min-w-0 flex-1 break-words">{children}</div>
+      {action ? <span className="flex h-[1lh] shrink-0 items-center">{action}</span> : null}
     </div>
   )
 }

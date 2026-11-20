@@ -500,6 +500,8 @@ function ResourceRow({
     </>
   );
 
+  // local patch (pi-app): a custom null icon omits its column and spacing.
+  const icon = renderIcon ? renderIcon(row.item) : defaultIcon(row.item, expanded);
   const element = (
     // local patch (registry beui.dev/components/agents/ai-sidebar has no enter
     // animation): rows fade/slide in when a folder expands, so children stop
@@ -629,9 +631,11 @@ function ResourceRow({
       )}
       style={{ paddingLeft: `${12 + row.depth * 16}px` }}
     >
-      <span aria-hidden="true" className="grid size-5 shrink-0 place-items-center">
-        {renderIcon?.(row.item) ?? defaultIcon(row.item, expanded)}
-      </span>
+      {icon != null ? (
+        <span aria-hidden="true" className="grid size-5 shrink-0 place-items-center">
+          {icon}
+        </span>
+      ) : null}
 
       {renaming ? (
         <input
@@ -666,9 +670,11 @@ function ResourceRow({
 
       {!renaming && !row.item.disabled ? renderActions?.(row.item) : null}
       {!renaming && !row.item.disabled && hasMenu ? (
-        // local patch (pi-app): float the actions menu over the row instead of
-        // reserving a ~28px slot for it, so a title can use the full row width
-        // instead of stopping well short of the right edge.
+        // local patch (pi-app): the actions menu floats over the row's trailing
+        // edge instead of reserving a ~28px column, so titles keep the full row
+        // width. The group count and disclosure arrow step aside IN PLACE while
+        // the row is active (styles.css), and the title's tail fades earlier, so
+        // the floated control never covers a glyph or a sibling control.
         <MorphPopover
           open={menuOpen}
           onOpenChange={onMenuOpenChange}
@@ -682,11 +688,10 @@ function ResourceRow({
               aria-label={labels?.actionsFor(row.item.label) ?? `Actions for ${row.item.label}`}
               onClick={(event) => event.stopPropagation()}
               className={cn(
-                // local patch (pi-app): opaque background so the row hover
-                // state can't show the title through the floating menu button.
-                // local patch (pi-app): the floating action has a fill cue
-                // without a persistent outline.
-                "grid size-7 shrink-0 place-items-center rounded-lg bg-background text-muted-foreground outline-none transition-[opacity,color,background-color] hover:bg-muted hover:text-foreground focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-ring group-hover/resource:opacity-100 group-data-[menu-open=true]/resource:opacity-100",
+                // local patch (pi-app): the floated action paints no frame —
+                // the row's own hover fill shows through and only the glyph
+                // darkens, so it reads as a control, not a second surface.
+                "grid size-7 shrink-0 place-items-center rounded-lg text-muted-foreground outline-none transition-[opacity,color] hover:text-foreground focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-ring group-hover/resource:opacity-100 group-data-[menu-open=true]/resource:opacity-100",
                 // A finger never hovers, and this menu is the only path to
                 // rename and move without a drag — keep it on screen there.
                 canTouch ? "opacity-100" : "opacity-0",

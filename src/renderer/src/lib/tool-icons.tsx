@@ -33,6 +33,7 @@ import {
   SourceCodeCircle,
   SquareArrowOutUpRight,
   Subagent,
+  Target,
   Terminal,
   Timer,
   Upload,
@@ -60,17 +61,23 @@ import { cn } from '@/lib/utils'
  * promise cheap to hold.
  */
 const TOOL_ICONS: Record<string, IconComponent> = {
+  vision_analyze: ScanSearch,
   // Built-in file + shell tools. The shell rows use the plain `Terminal` glyph;
   // the terminal *category* group keeps the boxed `SquareTerminal` (see
   // lib/tool-categories.ts), so a folded run and its rows are distinguishable.
   bash: Terminal,
   bash_task: Terminal,
+  ssh_connect: Terminal,
+  ssh_session: Terminal,
   // A submitted plan wears the plan mode's own control glyph, so the tool row
   // matches the composer button that switched the session into plan mode.
   submit_plan: NotebookPen,
   todo_write: ListChecks,
-  get_goal: Compass,
-  update_goal: Compass,
+  // The goal tools wear goal mode's own control glyph, the way `submit_plan`
+  // takes plan mode's: the composer chip that enabled the mode and the row it
+  // produces read as one feature.
+  get_goal: Target,
+  update_goal: Target,
   present: CoPresent,
   // The app's image tool paints a picture rather than declaring one, so it
   // takes the image glyph instead of `present`'s co-present one.

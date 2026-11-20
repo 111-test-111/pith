@@ -1,5 +1,5 @@
 /** Embedded-browser state for useSyncExternalStore. Components wire browser state/popup/download subscriptions on mount; this store only reduces state and preserves snapshot identity between updates. Optimistic rows represent createPage round trips and are removed when the server list covers them. Queues/state stay directly testable in Node; window access is lazy. */
-import { buildMarkerUrl, HUMAN_OWNER } from '../../../../shared/browser.ts'
+import { agentOwner, buildMarkerUrl, humanBrowserOwner } from '../../../../shared/browser.ts'
 import type { BrowserPageMeta, BrowserPopupInfo, BrowserDownloadInfo } from '../../../../shared/browser.ts'
 import type { BrowserStatusDTO } from '../../../../shared/types.ts'
 
@@ -12,6 +12,7 @@ export interface BrowserPaneState {
   status: BrowserStatusDTO | null
   popups: BrowserPopupInfo[]
   downloads: BrowserDownloadInfo[]
+  links: string[]
   /** Local optimistic placeholders during createPage round trips, absent from server state. */
   optimistic: BrowserPanePage[]
 }
@@ -19,13 +20,13 @@ export interface BrowserPaneState {
 /** Bounded download history; the pane only needs recent completion notices. */
 export const BROWSER_DOWNLOADS_LIMIT = 5
 
-const EMPTY_STATE: BrowserPaneState = { status: null, popups: [], downloads: [], optimistic: [] }
+const EMPTY_STATE: BrowserPaneState = { status: null, popups: [], downloads: [], links: [], optimistic: [] }
 
-function optimisticPage(id: string): BrowserPanePage {
+function optimisticPage(id: string, owner: string): BrowserPanePage {
   return {
     id,
-    owner: HUMAN_OWNER,
-    url: buildMarkerUrl(HUMAN_OWNER, id),
+    owner,
+    url: buildMarkerUrl(owner, id),
     title: '',
     agentBusy: false,
     crashed: false,
@@ -55,6 +56,17 @@ function sameBrowserStatus(a: BrowserStatusDTO | null, b: BrowserStatusDTO): boo
 export class BrowserStore {
   private state: BrowserPaneState = EMPTY_STATE
   private listeners = new Set<() => void>()
+  readonly sessionId: string | null
+  readonly humanOwner: string
+  private readonly agent: string | null
+
+  constructor(sessionId: string | null = null) {
+    this.sessionId = sessionId
+    this.humanOwner = humanBrowserOwner(sessionId)
+    this.agent = sessionId ? agentOwner(sessionId) : null
+  }
+
+  owns = (owner: string): boolean => !this.sessionId || owner === this.humanOwner || owner === this.agent
 
   // Stable bound class fields, as in TerminalStore: pass subscribe/getState directly to useSyncExternalStore so renders do not replace callbacks and resubscribe.
   subscribe = (cb: () => void): (() => void) => {
@@ -68,6 +80,11 @@ export class BrowserStore {
 
   /** Publish changed server state only. Identity-only comparison would rerender every webview for identical freshly polled DTOs. */
   applyStatus(status: BrowserStatusDTO): void {
+    if (this.sessionId) status = {
+      ...status,
+      pages: status.pages.filter(page => this.owns(page.owner)),
+      pendingCreates: status.pendingCreates.filter(page => this.owns(page.owner))
+    }
     if (sameBrowserStatus(this.state.status, status)) return
     this.replace({ status })
   }
@@ -89,12 +106,22 @@ export class BrowserStore {
     this.replace({ downloads: [...this.state.downloads, d].slice(-BROWSER_DOWNLOADS_LIMIT) })
   }
 
+  pushLinks(links: string[]): void {
+    this.replace({ links: [...this.state.links, ...links] })
+  }
+
+  drainLinks(): string[] {
+    const links = this.state.links
+    if (links.length) this.replace({ links: [] })
+    return links
+  }
+
   // Local optimistic placeholders during createPage round trips.
 
   /** Add a placeholder; duplicate IDs preserve state without notifying. */
   addOptimistic(id: string): void {
     if (this.state.optimistic.some((p) => p.id === id)) return
-    this.replace({ optimistic: [...this.state.optimistic, optimisticPage(id)] })
+    this.replace({ optimistic: [...this.state.optimistic, optimisticPage(id, this.humanOwner)] })
   }
 
   /** Clear the pending marker once the server registers the created page. */

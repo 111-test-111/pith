@@ -1,9 +1,11 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
-import { AgentCodeLine, type AgentCodeToken } from '@/components/agents/agent-code'
+import { AgentCodeLine } from '@/components/agents/agent-code'
 import { Button } from '@/components/motion/button'
 import { useFileTokens } from '@/lib/hooks/use-file-tokens'
 import { useDiffWindow } from '@/lib/hooks/use-diff-window'
 import { fileLanguage } from '@/lib/file-language'
+import { displayRow, lineAtRow, wrapCodeLines, type WrappedCode } from '@/lib/code-wrap'
+import { sliceCodeTokens } from '@/lib/code-tokens'
 import { cn } from '@/lib/utils'
 import { codeLineHeight, useCodeFontSize } from '@/lib/typography'
 import { useI18n } from '@/i18n'
@@ -17,77 +19,6 @@ const CODE_INSET = 72
 /** Re-segment once the resize settles, keeping source DOM stable mid-drag. */
 const WRAP_SETTLE_MS = 120
 
-/** Break one line at `columns` display columns. The metric mirrors the
- * unwrapped width calculation (tab → next 8-column stop, wide code point →
- * 2ch), so a segment rendered with whitespace-pre never exceeds the measured
- * width and its row is exactly one code line tall. */
-function segmentLine(line: string, columns: number, out: number[]) {
-  let column = 0, start = 0, index = 0
-  while (index < line.length) {
-    const codePoint = line.codePointAt(index)!
-    let advance = codePoint === 9 ? 8 - column % 8 : codePoint > 127 ? 2 : 1
-    if (column > 0 && column + advance > columns) {
-      out.push(start, index)
-      start = index
-      column = 0
-      advance = codePoint === 9 ? 8 : codePoint > 127 ? 2 : 1
-    }
-    column += advance
-    index += codePoint >= 0x10000 ? 2 : 1
-  }
-  out.push(start, index)
-}
-
-/** Shiki offsets are absolute UTF-16 positions in the FILE, including newlines.
- * Find just the tokens intersecting this absolute segment, rather than scanning
- * every token in a minified line again for each display row. */
-function sliceTokens(tokens: AgentCodeToken[] | undefined, from: number, to: number) {
-  if (!tokens) return undefined
-  let low = 0, high = tokens.length
-  while (low < high) {
-    const mid = (low + high) >>> 1
-    if (tokens[mid].offset + tokens[mid].content.length <= from) low = mid + 1
-    else high = mid
-  }
-  const sliced: AgentCodeToken[] = []
-  let length = 0
-  for (let index = low; index < tokens.length && tokens[index].offset < to; index++) {
-    const token = tokens[index]
-    const start = Math.max(token.offset, from), end = Math.min(token.offset + token.content.length, to)
-    if (start >= end) continue
-    length += end - start
-    sliced.push({ ...token, content: token.content.slice(start - token.offset, end - token.offset), offset: start - from })
-  }
-  // An incomplete highlight (e.g. a CR stripped by the grammar) must never
-  // remove source characters: AgentCodeLine can paint the original segment.
-  return length === to - from ? sliced : undefined
-}
-
-/** Largest line index whose first display row is at or above `row`. */
-function lineAtRow(prefix: Uint32Array, row: number) {
-  let low = 0, high = prefix.length - 2
-  while (low < high) {
-    const mid = (low + high + 1) >> 1
-    if (prefix[mid] <= row) low = mid
-    else high = mid - 1
-  }
-  return low
-}
-
-interface WrappedSource { prefix: Uint32Array; boundaries: number[]; rows: number }
-
-/** A character anchor also locates a match deep inside a single wrapped line. */
-function displayRow(wrapped: WrappedSource | null, line: number, offset = 0) {
-  if (!wrapped) return line
-  let low = wrapped.prefix[line], high = wrapped.prefix[line + 1] - 1
-  while (low < high) {
-    const mid = (low + high + 1) >>> 1
-    if (wrapped.boundaries[mid * 2] <= offset) low = mid
-    else high = mid - 1
-  }
-  return low
-}
-
 /** BeUI token rows composed into a full-height, windowed source viewport.
  * Soft wrap re-segments lines into display rows at the configured code height, so the fixed-row
  * virtualizer, line anchors and search Highlights stay exact with no DOM
@@ -99,23 +30,14 @@ export function FileSource({ text, tab, store, search, wrap, debugBreakpoints, o
   const ruler = useRef<HTMLSpanElement>(null)
   const [columns, setColumns] = useState(0)
   const scrollTop = useRef(0)
-  const previousLayout = useRef<{ wrapped: WrappedSource | null; lines: string[]; path: string; rowHeight: number } | null>(null)
+  const previousLayout = useRef<{ wrapped: WrappedCode | null; lines: string[]; path: string; rowHeight: number } | null>(null)
   const positioned = useRef<{ store: FileBrowserStore; path: string; visit: number; line?: number } | null>(null)
   const lines = useMemo(() => text.split('\n'), [text])
   const gutterColumns = Math.max(3, String(lines.length).length)
   const tokens = useFileTokens(text, fileLanguage(tab.path))
   const lineStarts = useMemo(() => { let offset = 0; return lines.map(line => { const start = offset; offset += line.length + 1; return start }) }, [lines])
   const active = search?.result.matches[search.current]
-  const wrapped = useMemo(() => {
-    if (!wrap || columns < 8) return null
-    const prefix = new Uint32Array(lines.length + 1)
-    const boundaries: number[] = []
-    for (let index = 0; index < lines.length; index++) {
-      segmentLine(lines[index], columns, boundaries)
-      prefix[index + 1] = boundaries.length >> 1
-    }
-    return { prefix, boundaries, rows: boundaries.length >> 1 }
-  }, [wrap, columns, lines])
+  const wrapped = useMemo(() => wrap && columns >= 8 ? wrapCodeLines(lines, columns) : null, [wrap, columns, lines])
   const rowTop = (line: number, offset = 0) => displayRow(wrapped, line - 1, offset) * rowHeight
   const { start, end, onScroll: measureWindow } = useDiffWindow(ref, wrapped ? wrapped.rows : lines.length, true, 800, rowHeight, false)
   const onScroll = useCallback(() => {
@@ -223,7 +145,7 @@ export function FileSource({ text, tab, store, search, wrap, debugBreakpoints, o
                 <span className="min-w-0 pr-4">
                   {Array.from({ length: lastSegment - firstSegment }, (_, segment) => {
                     const from = wrapped.boundaries[(firstSegment + segment) * 2], to = wrapped.boundaries[(firstSegment + segment) * 2 + 1]
-                    return <AgentCodeLine key={from} code={line.slice(from, to)} tokens={sliceTokens(lineTokens, lineStarts[number - 1] + from, lineStarts[number - 1] + to)} className="block h-[var(--app-line-code)] whitespace-pre" />
+                    return <AgentCodeLine key={from} code={line.slice(from, to)} tokens={sliceCodeTokens(lineTokens, lineStarts[number - 1] + from, lineStarts[number - 1] + to)} className="block h-[var(--app-line-code)] whitespace-pre" />
                   })}
                 </span>
               </span>

@@ -9,12 +9,14 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
 import electron from 'electron'
+import { formatDimensionNote } from '@earendil-works/pi-coding-agent'
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const temporary = await mkdtemp(join(tmpdir(), 'pith-attach-'))
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms))
 /** A real 1×1 PNG, so the thumbnail behind each chip actually decodes. */
 const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+const IMAGE_NOTE = formatDimensionNote({ originalWidth: 2068, originalHeight: 124, width: 2000, height: 120, wasResized: true })
 let child, ws
 try {
   const preload = join(temporary, 'preload.mjs')
@@ -29,7 +31,7 @@ app.setPath('userData',${JSON.stringify(join(temporary, 'profile'))});
 app.commandLine.appendSwitch('remote-debugging-port','0');
 app.whenReady().then(()=>{
  const model={providerId:'deepseek',providerName:'DeepSeek',id:'fixture',name:'DeepSeek V4.1 Flash',reasoning:true,input:['text'],contextWindow:128000,maxTokens:8192,available:true,costInputPerM:0,costOutputPerM:0};
- const message={role:'user',content:'Please review the layout.',timestamp:1};
+ const message={role:'user',content:[{type:'text',text:'Please review the layout.\\n\\n'+${JSON.stringify(IMAGE_NOTE)}},{type:'image',data:${JSON.stringify(PNG)},mimeType:'image/png'}],timestamp:1};
  const snapshot=()=>({sessionId:'fixture',sessionPath:'/fixture/chat-0',cwd:'/workspace/pi-app',projectless:false,messages:[message],model,thinkingLevel:'high',availableThinkingLevels:['off','high'],isStreaming:false});
  const resends=[];
  // The prompt route stays UNSETTLED while the renderer paints the user's row,
@@ -141,10 +143,15 @@ app.whenReady().then(()=>{
   const dialogImage = '[role="dialog"] img[alt="shot.png"]'
   const dialogFile = '[role="dialog"] [aria-label="Remove docs/notes.md"]'
 
+  assert.equal(await evaluate(`document.querySelector('[data-user-bubble-body] p').textContent`), 'Please review the layout.', 'SDK resize hints stay out of the persisted user bubble')
+  assert.equal(await count('[data-from="user"] img'), 1, 'hiding the resize hint preserves the attached image')
+
   // ---- the edit-message dialog --------------------------------------------
   await evaluate(`document.querySelector('button[aria-label="Edit and resend"]').click()`)
   await waitFor(`document.querySelector('[role="dialog"] textarea')`)
   assert.equal(await count('textarea, [data-prompt-editor]'), 2, 'the editor is its own field beside the composer')
+  assert.equal(await evaluate(`document.querySelector('[role="dialog"] textarea').value`), 'Please review the layout.', 'edit-and-resend starts from the user prose without SDK image metadata')
+  await evaluate(`document.querySelector('[role="dialog"] button[aria-label="Remove Attachment 1"]').click()`)
   const drafted = await paste('[role="dialog"] textarea', PNG_FILE + TEXT_FILE)
   assert.equal(drafted, 'Please review the layout.', 'a file clipboard does not also paste as text')
   await waitFor(`document.querySelector(${JSON.stringify(dialogImage)})`)

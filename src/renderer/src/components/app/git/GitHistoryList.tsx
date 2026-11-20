@@ -2,7 +2,7 @@ import { useRef } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { Button } from '@/components/motion/button'
 import { Tooltip } from '@/components/motion/tooltip'
-import { ArrowLeft, History, X } from '@/lib/icons'
+import { ArrowLeft, FileHistory, X } from '@/lib/icons'
 import { useI18n } from '@/i18n'
 import { useScrollFade } from '@/lib/hooks/use-scroll-fade'
 import { FileTypeIcon } from '../FileTypeIcon'
@@ -33,7 +33,7 @@ export function GitHistoryList({ state, store, detail = false, backLabel }: { st
           {detail ? <Button variant="ghost" size="sm" data-git-commit-file={state.commitFiles[row.index].path} aria-label={t('git.openFileDiff', { path: state.commitFiles[row.index].path })} className={cn('h-9 w-full justify-start gap-2 font-normal', state.selection?.path === state.commitFiles[row.index].path && 'bg-primary/10')} aria-pressed={state.selection?.path === state.commitFiles[row.index].path} onClick={() => void store.select({ path: state.commitFiles[row.index].path, area: 'commit', commit: state.commit!.id })}>
             <FileTypeIcon path={state.commitFiles[row.index].path} variant="tree" className="size-4 shrink-0" /><span className="min-w-0 flex-1 truncate text-left text-xs">{state.commitFiles[row.index].path}</span><GitStatus status={state.commitFiles[row.index].status} />
           </Button> : <Button variant="ghost" size="sm" data-git-commit={state.history.commits[row.index].id} className={cn('h-full w-full items-start justify-start gap-2 px-2 py-2 font-normal', state.commit?.id === state.history.commits[row.index].id && 'bg-primary/10')} aria-pressed={state.commit?.id === state.history.commits[row.index].id} onClick={() => void store.selectCommit(state.history.commits[row.index])}>
-            <History aria-hidden className="mt-0.5 size-4 shrink-0 text-muted-foreground" /><span className="min-w-0 flex-1 text-left"><span className="block truncate text-xs font-medium">{state.history.commits[row.index].subject}</span><span className="mt-1 block truncate text-caption text-muted-foreground">{state.history.commits[row.index].id.slice(0, 7)} · {state.history.commits[row.index].author} · {dates.format(new Date(state.history.commits[row.index].date))}</span></span>
+            <FileHistory aria-hidden className="mt-0.5 size-4 shrink-0 text-muted-foreground" /><span className="min-w-0 flex-1 text-left"><span className="block truncate text-xs font-medium">{state.history.commits[row.index].subject}</span><span className="mt-1 block truncate text-caption text-muted-foreground">{state.history.commits[row.index].id.slice(0, 7)} · {state.history.commits[row.index].author} · {dates.format(new Date(state.history.commits[row.index].date))}</span></span>
           </Button>}
         </div>)}
       </div>

@@ -8,6 +8,8 @@ import { pathToFileURL } from 'node:url'
 import { getAgentDir } from '@earendil-works/pi-coding-agent'
 import type { ImageReplayRequest } from '../shared/image-replay'
 import type { GoalActionRequest } from '../shared/goal'
+import type { VisionModelSelection } from '../shared/vision'
+import type { SessionNamingModelSelection } from '../shared/session-naming'
 import { registerPlanIpc } from './pi/plan-ipc'
 import { PiManager } from './pi/manager'
 import { registerResourceIpc } from './resources/service'
@@ -15,6 +17,7 @@ import { installImageSkill } from './pi/image-skill'
 import { ScheduledTaskError } from './pi/scheduled-tasks/service'
 import type { JevSettingsUpdate, PictureInPicturePreferencesDTO, ScheduledTaskResult } from '../shared/types'
 import { TerminalManager } from './terminal/manager'
+import { registerSshIpc } from './ssh/ipc'
 import { buildDebugCommandLine } from './debug/terminal'
 import { registerQuitHandler } from './shutdown'
 import { isDefaultWorkspace } from './pi/default-workspace'
@@ -30,7 +33,7 @@ import {
   makeSessionApply,
   readImportStatus
 } from './browser/import-cookies'
-import { BROWSER_PARTITION, HUMAN_OWNER, isBrowserSearchEngine } from '../shared/browser'
+import { BROWSER_PARTITION, humanBrowserOwner, isBrowserSearchEngine } from '../shared/browser'
 import type { BrowserFocusGuestPayload, BrowserSeenPayload } from '../shared/browser'
 import { sandboxStatus } from './sandbox/broker'
 import { setWindowTheme } from './window-chrome'
@@ -42,6 +45,7 @@ import { readTableRange, readTableSlice, readTableStat } from './table'
 import { filePreviews } from './file-preview/service'
 import type { BinaryPreviewRequest } from '../shared/file-preview'
 import { saveFileCopy } from './file-actions'
+import { fileDefaultApp } from './file-default-app'
 import { resolveFilePath } from './file-path'
 import { MAX_CONCURRENT_SUBAGENTS_DEFAULT } from './pi/subagents/runtime'
 import type { AskUserAnswer } from '../shared/ask-user'
@@ -126,6 +130,7 @@ export function registerIpc(
   const terminals = new TerminalManager(pi.checkoutCoordinator)
   ipcMain.handle('terminal:create', (event, payload) => terminals.create(event.sender, payload))
   ipcMain.on('terminal:command', (event, command) => terminals.command(event.sender, command))
+  registerSshIpc(pi)
 
   // DAP runInTerminal: the adapter asks for a real terminal to host the
   // debuggee. Terminals are renderer-owned, so main relays the request to a
@@ -182,7 +187,9 @@ export function registerIpc(
     pendingDebugTerminal.set(requestId, { owner: ownerId, command, resolve, reject, cleanup })
     input.signal?.addEventListener('abort', cancel, { once: true })
     owner.once('destroyed', cancel)
-    owner.send('debug:terminal-request', { requestId, title: input.title, cwd: input.cwd } satisfies DebugTerminalRequest)
+    owner.send('debug:terminal-request', {
+      requestId, title: input.title, cwd: input.cwd, sessionPath: input.sessionPath
+    } satisfies DebugTerminalRequest)
   })
   const isQuitting = registerQuitHandler(app, [async () => { pi.stopScheduledTasks() }, () => resources.dispose(), () => git.dispose(), () => terminals.dispose(), () => pi.dispose(), async () => getBrowserService()?.dispose(), () => htmlPreviews.dispose(), () => filePreviews.dispose()])
 
@@ -276,7 +283,8 @@ export function registerIpc(
     browser.grantConsent()
     return browser.getStatus()
   })
-  ipcMain.handle('browser:createPage', (_event, url?: string) => browser.createPage(HUMAN_OWNER, url))
+  ipcMain.handle('browser:createPage', (_event, url?: string, sessionId?: string) =>
+    browser.createPage(humanBrowserOwner(sessionId ?? pi.activeBrowserSessionId()), url))
   ipcMain.handle('browser:closePage', (_event, id: string) => browser.closePage(id))
   // Toolbar reload: the service drives it with goto(currentUrl) for a page it
   // owns (the CDP Page.reload command kills the guest); false means the row has
@@ -354,6 +362,7 @@ export function registerIpc(
       sandbox: sandboxStatus(settings.sandboxMode),
       checkpointsEnabled: settings.checkpointsEnabled !== false,
       startup: settings.startup,
+      autoNameSessions: settings.autoNameSessions,
       subagentsEnabled: settings.subagentsEnabled !== false,
       subagentMaxConcurrent: settings.subagentMaxConcurrent ?? MAX_CONCURRENT_SUBAGENTS_DEFAULT,
       subagentReuseEnabled: settings.subagentReuseEnabled === true,
@@ -417,6 +426,7 @@ export function registerIpc(
   ipcMain.handle('app:setAskUserTimeoutSeconds', (_event, value: number) => pi.setAskUserTimeoutSeconds(value))
   ipcMain.handle('app:setResponseTimeoutSeconds', (_event, value: number) => pi.setResponseTimeoutSeconds(value))
   ipcMain.handle('app:setAllowMidRunChanges', (_event, enabled: boolean) => pi.setAllowMidRunChanges(enabled))
+  ipcMain.handle('app:setAutoNameSessions', (_event, enabled: boolean) => pi.setAutoNameSessions(enabled))
   ipcMain.handle('app:setSandboxMode', (_event, mode: SandboxMode) => pi.setSandboxMode(mode))
   // The preference is persisted here like the other app:set* switches; the
   // manager applies the flag to sessions (build-time registration + live reload).
@@ -527,9 +537,9 @@ export function registerIpc(
     pi.renameSession(path, name)
   )
   ipcMain.handle('pi:deleteFolder', (_event, cwd: string) => pi.deleteFolderSessions(cwd))
-  ipcMain.handle('pi:prompt', (_event, payload: PromptPayload) => {
-    pi.prompt(payload)
-    return { accepted: true }
+  ipcMain.handle('pi:prompt', async (_event, payload: PromptPayload) => {
+    const result = await pi.prompt(payload)
+    return 'accepted' in result ? result : { accepted: result.ok }
   })
   ipcMain.handle('pi:sideChatAsk', (_event, payload: SideChatAskPayload) => pi.sideChatAsk(payload))
   ipcMain.handle('pi:sideChatAbort', (_event, exchangeId: string) => {
@@ -580,6 +590,10 @@ export function registerIpc(
   ipcMain.handle('pi:setDefaultModel', (_event, providerId: string, modelId: string) =>
     pi.setDefaultModel(providerId, modelId)
   )
+  ipcMain.handle('pi:visionModel', () => pi.visionModel())
+  ipcMain.handle('pi:sessionNamingModel', () => pi.sessionNamingModel())
+  ipcMain.handle('pi:setSessionNamingModel', (_event, value: SessionNamingModelSelection | null) => pi.setSessionNamingModel(value))
+  ipcMain.handle('pi:setVisionModel', (_event, value: VisionModelSelection | null) => pi.setVisionModel(value))
   ipcMain.handle('pi:catalogPreset', (_event, providerId: string, modelId: string) =>
     pi.catalogPreset(providerId, modelId)
   )
@@ -615,6 +629,7 @@ export function registerIpc(
   ipcMain.handle('files:read', (_event, path: string) => pi.readFile(path))
   ipcMain.handle('files:directory', (_event, request: FileBrowserRequest, offset?: number) => listFileDirectory(request, offset))
   ipcMain.handle('files:document', (_event, request: FileBrowserRequest) => readFileDocument(request))
+  ipcMain.handle('files:defaultApp', (_event, request: FileBrowserRequest) => fileDefaultApp(request))
   ipcMain.handle('files:htmlPreview', (event, request: FileBrowserRequest) => {
     // Only our top-level shell can mint a filesystem grant, never a guest/frame.
     const window = BrowserWindow.fromWebContents(event.sender)

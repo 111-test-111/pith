@@ -6,6 +6,16 @@ notebook cells. Parsing uses CommonMark, `remark-gfm`, math and the shared
 IDs, classes and accessibility attributes; footnote reference/return links use
 unique IDs per rendered block and navigate within their own Markdown region.
 
+## Streaming text
+
+Live replies keep stable Markdown blocks memoized and reparse the trailing block.
+Newly appended parser text receives a short opacity fade; mounting history,
+restoring an existing live reply and rewriting a prefix do not replay it. Arrival
+ranges are bounded and expire on later deltas, with CSS finishing each fade.
+Source offsets and grapheme boundaries preserve inline syntax, emoji and combining
+characters; code and parser-produced math keep their own renderers. Both the app
+and system reduced-motion preferences disable the effect.
+
 ## Math compatibility
 
 `lib/math-renderer.tsx` renders parser-produced formulas through Temml, with

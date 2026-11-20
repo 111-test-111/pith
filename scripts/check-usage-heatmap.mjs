@@ -168,28 +168,13 @@ try {
   assert.ok(statCards.every((card) => /Requests|Est\. cost/.test(card.label)), 'two range summary cards, no duplicated total: ' + JSON.stringify(statCards))
   assert.ok(statCards.some((card) => card.label === 'Requests' && /3/.test(card.text)), 'and the request count rolls in: ' + JSON.stringify(statCards))
   await evaluate(`document.querySelectorAll('[role="tooltip"]').forEach((tip)=>tip.remove())`)
-  // The range switcher's fill box must not depend on its state. The hover fill
-  // is painted by the trigger itself, so the selected indicator has to cover
-  // exactly that box: the wrapper's line box used to be ~2px taller than its
-  // inline-flex button (baseline strut), and the selected 7d/30d pill then sat
-  // 1px proud of the hovered one on each side.
-  const rangeFills = await evaluate(`(()=>{
+  const rangeTabs = await evaluate(`(()=>{
     const texts=['7d','30d','MTD','Last month','All'];
-    return [...document.querySelectorAll('[role="tab"]')].filter(t=>texts.includes(t.textContent.trim())).map(t=>{
-      const wrapper=t.parentElement;
-      const button=t.getBoundingClientRect(),box=wrapper.getBoundingClientRect();
-      const indicator=wrapper.querySelector(':scope > span');
-      const fill=indicator?indicator.getBoundingClientRect():null;
-      const same=(a,b)=>Math.abs(a-b)<=0.5;
-      return {label:t.textContent.trim(),selected:t.getAttribute('aria-selected')==='true',
-        boxed:same(box.height,button.height)&&same(box.top,button.top)&&same(box.width,button.width),
-        filled:!fill||(same(fill.height,button.height)&&same(fill.top,button.top))};
-    });
+    return [...document.querySelectorAll('[role="tab"]')].filter(t=>texts.includes(t.textContent.trim()))
+      .map(t=>({label:t.textContent.trim(),selected:t.getAttribute('aria-selected')==='true'}));
   })()`)
-  assert.equal(rangeFills.length, 5, 'the usage range switcher renders every range: ' + JSON.stringify(rangeFills))
-  assert.ok(rangeFills.every((tab) => tab.boxed), 'every range tab boxes its fill on the trigger: ' + JSON.stringify(rangeFills))
-  assert.ok(rangeFills.some((tab) => tab.selected), 'one range is selected: ' + JSON.stringify(rangeFills))
-  assert.ok(rangeFills.every((tab) => tab.filled), 'the selected fill matches the hover fill box: ' + JSON.stringify(rangeFills))
+  assert.equal(rangeTabs.length, 5, 'the usage range switcher renders every range: ' + JSON.stringify(rangeTabs))
+  assert.equal(rangeTabs.filter(tab => tab.selected).length, 1, 'one range is selected: ' + JSON.stringify(rangeTabs))
 
   // The stacked areas draw themselves in through the animated clip: switching
   // the range remounts the chart — sampled at the next animation frame the

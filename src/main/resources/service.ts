@@ -3,7 +3,6 @@ import { Worker } from 'node:worker_threads'
 import { cpus } from 'node:os'
 import { join } from 'node:path'
 import { getAgentDir } from '@earendil-works/pi-coding-agent'
-import { loadSettings } from '../settings'
 import { collectProcessTree } from './processes'
 import { RuntimeSampler } from './runtime'
 import type { StorageScanOptions } from './storage'
@@ -52,9 +51,8 @@ export class ResourceService {
     if (this.closing) return Promise.resolve({ ok: false, code: 'unavailable' })
     if (this.storageJob) return this.storageJob
     const appData = app.getPath('userData'), agentData = getAgentDir(), sessionData = app.getPath('sessionData')
-    const library = loadSettings().library.directory ?? join(appData, 'library')
-    const options: StorageScanOptions = { appData, agentData, sessionData, library, roots: [
-      { kind: 'app', path: appData }, { kind: 'pi', path: agentData }, { kind: 'library', path: library },
+    const options: StorageScanOptions = { appData, agentData, sessionData, roots: [
+      { kind: 'app', path: appData }, { kind: 'pi', path: agentData },
       { kind: 'browser', path: sessionData }, { kind: 'logs', path: app.getPath('logs') }, { kind: 'crashes', path: app.getPath('crashDumps') }
     ] }
     this.storageJob = new Promise<ResourceResult<ResourceStorageDTO>>(resolve => {

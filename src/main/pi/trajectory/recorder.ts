@@ -7,6 +7,7 @@ import type { ContextRequestDTO } from '../../../shared/types'
 import type { CompactionRequestDTO } from '../../../shared/compaction'
 import { contextComposition } from '../context-composition'
 import { currentSystemPrompt } from '../transcript-context'
+import { providerErrorDiagnostic } from '../provider-errors.mjs'
 
 type StreamFn = AgentSession['agent']['streamFunction']
 type Stream = Awaited<ReturnType<StreamFn>>
@@ -156,6 +157,12 @@ export class TrajectoryRecorder {
       }
       await this.save(record, { output: message })
     }
+    const fail = async (error: unknown): Promise<void> => {
+      record.record.status = options?.signal?.aborted ? 'cancelled' : 'failed'
+      if (!this.maintenance) this.exceptionalReply = attempts
+      record.record.finishedAt = Date.now()
+      await this.save(record, { event: { error: error instanceof Error ? error.message : String(error), diagnostics: [providerErrorDiagnostic(error)] } })
+    }
     try {
       const stream = await this.previous(model, context, { ...options,
         onPayload: async (payload, requestModel) => {
@@ -188,7 +195,6 @@ export class TrajectoryRecorder {
           await options?.onResponse?.(response, requestModel)
         }
       })
-      const self = this
       return new Proxy(stream, {
         get(target, property) {
           if (property === Symbol.asyncIterator) return async function* () {
@@ -200,27 +206,26 @@ export class TrajectoryRecorder {
                 yield event
               }
             } catch (error) {
-              record.record.status = options?.signal?.aborted ? 'cancelled' : 'failed'
-              if (!self.maintenance) self.exceptionalReply = attempts
-              record.record.finishedAt = Date.now()
-              await self.save(record, { event: { error: error instanceof Error ? error.message : String(error) } })
+              await fail(error)
               throw error
             }
           }
           if (property === 'result') return async () => {
-            const message = await target.result()
-            await finish(message)
-            return message
+            try {
+              const message = await target.result()
+              await finish(message)
+              return message
+            } catch (error) {
+              await fail(error)
+              throw error
+            }
           }
           const value = Reflect.get(target, property, target)
           return typeof value === 'function' ? value.bind(target) : value
         }
       })
     } catch (error) {
-      record.record.status = options?.signal?.aborted ? 'cancelled' : 'failed'
-      if (!this.maintenance) this.exceptionalReply = attempts
-      record.record.finishedAt = Date.now()
-      await this.save(record, { event: { error: error instanceof Error ? error.message : String(error) } })
+      await fail(error)
       throw error
     }
   }

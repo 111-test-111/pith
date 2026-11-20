@@ -65,16 +65,15 @@ export function TerminalPane({ terminals, onNew, onEmpty }: {
             requestAnimationFrame(() => strip.current?.querySelector<HTMLElement>('[aria-selected="true"]')?.focus())
           }
         }}>
-          <Tabs value={active ?? ''} onValueChange={terminals.select} variant="segment" className="w-max">
-            <TabsList className="gap-1 bg-muted/60 p-0.5">
+          <Tabs value={active ?? ''} onValueChange={terminals.select} variant="underline" className="w-max">
+            <TabsList className="gap-1 border-b-0">
               {tabs.map((item) => {
                 const label = item.title || t('terminal.tab', { n: item.number })
                 return (
                   <div key={item.id} className="group/terminal relative flex items-center" data-terminal-tab={item.id}>
                     <TabsTrigger value={item.id}
-                      indicatorClassName="bg-background shadow-xs"
                       className={cn('h-7 min-h-0 pl-2.5 pr-7', active === item.id && 'text-foreground')}>
-                      <LabelTooltip content={item.info?.cwd} wrap wrapperClassName="max-w-36">
+                      <LabelTooltip content={item.ssh ? `${item.ssh.username}@${item.ssh.host}:${item.ssh.port}` : item.info?.cwd} wrap wrapperClassName="max-w-36">
                         <span className="truncate text-xs">{label}</span>
                       </LabelTooltip>
                     </TabsTrigger>
@@ -97,7 +96,15 @@ export function TerminalPane({ terminals, onNew, onEmpty }: {
           </Button>
         </Tooltip>
       </div>
-      {tab && tab.status !== 'running' && tab.status !== 'starting' ? (
+      {tab?.ssh ? <div role="status" className="flex shrink-0 items-center gap-2 px-3 py-1.5 text-xs text-muted-foreground" data-ssh-status={tab.ssh.status}>
+        <AnimatedBadge size="sm" status={tab.ssh.status === 'failed' ? 'danger' : 'neutral'}>
+          {t(`terminal.ssh.${tab.ssh.status}`)}
+        </AnimatedBadge>
+        <span className="min-w-0 flex-1 truncate">{t('terminal.ssh.observation')}</span>
+        {!tab.ssh.readOnly && ['disconnected', 'failed'].includes(tab.ssh.status) ?
+          <Button variant="ghost" size="sm" onClick={() => terminals.reconnectSsh(tab.id)}>{t('terminal.ssh.reconnect')}</Button> : null}
+      </div> : null}
+      {tab && !tab.ssh && tab.status !== 'running' && tab.status !== 'starting' ? (
         <div role="status" className="flex shrink-0 items-center gap-2 px-3 py-2 text-xs text-muted-foreground">
           {/* The status is the whole page for an exited terminal, so it carries the
               tone: a clean exit is neutral, a failure is destructive. The starting
@@ -124,7 +131,7 @@ export function TerminalPane({ terminals, onNew, onEmpty }: {
             <ContextMenuItem disabled={!canCopy} onSelect={() => {
               if (active) void navigator.clipboard?.writeText(terminals.selection(active)).catch(() => {})
             }}>{t('terminal.copy')}</ContextMenuItem>
-            <ContextMenuItem onSelect={() => {
+            <ContextMenuItem disabled={!!tab?.ssh} onSelect={() => {
               if (!active) return
               const id = active
               void navigator.clipboard?.readText().then(text => { if (text) terminals.paste(id, text) }).catch(() => {})

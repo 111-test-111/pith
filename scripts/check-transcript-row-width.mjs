@@ -80,7 +80,7 @@ window.streamOnce = () => {
 window.settle = () => flushSync(()=>window.store.applySnapshot(window.snapshot(window.messages, false)));
 window.expandEverything = () => {
   for (let pass = 0; pass < 8; pass++) {
-    const collapsed = [...document.querySelectorAll('#turn [aria-expanded="false"]')];
+    const collapsed = [...document.querySelectorAll('#turn [aria-expanded="false"]:not(ul[data-plain-list] button)')];
     if (!collapsed.length) break;
     collapsed.forEach((trigger) => trigger.click());
   }
@@ -89,7 +89,7 @@ window.viewport = () => document.querySelector('[data-slot="file-diff-viewport"]
 window.read = () => {
   const v = window.viewport();
   if (!v) return null;
-  const column = document.querySelector('#turn .max-w-3xl');
+  const column = document.querySelector('#turn .chat-column');
   let widest = 0;
   for (let el = v; el && el !== document.body && el !== column; el = el.parentElement) {
     widest = Math.max(widest, el.getBoundingClientRect().width);
@@ -108,7 +108,7 @@ function Fixture(){
   const {setLocale} = useI18n();
   window.setLocale = setLocale;
   return React.createElement(ImagePreviewProvider,null,
-    React.createElement('div',{id:'turn',style:{height:900,display:'flex',flexDirection:'column'}},
+    React.createElement('div',{id:'turn',className:'chat-layout',style:{height:900,display:'flex',flexDirection:'column'}},
       React.createElement(ChatView,{store:window.store,onDismissError:()=>{},onResend:()=>{},onEditMessage:()=>{},onRewindMessage:()=>{},onFork:()=>{},onReview:()=>{}})));
 }
 flushSync(()=>createRoot(document.getElementById('root')).render(React.createElement(I18nProvider,null,React.createElement(Fixture))));
@@ -158,6 +158,8 @@ try {
     await evaluate('window.expandEverything()')
     await pause(400)
     assert.ok(await evaluate('!!window.viewport()'), 'the diff body mounts once its disclosures are open')
+    await evaluate(`(()=>{const wrap=window.viewport().closest('[data-diff-layout]').querySelector('[aria-label="Wrap lines"]');if(wrap.getAttribute('aria-pressed')==='true')wrap.click()})()`)
+    await pause(100)
   }
   /** No ancestor between the diff and the column may exceed the column, and the
    *  diff's own scrollport must be the one holding the overflow. */

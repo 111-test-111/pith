@@ -33,14 +33,14 @@ const PATCH = `diff --git a/src/app.ts b/src/app.ts
  const a = 1
 -const b = 2
 +const b = 3
-+const c = 4
++const c = "${'longLine'.repeat(80)}"
  export {}
 diff --git a/src/new.ts b/src/new.ts
 new file mode 100644
 --- /dev/null
 +++ b/src/new.ts
 @@ -0,0 +1,2 @@
-+export const created = true
++export const created = "${'longLine'.repeat(80)}"
 +export {}
 `
 const SRT = `1
@@ -156,15 +156,16 @@ try {
   const preview = await import(pathToFileURL(join(temporary, 'preview.mjs')).href)
   const { previewKindOf, isMediaKind, readsAsText, hasPreviewView, isInlineOnly, textReadLimit, opensOnPreview, opensInFilePane, TEXT_READ_BYTES, JSON_READ_BYTES } = preview
   // [kind, opens on the rendered view, read as text, takes the pane alone].
-  // `hasPreviewView(kind)` is asserted to agree with the second column in every
-  // row, which is what keeps "owns a preview view" a single fact.
+  // `hasPreviewView(kind)` agrees with the second column except for HTML, which
+  // keeps its rendered tab but opens on source by default.
   const textRow = ['text', false, true, false]
   const rendered = (kind) => [kind, true, true, false]
+  const sourceFirst = (kind) => [kind, false, true, false]
   const inline = (kind) => [kind, false, kind === 'text', true]
   const expected = {
     '/a/b.ts': textRow, '/a/b.txt': textRow, '/a/b.xls': textRow, '/a/env': textRow, '/a/Makefile': textRow, '/a/.env': textRow,
     '/a/b.md': rendered('markdown'), '/a/b.markdown': rendered('markdown'), '/a/b.mdx': rendered('markdown'),
-    '/a/b.html': rendered('html'), '/a/b.HTM': rendered('html'),
+    '/a/b.html': sourceFirst('html'), '/a/b.HTM': sourceFirst('html'),
     '/a/b.csv': rendered('table'), '/a/b.tsv': rendered('table'), '/a/b.psv': rendered('table'),
     '/a/b.xlsx': inline('spreadsheet'), '/a/b.xlsm': inline('spreadsheet'), '/a/b.pdf': inline('pdf'),
     '/a/b.png': inline('image'), '/a/b.apng': inline('image'), '/a/b.jpe': inline('image'),
@@ -183,7 +184,7 @@ try {
   for (const [path, [kind, openOnPreview, readAsText, alone]] of Object.entries(expected)) {
     assert.equal(previewKindOf(path), kind, `kind of ${path}`)
     assert.equal(opensOnPreview(path), openOnPreview, `default view of ${path}`)
-    assert.equal(hasPreviewView(previewKindOf(path)), openOnPreview, `preview view of ${path}`)
+    assert.equal(hasPreviewView(previewKindOf(path)), openOnPreview || kind === 'html', `preview view of ${path}`)
     assert.equal(readsAsText(previewKindOf(path)), readAsText, `text read of ${path}`)
     assert.equal(isInlineOnly(previewKindOf(path)), alone, `inline-only of ${path}`)
   }
@@ -371,12 +372,29 @@ app.on('window-all-closed',()=>app.quit());`, resolveDir: repo, loader: 'ts' }, 
   assert.deepEqual(stats, ['+2−1', '+2'], 'each file keeps its own counts, and a zero side is not printed: ' + JSON.stringify(stats))
   const lines = await evaluate(`document.querySelectorAll('[data-review-diff] [data-file-diff], [data-review-diff]').length`)
   assert.ok(lines >= 2, 'both bodies are mounted')
+  assert.deepEqual(await evaluate(`Array.from(document.querySelectorAll('[data-file-diff-preview] [data-diff-hunk]'), node=>node.textContent)`), ['@@ -1,3 +1,4 @@','@@ -0,0 +1,2 @@'], 'patch files display the hunk range for each file')
+  assert.deepEqual(await evaluate(`Array.from(document.querySelectorAll('[data-file-diff-preview] [data-diff-inline]'), mark=>mark.textContent)`), ['2','3'], 'the patch preview highlights the exact changed values')
   await click('[data-diff-file] [data-review-file-header] button')
   assert.equal(await evaluate(`document.querySelector('[data-diff-file] [data-review-file-header] button').getAttribute('aria-expanded')`), 'false', 'a section header collapses its body')
   assert.equal(await evaluate(`document.querySelectorAll('[data-diff-file]')[0].querySelectorAll('[data-review-diff]').length`), 0, 'the collapsed body is gone, not hidden')
   await click('[data-diff-file] [data-review-file-header] button')
   await waitFor(`document.querySelectorAll('[data-diff-file]')[0].querySelectorAll('[data-review-diff]').length === 1`, 'section expands again')
-  console.log('PASS: .patch renders per-file diff sections with counts and collapse')
+  const patchWrap = '[data-file-view-tabs] button[aria-label="Wrap lines"]'
+  const patchWidths = `Array.from(document.querySelectorAll('[data-file-diff-preview] [data-slot="file-diff-viewport"]'), v => v.scrollWidth - v.clientWidth)`
+  assert.equal(await evaluate(`document.querySelector(${JSON.stringify(patchWrap)}).getAttribute('aria-pressed')`),'true','patches default to wrapping')
+  await click(patchWrap)
+  assert.ok((await evaluate(patchWidths)).every(width => width > 1), 'patch sections have horizontal overflow before wrapping')
+  await click(patchWrap)
+  await waitFor(`${patchWidths}.every(width => width <= 1)`, 'patch preview wraps both file sections')
+  await click(patchWrap)
+  await waitFor(`${patchWidths}.every(width => width > 1)`, 'patch preview restores horizontal scrolling')
+  const sectionToggle = '[data-diff-file] [data-diff-layout-toggle]'
+  assert.equal(await evaluate(`document.querySelectorAll('${sectionToggle}').length`),2,'each textual patch section offers the same single control')
+  await click(sectionToggle)
+  await waitFor(`document.querySelectorAll('[data-diff-file] [data-diff-layout="side-by-side"]').length===1`, 'a patch toggle changes only its file section')
+  assert.deepEqual(await evaluate(`Array.from(document.querySelectorAll('[data-diff-file] [data-diff-side] [data-diff-inline]'), mark=>mark.textContent)`), ['2','3'], 'the split patch keeps word highlights on both sides')
+  await click(sectionToggle)
+  console.log('PASS: .patch renders per-file diff sections with counts, collapse and shared wrapping')
 
   // 4. A notebook renders its cells: Markdown through the app's renderer, code
   //    through its highlighter, and every output kind including a real image.
@@ -435,13 +453,20 @@ app.on('window-all-closed',()=>app.quit());`, resolveDir: repo, loader: 'ts' }, 
   assert.equal(await evaluate(`[...document.querySelectorAll('[data-json-toggle]')].find(b=>b.textContent.startsWith('tags'))?.getAttribute('aria-expanded')`), 'false', 'a container folds')
   assert.equal(await evaluate(`document.querySelectorAll('[data-json-index]').length`), 150, 'folded children leave the DOM')
   // Expand-all reaches every depth; collapse-all folds the root itself.
-  await click('[data-json-expand-all]')
+  // One fold control with two states: the bar always offers the opposite of
+  // what the tree shows, so the same button expands and then collapses.
+  const foldState = `document.querySelector('[data-json-fold-all]').dataset.jsonFoldAll`
+  assert.equal(await evaluate(`document.querySelectorAll('[data-json-fold-all]').length`), 1, 'the bar holds one fold control')
+  assert.equal(await evaluate(foldState), 'expand', 'the fold control offers expand while containers are folded')
+  await click('[data-json-fold-all="expand"]')
   await waitFor(`[...document.querySelectorAll('[data-json-entry]')].some(n=>n.textContent.includes('bottom'))`, 'expand all reaches the deepest value')
   assert.ok(await evaluate(`[...document.querySelectorAll('[data-json-toggle]')].every(b=>b.getAttribute('aria-expanded')==='true')`), 'every container is open')
-  await click('[data-json-collapse-all]')
+  assert.equal(await evaluate(foldState), 'collapse', 'the same control flips to collapse once every container is open')
+  await click('[data-json-fold-all="collapse"]')
   await pause(150)
   assert.equal(await evaluate(`document.querySelectorAll('[data-json-entry]').length`), 0, 'collapse all folds the root')
   assert.equal(await evaluate(`document.querySelectorAll('[data-json-toggle]').length`), 1, 'only the root toggle remains')
+  assert.equal(await evaluate(foldState), 'expand', 'the control returns to expand once the tree is folded')
   // A broken JSON file gets its own notice, and stays readable in source.
   await open('broken.json')
   await waitFor('document.querySelector("[data-file-json-invalid]")', 'invalid json notice')
@@ -460,13 +485,13 @@ app.on('window-all-closed',()=>app.quit());`, resolveDir: repo, loader: 'ts' }, 
   await pause(200)
   const midEntries = await evaluate(`document.querySelectorAll('[data-json-entry]').length`)
   assert.ok(midEntries > 0 && midEntries < 300, `scrolling keeps the window small: ${midEntries}`)
-  await click('[data-json-expand-all]')
+  await click('[data-json-fold-all="expand"]')
   await waitFor(`document.querySelector('[data-file-json-tree]').scrollHeight > 500000`, 'expand all flattens to the budget')
   assert.ok(await evaluate(`document.querySelectorAll('[data-json-entry]').length < 300`), 'expand all still renders only a window')
   await evaluate(`(()=>{const el=document.querySelector('[data-file-json-tree]');el.scrollTop=el.scrollHeight})()`)
   await waitFor('document.querySelector("[data-json-cutoff]")', 'the budget cutoff row')
   assert.equal(await evaluate(`document.querySelector('[data-json-cutoff]').textContent`), await evaluate(`window.en['files.json.capped'].replace('{count}','50000')`), 'the cutoff names the budget')
-  await click('[data-json-collapse-all]')
+  await click('[data-json-fold-all="collapse"]')
   await pause(150)
   assert.equal(await evaluate(`document.querySelectorAll('[data-json-entry]').length`), 0, 'collapse recovers from the budget')
   console.log('PASS: a huge .json stays in a small virtual window and expand-all is budget-capped')

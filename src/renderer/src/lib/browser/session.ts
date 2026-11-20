@@ -1,5 +1,5 @@
 /** Embedded-browser persistence in localStorage: real human navigation feeds recent URLs; open-page snapshots restore guests destroyed by pane unmount. Pure transformations are separate from storage for Node checks. Ported from pi-web with pi-app keys and shared HUMAN_OWNER; storage failures fall back to empty state. */
-import { HUMAN_OWNER } from '../../../../shared/browser.ts'
+import { browserOwnerSessionId, HUMAN_OWNER } from '../../../../shared/browser.ts'
 
 export const BROWSER_RECENTS_LIMIT = 8
 export const OPEN_BROWSER_PAGES_LIMIT = 12
@@ -8,6 +8,8 @@ export const BROWSER_HISTORY_LIMIT = 500
 
 const RECENTS_KEY = 'pi-app:browser-recents'
 const OPEN_PAGES_KEY = 'pi-app:browser-open-pages'
+const SCOPED_OPEN_PAGES_KEY = 'pi-app:browser-open-pages:v2'
+const OPEN_PAGES_SESSION_LIMIT = 48
 const HISTORY_KEY = 'pi-app:browser-history'
 
 export function isRecordableUrl(url: string): boolean {
@@ -158,59 +160,96 @@ export function recordRecentUrl(url: string): void {
   for (const cb of recentsListeners) cb()
 }
 
-/** Read legacy URL arrays as human pages and current entries with optional blank URLs. Preserve selected/title/favicon; invalid entries/JSON fall back silently. */
+/** Accept legacy URL entries as well as blank tabs with explicit owners. */
+function parseOpenPages(value: unknown): OpenBrowserPageEntry[] {
+  if (!Array.isArray(value)) return []
+  const pages: OpenBrowserPageEntry[] = []
+  for (const item of value.slice(0, OPEN_BROWSER_PAGES_LIMIT)) {
+    const value: unknown = typeof item === 'string' ? { url: item } : item
+    if (!value || typeof value !== 'object') continue
+    const record = value as Partial<Record<keyof OpenBrowserPageEntry, unknown>>
+    const url = typeof record.url === 'string' && isRecordableUrl(record.url) ? record.url : undefined
+    const owner = typeof record.owner === 'string' && record.owner ? record.owner : undefined
+    if (!url && !owner) continue
+    const entry: OpenBrowserPageEntry = { owner: owner ?? HUMAN_OWNER }
+    if (url) entry.url = url
+    if (typeof record.title === 'string' && record.title) entry.title = record.title
+    if (typeof record.favicon === 'string' && record.favicon) entry.favicon = record.favicon
+    if (record.selected === true) entry.selected = true
+    pages.push(entry)
+  }
+  return pages
+}
+
 function readOpenPagesList(): OpenBrowserPageEntry[] {
   try {
     const raw = window.localStorage.getItem(OPEN_PAGES_KEY)
-    if (!raw) return []
-    const parsed: unknown = JSON.parse(raw)
-    if (!Array.isArray(parsed)) return []
-    const entries: OpenBrowserPageEntry[] = []
-    for (const item of parsed) {
-      if (typeof item === 'string') {
-        entries.push({ owner: HUMAN_OWNER, url: item })
-        continue
-      }
-      if (!item || typeof item !== 'object') continue
-      const record = item as { owner?: unknown; url?: unknown; title?: unknown; favicon?: unknown; selected?: unknown }
-      const hasUrl = typeof record.url === 'string'
-      const hasOwner = typeof record.owner === 'string' && record.owner.length > 0
-      if (!hasUrl && !hasOwner) continue
-      const entry: OpenBrowserPageEntry = { owner: hasOwner ? (record.owner as string) : HUMAN_OWNER }
-      if (hasUrl) entry.url = record.url as string
-      if (typeof record.title === 'string' && record.title) entry.title = record.title
-      if (typeof record.favicon === 'string' && record.favicon) entry.favicon = record.favicon
-      if (record.selected === true) entry.selected = true
-      entries.push(entry)
-    }
-    return entries
-  } catch {
-    return []
-  }
+    return raw ? parseOpenPages(JSON.parse(raw)) : []
+  } catch { return [] }
 }
 
-export function readOpenBrowserPages(): OpenBrowserPageEntry[] {
-  return readOpenPagesList()
+let scopedPages: Map<string, OpenBrowserPageEntry[]> | undefined
+function openPagesBySession(): Map<string, OpenBrowserPageEntry[]> {
+  if (scopedPages) return scopedPages
+  const entries = new Map<string, OpenBrowserPageEntry[]>()
+  try {
+    const raw = window.localStorage.getItem(SCOPED_OPEN_PAGES_KEY)
+    if (raw === null) {
+      // The original global snapshot can identify its agent-owned pages.
+      for (const page of readOpenPagesList()) {
+        const id = browserOwnerSessionId(page.owner)
+        if (id) entries.set(id, [...(entries.get(id) ?? []), page])
+      }
+      if (entries.size) writeList(SCOPED_OPEN_PAGES_KEY, [...entries])
+      return scopedPages = entries
+    }
+    const data: unknown = raw && raw.length <= 2 * 1024 * 1024 ? JSON.parse(raw) : null
+    if (Array.isArray(data)) {
+      for (const row of data.slice(-OPEN_PAGES_SESSION_LIMIT)) {
+        if (!Array.isArray(row)) continue
+        const [id, pages] = row
+        if (typeof id !== 'string' || !Array.isArray(pages)) continue
+        entries.set(id, parseOpenPages(pages).filter(page => browserOwnerSessionId(page.owner) === id))
+      }
+    }
+  } catch { /* Optional preference storage. */ }
+  return scopedPages = entries
+}
+
+export function readOpenBrowserPages(sessionId?: string | null): OpenBrowserPageEntry[] {
+  return sessionId ? openPagesBySession().get(sessionId) ?? [] : readOpenPagesList()
 }
 
 // Explicit tab closure ends this snapshot writer's lifetime. Rail folds do
 // not: the next pane still reconstructs the pages from the same snapshot.
-let openPagesRevision = 0
+const openPagesRevisions = new Map<string | null, number>()
 
-export function getOpenBrowserPagesRevision(): number {
-  return openPagesRevision
+export function getOpenBrowserPagesRevision(sessionId: string | null = null): number {
+  return openPagesRevisions.get(sessionId) ?? 0
 }
 
 /** Fence outgoing pane effects before teardown, retaining pages only when
  * close/reopen restoration is enabled. */
-export function closeOpenBrowserPages(restoreTabs: boolean): void {
-  openPagesRevision += 1
-  if (!restoreTabs) writeOpenBrowserPages([])
+export function closeOpenBrowserPages(restoreTabs: boolean, sessionId: string | null = null): void {
+  const revision = getOpenBrowserPagesRevision(sessionId) + 1
+  openPagesRevisions.set(sessionId, revision)
+  if (!restoreTabs) writeOpenBrowserPages([], revision, sessionId)
 }
 
-export function writeOpenBrowserPages(entries: readonly OpenBrowserPageEntry[], revision = openPagesRevision): void {
-  if (revision !== openPagesRevision) return
-  writeList(OPEN_PAGES_KEY, entries.slice(0, OPEN_BROWSER_PAGES_LIMIT))
+export function writeOpenBrowserPages(
+  entries: readonly OpenBrowserPageEntry[],
+  revision?: number,
+  sessionId: string | null = null
+): void {
+  if (revision !== undefined && revision !== getOpenBrowserPagesRevision(sessionId)) return
+  const pages = entries.slice(0, OPEN_BROWSER_PAGES_LIMIT)
+  if (!sessionId) { writeList(OPEN_PAGES_KEY, pages); return }
+  const bySession = openPagesBySession()
+  if (JSON.stringify(bySession.get(sessionId) ?? []) === JSON.stringify(pages)) return
+  bySession.delete(sessionId)
+  if (pages.length) bySession.set(sessionId, pages)
+  while (bySession.size > OPEN_PAGES_SESSION_LIMIT) bySession.delete(bySession.keys().next().value!)
+  writeList(SCOPED_OPEN_PAGES_KEY, [...bySession])
 }
 
 // Browsing history: localStorage adapter and subscriptions.

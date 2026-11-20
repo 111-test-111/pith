@@ -56,18 +56,19 @@ export function NewSessionHeader({ projectName, cwd, projects, onProjectChange, 
   return (
     <div className="mb-6 flex flex-col items-start text-left">
       <div className="mb-5 flex max-w-full items-center gap-2 text-xs text-muted-foreground">
-        <PithIcon variant="mark" className="mr-1 size-9 text-primary" />
+        <PithIcon variant="mark" className="mr-1 size-7 text-primary" />
         <span className="shrink-0">{t('newSession.label')}</span>
         <span aria-hidden="true" className="h-3 w-px shrink-0 bg-border" />
         <Select
           value={cwd ?? NO_PROJECT}
           onValueChange={handleProjectChange}
           disabled={switching}
+          textClassName="text-xs"
           className="w-auto"
         >
           <SelectTrigger
             aria-label={t('newSession.projectAria')}
-            className="h-7 w-auto gap-1.5 rounded-control border-0 bg-transparent px-1.5 text-xs font-normal text-muted-foreground hover:bg-muted hover:text-foreground"
+            className="h-7 w-auto gap-1.5 rounded-control border-0 bg-transparent px-1.5 font-normal text-muted-foreground hover:bg-muted hover:text-foreground"
           >
             <span className="flex min-w-0 items-center gap-1.5">
               <Folder aria-hidden="true" className="size-3 shrink-0" />
@@ -83,7 +84,7 @@ export function NewSessionHeader({ projectName, cwd, projects, onProjectChange, 
               <SelectItem value={NO_PROJECT} className="py-1.5">
                 <span className="flex min-w-0 flex-1 items-center gap-2">
                   <Chat01 aria-hidden="true" className="size-4 shrink-0" />
-                  <span className="truncate text-sm text-foreground">
+                  <span className="truncate text-foreground">
                     {t('newSession.noProject')}
                   </span>
                 </span>
@@ -94,7 +95,7 @@ export function NewSessionHeader({ projectName, cwd, projects, onProjectChange, 
               <SelectItem value={NEW_PROJECT} className="py-1.5">
                 <span className="flex min-w-0 flex-1 items-center gap-2">
                   <FolderPlus aria-hidden="true" className="size-4 shrink-0" />
-                  <span className="truncate text-sm text-foreground">
+                  <span className="truncate text-foreground">
                     {t('newSession.newProject')}
                   </span>
                 </span>
@@ -103,7 +104,7 @@ export function NewSessionHeader({ projectName, cwd, projects, onProjectChange, 
               {projects.map((project) => (
                 <SelectItem key={project.cwd} value={project.cwd} className="py-1.5">
                   <span className="flex min-w-0 flex-1 flex-col">
-                    <span className="truncate text-sm text-foreground">{project.label}</span>
+                    <span className="truncate text-foreground">{project.label}</span>
                     <span dir="ltr" className="truncate text-caption text-muted-foreground">
                       {project.cwd}
                     </span>

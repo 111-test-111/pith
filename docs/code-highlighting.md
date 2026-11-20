@@ -23,7 +23,9 @@ Streaming blocks and large or intentionally plain previews retain their existing
 highlighting limits. Changed-file hover previews snapshot only warm tokens and
 discard the old snapshot when the theme changes. Code surfaces keep their
 app-owned backgrounds, frames and diff addition/deletion colors; inline code
-and terminal ANSI colors keep their separate rendering rules.
+and terminal ANSI colors keep their separate rendering rules. Inline code takes
+the interface's inner corner step, so its highlight box reads as a rounded box
+in the superellipse style and collapses to a hard edge in the square style.
 
 The `code-themes` UI suite checks button selection, both preview modes, actual rendered colors
 across main-thread and worker surfaces, rapid switches, window synchronization,

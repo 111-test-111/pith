@@ -326,10 +326,10 @@ export function BrowserSection() {
         <SettingsRow label={t('settings.browserImport')} description={t('settings.browserImportHint')}>
           {sources.length > 0 ? (
             <span data-browser-import-profile className="contents">
-              <Select value={profileId ?? sources[0].id} onValueChange={setProfileId} disabled={importing}>
+              <Select value={profileId ?? sources[0].id} onValueChange={setProfileId} disabled={importing} textClassName="text-xs">
                 <SelectTrigger
                   aria-label={t('settings.browserImportProfiles')}
-                  className="h-8 w-auto max-w-56 rounded-control px-3 text-xs"
+                  className="h-8 w-auto max-w-56 rounded-control px-3"
                 >
                   <span className="truncate">
                     {sources.find((s) => s.id === (profileId ?? sources[0].id))?.label ?? sources[0].label}
@@ -338,7 +338,7 @@ export function BrowserSection() {
                 <SelectContent className="left-auto right-0 w-56">
                   {sources.map((source) => (
                     <SelectItem key={source.id} value={source.id} className="py-1.5">
-                      <span className="truncate text-sm text-foreground">{source.label}</span>
+                      <span className="truncate text-foreground">{source.label}</span>
                     </SelectItem>
                   ))}
                 </SelectContent>

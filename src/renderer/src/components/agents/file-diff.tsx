@@ -11,6 +11,7 @@ import {
 } from "@/lib/icons";
 import { motion, useReducedMotion } from "motion/react";
 import {
+  Fragment,
   type CSSProperties,
   type ReactNode,
   useCallback,
@@ -23,24 +24,34 @@ import {
 } from "react";
 import {
   type AgentCodeLanguage,
+  type AgentCodeToken,
   type AgentCodeTokenLines,
   AgentCodeLine,
   useAgentCodeTokens,
 } from "@/components/agents/agent-code";
 import { AgentDisclosure } from "@/components/agents/agent-disclosure";
+import { useI18n } from "@/i18n";
 import { SPRING_SWAP } from "@/lib/ease";
 import { cn } from "@/lib/utils";
 // local patch (pi-app): bounded row DOM for the scrollable hover preview.
 import { useDiffWindow } from "@/lib/hooks/use-diff-window";
 // local patch (pi-app): row geometry follows the independent code preference.
 import { codeLineHeight, useCodeFontSize } from "@/lib/typography";
-import { diffGutterColumns } from "@/lib/diff";
+// local patch (pi-app): shared hunk layout and word-level marks.
+import { diffCodeText, diffGutterColumns, diffGutterWidth } from "@/lib/diff";
+import { diffDisplayRows, diffLineWidths, diffRowsInWindow, reanchorDiffRow, type DiffLayout, type DiffLineWidths, type DiffRow, type DiffSide, type WrappedDiff } from "@/lib/diff-layout";
+import { DiffWrapRuler, useDiffWrap } from "@/lib/hooks/use-diff-wrap";
+import { diffInlineRanges, type DiffLinePair, type DiffRange } from "@/lib/diff-inline";
+import { useDiffStyle } from "@/lib/diff-style";
+import { sliceCodeTokens } from "@/lib/code-tokens";
 // local patch (pi-app): the diff viewport's clipped edge fades instead of
 // cutting a line (the app hides every scrollbar, so the cut had no other cue).
 import { useScrollFade } from "@/lib/hooks/use-scroll-fade";
+import { useWheelScroll } from "@/lib/hooks/use-wheel-scroll";
 
 export type FileDiffStatus = "streaming" | "complete";
-export type FileDiffLineType = "added" | "removed" | "context";
+// local patch (pi-app): headings share the code row height and scroll window.
+export type FileDiffLineType = "added" | "removed" | "context" | "hunk";
 
 export interface FileDiffLine {
   id: string;
@@ -48,12 +59,12 @@ export interface FileDiffLine {
   oldLine?: number;
   newLine?: number;
   content: string;
+  // local patch (pi-app): a wrapped continuation keeps the diff tint but has no marker.
+  continuation?: boolean;
+  pair?: DiffLinePair;
+  sourceOffset?: number;
+  source?: FileDiffLine;
 }
-
-// local patch (pi-app): a hover preview reuses its parsed line array across
-// visits. Cache its width with that array so remounting the small virtual window
-// does not rescan every line of a large patch.
-const widestLineCache = new WeakMap<FileDiffLine[], number>();
 
 export interface FileDiffProps {
   file: ReactNode;
@@ -64,6 +75,13 @@ export interface FileDiffProps {
   onOpenChange?: (open: boolean) => void;
   collapseOnComplete?: boolean;
   maxHeight?: number;
+  // local patch (pi-app): fit code to the available width in file and review panes.
+  wrap?: boolean;
+  // local patch (pi-app): app-owned layout action and externally windowed rows.
+  layout?: DiffLayout;
+  displayRows?: readonly DiffRow[];
+  lineWidths?: DiffLineWidths;
+  headerAction?: ReactNode;
   /** local patch (pi-app): keep gutters stable across a parent-owned window. */
   gutterColumns?: number;
   language?: AgentCodeLanguage;
@@ -128,15 +146,38 @@ function ChangeCount({ value, type }: { value: number; type: "added" | "removed"
   );
 }
 
+// local patch (pi-app): mark exact ranges while retaining the code palette.
+function DiffCode({ code, tokens, marks, className }: { code: string; tokens?: AgentCodeToken[]; marks?: readonly DiffRange[]; className: string }) {
+  if (!marks?.length) return <AgentCodeLine code={code} tokens={tokens} className={className} />;
+  const syntax = tokens?.map((token) => token.content).join("") === code ? tokens : undefined;
+  const lineStart = syntax?.[0]?.offset ?? 0;
+  const slice = (start: number, end: number) => start < end ? (
+    <AgentCodeLine code={code.slice(start, end)} tokens={sliceCodeTokens(syntax, lineStart + start, lineStart + end)} />
+  ) : null;
+
+  return <span className={className}>
+    {marks.map(({ start, end }, index) => <Fragment key={start}>
+      {slice(marks[index - 1]?.end ?? 0, start)}
+      <mark data-diff-inline="">{slice(start, end)}</mark>
+    </Fragment>)}
+    {slice(marks[marks.length - 1].end, code.length)}
+  </span>;
+}
+
 export function FileDiff({
   file,
-  lines,
+  lines: parsedLines,
   status = "streaming",
   open,
   defaultOpen = true,
   onOpenChange,
   collapseOnComplete = true,
   maxHeight = 220,
+  wrap = true,
+  layout = "stacked",
+  displayRows,
+  lineWidths,
+  headerAction,
   gutterColumns: gutterColumnsProp,
   maxHeightOverride,
   bodyClassName,
@@ -153,6 +194,10 @@ export function FileDiff({
   deletions: deletionsProp,
   className,
 }: FileDiffProps) {
+  const { t } = useI18n();
+  const detailed = useDiffStyle() === "detailed";
+  const split = layout === "side-by-side";
+  const rows = useMemo(() => displayRows ?? diffDisplayRows(parsedLines, layout, detailed), [displayRows, parsedLines, layout, detailed]);
   const reduce = useReducedMotion() ?? false;
   const baseId = useId();
   const triggerId = `${baseId}-trigger`;
@@ -169,50 +214,60 @@ export function FileDiff({
   const maskImage = edgeFade ? fadeMaskImage : undefined;
   const fade = !edgeFade ? "none" : fadeEdges.top && fadeEdges.bottom ? "both" : fadeEdges.bottom ? "bottom" : fadeEdges.top ? "top" : "none";
   const streaming = status === "streaming";
-  const additions = additionsProp ?? lines.filter((line) => line.type === "added").length;
-  const deletions = deletionsProp ?? lines.filter((line) => line.type === "removed").length;
+  const additions = additionsProp ?? parsedLines.filter((line) => line.type === "added").length;
+  const deletions = deletionsProp ?? parsedLines.filter((line) => line.type === "removed").length;
   // local patch (pi-app): plain/pretokenized previews need no joined copy of a
   // large file on every scroll-window update.
   const code = useMemo(
-    () => highlight && tokenLines === undefined ? lines.map((line) => line.content).join("\n") : "",
-    [lines, highlight, tokenLines],
+    () => highlight && tokenLines === undefined ? diffCodeText(parsedLines) : "",
+    [parsedLines, highlight, tokenLines],
   );
-  // local patch (pi-app): the widest row, so `containRows` can lay the body out
-  // at a fixed width instead of measuring it from `w-max` — with rows skipped by
-  // `content-visibility`, `w-max` only sees the rows that happen to be rendered,
-  // which would cut horizontal scrolling short. Tabs and Unicode use a
-  // conservative column bound, while ASCII monospace columns are exact.
-  const widestLine = useMemo(() => {
-    const cached = widestLineCache.get(lines);
-    if (cached !== undefined) return cached;
-    const width = lines.reduce((widest, line) => {
-      // local patch (pi-app): tabs and wide Unicode must not truncate horizontal
-      // scrolling when the widest line is outside the mounted window. Use a
-      // conservative column bound for non-ASCII glyphs (including CJK fonts).
-      if (!/[\t\u0080-\uFFFF]/.test(line.content)) return Math.max(widest, line.content.length);
-      let columns = 0;
-      for (const character of line.content) {
-        if (character === "\t") columns += 8 - columns % 8;
-        else columns += character.codePointAt(0)! > 127 ? 2 : 1;
-      }
-      return Math.max(widest, columns);
-    }, 0);
-    widestLineCache.set(lines, width);
-    return width;
-  }, [lines]);
   // local patch (pi-app): Shiki and line DOM are deferred until the user
   // opens the diff, and never rerun for cumulative streaming snapshots.
   const liveTokens = useAgentCodeTokens(code, language, highlight && tokenLines === undefined && currentOpen && !streaming);
   const tokens = tokenLines === undefined ? liveTokens : tokenLines;
-  // local patch (pi-app): uncapped reviews and growing transcript diffs retain
-  // their complete DOM. Opt-in settled previews have non-wrapping code
-  // rows and keep only the visible window mounted.
-  const virtual = virtualize && !streaming && maxHeightOverride !== null;
+  const rowTokens = useMemo(() => {
+    if (!tokens) return null;
+    const byLine = new Map<FileDiffLine, AgentCodeToken[] | undefined>();
+    let index = 0;
+    for (const line of parsedLines) if (line.type !== "hunk") byLine.set(line, tokens[index++]);
+    return byLine;
+  }, [parsedLines, tokens]);
+  // local patch (pi-app): reviews supply their own window. Settled standalone
+  // previews window both their normal rows and their wrapped continuations.
+  const virtual = virtualize && currentOpen && !streaming && maxHeightOverride !== null;
+  const contained = containRows && !wrap;
+  const widths = !wrap && (virtual || contained || split) ? lineWidths ?? diffLineWidths(parsedLines) : undefined;
   const rowHeight = codeLineHeight(useCodeFontSize());
-  const gutterColumns = useMemo(() => gutterColumnsProp ?? diffGutterColumns(lines), [gutterColumnsProp, lines]);
+  const gutterColumns = useMemo(() => gutterColumnsProp ?? diffGutterColumns(parsedLines), [gutterColumnsProp, parsedLines]);
+  const gutterWidth = diffGutterWidth(gutterColumns);
+  const measureWrap = virtual && wrap;
+  const { ruler, wrapped, tabSize } = useDiffWrap(rows, measureWrap, layout, gutterWidth, rowHeight);
+  const rowCount = wrapped?.rows ?? rows.length;
   const requestedHeight = maxHeightOverride === undefined ? maxHeight : maxHeightOverride;
   const viewportHeight = requestedHeight === null ? undefined : Math.max(rowHeight, Math.floor(requestedHeight / rowHeight) * rowHeight);
-  const { start, end, onScroll } = useDiffWindow(viewportRef, lines.length, virtual, viewportHeight ?? maxHeight, rowHeight);
+  const { start, end, onScroll } = useDiffWindow(viewportRef, rowCount, virtual, viewportHeight ?? maxHeight, rowHeight, false);
+  const visible = useMemo(() => virtual ? diffRowsInWindow(rows, wrapped, start, end) : rows, [rows, wrapped, virtual, start, end]);
+  const inlineRanges = useMemo(() => {
+    if (!detailed || !currentOpen || streaming) return null;
+    return diffInlineRanges(visible.flatMap(row => 'content' in row ? [row] : [row.before, row.after].filter(line => line !== undefined)));
+  }, [detailed, currentOpen, streaming, visible]);
+  useWheelScroll(viewportRef, currentOpen);
+
+  const previousLayout = useRef<{ source: FileDiffLine[]; rows: readonly DiffRow[]; rowHeight: number; wrapped: WrappedDiff | null } | null>(null);
+  const lastScrollTop = useRef(0);
+  useLayoutEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport || !currentOpen || !virtual) { previousLayout.current = null; return; }
+    const previous = previousLayout.current;
+    if (lastScrollTop.current > 0 && previous?.source === parsedLines && (previous.rows !== rows || previous.wrapped !== wrapped || previous.rowHeight !== rowHeight)) {
+      const next = reanchorDiffRow(lastScrollTop.current / previous.rowHeight, previous.rows, previous.wrapped, rows, wrapped);
+      if (next !== undefined) viewport.scrollTop = next * rowHeight;
+    }
+    lastScrollTop.current = viewport.scrollTop;
+    onScroll();
+    previousLayout.current = { source: parsedLines, rows, rowHeight, wrapped };
+  }, [currentOpen, onScroll, parsedLines, rowHeight, rows, virtual, wrapped]);
 
   const setOpen = useCallback(
     (next: boolean) => {
@@ -256,13 +311,50 @@ export function FileDiff({
     return () => cancelAnimationFrame(frame);
   });
 
+  const rowStyle: CSSProperties | undefined = virtual ? { height: rowHeight } : contained && !split ? {
+    contentVisibility: "auto",
+    containIntrinsicSize: `auto ${rowHeight}px`,
+  } : undefined;
+  const hasHeaderAction = !headerless && Boolean(headerAction);
+  const renderLine = (line: FileDiffLine | undefined, key: string, side?: DiffSide) => {
+    if (!line) return <div key={key} data-diff-blank="" aria-hidden="true" style={rowStyle} />;
+    if (line.type === "hunk") {
+      return side === "after" ? <div key={key} data-diff-hunk-spacer="" aria-hidden="true" />
+        : <div key={key} data-diff-hunk="" title={line.content}><code>{line.content}</code></div>;
+    }
+    const type = line.type ?? "context";
+    const syntax = rowTokens?.get(line.source ?? line);
+    const tokenStart = (syntax?.[0]?.offset ?? 0) + (line.sourceOffset ?? 0);
+    const lineTokens = line.source ? sliceCodeTokens(syntax, tokenStart, tokenStart + line.content.length) : syntax;
+    return <div key={key} data-diff-change={type === "context" ? undefined : type} style={rowStyle}
+      className={cn(
+        "grid min-h-[var(--app-line-code)]",
+        side ? "grid-cols-[var(--diff-gutter)_1rem_minmax(0,1fr)]" : "grid-cols-[var(--diff-gutter)_var(--diff-gutter)_1rem_minmax(0,1fr)]",
+        type === "added" && "bg-emerald-500/[0.14]",
+        type === "removed" && "bg-rose-500/[0.14]",
+      )}>
+      {side !== "after" ? <span className="select-none pr-2 text-right tabular-nums text-muted-foreground/40">{line.oldLine}</span> : null}
+      {side !== "before" ? <span className="select-none pr-2 text-right tabular-nums text-muted-foreground/40">{line.newLine}</span> : null}
+      <span className={cn("select-none text-center text-muted-foreground/45",
+        type === "added" && "text-emerald-600 dark:text-emerald-400",
+        type === "removed" && "text-rose-600 dark:text-rose-400",
+      )}>
+        {!line.continuation && (type === "added" ? "+" : type === "removed" ? "−" : "")}
+      </span>
+      <DiffCode code={line.content} tokens={lineTokens} marks={inlineRanges?.get(line)}
+        className={cn("min-w-0 px-1.5", wrap ? "whitespace-break-spaces [overflow-wrap:anywhere]" : "whitespace-pre")} />
+    </div>;
+  };
+
   return (
     <div
       data-state={status}
+      data-diff-layout={layout}
       aria-busy={streaming}
-      className={cn("w-full text-sm", className)}
+      className={cn("w-full text-sm", hasHeaderAction && "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-1", className)}
     >
       {headerless ? null : (
+        <>
         <button
           // local patch (pi-app): app-owned transcript geometry hook.
           data-agent-trigger=""
@@ -272,7 +364,7 @@ export function FileDiff({
           aria-controls={contentId}
           onClick={() => setOpen(!currentOpen)}
           // local patch (pi-app): transcript disclosures stay unfilled on hover.
-          className="group flex min-h-9 w-full items-center gap-2 rounded-md py-1 text-left outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+          className="group flex min-h-9 w-full min-w-0 items-center gap-2 rounded-md py-1 text-left outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
         >
           {icon ?? (
             <FileCode2
@@ -284,14 +376,14 @@ export function FileDiff({
               (`edit · file — path`), not code, so they use the same UI font,
               size and muted chrome color as the ToolResult title. */}
           {/* local patch (pi-app): share tool/reasoning label type alignment. */}
-          <span className="transcript-label min-w-0 flex-1 truncate font-medium text-muted-foreground">
+          <span className="transcript-label min-w-0 truncate font-medium text-muted-foreground">
             {file}
           </span>
-          <span className="flex shrink-0 items-center gap-2">
+          {additions || deletions ? <span data-diff-counts className="flex shrink-0 items-center gap-2">
             <ChangeCount value={additions} type="added" />
             <ChangeCount value={deletions} type="removed" />
-          </span>
-          <span className="grid size-4 shrink-0 place-items-center text-muted-foreground/60">
+          </span> : null}
+          <span className="ml-auto grid size-4 shrink-0 place-items-center text-muted-foreground/60">
             {streaming ? (
               <LoaderCircle
                 aria-label="Applying changes"
@@ -310,6 +402,8 @@ export function FileDiff({
             <ChevronDown className="size-3.5" />
           </motion.span>
         </button>
+        {headerAction}
+        </>
       )}
 
       <AgentDisclosure
@@ -318,6 +412,7 @@ export function FileDiff({
         id={contentId}
         role={headerless ? undefined : "region"}
         aria-labelledby={headerless ? undefined : triggerId}
+        className={hasHeaderAction ? 'col-span-2' : undefined}
         open={currentOpen}
       >
         {lazyContent && !currentOpen ? null : (
@@ -339,8 +434,8 @@ export function FileDiff({
               // scroll; announcing that as live output makes screen readers
               // repeat the diff. Only a genuinely growing diff is live.
               aria-live={streaming ? "polite" : undefined}
-              onScroll={virtual ? onScroll : undefined}
-              className="scrollbar-hide overflow-auto"
+              onScroll={virtual ? (event) => { lastScrollTop.current = event.currentTarget.scrollTop; onScroll(); } : undefined}
+              className="relative scrollbar-hide overflow-auto"
               style={{
                 maxHeight: viewportHeight,
                 overflowAnchor: "none",
@@ -348,77 +443,35 @@ export function FileDiff({
                 WebkitMaskImage: maskImage
               }}
             >
+              {measureWrap ? <DiffWrapRuler ruler={ruler} layout={layout} gutter={gutterWidth} /> : null}
               {/* local patch (pi-app): the row wrapper is as wide as the widest
                   line (never narrower than the viewport), so a row's added/
                   removed tint spans the whole horizontally scrolled width
                   instead of stopping where the viewport ends. */}
               <div
-                className="w-max min-w-full font-mono text-code"
+                className={cn("min-w-full font-mono text-code", split || wrap ? "w-full" : "w-max")}
                 style={{
-                  '--diff-gutter': `max(2.25rem, calc(${gutterColumns}ch + 0.5rem))`,
-                  width: containRows || virtual ? `calc(2 * var(--diff-gutter) + 2rem + ${widestLine}ch)` : undefined,
+                  '--diff-gutter': gutterWidth,
+                  tabSize: wrapped ? tabSize : undefined,
+                  width: !split && widths ? `calc(2 * var(--diff-gutter) + 2rem + ${Math.max(widths.before, widths.after)}ch)` : undefined,
                   // local patch (pi-app): spacers preserve the full scroll range
                   // without mounting the skipped rows; no estimated heights.
                   paddingTop: virtual ? start * rowHeight : undefined,
-                  paddingBottom: virtual ? (lines.length - end) * rowHeight : undefined,
+                  paddingBottom: virtual ? (rowCount - end) * rowHeight : undefined,
                 } as CSSProperties}
               >
-                <span className="sr-only">File changes</span>
-                {(virtual ? lines.slice(start, end) : lines).map((line, offset) => {
-                  const index = start + offset;
-                  const type = line.type ?? "context";
-                  return (
-                    <div
-                      key={line.id}
-                      style={
-                        virtual
-                          ? { height: rowHeight }
-                          : containRows
-                          ? {
-                              contentVisibility: "auto",
-                              containIntrinsicSize: `auto ${rowHeight}px`,
-                            }
-                          : undefined
-                      }
-                      className={cn(
-                        "grid grid-cols-[var(--diff-gutter)_var(--diff-gutter)_1rem_minmax(0,1fr)]",
-                        // local patch (pi-app): the vendored 7% wash was too pale
-                        // to read as a change on the muted panel — the owner
-                        // asked for deeper diff colours everywhere FileDiff
-                        // renders (tool rows, review, checkpoints, previews).
-                        type === "added" && "bg-emerald-500/[0.14]",
-                        type === "removed" && "bg-rose-500/[0.14]",
-                      )}
-                    >
-                      <span className="select-none pr-2 text-right tabular-nums text-muted-foreground/40">
-                        {line.oldLine}
-                      </span>
-                      <span className="select-none pr-2 text-right tabular-nums text-muted-foreground/40">
-                        {line.newLine}
-                      </span>
-                      <span
-                        className={cn(
-                          "select-none text-center text-muted-foreground/45",
-                          type === "added" &&
-                            "text-emerald-600 dark:text-emerald-400",
-                          type === "removed" &&
-                            "text-rose-600 dark:text-rose-400",
-                        )}
-                      >
-                        {type === "added"
-                          ? "+"
-                          : type === "removed"
-                            ? "−"
-                            : ""}
-                      </span>
-                      <AgentCodeLine
-                        code={line.content}
-                        tokens={tokens?.[index]}
-                        className="min-w-0 whitespace-pre px-1.5"
-                      />
-                    </div>
-                  );
-                })}
+                <span className="sr-only">{t('diff.changes')}</span>
+                {split && visible.length ? (
+                  <div data-diff-split="" style={{ '--diff-split-rows': visible.length } as CSSProperties}>
+                    {(['before', 'after'] as const).map(side => (
+                      <div key={side} data-diff-side={side} role="region" aria-label={t(`diff.${side}`)} tabIndex={wrap ? undefined : 0}
+                        style={widths ? { '--diff-side-width': widths[side] ? `calc(var(--diff-gutter) + 2rem + ${widths[side]}ch)` : undefined } as CSSProperties : undefined}
+                        className="outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring">
+                        {visible.map(row => renderLine('content' in row ? row : row[side], row.id, side))}
+                      </div>
+                    ))}
+                  </div>
+                ) : visible.map(row => 'content' in row ? renderLine(row, row.id) : null)}
               </div>
             </div>
           </div>

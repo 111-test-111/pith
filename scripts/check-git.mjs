@@ -33,6 +33,7 @@ try {
   const request = async (action, fields = {}) => ({ cwd: active, id: randomUUID(), revision: action === 'init' ? '' : (await status()).revision, action, ...fields })
   const execute = async (action, fields = {}) => ok(await service.execute(await request(action, fields)))
   rejected(await service.status({ cwd: nested }), 'not-repository')
+  rejected(await service.treeStatus({ cwd: nested }), 'not-repository')
   // Init acts on the explicit active project. Open a nested workspace later.
   active = project
   await execute('init')
@@ -58,6 +59,15 @@ try {
   assert.equal(history.commits[0].subject, 'Initial fixture'); assert(history.commits[0].body.includes('Body with newlines.')); assert.deepEqual(history.commits[0].parents, [])
   const firstCommit = history.commits[0].id
   assert.deepEqual(ok(await service.commitFiles({ cwd: active, commit: firstCommit })).map(file => file.path), ['README.md', 'nested/file.txt'])
+  assert.deepEqual(ok(await service.treeStatus({ cwd: nested })), [], 'clean subdirectory is still a Git workspace')
+  await writeFile(join(nested, 'new [file].txt'), 'nested addition\nsecond line\n')
+  await writeFile(join(project, 'outside nested.txt'), 'outside workspace\n')
+  const treeChanges = ok(await service.treeStatus({ cwd: nested }))
+  assert.deepEqual(treeChanges.map(file => file.path), ['new [file].txt'], 'tree paths are relative to the active workspace')
+  assert.deepEqual(treeChanges[0].worktreeStats, { added: 2, removed: 0, binary: false })
+  rejected(await service.treeStatus({ cwd: project }), 'stale')
+  await rm(join(project, 'outside nested.txt'))
+  await rm(join(nested, 'new [file].txt'))
   assert(ok(await service.diff({ cwd: active, revision: (await status()).revision, area: 'commit', path: 'README.md', commit: firstCommit })).patch.includes('+original'))
   await writeFile(join(project, 'README.md'), 'staged\n'); await execute('stage', { paths: ['README.md'] }); await writeFile(join(project, 'README.md'), 'working\n')
   let repo = await status()

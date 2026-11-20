@@ -5,6 +5,7 @@ import { EASE_OUT } from '@/lib/ease'
 import { Button } from '@/components/motion/button'
 import { Input } from '@/components/motion/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/motion/select'
+import { Tabs, TabsList, TabsTrigger } from '@/components/motion/tabs'
 import { FadeScroll } from '../FadeScroll'
 import { WindowTitlebar } from '../WindowTitlebar'
 import { ConfirmDialog } from '../ConfirmDialog'
@@ -367,13 +368,17 @@ export const ScheduledTasksView = memo(function ScheduledTasksView({
             </div>
           </WindowTitlebar>
 
-          <nav aria-label={t('scheduledTasks.views')} className="flex shrink-0 gap-1 border-b border-border/60 px-3 py-1.5">
-            <Button variant={view === 'tasks' ? 'secondary' : 'ghost'} size="sm" className={view === 'tasks' ? 'bg-muted' : undefined} aria-current={view === 'tasks' ? 'page' : undefined} onClick={() => { setView('tasks'); setQuery(''); setMobileDetail(false) }}>
-              {t('scheduledTasks.views.tasks')} · {tasks.length}
-            </Button>
-            <Button variant={view === 'history' ? 'secondary' : 'ghost'} size="sm" className={view === 'history' ? 'bg-muted' : undefined} aria-current={view === 'history' ? 'page' : undefined} onClick={() => { setView('history'); setQuery(''); setMobileDetail(false) }}>
-              {t('scheduledTasks.views.history')}{snapshot?.unreadCount ? ` · ${snapshot.unreadCount}` : ''}
-            </Button>
+          <nav aria-label={t('scheduledTasks.views')} className="shrink-0 border-b border-border/60 px-3 py-1.5">
+            <Tabs value={view} onValueChange={value => { setView(value as 'tasks' | 'history'); setQuery(''); setMobileDetail(false) }} variant="underline">
+              <TabsList className="h-8 border-b-0">
+                <TabsTrigger value="tasks" className="h-8 min-h-0" aria-current={view === 'tasks' ? 'page' : undefined}>
+                  {t('scheduledTasks.views.tasks')} · {tasks.length}
+                </TabsTrigger>
+                <TabsTrigger value="history" className="h-8 min-h-0" aria-current={view === 'history' ? 'page' : undefined}>
+                  {t('scheduledTasks.views.history')}{snapshot?.unreadCount ? ` · ${snapshot.unreadCount}` : ''}
+                </TabsTrigger>
+              </TabsList>
+            </Tabs>
           </nav>
 
           {error ? (

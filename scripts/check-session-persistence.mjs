@@ -42,9 +42,9 @@ try {
       }))
       builder.onResolve({ filter: /^playwright-core(\/|$)/ }, args => ({ path: fileURLToPath(import.meta.resolve(args.path)), external: true }))
       builder.onResolve({ filter: /^electron$/ }, () => ({ path: 'electron', namespace: 'fixture' }))
-      builder.onResolve({ filter: /^proper-lockfile$|^@resvg\/resvg-js$/ }, args => ({ path: fileURLToPath(import.meta.resolve(args.path)), external: true }))
+      builder.onResolve({ filter: /^proper-lockfile$|^@resvg\/resvg-js$|^ssh2$|^@xterm\/headless$/ }, args => ({ path: fileURLToPath(import.meta.resolve(args.path)), external: true }))
       builder.onLoad({ filter: /.*/, namespace: 'fixture' }, () => ({
-        contents: 'export const app = { getPath() { throw Error("Unexpected app access") } }; export const shell = {};'
+        contents: `export const app = { getPath(name) { if (name === 'userData') return ${JSON.stringify(temp)}; throw Error("Unexpected app access") } }; export const shell = {};`
       }))
     } }]
   })

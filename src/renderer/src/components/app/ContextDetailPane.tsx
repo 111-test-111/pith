@@ -274,7 +274,7 @@ export function ContextDetailPane({ store }: { store: PiStore }) {
           <Stat emphasis label={t('contextDetail.usage')} value={usage.percent !== null ? formatEstimatePercent(usage.percent) : NONE} />
           <Stat emphasis label={t('contextDetail.contextTokens')} value={used !== null ? `~${formatCount(used, locale)}` : NONE} />
           <Stat emphasis label={t('contextDetail.contextLimit')} value={usage.contextWindow > 0 ? formatCount(usage.contextWindow, locale) : NONE} />
-          <Stat emphasis label={t('contextDetail.projectionEstimate')} value={`~${formatCount(detail.projectionEstimate, locale)}`} />
+          <Stat emphasis label={t('contextDetail.cacheHitLabel')} value={usage.cacheHitRate !== null ? formatRate(usage.cacheHitRate) : NONE} />
         </div>
         <div className="pane-stat-grid context-config-grid mt-4" data-context-config>
           <Stat label={t('contextDetail.provider')} value={detail.provider ?? NONE} />

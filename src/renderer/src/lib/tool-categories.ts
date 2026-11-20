@@ -46,7 +46,7 @@ export const TOOL_CATEGORIES: readonly ToolCategory[] = [
     id: 'terminal',
     labelKey: 'tool.categoryTerminal',
     icon: SquareTerminal,
-    tools: ['bash', 'bash_task', 'powershell']
+    tools: ['bash', 'bash_task', 'ssh_connect', 'ssh_session', 'powershell']
   },
   {
     id: 'changes',

@@ -25,7 +25,7 @@ export { buildToolCatalog } from './src/main/pi/catalog';`, resolveDir: resolve(
     plugins: [{ name: 'isolated-profile', setup(builder) {
       builder.onResolve({ filter: /^@earendil-works\/pi-coding-agent$/ }, () => ({ path: 'sdk', namespace: 'fixture' }))
       builder.onResolve({ filter: /^electron$/ }, () => ({ path: 'electron', namespace: 'fixture' }))
-      builder.onResolve({ filter: /^proper-lockfile$|^@resvg\/resvg-js$/ }, args => ({ path: fileURLToPath(import.meta.resolve(args.path)), external: true }))
+      builder.onResolve({ filter: /^proper-lockfile$|^@resvg\/resvg-js$|^ssh2$|^@xterm\/headless$/ }, args => ({ path: fileURLToPath(import.meta.resolve(args.path)), external: true }))
       builder.onResolve({ filter: /^playwright-core(\/|$)|^chromium-bidi(\/|$)/ }, (args) => {
         // Keep the test bundle out of the embedded browser's heavy optional
         // dependency graph. The browser service is loaded for its type surface

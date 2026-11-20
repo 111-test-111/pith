@@ -2,6 +2,136 @@ import assert from 'node:assert/strict'
 import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 
+/** Skill selection uses the live catalog and the editor's native transaction. */
+export async function checkComposerActions(page, locale) {
+  const input = page.locator('[data-prompt-editor]')
+  const text = () => input.evaluate(node => node.innerText.replace(/\n$/, ''))
+  const plus = page.locator('[data-composer-actions-trigger]')
+  const addSkill = page.locator('[data-composer-action="add-skill"]')
+  const panel = page.locator('[data-composer-skills-menu]:not([inert])')
+  await page.evaluate(() => {
+    window.searchCalls = 0; window.catalogCalls = 0; window.skillMenuMode = 'ready'
+    window.pi.searchFiles = async () => {
+      window.searchCalls++
+      return [{ path: '/tmp/notes.md', relPath: 'notes.md', name: 'notes.md', dir: '', kind: 'text', size: 6 }]
+    }
+    const names = ['alpha', 'explicit-only', ...Array.from({ length: 30 }, (_, i) => `scroll-${String(i).padStart(2, '0')}`), 'z-last']
+    window.skillCatalog = { tools: [], extensions: [], skillDiagnostics: [], skills: names.map(name => ({
+      name, description: `Instructions for ${name}`, filePath: `/skills/${name}/SKILL.md`, baseDir: `/skills/${name}`,
+      source: '/skills', scope: 'user', origin: 'top-level', disableModelInvocation: name === 'explicit-only'
+    })) }
+    window.pi.toolsCatalog = async () => {
+      window.catalogCalls++
+      const mode = window.skillMenuMode
+      if (mode === 'error') throw new Error('fixture catalog error')
+      if (mode === 'hold') await new Promise(resolve => { window.releaseSkillCatalog = resolve })
+      return mode === 'empty' ? { ...window.skillCatalog, skills: [] } : window.skillCatalog
+    }
+    window.originalSkillEditor = document.querySelector('[data-prompt-editor]')
+  })
+  await input.fill('\n@notes')
+  await page.waitForTimeout(250) // the removed @ lookup used a 120ms debounce
+  assert.equal(await page.evaluate(() => window.searchCalls), 0, '@ is ordinary draft text and performs no file lookup')
+  assert.equal(await page.getByText('notes.md', { exact: true }).count(), 0, '@ never opens a file chooser')
+  await input.fill('/skill:')
+  assert.equal(await panel.count(), 0, 'typing / does not open a skill menu')
+  assert.equal(await page.evaluate(() => window.catalogCalls), 0, 'typing / does not load the skill catalog')
+
+  const [triggerBox, composerBox] = await Promise.all([plus.boundingBox(), input.locator('xpath=ancestor::form').boundingBox()])
+  assert.ok(triggerBox.x >= composerBox.x && triggerBox.x - composerBox.x <= 12, 'the plus button stays at the left edge of the input frame')
+  assert.ok(composerBox.y + composerBox.height - triggerBox.y - triggerBox.height <= 12, 'the plus button stays at the bottom edge of the input frame')
+  const openSkills = async () => {
+    await plus.click()
+    await addSkill.waitFor()
+    assert.equal((await addSkill.innerText()).trim(), { en: 'Add skill', 'zh-CN': '添加技能', 'zh-TW': '新增技能' }[locale])
+    assert.equal(await panel.count(), 0, 'the first level opens before the skill submenu')
+    await addSkill.click()
+    await panel.waitFor()
+  }
+
+  await input.fill('existing request\nsecond line')
+  await openSkills()
+  await panel.locator('[data-skill-name="explicit-only"]').waitFor()
+  assert.equal(await page.evaluate(() => window.catalogCalls), 1, 'opening the submenu reads the active catalog once')
+  const scroller = panel.locator('[data-fade-scroll]')
+  assert.ok(await scroller.evaluate(node => node.scrollHeight > node.clientHeight), 'a long skill list is scrollable')
+  await panel.locator('[data-skill-name="alpha"]').focus()
+  await page.keyboard.press('End')
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset.skillName), 'z-last')
+  assert.ok(await scroller.evaluate(node => node.scrollTop > 0), 'keyboard selection reveals the last skill')
+  await page.keyboard.press('Enter')
+  assert.equal(await text(), '/skill:z-last existing request\nsecond line')
+  assert.equal(await input.evaluate(node => node === window.originalSkillEditor && node === document.activeElement), true, 'skill selection retains and focuses the same native editor')
+  await input.press('ControlOrMeta+z')
+  assert.equal(await text(), 'existing request\nsecond line', 'skill insertion is one native undo transaction')
+  await input.press('ControlOrMeta+Shift+z')
+  assert.equal(await text(), '/skill:z-last existing request\nsecond line')
+  await plus.focus()
+  await page.keyboard.press('Enter')
+  await page.waitForFunction(() => document.activeElement?.dataset.composerAction === 'toggle-plan')
+  await page.keyboard.press('End')
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset.composerAction), 'add-skill')
+  await page.keyboard.press('ArrowRight')
+  await panel.waitFor()
+  await panel.locator('[data-skill-name="explicit-only"]').click()
+  assert.equal(await text(), '/skill:explicit-only existing request\nsecond line', 'choosing another skill replaces the command without losing the request')
+  await input.press('Enter')
+  assert.equal(await page.evaluate(() => window.sent.at(-1).text), '/skill:explicit-only existing request\nsecond line', 'submission uses the SDK native skill command')
+
+  // A child Escape returns to its entry, then the parent Escape closes the
+  // action menu. A late response from a dismissed opening must not replace it.
+  await page.evaluate(() => { window.skillMenuMode = 'hold' })
+  await openSkills()
+  await panel.getByRole('status').waitFor()
+  await page.waitForFunction(() => typeof window.releaseSkillCatalog === 'function')
+  await page.keyboard.press('Escape')
+  assert.equal(await plus.getAttribute('aria-expanded'), 'true', 'Escape closes the submenu first')
+  assert.equal(await addSkill.evaluate(node => node === document.activeElement), true, 'submenu dismissal restores its trigger focus')
+  await page.keyboard.press('Escape')
+  assert.equal(await plus.getAttribute('aria-expanded'), 'false')
+  await page.evaluate(() => { window.skillMenuMode = 'empty' })
+  await openSkills()
+  await page.waitForFunction(() => !document.querySelector('[data-composer-skills-menu] [role="status"]'))
+  await page.evaluate(() => window.releaseSkillCatalog())
+  assert.equal(await panel.locator('[data-skill-name]').count(), 0, 'a late catalog cannot repopulate a newer empty menu')
+  assert.ok((await panel.innerText()).trim(), 'empty skill catalogs explain the state')
+  await page.keyboard.press('Escape'); await page.keyboard.press('Escape')
+  await page.evaluate(() => { window.skillMenuMode = 'error' })
+  await openSkills()
+  await panel.getByRole('alert').waitFor()
+  await input.click()
+  assert.equal(await plus.getAttribute('aria-expanded'), 'false', 'an outside click dismisses both menu levels')
+
+  // Removing an explicit file attachment no longer edits literal @ text.
+  await page.evaluate(() => {
+    window.skillMenuMode = 'ready'
+    window.pi.pathForFile = () => '/tmp/notes.md'
+    window.pi.readFile = async path => ({ path, relPath: 'notes.md', kind: 'text', size: 6 })
+  })
+  const fileInput = page.locator('input[type="file"]:not([accept])')
+  const attachFile = () => fileInput.setInputFiles({ name: 'notes.md', mimeType: 'text/plain', buffer: Buffer.from('notes\n') })
+  await input.fill('@notes.md stays in this draft')
+  await attachFile()
+  await page.locator('[data-attachment-card]').getByRole('button').last().click()
+  assert.equal(await text(), '@notes.md stays in this draft')
+  await input.fill('')
+  await attachFile()
+  await openSkills()
+  await panel.locator('[data-skill-name="alpha"]').click()
+  await input.press('Enter')
+  assert.equal(await page.evaluate(() => window.sent.at(-1).text), '/skill:alpha ', 'a skill-only draft retains the SDK separator before appended file blocks')
+  assert.deepEqual(await page.evaluate(() => window.sent.at(-1).files), ['/tmp/notes.md'])
+  assert.equal(await text(), '')
+  if (process.env.PI_PLAN_SCREENSHOT_DIR) {
+    await openSkills()
+    await panel.locator('[data-skill-name="alpha"]').waitFor()
+    await mkdir(process.env.PI_PLAN_SCREENSHOT_DIR, { recursive: true })
+    await page.screenshot({ path: join(process.env.PI_PLAN_SCREENSHOT_DIR, `composer-skills-${locale}.png`) })
+    await page.keyboard.press('Escape'); await page.keyboard.press('Escape')
+  }
+  await page.evaluate(() => { window.sent = [] })
+}
+
 /** Capture the native caret and verify a plan-mode toggle leaves the editing
  * surface untouched. A test-only color makes the caret measurable in pixels. */
 async function checkPromptTypography(page, locale) {
@@ -258,21 +388,8 @@ export async function checkPromptEditor(page, locale) {
   assert.equal(await text(), 'plain\ntext')
   assert.equal(await input.locator('b, div, span, img').count(), 0)
 
-  // The @ picker uses draft offsets after a leading blank line. Its
-  // programmatic replacement puts the caret after the reference.
-  await page.evaluate(() => { window.pi.searchFiles = async () => [{ path: '/tmp/notes.md', relPath: 'notes.md', name: 'notes.md', dir: '', kind: 'text', size: 6 }] })
-  await input.fill('\n@notes')
-  await page.getByText('notes.md', { exact: true }).waitFor()
-  await input.press('Enter')
-  assert.equal(await text(), '\n@notes.md ')
-  await input.press('ControlOrMeta+z')
-  assert.equal(await text(), '\n@notes', 'a mention replacement is one native undo transaction')
-  await input.press('ControlOrMeta+Shift+z')
-  assert.equal(await text(), '\n@notes.md ')
-  await page.keyboard.insertText('ok')
-  assert.equal(await text(), '\n@notes.md ok')
-  await page.locator('[data-attachment-card]').getByRole('button').last().click()
-  assert.equal(await text(), 'ok')
+  await checkComposerActions(page, locale)
+  await input.fill('ok')
 
   await page.evaluate(() => window.setAppendDraft({ text: 'annotation\nsecond line', seq: 1 }))
   await page.waitForFunction(() => document.querySelector('[data-prompt-editor]').innerText.replace(/\n$/, '') === 'ok\n\nannotation\nsecond line')

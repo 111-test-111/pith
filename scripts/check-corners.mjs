@@ -47,6 +47,7 @@ body { overflow: auto !important; } #gallery { max-width:900px; margin:32px auto
 .lab-columns { display:grid; grid-template-columns:1fr 1fr; gap:32px; }
 .lab-label { font-size:13px; opacity:.65; margin-bottom:12px; } .lab-section { margin:28px 0; }
 #pseudo::before {content:'';display:block;width:8px;height:8px;background:currentColor;}
+#pseudo::after {content:'';display:block;width:24px;height:24px;border-radius:var(--app-radius-item);background:currentColor;}
 #pill-list [role="tablist"] { display:flex; flex-direction:column; align-items:stretch; gap:4px; width:128px; }
 </style></head><body><div id="root"></div><script type="module">
 import React from 'react';
@@ -66,6 +67,7 @@ import {MessageBubble,MessageBubbleContent} from '/src/components/agents/message
 import {StreamingResponse} from '/src/components/agents/streaming-response.tsx';
 import {Markdown} from '/src/lib/markdown.tsx';
 import {TurnWrittenFiles} from '/src/components/app/TurnWrittenFiles.tsx';
+import {HeatCalendar} from '/src/components/charts/heat-calendar.tsx';
 import {I18nProvider} from '/src/i18n/index.tsx';
 import {setUiStyle} from '/src/lib/ui-style.ts';
 import {synthesizeWritePatch} from '/src/lib/diff.ts';
@@ -138,7 +140,9 @@ function Fixture(){
      h(TabsTrigger,{value:'three'},'Providers'),
      h(TabsTrigger,{value:'four'},'Tools'),
      h(TabsTrigger,{value:'five'},'Sounds'))))),
-  h('section',{className:'lab-section'},h('div',{className:'lab-label'},'Composer'),h(PromptInput,{placeholder:'Ask anything…',defaultValue:'Refine the corners, preserve the circles.'}))));
+  h('section',{className:'lab-section'},h('div',{className:'lab-label'},'Composer'),h(PromptInput,{placeholder:'Ask anything…',defaultValue:'Refine the corners, preserve the circles.'})),
+  h('div',{id:'inherit-probe',className:'rounded-item',style:{width:80,height:40}},h('div',{id:'inherit-child',className:'rounded-inherit',style:{width:'100%',height:'100%',background:'var(--primary)'}})),
+  h('section',{id:'heat-case',className:'lab-section'},h(HeatCalendar,{weeks:4,endDate:new Date('2026-09-20T00:00:00Z'),values:Array.from({length:4},()=>Array(7).fill(.5))}))));
 }
 createRoot(document.getElementById('root')).render(h(Fixture));
 </script></body></html>`
@@ -149,7 +153,17 @@ try {
   server = await createServer({
     configFile: false, root: join(repo, 'src/renderer'), logLevel: 'error', cacheDir: join(temporary, 'vite'),
     resolve: { alias: { '@': join(repo, 'src/renderer/src') } },
-    plugins: [react({ exclude: /(?:node_modules|\/vite\/deps\/)/ }), tailwindcss(), {
+    plugins: [{
+      // The HTML is served from middleware, outside Tailwind's source scan.
+      // Register this fixture so variant-only classes (notably the full-round
+      // pseudo-element probe) are emitted rather than passing on CSS defaults.
+      name: 'corner-fixture-css', enforce: 'pre',
+      transform(source, id) {
+        if (id.split('?')[0] === join(repo, 'src/renderer/src/styles.css')) {
+          return source + '\n@source ' + JSON.stringify(join(repo, 'scripts/check-corners.mjs')) + ';\n'
+        }
+      }
+    }, react({ exclude: /(?:node_modules|\/vite\/deps\/)/ }), tailwindcss(), {
       name: 'corner-fixture', configureServer(server) {
         server.middlewares.use(async (req, res, next) => {
           if (req.url?.split('?')[0] !== fixturePath) return next()
@@ -227,12 +241,23 @@ app.on('window-all-closed',()=>app.quit());`)
     function sample(){if(!window.cornerSampling)return;
       const e=document.querySelector(${JSON.stringify(selector)});
       if(e){const c=getComputedStyle(e),r=e.getBoundingClientRect(),radius=parseFloat(c.borderTopLeftRadius)*r.width/e.offsetWidth;
-        const hit=document.elementFromPoint(r.left+radius*.22,r.top+radius*.22);
+        // .22r is inside a superellipse(2), but OUTSIDE a circular arc.
+        // Probe every corner: a stale longhand on just one corner must fail.
+        const inset=Math.max(.1,radius*.22);
+        const inside=[[r.left+inset,r.top+inset],[r.right-inset,r.top+inset],
+          [r.left+inset,r.bottom-inset],[r.right-inset,r.bottom-inset]].map(([x,y])=>{
+            const hit=document.elementFromPoint(x,y);return e===hit||e.contains(hit)});
         window.cornerFrames.push({shape:c.cornerShape,clip:c.clipPath,opacity:c.opacity,radius,
-          inside:e===hit||e.contains(hit),transform:c.transform});}
+          inside,transform:c.transform});}
       requestAnimationFrame(sample)}requestAnimationFrame(sample);
   })()`)
   const endFrames = async () => evaluate('window.cornerSampling=false;window.cornerFrames')
+  const shapeOf = preset => preset === 'rounded' ? 'superellipse(1)' : 'superellipse(2)'
+  const assertCorners = async (selector, radius, shape, label, pseudo = '') => {
+    const corners = await evaluate(`(()=>{const e=document.querySelector(${JSON.stringify(selector)});if(!e)throw new Error('Missing corner probe: '+${JSON.stringify(selector)});const s=getComputedStyle(e,${JSON.stringify(pseudo)});return ['top-left','top-right','bottom-left','bottom-right'].map(c=>[s.getPropertyValue('border-'+c+'-radius'),s.getPropertyValue('corner-'+c+'-shape')])})()`)
+    assert.deepEqual(corners, Array.from({ length: 4 }, () => [radius, shape]), label + ': all four radii and shapes')
+  }
+  const nativeFrames = (frames, preset) => frames.every(f => f.shape === shapeOf(preset) && f.clip === 'none' && f.inside.every(inside => inside === (preset !== 'rounded' || f.radius < 1)))
 
   for (const reduced of [false, true]) {
     await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: reduced ? 'reduce' : 'no-preference' }] })
@@ -241,7 +266,7 @@ app.on('window-all-closed',()=>app.quit());`)
     assert.equal(await evaluate('CSS.supports("corner-shape","squircle")'), true)
     for (const dark of [false, true]) {
       const theme = dark ? 'dark' : 'light'
-      await evaluate(`document.documentElement.classList.toggle('dark',${dark})`)
+      await evaluate(`window.setUiStyle('square');document.documentElement.classList.toggle('dark',${dark})`)
       for (const selector of ['#primary', '.lab-field', '#segment [aria-selected="true"]', '[data-slot="message-bubble"] .rounded-inherit']) {
         assert.equal(await style(selector, 'corner-shape'), 'superellipse(2)', selector + ': continuous corners')
       }
@@ -257,10 +282,13 @@ app.on('window-all-closed',()=>app.quit());`)
       // and streaming chrome kept Tailwind's bare `rounded` (a literal 0.25rem,
       // not a theme token) as `[&_code]:rounded`, which quietly re-rounded every
       // inline code box in the transcript while plain markdown stayed square.
-      const detailRadius = await evaluate('getComputedStyle(document.documentElement).getPropertyValue("--app-radius-detail").trim()')
+      // The highlight box takes the scale's INNER step — one step rounder than
+      // the smallest token, so a code chip reads as a rounded box in the
+      // superellipse style instead of a near-rectangle.
+      const innerRadius = await evaluate('getComputedStyle(document.documentElement).getPropertyValue("--app-radius-inner").trim()')
       for (const selector of ['#md-case [data-slot="message-bubble"] code', '#md-plain code']) {
-        assert.equal(await style(selector, 'border-top-left-radius'), detailRadius, selector + ': inline code takes the theme detail radius')
-        assert.equal(await style(selector, 'border-bottom-right-radius'), detailRadius, selector + ': every inline code corner')
+        assert.equal(await style(selector, 'border-top-left-radius'), innerRadius, selector + ': inline code takes the theme inner radius')
+        assert.equal(await style(selector, 'border-bottom-right-radius'), innerRadius, selector + ': every inline code corner')
         assert.equal(await style(selector, 'corner-shape'), 'superellipse(2)', selector + ': continuous corner shape')
         assert.notEqual(await style(selector, 'background-color'), 'rgba(0, 0, 0, 0)', selector + ': inline code paints its own box')
         assert.equal(await evaluate(`(()=>{const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();return r.width>0&&r.height>0})()`), true, selector + ': inline code has a box')
@@ -273,12 +301,15 @@ app.on('window-all-closed',()=>app.quit());`)
       await evaluate('document.documentElement.style.removeProperty("--app-corner-shape")')
       await screenshot(`${theme}-${reduced ? 'reduced' : 'motion'}-gallery`)
 
-      // The style preset must be a pure token swap: both presets pinned, and the
+      // Each preset drives real consumers; rounded must change both radius AND
+      // geometry, while returning to square/squircle must clear the old shape.
+      // The style preset must be a pure token swap: all presets pinned, and the
       // capsule site must actually change shape between them. The preset block
       // has the same specificity as :root and wins on source order alone, so
       // this is also what catches a reorder above :root.
       const CORNER_PRESETS = {
         square: { detail: '0px', inner: '0px', item: '0px', card: '0px', window: '0px', capsule: '0px' },
+        rounded: { detail: '2px', inner: '4px', item: '8px', card: '12px', window: '28px', capsule: '9999px' },
         squircle: { detail: '4px', inner: '10px', item: '14px', card: '20px', window: '28px', capsule: '9999px' }
       }
       for (const [preset, expected] of Object.entries(CORNER_PRESETS)) {
@@ -289,6 +320,41 @@ app.on('window-all-closed',()=>app.quit());`)
         // fill mid-interpolation as an `oklab(...)` mix and reported two boxes
         // that are in fact identical at rest as unequal.
         await pause(400)
+        const shape = shapeOf(preset)
+        for (const [selector, radius] of [
+          ['#primary', expected.item], ['.lab-field', expected.item],
+          ['#inherit-probe', expected.item], ['#inherit-child', expected.item],
+          ['#md-case [data-slot="message-bubble"] code', expected.inner], ['#md-plain code', expected.inner],
+          ['#segment .absolute', expected.inner], ['#underline [role="tab"][aria-selected="false"]', expected.inner]
+        ]) await assertCorners(selector, radius, shape, preset + ': ' + selector)
+        // Change the parent's shape without remounting: inherit must follow
+        // runtime changes, not capture the previous preset's superellipse.
+        await evaluate('document.querySelector("#inherit-probe").classList.add("corner-round")')
+        await assertCorners('#inherit-child', expected.item, 'superellipse(1)', preset + ': dynamic inherited round override')
+        await evaluate('document.querySelector("#inherit-probe").classList.remove("corner-round")')
+        await assertCorners('#inherit-child', expected.item, shape, preset + ': inherited shape restored')
+        await beginFrames('#primary'); await pause(80)
+        const controlFrames = await endFrames()
+        assert.ok(controlFrames.length > 0 && nativeFrames(controlFrames, preset), preset + ': ordinary control paints the expected four-corner curve: ' + JSON.stringify(controlFrames))
+        assert.equal(await style('#status-dot', 'corner-shape'), 'superellipse(1)', preset + ': true circles never acquire the preset shape')
+        assert.equal(await evaluate('(()=>{const e=document.querySelector("#status-dot"),s=getComputedStyle(e),r=e.getBoundingClientRect();return r.width===r.height&&r.width>0&&parseFloat(s.borderTopLeftRadius)>=r.width/2})()'), true, preset + ': the full-round status stays a circle at its actual size')
+        assert.equal(await evaluate('getComputedStyle(document.getElementById("pseudo"),"::before").cornerShape'), 'superellipse(1)', preset + ': pseudo-element full-round stays circular')
+        await assertCorners('#pseudo', expected.item, shape, preset + ': ordinary pseudo-element follows the live shape', '::after')
+        // Exercise actual chart particles and their dynamically mounted hover
+        // rings, not a copied capsule utility on an inert sample.
+        const heatCell = await evaluate(`(()=>{const e=document.querySelector('#heat-case [data-heat-cell]');e.scrollIntoView({block:'center'});const r=e.getBoundingClientRect();return{x:r.left+r.width/2,y:r.top+r.height/2}})()`)
+        await send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...heatCell })
+        await evaluate(`document.querySelector('#heat-case [data-heat-cell]').focus({preventScroll:true})`)
+        for (let i = 0; i < 40; i++) {
+          if (await evaluate(`!!document.querySelector('#heat-case .rounded-inherit')`)) break
+          await pause(25)
+        }
+        for (const selector of ['#heat-case [data-heat-cell]', '#heat-case [data-heat-cell] > span', '#heat-case .rounded-inherit']) {
+          await assertCorners(selector, expected.capsule, 'superellipse(1)', preset + ': chart capsule/ring ' + selector)
+        }
+        await assertCorners('#heat-case button.size-3', expected.detail, shape, preset + ': chart legend')
+        await evaluate('document.activeElement.blur();window.scrollTo(0,0)')
+        await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 0, y: 0 }); await pause(180)
         for (const [token, value] of Object.entries(expected)) {
           assert.equal(
             await evaluate(`getComputedStyle(document.documentElement).getPropertyValue("--app-radius-${token}").trim()`),
@@ -302,7 +368,17 @@ app.on('window-all-closed',()=>app.quit());`)
           parseFloat(expected.item),
           preset + ': the composer send control takes the shared icon step, never the capsule step (got ' + sendRadius + ', expected ' + parseFloat(expected.item) + ')'
         )
-        assert.equal(await style('[aria-label="Send prompt"]', 'corner-shape'), 'superellipse(2)', preset + ': the send control keeps the continuous corner shape')
+        assert.equal(await style('[aria-label="Send prompt"]', 'corner-shape'), shape, preset + ': the send control follows the active corner shape')
+        // The inline-code highlight box follows the semantic scale too: one step
+        // rounder than the smallest token in the superellipse style, and still a
+        // hard edge in the square style.
+        const inlineRadius = parseFloat(await style('#md-plain code', 'border-top-left-radius'))
+        assert.equal(inlineRadius, parseFloat(expected.inner), preset + ': the inline-code highlight box takes the inner step (got ' + inlineRadius + ', expected ' + parseFloat(expected.inner) + ')')
+        assert.equal(
+          inlineRadius > parseFloat(expected.detail),
+          preset !== 'square',
+          preset + ': the inline-code highlight box is rounder than the smallest scale step in both non-square styles (got ' + inlineRadius + ' against a detail step of ' + parseFloat(expected.detail) + ')'
+        )
         // Defect 1: the pill LIST takes the scale's card step, never the capsule.
         // A tall vertical pill list (the Settings nav, the Tools/Skills/
         // Subagents/Extensions section lists) is much taller than it is wide, so
@@ -313,7 +389,7 @@ app.on('window-all-closed',()=>app.quit());`)
         assert.ok(pill.width > 0 && pill.height > pill.width, preset + ': the fixture pill list is a tall vertical list (got ' + pill.width + '×' + pill.height + ')')
         assert.equal(pill.radius, parseFloat(expected.card), preset + ': the pill container takes the scale card step, so a tall pill list cannot turn into a capsule (got radius ' + pill.radius + ', expected ' + parseFloat(expected.card) + ' — a capsule would clamp to half its width and read as semicircular ends)')
         assert.ok(pill.radius < Math.min(pill.width, pill.height) / 2, preset + ': the pill container keeps small rounded corners, not semicircular ends (radius ' + pill.radius + ' on a ' + pill.width + '×' + pill.height + ' list)')
-        assert.equal(pill.shape, 'superellipse(2)', preset + ': the pill container keeps the continuous corner shape, not a forced capsule — a capsule would force `corner-shape: round` and, on a tall list, clamp to semicircular ends')
+        assert.equal(pill.shape, shape, preset + ': the pill container follows the preset curve, not a forced capsule')
         // The moving INDICATOR takes the CONTROL step like its tab: a selected
         // row reads as a normal small-radius block, never a left/right
         // semicircle pill.
@@ -341,7 +417,7 @@ app.on('window-all-closed',()=>app.quit());`)
           underline.radius < underline.height / 2,
           `${preset}: the compact tab fill keeps small rounded corners rather than clamping into a capsule (radius ${underline.radius} on a ${underline.height}px row)`
         )
-        assert.equal(underline.shape, 'superellipse(2)', `${preset}: the underline tab fill keeps the continuous corner shape`)
+        assert.equal(underline.shape, shape, `${preset}: the underline tab fill follows the preset curve`)
         // Selection controls, pinned per preset. Both frames take the CONTROL
         // step: hard-edged in the square style, a full circle in the squircle
         // style (the control step is 14px on this 14px box). The MARK is what
@@ -399,7 +475,7 @@ app.on('window-all-closed',()=>app.quit());`)
         const markArt = selector => evaluate('(()=>{const m=document.querySelector(' + JSON.stringify(selector + ' [data-checkbox-mark]') + ');if(!m)return null;return {tag:m.tagName.toLowerCase(),paths:[...m.querySelectorAll("path")].filter(p=>(p.getAttribute("d")||"").trim()).length}})()')
         const pointFill = await frameFill('#point-checkbox')
         const checkFill = await frameFill('#check-mark-box')
-        if (preset === 'squircle') {
+        if (preset !== 'square') {
           assert.equal(
             pointFill, checkFill,
             preset + ': the squircle on-state must look the same for both `mark` variants (filled accent + white check); got point-mark ' + pointFill + ' vs check-mark ' + checkFill
@@ -425,13 +501,10 @@ app.on('window-all-closed',()=>app.quit());`)
         // The invariant this change exists to protect, in ONE assertion: the
         // checkbox and the radio must stay tellable apart by the mark they draw.
         assert.ok(
-          preset !== 'squircle' || (checkboxMark.tag === 'svg' && checkboxMark.paths >= 1 && radioMark.tag === 'span'),
+          preset === 'square' || (checkboxMark.tag === 'svg' && checkboxMark.paths >= 1 && radioMark.tag === 'span'),
           preset + ': the checkbox and the radio must stay distinguishable by their mark — in the squircle style the checkbox mark must be the check glyph (svg + non-empty path) while the radio mark must stay the dot (span); got checkbox <' + checkboxMark.tag + '> with ' + checkboxMark.paths + ' drawn path(s) and radio <' + radioMark.tag + '>'
         )
         await screenshot(`${theme}-${reduced ? 'reduced' : 'motion'}-${preset}-gallery`)
-      }
-      await evaluate("window.setUiStyle('square')")
-      await pause(400)
 
       // The dialog is portalled outside #root. Check entry frames, focus trap,
       // shadow, and native corners at every observed frame (not just at rest).
@@ -440,10 +513,19 @@ app.on('window-all-closed',()=>app.quit());`)
       await evaluate(`document.querySelector('[data-trigger="modal"]').click()`); await pause(450)
       const frames = await endFrames()
       assert.ok(frames.length > 4, 'entry frame sampler ran')
-      assert.ok(frames.every(f => f.shape === 'superellipse(2)' && f.clip === 'none' && f.inside), 'dialog corners stay native on every entry frame: ' + JSON.stringify(frames))
+      assert.ok(nativeFrames(frames, preset), preset + ': dialog corners stay native on every entry frame: ' + JSON.stringify(frames))
+      await assertCorners(dialog, expected.window, shape, preset + ': portal dialog')
+      // A preset change while the portal is OPEN must not leave an animation-
+      // owned shape behind. Keep the dialog node and focus through the cycle.
+      await evaluate(`window.savedDialog=document.querySelector(${JSON.stringify(dialog)});void 0`)
+      for (const next of ['squircle', 'rounded', 'square', preset]) {
+        await evaluate(`window.setUiStyle(${JSON.stringify(next)})`); await pause(100)
+        await assertCorners(dialog, CORNER_PRESETS[next].window, shapeOf(next), next + ': live portal switch')
+        assert.equal(await evaluate(`window.savedDialog===document.querySelector(${JSON.stringify(dialog)})`), true, next + ': portal stays mounted')
+      }
       if (reduced) assert.ok(frames.every(f => f.transform === 'none'), 'reduced motion has no scale')
       assert.notEqual(await style(dialog, 'box-shadow'), 'none')
-      if (!dark && !reduced) {
+      if (preset === 'square' && !dark && !reduced) {
         // Negative control: the original beUI mask must fail the geometric
         // oracle despite still reporting corner-shape: squircle. The mask uses
         // a fixed radius — the square-style branch's own radius is 0 and would
@@ -451,7 +533,7 @@ app.on('window-all-closed',()=>app.quit());`)
         await beginFrames(dialog)
         await evaluate(`(()=>{const e=document.querySelector(${JSON.stringify(dialog)});e.style.clipPath='inset(0 round 24px)'})()`)
         await pause(80)
-        assert.ok((await endFrames()).some(f => !f.inside), 'hit testing detects the old circular-mask regression')
+        assert.ok((await endFrames()).some(f => f.inside.some(inside => !inside)), 'hit testing detects the old circular-mask regression')
         await evaluate(`document.querySelector(${JSON.stringify(dialog)}).style.removeProperty('clip-path')`)
       }
       assert.equal(await evaluate('document.activeElement.id'), 'dialog-input', 'dialog initially focuses its field')
@@ -459,7 +541,7 @@ app.on('window-all-closed',()=>app.quit());`)
       assert.equal(await evaluate('document.activeElement.getAttribute("aria-label")'), 'Close dialog', 'Shift+Tab traps at the last control')
       await key('Tab', 'Tab', 9)
       assert.equal(await evaluate('document.activeElement.id'), 'dialog-input', 'Tab wraps to first control')
-      await screenshot(`${theme}-${reduced ? 'reduced' : 'motion'}-dialog`)
+      await screenshot(`${theme}-${reduced ? 'reduced' : 'motion'}-${preset}-dialog`)
       if (!dark && !reduced) {
         await send('Emulation.setDeviceMetricsOverride', { width: 760, height: 700, deviceScaleFactor: 1, mobile: false })
         await evaluate(`document.querySelector(${JSON.stringify(dialog)}).style.maxWidth='none'`)
@@ -470,7 +552,7 @@ app.on('window-all-closed',()=>app.quit());`)
       await beginFrames(dialog)
       await key('Escape'); await pause(350)
       const exits = await endFrames()
-      assert.ok(exits.every(f => f.shape === 'superellipse(2)' && f.clip === 'none'), 'exit never restores circular masks')
+      assert.ok(exits.every(f => f.shape === shape && f.clip === 'none'), preset + ': exit keeps the current shape and never restores circular masks')
       assert.equal(await evaluate('document.activeElement.dataset.trigger'), 'modal', 'Escape returns focus')
       assert.equal(await evaluate(`document.querySelector(${JSON.stringify(dialog)})===null`), true, 'dialog exits completely')
 
@@ -482,7 +564,8 @@ app.on('window-all-closed',()=>app.quit());`)
         await evaluate('window.controls.setPopover(true)'); await pause(500)
         const samples = await endFrames()
         assert.ok(samples.length > 4)
-        assert.ok(samples.every(f => f.shape === 'superellipse(2)' && f.clip === 'none' && f.inside), 'popover corners survive every frame: ' + JSON.stringify(samples))
+        assert.ok(nativeFrames(samples, preset), preset + ': popover corners survive every frame: ' + JSON.stringify(samples))
+        await assertCorners(popover, expected.window, shape, preset + ': portal popover')
         await evaluate('document.getElementById("popover-focus").focus()')
         await key('Escape'); await pause(30)
         assert.equal(await evaluate('document.querySelector("[data-morph-popover-portal]")?.inert ?? true'), true, 'exit releases interaction immediately')
@@ -493,7 +576,8 @@ app.on('window-all-closed',()=>app.quit());`)
         assert.equal(await evaluate('document.querySelector("[data-morph-popover-portal]")===null'), true, 'popover finishes its exit')
         assert.equal(await evaluate('document.activeElement.dataset.trigger'), 'popover')
       }
-      console.log(`${theme}/${reduced ? 'reduced' : 'motion'}: ${frames.length} dialog frames; native popovers above/below, instant/reduced paths and focus passed`)
+      console.log(`${preset}/${theme}/${reduced ? 'reduced' : 'motion'}: ${frames.length} dialog frames; native popovers above/below, instant/reduced paths and focus passed`)
+      }
     }
 
     // A live token change must reach animation-owned corners and tab indicators
@@ -520,7 +604,7 @@ app.on('window-all-closed',()=>app.quit());`)
     await evaluate('document.documentElement.style.removeProperty("--app-radius-control");document.documentElement.style.removeProperty("--app-radius-window");document.documentElement.style.removeProperty("--app-radius-inner")')
     await key('Escape'); await pause(450)
   }
-  console.log('PASS: native corners, circular exceptions, pseudo-elements, inherited layers, live tokens, animation frames, themes and focus.')
+  console.log('PASS: square/rounded/squircle native corners, four-corner paint, circular exceptions, pseudo-elements, inherited layers, charts, live tokens, animation frames, themes and focus.')
 } finally {
   ws?.close()
   if (child && child.exitCode === null) {

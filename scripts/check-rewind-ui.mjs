@@ -16,16 +16,18 @@ const fixturePath = '/__rewind-check.html'
 const fixture = `<!doctype html><html><body><div id="root"></div><script type="module">
 import React from 'react';import {createRoot} from 'react-dom/client';
 import {RewindDialog} from '/src/components/app/RewindDialog.tsx';
+import {setDiffStyle} from '/src/lib/diff-style.ts';
 import {ModelEditorDialog} from '/src/components/app/settings/providers/ModelEditorDialog.tsx';
 import {Button} from '/src/components/motion/button/index.tsx';
 import {I18nProvider,useI18n} from '/src/i18n/index.tsx';import '/src/styles.css';
 localStorage.setItem('pi-app:locale','en');
 window.outside=false;window.statsReads=0;window.filePreviews=[];window.binaryIndex=false;window.large=false;window.patchReads=0;window.restores=[];window.commitMode='success';window.operations=[];window.previewActions={};window.pending=[];window.busy=false;window.busyReason=undefined;window.listError=undefined;window.empty=false;let listener;
 const cp={id:'checkpoint',sessionId:'session',timestamp:1700000000000,trigger:'before-turn',entryId:'before',messageEntryId:'msg-1',description:'Fixture change',files:2,bytes:30,excluded:[],branch:'main',messageTimestamp:42};
-window.checkpoint=cp;
+window.checkpoint=cp;window.checkpoints=[cp];
+window.setDiffStyle=setDiffStyle;
 window.statsBatches=[];window.failTotals=false;window.statsDelay=0;window.deck=false;window.patchDelay=0;window.patchFiles=[];window.mixedCoverage=false;window.filePreviewDelay=0;
 window.pi={configuredModels:async()=>[{providerId:'fixture',providerName:'Fixture provider',id:'source',name:'Fixture source',reasoning:true,input:['text'],contextWindow:32768,maxTokens:4096}],
-rewindList:async()=>({value:{checkpoints:window.empty?[]:[cp],operations:window.operations,pending:window.pending,enabled:true,busy:window.busy,busyReason:window.busyReason,bytes:30,error:window.listError}}),
+rewindList:async()=>({value:{checkpoints:window.empty?[]:window.checkpoints,operations:window.operations,pending:window.pending,enabled:true,busy:window.busy,busyReason:window.busyReason,bytes:30,error:window.listError}}),
 onRewind:fn=>{listener=fn;return()=>{listener=undefined}},
 rewindPreview:async(path,id,action)=>{const token='preview-'+Date.now();window.previewActions[token]={id,action};return{value:{token,checkpointId:id,operationId:action?id:undefined,action,scopeRoot:'/standalone/workspace',uncovered:action?window.operations.find(op=>op.id===id)?.skipped:window.outside||window.mixedCoverage?[{path:'/project/Workspace.tsx',reason:'outside-workspace'}]:[],blocked:window.restoreBlock,changes:window.outside?[]:window.large||window.deck?Array.from({length:window.deck?40:1000},(_,i)=>({path:'file-'+i+'.txt',area:'worktree',singleFile:true,kind:'modified',binary:false,bytes:100000})):[{path:'file.txt',area:'worktree',singleFile:true,kind:'modified',binary:false,beforeMode:420,afterMode:493,bytes:30},{path:'file.txt',area:'index',kind:'modified',binary:false,bytes:20}],excluded:[{path:'.env',reason:'ignored'}]}}},
 rewindPreviewFile:async(path,token,file)=>{window.filePreviews.push({token,file});await new Promise(resolve=>setTimeout(resolve,window.filePreviewDelay));return{value:{token:'single-'+Date.now(),checkpointId:'checkpoint',file,changes:[{path:file,area:'worktree',kind:'modified',binary:false,bytes:30}],excluded:[]}}},
@@ -99,13 +101,29 @@ try {
   const select = async (mode='all') => { await evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent.includes('Fixture change')).click()`);await until(`!!document.querySelector('[data-rewind-mode-trigger]:not(:disabled)')`);await setMode(mode) }
   await select('conversation')
   await until(`document.querySelectorAll('[data-review-diff]').length===2`)
+  const checkpointLayouts = '[data-rewind-panel] [data-diff-layout-toggle]'
+  const checkpointWrap = '[data-rewind-toolbar] button[aria-label="Wrap lines"]'
+  assert.equal(await evaluate(`document.querySelector(${JSON.stringify(checkpointWrap)}).getAttribute('aria-pressed')`), 'true', 'checkpoint diff wrapping is on by default')
+  assert.equal(await evaluate(`document.querySelectorAll('${checkpointLayouts}').length`),2,'each checkpoint file diff has one layout control')
+  const beforeLayoutReads = await evaluate('window.patchReads')
+  await evaluate(`window.checkpointToggle=document.querySelector('${checkpointLayouts}'); checkpointToggle.focus(); checkpointToggle.click()`)
+  await until(`checkpointToggle.getAttribute('aria-pressed')==='true' && document.querySelectorAll('[data-rewind-panel] [data-diff-side]').length===2`)
+  assert.deepEqual(await evaluate(`Array.from(document.querySelectorAll('[data-rewind-panel] [data-diff-side]'), side=>[side.dataset.diffSide,side.querySelector('[data-diff-inline]').textContent])`), [['before','old'],['after','new']], 'checkpoint columns use the shared inline highlights')
+  assert.equal(await evaluate(`document.activeElement===checkpointToggle && document.querySelector('[data-rewind-panel] [data-diff-hunk]').textContent==='@@ -1 +1 @@'`),true,'the same control keeps focus and the detailed hunk is visible')
+  await evaluate(`window.setDiffStyle('simple')`)
+  await until(`!document.querySelector('[data-rewind-panel] [data-diff-hunk], [data-rewind-panel] [data-diff-inline]')`)
+  assert.equal(await evaluate(`document.querySelectorAll('[data-rewind-panel] [data-diff-side]').length`),2,'simplified mode keeps the chosen checkpoint layout')
+  await evaluate(`window.setDiffStyle('detailed'); checkpointToggle.click()`)
+  await until(`checkpointToggle.getAttribute('aria-pressed')==='false' && document.querySelectorAll('[data-rewind-panel] [data-diff-hunk]').length===2`)
+  assert.equal(await evaluate('window.patchReads'),beforeLayoutReads,'view and display style changes reuse the loaded checkpoint patch')
+  console.log('PASS: checkpoint diffs share both layouts and detailed/simplified display without re-reading patches')
   await until(`document.querySelector('[data-rewind-totals]')?.textContent==='Total+2−2'`)
   assert.equal(await evaluate(`document.querySelector('[data-rewind-restore]').dataset.rewindSelectedMode`),'conversation','conversation remains the default action while diffs are visible')
   assert(await evaluate(`document.body.innerText.includes('The file diffs below are for review')`),'copy distinguishes the preview from the conversation-only action')
   assert.equal(await evaluate(`document.querySelectorAll('button[role="radio"]').length`),0,'mode radios are removed')
   await evaluate(`document.querySelector('[data-rewind-mode-trigger]').click()`)
   await until(`document.querySelectorAll('[data-rewind-mode]').length===2`)
-  assert.equal(await evaluate(`document.querySelectorAll('[data-rewind-mode-warning]').length`),2,'both file-changing alternatives carry a warning')
+  assert.equal(await evaluate(`document.querySelectorAll('[data-rewind-mode-warning]').length`),0,'a file-changing alternative carries no separate warning mark')
   await pause(150)
   const optionBounds = await evaluate(`(()=>{const r=document.querySelector('[data-rewind-mode="all"]').getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}})()`)
   const pointer = {x:optionBounds.x+optionBounds.width/2,y:optionBounds.y+optionBounds.height/2}
@@ -131,8 +149,18 @@ try {
   await send('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13})
   await until(`document.querySelector('[data-rewind-restore]')?.dataset.rewindSelectedMode==='files'`)
   assert.equal(await evaluate('window.restores.length'),0,'keyboard mode selection also never executes')
+  // A target that touches files is not a different kind of choice: it paints
+  // exactly like conversation-only, with no destructive tone or warning mark.
+  // Mode is `files` here, so the menu offers conversation and files+conversation.
+  await evaluate(`document.querySelector('[data-rewind-mode-trigger]').click()`)
+  await until(`document.querySelectorAll('[data-rewind-mode]').length===2`)
+  const modeTone = await evaluate(`(()=>{const read=value=>{const style=getComputedStyle(document.querySelector('[data-rewind-mode="'+value+'"]'));return {color:style.color,background:style.backgroundColor,border:style.borderColor}};return {conversation:read('conversation'),file:read('all')}})()`)
+  assert.deepEqual(modeTone.file,modeTone.conversation,'the file-changing target renders exactly like conversation-only')
+  assert.equal(await evaluate(`document.querySelectorAll('[data-rewind-mode-warning]').length`),0,'no mode option carries a warning mark')
+  await send('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape'})
+  await until(`!document.querySelector('[data-rewind-mode-options]')`)
   await setMode('all')
-  await until('window.patchReads===2')
+  await until('window.patchReads>=2')
   assert.equal(await evaluate(`document.querySelector('[role="dialog"][aria-modal="true"]').getAttribute('aria-label')`),'Rewind')
   await until(`document.body.innerText.includes('old worktree')&&document.body.innerText.includes('old index')`)
   assert.equal(await evaluate(`document.querySelectorAll('[data-review-file-header]').length`),2)
@@ -241,9 +269,9 @@ try {
   await until(`document.body.innerText.includes('An interrupted restore needs recovery')`)
   await clickText('Recover pre-operation state');await until('window.pending.length===0')
   console.log('PASS: stale preview rejection, in-flight Escape protection and recovery while checkout is blocked')
-  // One busy fact renders once: the sticky capture error and the restore
-  // block never stack the same sentence, while distinct facts both stay.
-  await evaluate(`window.busy=true;window.listError={code:'busy'};window.refresh()`)
+  // Historical capture failures and current restore blockers are distinct
+  // facts, even when both carry the same busy error code.
+  await evaluate(`window.busy=true;window.listError=undefined;window.refresh()`)
   await select('all')
   await until(`!!document.querySelector('[data-rewind-error="busy"]')`)
   assert.equal(await evaluate(`document.querySelectorAll('[data-rewind-error="busy"]').length`),1,'the busy notice renders exactly once')
@@ -253,6 +281,10 @@ try {
   // older shape) keeps the generic sentence.
   const busySentence = () => evaluate(`document.querySelector('[data-rewind-error="busy"]').innerText`)
   assert.match(await busySentence(),/active work or queued messages/,'without a reason the generic busy sentence stays')
+  await evaluate(`window.listError={code:'busy'};window.refresh()`)
+  await until(`document.querySelectorAll('[data-rewind-error="busy"]').length===2`)
+  assert(await evaluate(`document.body.innerText.includes('folder was in use when the turn started')`),'capture contention explains the missed backup as a past event')
+  assert(await evaluate(`document.body.innerText.includes('active work or queued messages')`),'the independent current restore blocker stays visible')
   await evaluate(`window.busyReason='turn';window.listError=undefined;window.refresh()`)
   await until(`/still answering/.test(document.querySelector('[data-rewind-error="busy"]')?.innerText||'')`)
   await evaluate(`window.busyReason='queued';window.refresh()`)
@@ -273,9 +305,14 @@ try {
   await evaluate(`window.busy=false;window.listError={code:'busy'};window.empty=true;window.refresh()`)
   await until(`document.body.innerText.includes('could not be saved')`)
   assert.equal(await evaluate(`document.querySelectorAll('[data-rewind-checkpoint]').length`),0,'a failed capture explains the empty list instead of promising the next turn')
+  assert.match(await busySentence(),/folder was in use when the turn started/)
+  assert(!await evaluate(`document.body.innerText.includes('active work or queued messages')`),'an idle checkout must not be described as currently busy by an old capture error')
+  await evaluate(`window.empty=false;window.refresh()`)
+  await until(`!!document.querySelector('[data-rewind-checkpoint]')`)
+  assert(!await evaluate(`document.querySelector('[data-rewind-restore]').disabled`),'an old capture failure does not block restoration of an existing checkpoint')
   await evaluate(`window.empty=false;window.listError=undefined;window.refresh()`)
   await until(`!!document.querySelector('[data-rewind-checkpoint]')`)
-  console.log('PASS: deduplicated busy/capture notices, one named busy reason and an honest empty state after a failed capture')
+  console.log('PASS: capture failures describe past contention; current restore blockers stay independent and existing backups remain usable')
   await evaluate('window.binaryIndex=true');await select()
   await until(`document.body.innerText.includes('Binary contents or metadata')`)
   await until(`document.querySelector('[data-rewind-totals]')?.textContent==='Total+1−11 binary entries'`)
@@ -303,6 +340,7 @@ try {
 
   // A diagonal swipe moves the inner diff and its owning vertical page;
   // changes of direction take effect without an idle gap.
+  await evaluate(`document.querySelector(${JSON.stringify(checkpointWrap)}).click()`)
   await evaluate(`(()=>{const diff=document.querySelector('[data-review-diff]');diff.style.width='80px';diff.scrollLeft=10})()`)
   await pause(250)
   const diffPosition=()=>evaluate(`(()=>{const diff=document.querySelector('[data-review-diff]');return {left:diff.scrollLeft,top:document.querySelector('[data-rewind-scroll]').scrollTop}})()`)
@@ -521,8 +559,8 @@ try {
       await evaluate(`document.querySelector('[data-rewind-info-trigger]').click()`);await pause(150)
       await evaluate(`document.querySelector('[data-rewind-mode-trigger]').click()`);await until(`!!document.querySelector('[data-rewind-mode-options]')`)
       await until(`getComputedStyle(document.querySelector('[data-rewind-mode-options]').closest('[data-morph-popover-portal]')).visibility==='visible'`)
-      const menuGeometry = await evaluate(`(()=>{const options=document.querySelector('[data-rewind-mode-options]');const box=options.getBoundingClientRect();const widths=[...options.querySelectorAll('button')].map(button=>{const range=document.createRange();range.selectNodeContents(button.querySelector('span'));return range.getBoundingClientRect().width+(button.querySelector('svg')?28:0)});return {slack:box.width-Math.max(...widths),left:box.left,right:box.right,viewport:innerWidth}})()`)
-      assert(menuGeometry.slack<32&&menuGeometry.left>=0&&menuGeometry.right<=menuGeometry.viewport,locale+' '+width+': restore menu fits its text and warning icons without excess width: '+JSON.stringify(menuGeometry))
+      const menuGeometry = await evaluate(`(()=>{const options=document.querySelector('[data-rewind-mode-options]');const box=options.getBoundingClientRect();const widths=[...options.querySelectorAll('button')].map(button=>{const range=document.createRange();range.selectNodeContents(button.querySelector('span'));return range.getBoundingClientRect().width});return {slack:box.width-Math.max(...widths),left:box.left,right:box.right,viewport:innerWidth}})()`)
+      assert(menuGeometry.slack<32&&menuGeometry.left>=0&&menuGeometry.right<=menuGeometry.viewport,locale+' '+width+': restore menu fits its text without excess width: '+JSON.stringify(menuGeometry))
       const menuShot = await send('Page.captureScreenshot',{format:'png'})
       await writeFile(join(temporary,'rewind-menu-'+locale+'-'+width+'.png'),Buffer.from(menuShot.data,'base64'))
       await send('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape'});await until(`!document.querySelector('[data-rewind-mode-options]')`)
@@ -571,6 +609,17 @@ try {
   assert.equal(await evaluate('window.restores.length'),restoresBeforeAnchored,'anchored opens select and preselect, never execute')
   await evaluate(`window.setOpen(false)`);await until(`!document.querySelector('[data-rewind-panel]')`)
   console.log('PASS: anchored opens auto-select their checkpoint and preselect conversation/files restore modes')
+  // An ordinary open (the title-row checkpoint action) starts on the NEWEST
+  // checkpoint with no click: the list arrives already previewed, and the
+  // automatic choice never executes anything.
+  await evaluate(`window.checkpoints=[window.checkpoint,{...window.checkpoint,id:'older-checkpoint',timestamp:1690000000000,description:'Older checkpoint'}];window.refresh()`)
+  await evaluate(`window.setOpen(true)`);await until(`!!document.querySelector('[data-rewind-checkpoint][aria-pressed="true"]')`)
+  await until(`!!document.querySelector('[data-review-diff]')`)
+  assert.equal(await evaluate(`document.querySelectorAll('[data-rewind-checkpoint][aria-pressed="true"]').length`),1,'exactly one checkpoint is selected')
+  assert(await evaluate(`document.querySelector('[data-rewind-checkpoint][aria-pressed="true"]').textContent.includes('Fixture change')`),'the newest checkpoint is the one being previewed')
+  assert.equal(await evaluate('window.restores.length'),restoresBeforeAnchored,'opening the window never executes a restore')
+  await evaluate(`window.setOpen(false)`);await until(`!document.querySelector('[data-rewind-panel]')`)
+  console.log('PASS: a plain open auto-selects the newest checkpoint')
   await send('Emulation.setDeviceMetricsOverride',{width:1100,height:1000,deviceScaleFactor:1,mobile:false})
   await evaluate(`window.setEditorTarget({kind:'new'})`)
   await until(`document.body.innerText.includes('Add model')`);await pause(300)

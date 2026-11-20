@@ -34,12 +34,12 @@ import {initFonts} from '/src/lib/fonts.ts';
 import '/src/styles.css';
 localStorage.setItem('pi-app:locale','en');initFonts();
 window.store=new PiStore();
-window.setSession=(cwd,projectless=false)=>store.applySnapshot({cwd,projectless,sessionId:crypto.randomUUID(),messages:[],model:null,thinkingLevel:'off',availableThinkingLevels:['off'],isStreaming:false});
+window.setSession=(cwd,projectless=false,id='project')=>store.applySnapshot({cwd,projectless,sessionId:id,sessionPath:'/fixture/'+id,messages:[],model:null,thinkingLevel:'off',availableThinkingLevels:['off'],isStreaming:false});
 setSession(${JSON.stringify(project)});
 const originalCreate=TerminalStore.prototype.create;
-TerminalStore.prototype.create=function(...args){if(!window.tc){window.tc=this;window.storeUpdates=0;this.subscribe(()=>window.storeUpdates++);}return originalCreate.apply(this,args)};
+TerminalStore.prototype.create=function(...args){window.lastTerminalStore=this;if(!window.tc){window.tc=this;window.storeUpdates=0;this.subscribe(()=>window.storeUpdates++);}return originalCreate.apply(this,args)};
 window.terminal=id=>tc.sessions.get(id??tc.getSnapshot().active)?.runtime?.terminal;
-window.buffer=id=>{const b=terminal(id).buffer.active;return Array.from({length:b.length},(_,i)=>(b.getLine(i).isWrapped?'':'\\n')+b.getLine(i).translateToString(true)).join('')};
+window.buffer=(id,owner=tc)=>{const b=owner.sessions.get(id??owner.getSnapshot().active).runtime.terminal.buffer.active;return Array.from({length:b.length},(_,i)=>(b.getLine(i).isWrapped?'':'\\n')+b.getLine(i).translateToString(true)).join('')};
 window.traffic={};window.pi.onTerminalEvent(e=>{if(e.type==='data'){const s=traffic[e.id]??={chars:0,batches:0,tail:''};s.chars+=e.data.length;s.batches++;s.tail=(s.tail+e.data).slice(-4096)}});
 window.root=createRoot(document.getElementById('root'));
 root.render(React.createElement(React.StrictMode,null,React.createElement(ThemeProvider,{attribute:'class',defaultTheme:'dark'},React.createElement(I18nProvider,null,React.createElement(ImagePreviewProvider,null,React.createElement(ToastProvider,null,React.createElement(Workspace,{store,accent:'indigo',onAccentChange:()=>{}})))))));
@@ -129,12 +129,26 @@ app.whenReady().then(()=>{
   assert.equal(await evaluate('buffer().includes("__FULLSCREEN_ALIVE__")'), true, 'restoring width retains scrollback')
   console.log('PASS: fullscreen terminal resize, input, PTY and scrollback retention')
 
-  await evaluate(`setSession('/internal/workspace',true)`)
+  await click('[data-titlebar-action="sidebar-fullscreen"]')
+  await input('sleep .3; printf "__AFTER_SWITCH__\\n"\r',first)
+  await evaluate(`setSession(${JSON.stringify(project)},false,'another-chat')`)
+  await waitFor('!document.querySelector("[data-panel=right]")', 'same project chat has a closed sidebar')
+  await evaluate(`setSession('/internal/workspace',true,'projectless')`)
+  await click(panelSelector)
+  await evaluate(`Array.from(document.querySelectorAll('[data-panel="right"] button')).find(b=>b.textContent.includes('Terminal')).click()`)
+  await waitFor('lastTerminalStore !== tc && lastTerminalStore.getSnapshot().tabs[0]?.status === "running"', 'independent projectless shell')
+  assert.equal(await evaluate('document.querySelectorAll("[data-terminal-tab]").length'),1,'only the projectless terminal is shown')
+  const other = await evaluate('lastTerminalStore.getSnapshot().active')
+  await input('printf "__HOME__%s\\n" "$PWD"\r',other)
+  await waitFor(`buffer(undefined,lastTerminalStore).includes(${JSON.stringify('__HOME__'+home)})`, 'projectless home')
+  await click(`[data-terminal-tab="${other}"] button[aria-label]`)
+  await evaluate(`setSession(${JSON.stringify(project)})`)
+  await waitFor(`document.querySelector('[data-panel-fullscreen="true"] [data-terminal-tab="${first}"]') && buffer().includes("__AFTER_SWITCH__")`, 'restored fullscreen, terminal tab and background output')
+  assert.equal(await evaluate('tc.getSnapshot().tabs[0].info.pid'),pid, 'switching chats retains the original shell')
+  await click('[data-titlebar-action="sidebar-fullscreen"]')
   await click('[aria-label="New terminal"]')
   await waitFor('tc.getSnapshot().tabs[1]?.status === "running"','second terminal')
   const second=await evaluate('tc.getSnapshot().active')
-  await input('printf "__HOME__%s\\n" "$PWD"\r')
-  await waitFor(`buffer().includes(${JSON.stringify('__HOME__'+home)})`,'projectless home')
   await input('printf "\\033[31m红色中文🙂\\033[0m\\n"\r')
   await waitFor('buffer().includes("红色中文🙂")','Unicode/ANSI')
 

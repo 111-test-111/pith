@@ -1,6 +1,7 @@
 import { memo, useMemo, useState } from 'react'
 import { Clock } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
+import { Tabs, TabsList, TabsTrigger } from '@/components/motion/tabs'
 import {
   DateRangePicker,
   DateRangePickerCalendar,
@@ -104,14 +105,12 @@ export const DateTimeField = memo(function DateTimeField({ value, onChange, inva
           </Button>
         </MorphPopoverTrigger>
         <MorphPopoverContent align="start" radius="var(--app-radius-card)" className="w-[21rem] p-2">
-          <div className="mb-2 flex items-center gap-1 border-b border-border/60 pb-2">
-            <Button variant={tab === 'date' ? 'secondary' : 'ghost'} size="sm" className={cn('h-7 px-2 text-xs', tab === 'date' && 'bg-muted')} aria-pressed={tab === 'date'} data-scheduled-datetime-tab="date" onClick={() => setTab('date')}>
-              {t('scheduledTasks.editor.date')}
-            </Button>
-            <Button variant={tab === 'time' ? 'secondary' : 'ghost'} size="sm" className={cn('h-7 px-2 text-xs', tab === 'time' && 'bg-muted')} aria-pressed={tab === 'time'} data-scheduled-datetime-tab="time" onClick={() => setTab('time')}>
-              {t('scheduledTasks.editor.time')}
-            </Button>
-          </div>
+          <Tabs value={tab} onValueChange={value => setTab(value as 'date' | 'time')} variant="underline" className="mb-2">
+            <TabsList className="flex h-9 w-full border-border/60">
+              <TabsTrigger value="date" className="h-9 min-h-0 px-2 text-xs" data-scheduled-datetime-tab="date">{t('scheduledTasks.editor.date')}</TabsTrigger>
+              <TabsTrigger value="time" className="h-9 min-h-0 px-2 text-xs" data-scheduled-datetime-tab="time">{t('scheduledTasks.editor.time')}</TabsTrigger>
+            </TabsList>
+          </Tabs>
           {tab === 'date' ? (
             <DateRangePickerCalendar className="w-full rounded-none border-0 p-0" data-scheduled-calendar>
               <DateRangePickerHeader />

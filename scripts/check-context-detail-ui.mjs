@@ -27,6 +27,7 @@ const fixture = `<!doctype html><html><body><div id="root"></div><script type="m
 import React from 'react';import {createRoot} from 'react-dom/client';import {flushSync} from 'react-dom';
 import {I18nProvider,useI18n} from '/src/i18n/index.tsx';
 import {SidebarPanel} from '/src/components/app/SidebarPanel.tsx';
+import {FileBrowserStore} from '/src/state/file-browser-store.ts';
 import '/src/styles.css';
 localStorage.setItem('pi-app:locale','en');
 const DETAIL={sessionId:'fixture',sessionPath:'/ui/session',title:'Context pane fixture session',cwd:'/ui',projectless:false,
@@ -57,7 +58,7 @@ window.fixtureShell=()=>shell;
 // The stub serves the same readout main would: pushing a new ring payload also
 // moves what the next contextDetail call answers with.
 window.moveRing=usage=>{DETAIL.usage=usage;DETAIL.cost=usage.sessionCost;window.pushShell({contextUsage:usage})};
-const pane={files:{subscribeOpen:()=>()=>{},select:()=>{}},terminals:{},onNewTerminal:()=>{},onTerminalsEmpty:()=>{},
+const pane={files:new FileBrowserStore(),terminals:{},onNewTerminal:()=>{},onTerminalsEmpty:()=>{},
  store,reviewTurnId:null,sideChat:null,sideChatDraft:'',onSideChatDraftChange:()=>{},sideChatOnCurrentSession:true,onSideChatRebind:()=>{},agentRuns:new Map(),onOpenSessionInChat:()=>{}};
 window.opened=[];
 function Rail(props){return React.createElement(SidebarPanel,Object.assign({pane,
@@ -134,9 +135,9 @@ try {
   await evaluate('window.answer()')
   await pause(250)
 
-  // 2. Every field of the DTO reaches the grid, at full precision: exact grouped
-  //    counts (never `53.5k`), one decimal on the estimated percent, two on the
-  //    cache rate and up to four on the cost.
+  // 2. Every displayed field of the DTO reaches the grid, at full precision:
+  //    exact grouped counts (never `53.5k`), one decimal on the estimated
+  //    percent, two on the cache rate and up to four on the cost.
   const stats = Object.fromEntries(await evaluate('window.stats()'))
   assert.equal(stats.Session, undefined, 'the session name row is gone')
   assert.equal(stats.Provider, 'anthropic')
@@ -146,7 +147,6 @@ try {
   assert.equal(stats['Total tokens'], '53,454', 'and so is the cumulative billed total')
   assert.equal(stats.Usage, '26.9%', 'the estimated percent keeps one decimal')
   assert.equal(stats['Context tokens'], '~53,754', 'the live context size stays marked as an estimate')
-  assert.equal(stats['Current projection estimate'], '~78,000')
   assert.equal(stats['Composition source'], 'Latest captured request')
   assert.equal(stats['Composition estimate'], '~53,754')
   assert.equal(stats['Reported request input'], '53,000')
@@ -174,6 +174,8 @@ try {
     current:labels('current'),composition:labels('composition'),request:labels('request'),session:labels('session')}})()`)
   assert.deepEqual(scopes.order, ['current', 'composition', 'request', 'session'], 'current context and its composition precede independent request/billing scopes')
   assert.equal(scopes.current.length, 7)
+  assert.deepEqual(scopes.current.slice(0, 4), ['Usage', 'Context tokens', 'Context limit', 'Cache hit'], 'the Current context grid ends on the live cache hit rate')
+  assert.equal(await evaluate(`document.querySelector('[data-context-current] [data-context-stat="Cache hit"] [data-context-stat-value]').textContent.trim()`), '93.01%', 'the Current context cache rate keeps its second decimal')
   assert(scopes.current.includes('Context tokens') && !scopes.current.includes('Total tokens'), 'live context never sits among cumulative billing')
   assert.equal(scopes.composition.length, 2)
   assert(!scopes.composition.includes('Reported request input'), 'provider metadata has its own section')

@@ -11,8 +11,6 @@ import { loadSettings, saveSettings, type WindowBounds } from './settings'
 import { registerPictureInPictureIpc } from './picture-in-picture'
 import { registerQuitShortcut } from './shutdown'
 import { windowChromeOptions } from './window-chrome'
-import { getLibraryService, startLibraryService } from './library/service'
-import { registerLibraryIpc } from './library/ipc'
 import { acquireRuntimeLock } from './runtime-lock'
 
 // A privileged scheme has to be declared before the app is ready.
@@ -100,12 +98,7 @@ function createWindow(): BrowserWindow {
   // wiring installs unconditionally; only the input relay is service-aware, and it
   // looks the singleton up lazily via getBrowserService() — a designed no-op until
   // the service initializes in ipc.ts (registerIpc).
-  installBrowserWiring(win, broadcast, (owner) => {
-    const library = getLibraryService()
-    if (!library) return undefined
-    const source = library.downloadSession(owner)
-    return (path, url) => library.download(path, url, source)
-  })
+  installBrowserWiring(win, broadcast)
   installHtmlPreviewWiring(win)
 
   // Restore the maximized state the window was closed in. Reading bounds while
@@ -177,8 +170,6 @@ app.whenReady().then(async () => {
   // BrowserWindow.icon does not set the macOS Dock icon during development.
   if (process.platform === 'darwin') app.dock?.setIcon(join(iconDirectory, '512x512.png'))
   const pi = createPiManager()
-  const library = startLibraryService(broadcast, (id) => pi.librarySession(id))
-  registerLibraryIpc(library)
   const pictureInPicture = registerPictureInPictureIpc()
   const isQuitting = registerIpc(pi, () => pictureInPicture.mainWindow(), (preferences) => pictureInPicture.setPreferences(preferences))
   app.on('before-quit', () => pictureInPicture.dispose())

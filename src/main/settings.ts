@@ -6,8 +6,34 @@ import { ASK_USER_DEFAULT_TIMEOUT_S, clampAskUserTimeoutSeconds } from '../share
 import { RESPONSE_TIMEOUT_DEFAULT_S, clampResponseTimeoutSeconds } from '../shared/response-timeout'
 import { DEFAULT_SANDBOX_MODE, isSandboxMode } from './sandbox/mode'
 import type { SandboxMode } from './sandbox/types'
-import { DEFAULT_LIBRARY_PREFERENCES, normalizeLibraryPreferences, type LibraryPreferences } from '../shared/library'
 import { DEFAULT_BROWSER_SEARCH_ENGINE, isBrowserSearchEngine, type BrowserSearchEngine } from '../shared/browser'
+import { normalizeVisionModel, type VisionModelSelection } from '../shared/vision'
+import { normalizeSessionNamingModel, type SessionNamingModelSelection } from '../shared/session-naming'
+
+/** The Library feature is removed. Its preference object stays in
+ * `AppSettings` so a later settings write cannot erase a saved archive
+ * directory or quota — those are the rollback path for restoring the feature.
+ * Nothing reads this field at runtime. */
+interface LibraryPreferences {
+  enabled: boolean
+  directory: string | null
+  maxBytes: number
+}
+const DEFAULT_LIBRARY_PREFERENCES: LibraryPreferences = { enabled: true, directory: null, maxBytes: 2 * 1024 ** 3 }
+const LIBRARY_MIN_MAX_BYTES = 1024 ** 2
+const LIBRARY_MAX_MAX_BYTES = 1024 ** 4
+
+function normalizeLibraryPreferences(value: unknown): LibraryPreferences {
+  const input = value && typeof value === 'object' ? value as Record<string, unknown> : {}
+  return {
+    enabled: typeof input.enabled === 'boolean' ? input.enabled : true,
+    directory: typeof input.directory === 'string' && input.directory.length <= 4096 && !input.directory.includes('\0')
+      && /^(?:\/|[a-z]:[\\/]|\\\\[^\\]+\\[^\\]+)/i.test(input.directory) ? input.directory : null,
+    maxBytes: typeof input.maxBytes === 'number' && Number.isSafeInteger(input.maxBytes)
+      && input.maxBytes >= LIBRARY_MIN_MAX_BYTES && input.maxBytes <= LIBRARY_MAX_MAX_BYTES
+      ? input.maxBytes : DEFAULT_LIBRARY_PREFERENCES.maxBytes
+  }
+}
 
 /** Persisted geometry of the main window. `width`/`height` are the window's
  * normal (restored) size, so maximizing or going full screen does not clobber
@@ -22,6 +48,12 @@ export interface WindowBounds {
 }
 
 export interface AppSettings {
+  /** Name regular conversations after a settled turn; default on. */
+  autoNameSessions: boolean
+  /** Null uses the conversation's model without changing its selection. */
+  sessionNamingModel: SessionNamingModelSelection | null
+  /** Image analysis fallback for text-only sessions; null disables the bridge. */
+  visionModel: VisionModelSelection | null
   library: LibraryPreferences
   pictureInPicture: PictureInPicturePreferencesDTO
   /** Last native small-window location and scale relative to its source. */
@@ -32,7 +64,8 @@ export interface AppSettings {
   bashMaxWaitMs: number
   /** Null means a projectless chat; its internal cwd is never a project. */
   cwd: string | null
-  /** Folders opened through the app, most recent first. Sessions of every
+  /** Folders opened through the app, in the sidebar's project order. New
+   * folders append; session activity never reorders projects. Sessions of every
    * folder stay visible in the sidebar; `cwd` is the active one. */
   folders: string[]
   /** Inject AGENTS.md / CLAUDE.md context files into the system prompt
@@ -95,6 +128,9 @@ export interface AppSettings {
 }
 
 const defaults: AppSettings = {
+  autoNameSessions: true,
+  sessionNamingModel: null,
+  visionModel: null,
   library: DEFAULT_LIBRARY_PREFERENCES,
   pictureInPicture: DEFAULT_PICTURE_IN_PICTURE_PREFERENCES,
   pictureInPictureLast: null,
@@ -159,7 +195,7 @@ export function loadSettings(): AppSettings {
       Number.isFinite(pictureInPictureLast.x) && Number.isFinite(pictureInPictureLast.y) &&
       Number.isFinite(pictureInPictureLast.scale) && pictureInPictureLast.scale > 0 && pictureInPictureLast.scale <= 6
       ? { x: pictureInPictureLast.x, y: pictureInPictureLast.y, scale: pictureInPictureLast.scale } : null
-    return { ...defaults, ...raw, library: normalizeLibraryPreferences(raw.library), jev, bashMaxWaitMs, startup, startupSession, subagentMaxConcurrent, askUserTimeoutSeconds,
+    return { ...defaults, ...raw, autoNameSessions: raw.autoNameSessions !== false, sessionNamingModel: normalizeSessionNamingModel(raw.sessionNamingModel), visionModel: normalizeVisionModel(raw.visionModel), library: normalizeLibraryPreferences(raw.library), jev, bashMaxWaitMs, startup, startupSession, subagentMaxConcurrent, askUserTimeoutSeconds,
       subagentTurnLimitOverrideEnabled: raw.subagentTurnLimitOverrideEnabled === true, subagentMaxTurns,
       responseTimeoutSeconds,
       allowMidRunChanges: raw.allowMidRunChanges === true,

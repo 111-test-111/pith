@@ -37,6 +37,8 @@ Non-live suites receive temporary home, Pi configuration, cache, data and temp d
 
 Electron requires a desktop display. On headless Linux, use `xvfb-run --auto-servernum npm run test:ui`; Xvfb and Electron's system libraries must already be installed. Media seeking uses `ffmpeg` to generate a short video. Missing tooling is recorded as skipped coverage; install it before using `--strict-skips`.
 
+SSH suites require local `tmux` on PATH for isolated loopback SSH/PTY fixtures. They use synthetic password/key credentials and never contact an external host. The core and UI CI lanes install tmux; absent tmux is skipped coverage. The application itself needs tmux on the remote host only for persistent remote sessions, not on the local machine.
+
 Native debugger suites use installed adapters and compiler tools. Only the host Pi `debug-adapters/` directory is exposed inside the isolated native configuration; credentials and sessions remain isolated. Tools must be discoverable on `PATH` or in that adapter directory; packages installed only in a personal editor directory or Python user home may require installation into the test tool environment. Sandbox checks exercise the host backend where available and the fail-closed contract otherwise, with missing kernel enforcement recorded as skipped coverage.
 
 On macOS/Linux, install Python's adapter into a dedicated virtual environment so it remains available with an isolated home:

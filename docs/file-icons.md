@@ -1,17 +1,17 @@
 # File-type icons
 
 `FileTypeIcon.tsx` subscribes to the shared interface-style preference. Square
-uses the application's angular Pierre adaptations; squircle uses the native
+uses the application's angular Pierre adaptations; rounded and squircle share the native
 complete file-icon set from `@pierre/trees` 1.0.0-beta.4, matching the Codex
-desktop file tree and review headers, with a local Sass override. Both include
+desktop file tree and review headers, with a local Sass override. All styles include
 application additions for document and media formats. Switching style updates existing image elements immediately, including
 file trees, rail tabs, Git lists, attachment cards, sent-message file chips
 and delivered files. Folders and toolbar actions use the ordinary UI glyph
 adapter.
 
 `lib/file-icons.ts` resolves the same Pierre filename/extension associations in
-both styles, with compound extensions checked before shorter suffixes and a
-generic fallback for unknown types. Both styles use the shared sizes from `icon-metrics.ts`.
+all three styles, with compound extensions checked before shorter suffixes and a
+generic fallback for unknown types. All styles use the shared sizes from `icon-metrics.ts`.
 The Pierre snapshot preserves upstream paths, native viewports and opacity;
 its generated SVGs contain the upstream light/dark palette. Embedded SVG media
 queries inherit the image element's color scheme, so the app's light/dark/system
@@ -40,7 +40,7 @@ edges and right-angle bends. JavaScript, TypeScript and CSS use the same
 alignment for their S lettering. PostCSS has an inset square frame.
 Intrinsic diagonal shapes remain recognizable.
 Six upstream drawings that already contain only
-straight segments retain their native geometry. Both styles use the same
+straight segments retain their native geometry. All styles use the same
 light/dark palette, associations and tree/tab/card sizes.
 
 `scripts/generate-pierre-square-icons.mjs` owns the reviewed constructions and
@@ -62,17 +62,17 @@ video. They adapt Pierre's 16px document silhouette and use its palette with
 red, blue, green and orange; audio and video use purple and indigo.
 
 The same directory holds `sass.svg`, a separately drawn upright curved S for the
-squircle interface. Both Sass variants have equal upper/lower halves with
+rounded and squircle interfaces. Both Sass variants have equal upper/lower halves with
 central symmetry about the 16px canvas centre. Its pink palette matches upstream Sass, while the original
 Sass source remains untouched in the Pierre snapshot. It shares the existing
 Sass/SCSS associations with the angular version.
 
 `lib/pierre-file-icons.extensions.json` owns their extension associations and
 palette token selections; an icon listed in `colors` also selects its local
-source SVG for squircle. These associations override the Pierre snapshot's
+source SVG for rounded and squircle. These associations override the Pierre snapshot's
 generic entries, including replacing the table drawing for Office/OpenDocument
 spreadsheets; CSV/TSV retain the table icon. Exact filenames still take
-precedence in both styles. Ambiguous source/key suffixes such as `ts`, `mts`,
+precedence in all styles. Ambiguous source/key suffixes such as `ts`, `mts`,
 `dot` and `key` are not claimed as media
 or Office formats. Icon associations do not change file preview support.
 
@@ -104,6 +104,6 @@ out of version control.
 The `icons` suite checks live family switching without losing mounted controls,
 filename associations, decoded artwork, actual document/media/Sass theme colors, native exception fidelity, card sizes and
 all packaged SVGs/licenses through local `file://` URLs. Set
-`PI_ICONS_SCREENSHOT_DIR` to retain both styles' light/dark galleries for visual
+`PI_ICONS_SCREENSHOT_DIR` to retain all three styles' light/dark galleries for visual
 review, including focused document/media galleries. Run the affected file-pane
 suites as described in [testing](testing.md).

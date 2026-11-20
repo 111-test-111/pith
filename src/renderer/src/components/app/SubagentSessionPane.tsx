@@ -99,7 +99,7 @@ export const SubagentSessionPane = memo(function SubagentSessionPane({
           items (`min-h-0 flex-1` + the scroller's inner `h-full` viewport). In
           a block wrapper the scroller's `flex-1` does nothing, its viewport
           resolves to `auto` and the transcript is clipped instead of scrolled. */}
-      <div className="flex min-h-0 flex-1 flex-col">
+      <div className="chat-layout flex min-h-0 flex-1 flex-col">
         {error ? (
           <p className="px-3 py-4 text-xs text-destructive [overflow-wrap:anywhere]">
             {t('subagent.paneError')}

@@ -17,8 +17,7 @@ try {
   await build({ stdin: { contents: `export * from './src/shared/image-replay';
 export {parsePresentResult} from './src/shared/present';
 export {capturePresentedImage,hydrateImagePresentations,imagePresentationDetails,presentedGeneration,imageReplayRecords} from './src/main/pi/image-replay';
-export {uncoveredWrites} from './src/main/rewind/coverage';
-export {collectImageReplay} from './src/main/library/extract';`, resolveDir: planRepoRoot },
+export {uncoveredWrites} from './src/main/rewind/coverage';`, resolveDir: planRepoRoot },
     outfile: module, bundle: true, platform: 'node', format: 'esm' })
   const api = await import(pathToFileURL(module).href)
   fixture = await createPlanFixture()
@@ -97,8 +96,6 @@ export {collectImageReplay} from './src/main/library/extract';`, resolveDir: pla
   const disk = SessionManager.open(request.sessionPath)
   const privateResult = disk.getBranch().filter(entry => entry.type === 'custom' && entry.customType === api.IMAGE_REPLAY_ENTRY).at(-1)
   assert.equal(api.parseImageReplayRecord(privateResult.data).result.files[0].path, completed.result.files[0].path)
-  const library = api.collectImageReplay({ id: fixture.session.sessionId, path: request.sessionPath, cwd: fixture.project, title: '' }, privateResult.id, privateResult.data)
-  assert(library.some(item => item.originalPath === completed.result.files[0].path), 'history collection retains the retry as a generated image')
   const uncovered = await api.uncoveredWrites(disk.getBranch(), fixture.project, fixture.project, null, [{ path: 'images', reason: 'ignored' }])
   assert(uncovered.some(item => item.path === completed.result.files[0].path), 'private committed writes remain explicit Rewind coverage evidence')
 
@@ -253,7 +250,7 @@ export {collectImageReplay} from './src/main/library/extract';`, resolveDir: pla
     result: { ...generated.details, files: [{ path: oldVector, mimeType: 'image/svg+xml', size: svg.length, width: 4, height: 3 }] },
     fileHashes: { [oldVector]: createHash('sha256').update(svg).digest('hex') } })
   assert.equal((await api.capturePresentedImage(vectors, newVector, svg.length)).result.files[0].path, newVector, 'private original-byte fingerprints also recover SVG without raster previews')
-  console.log('PASS: generated/ordinary provenance, verified renames, private historical backfill, exact n=1 replay, billing, cancellation, admission, library and Rewind receipts')
+  console.log('PASS: generated/ordinary provenance, verified renames, private historical backfill, exact n=1 replay, billing, cancellation, admission and Rewind receipts')
 } finally {
   await cold?.dispose()
   await fixture?.close()

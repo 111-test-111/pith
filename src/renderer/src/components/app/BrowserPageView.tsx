@@ -8,7 +8,7 @@ import { LoaderProgress } from '@/components/motion/loader'
 import { useI18n } from '@/i18n'
 import {
   BROWSER_PARTITION,
-  HUMAN_OWNER,
+  isHumanBrowserOwner,
   buildMarkerUrl,
   isAllowedNavigationUrl,
   resolveBrowserInput,
@@ -235,7 +235,7 @@ function recentUrlParts(url: string): { host: string; rest: string } {
  * CURRENT page and the recent-addresses list. The T7 no-pages empty state is
  * a different surface and stays.
  */
-function BrowserStartPage({ onOpen }: { onOpen: (raw: string) => boolean }): JSX.Element {
+function BrowserStartPage({ active, onOpen }: { active: boolean; onOpen: (raw: string) => boolean }): JSX.Element {
   const { t } = useI18n()
   const [draft, setDraft] = useState('')
   const recents = useSyncExternalStore(subscribeBrowserRecents, getRecentUrls)
@@ -243,7 +243,7 @@ function BrowserStartPage({ onOpen }: { onOpen: (raw: string) => boolean }): JSX
     if (onOpen(draft)) setDraft('')
   }
   return (
-    <div className="absolute inset-0 z-10 overflow-y-auto bg-background" data-browser-start-page>
+    <div inert={!active} className="absolute inset-0 z-10 overflow-y-auto bg-background" data-browser-start-page>
       <div className="flex min-h-full flex-col items-center justify-center gap-5 p-6 text-center">
         <div className="flex flex-col items-center gap-1.5">
           <Globe aria-hidden="true" className="size-6 text-muted-foreground/70" />
@@ -807,7 +807,7 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, onWeb
       // History/recents record REAL human navigation only (markers and
       // agent-driven pages stay out; SPA routes arrive as in-page navigations
       // and are excluded there).
-      if (page.owner === HUMAN_OWNER && isRecordableUrl(raw)) {
+      if (isHumanBrowserOwner(page.owner) && isRecordableUrl(raw)) {
         recordRecentUrl(raw)
         recordBrowserHistory(raw)
       }
@@ -862,7 +862,7 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, onWeb
     const onTitle = (event: Event) => {
       const title = (event as unknown as { title?: string }).title ?? ''
       onNavChange(page.id, { title })
-      if (page.owner === HUMAN_OWNER) updateBrowserHistoryTitleFor(lastNavUrlRef.current, title)
+      if (isHumanBrowserOwner(page.owner)) updateBrowserHistoryTitleFor(lastNavUrlRef.current, title)
     }
     const onFavicon = (event: Event) => {
       // Candidates follow the site's declaration order; the last is usually
@@ -870,7 +870,7 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, onWeb
       const favicons = (event as unknown as { favicons?: string[] }).favicons ?? []
       const favicon = favicons.length > 0 ? favicons[favicons.length - 1] : null
       onNavChange(page.id, { favicon })
-      if (page.owner === HUMAN_OWNER && favicon) {
+      if (isHumanBrowserOwner(page.owner) && favicon) {
         updateBrowserHistoryFaviconFor(lastNavUrlRef.current, favicon)
       }
     }
@@ -914,7 +914,7 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, onWeb
 
   // IRON RULE: an unselected agent page must never take `display: none` —
   // keep it hosted at full size, invisible and pointer-transparent.
-  const backgroundAgent = !selected && page.owner !== HUMAN_OWNER
+  const backgroundAgent = !selected && !isHumanBrowserOwner(page.owner)
   return (
     <div
       data-browser-page={page.id}
@@ -922,7 +922,7 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, onWeb
       style={backgroundAgent ? { opacity: 0, pointerEvents: 'none' } : undefined}
     >
       {selected ? (
-        <div className="flex min-h-11 shrink-0 items-center gap-1 border-b border-border/40 px-2 py-0.5" data-browser-toolbar>
+        <div inert={!active} className="flex min-h-11 shrink-0 items-center gap-1 border-b border-border/40 px-2 py-0.5" data-browser-toolbar>
           <ToolButton label={t('browser.back')} icon={ArrowLeft} onClick={() => navigate('back')} disabled={!navFlags.back} />
           <ToolButton label={t('browser.forward')} icon={ArrowRight} onClick={() => navigate('forward')} disabled={!navFlags.forward} />
           <ToolButton label={t('browser.reload')} icon={RefreshCw} onClick={() => navigate('reload')} />
@@ -1027,6 +1027,7 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, onWeb
           ref={webviewRef}
           src={srcReady ? initialSrcRef.current : undefined}
           partition={BROWSER_PARTITION}
+          tabIndex={active && selected ? 0 : -1}
           // allowpopups as a STRING spread (React strips boolean attributes on
           // unknown elements, so a `true` prop never reaches the DOM) — without
           // it Chromium swallows guest `window.open` before the main-process
@@ -1058,7 +1059,7 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, onWeb
           />
         ) : null}
         {selected && displayUrl === 'about:blank' ? (
-          <BrowserStartPage onOpen={(raw) => loadUrl(raw) !== null} />
+          <BrowserStartPage active={active} onOpen={(raw) => loadUrl(raw) !== null} />
         ) : null}
         {selected && loadingProgress !== null ? (
           <div data-browser-loading-progress className="pointer-events-none absolute inset-x-0 top-0 z-20">
@@ -1077,6 +1078,7 @@ export function BrowserPageView({ page, selected, displayUrl, onNavChange, onWeb
         ) : null}
         {findOpen ? (
           <div
+            inert={!active}
             data-browser-find
             className="absolute right-2 top-2 z-10 flex min-h-9 items-center gap-0.5 rounded-control border border-border bg-background px-1 py-0.5 shadow-overlay"
             onKeyDown={(event) => {

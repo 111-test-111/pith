@@ -21,6 +21,7 @@ Start with [README](../README.md) for the product, setup and development command
 | [Subagents](subagents-implementation.md) | Role grants, persisted runs, notifications and recovery |
 | [Native MCP / codemode](native-mcp-codemode.md) | SDK MCP configuration, scripts and result contracts |
 | [DAP debug](debug-implementation.md) | Target ownership, stopped references, native/core inspection |
+| [Persistent SSH](ssh-implementation.md) | Model-owned remote PTYs, credential references, tmux reconnect, sidebar observation and cleanup |
 | [Embedded browser](architecture/embedded-browser.md) | webview/CDP hosting, tools, trust boundaries and cleanup |
 | [Image generation](image-generation.md) | OpenRouter protocols, atomic image files, billing, generated delivery and private retries |
 | [Jev integration](jev-integration.md) | Judgment tools, optional workflow and evidence |
@@ -31,12 +32,12 @@ Start with [README](../README.md) for the product, setup and development command
 | Document | Contract |
 | --- | --- |
 | [Context budget](context-budget-implementation.md) | Request-copy budgets and image safety |
+| [Vision bridge](vision-bridge.md) | Image evidence for text-only models, historical references and auxiliary usage |
 | [Context compaction](context-compaction.md) | Queued manual summaries, completed tool boundaries, process visualization and cancellation |
 | [Context statistics](context-statistics-implementation.md) | Billing, selected-branch projections and observed request composition |
 | [Resource usage](resource-usage.md) | CPU and resident-memory sampling, process-tree scope and exact local storage measurements |
 | [System prompt](system-prompt.md) | Concise runtime guidance and on-demand tool instructions |
 | [Delivery / trajectory](present-trajectory-implementation.md) | File delivery, recorded requests, paging and exports |
-| [Library](library-implementation.md) | Conversation resources, local copies, projects, archive quota and recovery |
 | [Session replay](session-replay-implementation.md) | Offline SDK/provider-boundary replay |
 | [Long-session benchmark](long-session-benchmarks.md) | Reproducible performance measurement and interpretation |
 | [Sidebar panes](sidebar-pane-layout.md) | Container layouts and state preservation |

@@ -16,7 +16,6 @@ export default defineConfig({
         input: {
           index: resolve('src/main/index.ts'),
           'resources-worker': resolve('src/main/resources/worker.ts'),
-          'library-worker': resolve('src/main/library/worker.ts'),
           'file-preview-worker': resolve('src/main/file-preview/worker.ts'),
           'session-search-worker': resolve('src/main/pi/session-search-worker.ts'),
           'trajectory-worker': resolve('src/main/pi/trajectory-worker.ts'),

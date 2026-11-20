@@ -4,6 +4,7 @@ import { Button } from '@/components/motion/button'
 import { Checkbox } from '@/components/motion/checkbox'
 import { Input } from '@/components/motion/input'
 import { RadioGroup, RadioGroupItem } from '@/components/motion/radio'
+import { Tabs, TabsList, TabsTrigger } from '@/components/motion/tabs'
 import { Check, ChevronDown, ChevronUp, ChevronsDownUp, ChevronsUpDown, CircleHelp, Clock, PencilLine, X } from '@/lib/icons'
 import { EASE_OUT } from '@/lib/ease'
 import { useI18n } from '@/i18n'
@@ -240,8 +241,8 @@ export function AskUserPanel({
   // reachable — reopen, or close it unanswered.
   if (collapsed && settled === null) {
     return (
-      <div className="px-3 pb-2" data-ask-user={request.requestId} data-ask-user-state={stateAttr}>
-        <div className="mx-auto w-full max-w-3xl">
+      <div className="chat-gutter pb-2" data-ask-user={request.requestId} data-ask-user-state={stateAttr}>
+        <div className="chat-column">
           <div className="flex items-center gap-1.5 rounded-control border border-border bg-card py-1 pl-2.5 pr-1 shadow-overlay">
             <CircleHelp aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
             <span className="min-w-0 flex-1 truncate text-xs font-semibold text-foreground">
@@ -283,8 +284,8 @@ export function AskUserPanel({
   if (settled === 'sent' || settled === 'cancelled') {
     const sent = settled === 'sent'
     return (
-      <div className="px-3 pb-2" data-ask-user={request.requestId} data-ask-user-state={stateAttr}>
-        <div className="mx-auto w-full max-w-3xl">
+      <div className="chat-gutter pb-2" data-ask-user={request.requestId} data-ask-user-state={stateAttr}>
+        <div className="chat-column">
           <span
             data-ask-user-action="settled"
             className={
@@ -311,8 +312,8 @@ export function AskUserPanel({
   ) : null
 
   return (
-    <div className="px-3 pb-2" data-ask-user={request.requestId} data-ask-user-state={stateAttr}>
-      <div className="mx-auto w-full max-w-3xl">
+    <div className="chat-gutter pb-2" data-ask-user={request.requestId} data-ask-user-state={stateAttr}>
+      <div className="chat-column">
       <div className="relative rounded-card border border-border bg-card p-4 shadow-overlay">
         <div className="absolute right-2.5 top-2.5 flex items-center gap-0.5">
           <Button
@@ -357,28 +358,30 @@ export function AskUserPanel({
         </div>
 
         {/* Each question's own `header` — the short label the model supplies —
-            is the chip row's tab label, falling back to its ordinal. It is
+            is the tab label, falling back to its ordinal. It is
             both the only place that label is ever shown and the fastest way
             between questions of a long set. */}
         {questions.length > 1 ? (
-          <div className="mb-2.5 flex flex-wrap items-center gap-1" data-ask-user-chips="">
-            {questions.map((item, index) => (
-              <Button
-                key={`${index}:${item.question}`}
-                variant={index === qi ? 'secondary' : 'ghost'}
-                size="sm"
-                data-ask-user-chip={index}
-                aria-current={index === qi ? 'true' : undefined}
-                aria-label={item.header ?? `${index + 1}`}
-                className={`h-6 min-w-0 max-w-40 gap-1 px-2 text-caption font-semibold ${index === qi ? 'bg-muted' : ''}`}
-                onClick={() => goTo(index)}
-              >
-                {answers[index]?.length || custom[index]?.trim() ? (
-                  <Check aria-hidden="true" className="size-3 shrink-0 text-emerald-600 dark:text-emerald-400" />
-                ) : null}
-                <span className="truncate">{item.header ?? `${index + 1}`}</span>
-              </Button>
-            ))}
+          <div className="mb-2.5" data-ask-user-chips="">
+            <Tabs value={String(qi)} onValueChange={value => goTo(Number(value))} variant="underline">
+              <TabsList className="flex flex-wrap border-b-0">
+                {questions.map((item, index) => (
+                  <TabsTrigger
+                    key={`${index}:${item.question}`}
+                    value={String(index)}
+                    data-ask-user-chip={index}
+                    aria-current={index === qi ? 'true' : undefined}
+                    aria-label={item.header ?? `${index + 1}`}
+                    className="h-6 min-h-0 min-w-0 max-w-40 gap-1 px-2 text-caption font-semibold"
+                  >
+                    {answers[index]?.length || custom[index]?.trim() ? (
+                      <Check aria-hidden="true" className="size-3 shrink-0 text-emerald-600 dark:text-emerald-400" />
+                    ) : null}
+                    <span className="truncate">{item.header ?? `${index + 1}`}</span>
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+            </Tabs>
           </div>
         ) : null}
 

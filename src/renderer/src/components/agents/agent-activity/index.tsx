@@ -128,6 +128,7 @@ export function AgentActivity({
   open,
   defaultOpen = false,
   onOpenChange,
+  externalContentIds,
   collapseOnComplete = true,
   activeLabel,
   summary,
@@ -225,7 +226,7 @@ export function AgentActivity({
           id={triggerId}
           type="button"
           aria-expanded={expanded}
-          aria-controls={contentId}
+          aria-controls={externalContentIds ?? contentId}
           onClick={toggle}
           // local patch (pi-app): transcript disclosures change text on hover without a fill.
           className="group flex h-7 min-w-0 items-center gap-1.5 rounded-md text-left font-medium text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
@@ -255,7 +256,7 @@ export function AgentActivity({
         </button>
       )}
 
-      <AgentDisclosure
+      {!externalContentIds && <AgentDisclosure
         // local patch (pi-app): only a real row body owns a leading gap.
         data-agent-body={items.length > 0 || undefined}
         id={contentId}
@@ -305,7 +306,7 @@ export function AgentActivity({
             </AnimatePresence>
           </motion.div>
         </div>
-      </AgentDisclosure>
+      </AgentDisclosure>}
     </div>
   );
 }

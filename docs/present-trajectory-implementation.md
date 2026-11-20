@@ -6,7 +6,7 @@
 
 Only a successful matching result with validated `pith-present-v1` details creates delivery cards. Cards appear at the settled change scope's final group and reconstruct from the selected branch on reopen/compaction/fork/Rewind. A child cannot deliver for the parent: the parent presents the file itself. Preview uses the file pane, Open the OS handler and Save As the native full-file copy route. References are not immutable snapshots.
 
-Generated `image` receipts receive app-stamped display metadata. Bottom delivery galleries reuse the image tool's pure-media view, with floating information and retry/cancel actions; the `present` tool's own disclosure keeps its original text result. Ordinary images keep the existing file cards. Exact replay parameters and UI execution receipts persist as private SDK custom entries; replays make no model request or conversation message. Standalone usage, Library extraction and Rewind coverage retain their billing and successful file effects. See [image generation](image-generation.md#generated-image-delivery-and-private-replay) for admission, persistence and renderer behavior.
+Generated `image` receipts receive app-stamped display metadata. Bottom delivery galleries reuse the image tool's pure-media view, with floating information and retry/cancel actions; the `present` tool's own disclosure keeps its original text result. Ordinary images keep the existing file cards. Exact replay parameters and UI execution receipts persist as private SDK custom entries; replays make no model request or conversation message. Standalone usage and Rewind coverage retain their billing and successful file effects. See [image generation](image-generation.md#generated-image-delivery-and-private-replay) for admission, persistence and renderer behavior.
 
 ## Capture boundary and durability
 
@@ -15,6 +15,8 @@ Generated `image` receipts receive app-stamped display metadata. Bottom delivery
 Stream events pass through unchanged without retained deltas. First-output timing requires an actual nonempty text/thinking/tool-argument delta; result-only consumers have no invented first-output metric. Output rate uses reported tokens and recorded times, not inferred provider internals.
 
 One logical run survives retry/compaction starts until `agent_settled`; each request/retry attempt settles separately. Tool records include actual arguments/output. Message linkage uses a later awaited agent subscription after persistence. Captured assistant output is not duplicated as historical fallback.
+
+Provider catches append a `provider_error` diagnostic before reducing the thrown exception to `errorMessage`. The version-checked preparation patches the pinned pi-ai text adapters and installs the shared serializer from `src/main/pi/provider-errors.mjs`. Original error text and stop reasons still govern SDK retries/cancellation. Finalized output and SDK session JSONL retain `diagnostics[].error`, including nested `cause`, aggregate errors, stacks, error codes and selected network/socket fields. Exceptions thrown outside the adapter's normal result path use the same diagnostic in the trajectory `event` document. The serializer bounds depth, node count and text, marks truncation/cycles, redacts credentials in diagnostic strings and never copies request/response/authentication objects. Inspect a failed request's Output (or Event for a thrown stream) or export its record to read the cause chain; old records cannot recover causes already discarded.
 
 A lazy worker owns `trajectory.sqlite` (0600), WAL, hashing and immutable SHA-256 JSON nodes. Repeated data is deduplicated. Diagnostics stay outside model history and transcript state. Capture failure does not fail execution, but is marked incomplete; worker failure backs off and restart marks unfinished records interrupted.
 
@@ -40,6 +42,7 @@ The pane contains a record list and detail inspector below its filters. Geometry
 node scripts/check-present-trajectory.mjs
 node scripts/check-present-trajectory-ui.mjs
 node scripts/check-session-replay.mjs
+node scripts/check-provider-errors.mjs
 ```
 
 Checks cover real SDK persistence/callbacks, delivery, secrets, Unicode paging/export, branch/fork authorization, interruption and capture during export. UI checks require a build and use real preload/IPC/SQLite with isolated sessions.

@@ -18,7 +18,7 @@ const sdk = fileURLToPath(import.meta.resolve('@earendil-works/pi-coding-agent')
  * The fake stream is installed inside the mocked createAgentSessionFromServices
  * so it exists before PiManager takes ownership of the session.
  */
-export async function createPlanFixture({ respond: initialRespond, extensionFactories = [], withRewind = false, withLibrary = false, keepRecentTokens = 20000, providerCallbacks = false, prepareAgentDir, loadDiscoveredExtensions = false, loadSkills = false, loadContextFiles = false, imageSkillPath, temporaryRoot, reuseBundle = false, sessionPath, keepFiles = false } = {}) {
+export async function createPlanFixture({ respond: initialRespond, extensionFactories = [], withRewind = false, keepRecentTokens = 20000, providerCallbacks = false, prepareAgentDir, loadDiscoveredExtensions = false, loadSkills = false, loadContextFiles = false, imageSkillPath, temporaryRoot, reuseBundle = false, sessionPath, keepFiles = false, autoNameSessions = false } = {}) {
   const temporary = temporaryRoot ?? await mkdtemp(join(tmpdir(), 'pith-plan-mode-'))
   const agentDir = join(temporary, 'agent')
   const project = join(temporary, 'project')
@@ -38,8 +38,8 @@ export async function createPlanFixture({ respond: initialRespond, extensionFact
   if (!reuseBundle) await build({
     stdin: {
       contents: `export { PiManager } from './src/main/pi/manager';
+export { loadSettings } from './src/main/settings';
 export { debugAdapterSpec } from './src/main/debug/adapters';
-export { startLibraryService } from './src/main/library/service';
 export { PlanStorage } from './src/main/pi/plan-storage';
 export { GoalStorage } from './src/main/pi/goals/storage';
 export { GoalInputStorage } from './src/main/pi/goals/input';
@@ -59,7 +59,7 @@ export { SessionManager, ModelRuntime, SettingsManager, setPlanFixtureStream, re
       setup(builder) {
         builder.onResolve({ filter: /^@earendil-works\/pi-coding-agent$/ }, () => ({ path: 'sdk', namespace: 'fixture' }))
         builder.onResolve({ filter: /^electron$/ }, () => ({ path: 'electron', namespace: 'fixture' }))
-        builder.onResolve({ filter: /^proper-lockfile$|^@resvg\/resvg-js$/ }, args => ({ path: fileURLToPath(import.meta.resolve(args.path)), external: true }))
+        builder.onResolve({ filter: /^proper-lockfile$|^@resvg\/resvg-js$|^ssh2$|^@xterm\/(headless|addon-serialize)$/ }, args => ({ path: fileURLToPath(import.meta.resolve(args.path)), external: true }))
         // Strict absolute externalization for the browser dependency graph.
         builder.onResolve({ filter: /^playwright-core(\/|$)|^chromium-bidi(\/|$)/ }, (args) => {
           const resolved = fileURLToPath(import.meta.resolve(args.path))
@@ -108,14 +108,11 @@ export async function createAgentSessionFromServices(options){
   })
 
   if (!reuseBundle) await build({ entryPoints: [join(planRepoRoot, 'src/main/pi/trajectory-worker.ts')], outfile: join(temporary, 'trajectory-worker.mjs'), bundle: true, platform: 'node', format: 'esm' })
-  if (withLibrary && !reuseBundle) await build({ entryPoints: [join(planRepoRoot, 'src/main/library/worker.ts')], outfile: join(temporary, 'library-worker.mjs'), bundle: true, platform: 'node', format: 'esm',
-    plugins: [{ name: 'library-dependencies', setup(builder) { builder.onResolve({ filter: /^@earendil-works\/pi-coding-agent$|^proper-lockfile$/ }, args => ({ path: fileURLToPath(import.meta.resolve(args.path)), external: true })) } }] })
   if (withRewind && !reuseBundle) await build({ entryPoints: [join(planRepoRoot, 'src/main/rewind/worker.ts')], outfile: join(temporary, 'rewind-worker.mjs'), bundle: true, platform: 'node', format: 'esm' })
 
   const {
     PiManager,
     PiStore,
-    startLibraryService,
     SessionManager,
     ModelRuntime,
     setPlanFixtureStream,
@@ -130,7 +127,8 @@ export async function createAgentSessionFromServices(options){
   let respond = initialRespond ?? (() => [{ type: 'text', text: 'ok' }])
 
   setPlanFixtureStream((model, context, options) => {
-    requests.push(JSON.parse(JSON.stringify(context)))
+    try { requests.push(JSON.parse(JSON.stringify(context))) }
+    catch { throw new Error('Fixture request context must stay JSON-serializable') }
     const content = respond(requests.length, context)
     const message = {
       role: 'assistant',
@@ -205,13 +203,15 @@ export async function createAgentSessionFromServices(options){
     typeof imageSkillPath === 'function' ? imageSkillPath(agentDir) : imageSkillPath
   )
   app.runtime = async () => runtime
+  // Auxiliary naming has its own integration suite and synthetic provider.
+  // Other fixtures must never make an unmocked model request after settling.
+  app.setAutoNameSessions(autoNameSessions)
 
   const manager = sessionPath ? SessionManager.open(sessionPath) : SessionManager.create(project, sessions)
   const managed = await app.buildSession(manager)
   const { session } = managed
 
   store.applySnapshot(app.snapshot())
-  const library = withLibrary ? startLibraryService(() => {}, id => app.librarySession(id)) : null
 
   return {
     app,
@@ -219,7 +219,6 @@ export async function createAgentSessionFromServices(options){
     session,
     manager,
     store,
-    library,
     debugAdapterSpec,
     project,
     userData,

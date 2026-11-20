@@ -1,8 +1,11 @@
-import { useMemo, useRef, useState } from 'react'
-import { countDiffChanges } from '@/lib/diff'
+import { useId, useMemo, useRef, useState } from 'react'
+import { countDiffChanges, DIFF_HUNK_RANGE } from '@/lib/diff'
 import { basename } from '@/lib/format'
 import { useI18n } from '@/i18n'
+import { cn } from '@/lib/utils'
 import { ReviewDiffBody, ReviewFileHeader } from './ReviewDiff'
+import { DiffLayoutButton } from './DiffControls'
+import type { DiffLayout } from '@/lib/diff-layout'
 
 /**
  * Preview for a patch file (`.diff` / `.patch`): the raw text of a unified diff
@@ -63,6 +66,7 @@ function splitPatch(text: string, fallback: string): PatchSection[] {
   const groups: string[][] = []
   let current: string[] = []
   let inHunk = false
+  let remaining = 0
   // Whether the group being built already began with git's own `diff --git`
   // line. Git announces one file with BOTH that line and a `--- `/`+++ ` pair,
   // so the pair is only a boundary for patches that have no git line —
@@ -71,11 +75,19 @@ function splitPatch(text: string, fallback: string): PatchSection[] {
   const flush = () => { if (current.some(line => line !== '')) groups.push(current); current = []; announced = false }
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index]
-    if (inHunk && !line.startsWith('@@') && !isHunkBody(line)) inHunk = false
+    if (inHunk && (remaining === 0 || (!line.startsWith('@@') && !isHunkBody(line)))) inHunk = false
     const boundary = line.startsWith('diff --git ') || (!inHunk && !announced && line.startsWith('--- ') && (lines[index + 1] ?? '').startsWith('+++ '))
     if (boundary) flush()
     if (line.startsWith('diff --git ')) announced = true
-    if (line.startsWith('@@')) inHunk = true
+    if (line.startsWith('@@')) {
+      const range = DIFF_HUNK_RANGE.exec(line)
+      // A bare patch may place its next file header right after the last row.
+      remaining = range ? Number(range[2] ?? 1) + Number(range[4] ?? 1) : -1
+      inHunk = true
+    } else if (inHunk && remaining > 0) {
+      if (line.startsWith(' ')) remaining = Math.max(0, remaining - 2)
+      else if (line.startsWith('-') || line.startsWith('+')) remaining--
+    }
     current.push(line)
   }
   flush()
@@ -85,10 +97,14 @@ function splitPatch(text: string, fallback: string): PatchSection[] {
   })
 }
 
-export function FileDiffPreview({ text, displayPath }: { text: string; displayPath: string }) {
+export function FileDiffPreview({ text, displayPath, wrap, layout: sharedLayout, className }: {
+  text: string; displayPath: string; wrap: boolean; layout?: DiffLayout; className?: string
+}) {
   const { t } = useI18n()
   const scroll = useRef<HTMLDivElement>(null)
+  const id = useId()
   const [collapsed, setCollapsed] = useState<ReadonlySet<number>>(() => new Set<number>())
+  const [layouts, setLayouts] = useState<Record<number, DiffLayout>>({})
   const sections = useMemo(() => splitPatch(text, basename(displayPath)), [text, displayPath])
   const toggle = (index: number) => setCollapsed(previous => {
     const next = new Set(previous)
@@ -97,17 +113,19 @@ export function FileDiffPreview({ text, displayPath }: { text: string; displayPa
   })
 
   if (sections.length === 0) return <div role="status" className="flex min-h-0 flex-1 items-center justify-center p-5 text-center text-xs leading-ui text-muted-foreground">{t('files.diffPreview.empty')}</div>
-  return <div ref={scroll} data-file-diff-preview className="min-h-0 flex-1 overflow-auto">
-    {sections.map((section, index) => <section key={`${index}:${section.path}`} data-diff-file={section.path || undefined}>
-      {section.path ? <ReviewFileHeader
-        displayPath={section.path}
-        collapsed={collapsed.has(index)}
-        onToggle={() => toggle(index)}
-        added={section.added}
-        removed={section.removed}
-        contentId={`file-diff-${index}`}
-      /> : null}
-      {collapsed.has(index) ? null : <ReviewDiffBody patch={section.patch} displayPath={section.path || displayPath} scrollRootRef={scroll} layoutKey={collapsed.size} />}
-    </section>)}
+  return <div ref={scroll} data-file-diff-preview className={cn('min-h-0 flex-1 overflow-auto', className)}>
+    {sections.map((section, index) => {
+      const layout = sharedLayout ?? layouts[index] ?? 'stacked'
+      const contentId = `${id}-${index}`
+      return <section key={`${index}:${section.path}`} data-diff-file={section.path || undefined}>
+        {section.path ? <ReviewFileHeader displayPath={section.path} collapsed={collapsed.has(index)} onToggle={() => toggle(index)}
+          added={section.added} removed={section.removed} contentId={contentId}
+          action={!sharedLayout && (section.added || section.removed) ? <DiffLayoutButton layout={layout} className="size-6"
+            onChange={next => setLayouts(previous => ({ ...previous, [index]: next }))} /> : null} /> : null}
+        {collapsed.has(index) ? null : <div id={contentId}>
+          <ReviewDiffBody patch={section.patch} displayPath={section.path || displayPath} scrollRootRef={scroll} layoutKey={collapsed.size} wrap={wrap} layout={layout} />
+        </div>}
+      </section>
+    })}
   </div>
 }

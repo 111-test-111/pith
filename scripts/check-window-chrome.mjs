@@ -123,10 +123,15 @@ app.whenReady().then(()=>{
     throw new Error('Timed out: ' + expression + '\n' + JSON.stringify(exceptions) + '\n' + output.slice(-2000))
   }
   const ready = () => waitFor(`document.querySelector('[data-prompt-editor]') && document.querySelector('[data-slot="sidebar-trigger"]')`)
-  const click = async selector => {
+  // A press without the settling pause: page transitions finish in ~220ms, so
+  // callers that sample mid-animation need the frame right after release.
+  const press = async selector => {
     const point = await evaluate(`(()=>{const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`)
     await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...point, button: 'left', clickCount: 1 })
     await send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...point, button: 'left', clickCount: 1 })
+  }
+  const click = async selector => {
+    await press(selector)
     await pause(400)
   }
   const screenshot = async name => {
@@ -134,7 +139,12 @@ app.whenReady().then(()=>{
     await mkdir(process.env.PI_WINDOW_SCREENSHOT_DIR, { recursive: true })
     await writeFile(join(process.env.PI_WINDOW_SCREENSHOT_DIR, name + '.png'), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'))
   }
-  const reload = async () => { await send('Page.reload'); await pause(300); await ready() }
+  const reload = async () => {
+    await send('Page.reload'); await pause(300); await ready()
+    // An occluded native window can expose DOM before Viz has a backing frame.
+    // Commit that frame before sampling WebContents alpha through main.
+    await send('Page.captureScreenshot')
+  }
   await send('Runtime.enable')
   await ready()
   await evaluate(`localStorage.setItem('pi-app:locale','zh-CN');localStorage.setItem('theme','dark')`)
@@ -184,9 +194,29 @@ app.whenReady().then(()=>{
     await assertTitlebarGlass(enabled)
   }
   await assertWorkspaceGlass(true)
+  // Opaque chrome owns the window background, so a page never steps aside for
+  // the native material while it animates: the title row must stay fully
+  // opaque on every frame of a Settings <-> conversation transition. A
+  // transparent page background showed the system material for a frame and
+  // read as a white-to-grey flash.
+  const assertOpaqueTransition = async selector => {
+    await press(selector)
+    for (const delay of [40, 60, 60]) {
+      await pause(delay)
+      const strip = await evaluate(`(()=>{
+        const header=[...document.querySelectorAll('[data-window-titlebar]')].find(el=>getComputedStyle(el).visibility==='visible'&&el.getBoundingClientRect().height>0);
+        if(!header) return null;
+        const r=header.getBoundingClientRect();
+        return fixture.alpha({x:Math.floor(r.left+r.width*0.5),y:Math.floor(r.bottom-4),width:8,height:2});
+      })()`)
+      assert.ok(strip && strip.pixels>0, 'the title-row capture contains pixels mid-transition')
+      assert.equal(strip.min, 255, 'the title row stays opaque while a page animates: ' + JSON.stringify(strip))
+    }
+    await pause(400)
+  }
   // One chrome canvas: every title-row control draws the same 16px compact
   // glyph the sessions sidebar's own controls draw (AGENTS.md · workspace).
-  const chromeGlyphs = await evaluate(`(()=>{const sizes=sel=>Array.from(document.querySelectorAll(sel)).map(svg=>[svg.dataset.appIcon,svg.getBoundingClientRect().width,svg.getBoundingClientRect().height]);return{titleRow:sizes('[data-window-titlebar] button svg[data-app-icon]'),sidebar:sizes('[data-slot="sidebar"] [data-slot="sidebar-menu"] svg[data-app-icon]')}})()`)
+  const chromeGlyphs = await evaluate(`(()=>{const sizes=sel=>Array.from(document.querySelectorAll(sel)).map(svg=>[svg.dataset.appIcon,svg.getBoundingClientRect().width,svg.getBoundingClientRect().height]);return{titleRow:sizes('[data-window-titlebar] button svg[data-app-icon]'),sidebar:sizes('[data-slot="sidebar"] .session-sidebar > div:first-child button svg[data-app-icon]')}})()`)
   assert.ok(chromeGlyphs.sidebar.length >= 2 && chromeGlyphs.sidebar.every(([, width, height]) => width === 16 && height === 16), 'the sessions sidebar draws the compact 16px canvas: ' + JSON.stringify(chromeGlyphs))
   assert.ok(chromeGlyphs.titleRow.length >= 4, 'the title row renders its control glyphs: ' + JSON.stringify(chromeGlyphs))
   assert.ok(chromeGlyphs.titleRow.every(([, width, height]) => width === 16 && height === 16), 'every title-row control glyph matches the sidebar canvas: ' + JSON.stringify(chromeGlyphs))
@@ -251,7 +281,7 @@ app.whenReady().then(()=>{
   assert.equal(await evaluate(`document.querySelector('[data-queue-compaction]').closest('[data-queue-panel]')!==null`), true, 'the action uses the existing composer queue')
   assert.equal(await evaluate(`document.querySelector('[data-queue-panel]').getBoundingClientRect().bottom<=document.querySelector('[contenteditable="plaintext-only"]').getBoundingClientRect().top`), true, 'the queue remains above the input')
   assert.match(await evaluate(`document.querySelector('[data-queue-compaction]').textContent`), /当前回复与工具调用完成后执行/)
-  assert.equal(await evaluate(`document.querySelector('[data-queue-panel]').querySelectorAll('button').length`), 0, 'the action has no message recall or promotion controls')
+  assert.equal(await evaluate(`document.querySelector('[data-queue-panel]').querySelectorAll('button:not([data-queue-toggle])').length`), 0, 'the action has no message recall or promotion controls')
   await click('[data-titlebar-more]')
   await waitFor(`document.querySelector('[data-titlebar-action="compact"]')`)
   await click('[data-titlebar-action="compact"]')
@@ -265,6 +295,17 @@ app.whenReady().then(()=>{
   await waitFor(`!document.querySelector('[data-queue-compaction]')`)
   assert.equal(await evaluate(`document.querySelectorAll('[data-queue-row]').length`), 2, 'starting compaction preserves ordinary queued messages')
   await evaluate(`fixture.event({type:'compaction_end',sessionPath:'/fixture/chat-0',reason:'manual'})`)
+  // A consumed queued message: the card's removal and the user bubble land in
+  // the same update, and the persisted message replaces the echo (no duplicate).
+  await evaluate(`fixture.event({type:'queue_update',sessionPath:'/fixture/chat-0',steering:[],followUp:[{text:'Review after finishing',originalText:'Review after finishing',imageCount:0,filePaths:[]}],delivered:[{text:'Check the current tool result',originalText:'Check the current tool result',imageCount:0,filePaths:[]}]})`)
+  await waitFor(`document.querySelectorAll('[data-queue-row]').length===1`)
+  const deliveredBubble = `(() => {const bubbles=[...document.querySelectorAll('[data-user-bubble-body]')];return {count:bubbles.length,text:bubbles.at(-1)?.textContent??''}})()`
+  const echoed = await evaluate(deliveredBubble)
+  assert.equal(echoed.count, 1, 'the consumed message renders as a user row with the card removal: ' + JSON.stringify(echoed))
+  assert.match(echoed.text, /Check the current tool result/)
+  await evaluate(`fixture.event({type:'message_end',sessionPath:'/fixture/chat-0',message:{role:'user',timestamp:Date.now(),content:'Check the current tool result'}})`)
+  const settled = await evaluate(deliveredBubble)
+  assert.equal(settled.count, 1, 'the persisted message replaces the echo instead of duplicating it: ' + JSON.stringify(settled))
   await evaluate(`fixture.event({type:'queue_update',sessionPath:'/fixture/chat-0',steering:[],followUp:[]})`)
   await waitFor(`!document.querySelector('[data-queue-panel]')`)
   await evaluate(`fixture.scenario('compact-small')`)
@@ -438,9 +479,9 @@ app.whenReady().then(()=>{
   assert.equal(await evaluate(`document.querySelector('${glassCheckbox}').getAttribute('aria-checked')`), 'false')
   await assertTitlebarGlass(false)
   await screenshot('settings-glass-off')
-  await click('button[aria-label="返回对话"]')
+  await assertOpaqueTransition('button[aria-label="返回对话"]')
   await assertWorkspaceGlass(false)
-  await click('button[aria-label="设置"]')
+  await assertOpaqueTransition('button[aria-label="设置"]')
   await evaluate(`[...document.querySelectorAll('[role="tab"]')].find(button=>button.textContent.trim()==='外观').click()`)
   await evaluate(`document.querySelector('${glassCheckbox}').scrollIntoView({block:'center'})`)
   await pause(300)

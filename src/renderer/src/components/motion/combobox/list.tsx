@@ -14,6 +14,8 @@ import {
 } from "react";
 import { EASE_OUT, SPRING_LAYOUT } from "@/lib/ease";
 import { cn } from "@/lib/utils";
+// local patch (pi-app): option names share the searchable trigger's text role.
+import { SINGLE_LINE_INPUT_TEXT } from "@/lib/input-style";
 import { ComboboxGroupContext, useComboboxContext } from "./context";
 
 export interface ComboboxListProps {
@@ -160,7 +162,8 @@ export function ComboboxItem({
         context.select(value);
       }}
       className={cn(
-        "relative flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm outline-none transition-colors duration-150",
+        "relative flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left outline-none transition-colors duration-150",
+        SINGLE_LINE_INPUT_TEXT,
         active ? "text-foreground" : "text-muted-foreground",
         "disabled:pointer-events-none disabled:opacity-45",
         className,
@@ -206,7 +209,8 @@ export function ComboboxEmpty({
     <div
       role="status"
       className={cn(
-        "px-3 py-8 text-center text-sm text-muted-foreground",
+        "px-3 py-8 text-center text-muted-foreground",
+        SINGLE_LINE_INPUT_TEXT,
         className,
       )}>
       {children}

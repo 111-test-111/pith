@@ -4,7 +4,7 @@ import { basename } from './format'
 import type { UiStyle } from './ui-style'
 
 /**
- * Square uses app-owned Pierre adaptations; squircle uses the native artwork.
+ * Square uses app-owned Pierre adaptations; rounded and squircle share the native artwork.
  * Both share @pierre/trees' complete associations and the document/media additions.
  *
  * `scripts/prepare-file-icons.mjs` writes only the SVGs these maps can reach into
@@ -73,6 +73,6 @@ export function fileIconName(path: string, _style: UiStyle = 'square'): string {
 /** Relative on purpose: the packaged renderer is loaded from `file://`, where
  * an absolute path would resolve against the filesystem root instead of the app. */
 export function fileIconSource(path: string, style: UiStyle = 'square'): string {
-  const directory = style === 'squircle' ? 'pierre/' : 'pierre-square/'
+  const directory = style === 'square' ? 'pierre-square/' : 'pierre/'
   return `./file-icons/${directory}${fileIconName(path, style)}.svg`
 }

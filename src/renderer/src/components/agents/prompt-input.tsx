@@ -1,4 +1,5 @@
 // local patch (pi-app): shared scalable typography for content and code.
+// local patch (pi-app): the model trigger and option labels share one text role.
 // local patch (pi-app): keep UI frames and focus rings in this component at 1px.
 "use client";
 // beui.dev/components/agents/chat-app
@@ -298,9 +299,10 @@ export function PromptInput({
             value={currentModelValue}
             onValueChange={setModel}
             disabled={disabled || loading}
+            textClassName="text-xs"
             className="min-w-0"
           >
-            <SelectTrigger className="h-8 w-auto max-w-52 rounded-xl border-0 bg-transparent px-2 py-0 text-xs hover:bg-muted focus-visible:ring-1">
+            <SelectTrigger className="h-8 w-auto max-w-52 rounded-xl border-0 bg-transparent px-2 py-0 hover:bg-muted focus-visible:ring-1">
               <span className="flex min-w-0 items-center gap-1.5">
                 {currentModel?.icon ? (
                   <span className="grid size-4 shrink-0 place-items-center text-muted-foreground [&_svg]:size-3.5">
@@ -326,7 +328,7 @@ export function PromptInput({
                         {option.icon}
                       </span>
                     ) : null}
-                    <span className="min-w-0 truncate text-sm text-foreground">
+                    <span className="min-w-0 truncate text-foreground">
                       {option.label}
                     </span>
                   </span>

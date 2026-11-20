@@ -11,11 +11,15 @@ import {
 } from 'react'
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import { CodeBlock } from '@/components/agents/code-block'
+import { MarkdownDiff } from '@/components/app/MarkdownDiff'
+import { FileTypeIcon } from '@/components/app/FileTypeIcon'
 import { ImagePreviewGroup, PreviewThumb } from '@/components/app/ImagePreview'
 import { MarkdownMath } from '@/components/app/MarkdownMath'
 import { MarkdownMermaid } from '@/components/app/MarkdownMermaid'
 import { FILE_REMARK_PLUGINS, REMARK_PLUGINS } from '@/lib/markdown-plugins'
 import { splitMarkdownBlocks } from '@/lib/markdown-blocks'
+import { rehypeTextArrivals, STREAM_TEXT_FADE_MS, type TextArrival } from '@/lib/stream-text-arrivals'
+import { useReduceMotion, useSystemReducedMotion } from '@/lib/reduce-motion'
 import { normalizeQuotedMath } from '@/lib/markdown-quoted-math'
 import { normalizeLinkSpaces } from '@/lib/markdown-link-spaces'
 import { localFileTarget, useFileNavigation } from '@/lib/file-navigation'
@@ -188,6 +192,13 @@ function isBrowserOpenLinkClick(href: string, event: { metaKey: boolean; ctrlKey
 
 type MarkdownComponents = ComponentPropsWithoutRef<typeof ReactMarkdown>['components']
 
+function ArrivingText({ at, id, children }: { at: number; id: string; children: ReactNode }) {
+  // A remounted inline node resumes the same arrival; an existing span keeps
+  // its original delay rather than restarting on every streaming delta.
+  const [delay] = useState(() => Math.min(STREAM_TEXT_FADE_MS, Math.max(0, performance.now() - at)))
+  return <span data-stream-text={id} className="stream-text-arrival" style={{ animationDelay: `-${delay}ms` }}>{children}</span>
+}
+
 const components: MarkdownComponents = {
   span({ node, children }) {
     const props = node?.properties
@@ -197,16 +208,23 @@ const components: MarkdownComponents = {
       display={props['data-math'] === 'display'}
       incomplete={props['data-math-incomplete'] === true}
     />
+    if (props?.['data-stream-text-at'] !== undefined) return <ArrivingText
+      key={String(props['data-stream-text-id'])}
+      at={Number(props['data-stream-text-at'])}
+      id={String(props['data-stream-text-id'])}
+    >{children}</ArrivingText>
     return <span>{children}</span>
   },
   pre({ children }) {
     const { code, language } = extractCodeBlock(children)
     const streaming = useContext(StreamingMarkdownContext)
     if (language?.toLowerCase() === 'mermaid') return <MarkdownMermaid code={code} streaming={streaming} />
+    const syntax = normalizeLanguage(language)
+    if (syntax === 'diff') return <MarkdownDiff code={code} streaming={streaming} />
     return (
       <CodeBlock
         code={code}
-        language={normalizeLanguage(language)}
+        language={syntax}
         status={streaming ? 'streaming' : 'complete'}
       />
     )
@@ -214,15 +232,16 @@ const components: MarkdownComponents = {
   code({ children }) {
     // Only inline code reaches this override — fenced code is consumed by `pre`.
     return (
-      <code data-inline-code className="rounded-detail bg-muted px-1.5 py-0.5 font-mono text-code-inline text-foreground">
+      <code data-inline-code className="rounded-inner bg-muted px-1.5 py-0.5 font-mono text-code-inline text-foreground">
         {children}
       </code>
     )
   },
   a({ node, href, title, children, className, ...props }) {
     const navigation = useFileNavigation()
+    const fileTarget = href ? localFileTarget(href, navigation.cwd) : null
     const footnoteLabel = useContext(FootnoteLabelContext)
-    return (
+    const link = (
       <a
         {...props}
         href={href}
@@ -251,11 +270,14 @@ const components: MarkdownComponents = {
             requestBrowserOpenLink(href)
           } else navigation.open(href)
         }}
-        className={cn('font-medium text-primary underline underline-offset-2 hover:opacity-80', className)}
+        className={cn('font-medium text-primary hover:opacity-80', className)}
       >
+        {fileTarget && <span data-markdown-file-icon aria-hidden="true"><FileTypeIcon path={fileTarget.path} /></span>}
         {children}
       </a>
     )
+    // A selectable space merges with any existing prose space before the link.
+    return fileTarget ? <>{' '}{link}</> : link
   },
   table({ children }) {
     return (
@@ -358,7 +380,7 @@ class MarkdownBlockBoundary extends Component<{ source: string; children: ReactN
   }
 }
 
-function ParsedMarkdown({ source }: { source: string }) {
+function ParsedMarkdown({ source, offset = 0, arrivals }: { source: string; offset?: number; arrivals?: TextArrival[] }) {
   const { t } = useI18n()
   const preserveLineBreaks = useContext(PreserveLineBreaksContext)
   const idPrefix = `markdown-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}-`
@@ -366,10 +388,21 @@ function ParsedMarkdown({ source }: { source: string }) {
   // quoted math keeps a Jupyter formula's quote structure, and link spaces
   // wrap a destination CommonMark would otherwise refuse as literal text.
   const text = normalizeLinkSpaces(normalizeQuotedMath(source))
+  const localArrivals = arrivals?.flatMap((arrival) => {
+    const start = Math.max(0, arrival.start - offset)
+    const end = Math.min(source.length, arrival.end - offset)
+    if (end <= start) return []
+    if (text === source) return [{ ...arrival, start, end }]
+    const before = normalizeLinkSpaces(normalizeQuotedMath(source.slice(0, start)))
+    const through = normalizeLinkSpaces(normalizeQuotedMath(source.slice(0, end)))
+    return text.startsWith(before) && text.startsWith(through)
+      ? [{ ...arrival, start: before.length, end: through.length }] : []
+  })
   return (
     <FootnoteLabelContext.Provider value={`${idPrefix}footnote-label`}>
       <ReactMarkdown
         remarkPlugins={preserveLineBreaks ? FILE_REMARK_PLUGINS : REMARK_PLUGINS}
+        rehypePlugins={localArrivals?.length ? [[rehypeTextArrivals, { source: text, arrivals: localArrivals, now: performance.now() }]] : undefined}
         remarkRehypeOptions={{
           clobberPrefix: idPrefix,
           footnoteLabel: t('markdown.footnotes'),
@@ -386,9 +419,38 @@ function ParsedMarkdown({ source }: { source: string }) {
 
 /** One already-final markdown block — memoized so stable blocks never
  * re-parse while the tail streams. */
-const MarkdownBlock = memo(function MarkdownBlock({ children }: { children: string }) {
-  return <MarkdownBlockBoundary source={children}><ParsedMarkdown source={children} /></MarkdownBlockBoundary>
+const MarkdownBlock = memo(function MarkdownBlock({ children, offset, arrivals }: { children: string; offset?: number; arrivals?: TextArrival[] }) {
+  return <MarkdownBlockBoundary source={children}><ParsedMarkdown source={children} offset={offset} arrivals={arrivals} /></MarkdownBlockBoundary>
 })
+
+/** Only the live renderer owns arrival metadata and motion subscriptions.
+ * Mounting/restoring a message adopts its existing source without animating it.
+ * A short bounded history preserves overlapping deltas; CSS finishes the fade
+ * without timers, layout animation or a frame loop. */
+function StreamingMarkdown({ source }: { source: string }) {
+  const appReduce = useReduceMotion()
+  const osReduce = useSystemReducedMotion()
+  const reduce = appReduce || osReduce
+  const [record, setRecord] = useState<{ source: string; arrivals: TextArrival[] }>(() => ({ source, arrivals: [] }))
+  let current = record
+  if (source !== record.source || (reduce && record.arrivals.length > 0)) {
+    const now = performance.now()
+    const arrivals = !reduce && source.length > record.source.length && source.startsWith(record.source)
+      ? [...record.arrivals.filter((arrival) => now - arrival.at < STREAM_TEXT_FADE_MS), { start: record.source.length, end: source.length, at: now }].slice(-16)
+      : []
+    current = { source, arrivals }
+    setRecord(current)
+  }
+  const blocks = splitMarkdownBlocks(source)
+  let offset = 0
+  return [...blocks.stable, blocks.tail].map((block) => {
+    const start = offset
+    offset += block.length
+    if (!block) return null
+    const arrivals = current.arrivals.some((arrival) => arrival.start < offset && arrival.end > start) ? current.arrivals : undefined
+    return <MarkdownBlock key={start} offset={start} arrivals={arrivals}>{block}</MarkdownBlock>
+  })
+}
 
 export const Markdown = memo(function Markdown({
   children,
@@ -399,7 +461,6 @@ export const Markdown = memo(function Markdown({
   streaming?: boolean
   preserveLineBreaks?: boolean
 }) {
-  const blocks = streaming ? splitMarkdownBlocks(children) : null
   return (
     <StreamingMarkdownContext.Provider value={streaming}>
       <PreserveLineBreaksContext.Provider value={preserveLineBreaks}>
@@ -409,14 +470,7 @@ export const Markdown = memo(function Markdown({
               whitespace-pre. Stacked streaming blocks keep single-parse spacing
               through this wrapper's own `space-y-3`. */}
           <div data-markdown className="space-y-3 text-content text-foreground [overflow-wrap:anywhere]">
-            {blocks ? (
-              <>
-                {blocks.stable.map((block, index) => (
-                  <MarkdownBlock key={index}>{block}</MarkdownBlock>
-                ))}
-                {blocks.tail ? <MarkdownBlock>{blocks.tail}</MarkdownBlock> : null}
-              </>
-            ) : (
+            {streaming ? <StreamingMarkdown source={children} /> : (
               <MarkdownBlock>{children}</MarkdownBlock>
             )}
           </div>

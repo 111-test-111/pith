@@ -7,6 +7,7 @@ import { GitStatistics } from './statistics'
 import { GitGraphReader } from './graph'
 import { parseHistory } from './parse'
 import { blockReason, canonicalDirectory, entryPath, fileDigest, hasGitAncestor, inspect, MAX_FILES, MAX_PATCH_BYTES, readPreviewFile, trimLine } from './repository'
+import { readTreeStatus } from './tree-status'
 
 const PREVIEW_TTL = 5 * 60_000
 const RECEIPT_TTL = 15 * 60_000
@@ -62,6 +63,13 @@ export class GitWorkbench {
         while (this.statisticsCache.size > 8) this.statisticsCache.delete(this.statisticsCache.keys().next().value!)
       }
       return { ...repository, files: await counts, blocked: this.options.workspace().writable ? blockReason(this.options.coordinator, repository.root) : 'readonly' }
+    })
+  }
+  treeStatus(request: GitWorkspaceRequest): Promise<GitResult<GitChange[]>> {
+    return gitResult(async () => {
+      const cwd = await this.workspace(request)
+      await this.options.coordinator.ready()
+      return readTreeStatus(this.runner, this.statistics, cwd)
     })
   }
   diff(request: GitDiffRequest): Promise<GitResult<GitDiff>> {

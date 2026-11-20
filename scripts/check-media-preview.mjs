@@ -101,6 +101,7 @@ try {
   const fixture = `<!doctype html><html lang="en"><body><div id="root"></div><script type="module">
 import React from 'react';import {createRoot} from 'react-dom/client';
 import {FilesPane} from '/src/components/app/FilesPane.tsx';
+import {SidebarPanel,fileTabId,filePathForTab} from '/src/components/app/SidebarPanel.tsx';
 import {I18nProvider,useI18n} from '/src/i18n/index.tsx';
 import {PiStore} from '/src/state/pi-store.ts';import {FileBrowserStore} from '/src/state/file-browser-store.ts';import {DebugStore} from '/src/state/debug-store.ts';
 import en from '/src/i18n/locales/en.ts';import zh from '/src/i18n/locales/zh-CN.ts';import tw from '/src/i18n/locales/zh-TW.ts';
@@ -111,7 +112,16 @@ localStorage.setItem('pi-app:locale','en');
 const cwd=${JSON.stringify(project)};
 const files=new FileBrowserStore(),pi=new PiStore(),debug=new DebugStore();
 pi.applySnapshot({cwd,sessionId:crypto.randomUUID(),messages:[],model:null,thinkingLevel:'off',availableThinkingLevels:['off'],isStreaming:false});
-const App=()=>{window.setLocale=useI18n().setLocale;const state=React.useSyncExternalStore(files.subscribe,files.getSnapshot);return React.createElement(FilesPane,{files,store:pi,filePath:state.active,debug})};
+const App=()=>{
+  window.setLocale=useI18n().setLocale;
+  const state=React.useSyncExternalStore(files.subscribe,files.getSnapshot);
+  const [rail,setRail]=React.useState(false);window.showRail=setRail;
+  if(!rail)return React.createElement(FilesPane,{files,store:pi,filePath:state.active,debug});
+  return React.createElement('div',{className:'flex h-full'},React.createElement(SidebarPanel,{open:true,width:600,scopeKey:'media-check',
+    tabs:state.tabs.map(tab=>fileTabId(tab.path)),activeTab:state.active?fileTabId(state.active):null,
+    onSelectTab:id=>files.select(filePathForTab(id)),onCloseTab:id=>files.close(filePathForTab(id)),
+    pane:{files,store:pi,debug,agentRuns:new Map()}}));
+};
 createRoot(document.getElementById('root')).render(React.createElement(React.StrictMode,null,React.createElement(I18nProvider,null,React.createElement(App))));
 window.cwd=cwd;window.files=files;window.en=en;window.zh=zh;window.tw=tw;window.setUiStyle=setUiStyle;window.setReduceMotion=setReduceMotion;
 window.openFile=name=>files.open(cwd,{path:cwd+'/'+name});
@@ -490,6 +500,22 @@ app.on('window-all-closed',()=>app.quit());`, resolveDir: repo, loader: 'ts' }, 
   await open('still.png')
   await waitFor(`document.querySelector('[data-file-media=image] img')?.complete`, 'image after the storm')
   console.log(`PASS: locales complete; ${after.media - before.media} aborted media loads left descriptors stable (${before.fds} → ${after.fds})`)
+
+  await evaluate(`showRail(true);openFile('tone.wav')`)
+  await waitFor(`${audioElement}?.duration > 0`, 'audio opens in the rail')
+  await evaluate(`window.keptAudio=${audioElement};keptAudio.currentTime=2.5;keptAudio.volume=0.4;keptAudio.playbackRate=1.5`)
+  await click('[data-media-controls] [aria-label="Play"]')
+  await waitFor(`!keptAudio.paused && keptAudio.currentTime>2.5`, 'rail audio plays at the chosen position')
+  const tab = name => '[data-sidebar-tab=' + JSON.stringify('file:' + join(project, name)) + ']'
+  await click(tab('notes.txt') + ' [role=tab]')
+  await waitFor(`keptAudio.isConnected && keptAudio.closest('[inert]') && keptAudio.paused`, 'hidden player is retained and paused')
+  const pausedTime = await evaluate('keptAudio.currentTime')
+  await click(tab('tone.wav') + ' [role=tab]')
+  assert.deepEqual(await evaluate(`({same:document.querySelector('[data-sidebar-file-preview=active] audio')===keptAudio,time:keptAudio.currentTime,paused:keptAudio.paused,volume:keptAudio.volume,rate:keptAudio.playbackRate})`), { same: true, time: pausedTime, paused: true, volume: 0.4, rate: 1.5 }, 'returning to audio preserves progress, volume and speed')
+  await click(tab('notes.txt') + ' [role=tab]')
+  await click(tab('tone.wav') + ' button[aria-label^="Close "]')
+  await waitFor(`!keptAudio.isConnected && !keptAudio.getAttribute('src')`, 'closing the retained player releases its stream')
+  console.log('PASS: audio pauses while hidden, resumes from the same position on demand, and releases its stream on close')
 
   assert.deepEqual(exceptions, [], 'no renderer exceptions')
   console.log('\nmedia preview check passed')

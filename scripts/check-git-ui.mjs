@@ -13,24 +13,29 @@ import { chromium } from 'playwright-core'
 
 const repo = resolve('.'), temporary = await mkdtemp(join(tmpdir(), 'pith-git-ui-'))
 const project = join(temporary, 'project'), second = join(temporary, 'second')
+const wideLine = 'longToken'.repeat(24)
+const workingReadme = `working change ${wideLine}\n`
 const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: join(temporary, 'global-config') }, stdio: ['pipe', 'pipe', 'pipe'] }).trimEnd()
 let server, child, browser, page
+const errors = []
 try {
   await writeFile(join(temporary, 'global-config'), '')
   for (const directory of [project, second]) {
     await mkdir(directory); git(directory, 'init', '-b', 'main'); git(directory, 'config', 'user.name', 'UI Fixture'); git(directory, 'config', 'user.email', 'ui@example.invalid'); git(directory, 'config', 'commit.gpgsign', 'false')
     await writeFile(join(directory, 'README.md'), 'original\n'); git(directory, 'add', 'README.md'); git(directory, 'commit', '-m', 'Initial UI commit')
   }
-  await writeFile(join(project, 'README.md'), 'working change\n'); await writeFile(join(project, 'new file.txt'), 'new content\n')
+  await writeFile(join(project, 'README.md'), workingReadme); await writeFile(join(project, 'new file.txt'), `new content ${wideLine}\n`)
   const fixturePath = '/__git_workbench.html'
   const fixture = `<!doctype html><html><head><style>body{margin:0}#root{height:100vh}</style></head><body><div id="root"></div><script type="module">
 import React from 'react';import {createRoot} from 'react-dom/client';import {flushSync} from 'react-dom';
-import {I18nProvider,useI18n} from '/src/i18n/index.tsx';import {SidebarPanel} from '/src/components/app/SidebarPanel.tsx';import {GitStore} from '/src/state/git-store.ts';import '/src/styles.css';
+import {I18nProvider,useI18n} from '/src/i18n/index.tsx';import {SidebarPanel} from '/src/components/app/SidebarPanel.tsx';import {WorkspacePanes} from '/src/state/workspace-panes.ts';import '/src/styles.css';
 localStorage.setItem('pi-app:locale','en');
-const git=new GitStore();window.git=git;const listeners=new Set();let shell={cwd:${JSON.stringify(project)},projectless:false,subagentChild:false,scheduledTaskSession:false};
+const panes=new WorkspacePanes(),sessionKey='/fixtures/git-ui';
+const {git,files}=panes.forSession(sessionKey);window.git=git;const listeners=new Set();let shell={cwd:${JSON.stringify(project)},projectless:false,subagentChild:false,scheduledTaskSession:false};
+window.restoredGitWrap=()=>{panes.flush();return new WorkspacePanes().forSession(sessionKey).git.getState().wrapLines};
 const store={subscribe:fn=>{listeners.add(fn);return()=>listeners.delete(fn)},getShell:()=>shell};
 window.bind=async(cwd,readonly=false)=>{await window.gitFixture.workspace(cwd,readonly);shell={...shell,cwd,subagentChild:readonly};for(const fn of listeners)fn()};
-const pane={git,store,files:{subscribeOpen:()=>()=>{},select:()=>{}},terminals:{},onNewTerminal:()=>{},onTerminalsEmpty:()=>{},debug:{},reviewTurnId:null,sideChat:null,sideChatDraft:'',onSideChatDraftChange:()=>{},sideChatOnCurrentSession:true,onSideChatRebind:()=>{},agentRuns:new Map(),onOpenSessionInChat:()=>{}};
+const pane={git,store,files,terminals:{},onNewTerminal:()=>{},onTerminalsEmpty:()=>{},debug:{},reviewTurnId:null,sideChat:null,sideChatDraft:'',onSideChatDraftChange:()=>{},sideChatOnCurrentSession:true,onSideChatRebind:()=>{},agentRuns:new Map(),onOpenSessionInChat:()=>{}};
 function Fixture(){const {setLocale}=useI18n();window.locale=setLocale;const [active,setActive]=React.useState('git'),[hidden,setHidden]=React.useState(false);window.tab=setActive;window.hide=setHidden;return hidden?null:React.createElement('div',{id:'rail',style:{width:420,height:'100vh',display:'flex','--panel-right':'420px'}},React.createElement(SidebarPanel,{pane,open:true,width:420,resizing:true,tabs:['git'],activeTab:active,onSelectTab:setActive,onOpenTab:setActive,onCloseTab:()=>{},onCloseOtherTabs:()=>{},onCloseAllTabs:()=>{}}))}
 window.root=createRoot(document.getElementById('root'));flushSync(()=>window.root.render(React.createElement(I18nProvider,null,React.createElement(Fixture))));
 window.resize=width=>{const node=document.querySelector('#rail');node.style.width=width+'px';node.style.setProperty('--panel-right',width+'px')};
@@ -47,7 +52,7 @@ window.resize=width=>{const node=document.querySelector('#rail');node.style.widt
   const endpoint = await new Promise((resolve, reject) => { let output = ''; const timer = setTimeout(() => reject(new Error(output)), 20000); child.once('exit', code => { clearTimeout(timer); reject(new Error('Electron exited '+code+' '+output)) }); child.stderr.on('data', chunk => { output += chunk; const match = /DevTools listening on ws:\/\/127\.0\.0\.1:(\d+)/.exec(output); if (match) { clearTimeout(timer); resolve('http://127.0.0.1:'+match[1]) } }) })
   browser = await chromium.connectOverCDP(endpoint)
   for (let i=0;i<100&&!page;i++){page=browser.contexts()[0]?.pages().find(page=>page.url().includes(fixturePath));if(!page)await new Promise(resolve=>setTimeout(resolve,50))} assert(page)
-  const errors=[];page.on('pageerror',error=>errors.push(String(error)))
+  page.on('pageerror',error=>errors.push(error.stack ?? String(error)))
   const capture=async name=>{if(!process.env.PI_GIT_SCREENSHOT_DIR)return;await page.mouse.move(1380,20);await page.waitForTimeout(300);await mkdir(process.env.PI_GIT_SCREENSHOT_DIR,{recursive:true});await page.screenshot({path:join(process.env.PI_GIT_SCREENSHOT_DIR,name+'.png')})}
   const assertSplit=async(detailSelector,wide)=>{
     const master=await page.locator('.git-content > .git-master').boundingBox(),detail=await page.locator(detailSelector).boundingBox()
@@ -83,16 +88,32 @@ window.resize=width=>{const node=document.querySelector('#rail');node.style.widt
     await capture(`git-${view}-resized`);await page.evaluate(()=>window.resize(420));return preferred
   }
   await page.waitForSelector('[data-git-path="README.md"]')
-  assert.equal(await page.locator('[data-git-root]').innerText(), await import('node:fs/promises').then(fs=>fs.realpath(project)))
+  assert.equal(await page.locator('[data-git-pane]').getAttribute('data-git-root'), await import('node:fs/promises').then(fs=>fs.realpath(project)))
+  const headerText=await page.locator('[data-git-toolbar]').innerText()
+  assert.equal(headerText.includes(project),false,'the single header row no longer repeats the repository path')
   const counts=async selector=>{const node=page.locator(selector);return [Number(await node.getAttribute('data-git-added')),Number(await node.getAttribute('data-git-removed'))]}
   assert.deepEqual(await counts('[data-git-summary] [data-git-file-stats]'),[2,1])
   assert.deepEqual(await counts('[data-git-path="README.md"] [data-git-file-stats]'),[1,1])
   assert.deepEqual(await counts('[data-git-path="new file.txt"] [data-git-file-stats]'),[1,0])
+  const countGap = await page.locator('[data-git-path="README.md"] [data-git-file-stats]').evaluate(stats => {
+    const label = document.createRange()
+    label.selectNodeContents(stats.previousElementSibling)
+    return stats.getBoundingClientRect().left - label.getBoundingClientRect().right
+  })
+  assert.ok(countGap>=0 && countGap<=10,'file line counts sit directly after the path')
   if(process.env.PI_GIT_SCREENSHOT_DIR){await page.evaluate(()=>window.locale('zh-CN'));await capture('git-changes-zh-CN');await page.evaluate(()=>window.locale('en'))}
   const statusColor = async code => page.locator(`[data-git-status="${code}"]`).first().evaluate(node=>getComputedStyle(node).color)
   const modifiedColor = await statusColor('M'), addedColor = await statusColor('?'); assert.notEqual(modifiedColor, addedColor)
-  assert.equal(await page.locator('[data-git-upstream]').innerText(),'No upstream','an unconfigured upstream must not imply synchronized zero counts')
   const switchBranch=page.locator('[data-git-toolbar]').getByRole('button',{name:'Switch branch',exact:true})
+  const headerOrder=()=>page.locator('[data-git-toolbar] button').evaluateAll(nodes=>nodes.map(node=>node.getAttribute('aria-label')??node.textContent.trim()))
+  const headerRows=()=>page.locator('[data-git-toolbar]').evaluate(node=>new Set(Array.from(node.querySelectorAll('button'),button=>{const box=button.getBoundingClientRect();return Math.round(box.top+box.height/2)})).size)
+  assert.deepEqual(await headerOrder(),['Switch branch','Changes','History','Graph','Fetch remotes','Pull (fast-forward only)','Push','Refresh Git'],'one header row reads branch context, the three views, remote sync and reload in order')
+  await page.evaluate(()=>window.resize(1000));await page.waitForTimeout(80)
+  assert.equal(await headerRows(),1,'a docked pane keeps branch context, views and repo actions on a single header row')
+  assert.equal(await page.locator('[data-git-upstream]').innerText(),'No upstream','an unconfigured upstream must not imply synchronized zero counts')
+  await page.evaluate(()=>window.resize(420));await page.waitForTimeout(80)
+  assert.equal(await headerRows(),1,'a narrow pane truncates the branch label instead of wrapping a header group')
+  assert.equal(await page.locator('[data-git-upstream]').isVisible(),false,'the widest optional hint steps aside before anything wraps')
   const branchPicker=page.getByRole('combobox',{name:'Search branches…'})
   const selectMainWithKeyboard=async()=>{
     await branchPicker.fill('mai')
@@ -117,7 +138,55 @@ window.resize=width=>{const node=document.querySelector('#rail');node.style.widt
   const deletedColor = await statusColor('D'); assert.notEqual(deletedColor, modifiedColor); assert.notEqual(deletedColor, addedColor)
   git(project,'restore','--staged','--','README.md');await page.evaluate(()=>window.git.refresh())
   await page.locator('[data-git-path="README.md"]').click();await page.waitForFunction(()=>document.querySelector('[data-git-diff]')?.textContent.includes('working change'))
+  const gitDiff = page.locator('[data-git-diff]')
+  const wrapButton = gitDiff.getByRole('button', { name: 'Wrap lines', exact: true })
+  const hunkBodies = gitDiff.locator('[data-slot="file-diff-viewport"]')
+  const assertWrap = async (wrap, bodies = hunkBodies) => {
+    assert.equal(await wrapButton.getAttribute('aria-pressed'), String(wrap))
+    const overflow = await bodies.evaluateAll(nodes => nodes.map(node => node.scrollWidth > node.clientWidth + 1))
+    assert.ok(overflow.length > 0 && overflow.every(value => value === !wrap), 'the Git diff fits the pane when wrapped and scrolls sideways otherwise')
+  }
+  await assertWrap(true)
+  await wrapButton.press('Space')
+  await assertWrap(false)
+  await gitDiff.locator('[data-diff-hunk]').getByText('@@ -1 +1 @@', { exact: true }).waitFor()
+  const wrapBody = await hunkBodies.elementHandle()
+  const unwrappedHeight = await wrapBody.evaluate(node => node.scrollHeight)
+  const wrapReads = await page.evaluate(() => window.gitFixture.diffReads())
+  await wrapButton.press('Space')
+  await assertWrap(true)
+  assert.ok(await wrapBody.evaluate((node, height) => node.isConnected && node.scrollHeight > height, unwrappedHeight), 'wrapping expands the existing hunk rows')
+  assert.equal(await page.evaluate(() => window.gitFixture.diffReads()), wrapReads, 'wrapping does not reread the diff')
+  const layoutButton = gitDiff.getByRole('button', { name: 'Side-by-side diff', exact: true })
+  await layoutButton.press('Space')
+  await gitDiff.locator('[data-diff-side="before"] [data-diff-change="removed"]').getByText('original').waitFor()
+  await gitDiff.locator('[data-diff-side="after"] [data-diff-change="added"]').getByText(/working change/).waitFor()
+  assert.equal(await layoutButton.getAttribute('aria-pressed'), 'true')
+  assert.equal(await page.evaluate(() => window.gitFixture.diffReads()), wrapReads, 'the Git layout toggle does not reread the selected diff')
+  await layoutButton.press('Space')
+  await assertWrap(true)
+  assert.equal(await page.evaluate(() => window.restoredGitWrap()), true, 'Git wrap is restored from the saved conversation layout')
   const draft=page.getByRole('textbox',{name:'Commit message'}), commitMessage='UI commit draft\n\nDetailed commit body';await draft.fill(commitMessage)
+  // The commit box reads at the panel's shared size, like the change rows above it.
+  const fontSizes=await page.evaluate(()=>({input:getComputedStyle(document.querySelector('[data-git-composer] textarea')).fontSize,row:getComputedStyle(document.querySelector('[data-git-path="README.md"]')).fontSize}))
+  assert.equal(fontSizes.input, fontSizes.row, 'the commit message uses the panel text size: ' + JSON.stringify(fontSizes))
+  // The commit box grows with its content and stops at six lines, where it
+  // scrolls instead of pushing the change list up.
+  const boxMetrics=async()=>page.evaluate(()=>{const area=document.querySelector('[data-git-composer] textarea'),style=getComputedStyle(area);return{height:Math.round(area.getBoundingClientRect().height),line:Number.parseFloat(style.lineHeight),overflow:style.overflowY,scrolls:area.scrollHeight>area.clientHeight+1}})
+  await draft.fill('one\ntwo')
+  const twoLineBox=await boxMetrics()
+  assert.equal(twoLineBox.scrolls,false,'two lines fit without scrolling')
+  await draft.fill('one\ntwo\nthree\nfour\nfive')
+  const fiveLineBox=await boxMetrics()
+  assert.ok(fiveLineBox.height>twoLineBox.height+fiveLineBox.line*2,'the commit box grows with its lines: '+JSON.stringify({twoLineBox,fiveLineBox}))
+  assert.equal(fiveLineBox.scrolls,false,'five lines still fit')
+  await draft.fill(Array.from({length:9},(_,index)=>`line ${index+1}`).join('\n'))
+  const nineLineBox=await boxMetrics()
+  assert.ok(Math.abs(nineLineBox.height-nineLineBox.line*6)<=1,'the commit box stops at six lines: '+JSON.stringify(nineLineBox))
+  assert.equal(nineLineBox.overflow,'auto','and scrolls past that ceiling')
+  assert.equal(nineLineBox.scrolls,true,'the overflow is scrollable, not clipped')
+  await capture('git-commit-box')
+  await draft.fill(commitMessage)
   const changesSplit=await resizeSplit('changes')
   // Container width does not change selected path/draft or trigger a new diff read.
   const selection=await page.evaluate(()=>window.git.getState().selection),initialDiffReads=await page.evaluate(()=>window.gitFixture.diffReads()),changesCanvas=await page.locator('[data-git-diff]').elementHandle(),composerNode=await draft.elementHandle()
@@ -133,12 +202,15 @@ window.resize=width=>{const node=document.querySelector('#rail');node.style.widt
   }
   assert.equal(await page.evaluate(()=>window.gitFixture.diffReads()),initialDiffReads,'width changes do not re-read the diff')
   await page.locator('[data-git-path="new file.txt"]').click();await page.waitForFunction(()=>document.querySelector('[data-git-diff]')?.textContent.includes('new content'))
+  await assertWrap(true)
   const coldDiffReads=await page.evaluate(()=>window.gitFixture.diffReads())
   await page.locator('[data-git-path="README.md"]').click();assert.equal(await page.evaluate(()=>window.git.getState().diffLoading),false)
   assert.equal(await page.evaluate(()=>window.gitFixture.diffReads()),coldDiffReads,'revisiting a file at the same revision uses cached bytes')
   await page.getByRole('button',{name:'Stage README.md',exact:true}).click()
   await page.waitForFunction(()=>window.git.getState().repository.files.find(file=>file.path==='README.md')?.index==='M'&&!window.git.getState().busy)
-  assert.equal(git(project,'show',':README.md'),'working change');assert.deepEqual(await counts('[data-git-path="README.md"][data-git-area="staged"] [data-git-file-stats]'),[1,1]);assert.deepEqual(await counts('[data-git-summary] [data-git-file-stats]'),[2,1])
+  assert.equal(git(project,'show',':README.md'),workingReadme.trimEnd());assert.deepEqual(await counts('[data-git-path="README.md"][data-git-area="staged"] [data-git-file-stats]'),[1,1]);assert.deepEqual(await counts('[data-git-summary] [data-git-file-stats]'),[2,1])
+  await page.waitForFunction(() => window.git.getState().selection?.area === 'staged' && !!document.querySelector('[data-git-diff] [data-slot="file-diff-viewport"]'))
+  await assertWrap(true)
   await page.getByRole('button',{name:'Unstage README.md',exact:true}).click()
   await page.waitForFunction(()=>window.git.getState().repository.files.find(file=>file.path==='README.md')?.index==='.'&&!window.git.getState().busy)
   assert.equal(git(project,'diff','--cached'),'')
@@ -146,7 +218,7 @@ window.resize=width=>{const node=document.querySelector('#rail');node.style.widt
   await page.waitForSelector('[role="dialog"]')
   await page.waitForFunction(()=>document.activeElement?.textContent.trim()==='Cancel')
   assert.equal(await page.evaluate(()=>document.activeElement?.textContent.trim()),'Cancel','discard defaults to Cancel')
-  await page.getByRole('button',{name:'Cancel',exact:true}).click();await page.waitForSelector('[role="dialog"]',{state:'hidden'});assert.equal(await readFile(join(project,'README.md'),'utf8'),'working change\n')
+  await page.getByRole('button',{name:'Cancel',exact:true}).click();await page.waitForSelector('[role="dialog"]',{state:'hidden'});assert.equal(await readFile(join(project,'README.md'),'utf8'),workingReadme)
   assert.equal(await page.evaluate(()=>document.activeElement?.getAttribute('aria-label')),'Discard working changes in README.md','Cancel restores the originating control')
   await page.getByRole('button',{name:'Discard working changes in README.md',exact:true}).click();await page.getByRole('button',{name:'Discard changes',exact:true}).click()
   await page.waitForFunction(()=>!window.git.getState().repository.files.some(file=>file.path==='README.md')&&!window.git.getState().busy)
@@ -164,6 +236,7 @@ window.resize=width=>{const node=document.querySelector('#rail');node.style.widt
   assert.equal(await page.locator(`[data-git-commit="${historyHead}"]`).getAttribute('aria-pressed'),'true');assert.equal(await page.locator('[data-git-diff]').count(),0)
   await assertSplit('.git-content > [data-git-commit-details]',true)
   await page.getByRole('button',{name:'View changes in new file.txt',exact:true}).click();await page.waitForFunction(()=>document.querySelector('[data-git-diff]')?.textContent.includes('new content'))
+  await assertWrap(true)
   await capture('git-history-wide')
   // A different commit changes only the inspector, without returning through another screen.
   await page.locator(`[data-git-commit="${historyRoot}"]`).click();await page.getByRole('button',{name:'View changes in README.md',exact:true}).waitFor()
@@ -179,16 +252,27 @@ window.resize=width=>{const node=document.querySelector('#rail');node.style.widt
   for(const width of [300,780,1000,420]){await page.evaluate(width=>window.resize(width),width);await page.waitForTimeout(80);await assertSplit('.git-content > [data-git-commit-details]',width>=768);assert.equal(await historyList.evaluate(node=>node===document.querySelector('[data-git-history][data-mode="list"]')),true);assert.equal(await inspector.evaluate(node=>node===document.querySelector('[data-git-commit-details]')),true);assert.equal(await historyDiff.evaluate(node=>node===document.querySelector('[data-git-diff]')),true);assert.deepEqual(await page.evaluate(()=>window.git.getState().selection),historySelection);await capture('git-history-'+width)}
   assert.deepEqual(await page.evaluate(()=>window.gitFixture.readCounts()),historyReadCounts,'history width changes preserve requests and selected diffs')
   await page.evaluate(()=>window.hide(true));await page.waitForSelector('[data-git-pane]',{state:'hidden'});await page.evaluate(()=>window.hide(false));await page.waitForSelector('[data-git-history]');assert.equal(await page.getByRole('tab',{name:'History',exact:true}).getAttribute('aria-selected'),'true');await page.waitForFunction(()=>document.querySelector('[data-git-diff]')?.textContent.includes('new content'))
+  await assertWrap(true)
   await capture('git-history')
   assert.equal(await page.evaluate(()=>window.git.getState().splitWidths.history),historySplit,'pane remounts preserve the history split')
   // Multi-file rename patches and mode-only metadata never become bogus hunk rows.
   await page.getByRole('tab',{name:'Changes',exact:true}).click();await rename(join(project,'new file.txt'),join(project,'renamed file.txt'));git(project,'add','-A');await page.evaluate(()=>window.git.refresh())
   await page.locator('[data-git-path="renamed file.txt"]').click();await page.waitForFunction(()=>document.querySelectorAll('[data-git-diff] [data-review-diff]').length===2)
   assert.equal(await page.locator('[data-git-diff] [data-review-diff]').allTextContents().then(text=>text.every(text=>text.includes('new content')&&!text.includes('diff --git'))),true)
+  await assertWrap(true)
+  await wrapButton.click();await assertWrap(false)
+  await wrapButton.click();await assertWrap(true)
   await capture('git-rename');git(project,'mv','renamed file.txt','new file.txt')
   if(process.platform!=='win32'){
     await chmod(join(project,'new file.txt'),0o755);await page.evaluate(()=>window.git.refresh());await page.locator('[data-git-path="new file.txt"]').click();await page.waitForFunction(()=>document.querySelector('[data-git-diff]')?.textContent.includes('new mode 100755'))
-    assert.equal(await page.locator('[data-git-diff] [data-review-diff]').count(),0);await chmod(join(project,'new file.txt'),0o644)
+    assert.equal(await page.locator('[data-git-diff] [data-review-diff]').count(),0)
+    await page.evaluate(() => window.resize(260))
+    const metadata = gitDiff.locator('pre')
+    await assertWrap(true, metadata)
+    await wrapButton.click();await assertWrap(false, metadata)
+    await wrapButton.click();await assertWrap(true, metadata)
+    await page.evaluate(() => window.resize(420))
+    await chmod(join(project,'new file.txt'),0o644)
   }
   await page.evaluate(()=>window.git.refresh());await page.waitForFunction(()=>window.git.getState().repository.files.length===0)
   // Upstream counts describe the last fetched tracking ref, not an unknown zero.
@@ -197,6 +281,9 @@ window.resize=width=>{const node=document.querySelector('#rail');node.style.widt
   // A main-owned lease disables real write controls and clears after release.
   await page.evaluate(async()=>{await window.gitFixture.block('process');await window.git.refresh()})
   assert.equal(await switchBranch.isDisabled(),true)
+  assert.equal(await page.getByRole('button',{name:'Fetch remotes',exact:true}).isDisabled(),true,'a write lease disables the remote actions')
+  assert.equal(await page.getByText('Git writes are paused while this repository has active work or a checkout operation.',{exact:true}).count(),0,'a blocked repository explains itself through disabled controls, not an info strip')
+  assert.equal(await page.locator('[data-git-pane] [role="status"]').filter({hasText:'Git writes are paused'}).count(),0)
   await page.evaluate(async()=>{await window.gitFixture.block(null);await window.git.refresh()})
   await switchBranch.click();await page.getByRole('button',{name:'Create branch',exact:true}).click();await page.waitForSelector('[data-git-create-branch]');assert.equal(await page.locator('[role="dialog"][aria-modal="true"]').count(),0)
   const branchName = page.getByRole('textbox',{name:'Branch name'});assert.equal(await branchName.evaluate(input=>input===document.activeElement),true)
@@ -224,6 +311,24 @@ window.resize=width=>{const node=document.querySelector('#rail');node.style.widt
   assert.equal(git(project,'branch','--show-current'),'ui-feature')
   await switchBranch.click();await selectMainWithKeyboard()
   assert.equal(git(project,'branch','--show-current'),'main')
+  // The branch chip follows its label: the full name survives while the row has
+  // room and only ellipsizes once the pinned-narrow pane cannot hold it.
+  const longBranch='feature/responsive-header-labels-that-outgrow-a-pinned-narrow-pane'
+  git(project,'branch',longBranch)
+  await switchBranch.click();await branchPicker.fill('responsive')
+  await page.waitForFunction(branch=>{const input=document.querySelector('[data-git-branches] [role="combobox"]'),id=input?.getAttribute('aria-activedescendant'),option=id&&document.getElementById(id);return option&&!option.disabled&&option.textContent.trim()===branch},longBranch)
+  await branchPicker.press('Enter')
+  await page.waitForFunction(branch=>window.git.getState().repository.branch===branch&&!window.git.getState().busy,longBranch)
+  const branchLabel=switchBranch.locator('span').first()
+  await page.evaluate(()=>window.resize(1000));await page.waitForTimeout(80)
+  const wideLabel=await branchLabel.evaluate(node=>({truncated:node.scrollWidth>node.clientWidth+1,width:node.getBoundingClientRect().width}))
+  assert.equal(wideLabel.truncated,false,'a docked pane shows the whole branch label')
+  assert(wideLabel.width>160,'the branch label is not clamped to a fixed narrow cap')
+  await page.evaluate(()=>window.resize(300));await page.waitForTimeout(80)
+  assert.equal(await branchLabel.evaluate(node=>node.scrollWidth>node.clientWidth+1),true,'a label wider than the pinned pane ellipsizes instead of overflowing')
+  assert(await page.locator('[data-git-toolbar]').evaluate(node=>node.scrollWidth<=node.clientWidth+1),'the header groups wrap inside a 300px pane')
+  await page.evaluate(()=>window.resize(420));await page.waitForTimeout(80)
+  await switchBranch.click();await selectMainWithKeyboard();git(project,'branch','-D',longBranch)
   await switchBranch.click();await page.getByRole('option',{name:'ui-feature',exact:true}).click();await page.waitForFunction(()=>window.git.getState().repository.branch==='ui-feature'&&!window.git.getState().busy)
   assert.equal(git(project,'branch','--show-current'),'ui-feature','pointer selection switches directly too')
   await switchBranch.click();await selectMainWithKeyboard()
@@ -233,7 +338,7 @@ window.resize=width=>{const node=document.querySelector('#rail');node.style.widt
   await draft.fill('Persist me');await page.evaluate(cwd=>window.bind(cwd),second);await page.waitForFunction(cwd=>window.git.getState().repository?.root===cwd,await import('node:fs/promises').then(fs=>fs.realpath(second)))
   assert.equal(await draft.inputValue(),'');await page.evaluate(cwd=>window.bind(cwd),project);await page.waitForFunction(()=>window.git.getState().draft==='Persist me');assert.equal(await draft.inputValue(),'Persist me')
   // A graph replaces the checkout controls and reads every public tip, including merges.
-  git(project,'checkout','-b','graph-feature');await writeFile(join(project,'graph.txt'),'graph payload\n');git(project,'add','graph.txt');git(project,'commit','-m','Graph feature','-m','Graph feature body')
+  git(project,'checkout','-b','graph-feature');await writeFile(join(project,'graph.txt'),`graph payload ${wideLine}\n`);git(project,'add','graph.txt');git(project,'commit','-m','Graph feature','-m','Graph feature body')
   const graphFeature = git(project,'rev-parse','HEAD');git(project,'checkout','main')
   let graphParent=git(project,'rev-parse','HEAD');const graphTree=git(project,'rev-parse','HEAD^{tree}')
   for(let i=0;i<60;i++)graphParent=git(project,'commit-tree',graphTree,'-p',graphParent,'-m',`Graph UI ${i}`)
@@ -242,13 +347,14 @@ window.resize=width=>{const node=document.querySelector('#rail');node.style.widt
   git(project,'tag','v-graph',graphFeature);git(project,'update-ref','refs/remotes/origin/feature',graphFeature);git(project,'update-ref','refs/remotes/origin/orphan',graphOrphan);git(project,'update-ref','refs/pith/checkpoints/private',privateGraph)
   for(const name of ['aaa-head','aab-head','aac-head'])git(project,'update-ref',`refs/heads/${name}`,graphHead)
   await page.evaluate(()=>window.git.refresh());await page.waitForFunction(()=>!window.git.getState().busy)
-  const graphToggle=page.getByRole('button',{name:'Git graph',exact:true})
-  assert.deepEqual(await graphToggle.evaluate(button=>Array.from(button.closest('[data-git-pane]').firstElementChild.querySelectorAll('button'),node=>node.getAttribute('aria-label'))),['Git graph','Refresh Git'],'graph toggle immediately precedes refresh')
-  await graphToggle.click();await page.waitForFunction(()=>!!window.git.getState().graph&&!window.git.getState().graphLoading)
-  assert.equal(await graphToggle.getAttribute('aria-pressed'),'true');assert.equal(await page.locator('[data-git-toolbar]').count(),0);assert.equal(await draft.count(),0)
+  const graphTab=page.getByRole('tab',{name:'Graph',exact:true})
+  assert.equal(await page.evaluate(()=>['[data-git-graph-tab]','[data-git-toolbar] button[aria-label="Switch branch"]'].map(selector=>{const box=document.querySelector(selector).getBoundingClientRect();return Math.round(box.top+box.height/2)}).every((center,index,all)=>center===all[0])),true,'the graph view shares one header row with the branch chip')
+  await graphTab.click();await page.waitForFunction(()=>!!window.git.getState().graph&&!window.git.getState().graphLoading)
+  assert.equal(await graphTab.getAttribute('aria-selected'),'true');assert.equal(await page.getByRole('tab',{name:'Changes',exact:true}).count(),1,'graph mode keeps the sibling view tabs instead of hiding them');assert.equal(await page.getByRole('tab',{name:'History',exact:true}).count(),1);assert.equal(await draft.count(),0)
+  assert.equal(await page.locator('[data-git-graph] > :first-child').evaluate(node=>node.classList.contains('git-graph-body')),true,'the graph starts directly under the pane header without a second title row')
   assert.equal(await page.getByText('Git operation completed.',{exact:true}).count(),0,'old mutation notices do not intrude into graph mode')
   assert.equal(await page.locator('[data-git-graph-ref="HEAD"]').count(),1,'HEAD remains visible when many refs share its commit')
-  assert.equal(await page.getByText('All branches and tags',{exact:true}).count(),1)
+  assert.equal(await page.getByText('All branches and tags',{exact:true}).count(),0,'the removed scope strip does not return')
   await page.getByRole('button',{name:'Load more commits',exact:true}).click();await page.waitForFunction(()=>window.git.getState().graph?.next===null&&!window.git.getState().graphLoading)
   const graphFacts=await page.evaluate(()=>window.git.getState().graph)
   assert.equal(new Set(graphFacts.commits.map(row=>row.id)).size,graphFacts.commits.length);assert(graphFacts.commits.some(row=>row.id===graphOrphan));assert(!graphFacts.commits.some(row=>row.id===privateGraph))
@@ -257,22 +363,26 @@ window.resize=width=>{const node=document.querySelector('#rail');node.style.widt
   assert(await page.locator('[data-git-graph-commit]').count()<graphFacts.commits.length,'graph rows and nodes are windowed')
   await page.evaluate(()=>window.git.setVisible(false));const graphReadCount=await page.evaluate(()=>window.gitFixture.graphReads())
   const canvas=await page.locator('[data-git-graph-canvas]').elementHandle()
-  for(const width of [300,1000,420]){await page.evaluate(width=>window.resize(width),width);await page.waitForTimeout(80);assert.equal(await graphToggle.getAttribute('aria-pressed'),'true');assert.equal(await canvas.evaluate(node=>node===document.querySelector('[data-git-graph-canvas]')),true);await capture('git-graph-'+width)}
+  for(const width of [300,1000,420]){await page.evaluate(width=>window.resize(width),width);await page.waitForTimeout(80);assert.equal(await graphTab.getAttribute('aria-selected'),'true');assert.equal(await canvas.evaluate(node=>node===document.querySelector('[data-git-graph-canvas]')),true);await capture('git-graph-'+width)}
+  assert.equal(await headerRows(),1,'ahead/behind counts do not push the header into a second row at a docked width')
+  assert.equal(await page.locator('[data-git-upstream]').isVisible(),false,'the upstream block steps aside once the row has no spare width')
   assert.equal(await page.evaluate(()=>window.gitFixture.graphReads()),graphReadCount,'resizing graph does not issue reads')
   await page.evaluate(id=>{const rows=window.git.getState().graph.commits;document.querySelector('[data-git-graph-scroll]').scrollTop=rows.findIndex(row=>row.id===id)*60},graphFeature)
   await page.locator(`[data-git-graph-commit="${graphFeature}"]`).click();await page.waitForSelector('[data-git-graph-details]');await page.getByText('Graph feature body',{exact:true}).waitFor()
   await page.getByRole('button',{name:'View changes in graph.txt',exact:true}).click();await page.waitForFunction(()=>document.querySelector('[data-git-diff]')?.textContent.includes('graph payload'))
+  await assertWrap(true)
   const graphSplit=await resizeSplit('graph');assert.equal(await page.evaluate(()=>window.git.getState().splitWidths.history),historySplit)
   await page.evaluate(()=>window.git.setVisible(false));const detailReads=await page.evaluate(()=>window.gitFixture.diffReads()),detailCanvas=await page.locator('[data-git-diff]').elementHandle()
   for(const width of [1000,300,420]){await page.evaluate(width=>window.resize(width),width);await page.waitForTimeout(80);assert.equal(await detailCanvas.evaluate(node=>node===document.querySelector('[data-git-diff]')),true);assert.equal(await page.locator(`[data-git-graph-commit="${graphFeature}"]`).getAttribute('aria-pressed'),'true');await capture('git-graph-detail-'+width)}
   assert.equal(await page.evaluate(()=>window.gitFixture.diffReads()),detailReads,'graph detail resize preserves the diff and its IPC cache')
+  await assertWrap(true)
   assert.equal(git(project,'rev-parse','HEAD'),graphHead);assert.equal(git(project,'branch','--show-current'),'main','graph navigation never checks out a branch')
   await capture('git-graph-detail');await page.getByRole('button',{name:'Back to graph',exact:true}).click();assert.equal(await page.locator('[data-git-graph-details]').count(),0)
-  await page.evaluate(()=>window.hide(true));await page.waitForSelector('[data-git-pane]',{state:'hidden'});await page.evaluate(()=>window.hide(false));await page.waitForSelector('[data-git-graph]');assert.equal(await graphToggle.getAttribute('aria-pressed'),'true')
+  await page.evaluate(()=>window.hide(true));await page.waitForSelector('[data-git-pane]',{state:'hidden'});await page.evaluate(()=>window.hide(false));await page.waitForSelector('[data-git-graph]');assert.equal(await graphTab.getAttribute('aria-selected'),'true','the restored pane keeps the selected graph view')
   assert.equal(await page.evaluate(()=>window.git.getState().splitWidths.graph),graphSplit)
   for(const locale of ['zh-CN','zh-TW']){await page.evaluate(locale=>window.locale(locale),locale);await capture('git-graph-'+locale)}await page.evaluate(()=>window.locale('en'))
-  await graphToggle.click();await page.waitForSelector('[data-git-toolbar]');assert.equal(await page.getByRole('tab',{name:'Changes',exact:true}).getAttribute('aria-selected'),'true');assert.equal(await draft.inputValue(),'Persist me')
-  await page.getByRole('tab',{name:'History',exact:true}).click();await graphToggle.click();await graphToggle.click();assert.equal(await page.getByRole('tab',{name:'History',exact:true}).getAttribute('aria-selected'),'true')
+  await page.getByRole('tab',{name:'Changes',exact:true}).click();assert.equal(await page.getByRole('tab',{name:'Changes',exact:true}).getAttribute('aria-selected'),'true');assert.equal(await draft.inputValue(),'Persist me')
+  await page.getByRole('tab',{name:'History',exact:true}).click();await graphTab.click();await page.getByRole('tab',{name:'History',exact:true}).click();assert.equal(await page.evaluate(()=>window.git.getState().view),'history','view tabs switch among all three views')
   // Pagination and selection remain independent; the mounted list retains its scroll.
   await page.evaluate(()=>window.git.setVisible(false));await page.evaluate(()=>window.resize(1000));await page.waitForFunction(()=>!window.git.getState().historyLoading)
   const longList=await page.locator(listSelector).elementHandle(),longScroll=page.locator(`${listSelector} [data-git-history-scroll]`)
@@ -298,9 +408,10 @@ window.resize=width=>{const node=document.querySelector('#rail');node.style.widt
   }
   if(process.env.PI_GIT_SCREENSHOT_DIR){await mkdir(process.env.PI_GIT_SCREENSHOT_DIR,{recursive:true});for(const width of [300,1000]){await page.evaluate(width=>window.resize(width),width);await page.screenshot({path:join(process.env.PI_GIT_SCREENSHOT_DIR,`git-${width}.png`)})}}
   assert.deepEqual(errors,[])
-  console.log('Git UI: production preload/IPC, line counts, diff cache, staging/discard/commit/history with persistent list and side inspector/multi-branch graph/instant branch dropdown/inline creation, draggable splits and keyboard/minimum widths, focus, locale, width and workspace persistence passed')
+  console.log('Git UI: production preload/IPC, line counts, diff cache and wrapping, staging/discard/commit/history with persistent list and side inspector/multi-branch graph/instant branch dropdown/inline creation, draggable splits and keyboard/minimum widths, focus, locale, width and workspace persistence passed')
 } catch (error) {
   if (page) {
+    if (errors.length) console.error(errors)
     console.error(await page.evaluate(()=>({state:window.git?.getState(),html:document.querySelector('[data-git-history]')?.innerHTML})).catch(()=>null))
     if(process.env.PI_GIT_SCREENSHOT_DIR){await mkdir(process.env.PI_GIT_SCREENSHOT_DIR,{recursive:true});await page.screenshot({path:join(process.env.PI_GIT_SCREENSHOT_DIR,'failure.png')}).catch(()=>{})}
   }

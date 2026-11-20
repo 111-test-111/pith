@@ -47,7 +47,7 @@ interface ModelPickerProps {
   inheritThinkingLabel?: string
   /** Keep a saved model visible when it is absent from the current catalog. */
   unknownModelLabel?: string
-  /** Trigger type scale. The composer keeps its 12px control type; the
+  /** Trigger and option type scale. The composer keeps its 12px control type; the
    * scheduled-task form passes the form's own scale (14px). */
   textClassName?: string
   /** Menu options can follow a settings surface's compact control scale. */
@@ -100,7 +100,7 @@ export function ModelPicker({
   inheritThinkingLabel,
   unknownModelLabel,
   textClassName = 'text-xs',
-  optionTextClassName = 'text-sm',
+  optionTextClassName = textClassName,
   portal = false,
   panelId,
   ariaLabel,

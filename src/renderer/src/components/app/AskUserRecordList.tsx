@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { createContext, useState } from 'react'
 import { ToolResult, type ToolResultStatus } from '@/components/agents/tool-result'
 import { CircleHelp } from '@/lib/icons'
 import { cn } from '@/lib/utils'
@@ -9,6 +9,9 @@ import { ASK_USER_KIND, askUserRecordKind } from '../../../../shared/ask-user'
 import type { AskUserRecordDTO, AskUserRecordKind, AskUserToolDetails } from '../../../../shared/ask-user'
 import type { MessageKey } from '@/i18n/locales/en'
 import { AskUserResultCard } from './AskUserPanel'
+
+/** Selected-branch outcomes shared with the transcript's asking rows. */
+export const AskUserRecordsContext = createContext<ReadonlyMap<string, AskUserRecordDTO>>(new Map())
 
 /**
  * Every ask_user_question this session asked, newest first — the transcript no

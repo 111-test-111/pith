@@ -49,6 +49,12 @@
 .git-graph-body[data-has-commit='true'] { grid-template-areas: 'master' 'detail'; grid-template-rows: minmax(7rem, 42%) minmax(0, 1fr); }
 .git-graph-hash { display: none; }
 @container sidebar-pane (min-width: 32rem) { .git-graph-hash { display: inline; } }
+/* The Git header is one row: the branch chip truncates first, and the upstream
+ * status — the widest optional group — steps aside before any group may wrap.
+ * Above this width there is room for the counts beside the remote buttons. */
+@container sidebar-pane (max-width: 30rem) {
+  [data-git-toolbar] [data-git-upstream] { display: none; }
+}
 @container sidebar-pane (min-width: 48rem) {
   .wide-pane-split-handle { display: block !important; }
   .git-content[data-has-detail='true'] { grid-template-areas: 'master divider detail'; grid-template-columns: clamp(16rem, var(--pane-master-width, clamp(16rem, 32%, 24rem)), calc(100% - 20rem - 0.375rem)) 0.375rem minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }

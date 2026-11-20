@@ -104,11 +104,12 @@ export function SandboxModePicker({
       value={mode ?? '__inherit__'}
       onValueChange={switchMode}
       disabled={disabled || planRestricted || (!sessionPath && !onModeChange)}
+      textClassName={textClassName}
       className="w-auto"
     >
       <SelectTrigger
         aria-label={t('sandbox.modeLabel')}
-        className={cn("h-8 w-auto gap-1.5 rounded-control border-0 bg-transparent px-2.5 hover:bg-muted", textClassName)}
+        className="h-8 w-auto gap-1.5 rounded-control border-0 bg-transparent px-2.5 hover:bg-muted"
       >
         <span className="flex min-w-0 items-center gap-1.5 whitespace-nowrap">
           {mode && CurrentIcon ? <CurrentIcon

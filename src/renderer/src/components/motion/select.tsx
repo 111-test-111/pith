@@ -40,6 +40,7 @@ interface SelectContextValue {
   triggerId: string;
   listId: string;
   disabled: boolean;
+  textClassName: string;
   placement: Placement;
   setPlacement: (p: Placement) => void;
   panelRef: React.RefObject<HTMLDivElement | null>;
@@ -72,6 +73,8 @@ export interface SelectProps {
    */
   onOpenChange?: (open: boolean) => void;
   disabled?: boolean;
+  /** local patch (pi-app): one text role for the trigger and option labels, including portals. */
+  textClassName?: string;
   className?: string;
   children: ReactNode;
 }
@@ -84,6 +87,7 @@ export function Select({
   defaultOpen = false,
   onOpenChange,
   disabled = false,
+  textClassName = "text-sm",
   className,
   children,
 }: SelectProps) {
@@ -163,6 +167,7 @@ export function Select({
       triggerId: `${baseId}-trigger`,
       listId: `${baseId}-list`,
       disabled,
+      textClassName,
       placement,
       setPlacement,
       panelRef,
@@ -178,6 +183,7 @@ export function Select({
       reduce,
       baseId,
       disabled,
+      textClassName,
       placement,
     ],
   );
@@ -219,7 +225,8 @@ export function SelectTrigger({ className, "aria-label": ariaLabel, children }: 
       className={cn(
         // local patch (pi-app): reserve the transparent border's layout space;
         // pointer hover fills the trigger, keyboard focus keeps a visible ring.
-        "relative z-10 flex w-full items-center justify-between gap-2 rounded-xl border border-transparent bg-background px-3 py-2 text-sm text-foreground outline-none transition-colors",
+        "relative z-10 flex w-full items-center justify-between gap-2 rounded-xl border border-transparent bg-background px-3 py-2 text-foreground outline-none transition-colors",
+        ctx.textClassName,
         "hover:bg-muted focus-visible:ring-1 focus-visible:ring-ring",
         "disabled:pointer-events-none disabled:opacity-50",
         className,
@@ -423,7 +430,8 @@ export function SelectItem({
         disabled={disabled}
         onClick={() => ctx.select(value)}
         className={cn(
-          "flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm outline-none transition-colors",
+          "flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left outline-none transition-colors",
+          ctx.textClassName,
           // local patch (pi-app): a committed single choice keeps its theme tint.
           selected
             ? "bg-primary/15 text-foreground"

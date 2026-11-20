@@ -1,20 +1,22 @@
 import { forwardRef, type ForwardRefExoticComponent, type RefAttributes } from 'react'
 import { HugeiconsIcon, type HugeiconsIconProps, type IconSvgElement } from '@hugeicons/react'
 import {
-  AiContentGenerator02Icon,
+  AddCircleIcon,
+  AiContentGenerator01Icon,
   AiEditingIcon,
   Alert01Icon,
   AlertCircleIcon,
   Analytics02Icon,
   AnonymousIcon,
+  ArcherIcon,
   ArchiveArrowUpIcon,
+  ArrowBigLeftDashIcon,
   ArrowBigRightDashIcon,
   ArrowDown02Icon,
   ArrowDownToLineIcon,
   ArrowDownWideNarrowIcon,
   ArrowExpand01Icon,
   ArrowLeft02Icon,
-  ArrowLeftFromLineIcon,
   ArrowRight02Icon,
   ArrowShrink01Icon,
   ArrowUp02Icon,
@@ -25,24 +27,25 @@ import {
   BadgeCheckIcon,
   BanIcon,
   BellIcon,
+  Blockchain04Icon,
   BookDownloadIcon,
-  BookOpenCheckIcon,
-  BookOpenIcon,
+  BookOpen01Icon,
   BookOpenTextIcon,
   BookSearchIcon,
   Bookmark01Icon,
   BoxesIcon,
   BracesIcon,
   Brain03Icon,
+  BubbleChatBlockedIcon,
   BugIcon,
   CameraIcon,
   Cancel01Icon,
   CancelCircleIcon,
   CancelSquareIcon,
   ChatAdd01Icon,
-  ChatBlockedIcon,
-  ChatIcon,
+  Chatting01Icon,
   CheckIcon,
+  CheckmarkBadge02Icon,
   CheckmarkCircle02Icon,
   ChevronDownIcon,
   ChevronLeftIcon,
@@ -68,12 +71,11 @@ import {
   DiffIcon,
   Download01Icon,
   Edit02Icon,
-  ElearningExchangeIcon,
   EnergyEllipseIcon,
-  ExternalLinkIcon,
   EyeIcon,
   EyeOffIcon,
   FileAddIcon,
+  FileClockIcon,
   FileCodeIcon,
   FileDiffIcon,
   FilePenIcon,
@@ -81,14 +83,16 @@ import {
   FileSearchIcon,
   FileSecurityIcon,
   FileTextIcon,
+  FileXIcon,
   FirstAidKitIcon,
+  FlashIcon,
   FlaskConicalIcon,
   FlowSquareIcon,
   FocusIcon,
   FoldHorizontalIcon,
   Folder01Icon,
-  Folder03Icon,
-  FolderInputIcon,
+  Folder02Icon,
+  FolderAddIcon,
   FolderKanbanIcon,
   FolderPlusIcon,
   FolderSearchIcon,
@@ -120,9 +124,7 @@ import {
   LoaderCircleIcon,
   LogOutIcon,
   MessageCirclePlusIcon,
-  MessageSquareDashedIcon,
   MessageSquareIcon,
-  MessageSquarePlusIcon,
   MessageSquareTextIcon,
   MinusSignIcon,
   MonitorIcon,
@@ -148,8 +150,6 @@ import {
   PencilEdit02Icon,
   PencilLineIcon,
   PictureInPictureOnIcon,
-  PinIcon,
-  PinOffIcon,
   PlayIcon,
   PlusIcon,
   PowerIcon,
@@ -174,16 +174,18 @@ import {
   SourceCodeCircleIcon,
   SourceCodeIcon,
   SparklesIcon,
-  SquareArrowOutUpRightIcon,
-  SquareCheckBigIcon,
+  SquareArrowUpRightIcon,
   SquareDashedIcon,
+  SquareDotIcon,
   SquareIcon,
   SquareLibraryIcon,
+  SquarePlusIcon,
   SquareTerminalIcon,
   StampIcon,
   StepForwardIcon,
   SubtitleIcon,
   Sun01Icon,
+  Target01Icon,
   TerminalIcon,
   TextFontIcon,
   TextSearchIcon,
@@ -203,11 +205,11 @@ import {
   VolumeXIcon,
   WandSparklesIcon,
   Wrench01Icon,
-  ZapIcon,
   ZoomInIcon,
   ZoomOutIcon
 } from '@hugeicons/core-free-icons'
 import {
+  RiAddBoxLine,
   RiAddLine,
   RiAlertLine,
   RiAlignCenter,
@@ -220,6 +222,7 @@ import {
   RiArrowLeftSLine,
   RiArrowRightLine,
   RiArrowRightSLine,
+  RiArrowRightUpBoxLine,
   RiArrowRightUpLine,
   RiArrowUpDownLine,
   RiArrowUpLine,
@@ -232,7 +235,6 @@ import {
   RiBarChartBoxLine,
   RiBookMarkedLine,
   RiBookReadLine,
-  RiBookShelfLine,
   RiBookmark3Line,
   RiBox3Line,
   RiBracesLine,
@@ -275,14 +277,15 @@ import {
   RiExpandDiagonalLine,
   RiExpandLeftRightLine,
   RiExpandUpDownLine,
-  RiExternalLinkLine,
-  RiEye2Line,
+  RiEyeLine,
   RiEyeOffLine,
   RiFileAddLine,
+  RiFileCloseLine,
   RiFileCodeLine,
   RiFileCopyLine,
   RiFileDownloadLine,
   RiFileEditLine,
+  RiFileHistoryLine,
   RiFileSearchLine,
   RiFileShield2Line,
   RiFileTextLine,
@@ -306,7 +309,6 @@ import {
   RiGitPullRequestLine,
   RiGlobalLine,
   RiGraduationCapLine,
-  RiGroupLine,
   RiHammerLine,
   RiHistoryLine,
   RiImage2Line,
@@ -324,6 +326,7 @@ import {
   RiLoader3Line,
   RiLoader4Line,
   RiLogoutBoxLine,
+  RiMacbookLine,
   RiMagicLine,
   RiMoonLine,
   RiMore2Line,
@@ -337,7 +340,7 @@ import {
   RiPencilAiLine,
   RiPictureInPicture2Line,
   RiPlayLine,
-  RiPlug2Line,
+  RiPlug3Line,
   RiPresentationLine,
   RiPrinterLine,
   RiProhibitedLine,
@@ -367,6 +370,7 @@ import {
   RiStore2Line,
   RiSubtractLine,
   RiSunLine,
+  RiTargetLine,
   RiTerminalBoxLine,
   RiTerminalLine,
   RiTextWrap,
@@ -389,13 +393,13 @@ import {
   type RemixiconComponentType
 } from '@remixicon/react'
 import { UI_ICON_SIZE, UI_ICON_STROKE } from './icon-metrics'
-import { DiffArtwork } from './app-artwork'
+import { DiffArtwork, DiffSideBySideRoundedArtwork, DiffSideBySideSquareArtwork, DiffStackedRoundedArtwork, DiffStackedSquareArtwork, PinArtwork, PinOffArtwork, SquareDotArtwork, SubagentRoundedArtwork, SubagentSquareArtwork, type AppArtworkComponent } from './app-artwork'
 import { KEYCAP_ARTWORK } from './keycap-artwork'
 import { useUiStyle } from './ui-style'
 
 /**
  * The single entry point for app and beUI glyphs. Square interfaces use Remix Line;
- * squircle interfaces keep Hugeicons Stroke Rounded on its native 24 grid.
+ * rounded and squircle interfaces share Hugeicons Stroke Rounded on its native 24 grid.
  * GLYPHS pairs both drawings under stable semantic names. Remix choices favour
  * centered, nearly square silhouettes with a readable semantic match. Both
  * families keep their native 24-grid drawings at every UI size. Native paths
@@ -404,14 +408,14 @@ import { useUiStyle } from './ui-style'
  * Remix Line draws filled outlines; Hugeicons preserves native 1.5 strokes and filled
  * details. Stroke overrides belong only to the stroke family. SVG refs, CSS
  * sizing, colour and accessibility pass through both official renderers.
- * File types use FileTypeIcon's separate Bearded/Pierre adapter. Keyboard-only
- * Lucide artwork and provider/Pith branding keep their own geometry in both styles.
+ * File types use FileTypeIcon's native/angular Pierre adapter. Keyboard-only
+ * Lucide artwork and provider/Pith branding keep their own geometry in all styles.
  */
 export type IconProps = Omit<HugeiconsIconProps, 'ref' | 'icon' | 'altIcon' | 'showAlt'>
 export type IconComponent = ForwardRefExoticComponent<IconProps & RefAttributes<SVGSVGElement>>
 
 /** One drawing per meaning; related semantic names can share their artwork. */
-type Glyph = { rounded: IconSvgElement; square: RemixiconComponentType | null }
+type Glyph = { rounded: IconSvgElement | AppArtworkComponent; square: RemixiconComponentType | null }
 
 /** Deliberately prefer a balanced silhouette over a literal semantic match. */
 const GLYPHS = {
@@ -424,7 +428,7 @@ const GLYPHS = {
   ArrowDownUp: { rounded: ArrowUpDownIcon, square: RiArrowUpDownLine },
   ArrowDownWideNarrow: { rounded: ArrowDownWideNarrowIcon, square: RiSortDesc },
   ArrowLeft: { rounded: ArrowLeft02Icon, square: RiArrowLeftLine },
-  ArrowLeftFromLine: { rounded: ArrowLeftFromLineIcon, square: RiLogoutBoxLine },
+  ArrowLeftFromLine: { rounded: ArrowBigLeftDashIcon, square: RiLogoutBoxLine },
   ArrowRight: { rounded: ArrowRight02Icon, square: RiArrowRightLine },
   ArrowUp: { rounded: ArrowUp02Icon, square: RiArrowUpLine },
   ArrowUpFromLine: { rounded: ArrowUpFromLineIcon, square: RiUpload2Line },
@@ -442,8 +446,8 @@ const GLYPHS = {
   Ban: { rounded: BanIcon, square: RiProhibitedLine },
   Bell: { rounded: BellIcon, square: RiNotification3Line },
   BookDownload: { rounded: BookDownloadIcon, square: RiFileDownloadLine },
-  BookOpen: { rounded: BookOpenIcon, square: RiBookShelfLine },
-  BookOpenCheck: { rounded: BookOpenCheckIcon, square: RiBookMarkedLine },
+  BookOpen: { rounded: Blockchain04Icon, square: RiMacbookLine },
+  BookOpenCheck: { rounded: BookOpen01Icon, square: RiBookMarkedLine },
   BookOpenText: { rounded: BookOpenTextIcon, square: RiBookReadLine },
   Bug: { rounded: BugIcon, square: RiBug2Line },
   Bookmark: { rounded: Bookmark01Icon, square: RiBookmark3Line },
@@ -455,12 +459,12 @@ const GLYPHS = {
   CalendarCheck: { rounded: TimeScheduleIcon, square: RiCalendarCheckLine },
   Camera: { rounded: CameraIcon, square: RiCameraLine },
   Chart: { rounded: Analytics02Icon, square: RiBarChartBoxLine },
-  Chat01: { rounded: ChatIcon, square: RiChat4Line },
+  Chat01: { rounded: Chatting01Icon, square: RiChat4Line },
   ChatAdd: { rounded: ChatAdd01Icon, square: RiChatNewLine },
-  Chats: { rounded: ChatBlockedIcon, square: RiChat4Line },
+  Chats: { rounded: AnonymousIcon, square: RiChat4Line },
   Check: { rounded: CheckIcon, square: RiCheckLine },
   CheckCircle2: { rounded: CheckmarkCircle02Icon, square: RiCheckboxCircleLine },
-  CheckSquareOffset: { rounded: SquareCheckBigIcon, square: RiCheckboxLine },
+  CheckSquareOffset: { rounded: CheckmarkBadge02Icon, square: RiCheckboxLine },
   ChevronDown: { rounded: ChevronDownIcon, square: RiArrowDownSLine },
   ChevronLeft: { rounded: ChevronLeftIcon, square: RiArrowLeftSLine },
   ChevronRight: { rounded: ChevronRightIcon, square: RiArrowRightSLine },
@@ -488,37 +492,41 @@ const GLYPHS = {
   Dashboard: { rounded: LayoutDashboardIcon, square: RiDashboardLine },
   Database: { rounded: DatabaseIcon, square: RiDatabase2Line },
   Diff: { rounded: DiffIcon, square: DiffArtwork },
+  DiffSideBySide: { rounded: DiffSideBySideRoundedArtwork, square: DiffSideBySideSquareArtwork },
+  DiffStacked: { rounded: DiffStackedRoundedArtwork, square: DiffStackedSquareArtwork },
   Download: { rounded: Download01Icon, square: RiDownloadLine },
   Edit02: { rounded: Edit02Icon, square: RiEditBoxLine },
-  ExternalLink: { rounded: ExternalLinkIcon, square: RiExternalLinkLine },
-  Eye: { rounded: EyeIcon, square: RiEye2Line },
+  ExternalLink: { rounded: SquareArrowUpRightIcon, square: RiArrowRightUpBoxLine },
+  Eye: { rounded: EyeIcon, square: RiEyeLine },
   EyeOff: { rounded: EyeOffIcon, square: RiEyeOffLine },
   FileCode2: { rounded: FileCodeIcon, square: RiFileCodeLine },
   FileDiff: { rounded: FileDiffIcon, square: DiffArtwork },
+  FileHistory: { rounded: FileClockIcon, square: RiFileHistoryLine },
   FilePen: { rounded: FilePenIcon, square: RiFileEditLine },
   FilePlus2: { rounded: FileAddIcon, square: RiFileAddLine },
   FileSearch: { rounded: FileSearchIcon, square: RiFileSearchLine },
   FileSearch2: { rounded: FileSearchCornerIcon, square: RiFileSearchLine },
   FileText: { rounded: FileTextIcon, square: RiFileTextLine },
+  FileX: { rounded: FileXIcon, square: RiFileCloseLine },
   FirstAidKit: { rounded: FirstAidKitIcon, square: RiFirstAidKitLine },
   Flask: { rounded: FlaskConicalIcon, square: RiFlaskLine },
   FlowSquare: { rounded: FlowSquareIcon, square: RiFlowChart },
   Focus: { rounded: FocusIcon, square: RiFocus3Line },
   Folder: { rounded: Folder01Icon, square: RiFolder6Line },
-  FolderInput: { rounded: FolderInputIcon, square: RiFolderTransferLine },
+  FolderInput: { rounded: FolderAddIcon, square: RiFolderTransferLine },
   FolderKanban: { rounded: FolderKanbanIcon, square: RiFolderChartLine },
-  FolderOpen: { rounded: Folder03Icon, square: RiFolderOpenLine },
+  FolderOpen: { rounded: Folder02Icon, square: RiFolderOpenLine },
   FolderPlus: { rounded: FolderPlusIcon, square: RiFolderAddLine },
   FolderSearch: { rounded: FolderSearchIcon, square: RiFolderInfoLine },
   FolderTree: { rounded: FolderTreeIcon, square: RiListView },
   Gavel: { rounded: GavelIcon, square: RiHammerLine },
-  Subagent: { rounded: AnonymousIcon, square: RiGroupLine },
+  Subagent: { rounded: SubagentRoundedArtwork, square: SubagentSquareArtwork },
   GitFork: { rounded: GitForkIcon, square: RiGitBranchLine },
   GitGraph: { rounded: GitMergeIcon, square: RiGitMergeLine },
   GitPullRequest: { rounded: GitPullRequestIcon, square: RiGitPullRequestLine },
   Globe: { rounded: GlobalIcon, square: RiGlobalLine },
   Globe2: { rounded: GlobalIcon, square: RiGlobalLine },
-  Skills: { rounded: ElearningExchangeIcon, square: RiGraduationCapLine },
+  Skills: { rounded: ArcherIcon, square: RiGraduationCapLine },
   History: { rounded: Clock02Icon, square: RiHistoryLine },
   Image: { rounded: Image03Icon, square: RiImage2Line },
   Inbox: { rounded: InboxIcon, square: RiInbox2Line },
@@ -546,8 +554,8 @@ const GLYPHS = {
   Maximize2: { rounded: ArrowExpand01Icon, square: RiExpandDiagonalLine },
   MessageCirclePlus: { rounded: MessageCirclePlusIcon, square: RiChatNewLine },
   MessageSquare: { rounded: MessageSquareIcon, square: RiChat4Line },
-  MessageSquareDashed: { rounded: MessageSquareDashedIcon, square: RiChat4Line },
-  MessageSquarePlus: { rounded: MessageSquarePlusIcon, square: RiChatNewLine },
+  MessageSquareDashed: { rounded: BubbleChatBlockedIcon, square: RiChat4Line },
+  MessageSquarePlus: { rounded: AddCircleIcon, square: RiChatNewLine },
   MessageSquareText: { rounded: MessageSquareTextIcon, square: RiChat4Line },
   Minimize2: { rounded: ArrowShrink01Icon, square: RiCollapseDiagonalLine },
   Minus: { rounded: MinusSignIcon, square: RiSubtractLine },
@@ -574,11 +582,12 @@ const GLYPHS = {
   PencilSparkles: { rounded: AiEditingIcon, square: RiPencilAiLine },
   Pause: { rounded: PauseIcon, square: RiPauseLine },
   Play: { rounded: PlayIcon, square: RiPlayLine },
-  Pin: { rounded: PinIcon, square: RiPushpinLine },
-  PinOff: { rounded: PinOffIcon, square: RiUnpinLine },
+  Pin: { rounded: PinArtwork, square: RiPushpinLine },
+  PinLocation: { rounded: PinArtwork, square: RiPushpinLine },
+  PinOff: { rounded: PinOffArtwork, square: RiUnpinLine },
   PictureInPicture2: { rounded: PictureInPictureOnIcon, square: RiPictureInPicture2Line },
-  Plug: { rounded: ConnectIcon, square: RiPlug2Line },
-  PlugZap: { rounded: ConnectIcon, square: RiPlug2Line },
+  Plug: { rounded: ConnectIcon, square: RiPlug3Line },
+  PlugZap: { rounded: ConnectIcon, square: RiPlug3Line },
   Plus: { rounded: PlusIcon, square: RiAddLine },
   Power: { rounded: PowerIcon, square: RiShutDownLine },
   Puzzle: { rounded: PuzzleIcon, square: RiStore2Line },
@@ -607,8 +616,10 @@ const GLYPHS = {
   SourceCodeCircle: { rounded: SourceCodeCircleIcon, square: RiCodeBoxLine },
   SourceCode: { rounded: SourceCodeIcon, square: RiCodeBoxLine },
   Square: { rounded: SquareIcon, square: RiCheckboxBlankLine },
-  SquareArrowOutUpRight: { rounded: SquareArrowOutUpRightIcon, square: RiExternalLinkLine },
+  SquareArrowOutUpRight: { rounded: SquareArrowUpRightIcon, square: RiArrowRightUpBoxLine },
+  SquareDot: { rounded: SquareDotIcon, square: SquareDotArtwork },
   SquareFunction: { rounded: FunctionSquareIcon, square: RiFunctions },
+  SquarePlus: { rounded: SquarePlusIcon, square: RiAddBoxLine },
   SquareTerminal: { rounded: SquareTerminalIcon, square: RiTerminalBoxLine },
   Stamp: { rounded: StampIcon, square: RiVerifiedBadgeLine },
   StepForward: { rounded: StepForwardIcon, square: RiSkipForwardLine },
@@ -616,8 +627,9 @@ const GLYPHS = {
   StickyNotePlus: { rounded: NoteAddIcon, square: RiStickyNoteAddLine },
   Subtitle: { rounded: SubtitleIcon, square: RiClosedCaptioningLine },
   Sun: { rounded: Sun01Icon, square: RiSunLine },
+  Target: { rounded: Target01Icon, square: RiTargetLine },
   Terminal: { rounded: TerminalIcon, square: RiTerminalLine },
-  TextAlignCenter: { rounded: AiContentGenerator02Icon, square: RiAlignCenter },
+  TextAlignCenter: { rounded: AiContentGenerator01Icon, square: RiAlignCenter },
   TextFont: { rounded: TextFontIcon, square: RiFontFamily },
   TextSearch: { rounded: TextSearchIcon, square: RiFileSearchLine },
   Type: { rounded: TextSmallcapsIcon, square: RiFontSize },
@@ -638,7 +650,7 @@ const GLYPHS = {
   X: { rounded: Cancel01Icon, square: RiCloseLargeLine },
   XCircle: { rounded: CancelCircleIcon, square: RiCloseCircleLine },
   XSquare: { rounded: CancelSquareIcon, square: RiCloseLargeLine },
-  Zap: { rounded: ZapIcon, square: RiFlashlightLine },
+  Zap: { rounded: FlashIcon, square: RiFlashlightLine },
   ZoomIn: { rounded: ZoomInIcon, square: RiZoomInLine },
   ZoomOut: { rounded: ZoomOutIcon, square: RiZoomOutLine },
 } satisfies Record<string, Glyph>
@@ -647,10 +659,12 @@ function createIcon(name: string, glyph: Glyph): IconComponent {
   const Component = forwardRef<SVGSVGElement, IconProps>(({ size = UI_ICON_SIZE.normal, ...props }, ref) => {
     const [style] = useUiStyle()
     const RemixGlyph = glyph.square
+    // Stroke-only props describe the stroke family. Filled drawings — Remix's
+    // outlines and the app-owned pins — keep their own geometry and weight: a
+    // stroke (or a foreign viewBox) would thicken or crop them, most visibly
+    // at 16px in chrome.
+    const { strokeWidth: _strokeWidth, absoluteStrokeWidth: _absoluteStrokeWidth, stroke: _stroke, fill: _fill, strokeLinecap: _strokeLinecap, strokeLinejoin: _strokeLinejoin, viewBox: _viewBox, children: _children, ...svgProps } = props
     if (style === 'square' && RemixGlyph) {
-      // Filled outlines already encode Remix's weight. Passing a stroke (or a
-      // foreign viewBox) would thicken/crop them, especially at 16px in chrome.
-      const { strokeWidth, absoluteStrokeWidth, stroke, fill, strokeLinecap, strokeLinejoin, viewBox, children, ...svgProps } = props
       return (
         <RemixGlyph
           ref={ref}
@@ -661,6 +675,23 @@ function createIcon(name: string, glyph: Glyph): IconComponent {
           data-icon-family="remix"
           {...svgProps}
           stroke="none"
+        />
+      )
+    }
+    if (typeof glyph.rounded === 'function') {
+      const AppGlyph = glyph.rounded
+      // App-owned rounded-family artwork keeps its upstream canvas: the vendored
+      // pins are filled drawings on Phosphor's 256 grid, so the family's 24
+      // grid, default stroke and `fill="none"` root must not be applied.
+      return (
+        <AppGlyph
+          ref={ref}
+          size={size}
+          aria-hidden={props['aria-label'] || props['aria-labelledby'] ? undefined : true}
+          focusable="false"
+          data-app-icon={name}
+          data-icon-family="app-artwork"
+          {...svgProps}
         />
       )
     }
@@ -754,6 +785,8 @@ export const Copy = /* @__PURE__ */ createIcon('Copy', GLYPHS.Copy)
 export const Dashboard = /* @__PURE__ */ createIcon('Dashboard', GLYPHS.Dashboard)
 export const Database = /* @__PURE__ */ createIcon('Database', GLYPHS.Database)
 export const Diff = /* @__PURE__ */ createIcon('Diff', GLYPHS.Diff)
+export const DiffSideBySide = /* @__PURE__ */ createIcon('DiffSideBySide', GLYPHS.DiffSideBySide)
+export const DiffStacked = /* @__PURE__ */ createIcon('DiffStacked', GLYPHS.DiffStacked)
 export const Download = /* @__PURE__ */ createIcon('Download', GLYPHS.Download)
 export const Edit02 = /* @__PURE__ */ createIcon('Edit02', GLYPHS.Edit02)
 export const ExternalLink = /* @__PURE__ */ createIcon('ExternalLink', GLYPHS.ExternalLink)
@@ -762,10 +795,12 @@ export const EyeOff = /* @__PURE__ */ createIcon('EyeOff', GLYPHS.EyeOff)
 export const FileCode2 = /* @__PURE__ */ createIcon('FileCode2', GLYPHS.FileCode2)
 export const FileDiff = /* @__PURE__ */ createIcon('FileDiff', GLYPHS.FileDiff)
 export const FilePen = /* @__PURE__ */ createIcon('FilePen', GLYPHS.FilePen)
+export const FileHistory = /* @__PURE__ */ createIcon('FileHistory', GLYPHS.FileHistory)
 export const FilePlus2 = /* @__PURE__ */ createIcon('FilePlus2', GLYPHS.FilePlus2)
 export const FileSearch = /* @__PURE__ */ createIcon('FileSearch', GLYPHS.FileSearch)
 export const FileSearch2 = /* @__PURE__ */ createIcon('FileSearch2', GLYPHS.FileSearch2)
 export const FileText = /* @__PURE__ */ createIcon('FileText', GLYPHS.FileText)
+export const FileX = /* @__PURE__ */ createIcon('FileX', GLYPHS.FileX)
 export const FirstAidKit = /* @__PURE__ */ createIcon('FirstAidKit', GLYPHS.FirstAidKit)
 export const Flask = /* @__PURE__ */ createIcon('Flask', GLYPHS.Flask)
 export const FlowSquare = /* @__PURE__ */ createIcon('FlowSquare', GLYPHS.FlowSquare)
@@ -845,6 +880,7 @@ export const PencilSparkles = /* @__PURE__ */ createIcon('PencilSparkles', GLYPH
 export const Pause = /* @__PURE__ */ createIcon('Pause', GLYPHS.Pause)
 export const Play = /* @__PURE__ */ createIcon('Play', GLYPHS.Play)
 export const Pin = /* @__PURE__ */ createIcon('Pin', GLYPHS.Pin)
+export const PinLocation = /* @__PURE__ */ createIcon('PinLocation', GLYPHS.PinLocation)
 export const PinOff = /* @__PURE__ */ createIcon('PinOff', GLYPHS.PinOff)
 export const PictureInPicture2 = /* @__PURE__ */ createIcon('PictureInPicture2', GLYPHS.PictureInPicture2)
 export const Plug = /* @__PURE__ */ createIcon('Plug', GLYPHS.Plug)
@@ -878,7 +914,9 @@ export const SourceCodeCircle = /* @__PURE__ */ createIcon('SourceCodeCircle', G
 export const SourceCode = /* @__PURE__ */ createIcon('SourceCode', GLYPHS.SourceCode)
 export const Square = /* @__PURE__ */ createIcon('Square', GLYPHS.Square)
 export const SquareArrowOutUpRight = /* @__PURE__ */ createIcon('SquareArrowOutUpRight', GLYPHS.SquareArrowOutUpRight)
+export const SquareDot = /* @__PURE__ */ createIcon('SquareDot', GLYPHS.SquareDot)
 export const SquareFunction = /* @__PURE__ */ createIcon('SquareFunction', GLYPHS.SquareFunction)
+export const SquarePlus = /* @__PURE__ */ createIcon('SquarePlus', GLYPHS.SquarePlus)
 export const SquareTerminal = /* @__PURE__ */ createIcon('SquareTerminal', GLYPHS.SquareTerminal)
 export const StepForward = /* @__PURE__ */ createIcon('StepForward', GLYPHS.StepForward)
 export const Stamp = /* @__PURE__ */ createIcon('Stamp', GLYPHS.Stamp)
@@ -886,6 +924,7 @@ export const Stethoscope = /* @__PURE__ */ createIcon('Stethoscope', GLYPHS.Stet
 export const StickyNotePlus = /* @__PURE__ */ createIcon('StickyNotePlus', GLYPHS.StickyNotePlus)
 export const Subtitle = /* @__PURE__ */ createIcon('Subtitle', GLYPHS.Subtitle)
 export const Sun = /* @__PURE__ */ createIcon('Sun', GLYPHS.Sun)
+export const Target = /* @__PURE__ */ createIcon('Target', GLYPHS.Target)
 export const Terminal = /* @__PURE__ */ createIcon('Terminal', GLYPHS.Terminal)
 export const TextAlignCenter = /* @__PURE__ */ createIcon('TextAlignCenter', GLYPHS.TextAlignCenter)
 export const TextFont = /* @__PURE__ */ createIcon('TextFont', GLYPHS.TextFont)

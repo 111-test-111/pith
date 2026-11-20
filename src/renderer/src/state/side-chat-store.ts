@@ -16,6 +16,7 @@ export interface SideChatExchange {
 
 export interface SideChatState {
   exchanges: SideChatExchange[]
+  draft: string
   /** The exchange currently streaming, if any. */
   activeId: string | null
 }
@@ -34,21 +35,16 @@ type Listener = () => void
  * an answering side question never re-renders the workspace or the transcript.
  */
 export class SideChatStore {
-  private state: SideChatState = { exchanges: [], activeId: null }
+  private state: SideChatState = { exchanges: [], activeId: null, draft: '' }
   private listeners = new Set<Listener>()
-  private seq = 0
-  private unsubscribe: () => void
+  private unsubscribe?: () => void
   /**
-   * The session every answer draws on, captured when the side-chat tab opens:
-   * switching the workspace to another session afterwards cannot silently
-   * repoint an existing thread at a different conversation. Rebinding is an
-   * explicit action (see the pane's rebind button), which starts a fresh store.
+   * The conversation that owns this pane and supplies its answer context.
    */
   readonly boundSessionPath: string | null
 
   constructor(boundSessionPath: string | null) {
     this.boundSessionPath = boundSessionPath
-    this.unsubscribe = window.pi.onSideChatEvent((event) => this.dispatch(event))
   }
 
   getState = (): SideChatState => this.state
@@ -64,6 +60,8 @@ export class SideChatStore {
     this.state = { ...this.state, ...patch }
     for (const listener of this.listeners) listener()
   }
+
+  setDraft = (draft: string): void => { this.set({ draft }) }
 
   private patch(id: string, patch: Partial<SideChatExchange>): void {
     const exchanges = this.state.exchanges.map((exchange) =>
@@ -83,7 +81,8 @@ export class SideChatStore {
   ask(question: string): void {
     const text = question.trim()
     if (!text || this.state.activeId) return
-    const id = `btw-${Date.now().toString(36)}-${++this.seq}`
+    this.unsubscribe ??= window.pi.onSideChatEvent(event => this.dispatch(event))
+    const id = `btw-${crypto.randomUUID()}`
     // Only settled exchanges replay into the next prompt: a failed or stopped
     // answer has no answer text worth quoting back to the model.
     const history: SideChatHistoryEntry[] = this.state.exchanges
@@ -126,7 +125,8 @@ export class SideChatStore {
   /** Destroy the side chat: stop its answer and stop listening for events. */
   dispose(): void {
     this.abort()
-    this.unsubscribe()
+    this.unsubscribe?.()
+    this.unsubscribe = undefined
   }
 
   dispatch(event: SideChatEvent): void {

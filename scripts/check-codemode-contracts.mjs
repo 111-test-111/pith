@@ -80,7 +80,7 @@ assert(onlyLoadout.descriptions.codemode.includes(sdkDefinition.description),
 
 let fixture
 try {
-  fixture = await createPlanFixture({ withLibrary: true, extensionFactories: [api => {
+  fixture = await createPlanFixture({ extensionFactories: [api => {
     for (const tool of browserTools) api.registerTool({ ...tool, name: `fixture_${tool.name}` })
     api.registerTool(probe)
   }] })
@@ -269,13 +269,5 @@ text(failed.errorMessage);
   assert.equal((await fixture.app.contextDetail()).cost, fixture.session.getSessionStats().cost, 'app context billing includes image usage without adding nested costs again')
   const generatedEntry = fixture.session.sessionManager.getBranch().find(entry => entry.type === 'message' && entry.message.role === 'toolResult' && entry.message.toolCallId === generatedResult.toolCallId)
   assert(generatedEntry, 'the generated result is committed to the selected SDK branch')
-  let archived
-  for (let attempt = 0; attempt < 200; attempt++) {
-    archived = (await fixture.library.page({ kind: 'image' })).items.find(item => item.entryId === generatedEntry.id && item.toolName === 'codemode' && item.storage === 'saved')
-    if (archived) break
-    await new Promise(resolve => setTimeout(resolve, 10))
-  }
-  assert(archived, 'forwarded model images enter the app Library')
-  assert.deepEqual(await readFile(archived.archivedPath), Buffer.from(jpeg, 'base64'))
-  console.log('PASS codemode contracts: compact discovery, validation/reload/mode-only, Pi 1.0 model images/billing/library, browser images/errors, exact paging, durable logs and debug lifecycle')
+  console.log('PASS codemode contracts: compact discovery, validation/reload/mode-only, Pi 1.0 model images/billing, browser images/errors, exact paging, durable logs and debug lifecycle')
 } finally { await fixture?.close() }

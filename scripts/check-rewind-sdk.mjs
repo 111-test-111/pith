@@ -25,6 +25,7 @@ try {
   const sessionDir = join(agentDir, 'sessions', '--rewind-fixture-project--')
   await build({ stdin: { contents: `export { PiManager } from './src/main/pi/manager';
 export { RewindFailure } from './src/main/rewind/types';
+export { CheckoutCoordinator } from './src/main/rewind/coordinator';
 export { uncoveredWrites } from './src/main/rewind/coverage';
 export { TodoState, createTodoTool } from './src/main/pi/todo';
 export * from './src/main/pi/todo-protocol';
@@ -36,7 +37,7 @@ export { buildToolCatalog } from './src/main/pi/catalog';`, resolveDir: resolve(
       builder.onResolve({ filter: /^@earendil-works\/pi-coding-agent$/ }, () => ({ path: 'sdk', namespace: 'fixture' }))
       builder.onResolve({ filter: /^playwright-core(\/|$)/ }, args => ({ path: fileURLToPath(import.meta.resolve(args.path)), external: true }))
       builder.onResolve({ filter: /^electron$/ }, () => ({ path: 'electron', namespace: 'fixture' }))
-      builder.onResolve({ filter: /^proper-lockfile$|^@resvg\/resvg-js$/ }, args => ({ path: fileURLToPath(import.meta.resolve(args.path)), external: true }))
+      builder.onResolve({ filter: /^proper-lockfile$|^@resvg\/resvg-js$|^ssh2$|^@xterm\/headless$/ }, args => ({ path: fileURLToPath(import.meta.resolve(args.path)), external: true }))
       builder.onResolve({ filter: /^\// }, (args) => args.path === sdk ? { path: sdk, external: true } : undefined)
       builder.onLoad({ filter: /^electron$/, namespace: 'fixture' }, () => ({ contents: `export const app={getPath:()=>${JSON.stringify(temporary)}};export const shell={};` }))
       builder.onLoad({ filter: /^sdk$/, namespace: 'fixture' }, () => ({ contents: `
@@ -53,7 +54,7 @@ pi.on('tool_result',e=>{if(e.toolName==='todo_write'&&e.input.todos[0]?.content=
 }}]}})};` }))
     } }]
   })
-  const { PiManager, PiStore, RewindFailure, uncoveredWrites, selectedBranchHasMessages } = await import(pathToFileURL(outfile).href)
+  const { PiManager, PiStore, RewindFailure, CheckoutCoordinator, uncoveredWrites, selectedBranchHasMessages } = await import(pathToFileURL(outfile).href)
   const scope = join(temporary, 'coverage', 'scope'), sibling = join(temporary, 'coverage', 'scope-sibling')
   await mkdir(scope, { recursive: true }); await mkdir(sibling)
   await writeFile(join(scope, 'space name.txt'), 'covered')
@@ -104,6 +105,9 @@ pi.on('tool_result',e=>{if(e.toolName==='todo_write'&&e.input.todos[0]?.content=
   const store = new PiStore()
   const app = new PiManager((channel, event) => { if (channel === 'pi:event') store.dispatch(event) }, (error) => { throw new Error(error) }); apps.push(app)
   app.runtime = async () => runtime
+  // This fixture supplies only the primary stream. Auxiliary naming has its
+  // own suite and must not dispatch unmocked requests or mutate preview leaves.
+  app.setAutoNameSessions(false)
   const manager = SessionManager.create(project, sessionDir)
   const managed = await app.buildSession(manager)
   const { session } = managed
@@ -155,9 +159,9 @@ pi.on('tool_result',e=>{if(e.toolName==='todo_write'&&e.input.todos[0]?.content=
   assert.equal(queuedCheckpoint.entryId, queueUser.parentId, 'steering messages have exact awaited checkpoints')
   console.log('PASS: real SDK prompt/steer capture barriers, one pre-turn point, no tool/resume points or hidden capture entries')
   // Concurrent sessions share one checkout: another session's model turn (a
-  // plain run lease) must not starve this session's pre-turn capture, while
-  // the leases that can actually write — tool, process and a subagent run —
-  // still fence the snapshot window and surface a busy capture error.
+  // plain run lease) must not starve this session's pre-turn capture. Writers
+  // and other snapshots delay the user-message barrier instead of discarding
+  // its checkpoint and allowing unbacked file edits.
   {
     const otherRun = app.checkoutCoordinator.acquire(project, 'run', join(temporary, 'other-session.jsonl'))
     respond = () => [{ type: 'text', text: 'Done beside a run' }]
@@ -168,19 +172,106 @@ pi.on('tool_result',e=>{if(e.toolName==='todo_write'&&e.input.todos[0]?.content=
     const besideUser = manager.getEntries().filter(entry => entry.type === 'message' && entry.message.role === 'user').at(-1)
     assert(beside.checkpoints.some(cp => cp.messageEntryId === besideUser.id), 'a checkpoint is captured while a sibling session only streams')
     for (const kind of ['tool', 'process', 'subagent']) {
+      const file = 'writer-' + kind + '.txt'
+      await writeFile(join(project, file), 'WRITER BEFORE\n')
       const release = app.checkoutCoordinator.acquire(project, kind, join(temporary, 'writer-session.jsonl'))
-      respond = () => [{ type: 'text', text: 'Done' }]
-      await session.prompt('Capture fenced by ' + kind)
-      await managed.rewind.idle(); release()
-      const fenced = value(await app.rewindList(managed.path))
-      assert.equal(fenced.error?.code, 'busy', kind + ' lease fences the snapshot; the list surfaces the failed capture')
+      let round = 0, settled = false
+      respond = () => ++round === 1 ? [{ type: 'toolCall', name: 'write', id: 'after-writer-' + kind, arguments: { path: file, content: 'USER TURN AFTER\n' } }] : [{ type: 'text', text: 'Done' }]
+      const prompting = session.prompt('Capture waits for ' + kind).then(() => { settled = true })
+      try {
+        await until(() => session.isStreaming)
+        await pause(40)
+        assert.equal(round, 0, kind + ' blocks model/tool execution until its pre-turn snapshot can be saved')
+        assert.equal(settled, false)
+        assert.equal(await readFile(join(project, file), 'utf8'), 'WRITER BEFORE\n')
+        // Existing writers must still be able to finish nested/child work;
+        // reserving the exclusive window while waiting would deadlock them.
+        const nested = await app.checkoutCoordinator.enter(project, 'tool', '/fixture/nested-writer')
+        try { await writeFile(join(project, file), 'WRITER FINISHED\n') } finally { nested() }
+      } finally { release() }
+      await prompting; await managed.rewind.idle()
+      const completed = value(await app.rewindList(managed.path))
+      assert.equal(completed.error, undefined)
+      const user = manager.getEntries().filter(entry => entry.type === 'message' && entry.message.role === 'user').at(-1)
+      const checkpoint = completed.checkpoints.find(cp => cp.messageEntryId === user.id)
+      assert(checkpoint, kind + ' release wakes capture and binds the checkpoint to the exact user entry')
+      assert.equal(checkpoint.entryId, user.parentId)
+      const preview = value(await app.rewindPreview(managed.path, checkpoint.id))
+      const patch = value(await app.rewindPatch(managed.path, preview.token, file, 'worktree'))
+      assert.match(patch.patch, /\+WRITER FINISHED/, 'the backup contains the finished writer bytes before the new turn edits')
+      assert.match(patch.patch, /-USER TURN AFTER/)
     }
+    const sibling = await app.buildSession(SessionManager.create(project, sessionDir))
+    await sibling.lifecyclePromise
+    app.activateSession(managed)
+    sibling.session.agent.streamFunction = session.agent.streamFunction
+    let finishSnapshot, startedSnapshot, firstSnapshot = true
+    const started = new Promise(resolve => { startedSnapshot = resolve })
+    const held = new Promise(resolve => { finishSnapshot = resolve })
+    app.rewindClient.call = async (method, ...args) => {
+      if (method === 'checkpoint' && firstSnapshot) { firstSnapshot = false; startedSnapshot(); await held }
+      return originalCall(method, ...args)
+    }
+    let responses = 0
+    respond = () => { responses++; return [{ type: 'text', text: 'Done after another snapshot' }] }
+    const prompting = Promise.all([session.prompt('Capture while another snapshot starts'), sibling.session.prompt('Capture waits for another snapshot')])
+    try {
+      await started; await until(() => session.isStreaming && sibling.session.isStreaming)
+      await pause(40); assert.equal(responses, 0, 'both SDK user turns await their own snapshot window')
+    } finally { finishSnapshot() }
+    try { await prompting } finally { app.rewindClient.call = originalCall }
+    for (const owner of [managed, sibling]) {
+      await owner.rewind.idle()
+      const serialized = value(await app.rewindList(owner.path))
+      const user = owner.session.sessionManager.getEntries().filter(entry => entry.type === 'message' && entry.message.role === 'user').at(-1)
+      const checkpoint = serialized.checkpoints.find(cp => cp.messageEntryId === user.id)
+      assert(checkpoint, 'concurrent SDK snapshots serialize without losing either session checkpoint')
+      assert.equal(checkpoint.entryId, user.parentId)
+      assert.equal(serialized.error, undefined)
+    }
+
+    const closingWriter = app.checkoutCoordinator.acquire(project, 'process', '/fixture/disposal-writer')
+    const disposing = sibling.session.prompt('Dispose while waiting for capture')
+    try {
+      await until(() => sibling.session.isStreaming); await pause(40)
+      sibling.rewind.dispose(); sibling.session.agent.abort()
+      await disposing; await sibling.rewind.idle()
+      assert.equal(sibling.rewind.error?.code, 'cancelled', 'recorder teardown cancels its pending snapshot wait')
+    } finally { closingWriter() }
+
+    const writer = app.checkoutCoordinator.acquire(project, 'process', '/fixture/stopped-writer')
+    const stopped = session.prompt('Stop while waiting for capture')
+    try {
+      await until(() => session.isStreaming); await pause(40)
+      await session.abort(); await stopped; await managed.rewind.idle()
+      assert.equal(value(await app.rewindList(managed.path)).error?.code, 'cancelled', 'SDK Stop cancels snapshot admission without waiting for the writer')
+    } finally { writer() }
     respond = () => [{ type: 'text', text: 'Done' }]
     await session.prompt('Capture recovers')
     await managed.rewind.idle()
     assert.equal(value(await app.rewindList(managed.path)).error, undefined, 'a later successful capture clears the sticky error')
   }
-  console.log('PASS: concurrent-session capture — sibling runs never starve checkpoints; writing leases still fence snapshots')
+  {
+    const coordinator = new CheckoutCoordinator()
+    const writer = coordinator.acquire(project, 'process')
+    await assert.rejects(coordinator.withSnapshot(project, async () => assert.fail('must not capture active writes'), undefined, 30), error => error.code === 'busy', 'persistent writer contention has a bounded wait')
+    const controller = new AbortController()
+    const cancelled = coordinator.withSnapshot(project, async () => assert.fail('must not capture after Stop'), controller.signal)
+    await pause(20); controller.abort()
+    await assert.rejects(cancelled, error => error.code === 'cancelled')
+    writer()
+    assert.equal(await coordinator.withSnapshot(project, async () => 'captured'), 'captured', 'timeout and cancellation release their waiters')
+    const held = coordinator.acquire(project, 'tool')
+    const closing = coordinator.withSnapshot(project, async () => assert.fail('must not capture after shutdown'))
+    await pause(20); coordinator.close()
+    await assert.rejects(closing, error => error.code === 'busy', 'shutdown wakes pending captures'); held()
+
+    const recovering = new CheckoutCoordinator(), release = recovering.acquire(project, 'process')
+    const pending = recovering.withSnapshot(project, async () => assert.fail('must not capture unresolved recovery'))
+    await pause(20); recovering.setRecovery(project, 'pending-recovery')
+    await assert.rejects(pending, error => error.code === 'recovery' && error.operationId === 'pending-recovery'); release()
+  }
+  console.log('PASS: concurrent capture waits for writers/snapshots, saves pre-edit bytes, permits writer cleanup and respects Stop, timeout, recovery and shutdown')
   async function restore(id, action, mode = 'all') {
     const preview = value(await app.rewindPreview(managed.path, id, action))
     return value(await app.rewindRestore({ sessionPath: managed.path, token: preview.token, mode, operationId: randomUUID() }))

@@ -1,4 +1,6 @@
 import { APP_BASH_TOOL_NAMES } from './bash-tools'
+import { SSH_TOOL_NAMES } from '../../shared/ssh'
+import { VISION_TOOL_NAME } from '../../shared/vision'
 import { APP_BROWSER_TOOL_NAMES } from '../browser/tools'
 import { TODO_TOOL_NAME } from './todo-protocol'
 import { IMAGE_TOOL_NAME } from '../../shared/image'
@@ -24,7 +26,7 @@ import type {
   ToolInfoDTO
 } from '../../shared/types'
 
-const APP_TOOL_NAMES: readonly string[] = [...APP_BASH_TOOL_NAMES, 'debug', 'present', IMAGE_TOOL_NAME, TODO_TOOL_NAME, JEV_TOOL_NAME, 'get_goal', 'update_goal', ...APP_BROWSER_TOOL_NAMES]
+const APP_TOOL_NAMES: readonly string[] = [...APP_BASH_TOOL_NAMES, ...SSH_TOOL_NAMES, 'debug', 'present', IMAGE_TOOL_NAME, VISION_TOOL_NAME, TODO_TOOL_NAME, JEV_TOOL_NAME, 'get_goal', 'update_goal', ...APP_BROWSER_TOOL_NAMES]
 /** Hidden SDK factories are not listed as user-managed extensions, but their
  * tools still need a useful source name in Settings → Tools. Match their exact
  * factory identity so third-party inline extensions keep their own source. */

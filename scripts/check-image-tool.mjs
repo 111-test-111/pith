@@ -17,7 +17,6 @@ const outfile = join(root, 'modules.mjs')
 await build({ stdin: { contents: `export { createImageTool } from './src/main/pi/image';
 export * from './src/main/pi/image-protocol';
 export { uncoveredWrites } from './src/main/rewind/coverage';
-export { collectTool } from './src/main/library/extract';
 export { extractSubagentWrittenFiles } from './src/main/pi/subagents/derive';
 export { extractTurnWrittenFiles } from './src/renderer/src/lib/turn-written-files';
 export * from './src/main/pi/usage-stats';`, resolveDir: repo },
@@ -26,7 +25,7 @@ export * from './src/main/pi/usage-stats';`, resolveDir: repo },
     builder.onResolve({ filter: /^@earendil-works\/pi-coding-agent$|^@resvg\/resvg-js$/ }, args => ({ path: fileURLToPath(import.meta.resolve(args.path)), external: true }))
   } }]
 })
-const { createImageTool, createNativeImagesApi, ensureOpenRouterNativeImages, uncoveredWrites, collectTool, extractSubagentWrittenFiles, extractTurnWrittenFiles, createUsageAccumulator, accumulateSessionFile, finalizeUsage } = await import(pathToFileURL(outfile))
+const { createImageTool, createNativeImagesApi, ensureOpenRouterNativeImages, uncoveredWrites, extractSubagentWrittenFiles, extractTurnWrittenFiles, createUsageAccumulator, accumulateSessionFile, finalizeUsage } = await import(pathToFileURL(outfile))
 function crc32(bytes) {
   let crc = 0xffffffff
   for (const byte of bytes) { crc ^= byte; for (let bit = 0; bit < 8; bit++) crc = (crc >>> 1) ^ ((crc & 1) ? 0xedb88320 : 0) }
@@ -67,7 +66,6 @@ await test('chat preserves restrictive provider routing', async () => { const f 
 await test('corrupt provider image is rejected before saving success', async () => { const f = await fixture(model => success(model,[{ type: 'image', data: Buffer.from('not an image').toString('base64'), mimeType: 'image/png' }])); assert.equal((await f.run()).isError, true) })
 await test('dotted directory accepts multiple images', async () => { const f = await fixture(model => success(model, [1,2].map(() => ({ type: 'image', data: png.toString('base64'), mimeType: 'image/png' })))); await mkdir(join(f.cwd,'v1.0')); const r = await f.run({ n: 2, output_path: 'v1.0/' }); assert.equal(r.details.files.length, 2) })
 await test('successful image write appears in Rewind coverage', async () => { const f = await fixture(null,{ getMode: () => 'danger-full-access' }); const r = await f.run({ output_path: join(f.outside,'out.png') }); const branch = [{ type: 'message', id: 'a', message: { role: 'assistant', content: [{ type: 'toolCall', id: 'probe', name: 'image', arguments: args({ output_path: join(f.outside,'out.png') }) }] } }, { type: 'message', id: 'b', message: { role: 'toolResult', toolName: 'image', toolCallId: 'probe', isError: false, ...r } }]; const uncovered = await uncoveredWrites(branch,f.cwd,f.cwd,null,[]); assert.equal(uncovered.length,1, 'outside-workspace image write missing from skip/consent coverage') })
-await test('Library generated image keeps original path', async () => { const f = await fixture(); const r = await f.run(); const items = collectTool({ id: 'probe', path: 'session.jsonl', cwd: f.cwd, workspace: f.cwd, title: 'probe' }, 'entry', Date.now(),'image', args(),r); assert.equal(items[0].imageLabel,'generated'); assert.equal(items[0].originalPath,r.details.files[0].path) })
 await test('native transport honors timeoutMs', async () => { const original = globalThis.fetch; let receivedSignal; globalThis.fetch = async (_url, options) => { receivedSignal = options.signal; return new Promise(resolve => { const timer = setTimeout(() => resolve(new Response(JSON.stringify({ data: [{ b64_json: png.toString('base64'), media_type: 'image/png' }] }), { status: 200 })), 60); options.signal?.addEventListener('abort', () => { clearTimeout(timer); resolve(new Response('{}',{ status: 499 })) },{ once: true }) }) }; try { const started = Date.now(); const result = await createNativeImagesApi(async () => 'fixture').generateImages({ id:'probe',provider:'openrouter-native',api:'openrouter-native-images',baseUrl:'http://test.invalid' }, { input: [{ type:'text',text:'test' }] }, { timeoutMs: 5 }); assert.notEqual(result.stopReason,'stop', `provider continued ${Date.now()-started}ms past timeout; signal attached=${Boolean(receivedSignal)}`) } finally { globalThis.fetch = original } })
 await test('auto remembers working protocol without retrying authorization failures', async () => {
   const f = await fixture(model => model.provider === 'openrouter-native' ? { ...success(model), output: [], stopReason: 'error', errorMessage: 'Use the chat/completions endpoint' } : success(model))
@@ -165,7 +163,6 @@ await test('failed saves retain billing and only committed partial writes across
   }
   const entries = [{type:'message',id:'a',message:assistant},{type:'message',id:'b',message}]
   assert.equal((await uncoveredWrites(entries,partial.cwd,partial.cwd,null,[{path:'images',reason:'ignored'}])).length,1)
-  assert.equal(collectTool({id:'s',path:'session.jsonl',cwd:partial.cwd,workspace:partial.cwd,title:'Image fixture'},'b',Date.now(),'image',{},result).length,1)
   const accumulator=createUsageAccumulator(); accumulateSessionFile(accumulator, entries.map(e=>JSON.stringify({...e,timestamp:new Date().toISOString()})).join('\n'))
   const stats=finalizeUsage(accumulator,100); assert.equal(stats.totalCost,0.014)
   assert.equal(stats.models[0].model,partial.id); assert.equal(stats.models[0].provider,'openrouter')
@@ -178,7 +175,7 @@ await test('native wire contract uses live auth, routing, callbacks and options.
     apiKey:'stale', headers:{'X-Call':'call'}, metadata:{openrouterImage:{n:2,seed:0,outputCompression:0,routing:{only:['trusted'],allowFallbacks:false,dataCollection:'deny',requireParameters:true,order:['trusted'],ignore:['other']}}},
     onPayload:body=>({...body,prompt:'changed'}), onResponse:r=>responses.push(r.status),
     fetch:async(url, init)=>{
-      assert.equal(url,'https://fixture.invalid/api/v1/images'); headers.push(new Headers(init.headers));bodies.push(JSON.parse(init.body))
+      assert.equal(url,'https://fixture.invalid/api/v1/images'); headers.push(new Headers(init.headers));let body;try{body=JSON.parse(init.body)}catch{throw new Error('Fixture image request body must be JSON')}bodies.push(body)
       if(bodies.length===1){key='new';return new Response('{"error":{"message":"expired"}}',{status:401})}
       return new Response(JSON.stringify({data:[{b64_json:png.toString('base64'),media_type:'image/png'}],usage:{prompt_tokens:20,completion_tokens:5,total_tokens:25,cost:0.012}}))
     }
@@ -222,7 +219,8 @@ await test('real SDK default schema, accounting, credential rotation and revocat
   const originalFetch=globalThis.fetch, requests=[]
   let failed=false
   globalThis.fetch=async(_url,init)=>{
-    requests.push(JSON.parse(init.body))
+    let body;try{body=JSON.parse(init.body)}catch{throw new Error('Fixture image request body must be JSON')}
+    requests.push(body)
     const usage={prompt_tokens:10,completion_tokens:2,total_tokens:12,cost:0.025}
     return new Response(JSON.stringify(failed ? {error:{message:'Fixture rejected'},usage} : {
       id:'fixture-image',choices:[{message:{content:'A square',images:[{image_url:{url:`data:image/png;base64,${png.toString('base64')}`}}]}}],usage

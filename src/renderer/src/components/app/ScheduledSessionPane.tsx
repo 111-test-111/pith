@@ -69,7 +69,7 @@ export const ScheduledSessionPane = memo(function ScheduledSessionPane({
 
       {/* ChatView sizes its strip and scroller as flex items — keep this a
           flex COLUMN, not a block (see SubagentSessionPane). */}
-      <div className="flex min-h-0 flex-1 flex-col">
+      <div className="chat-layout flex min-h-0 flex-1 flex-col">
         {error ? (
           <p className="px-3 py-4 text-xs text-destructive [overflow-wrap:anywhere]">
             {t('scheduledTasks.pane.error')}

@@ -1,11 +1,9 @@
 import { memo, useMemo, useSyncExternalStore } from 'react'
-import { ChatAdd, Link2 } from '@/lib/icons'
-import { Button } from '@/components/motion/button'
+import { ChatAdd } from '@/lib/icons'
 import { RunningLoader } from './RunningLoader'
 import { MessageGroup, Message, MessageBubble, MessageBubbleContent } from '@/components/agents/message'
 import { MessageScroller } from '@/components/agents/message-scroller'
 import { PromptInput } from '@/components/agents/prompt-input'
-import { Tooltip } from '@/components/motion/tooltip'
 import { Markdown } from '@/lib/markdown'
 import { StreamingResponse } from '@/components/agents/streaming-response'
 import { formatTime } from '@/lib/format'
@@ -13,18 +11,6 @@ import type { SideChatExchange, SideChatStore } from '@/state/side-chat-store'
 import type { UserMsg } from '../../../../shared/types'
 import { useI18n } from '@/i18n'
 import { UserItem } from './MessageItems'
-
-interface SideChatPaneProps {
-  store: SideChatStore
-  /** Composer draft lives with the tab, not the pane, so switching panel tabs
-   * (or collapsing the rail) keeps what was typed. */
-  draft: string
-  onDraftChange: (value: string) => void
-  /** True while this thread is bound to the session the workspace shows. */
-  onCurrentSession: boolean
-  /** Point this thread at the current session, clearing its exchanges. */
-  onRebind: () => void
-}
 
 /**
  * Side chat (`/btw`): a thread of quick questions answered from this session's
@@ -34,20 +20,14 @@ interface SideChatPaneProps {
  * product, minus the session-level affordances (edit/resend/fork) that belong to
  * the real conversation.
  */
-export const SideChatPane = memo(function SideChatPane({
-  store,
-  draft,
-  onDraftChange,
-  onCurrentSession,
-  onRebind
-}: SideChatPaneProps) {
+export const SideChatPane = memo(function SideChatPane({ store }: { store: SideChatStore }) {
   const { t } = useI18n()
   const state = useSyncExternalStore(store.subscribe, store.getState)
   const busy = state.activeId !== null
 
   const send = (value: string) => {
     if (!value.trim() || busy) return
-    onDraftChange('')
+    store.setDraft('')
     store.ask(value)
   }
 
@@ -78,8 +58,8 @@ export const SideChatPane = memo(function SideChatPane({
       <div className="shrink-0 bg-background px-3 pb-3">
         <div className="pane-readable">
         <PromptInput
-          value={draft}
-          onValueChange={onDraftChange}
+          value={state.draft}
+          onValueChange={store.setDraft}
           onSubmit={send}
           // Escape stops the side answer only: the workspace composer's
           // window-level Esc handler skips `defaultPrevented` events, so the
@@ -94,24 +74,6 @@ export const SideChatPane = memo(function SideChatPane({
           minRows={1}
           maxRows={6}
           placeholder={t('sidebar.chatPlaceholder')}
-          // The thread belongs to the session it was opened against, so drift
-          // between that session and the selected one is actionable right here.
-          // Nothing to do while the two already match, so the button is inert
-          // then; when it can act it is an ordinary ghost icon button — quiet at
-          // rest, highlighted on hover (the variant's own hover styling).
-          leadingAction={
-            <Tooltip content={t('sidebar.chatRebind')}>
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label={t('sidebar.chatRebind')}
-                disabled={onCurrentSession}
-                onClick={onRebind}
-              >
-                <Link2 aria-hidden="true" className="size-4" />
-              </Button>
-            </Tooltip>
-          }
         />
         </div>
       </div>

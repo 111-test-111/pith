@@ -21,7 +21,6 @@ import React from 'react';import {createRoot} from 'react-dom/client';
 import {flushSync} from 'react-dom';
 import {ChatView} from '/src/components/app/ChatView.tsx';
 import {Composer} from '/src/components/app/Composer.tsx';
-import {QueuePanel} from '/src/components/app/QueuePanel.tsx';
 import {ImagePreviewProvider} from '/src/components/app/ImagePreview.tsx';
 import {PiStore} from '/src/state/pi-store.ts';
 import {extractReviewTurns} from '/src/lib/turn-written-files.ts';
@@ -70,15 +69,15 @@ window.startStartupFixture=()=>{
 };
 window.startQueueFixture=(initialCompaction=false)=>{
  window.turnStore=null;window.queueActions=[];
+ window.pi.queueAction=async ({action,kind,index})=>window.queueActions.push(action==='promote'?{action,index}:{action,kind,index});
  function Queued(){const {setLocale}=useI18n();window.setLocale=setLocale;
   const [compactionQueued,setCompactionQueued]=React.useState(initialCompaction),[queue,setQueue]=React.useState({
    steering:[{text:'current steer',imageCount:1,filePaths:['a.ts','b.ts']}],
    followUp:[{text:'duplicate draft',imageCount:0,filePaths:[]},{text:'duplicate draft',imageCount:0,filePaths:[]}]});
   window.setQueueCompaction=setCompactionQueued;window.setQueueMessages=setQueue;
-  return React.createElement(QueuePanel,{...queue,compactionQueued,
-  onPromote:index=>window.queueActions.push({action:'promote',index}),
-  onRemove:(kind,index)=>window.queueActions.push({action:'remove',kind,index}),
-  onRecall:()=>window.queueActions.push({action:'recall'})});}
+  return React.createElement(Composer,{queued:queue,compactionQueued,busy:true,models:[],model:null,thinkingLevel:'off',availableThinkingLevels:['off'],
+   onSend:()=>{},onQueue:()=>{},onModelChange:()=>{},onThinkingLevelChange:()=>{},
+   onRecallQueue:async()=>{window.queueActions.push({action:'recall'});return []}});}
  flushSync(()=>window.checkRoot.render(React.createElement(I18nProvider,{key:'queue'},React.createElement('div',{id:'queue-fixture',style:{width:800,margin:'20px auto'}},React.createElement(Queued)))));
 };
 window.addTasks=(count)=>{for(let i=0;i<count;i++)listener?.({...window.task,id:'bulk-'+i,toolCallId:'bulk-call-'+i,command:'echo bulk task '+i,status:'succeeded',background:true,exitCode:0,endedAt:Date.now(),revision:1})};
@@ -888,7 +887,8 @@ try {
   assert.equal(turnState.notices, 2)
   assert.deepEqual(turnState.reviews, [{ id: 20, files: ['a.ts'] }])
   await evaluate('window.resetTurn()')
-  await step(`{type:'message_end',message:{role:'user',timestamp:30,content:'user steer'}}`)
+  await step(`{type:'message_end',message:{role:'user',timestamp:30,queuedDelivery:'steer',content:'user steer'}}`)
+  assert.equal((await evaluate('window.turnRead()')).groups, 1, 'steer joins the live group before the next answer')
   await step(`{type:'message_start',message:window.round(40,[])}`)
   await step(`{type:'message_end',message:window.round(40,[window.writeCall('write-b','b.ts')])}`)
   await step(`{type:'message_end',message:window.result('write-b')}`)
@@ -898,8 +898,8 @@ try {
   await step(`{type:'message_end',message:window.notice(50)}`)
   await finish(60)
   turnState = await evaluate('window.turnRead()')
-  assert.equal(turnState.groups, 2, 'user steer opens a separate fold')
-  assert.equal(turnState.cards, 1, 'all steered groups have only one cumulative card')
+  assert.equal(turnState.groups, 1, 'user steer shares the original fold')
+  assert.equal(turnState.cards, 1, 'the steered turn has one cumulative card')
   assert.match(turnState.paths[0], /a.ts.*b.ts/)
   assert.deepEqual(turnState.reviews, [{ id: 20, files: ['a.ts', 'b.ts'] }])
   await evaluate(`window.turnStore.applySnapshot(window.turnSnapshot(JSON.parse(JSON.stringify(window.turnStore.getState().messages)),false))`)
@@ -911,6 +911,20 @@ try {
   await step(`{type:'message_end',message:window.round(80,window.prose('new reply'),'scope-new')}`, 1)
   await step(`{type:'agent_settled'}`, 1)
   assert.deepEqual((await evaluate('window.turnRead()')).reviews, turnState.reviews, 'an unrelated turn leaves the previous card intact')
+
+  // A follow-up is delivered inside the SDK run, after the original answer.
+  // Only its fresh scope stays live, so the earlier files appear immediately.
+  await evaluate('window.resetTurn()')
+  await step(`{type:'message_end',message:{role:'user',timestamp:27,queuedDelivery:'steer',content:'one more detail'}}`)
+  await step(`{type:'message_end',message:window.round(30,window.prose('original final answer'))}`)
+  await step(`{type:'message_end',changeScopeId:'scope-follow',message:{role:'user',timestamp:15,completedAt:40,queuedDelivery:'followUp',content:'follow-up prompt'}}`, 1)
+  await step(`{type:'message_start',message:window.round(50,[],'scope-follow')}`, 1)
+  await step(`{type:'message_end',message:window.round(50,[window.writeCall('follow-file','follow.ts')],'scope-follow')}`, 1)
+  await step(`{type:'message_end',message:{...window.result('follow-file'),timestamp:51}}`, 1)
+  await step(`{type:'message_end',message:window.round(60,window.prose('follow-up final answer'),'scope-follow')}`, 1)
+  await step(`{type:'agent_settled'}`, 2)
+  assert.deepEqual((await evaluate('window.turnRead()')).reviews, [{id:20,files:['a.ts']},{id:50,files:['follow.ts']}])
+  assert.equal(await evaluate(`document.querySelectorAll('#turn-fixture [data-transcript-gap-after="divider"]').length`), 2, 'the follow-up gets its own elapsed disclosure')
 
   // A run that ENDED on a failure is prose about the turn, not a status banner:
   // the text renders inside the turn, unframed, at body size in the error
@@ -968,20 +982,10 @@ try {
   }
   await step(`{type:'auto_retry_start',attempt:1,maxAttempts:3}`, 1)
   assert.equal(await evaluate(`document.querySelectorAll('#turn-fixture [data-turn-failure]').length`), 0, 'an in-flight retry is not turn prose')
-  const retrying = await evaluate(`(() => {
-    const node = document.querySelector('#turn-fixture [data-turn-notice]');
-    if (!node) return { found: false, text: document.querySelector('#turn-fixture').innerText };
-    const style = getComputedStyle(node);
-    return { found: true, text: node.innerText, bg: style.backgroundColor, radius: style.borderTopLeftRadius };
-  })()`)
-  assert.ok(retrying.found, 'an in-flight notice renders: ' + JSON.stringify(retrying))
-  assert.match(retrying.text, /retrying \(attempt 1 of 3\)/, 'the in-flight sentence is the retrying one')
-  assert.notEqual(retrying.bg, 'rgba(0, 0, 0, 0)', 'an in-flight notice keeps its framed status row: ' + JSON.stringify(retrying))
-  // The frame's corner comes from the theme token, so assert it against the
-  // token itself: the square-style branch resolves every step to 0, and a
-  // hardcoded non-zero radius would fail there for the wrong reason.
-  const controlRadius = await evaluate(`(() => { const probe = document.createElement('div'); probe.style.borderRadius = 'var(--app-radius-control)'; document.body.appendChild(probe); const value = getComputedStyle(probe).borderTopLeftRadius; probe.remove(); return value })()`)
-  assert.equal(retrying.radius, controlRadius, 'the status row keeps the theme radius token: ' + JSON.stringify({ radius: retrying.radius, controlRadius }))
+  // Reconnecting is not status chrome: the waiting row already says the turn is
+  // alive, so no attempt counter (and no framed row) appears above the composer.
+  assert.equal(await evaluate(`document.querySelectorAll('#turn-fixture [data-turn-notice]').length`), 0, 'an in-flight retry renders no status row')
+  assert.equal(await evaluate(`document.querySelector('#turn-fixture').innerText.includes('retrying')`), false, 'the retry attempt count is never announced')
   await step(`{type:'auto_retry_end',success:true}`, 1)
 
   // A compaction reads as a tool row, because that is what it is: one job runs
@@ -1058,7 +1062,7 @@ try {
   assert.equal(settled.open, 'false', 'a summary stays collapsed until it is asked for')
   assert.equal(settled.hasBody, false, 'the summary body is not mounted while collapsed')
   assert.match(settled.text, /Summarize context/, `the row names the job: ${settled.text}`)
-  assert.match(settled.text, /120\.0k tokens before summarization/, `the row carries the preceding context size: ${settled.text}`)
+  assert.match(settled.text, /Before 120\.0k tokens/, `the row carries the preceding context size: ${settled.text}`)
   assert.ok(settled.height < 60, `the row is one tool row tall: ${settled.height}`)
   assert.ok(
     settled.lowestTurn !== null && settled.top > settled.lowestTurn,
@@ -1186,7 +1190,7 @@ try {
   assert((await evaluate('window.frameCount')) > 20)
   assert.deepEqual(await evaluate('window.frameFailures'), [], 'no painted frame may expose an intermediate file list')
   assert.equal(exceptions.length, 0, JSON.stringify(exceptions))
-  console.log('PASS: real ChatView/PiStore frame-by-frame steer, idle server continuation, cumulative files/review, distinct user folds and snapshot restoration without flashing cards.')
+  console.log('PASS: real ChatView/PiStore frame-by-frame steer, follow-up, idle server continuation, cumulative files/review and snapshot restoration without flashing cards.')
   await checkContinueUi(evaluate, pause)
   await checkTurnFoldUi(evaluate, pause, async name => {
     if (!process.env.PI_BASH_SCREENSHOT_DIR) return
@@ -1269,11 +1273,55 @@ try {
   // identity in this existing browser, without a second style-only harness.
   await evaluate('window.startQueueFixture()')
   await evaluate(`window.setLocale('en')`); await pause(100)
-  const queueRows = await evaluate(`Array.from(document.querySelectorAll('#queue-fixture [data-queue-row]')).map(row=>({text:row.textContent,actions:Array.from(row.querySelectorAll('button')).map(button=>button.getAttribute('aria-label'))}))`)
+  const queueToggle = '#queue-fixture [data-queue-toggle]'
+  const queueGeometry = () => evaluate(`(() => {
+    const queue = document.querySelector('#queue-fixture [data-queue-panel]');
+    const input = document.querySelector('#queue-fixture .composer-surface');
+    const trigger = queue.querySelector('[data-queue-toggle]');
+    const body = document.getElementById(trigger.getAttribute('aria-controls'));
+    const panelBox = queue.getBoundingClientRect(), inputBox = input.getBoundingClientRect();
+    return {gap: inputBox.top-panelBox.bottom, aligned: panelBox.left===inputBox.left && panelBox.right===inputBox.right,
+      open: trigger.getAttribute('aria-expanded'), inert: body.inert, bodyHeight: body.getBoundingClientRect().height,
+      preview: queue.querySelector('[data-queue-preview]').textContent,
+      joins: getComputedStyle(queue).borderBottomLeftRadius==='0px' && getComputedStyle(input).borderTopLeftRadius==='0px',
+      corners: getComputedStyle(queue).borderTopLeftRadius===getComputedStyle(input).borderBottomLeftRadius};
+  })()`)
+  for (const [theme, corners] of [['light','square'],['light','rounded'],['dark','squircle']]) {
+    await evaluate(`document.documentElement.classList.toggle('dark',${theme==='dark'});document.documentElement.dataset.corners='${corners}'`)
+    const geometry = await queueGeometry()
+    assert.deepEqual(geometry, {gap:0,aligned:true,open:'false',inert:true,bodyHeight:0,preview:'current steer',joins:true,corners:true}, 'collapsed queue joins the composer in ' + corners)
+    if (process.env.PI_BASH_SCREENSHOT_DIR) await writeFile(join(process.env.PI_BASH_SCREENSHOT_DIR, `queue-${theme}-${corners}-collapsed.png`), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'))
+  }
+  await clickSelector(queueToggle); await pause(260)
+  const expandedQueue = await queueGeometry()
+  assert.equal(expandedQueue.gap, 0, 'the expanded queue remains attached')
+  assert.equal(expandedQueue.inert, false)
+  assert.ok(expandedQueue.bodyHeight > 0)
+  if (process.env.PI_BASH_SCREENSHOT_DIR) await writeFile(join(process.env.PI_BASH_SCREENSHOT_DIR, 'queue-dark-expanded.png'), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'))
+  const queueRows = await evaluate(`Array.from(document.querySelectorAll('#queue-fixture [data-queue-row]')).map(row=>({text:row.querySelector('[data-queue-row-text]').textContent,actions:Array.from(row.querySelectorAll('button')).map(button=>button.getAttribute('aria-label'))}))`)
   assert.equal(queueRows.length, 3, 'duplicate queued messages keep separate rows')
   assert.deepEqual(queueRows[0].actions, ['Remove from queue'], 'steers only offer removal')
   assert.deepEqual(queueRows[1].actions, ['Send now', 'Remove from queue'])
   assert.deepEqual(queueRows[2].actions, queueRows[1].actions)
+  // The header's recall control and every row's trailing actions share one right
+  // edge and one size: a row action must never sit inset or smaller than the
+  // control above it.
+  const queueActions = await evaluate(`(() => {
+    const panel=document.querySelector('#queue-fixture [data-queue-panel]');
+    const recall=panel.querySelector('button[aria-label="Recall to input"]');
+    const box=node=>{const r=node.getBoundingClientRect();return {right:Math.round(r.right),size:[Math.round(r.width),Math.round(r.height)]}};
+    const trailing=Array.from(panel.querySelectorAll('[data-queue-row]')).map(row=>{
+      const buttons=row.querySelectorAll('button');
+      return {...box(buttons[buttons.length-1]),actions:buttons.length};
+    });
+    return {header:box(recall),rows:trailing};
+  })()`)
+  assert.equal(queueActions.rows.length, 3, 'every queued row exposes its trailing actions')
+  assert.deepEqual(queueActions.rows.map(row=>row.actions), [1,2,2], 'a steer offers removal, a follow-up also offers send-now')
+  for (const row of queueActions.rows) {
+    assert.equal(row.right, queueActions.header.right, 'row actions align with the header control: ' + JSON.stringify(queueActions))
+    assert.deepEqual(row.size, queueActions.header.size, 'row actions match the header control size: ' + JSON.stringify(queueActions))
+  }
   await evaluate(`document.querySelectorAll('#queue-fixture [data-queue-row]')[0].querySelector('button').click();document.querySelectorAll('#queue-fixture [data-queue-row]')[2].querySelector('button[aria-label="Send now"]').click();document.querySelectorAll('#queue-fixture [data-queue-row]')[2].querySelector('button[aria-label="Remove from queue"]').click();document.querySelector('#queue-fixture button[aria-label="Recall to input"]').click()`)
   assert.deepEqual(await evaluate('window.queueActions'), [
     {action:'remove',kind:'steering',index:0}, {action:'promote',index:1},
@@ -1283,7 +1331,12 @@ try {
   assert.match(await evaluate(`document.querySelector('#queue-fixture').textContent`), /已排队 · 3/)
   assert.deepEqual(await evaluate(`Array.from(document.querySelectorAll('#queue-fixture [data-queue-row]')[1].querySelectorAll('button')).map(button=>button.getAttribute('aria-label'))`), ['立即发送', '移出队列'])
   assert.equal(exceptions.length, 0, JSON.stringify(exceptions))
-  console.log('PASS: queued message removal, promotion, recall and duplicate indices in both locales.')
+  await evaluate(`window.setQueueMessages({steering:[],followUp:[]})`); await pause(80)
+  assert.equal(await evaluate(`document.querySelector('[data-queue-panel]')===null`), true)
+  await evaluate(`window.setQueueMessages({steering:[],followUp:[{text:'',originalText:'',imageCount:0,filePaths:['/ui/notes.md']}]})`); await pause(80)
+  assert.equal((await queueGeometry()).preview, 'notes.md', 'the first attachment supplies a preview for a textless message')
+  assert.equal((await queueGeometry()).open, 'false', 'a fresh queue starts folded again')
+  console.log('PASS: the queue previews its first message, folds against the composer across themes, and preserves removal, promotion, recall and duplicate indices.')
   await evaluate('window.startQueueFixture(true)')
   await evaluate(`window.setLocale('en')`); await pause(250)
   assert.equal(await evaluate(`document.querySelectorAll('#queue-fixture [data-queue-row]').length`), 3, 'pending compaction does not become a user message row')
@@ -1295,7 +1348,7 @@ try {
   await pause(250)
   assert.deepEqual(await evaluate('window.queueActions'), [{action:'recall'}])
   assert.match(await evaluate(`document.querySelector('#queue-fixture').textContent`), /Queued · 1/)
-  assert.equal(await evaluate(`document.querySelector('#queue-fixture').querySelectorAll('button').length`), 0, 'after message recall the action stays without an empty recall control')
+  assert.equal(await evaluate(`document.querySelector('[data-queue-panel] [aria-label="Recall to input"]')===null`), true, 'after recall the compaction status stays without a recall control')
   await evaluate(`window.setLocale('zh-CN')`); await pause(100)
   assert.match(await evaluate(`document.querySelector('[data-queue-compaction]').textContent`), /等待压缩上下文.*当前回复与工具调用完成后执行/)
   await evaluate(`window.setLocale('zh-TW')`); await pause(100)

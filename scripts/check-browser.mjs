@@ -27,7 +27,7 @@ import {
 import {
   BrowserService, AxTargetError, BrowserHostUnavailableError, ConsentRequiredError, FilePickerInsteadOfClickError,
   InvalidRefError, NavigationBlockedError, NoFilePickerError, PageGoneError, PageNotFoundError,
-  SelectorTargetError, SnapshotScopeError, StaleSnapshotError, TypeTextTooLongError,
+  SelectorTargetError, SnapshotScopeError, StaleSnapshotError, TypeTargetNotInteractableError, TypeTextTooLongError,
   __setBrowserServiceForTests, getBrowserService, initBrowserService,
 } from '../src/main/browser/service.ts'
 // Tool registration, error mapping and target validation.
@@ -457,6 +457,12 @@ function mockLocator(opts, sel, visibleOnly = false) {
     evaluate: async (fn, arg, options) => {
       log(`locatorEval:${sel}:${options?.timeout ?? 'none'}`)
       if (opts.locatorEvalFails) throw new Error('Execution context was destroyed')
+      if (String(fn).includes('getBoundingClientRect')) {
+        return opts.typeTargetLayout ?? {
+          width: 30, height: 10, viewportWidth: 800, viewportHeight: 600,
+          display: 'block', visibility: 'visible',
+        }
+      }
       return opts.locatorIsFileInput ?? false
     },
 
@@ -777,12 +783,61 @@ test("service: type uses click, select-all and pressSequentially; submit adds En
     // Hidden guests require keyboard replay; this mock deliberately cannot fill.
 
   assert.deepEqual(pageOpts.actionLog, [
+    'locatorEval:aria-ref=e2:1000',
     'click:aria-ref=e2', 'key:ControlOrMeta+A', 'type:aria-ref=e2:hello', 'key:Enter',
   ])
 
   pageOpts.actionLog.length = 0
   await svc.agentTypeRef('agent:s1', 'e2', '')
-  assert.deepEqual(pageOpts.actionLog, ['click:aria-ref=e2', 'key:ControlOrMeta+A'])
+  assert.deepEqual(pageOpts.actionLog, ['locatorEval:aria-ref=e2:1000', 'click:aria-ref=e2', 'key:ControlOrMeta+A'])
+})
+
+test('tools/service: zero-size and hidden inputs report measured layout without sending input events, then recover', async () => {
+  const base = { width: 180, height: 20, viewportWidth: 719, viewportHeight: 734, display: 'block', visibility: 'visible' }
+  for (const [layout, reason] of [
+    [{ ...base, width: 0 }, /zero width \(0×20 CSS px/],
+    [{ ...base, height: 0 }, /zero height \(180×0 CSS px/],
+    [{ ...base, visibility: 'hidden' }, /input is hidden/],
+  ]) {
+    const pageOpts = { actionLog: [], selectorVisibleCount: 0, typeTargetLayout: layout }
+    const svc = await consentedService(pageOpts)
+    try {
+      await svc.agentNavigate('agent:s1', 'https://a.dev')
+      const type = createBrowserTools({ ownerId: 's1', service: svc }).find(tool => tool.name === 'browser_type')
+      pageOpts.actionLog.length = 0
+      for (const target of [{ selector: '#search' }, { ref: 'e2' }]) {
+        const result = await type.execute('collapsed', { ...target, text: 'HKBN', submit: true })
+        assert.equal(result.isError, true)
+        assert.equal(result.structuredContent.error.code, 'TYPE_TARGET_NOT_INTERACTABLE')
+        assert.match(result.content[0].text, reason)
+        assert.match(result.content[0].text, /719×734 CSS px frame viewport/)
+        assert.match(result.content[0].text, /expand.*browser_click.*widen/s, 'Recovery changes the layout before typing')
+        assert.match(result.content[0].text, /Do not retry typing with different selectors/)
+      }
+      assert.equal(pageOpts.actionLog.some(entry => /^(click|key|type):/.test(entry)), false,
+        'Neither selector nor ref attempts can click, select all, type or submit a hidden/zero-size input')
+      assert.equal(svc.listPages()[0].agentBusy, false, 'A rejected target releases the page action lock')
+
+      pageOpts.typeTargetLayout = base
+      pageOpts.selectorVisibleCount = 1
+      const recovered = await type.execute('expanded', { selector: '#search', text: 'HKBN', submit: true })
+      assert.equal(recovered.isError, false, 'A changed layout permits a fresh typing attempt')
+      assert.ok(pageOpts.actionLog.includes('type:#search:HKBN'))
+      assert.ok(pageOpts.actionLog.includes('key:Enter'))
+    } finally { svc.dispose() }
+  }
+})
+
+test('service: unavailable typing measurements report uncertainty without input events', async () => {
+  const pageOpts = { actionLog: [], locatorEvalFails: true }
+  const svc = await consentedService(pageOpts)
+  try {
+    await svc.agentNavigate('agent:s1', 'https://a.dev')
+    pageOpts.actionLog.length = 0
+    await assert.rejects(svc.agentTypeRef('agent:s1', 'e2', 'hi'), error =>
+      !(error instanceof TypeTargetNotInteractableError) && /could not measure.*may be unresponsive or the element detached/.test(error.message))
+    assert.equal(pageOpts.actionLog.some(entry => /^(click|key|type):/.test(entry)), false)
+  } finally { svc.dispose() }
 })
 
 test("service: blocked navigation schemes throw without creating a page", async () => {
@@ -1299,16 +1354,40 @@ test("service: wait_for reports timed-out conditions in unmet", async () => {
 test("validateTargetParams: provide exactly one ref, selector or ax", () => {
   assert.equal(validateTargetParams({ ref: 'e1' }), null)
   assert.equal(validateTargetParams({ selector: '#save' }), null)
-  assert.equal(validateTargetParams({ ax: { name: '暂存离开' } }), null)
-  assert.equal(validateTargetParams({ ax: { name: '暂存离开', role: 'button' } }), null)
-  assert.match(validateTargetParams({ ref: 'e1', selector: '#save' }), /^error: provide only one of ref, selector or ax$/)
-  assert.match(validateTargetParams({ ax: { name: 'x' }, ref: 'e1' }), /^error: provide only one of ref, selector or ax$/)
-  assert.match(validateTargetParams({}), /^error: provide ref, selector or ax$/)
+  assert.equal(validateTargetParams({ ax: { name: '暂存离开' } }, true), null)
+  assert.equal(validateTargetParams({ ax: { name: '暂存离开', role: 'button' } }, true), null)
+  assert.match(validateTargetParams({ ref: 'e1', selector: '#save' }), /^error: provide only one of ref or selector$/)
+  assert.match(validateTargetParams({ ax: { name: 'x' }, ref: 'e1' }, true), /^error: provide only one of ref, selector or ax$/)
+  assert.match(validateTargetParams({}), /^error: provide ref or selector$/)
 
-  assert.match(validateTargetParams({ ax: {} }), /^error: ax\.name must be a non-empty string$/)
-  assert.match(validateTargetParams({ ax: { name: '   ' } }), /^error: ax\.name must be a non-empty string$/)
-  assert.match(validateTargetParams({ ax: { name: 'x', role: '' } }), /^error: ax\.role must be a non-empty string when given$/)
-  assert.match(validateTargetParams({ ax: 'Save' }), /^error: ax must be an object like \{ name: "Save draft" \}$/)
+  assert.match(validateTargetParams({ ax: {} }, true), /^error: ax\.name must be a non-empty string$/)
+  assert.match(validateTargetParams({ ax: { name: '   ' } }, true), /^error: ax\.name must be a non-empty string$/)
+  assert.match(validateTargetParams({ ax: { name: 'x', role: '' } }, true), /^error: ax\.role must be a non-empty string when given$/)
+  assert.match(validateTargetParams({ ax: 'Save' }, true), /^error: ax must be an object like \{ name: "Save draft" \}$/)
+})
+
+test('tools: ref/selector-only actions reject ax and invalid targets before reaching the service', async () => {
+  const calls = []
+  const service = Object.fromEntries(['agentTypeRef', 'agentTypeSelector', 'agentSelectRef', 'agentSelectSelector', 'agentUpload', 'agentUploadSelector']
+    .map(name => [name, async (...args) => { calls.push([name, ...args]); throw Error('invalid target reached service') }]))
+  const tools = createBrowserTools({ ownerId: 's1', service })
+  for (const name of ['browser_type', 'browser_select', 'browser_upload']) {
+    const tool = tools.find(tool => tool.name === name)
+    const payload = { text: 'HKBN', values: ['one'], files: ['unused'] }
+    for (const target of [
+      { ax: { name: 'Search', role: 'textbox' } },
+      { ax: { name: 'Search' }, ref: 'e2' },
+      { ax: { name: 'Search' }, selector: '#search' },
+      { ref: 'e2', selector: '#search' }, {}, { ref: '  ' }, { selector: 7 },
+    ]) {
+      const result = await tool.execute('invalid', { ...payload, ...target })
+      assert.equal(result.isError, true)
+      assert.equal(result.structuredContent.error.code, 'INVALID_ARGUMENTS')
+      assert.doesNotMatch(result.content[0].text, /invalid ref: undefined/)
+      if (target.ax) assert.match(result.content[0].text, /ax is supported only by browser_click and browser_hover/)
+    }
+  }
+  assert.deepEqual(calls, [], 'Unsupported ax and malformed targets never dispatch a service call')
 })
 
 test("tools: click/hover expose ax; type/select/upload do not", () => {
@@ -1710,6 +1789,27 @@ test("session: optional close/reopen restoration fences outgoing snapshot writes
   })
 })
 
+test("session: closing one browser fences its writes and preserves the other session", () => {
+  withWindowShim(({ store }) => {
+    const first = new BrowserStore('first')
+    const second = new BrowserStore('second')
+    const firstPage = { owner: first.humanOwner, url: 'https://first.dev/' }
+    const secondPage = { owner: second.humanOwner, url: 'https://second.dev/', selected: true }
+    const legacyAgent = { owner: agentOwner('first'), url: 'https://agent.dev/' }
+    store.set('pi-app:browser-open-pages', JSON.stringify([firstPage, legacyAgent, { owner: HUMAN_OWNER, url: 'https://unassigned.dev/' }]))
+    assert.deepEqual(readOpenBrowserPages('first'), [firstPage, legacyAgent])
+    assert.deepEqual(readOpenBrowserPages('second'), [])
+    const firstWriter = getOpenBrowserPagesRevision('first')
+    const secondWriter = getOpenBrowserPagesRevision('second')
+    writeOpenBrowserPages([secondPage], secondWriter, 'second')
+    closeOpenBrowserPages(false, 'first')
+    writeOpenBrowserPages([firstPage], firstWriter, 'first')
+    assert.deepEqual(readOpenBrowserPages('first'), [])
+    assert.deepEqual(readOpenBrowserPages('second'), [secondPage])
+    assert.equal(getOpenBrowserPagesRevision('second'), secondWriter)
+  })
+})
+
 test("device: invalid sizes use 200; cap at 3840 after rounding", () => {
   assert.equal(DEVICE_SIZE_MIN, 200)
   assert.equal(DEVICE_SIZE_MAX, 3840)
@@ -1842,7 +1942,7 @@ test("popup: missing window.pi degrades safely; subscribed events forward and un
   const previous = globalThis.window
   try {
     delete globalThis.window
-    const stop = subscribeBrowserPopups(store)
+    const stop = subscribeBrowserPopups(() => store)
     assert.equal(typeof stop, 'function')
     stop()
   } finally {
@@ -1856,7 +1956,7 @@ test("popup: missing window.pi degrades safely; subscribed events forward and un
         return () => { const i = listeners.indexOf(cb); if (i !== -1) listeners.splice(i, 1) }
       },
     }
-    const stop = subscribeBrowserPopups(store)
+    const stop = subscribeBrowserPopups(() => store)
     assert.equal(listeners.length, 1)
     listeners[0]({ url: 'https://pop.dev/', openerWebContentsId: 42 })
     assert.deepEqual(store.getState().popups, [{ url: 'https://pop.dev/', openerWebContentsId: 42 }])
@@ -1887,12 +1987,12 @@ test("popup: onPopup runs after enqueue; omitted callbacks preserve behavior", (
     }
     const store = new BrowserStore()
     const seen = []
-    const stop = subscribeBrowserPopups(store, () => { seen.push(store.getState().popups.length) })
+    const stop = subscribeBrowserPopups(() => store, browser => { seen.push(browser.getState().popups.length) })
     listeners[0]({ url: 'https://p.dev/', openerWebContentsId: 7 })
     assert.deepEqual(seen, [1], "Enqueue before callback; callback errors must not lose the popup")
     stop()
     const plain = new BrowserStore()
-    const stop2 = subscribeBrowserPopups(plain)
+    const stop2 = subscribeBrowserPopups(() => plain)
     listeners[0]({ url: 'https://q.dev/', openerWebContentsId: 8 })
     assert.equal(plain.getState().popups.length, 1, "Missing onPopup preserves existing behavior")
     stop2()
@@ -1932,10 +2032,6 @@ test("popup source pin: client IDs, shared pending rows, navigateTo handshake an
   const view = readFileSync(
     new URL('../src/renderer/src/components/app/BrowserPageView.tsx', import.meta.url),
     'utf8',
-  )
-  assert.ok(
-    pane.includes('wcIdMapRef.current.get(popup.openerWebContentsId)?.owner ?? HUMAN_OWNER'),
-    "Inherit ownership through webContents mapping; unknown openers use human",
   )
   assert.ok(pane.includes('createBrowserPageId()'), "Generate popup IDs on the client")
   const modelStart = pane.indexOf('const pages = useMemo')
@@ -2621,6 +2717,14 @@ test("service: cross-frame ambiguity, multiple elements and missing selectors re
       && /closed shadow root/.test(error.message)
       && /ax: \{ name:/.test(error.message),
   )
+  for (const attempt of [
+    () => svcNone.agentTypeSelector('agent:s1', '#nope:visible', 'hi'),
+    () => svcNone.agentSelectSelector('agent:s1', '#nope', ['one']),
+    () => svcNone.agentUploadSelector('agent:s1', '#nope', ['unused']),
+  ]) {
+    await assert.rejects(attempt(), error => error instanceof SelectorTargetError
+      && /does not support ax/.test(error.message) && !/ax: \{ name:/.test(error.message))
+  }
 })
 
 test("service: selector targets prefer the unique visible match across frames", async () => {
@@ -2796,7 +2900,8 @@ test("service: keyboard actions await guest focus; missing webContents IDs prese
 
   pageOpts.actionLog.length = 0
   await svc.agentTypeRef('agent:s1', 'e2', 'hi')
-  assert.equal(pageOpts.actionLog[0], 'focusGuest:4242', "Focus before the entire typing chain")
+  const typingFlow = pageOpts.actionLog.filter(entry => /^(focusGuest|click|key|type):/.test(entry))
+  assert.equal(typingFlow[0], 'focusGuest:4242', "Focus before all pointer and keyboard input")
   assert.ok(pageOpts.actionLog.includes('type:aria-ref=e2:hi'), "Retain the actual text input")
 
   const noWc = { actionLog: [], snapshotText: '- textbox "q" [ref=e2]' }

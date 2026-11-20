@@ -133,11 +133,10 @@ export function DiscoverDialog({
             <Loader2 className="size-4 animate-spin" />{t('settings.discoverLoading')}
           </div>
         ) : error || saveBlocked ? (
-          <ProviderNotice tone="error">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <span>{error ?? t('settings.providerSaveBeforeContinue')}</span>
-              <Button variant="ghost" size="sm" disabled={importing} onClick={() => void (models.length ? importSelected() : load())}>{t('settings.providerRetry')}</Button>
-            </div>
+          <ProviderNotice tone="error" action={
+            <Button variant="ghost" size="sm" disabled={importing} onClick={() => void (models.length ? importSelected() : load())}>{t('settings.providerRetry')}</Button>
+          }>
+            {error ?? t('settings.providerSaveBeforeContinue')}
           </ProviderNotice>
         ) : null}
         {!loading && models.length > 0 ? <>

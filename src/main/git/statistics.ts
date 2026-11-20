@@ -63,9 +63,11 @@ export class GitStatistics {
     while (this.untracked.size > MAX_FILES) this.untracked.delete(this.untracked.keys().next().value!)
     return stats
   }
-  async files(repo: GitRepository): Promise<GitChange[]> {
+  async files(repo: Pick<GitRepository, 'root' | 'files'>, scope?: { config: string[]; paths: string[] }): Promise<GitChange[]> {
     const flags = ['--numstat', '-z', '--no-ext-diff', '--no-textconv', '--no-renames', '--no-color']
-    const readouts = await mapBounded([['diff', ...flags, '--cached', '--'], ['diff', ...flags, '--']], args => this.runner.run(repo.root, args, { strictUtf8: true }))
+    const readouts = await mapBounded([
+      [...flags, '--cached'], flags
+    ], args => this.runner.run(repo.root, [...(scope?.config ?? []), 'diff', ...args, '--', ...(scope?.paths ?? [])], { strictUtf8: true }))
     const staged = parseNumstat(readouts[0].stdout), worktree = parseNumstat(readouts[1].stdout)
     return mapBounded(repo.files, async file => ({
       ...file,

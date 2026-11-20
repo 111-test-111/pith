@@ -17,7 +17,11 @@ import { useSyncExternalStore } from 'react'
  * subscribable store, so flipping it in Settings re-renders the sidebar with
  * no session involvement. The workspace sidebar and every WindowTitlebar
  * consume it; their first render reads the stored value, so no boot hook is
- * needed in `main.tsx`. Keep the existing storage key. Default: on.
+ * needed in `main.tsx`. The same value also mirrors onto the root element as
+ * `data-chrome-glass`, because the window's own background is pure CSS: with
+ * the preference off the page paints the theme background instead of stepping
+ * aside for the native material, so a page transition can never flash it.
+ * Keep the existing storage key. Default: on.
  */
 
 const STORAGE_KEY = 'pi-app:sidebar-glass'
@@ -48,12 +52,24 @@ function get(): boolean {
 function set(next: boolean): void {
   if (get() === next) return
   current = next
+  applyChromeGlass(next)
   try {
     window.localStorage.setItem(STORAGE_KEY, next ? 'on' : 'off')
   } catch {
     /* persistence is best-effort; the in-memory value still applies */
   }
   for (const listener of listeners) listener()
+}
+
+/** The root flag `styles.css` reads for the window background; `off` is
+ * explicit so a missing attribute keeps the default translucent chrome. */
+function applyChromeGlass(glass: boolean): void {
+  document.documentElement.dataset.chromeGlass = glass ? 'on' : 'off'
+}
+
+/** Boot-time mirror for CSS that must not wait for a React render. */
+export function initSidebarGlass(): void {
+  applyChromeGlass(get())
 }
 
 /** Subscribable glass preference shared by the workspace sidebar and Settings. */

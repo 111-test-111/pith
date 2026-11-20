@@ -1,8 +1,9 @@
 import { memo, useCallback, useEffect, useId, useRef, useState } from 'react'
-import { ChevronDown, CircleHelp, Compass, Subagent, ListTodo, Terminal, X } from '@/lib/icons'
+import { ChevronDown, CircleHelp, Target, Subagent, ListTodo, Terminal, X } from '@/lib/icons'
 import { AgentDisclosure } from '@/components/agents/agent-disclosure'
 import { TodoList } from '@/components/agents/todo-list'
 import { Button } from '@/components/motion/button'
+import { Tabs, TabsList, TabsTrigger } from '@/components/motion/tabs'
 import { ActionSwapRollText } from '@/components/motion/action-swap-roll'
 import { useI18n } from '@/i18n'
 import { bashTaskLive, useBashTasks } from '@/lib/bash-tasks'
@@ -96,32 +97,35 @@ export const SessionTasks = memo(function SessionTasks({ todos, subagents = [], 
 
   return (
     <div ref={root} className="relative z-20 shrink-0" data-session-tasks>
-      <div role="group" aria-label={t('taskPanel.label')} className="flex flex-wrap items-center gap-1 border-b border-border px-4 py-1.5">
-        {(['goal', 'todo', 'bash', 'agents', 'ask', 'jev'] as const).map((panel) => {
-          if (panel === 'goal' ? !showGoal : panel === 'jev' ? !jevState : panel === 'todo' ? !items.length : panel === 'bash' ? !tasks.length : panel === 'agents' ? !subagents.length : !records.length) return null
-          const active = open && selected === panel
-          const Icon = panel === 'goal' ? Compass : panel === 'todo' ? ListTodo : panel === 'bash' ? Terminal : panel === 'agents' ? Subagent : CircleHelp
-          const label = panel === 'goal' ? t('goal.title') : panel === 'jev' ? t('jev.title') : panel === 'todo' ? t('todo.title') : panel === 'bash' ? t('taskPanel.background') : panel === 'agents' ? t('taskPanel.agents') : t('askUser.recordsTitle')
-          const count = panel === 'goal' ? goal ? t(`goal.status.${goal.status}`) : '' : panel === 'jev' ? String(jevState?.requests ?? 0) : panel === 'todo'
-            ? `${done}/${items.length}`
-            : panel === 'bash'
-              ? String(running || tasks.length)
-              : panel === 'agents'
-                ? String(agentsRunning || subagents.length)
-                : String(awaiting || records.length)
-          return (
-            <Button key={panel} ref={(node) => { triggers.current[panel] = node }}
-              id={`${baseId}-${panel}`} size="sm" variant={active ? 'secondary' : 'ghost'}
-              data-task-trigger={panel} data-jev-trigger={panel === 'jev' ? '' : undefined} aria-expanded={active} aria-controls={`${baseId}-panel`}
-              onClick={() => setSelected(active ? null : panel)}
-              className={cn('gap-2 text-xs', active && 'bg-muted')}>
-              {panel === 'jev' ? <ToolIcon name="jev_decide" className="size-3.5 text-muted-foreground" /> : <Icon aria-hidden="true" className="size-3.5 text-muted-foreground" />}
-              {label}
-              {panel !== 'jev' && count ? <span className="tabular-nums text-muted-foreground"><ActionSwapRollText value={count}>{count}</ActionSwapRollText></span> : null}
-              <ChevronDown aria-hidden="true" className={cn('size-3 text-muted-foreground transition-transform', active && 'rotate-180')} />
-            </Button>
-          )
-        })}
+      <div role="group" aria-label={t('taskPanel.label')} className="border-b border-border px-4 py-1.5">
+        <Tabs value={open ? selected ?? '' : ''} onValueChange={panel => setSelected(open && selected === panel ? null : panel as Panel)} variant="underline">
+          <TabsList className="flex flex-wrap border-b-0">
+            {(['goal', 'todo', 'bash', 'agents', 'ask', 'jev'] as const).map((panel) => {
+              if (panel === 'goal' ? !showGoal : panel === 'jev' ? !jevState : panel === 'todo' ? !items.length : panel === 'bash' ? !tasks.length : panel === 'agents' ? !subagents.length : !records.length) return null
+              const active = open && selected === panel
+              const Icon = panel === 'goal' ? Target : panel === 'todo' ? ListTodo : panel === 'bash' ? Terminal : panel === 'agents' ? Subagent : CircleHelp
+              const label = panel === 'goal' ? t('goal.title') : panel === 'jev' ? t('jev.title') : panel === 'todo' ? t('todo.title') : panel === 'bash' ? t('taskPanel.background') : panel === 'agents' ? t('taskPanel.agents') : t('askUser.recordsTitle')
+              const count = panel === 'goal' ? goal ? t(`goal.status.${goal.status}`) : '' : panel === 'jev' ? String(jevState?.requests ?? 0) : panel === 'todo'
+                ? `${done}/${items.length}`
+                : panel === 'bash'
+                  ? String(running || tasks.length)
+                  : panel === 'agents'
+                    ? String(agentsRunning || subagents.length)
+                    : String(awaiting || records.length)
+              return (
+                <TabsTrigger key={panel} value={panel} ref={(node) => { triggers.current[panel] = node }}
+                  id={`${baseId}-${panel}`}
+                  data-task-trigger={panel} data-jev-trigger={panel === 'jev' ? '' : undefined} aria-expanded={active} aria-controls={`${baseId}-panel`}
+                  className="h-8 min-h-0 gap-2 text-xs">
+                  {panel === 'jev' ? <ToolIcon name="jev_decide" className="size-3.5 text-muted-foreground" /> : <Icon aria-hidden="true" className="size-3.5 text-muted-foreground" />}
+                  {label}
+                  {panel !== 'jev' && count ? <span className="tabular-nums text-muted-foreground"><ActionSwapRollText value={count}>{count}</ActionSwapRollText></span> : null}
+                  <ChevronDown aria-hidden="true" className={cn('size-3 text-muted-foreground transition-transform', active && 'rotate-180')} />
+                </TabsTrigger>
+              )
+            })}
+          </TabsList>
+        </Tabs>
       </div>
       <div className={cn('absolute inset-x-0 top-full transition-opacity duration-150', open ? 'opacity-100' : 'pointer-events-none opacity-0')}>
         <AgentDisclosure id={`${baseId}-panel`} role="region" aria-labelledby={selected ? `${baseId}-${selected}` : undefined}

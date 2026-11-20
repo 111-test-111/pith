@@ -167,14 +167,14 @@ function bubbleContentClass(
     // local patch (pi-app): the app renders its own lists inside a bubble body
     // (the turn's written files) — `data-plain-list` opts those out of the
     // markdown list styling, which would otherwise add a 20px indent and bullets.
-    // local patch (pi-app): inline code takes the theme's detail radius. The
+    // local patch (pi-app): inline code takes the theme's inner radius. The
     // vendored descendant utility pinned a literal 0.25rem radius (Tailwind's
     // bare radius step, not a token) and an ancestor's descendant utility beats
     // the markdown element's own token class on specificity. Kept out of this
     // comment: the literal utility name — Tailwind's scanner reads comments and
     // would generate it again.
     // local patch (pi-app): inline code uses the shared small-text step.
-    "[&_a]:font-medium [&_a]:underline [&_a]:underline-offset-4 [&_code]:rounded-detail [&_code]:bg-background/60 [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-code-inline [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_p+p]:mt-2 [&_pre:not([data-code-block-pre])]:my-2 [&_pre:not([data-code-block-pre])]:overflow-x-auto [&_pre:not([data-code-block-pre])]:rounded-xl [&_pre:not([data-code-block-pre])]:bg-background/60 [&_pre:not([data-code-block-pre])]:p-3 [&_ul:not([data-plain-list])]:my-2 [&_ul:not([data-plain-list])]:list-disc [&_ul:not([data-plain-list])]:pl-5",
+    "[&_a]:font-medium [&_a]:underline [&_a]:underline-offset-4 [&_code]:rounded-inner [&_code]:bg-background/60 [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-code-inline [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_p+p]:mt-2 [&_pre:not([data-code-block-pre])]:my-2 [&_pre:not([data-code-block-pre])]:overflow-x-auto [&_pre:not([data-code-block-pre])]:rounded-xl [&_pre:not([data-code-block-pre])]:bg-background/60 [&_pre:not([data-code-block-pre])]:p-3 [&_ul:not([data-plain-list])]:my-2 [&_ul:not([data-plain-list])]:list-disc [&_ul:not([data-plain-list])]:pl-5",
     variant === "solid" && "text-background",
     variant === "ghost" && "w-full max-w-none rounded-none px-0 py-0",
     variant === "danger" && "text-destructive",

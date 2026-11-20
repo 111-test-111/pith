@@ -1,8 +1,10 @@
 import type { TrajectoryQuery, TrajectoryPage, TrajectoryDetail, TrajectoryNodeRequest, TrajectoryNodePage } from '../shared/types'
 import type { ImageReplayRequest, ImageReplaySnapshot } from '../shared/image-replay'
 import type { GoalActionRequest, GoalActionResult } from '../shared/goal'
-import type { GitBranch, GitCommitDetails, GitCommitFile, GitDiff, GitDiffRequest, GitDiscardPreview, GitGraph, GitGraphRequest, GitHistory, GitHistoryRequest, GitMutation, GitMutationReceipt, GitRepository, GitResult, GitWorkspaceRequest } from '../shared/git'
-import type { LibraryKind, LibraryPage, LibraryQuery, LibraryResult, LibrarySettingsUpdate, LibraryStatus, LibraryTextPreview } from '../shared/library'
+import type { VisionModelSelection, PromptAdmissionDTO } from '../shared/vision'
+import type { SessionNamingModelSelection } from '../shared/session-naming'
+import type { SshEvent, SshOutputDTO, SshOutputRequest, SshPanelRequest, SshPanelResult, SshSessionDTO } from '../shared/ssh'
+import type { GitBranch, GitChange, GitCommitDetails, GitCommitFile, GitDiff, GitDiffRequest, GitDiscardPreview, GitGraph, GitGraphRequest, GitHistory, GitHistoryRequest, GitMutation, GitMutationReceipt, GitRepository, GitResult, GitWorkspaceRequest } from '../shared/git'
 import type { AskUserAnswer } from '../shared/ask-user'
 import type { ResourceResult, ResourceRuntimeDTO, ResourceStorageDTO } from '../shared/resources'
 import type { BinaryPreviewRequest, PreviewResult } from '../shared/file-preview'
@@ -55,6 +57,7 @@ import type {
   FilePreviewDTO,
   FileBrowserRequest,
   FileActionResultDTO,
+  FileDefaultAppDTO,
   FileDirectoryDTO,
   FileDocumentDTO,
   HtmlPreviewDTO,
@@ -111,8 +114,10 @@ import type {
   WindowTheme
 } from '../shared/types'
 
+let sshSubscriptions = 0
 const api = {
   gitStatus: (request: GitWorkspaceRequest): Promise<GitResult<GitRepository>> => ipcRenderer.invoke('git:status', request),
+  gitTreeStatus: (request: GitWorkspaceRequest): Promise<GitResult<GitChange[]>> => ipcRenderer.invoke('git:treeStatus', request),
   gitDiff: (request: GitDiffRequest): Promise<GitResult<GitDiff>> => ipcRenderer.invoke('git:diff', request),
   gitBranches: (request: GitWorkspaceRequest): Promise<GitResult<GitBranch[]>> => ipcRenderer.invoke('git:branches', request),
   gitHistory: (request: GitHistoryRequest): Promise<GitResult<GitHistory>> => ipcRenderer.invoke('git:history', request),
@@ -122,18 +127,7 @@ const api = {
   gitPrepareDiscard: (request: GitWorkspaceRequest & { revision: string; paths: string[] }): Promise<GitResult<GitDiscardPreview>> => ipcRenderer.invoke('git:prepareDiscard', request),
   gitExecute: (request: GitMutation): Promise<GitResult<GitMutationReceipt>> => ipcRenderer.invoke('git:execute', request),
   gitCancel: (request: GitWorkspaceRequest & { id: string }): Promise<GitResult<void>> => ipcRenderer.invoke('git:cancel', request),
-  libraryStatus: (): Promise<LibraryResult<LibraryStatus>> => ipcRenderer.invoke('library:status'),
-  libraryPage: (query: LibraryQuery): Promise<LibraryResult<LibraryPage>> => ipcRenderer.invoke('library:page', query),
-  libraryRescan: (): Promise<LibraryResult<LibraryStatus>> => ipcRenderer.invoke('library:rescan'),
-  setLibraryPreferences: (update: LibrarySettingsUpdate): Promise<LibraryResult<LibraryStatus>> => ipcRenderer.invoke('library:settings', update),
-  libraryChooseDirectory: (reset = false): Promise<LibraryResult<LibraryStatus | null>> => ipcRenderer.invoke('library:directory', reset),
-  libraryDelete: (id: string): Promise<LibraryResult<void>> => ipcRenderer.invoke('library:delete', id),
-  libraryClear: (kind: LibraryKind): Promise<LibraryResult<number>> => ipcRenderer.invoke('library:clear', kind),
-  libraryFile: (id: string): Promise<LibraryResult<string>> => ipcRenderer.invoke('library:file', id),
-  libraryPreviewText: (id: string): Promise<LibraryResult<LibraryTextPreview | null>> => ipcRenderer.invoke('library:previewText', id),
-  libraryHtmlThumbnail: (id: string): Promise<LibraryResult<string | null>> => ipcRenderer.invoke('library:htmlThumbnail', id),
-  librarySaveCopy: (id: string, name: string): Promise<FileActionResultDTO> => ipcRenderer.invoke('library:saveCopy', id, name),
-  onLibraryChanged: (listener: () => void) => subscribe('library:changed', listener),
+
   platform: process.platform,
   rewindList: (path: string): Promise<RewindResult<RewindListDTO>> => ipcRenderer.invoke('rewind:list', path),
   rewindPreview: (path: string, checkpoint: string, action?: 'undo' | 'redo'): Promise<RewindResult<RewindPreviewDTO>> => ipcRenderer.invoke('rewind:preview', path, checkpoint, action),
@@ -217,6 +211,16 @@ setAlwaysOnTop: (flag: boolean): Promise<boolean> => ipcRenderer.invoke('window:
   terminalClose: (id: string): void =>
     ipcRenderer.send('terminal:command', { type: 'close', id }),
   onTerminalEvent: (listener: (event: TerminalEvent) => void) => subscribe('terminal:event', listener),
+  listSshSessions: (): Promise<SshSessionDTO[]> => ipcRenderer.invoke('ssh:list'),
+  sshOutput: (request: SshOutputRequest): Promise<SshOutputDTO> => ipcRenderer.invoke('ssh:output', request),
+  sshPanelAction: (request: SshPanelRequest): Promise<SshPanelResult> => ipcRenderer.invoke('ssh:action', request),
+  sshAck: (id: string, chars: number): void => ipcRenderer.send('ssh:ack', id, chars),
+  onSshEvent: (listener: (event: SshEvent) => void) => {
+    const off = subscribe('ssh:event', listener)
+    if (sshSubscriptions++ === 0) ipcRenderer.send('ssh:watch', true)
+    let closed = false
+    return () => { if (closed) return; closed = true; off(); if (--sshSubscriptions === 0) ipcRenderer.send('ssh:watch', false) }
+  },
   listBashTasks: (sessionPath: string): Promise<BashTaskDTO[]> => ipcRenderer.invoke('bash:list', sessionPath),
   bashTaskOutput: (request: BashTaskRequest): Promise<BashTaskOutputDTO> => ipcRenderer.invoke('bash:output', request),
   stopBashTask: (request: BashTaskRequest): Promise<BashTaskDTO> => ipcRenderer.invoke('bash:stop', request),
@@ -306,6 +310,7 @@ setAlwaysOnTop: (flag: boolean): Promise<boolean> => ipcRenderer.invoke('window:
   setSubagentProfileDefaults: (filePath: string, defaults: SubagentProfileDefaultsPayload): Promise<SubagentProfilesDTO> =>
     ipcRenderer.invoke('subagents:setProfileDefaults', filePath, defaults),
   appInfo: (): Promise<AppInfoDTO> => ipcRenderer.invoke('app:info'),
+  setAutoNameSessions: (enabled: boolean): Promise<boolean> => ipcRenderer.invoke('app:setAutoNameSessions', enabled),
   setContextFiles: (enabled: boolean): Promise<boolean> =>
     ipcRenderer.invoke('app:setContextFiles', enabled),
   pickDirectory: (): Promise<{ cwd: string } | { cancelled: true }> =>
@@ -329,7 +334,7 @@ setAlwaysOnTop: (flag: boolean): Promise<boolean> => ipcRenderer.invoke('window:
     ipcRenderer.invoke('pi:renameSession', path, name),
   deleteFolder: (cwd: string): Promise<SessionSnapshotDTO | null> =>
     ipcRenderer.invoke('pi:deleteFolder', cwd),
-  prompt: (payload: PromptPayload): Promise<{ accepted: boolean }> =>
+  prompt: (payload: PromptPayload): Promise<PromptAdmissionDTO> =>
     ipcRenderer.invoke('pi:prompt', payload),
   /**
    * Side chat (`/btw`): one no-tools question per call, streamed back on
@@ -379,6 +384,10 @@ setAlwaysOnTop: (flag: boolean): Promise<boolean> => ipcRenderer.invoke('window:
   defaultModel: (): Promise<DefaultModelDTO | null> => ipcRenderer.invoke('pi:defaultModel'),
   setDefaultModel: (providerId: string, modelId: string): Promise<void> =>
     ipcRenderer.invoke('pi:setDefaultModel', providerId, modelId),
+  visionModel: (): Promise<VisionModelSelection | null> => ipcRenderer.invoke('pi:visionModel'),
+  sessionNamingModel: (): Promise<SessionNamingModelSelection | null> => ipcRenderer.invoke('pi:sessionNamingModel'),
+  setSessionNamingModel: (value: SessionNamingModelSelection | null): Promise<SessionNamingModelSelection | null> => ipcRenderer.invoke('pi:setSessionNamingModel', value),
+  setVisionModel: (value: VisionModelSelection | null): Promise<VisionModelSelection | null> => ipcRenderer.invoke('pi:setVisionModel', value),
   catalogPreset: (providerId: string, modelId: string): Promise<CatalogRecommendationDTO> =>
     ipcRenderer.invoke('pi:catalogPreset', providerId, modelId),
   configuredModels: (): Promise<ModelConfigSourceDTO[]> =>
@@ -422,6 +431,7 @@ setAlwaysOnTop: (flag: boolean): Promise<boolean> => ipcRenderer.invoke('window:
   readFile: (path: string): Promise<FilePreviewDTO> => ipcRenderer.invoke('files:read', path),
   listFileDirectory: (request: FileBrowserRequest, offset?: number): Promise<FileDirectoryDTO> => ipcRenderer.invoke('files:directory', request, offset),
   readFileDocument: (request: FileBrowserRequest): Promise<FileDocumentDTO> => ipcRenderer.invoke('files:document', request),
+  fileDefaultApp: (request: FileBrowserRequest): Promise<FileDefaultAppDTO | null> => ipcRenderer.invoke('files:defaultApp', request),
   htmlPreview: (request: FileBrowserRequest): Promise<HtmlPreviewDTO> => ipcRenderer.invoke('files:htmlPreview', request),
   onHtmlPreviewLink: (listener: (link: HtmlPreviewLinkDTO) => void) => subscribe('files:htmlLink', listener),
   onHtmlPreviewFind: (listener: (webContentsId: number) => void) => subscribe('files:htmlFind', listener),
@@ -470,8 +480,8 @@ setAlwaysOnTop: (flag: boolean): Promise<boolean> => ipcRenderer.invoke('window:
   browserEnsureService: (): Promise<void> => ipcRenderer.invoke('browser:ensureService'),
   /** Grants the one-time consent, then resolves with the fresh status. */
   browserConsent: (): Promise<BrowserStatusDTO> => ipcRenderer.invoke('browser:consent'),
-  browserCreatePage: (url?: string): Promise<BrowserPageMeta> =>
-    ipcRenderer.invoke('browser:createPage', url),
+  browserCreatePage: (url?: string, sessionId?: string): Promise<BrowserPageMeta> =>
+    ipcRenderer.invoke('browser:createPage', url, sessionId),
   browserClosePage: (id: string): Promise<void> => ipcRenderer.invoke('browser:closePage', id),
   /** Toolbar reload, driven by the service (`goto(currentUrl)` — the CDP
    *  Page.reload command kills the guest). Resolves false only for a row the

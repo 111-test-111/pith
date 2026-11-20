@@ -352,8 +352,8 @@ function DebugDetails({ session, debug, cwd, split }: { session: DebugSessionDTO
 
       {stopped && !core && (session.capabilities?.supportsSteppingGranularity || granularity !== 'statement') ? <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border/60 px-3 py-1.5">
         <span className="text-xs text-muted-foreground">{t('debug.steppingMode')}</span>
-        <Select value={granularity} onValueChange={value => debug.setStepping(debugId, value as DebugSteppingGranularity)}>
-          <SelectTrigger aria-label={t('debug.steppingMode')} className="h-7 w-36 text-xs"><SelectValue /></SelectTrigger>
+        <Select value={granularity} onValueChange={value => debug.setStepping(debugId, value as DebugSteppingGranularity)} textClassName="text-xs">
+          <SelectTrigger aria-label={t('debug.steppingMode')} className="h-7 w-36"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="statement">{t('debug.stepStatement')}</SelectItem>
             <SelectItem value="line" disabled={!session.capabilities?.supportsSteppingGranularity}>{t('debug.stepLine')}</SelectItem>

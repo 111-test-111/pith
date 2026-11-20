@@ -29,7 +29,6 @@ export interface SessionSidebarPreferences {
   collapsed: string[]
   projectOrder: string[]
   sectionOrder: string[]
-  showDetails: boolean
 }
 
 const strings = (input: unknown): string[] => Array.isArray(input)
@@ -63,8 +62,7 @@ export function parseSidebarPreferences(raw: string | null): SessionSidebarPrefe
     sort: ['manual', 'updated', 'created'].includes(value.sort ?? '') ? value.sort! : order.length ? 'manual' : 'updated',
     filter: ['all', 'running', 'unread'].includes(value.filter ?? '') ? value.filter! : 'all',
     collapsed: strings(value.collapsed), projectOrder: strings(value.projectOrder),
-    sectionOrder: [...strings(value.sectionOrder).filter((id) => id === PROJECTS_GROUP || id === CHATS_GROUP), PROJECTS_GROUP, CHATS_GROUP].filter((id, index, all) => all.indexOf(id) === index),
-    showDetails: typeof value.showDetails === 'boolean' ? value.showDetails : true
+    sectionOrder: [...strings(value.sectionOrder).filter((id) => id === PROJECTS_GROUP || id === CHATS_GROUP), PROJECTS_GROUP, CHATS_GROUP].filter((id, index, all) => all.indexOf(id) === index)
   }
 }
 
@@ -182,16 +180,14 @@ function dateBucket(timestamp: string, now: Date): SidebarGroupKind {
   return 'older'
 }
 
-export function buildSidebarGroups(sessions: SessionSummaryDTO[], folders: SidebarFolder[], preferences: SessionSidebarPreferences, options: { archived?: boolean; query?: string; runningPaths?: ReadonlySet<string>; now?: Date } = {}): SidebarListGroup[] {
+export function buildSidebarGroups(sessions: SessionSummaryDTO[], folders: SidebarFolder[], preferences: SessionSidebarPreferences, options: { archived?: boolean; runningPaths?: ReadonlySet<string>; now?: Date } = {}): SidebarListGroup[] {
   const archived = new Set(preferences.archived), pinned = new Set(preferences.pinned), unread = new Set(preferences.unread)
-  const normalize = (text: string) => text.normalize('NFKC').toLocaleLowerCase()
-  const query = normalize(options.query?.trim() ?? '')
-  const filtering = !!query || preferences.filter !== 'all'
+  const filtering = preferences.filter !== 'all'
   const visible = sessions.filter((session) => {
     if (archived.has(session.path) !== !!options.archived) return false
     if (preferences.filter === 'running' && !(session.running || options.runningPaths?.has(session.path))) return false
     if (preferences.filter === 'unread' && !unread.has(session.path)) return false
-    return !query || normalize(`${session.label ?? ''} ${session.projectless ? '' : session.cwd}`).includes(query)
+    return true
   })
   const pinnedSessions = options.archived ? [] : orderSessions(visible.filter((session) => pinned.has(session.path)), preferences.pinned)
   const rest = options.archived ? visible : visible.filter((session) => !pinned.has(session.path))

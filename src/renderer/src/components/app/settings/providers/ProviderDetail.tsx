@@ -574,11 +574,11 @@ export function ProviderDetail({
               classNames={PROVIDER_INPUT_CLASS_NAMES}
               placeholder={t('settings.searchProviderModels')} aria-label={t('settings.searchProviderModels')} />
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <Tabs value={filter} onValueChange={setFilter} variant="segment">
+              <Tabs value={filter} onValueChange={setFilter} variant="underline">
                 <TabsList>
-                  <TabsTrigger value="all" className="gap-1.5 px-2.5 py-1.5 text-xs">{t('settings.providerAllModels')}<span className="tabular-nums">{rows.length}</span></TabsTrigger>
-                  <TabsTrigger value="enabled" className="gap-1.5 px-2.5 py-1.5 text-xs">{t('settings.providerEnabledModels')}<span className="tabular-nums">{visibleModelIds.length}</span></TabsTrigger>
-                  <TabsTrigger value="disabled" className="gap-1.5 px-2.5 py-1.5 text-xs">{t('settings.providerDisabledModels')}<span className="tabular-nums">{hiddenModelIds.length}</span></TabsTrigger>
+                  <TabsTrigger value="all" className="min-h-0 gap-1.5 px-2.5 py-1.5 text-xs">{t('settings.providerAllModels')}<span className="tabular-nums">{rows.length}</span></TabsTrigger>
+                  <TabsTrigger value="enabled" className="min-h-0 gap-1.5 px-2.5 py-1.5 text-xs">{t('settings.providerEnabledModels')}<span className="tabular-nums">{visibleModelIds.length}</span></TabsTrigger>
+                  <TabsTrigger value="disabled" className="min-h-0 gap-1.5 px-2.5 py-1.5 text-xs">{t('settings.providerDisabledModels')}<span className="tabular-nums">{hiddenModelIds.length}</span></TabsTrigger>
                 </TabsList>
               </Tabs>
               <div className="flex items-center gap-1">
@@ -592,7 +592,7 @@ export function ProviderDetail({
             </div>
           </div>
           {inventoryError ? (
-            <div className="p-4"><ProviderNotice tone="error"><div className="flex items-center justify-between gap-2"><span>{inventoryError}</span><Button variant="ghost" size="sm" onClick={() => void loadInventory()}>{t('settings.providerRetry')}</Button></div></ProviderNotice></div>
+            <div className="p-4"><ProviderNotice tone="error" action={<Button variant="ghost" size="sm" onClick={() => void loadInventory()}>{t('settings.providerRetry')}</Button>}>{inventoryError}</ProviderNotice></div>
           ) : null}
           <FadeScroll className="max-h-[26rem] px-4 py-1">
             <div className="divide-y divide-border/60">

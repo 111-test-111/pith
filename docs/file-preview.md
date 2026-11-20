@@ -1,6 +1,12 @@
 # File previews
 
-`src/shared/preview.ts` is the routing contract for file panes, links and Library previews. `readsAsText` is the only document-read gate. Binary formats use dedicated typed readers through `window.pi`; Save As copies the complete original file.
+`src/shared/preview.ts` is the routing contract for file panes and links. `readsAsText` is the only document-read gate. Binary formats use dedicated typed readers through `window.pi`; Save As copies the complete original file.
+
+Each file tab carries its own tree-column choice. A conversation link opens preview-first (an HTML file opens on its source, with the rendered view one tab away): the new tab keeps the file tree folded and never expands the target's ancestors, while the pane's tree toggle ("Show file tree") shows it for that tab. Browsing from the Files tab's tree reveals the file by expanding its ancestors and showing the tree column, and a link opened from inside a preview keeps the reading tab's arrangement.
+
+`FilePreviewRetention` keeps the active rail preview and up to three recently used inactive previews across conversations. Each inactive preview is released 90 seconds after leaving it. When the limit is reached, the least recently used preview is released first. Hidden layers keep their last viewport size and become inert. Audio and video pause on leaving and can resume from the same time. Closing a file or removing its conversation releases its preview immediately. Tabs remain available after expiry and reopen from their saved view settings and any lightweight reading position already tracked by the file store.
+
+On macOS the default-open toolbar button uses the associated application's original logo at a slightly larger toolbar size. Launch Services identifies the application for the complete file URL; a bounded main-process AppKit reader loads its declared bundle icon directly, avoiding the extra system tile that display-icon APIs can compose around the original artwork. It supports ICNS/PNG and asset-catalog resources without app-specific mappings. Icon reads deduplicate in a bounded short-lived cache; file associations revalidate on visits, refresh and window focus. Missing associations or unreadable original artwork and other platforms retain the shared open-file glyph; their Electron protocol lookup does not resolve file-type applications.
 
 PDF initialization, zoom and internal destinations must scroll only the PDF viewport. When a short document fits completely, pdf.js otherwise walks through non-overflowing ancestors and can scroll the clipped workspace, moving the rail tab strip and toolbars offscreen. The app override in `components/app/pdf-viewer.css` retains a minimal local scroll range so that traversal stops at the PDF viewport. `pdf-preview` exercises this with the real rail, an overflowing workspace sibling, docked/fullscreen layouts and Markdown tab switches.
 
@@ -28,16 +34,20 @@ Text previews detect UTF-8, UTF-16 LE/BE, GBK/GB18030 and Big5 automatically. De
 
 ## Git differences
 
+The Files tree shows changes within the active Git workspace. It marks changed files and their parent folders, and can show line counts from both the index and working-tree comparisons. Deleted paths stay in the tree and open their diff. The toolbar toggle is saved with the rail layout. Opening the tree, refreshing files, window focus and completed agent turns refresh the indicators.
+
 `FileBrowserCache` retains bounded diff snapshots across pane mounts and deduplicates active reads. Entering Diff validates HEAD and the working tree in the background while keeping the last snapshot visible; refresh, window focus and completed agent turns do the same. Unchanged reads retain snapshot identity. Refresh revokes older requests, and closing a tab or clearing the store drops its cached diffs so late responses cannot restore them.
 
 The file diff scrollport publishes its attached root as the review body's layout key. This recalculates virtual rows before paint after restoring a saved scroll position, so a distant diff does not briefly show an empty viewport.
+
+A single layout button switches between stacked and side-by-side text diffs. In Review the toolbar button applies to the entire file list, including collapsed files. Tool rows show the layout and wrapping controls when expanded. The side-by-side layout aligns each change run, repeats its context on both sides and leaves a blank opposite unmatched lines. Both sides share vertical positioning and each has its own horizontal scroll range when wrapping is off. Line wrapping starts enabled in both layouts. The Files pane saves its diff wrap choice separately from source wrapping. Long patches keep a bounded window of visible rows and wrapped continuations. Review, checkpoints and restore history, Git, file previews and transcript tool results share these rows and follow the detailed or simplified display preference. Markdown `diff` fences also offer the comparison while keeping the original patch available to copy.
 
 ## Verification
 
 After `npm run typecheck && npm run build`, run:
 
 ```bash
-npm test -- --no-prepare --suite file-preview-data,file-preview-ui,file-browser-cache,file-browser,preview-routing,table-preview --strict-skips
+npm test -- --no-prepare --suite file-preview-data,file-preview-ui,file-browser-cache,file-browser,preview-routing,table-preview,pdf-preview,media-preview,html-preview --strict-skips
 ```
 
 The data suite creates real archives, Parquet row groups and SQLite/WAL databases; it checks legacy ZIP names, Unicode metadata/CRC, limits, corruption, parser failures, cancellation, encoding recovery and original-byte fidelity. The UI suite uses the production preload and main worker with real Chromium interactions. It samples painted hover-exit frames for archive/sidebar rows and ordinary/context menu actions, including transfers between rows, and checks stable geometry and cleared fills. It also covers archive tree/keyboard/search behavior, fixed toolbar geometry, 4,800-entry windowing, grid paging, localization and resize/revisit behavior. `PI_FILE_PREVIEW_SCREENSHOT_DIR` retains its screenshot gallery outside the repository.

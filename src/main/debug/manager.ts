@@ -66,7 +66,7 @@ export interface DebugStartOptions {
   extraArguments?: Record<string, unknown>
   /** Answers the adapter's runInTerminal reverse request with a sidebar
    * terminal tab. Absent handler means the capability is not advertised. */
-  runInTerminal?: (input: { title: string; cwd: string; args: string[]; env?: Record<string, string | null>; signal?: AbortSignal }) => Promise<{ shellProcessId: number; terminalId: string; dispose?: () => Promise<void> }>
+  runInTerminal?: (input: { sessionPath: string; title: string; cwd: string; args: string[]; env?: Record<string, string | null>; signal?: AbortSignal }) => Promise<{ shellProcessId: number; terminalId: string; dispose?: () => Promise<void> }>
 }
 
 interface StoppedWaiter {
@@ -289,7 +289,10 @@ export class DebugManager {
       if (!argv.length) throw new Error('runInTerminal without args')
       const env = args?.env && typeof args.env === 'object'
         ? Object.fromEntries(Object.entries(args.env).map(([key, value]) => [key, value === null ? null : String(value)])) : undefined
-      const answer = await options.runInTerminal({ title: asString(args?.title) ?? spec.label, cwd: asString(args?.cwd) ?? options.cwd, args: argv, env, signal: session.controller.signal })
+      const answer = await options.runInTerminal({
+        sessionPath: options.sessionPath, title: asString(args?.title) ?? spec.label,
+        cwd: asString(args?.cwd) ?? options.cwd, args: argv, env, signal: session.controller.signal
+      })
       if (session.finishing) await answer.dispose?.()
       else if (answer.dispose) session.terminals.add(answer.dispose)
       this.admitted(session)

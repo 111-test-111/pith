@@ -5,11 +5,23 @@ import { FileBrowserCache } from './file-browser-cache'
 import type { TextEncoding } from '../../../shared/file-preview'
 
 export type FileView = 'source' | 'preview' | 'diff'
+export interface FileOpenOptions {
+  /** Whether opening this file may expand the file tree: the target tab shows
+   * its tree column and the opened file's ancestors enter `expanded`. Browsing
+   * surfaces (a tree row) pass true; conversation links and
+   * document navigation from a folded preview pass false, so a fresh tab opens
+   * preview-first. A tab the user expanded by hand keeps it either way.
+   * Defaults to true. */
+  expandTree?: boolean
+  /** Git-only row for a file that has been removed from disk. */
+  gitDeletion?: boolean
+}
 export interface FileTab extends FileTarget {
   cwd: string
   view: FileView
   visit: number
   treeOpen: boolean
+  gitDeletion?: true
   encoding?: TextEncoding
   previewState?: {
     dataTable?: string; dataView?: 'rows' | 'schema'
@@ -17,24 +29,26 @@ export interface FileTab extends FileTarget {
     archiveEntry?: { id: string; name: string }
   }
 }
-interface FileBrowserState {
+export interface FileBrowserState {
   tabs: FileTab[]
   active: string | null
   treeOpen: boolean
   expanded: string[]
   treeWidth?: number
+  showGitChanges?: boolean
   wrapLines: boolean
+  diffWrapLines?: boolean
 }
 /** Markdown, tables, patch files, notebooks and subtitles open on their
  * rendered view; everything else on source. The routing table decides, so a new
  * previewable type is one branch in `shared/preview.ts`. */
 export const defaultViewFor = (path: string): FileView => opensOnPreview(path) ? 'preview' : 'source'
 
-/** Tree, view and scroll choices survive pane unmounts and rail collapse.
- * The separate bounded cache keeps visits fast without retaining hidden DOM. */
+/** Conversation-owned tree, view and scroll choices survive preview unmounts.
+ * The separate bounded cache keeps disk reads off the first frame of revisits. */
 export class FileBrowserStore {
   readonly cache = new FileBrowserCache()
-  private state: FileBrowserState = { tabs: [], active: null, treeOpen: true, expanded: [], wrapLines: false }
+  private state: FileBrowserState
   private listeners = new Set<() => void>()
   private openListeners = new Set<(path: string) => void>()
   subscribeOpen = (listener: (path: string) => void) => { this.openListeners.add(listener); return () => { this.openListeners.delete(listener) } }
@@ -43,40 +57,50 @@ export class FileBrowserStore {
   private navigationVersion = 0
   private scroll = new Map<string, { top: number; left: number }>()
   private positioned = new Map<string, number>()
+  constructor(saved?: FileBrowserState) {
+    this.state = saved ?? { tabs: [], active: null, treeOpen: true, expanded: [], wrapLines: false }
+  }
   getSnapshot = () => this.state
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener) } }
   private set(patch: Partial<FileBrowserState>) {
     this.state = { ...this.state, ...patch }
     for (const listener of this.listeners) listener()
   }
-  open(cwd: string, target: FileTarget) {
+  open(cwd: string, target: FileTarget, view?: FileView, options?: FileOpenOptions) {
     const version = ++this.navigationVersion
     const path = normalizeSlashes(target.path)
     if (isHomePath(path)) {
       // Resolve only at navigation time. Tabs/cache/media URLs always receive
       // absolute paths, while ordinary navigation stays synchronous.
       return window.pi.resolveFilePath({ cwd, path }).then(absolute => {
-        if (version === this.navigationVersion) this.openResolved(cwd, { ...target, path: absolute })
+        if (version === this.navigationVersion) this.openResolved(cwd, { ...target, path: absolute }, view, options)
       }).catch(() => {
         if (version === this.navigationVersion) for (const listener of this.openErrorListeners) listener()
       })
     }
-    this.openResolved(cwd, target)
+    this.openResolved(cwd, target, view, options)
   }
-  private openResolved(cwd: string, target: FileTarget) {
+  private openResolved(cwd: string, target: FileTarget, view?: FileView, options?: FileOpenOptions) {
     cwd = cwd.replaceAll('\\', '/')
     const previous = this.state.tabs.find(tab => tab.path === target.path)
-    const tab: FileTab = { ...target, cwd: previous?.cwd ?? cwd, view: target.line ? 'source' : previous?.view ?? defaultViewFor(target.path), visit: (previous?.visit ?? 0) + 1, treeOpen: previous?.treeOpen ?? true, encoding: previous?.encoding, previewState: previous?.previewState }
-    const expanded = new Set(this.state.expanded)
-    let parent = fileDirname(target.path)
-    while (true) {
-      expanded.add(parent)
-      if (parent === cwd || parent === '/' || /^[a-z]:$/i.test(parent)) break
-      const next = fileDirname(parent)
-      if (next === parent) break
-      parent = next
+    // A conversation link opens the preview on its own: a fresh tab keeps the
+    // tree column folded, and only a manual toggle or a browsing open shows it.
+    const expandTree = options?.expandTree ?? true
+    const tab: FileTab = { ...target, cwd: previous?.cwd ?? cwd, view: target.line ? 'source' : view ?? previous?.view ?? defaultViewFor(target.path), visit: (previous?.visit ?? 0) + 1, treeOpen: expandTree || (previous?.treeOpen ?? false), gitDeletion: options?.gitDeletion ? true : undefined, encoding: previous?.encoding, previewState: previous?.previewState }
+    let expanded = this.state.expanded
+    if (expandTree) {
+      const ancestors = new Set(expanded)
+      let parent = fileDirname(target.path)
+      while (true) {
+        ancestors.add(parent)
+        if (parent === cwd || parent === '/' || /^[a-z]:$/i.test(parent)) break
+        const next = fileDirname(parent)
+        if (next === parent) break
+        parent = next
+      }
+      expanded = [...ancestors]
     }
-    this.set({ tabs: previous ? this.state.tabs.map(item => item === previous ? tab : item) : [...this.state.tabs, tab], active: tab.path, expanded: [...expanded] })
+    this.set({ tabs: previous ? this.state.tabs.map(item => item === previous ? tab : item) : [...this.state.tabs, tab], active: tab.path, expanded })
     for (const listener of this.openListeners) listener(tab.path)
   }
   select(path: string) { this.navigationVersion++; this.set({ active: path }) }
@@ -104,7 +128,9 @@ export class FileBrowserStore {
   }
   setExpanded(expanded: string[]) { this.set({ expanded }) }
   setTreeWidth(treeWidth: number) { this.set({ treeWidth }) }
+  toggleGitChanges() { this.set({ showGitChanges: this.state.showGitChanges === false }) }
   setWrapLines(wrapLines: boolean) { this.set({ wrapLines }) }
+  setDiffWrapLines(diffWrapLines: boolean) { this.set({ diffWrapLines }) }
   getScroll(path: string, view: FileView) { return this.scroll.get(`${path}\0${view}`) }
   saveScroll(path: string, view: FileView, top: number, left: number) {
     // Archive sources have a virtual identity owned by their outer file tab.

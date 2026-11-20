@@ -6,6 +6,7 @@ import { GitWorkbench } from './service'
 export function registerGitIpc(pi: PiManager): GitWorkbench {
   const git = new GitWorkbench({ coordinator: pi.checkoutCoordinator, workspace: () => pi.gitWorkspace(), trash: path => shell.trashItem(path) })
   ipcMain.handle('git:status', (_event, request: GitWorkspaceRequest) => git.status(request))
+  ipcMain.handle('git:treeStatus', (_event, request: GitWorkspaceRequest) => git.treeStatus(request))
   ipcMain.handle('git:diff', (_event, request: GitDiffRequest) => git.diff(request))
   ipcMain.handle('git:branches', (_event, request: GitWorkspaceRequest) => git.branches(request))
   ipcMain.handle('git:history', (_event, request: GitHistoryRequest) => git.history(request))

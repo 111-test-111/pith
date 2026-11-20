@@ -66,10 +66,10 @@ export function CopyConfigDialog({
       {loading ? (
         <div className="flex items-center justify-center gap-2 py-10 text-xs text-muted-foreground"><Loader2 className="size-4 animate-spin" />{t('settings.loadingModels')}</div>
       ) : error ? (
-        <div className="mt-3"><ProviderNotice tone="error">
-          <div className="flex items-center justify-between gap-2">
-            <span>{t('settings.copyLoadFailed')} · {error}</span><Button variant="ghost" size="sm" onClick={() => setRetry(value => value + 1)}>{t('settings.providerRetry')}</Button>
-          </div>
+        <div className="mt-3"><ProviderNotice tone="error" action={
+          <Button variant="ghost" size="sm" onClick={() => setRetry(value => value + 1)}>{t('settings.providerRetry')}</Button>
+        }>
+          {t('settings.copyLoadFailed')} · {error}
         </ProviderNotice></div>
       ) : shown.length === 0 ? (
         <p className="py-10 text-center text-xs text-muted-foreground">{t('settings.copyNoMatches')}</p>

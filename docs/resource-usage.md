@@ -41,9 +41,9 @@ native coverage suppresses totals and retains the measured process details.
 
 ## Disk data
 
-An explicit scan visits the complete user-data and Pi-data trees, the configured
-library archive, Chromium's session-data directory, and app log/crash-report
-directories. All roots come from main-owned settings/runtime paths. Pi's data
+An explicit scan visits the complete user-data and Pi-data trees, Chromium's
+session-data directory, and app log/crash-report directories. All roots come
+from main-owned settings/runtime paths. Pi's data
 is shared with its CLI and is labelled accordingly. Installation files, project
 source files and exports/downloads outside these roots are outside the view.
 The default internal workspace remains part of app data, never a project path.

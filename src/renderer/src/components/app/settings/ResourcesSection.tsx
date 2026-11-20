@@ -11,12 +11,12 @@ import { SettingsGroup, SettingsRow } from './SettingsRow'
 
 const CATEGORY_KEYS: Record<ResourceStorageCategory, MessageKey> = {
   sessions: 'resources.storage.sessions', rewind: 'resources.storage.rewind', trajectory: 'resources.storage.trajectory',
-  library: 'resources.storage.library', browser: 'resources.storage.browser', cache: 'resources.storage.cache',
+  browser: 'resources.storage.browser', cache: 'resources.storage.cache',
   indexes: 'resources.storage.indexes', logs: 'resources.storage.logs', workspace: 'resources.storage.workspace',
   extensions: 'resources.storage.extensions', configuration: 'resources.storage.configuration', other: 'resources.storage.other'
 }
 const ROOT_KEYS: Record<ResourceStorageRootKind, MessageKey> = {
-  app: 'resources.root.app', pi: 'resources.root.pi', library: 'resources.root.library', browser: 'resources.root.browser',
+  app: 'resources.root.app', pi: 'resources.root.pi', browser: 'resources.root.browser',
   logs: 'resources.root.logs', crashes: 'resources.root.crashes'
 }
 const PROCESS_KEYS: Record<ResourceProcessDTO['kind'], MessageKey> = {

@@ -1,12 +1,12 @@
 /** Real SVG adapter/interaction checks in isolated Electron. No SDK or user data.
  * PI_ICONS_SCREENSHOT_DIR retains the light/dark icon and control galleries.
  *
- * Icons use Remix in square interfaces and Hugeicons Stroke Rounded in squircle
- * interfaces; a few app-owned drawings (lib/app-artwork.tsx) cover meanings
+ * Icons use Remix in square interfaces and Hugeicons Stroke Rounded in rounded
+ * and squircle interfaces; a few app-owned drawings (lib/app-artwork.tsx) cover meanings
  * Remix lacks, while file types switch from square Pierre adaptations to native Pierre and vendored
  * Lucide shortcut keycaps stay independent of style. All glyphs use the shared
  * adapter, with no Lucide dependency. Phosphor stays declared for rollback and
- * imported by nothing. */
+ * imported by nothing — its pin paths are vendored into lib/app-artwork.tsx. */
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { cp, mkdir, mkdtemp, readFile, readdir, writeFile, rm } from 'node:fs/promises'
@@ -35,11 +35,25 @@ const providers = [...providerMap.matchAll(/^  (?:'([^']+)'|([\w]+)): /gm)].map(
 const glyphTable = source.match(/const GLYPHS = \{([\s\S]+?)\n\}/)[1]
 const glyphs = [...glyphTable.matchAll(/^  (\w+): \{ rounded: ([\w.]+), square: (\w+) \},?$/gm)].map(([, name, glyph, square]) => ({ name, glyph, square }))
 const keycapNames = ['Command', 'Option', 'Control', 'Shift', 'Backspace', 'KeyArrowLeft', 'KeyArrowRight', 'KeyArrowUp', 'KeyArrowDown']
-// App-owned filled artwork for meanings the Remix pack does not draw (the Diff
-// plus/minus mark, lib/app-artwork.tsx). The rendered gallery below still
+// App-owned filled artwork for meanings the Remix pack does not draw
+// (lib/app-artwork.tsx). The rendered gallery below still
 // validates its grid, fill and geometry; every other square glyph must be a
 // real Remix export.
-const appSquareArtwork = new Set(['DiffArtwork'])
+const appSquareArtwork = new Set(['DiffArtwork', 'DiffSideBySideSquareArtwork', 'DiffStackedSquareArtwork', 'SquareDotArtwork', 'SubagentSquareArtwork'])
+// Original 24-grid stroke artwork uses the ordinary Stroke Rounded renderer
+// and receives the same rendered geometry, colour and weight checks below.
+const appStrokeArtwork = new Set(['SubagentRoundedArtwork'])
+// App-owned squircle artwork for meanings the Stroke Rounded pack does not
+// draw: the vendored Phosphor pins (lib/app-artwork.tsx). They keep that
+// family's native 256 canvas as filled drawings instead of being rescaled onto
+// the 24 grid, so their canvas and fill are asserted in the gallery below.
+const appRoundedArtwork = new Set(['PinArtwork', 'PinOffArtwork'])
+const appDiffArtwork = new Set(['DiffSideBySideRoundedArtwork', 'DiffStackedRoundedArtwork'])
+const appArtworkSource = await readFile(join(repo, 'src/renderer/src/lib/app-artwork.tsx'), 'utf8')
+for (const name of appRoundedArtwork) {
+  assert.match(appArtworkSource, new RegExp('export function ' + name + '\\('), name + ': app-owned squircle artwork is exported')
+}
+assert.equal((appArtworkSource.match(/viewBox="0 0 256 256"/g) ?? []).length, 2, 'both vendored pins keep their upstream canvas')
 assert.equal(glyphs.length, expectedNames.length, 'every semantic export has an artwork binding')
 assert.deepEqual(glyphs.map(glyph => glyph.name).sort(), expectedNames, 'the mapping table and the exports agree')
 assert.ok(new Set(glyphs.map(glyph => glyph.glyph)).size > 150, 'the vocabulary draws from the whole family')
@@ -50,6 +64,7 @@ for (const glyph of glyphs) {
     continue
   }
   assert.ok(appSquareArtwork.has(glyph.square) || typeof remix[glyph.square] === 'function', glyph.name + ': a Remix export (or app artwork) covers the square interface')
+  if (appRoundedArtwork.has(glyph.glyph) || appStrokeArtwork.has(glyph.glyph) || appDiffArtwork.has(glyph.glyph)) continue
   const artwork = hugeicons[glyph.glyph]
   assert.ok(Array.isArray(artwork) && artwork.length, glyph.name + ': ' + glyph.glyph + ' is a Hugeicons export')
   for (const [, attributes] of artwork) {
@@ -165,19 +180,25 @@ import {PresentedFiles} from '/src/components/app/PresentedFiles.tsx';
 import {PithIcon} from '/src/components/app/PithIcon.tsx';
 import {ShortcutKeys} from '/src/components/app/ShortcutKeys.tsx';
 import {UI_ICON_SIZE,FILE_ICON_SIZE} from '/src/lib/icon-metrics.ts';
-import {setUiStyle,useUiStyle} from '/src/lib/ui-style.ts';
-import {I18nProvider} from '/src/i18n/index.tsx';
+import {applyUiStyle,setUiStyle,useUiStyle} from '/src/lib/ui-style.ts';
+import {I18nProvider,useI18n} from '/src/i18n/index.tsx';
+import {ThemeProvider} from 'next-themes';
+import {AppearanceSection} from '/src/components/app/settings/AppearanceSection.tsx';
 import '/src/styles.css';
 const h=React.createElement;const providers=${JSON.stringify(providers)};const fileSamples=${JSON.stringify(fileSamples)};const additionSamples=${JSON.stringify(additionSamples)};
 window.fileIconName=fileIconName;
 window.setUiStyle=setUiStyle;
 function Fixture(){
  const [uiStyle]=useUiStyle();
- const [checked,setChecked]=React.useState(false),[mixed,setMixed]=React.useState(false);
- const ref=React.useRef(null);window.controls={setChecked,setMixed};
+ const {setLocale}=useI18n();window.setLocale=setLocale;
+ // Mirror App's boot layout effect: cold reads must initialize from storage,
+ // not call the setter (which would mask a broken stored-value validator).
+ React.useLayoutEffect(()=>{applyUiStyle(uiStyle);window.observedStyle=uiStyle},[uiStyle]);
+ const [checked,setChecked]=React.useState(false),[mixed,setMixed]=React.useState(false),[appearance,setAppearance]=React.useState(false);
+ const ref=React.useRef(null);window.controls={setChecked,setMixed,setAppearance};
  React.useEffect(()=>{window.iconRef=ref;window.fixtureReady=true},[]);
  return h('main',null,
- h('h2',null,(uiStyle==='square'?'Remix · square':'Hugeicons Stroke Rounded · squircle')+' · 16 / 18 / 20 px'),
+ h('h2',null,(uiStyle==='square'?'Remix':'Hugeicons Stroke Rounded')+' · '+uiStyle+' · 16 / 18 / 20 px'),
  h('div',{id:'gallery'},Object.entries(icons).map(([name,Icon])=>h('div',{key:name,className:'cell'},
    h('div',{className:'samples'},...Object.values(UI_ICON_SIZE).map(size=>h(Icon,{key:size,size,'data-sample':name,'data-size':size}))),h('span',{className:'label'},name)))),
  h('div',{className:'row'},h('div',{id:'checkbox'},h(Checkbox,{checked,indeterminate:mixed,onCheckedChange:setChecked,label:'Checkbox'})),
@@ -206,9 +227,10 @@ function Fixture(){
    h(ShortcutKeys,{binding:'Control+Alt+Mod+Shift+KeyW',mac:true}),
    h(ShortcutKeys,{binding:'Mod+ArrowLeft',mac:true}),
    h(ShortcutKeys,{binding:'Mod+Alt+Shift+KeyM',mac:false})),
- h('h2',null,'Provider brands · bundled SVG'),h('div',{id:'brands'},...providers.map(providerId=>h(ProviderIcon,{key:providerId,providerId,size:22}))));
+ h('h2',null,'Provider brands · bundled SVG'),h('div',{id:'brands'},...providers.map(providerId=>h(ProviderIcon,{key:providerId,providerId,size:22}))),
+ appearance?h('section',{id:'appearance'},h(AppearanceSection,{accent:'',onAccentChange:()=>{},uiStyle,onUiStyleChange:setUiStyle})):null);
 }
-createRoot(document.getElementById('root')).render(h(I18nProvider,null,h(Fixture)));
+createRoot(document.getElementById('root')).render(h(ThemeProvider,{attribute:'class',defaultTheme:'light',enableSystem:false},h(I18nProvider,null,h(Fixture))));
 </script></body></html>`
 
 let server, child, ws
@@ -241,6 +263,21 @@ try {
   const send=(method,params={})=>new Promise((resolve,reject)=>{const id=++sequence;pending.set(id,m=>m.error?reject(m.error):resolve(m.result));ws.send(JSON.stringify({id,method,params}))})
   const evaluate=async expression=>{const r=await send('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true});if(r.exceptionDetails)throw new Error(JSON.stringify(r.exceptionDetails));return r.result.value}
   await send('Runtime.enable')
+  await send('Page.enable')
+  const navigate = async (method, params) => {
+    let onMessage
+    const loaded = new Promise(resolve => {
+      onMessage = event => { if (JSON.parse(event.data).method === 'Page.loadEventFired') resolve() }
+    })
+    ws.addEventListener('message', onMessage)
+    try {
+      const result = await send(method, params)
+      if (result.errorText) throw new Error(result.errorText)
+      await loaded
+    } finally {
+      ws.removeEventListener('message', onMessage)
+    }
+  }
   let ready=false
   for(let i=0;i<240&&!ready;i++){ready=await evaluate('!!window.fixtureReady');if(!ready)await pause(50)}
   assert(ready,'Fixture mounted: '+JSON.stringify(exceptions))
@@ -249,16 +286,23 @@ try {
   // actual child strokes so a default override cannot outline a filled detail.
   const gallery=async()=>evaluate(`Array.from(document.querySelectorAll('#gallery svg[data-size="18"]')).map(svg=>{const box=svg.getBBox();const view=svg.getAttribute('viewBox').split(' ').map(Number);const perUnit=24/view[2];return {name:svg.dataset.sample,family:svg.dataset.iconFamily,width:svg.getBoundingClientRect().width,height:svg.getBoundingClientRect().height,viewBox:svg.getAttribute('viewBox'),hidden:svg.getAttribute('aria-hidden'),fill:svg.getAttribute('fill'),stroke:svg.getAttribute('stroke'),strokes:[...svg.querySelectorAll('[stroke]')].map(node=>({color:node.getAttribute('stroke'),width:node.getAttribute('stroke-width')})),paths:svg.querySelectorAll('path,circle,rect,line,polyline,polygon,ellipse').length,inkLongSide:Math.max(box.width,box.height)*perUnit,box:JSON.stringify([box.x,box.y,box.width,box.height]),html:svg.outerHTML}})`)
   const rendered=await gallery()
+  const appRoundedNames = new Set(glyphs.filter(glyph => appRoundedArtwork.has(glyph.glyph) || appDiffArtwork.has(glyph.glyph)).map(glyph => glyph.name))
+  const pins = new Set(glyphs.filter(glyph => appRoundedArtwork.has(glyph.glyph)).map(glyph => glyph.name))
   const assertGallery = (rendered, style) => {
     assert.deepEqual(rendered.map(icon=>icon.name).sort(),expectedNames,'every export renders in '+style)
     for(const icon of rendered){
       const keyboard = keycapNames.includes(icon.name)
+      const appArtwork = style !== 'square' && appRoundedNames.has(icon.name)
       const filled = style === 'square' && !keyboard
       assert.equal(icon.width,18,icon.name+': width')
       assert.equal(icon.height,18,icon.name+': height')
-      assert.equal(icon.family,keyboard?'lucide-keycap':filled?'remix':'hugeicons',icon.name+': active family')
+      assert.equal(icon.family,keyboard?'lucide-keycap':appArtwork?'app-artwork':filled?'remix':'hugeicons',icon.name+': active family')
       assert.equal(icon.hidden,'true',icon.name+': is decorative by default')
-      if(filled){
+      if(appArtwork && pins.has(icon.name)){
+        assert.equal(icon.viewBox,'0 0 256 256',icon.name+": keeps the vendored Phosphor canvas instead of the 24 grid")
+        assert.equal(icon.fill,'currentColor',icon.name+': filled artwork follows the text colour')
+        assert.equal(icon.stroke,null,icon.name+': filled artwork adds no stroke')
+      }else if(filled){
         assert.equal(icon.viewBox,ICON_VIEW_BOX,icon.name+": preserves Remix's native canvas")
         assert.equal(icon.fill,'currentColor',icon.name+': preserves filled outlines')
         assert.equal(icon.stroke,'none',icon.name+': does not double-outline filled geometry')
@@ -298,11 +342,17 @@ try {
   // Style changes are live presentation changes: keep the focused button,
   // editable value and refs, while all ordinary/animated marks change together.
   await evaluate(`window.savedButton=document.querySelector('#props-button');window.savedInput=document.querySelector('input[aria-label="Success example"]');window.savedFileIcons=Array.from(document.querySelectorAll('#file-types img'));window.savedButton.focus()`)
-  for(const style of ['squircle','square','squircle']){
+  let nonSquareGallery, nonSquareFiles
+  for(const style of ['rounded','squircle','square','rounded','squircle']){
     await evaluate(`window.setUiStyle('${style}')`)
     await pause(100)
     const current=await gallery()
     assertGallery(current,style)
+    if(style!=='square'){
+      nonSquareGallery ??= current
+      assert.deepEqual(current,nonSquareGallery,style+': every glyph, app-owned pin/subagent drawing and keycap has exactly the same SVG/geometry in rounded and squircle')
+    }else assert.deepEqual(current,rendered,'returning to square restores every Remix/app-owned drawing')
+    for(const size of [16,18,20])assert.equal(await evaluate(`Array.from(document.querySelectorAll('#gallery svg[data-size="${size}"]')).every(svg=>svg.getBoundingClientRect().width===${size}&&svg.getBoundingClientRect().height===${size})`),true,style+': '+size+'px gallery retains the actual canvas size')
     assert.equal(await evaluate('document.activeElement===window.savedButton&&window.savedButton===document.querySelector("#props-button")'),true,style+': switching preserves focus and control identity')
     assert.equal(await evaluate(`window.savedInput===document.querySelector('input[aria-label="Success example"]')&&window.savedInput.value==='Input success'`),true,style+': input stays mounted with its value')
     assert.equal(await evaluate('window.iconRef.current===document.querySelector("#props-icon")'),true,style+': SVG ref follows the active artwork')
@@ -314,7 +364,11 @@ try {
     assert(files.every(icon=>icon.width>0&&icon.height>0&&icon.side===(icon.variant==='card'?18:16)),style+': tree/tab/card artwork decodes at the shared sizes')
     assert.deepEqual(await evaluate(`${JSON.stringify(fileSamples.map(([path])=>path))}.map(path=>window.fileIconName(path,'${style}'))`),fileSamples.map(([,icon])=>icon),style+': filenames, extensions, Windows paths and unknown types use the active associations')
     if(style==='square')assert.deepEqual(files.map(icon=>icon.src),fileIcons.map(icon=>icon.src),'returning to square restores the square Pierre artwork')
-    else assert(files.every(icon=>/^\.\/file-icons\/pierre\/[\w-]+\.svg$/.test(icon.src)),'squircle loads the Pierre snapshot')
+    else {
+      assert(files.every(icon=>/^\.\/file-icons\/pierre\/[\w-]+\.svg$/.test(icon.src)),style+': loads the native Pierre snapshot, never the square adaptations')
+      nonSquareFiles ??= files
+      assert.deepEqual(files,nonSquareFiles,style+': rounded and squircle use exactly the same file artwork URLs, sizes and decoded assets')
+    }
     assert.deepEqual(await evaluate(`Array.from(document.querySelectorAll('[data-attachment-card] [data-file-icon],[data-presented-files] [data-file-icon]')).map(image=>[image.dataset.fileIconFamily,image.getBoundingClientRect().width])`),[[style==='square'?'pierre-square':'pierre',18],[style==='square'?'pierre-square':'pierre',18]],style+': real attachment/presented cards follow the same family')
     assert.equal(await evaluate(`(()=>{const svg=document.querySelector('#primary-actions [data-app-icon="Ban"]');const path=svg.querySelector('path');return getComputedStyle(path).fill===getComputedStyle(svg.closest('button')).color||getComputedStyle(path).stroke===getComputedStyle(svg.closest('button')).color})()`),true,style+': stop artwork retains the action colour')
   }
@@ -329,9 +383,9 @@ try {
   assert(keycaps.every(mark=>mark.side>0&&mark.family==='lucide-keycap'&&mark.stroke.every(width=>width==='2')),'shortcut marks render the vendored Lucide artwork at its native stroke')
   assert.equal(await evaluate('document.querySelectorAll("#keycaps kbd").length'),3,'each shortcut key has its own cap')
   assert.equal(await evaluate('document.querySelector("#keycaps [role=group]").getAttribute("aria-label")'),'Shift+Meta+Backspace','the whole chord retains its accessible label')
-  console.log('PASS: all '+expectedNames.length+' UI/keyboard glyphs, 16/18/20px galleries, primary actions, individual keycaps, CSS sizing, refs, accessibility and both corner styles')
+  console.log('PASS: all '+expectedNames.length+' UI/keyboard glyphs, 16/18/20px galleries, primary actions, individual keycaps, CSS sizing, refs, accessibility and all three interface styles')
 
-  for(const style of ['square','squircle']){
+  for(const style of ['square','rounded','squircle']){
     await evaluate(`window.setUiStyle('${style}');window.controls.setChecked(false);window.controls.setMixed(false)`)
     await pause(250)
     await evaluate('document.querySelector("#checkbox button").click()')
@@ -350,7 +404,7 @@ try {
   await evaluate("window.setUiStyle('square')")
   await send('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-motion',value:'reduce'}]})
   await evaluate('window.fixtureReady=false')
-  await send('Page.reload')
+  await navigate('Page.reload')
   ready=false
   for(let i=0;i<240&&!ready;i++){ready=await evaluate('!!window.fixtureReady');if(!ready)await pause(50)}
   assert(ready,'Reduced motion fixture mounted')
@@ -361,7 +415,7 @@ try {
   const loaded=await evaluate(`Promise.all(Array.from(document.querySelectorAll('[data-provider-icon]')).map(async element=>{const source=getComputedStyle(element).maskImage.slice(5,-2);const image=new Image();image.src=source;await image.decode();return {id:element.dataset.providerIcon,width:image.naturalWidth,height:image.naturalHeight}}))`)
   assert.equal(loaded.length,providers.length)
   assert(loaded.every(image=>image.width>0&&image.height>0),'All bundled provider masks decode')
-  for(const style of ['square','squircle']){
+  for(const style of ['square','rounded','squircle']){
     await evaluate(`window.setUiStyle('${style}')`);await pause(200)
     for(const theme of ['light','dark']){
     await evaluate(`document.documentElement.classList.toggle('dark',${theme==='dark'});document.documentElement.style.colorScheme='${theme}'`)
@@ -392,10 +446,56 @@ try {
   assert.deepEqual(exceptions,[],'No renderer exceptions')
   console.log('PASS: '+loaded.length+' provider aliases, SVG asset decoding, light/dark themes')
 
+  // Mount the real Settings composition: copied radio options would miss an
+  // omitted rounded choice or a locale that still calls squircle "Rounded".
+  const waitFor = async expression => {
+    for(let i=0;i<240;i++){
+      if(await evaluate(`Boolean(${expression})`))return
+      await pause(50)
+    }
+    throw new Error('Fixture did not settle: '+expression+'; '+JSON.stringify(exceptions))
+  }
+  const styleIds=['square','rounded','squircle']
+  await evaluate('window.controls.setAppearance(true)')
+  for(const [locale,labels] of Object.entries({en:['Square','Rounded','Squircle'],'zh-CN':['直角','圆角','超椭圆'],'zh-TW':['直角','圓角','超橢圓']})){
+    await evaluate(`window.setLocale(${JSON.stringify(locale)})`)
+    await waitFor(`document.documentElement.lang===${JSON.stringify(locale)} && [...document.querySelectorAll('#appearance [role="radiogroup"]')].some(group=>[...group.querySelectorAll('label')].some(label=>label.textContent.trim()===${JSON.stringify(labels[1])}))`)
+    await evaluate(`window.styleGroup=[...document.querySelectorAll('#appearance [role="radiogroup"]')].find(group=>[...group.querySelectorAll('label')].some(label=>label.textContent.trim()===${JSON.stringify(labels[1])}));void 0`)
+    assert.deepEqual(await evaluate(`Array.from(window.styleGroup.querySelectorAll('label')).map(label=>label.textContent.trim())`),labels,locale+': Settings exposes exactly square / rounded / squircle with distinct localized labels')
+    for(const [index,style] of styleIds.entries()){
+      await evaluate(`window.styleGroup.querySelectorAll('[role="radio"]')[${index}].click()`)
+      await waitFor(`window.observedStyle===${JSON.stringify(style)}`)
+      assert.deepEqual(await evaluate(`Array.from(window.styleGroup.querySelectorAll('[role="radio"]')).map(button=>button.getAttribute('aria-checked'))`),styleIds.map(id=>String(id===style)),locale+'/'+style+': only the chosen Settings style is selected')
+      assert.equal(await evaluate('document.documentElement.dataset.corners'),style,locale+'/'+style+': Settings applies the live preset')
+      assert.equal(await evaluate('localStorage.getItem("pi-app:ui-style")'),style,locale+'/'+style+': Settings persists the selected style')
+      assertGallery(await gallery(),style)
+      const files=await fileGallery()
+      assert.deepEqual(files,style==='square'?fileIcons:nonSquareFiles,locale+'/'+style+': Settings changes the file family as well as glyphs')
+    }
+  }
+  await evaluate(`window.setLocale('en');window.controls.setAppearance(false)`)
+  await pause(100)
+  // A full renderer reload discards the module singleton/store and recreates
+  // React, unlike an unmount/remount. This checks cold renderer initialization;
+  // it deliberately does not claim a full Electron process restart.
+  for(const style of styleIds){
+    await evaluate(`window.setUiStyle(${JSON.stringify(style)});window.fixtureReady=false`)
+    await navigate('Page.reload')
+    await waitFor('window.fixtureReady')
+    assert.equal(await evaluate('window.observedStyle'),style,style+': cold renderer reads the persisted style')
+    assert.equal(await evaluate('document.documentElement.dataset.corners'),style,style+': boot applies the persisted corner preset')
+    assert.equal(await evaluate('getComputedStyle(document.querySelector("#props-button")).cornerShape'),style==='rounded'?'superellipse(1)':'superellipse(2)',style+': cold renderer starts with the right native curve')
+    assertGallery(await gallery(),style)
+    assert.deepEqual(await fileGallery(),style==='square'?fileIcons:nonSquareFiles,style+': cold renderer restores the correct file artwork')
+  }
+  assert.deepEqual(exceptions,[],'Settings and cold renderer initialization have no exceptions')
+  console.log('PASS: localized three-style Settings selection, persistence and cold renderer initialization')
+
   // Load the production assets from a local HTML file just as the packaged
   // renderer does. Every reachable file drawing must decode via relative URLs;
   // licenses must travel with the build, not just exist in the source checkout.
   assert.equal(await readFile(join(repo,'out/renderer/licenses/remix-icons.txt'),'utf8'),await readFile(join(repo,'src/renderer/public/licenses/remix-icons.txt'),'utf8'),'production includes the Remix license')
+  assert.equal(await readFile(join(repo,'out/renderer/licenses/phosphor-icons.txt'),'utf8'),await readFile(join(repo,'src/renderer/public/licenses/phosphor-icons.txt'),'utf8'),'production includes the license for the vendored pin artwork')
   const productionIcons=join(repo,'out/renderer/file-icons')
   for(const notice of ['LICENSE.txt','NOTICE.txt'])assert.equal(await readFile(join(productionIcons,notice),'utf8'),await readFile(join(repo,'resources/bearded-icons',notice),'utf8'),notice+': production retains upstream notice')
   for(const notice of ['LICENSE.txt','NOTICE.txt'])assert.equal(await readFile(join(productionIcons,'pierre',notice),'utf8'),await readFile(join(repo,'resources/pierre-icons',notice),'utf8'),notice+': production retains the Pierre notice')
@@ -413,11 +513,7 @@ try {
   await cp(productionIcons,join(temporary,'file-icons'),{recursive:true})
   const localFixture=join(temporary,'file-icons.html')
   await writeFile(localFixture,'<!doctype html><html><body></body></html>')
-  await send('Page.navigate',{url:pathToFileURL(localFixture).href})
-  for(let i=0;i<100;i++){
-    if(await evaluate(`location.href===${JSON.stringify(pathToFileURL(localFixture).href)}&&document.readyState==='complete'`))break
-    await pause(50)
-  }
+  await navigate('Page.navigate',{url:pathToFileURL(localFixture).href})
   const allArtwork=[...fileArtwork,...pierreArtwork.flatMap(name=>['pierre/'+name,'pierre-square/'+name])]
   const decoded=await evaluate(`Promise.all(${JSON.stringify(allArtwork)}.map(async name=>{const image=new Image();image.src='./file-icons/'+name+'.svg';await image.decode();return image.naturalWidth>0&&image.naturalHeight>0}))`)
   assert.equal(decoded.length,allArtwork.length)

@@ -23,6 +23,8 @@ Revisions include HEAD/status, index contents, Git configuration and dirty-file 
 
 Changes and History use the named sidebar container for their layout. At 48rem and wider, the source list stays left and the selected file diff or commit inspector opens right. The Changes composer occupies the left column while the diff spans its full height. Narrow panes stack list and inspector and keep the composer at the bottom. The inspector combines commit metadata/files with an independently scrollable diff, shares its composition with the graph, and has its own loading/error state. Closing it preserves history pagination/scroll; changing width retains the same list, editor and diff nodes without new reads.
 
+The diff header's Wrap lines button applies to every section of a patch, including rename and mode-only patches. Changes, History and Graph share the conversation's saved Git wrapping preference.
+
 All three Git views use the shared `PanelResizeHandle` for their wide divider, with pointer dragging and Left/Right keys (Shift steps farther). Each workspace remembers a preferred width per view across pane mounts. CSS fits that preference to 16rem list and 20rem detail floors; shrinking the rail does not overwrite the saved preference. Narrow layouts hide the vertical handle. Drag frames write only the content grid's CSS variable; GitStore receives the preference on release, without fetching data or rebuilding the selected diff.
 
 Ahead/behind indicators compare the current branch with its configured upstream's locally fetched tracking ref. Tooltips name that upstream and clarify that the comparison reflects the last fetch. Branches with no upstream display an explicit label instead of misleading zero counts.

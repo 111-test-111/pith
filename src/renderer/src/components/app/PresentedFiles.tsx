@@ -1,6 +1,6 @@
 import { memo, useState, type ReactNode } from 'react'
 import { Button } from '@/components/motion/button'
-import { Download, Eye, SquareArrowOutUpRight } from '@/lib/icons'
+import { Download, ExternalLink, Eye, FolderOpen } from '@/lib/icons'
 import { basename, formatBytes } from '@/lib/format'
 import { useFileNavigation } from '@/lib/file-navigation'
 import { useI18n } from '@/i18n'
@@ -8,6 +8,7 @@ import type { PresentedFile } from '../../../../shared/types'
 import { FileTypeIcon } from './FileTypeIcon'
 import { ImageGenerationResult } from './ImageGenerationResult'
 import { useImageReplays } from '@/lib/image-replays'
+import { useDefaultAppIcon } from '@/lib/hooks/use-default-app-icon'
 import type { ImageReplayRecord } from '../../../../shared/image-replay'
 import { ImagePreviewGroup, type PreviewImage } from './ImagePreview'
 import { generationPreviewImages } from '@/lib/image-preview-images'
@@ -15,6 +16,7 @@ import { generationPreviewImages } from '@/lib/image-preview-images'
 const PresentedFileCard = memo(function PresentedFileCard({ file }: { file: PresentedFile }) {
   const { t } = useI18n()
   const navigation = useFileNavigation()
+  const applicationIcon = useDefaultAppIcon(file.path)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(false)
   const save = async () => {
@@ -36,7 +38,8 @@ const PresentedFileCard = memo(function PresentedFileCard({ file }: { file: Pres
     </div>
     {file.description ? <p className="mt-1 break-words text-sm text-muted-foreground">{file.description}</p> : null}
     <div className="mt-2 flex items-center justify-end gap-1">
-      <Button size="sm" variant="ghost" onClick={() => void open()} aria-label={t('present.open')}><SquareArrowOutUpRight className="size-3.5" />{t('present.open')}</Button>
+      <Button size="sm" variant="ghost" onClick={() => void open()} aria-label={t('present.open')}>{applicationIcon ? <img src={applicationIcon} alt="" aria-hidden draggable={false} className="size-4 object-contain" /> : <ExternalLink className="size-3.5" />}{t('present.open')}</Button>
+      <Button size="sm" variant="ghost" onClick={() => void window.pi.showInFolder(file.path)} aria-label={t('files.showInFolder')}><FolderOpen className="size-3.5" />{t('files.showInFolder')}</Button>
       <Button size="sm" variant="ghost" onClick={() => void save()} disabled={busy} aria-label={t('present.save')}><Download className="size-3.5" />{t('present.save')}</Button>
       <Button size="sm" variant="ghost" onClick={() => navigation.openPath(file.path)} aria-label={t('present.preview', { name: basename(file.path) })}><Eye className="size-3.5" />{t('present.previewAction')}</Button>
     </div>

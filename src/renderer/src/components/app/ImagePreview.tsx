@@ -443,9 +443,11 @@ function ImageZoom({ image, viewportRef, navigation }: { image: PreviewImage; vi
  * attachments, message-bubble images). Markdown images use this too once their
  * workspace path has been resolved to a data URL.
  *
- * The thumbnail itself carries no hover lift: the camera cursor, the focus ring
- * and the preview are the affordance, and a shadow under a picture competed
- * with the elevation family (which is for floating surfaces, not for content).
+ * The thumbnail itself carries no hover wash or lift: the camera cursor, the
+ * focus ring and the preview are the affordance, and a shadow under a picture
+ * competed with the elevation family (which is for floating surfaces, not for
+ * content). Hover must not tint the artwork — a colour veil hides the very
+ * pixels the thumbnail exists to show.
  */
 export function PreviewThumb({
   src,
@@ -485,13 +487,12 @@ export function PreviewThumb({
       aria-label={t('imagePreview.open', { name })}
       title={title}
       className={cn(
-        'group/preview relative inline-block cursor-zoom-in overflow-hidden border align-middle focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+        'relative inline-block cursor-zoom-in overflow-hidden border align-middle focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
         framed ? 'border-border' : 'border-transparent',
         className
       )}
     >
       <img src={src} alt={alt ?? ''} onError={onError} className={cn('block', imageClassName)} />
-      <span aria-hidden="true" className="pointer-events-none absolute inset-0 rounded-inherit bg-transparent transition-colors group-hover/preview:bg-primary/10" />
     </button>
   )
 }

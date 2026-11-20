@@ -1,6 +1,6 @@
 import { useCallback, useLayoutEffect, useRef, useState, type RefObject } from 'react'
 
-/** Preview rows never wrap; bound DOM work by the scrollport, not the file size. */
+/** Window fixed-height display rows, including pre-segmented wrapped lines. */
 export const DIFF_ROW_HEIGHT = 20
 const OVERSCAN = 8
 

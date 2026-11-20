@@ -1,6 +1,6 @@
 /** Bounded header inspection for layout metadata, never an image transform.
  * Unrecognized/truncated formats keep the gallery's fixed fallback frame. */
-export function libraryImageDimensions(bytes: Buffer, extension = ''): { imageWidth: number; imageHeight: number } | undefined {
+export function imageDimensions(bytes: Buffer, extension = ''): { imageWidth: number; imageHeight: number } | undefined {
   const dimensions = (width: number, height: number) => Number.isSafeInteger(width) && Number.isSafeInteger(height)
     && width > 0 && height > 0 && width <= 1_000_000 && height <= 1_000_000 ? { imageWidth: width, imageHeight: height } : undefined
   if (bytes.length >= 24 && bytes.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10]))) return dimensions(bytes.readUInt32BE(16), bytes.readUInt32BE(20))

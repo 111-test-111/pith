@@ -55,8 +55,9 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import electron from 'electron'
 import { chromium } from 'playwright-core'
-import { LIBRARY_WEB_SNAPSHOT_SCHEMA } from '../src/shared/library.ts'
+import { SessionManager } from '@earendil-works/pi-coding-agent'
 import { checkBrowserLifecycle } from './lib/check-browser-lifecycle.mjs'
+import { checkBrowserTypeTargets } from './lib/check-browser-type-targets.mjs'
 
 const execFileAsync = promisify(execFile)
 const pause = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -71,6 +72,7 @@ const MARKER = 'about:blank#pith/'
 const temporary = await mkdtemp(join(tmpdir(), 'pith-browser-ui-'))
 const profile = join(temporary, 'profile')
 const home = join(temporary, 'home')
+const agentDir = join(temporary, 'agent')
 const project = join(temporary, 'project')
 const downloads = join(temporary, 'downloads')
 
@@ -152,6 +154,8 @@ process.on('unhandledRejection', (reason) => {
 })
 
 try {
+  await checkBrowserTypeTargets()
+  pass('flow', 'real Electron input layout: zero-width and hidden targets reject without input events, unsupported ax is refused, expansion recovers typing and offscreen inputs still scroll')
   await checkBrowserLifecycle(repo)
   pass('ui', 'development StrictMode opens an empty browser with one about:blank tab, reconstructs saved tabs, and ignores unmounted restore receipts')
   // ---- Fixture server: deterministic http pages on 127.0.0.1 (the navigation
@@ -315,12 +319,21 @@ try {
     'expected exactly one userData-rooting expression in the built main entry — update this check'
   )
   await writeFile(mainEntry, original.replace(NEEDLE, `app.setPath("userData", ${JSON.stringify(profile)});\napp.setPath("downloads", ${JSON.stringify(downloads)});`))
+  const sessionDir = join(agentDir, 'sessions', '--browser-fixture--')
+  await mkdir(sessionDir, { recursive: true })
+  const makeChat = (label) => {
+    const session = SessionManager.create(project, sessionDir)
+    session.appendMessage({ role: 'user', content: label, timestamp: Date.now() })
+    return { id: session.getSessionId(), path: session.getSessionFile() }
+  }
+  const originalChat = makeChat('Browser fixture A')
+  const secondChat = makeChat('Browser fixture B')
   await writeFile(join(profile, 'app-settings.json'), JSON.stringify({
-    cwd: project, folders: [project], startup: 'new',
+    cwd: project, folders: [project], startup: 'resume', startupSession: originalChat.path,
     contextFiles: false, browserConsent: false, browserAgentToolsEnabled: false
   }, null, 2))
 
-  const env = { ...process.env, PITH_CDP_PORT: String(cdpPort), HOME: home }
+  const env = { ...process.env, PITH_CDP_PORT: String(cdpPort), HOME: home, PI_CODING_AGENT_DIR: agentDir }
   // A surrounding dev session may export this; the check must drive the built
   // renderer under out/, not an inherited Vite URL.
   delete env.ELECTRON_RENDERER_URL
@@ -428,6 +441,9 @@ try {
   await eventually(() => evaluate('Boolean(document.querySelector("[data-panel=right]"))'), 'right rail')
   await evaluate(`(()=>{const rows=[...document.querySelectorAll('[data-panel=right] button')];const b=rows.find((e)=>[...e.querySelectorAll('span')].some((s)=>s.textContent.trim()==='Browser'));if(!b)throw Error('Browser picker row missing');b.click()})()`)
   await eventually(() => evaluate('Boolean(document.querySelector("[data-browser-pane]"))'), 'browser pane')
+  const browserSessionId = await evaluate('document.querySelector("[data-browser-workspace]").dataset.browserWorkspace')
+  assert.ok(browserSessionId, 'the browser belongs to the selected conversation')
+  const agentBrowserOwner = `agent:${browserSessionId}`
   // The consent card is the documented entry; the grant round trip is driven
   // live below. playwright attaches FIRST — the first-status latch creates the
   // pane's initial start page right after consent, and a guest created while
@@ -467,6 +483,71 @@ try {
   assert.equal(await progressShows(), 0, 'reloading the blank start page never flashes a progress bar')
   pass('flow', 'create-page handshake: the first-status latch auto-creates the start page and its marker webview materializes a guest target the connected client can see (Target.createTarget is unusable — see iron 1)')
 
+  const watchGuestTeardowns = () => evaluate(`(() => {
+    let count = 0;
+    const removed = new WeakSet();
+    const observer = new MutationObserver(records => {
+      for (const record of records) for (const node of record.removedNodes) {
+        if (!(node instanceof Element)) continue;
+        const guests = node.matches('webview') ? [node] : [...node.querySelectorAll('webview')];
+        for (const guest of guests) if (!removed.has(guest)) { removed.add(guest); count += 1; }
+      }
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    window.__finishRestoreGuestTeardowns = () => { observer.disconnect(); return count; };
+  })()`)
+  let scopedGuestTeardowns = 0
+  // Give each conversation a live browser in the same workspace, then
+  // return to the original blank guest for the rest of this suite.
+  {
+    await watchGuestTeardowns()
+    assert.equal(originalChat.id, browserSessionId)
+    const activeBrowser = '[data-browser-workspace]:not([aria-hidden])'
+    const browserUrl = activeBrowser + ' [data-browser-toolbar] input'
+    const scopedUrl = fixtureUrl + 'scoped-popup'
+    const secondUrl = fixtureUrl + 'second-chat'
+    const row = chatPath => '[data-resource-id=' + JSON.stringify(chatPath) + ']'
+    const select = chatPath => evaluate('document.querySelector(' + JSON.stringify(row(chatPath)) + ').click()')
+    const exists = selector => evaluate('Boolean(document.querySelector(' + JSON.stringify(selector) + '))')
+    const visibleUrl = () => evaluate('document.querySelector(' + JSON.stringify(browserUrl) + ')?.value')
+    await evaluate('window.originalGuest = document.querySelector(' + JSON.stringify(activeBrowser + ' webview') + '); void 0')
+    if (!await exists(row(secondChat.path))) await select('folder:' + project)
+    await eventually(() => exists(row(secondChat.path)), 'second chat is listed')
+    await select(secondChat.path)
+    await eventually(() => evaluate('document.querySelector("[data-panel=right]")?.getAttribute("aria-hidden") === "true"'), 'a different conversation has a closed sidebar')
+    assert.equal(await evaluate('originalGuest.isConnected'), true)
+    await evaluate('window.dispatchEvent(new CustomEvent("pith:browser-open-link"))')
+    await eventually(async () => (await visibleUrl()) === 'about:blank', 'second chat opens its own blank browser')
+    assert.equal(await evaluate('document.querySelector(' + JSON.stringify(activeBrowser) + ').dataset.browserWorkspace'), secondChat.id)
+    const secondPage = await evaluate('window.pi.browserCreatePage(' + JSON.stringify(secondUrl) + ')')
+    await eventually(() => exists('[data-browser-tab="' + secondPage.id + '"] [role=tab]'), 'second chat page appears')
+    await click('[data-browser-tab="' + secondPage.id + '"] [role=tab]')
+    await eventually(async () => (await visibleUrl())?.endsWith('/second-chat'), 'second chat selects its own page')
+
+    const launchPopup = 'void window.open(' + JSON.stringify(scopedUrl) + ', "scoped-popup")'
+    await evaluate('originalGuest.executeJavaScript(' + JSON.stringify(launchPopup) + ', true)')
+    const popup = await eventually(async () => {
+      const status = await evaluate('window.pi.browserStatus()')
+      return status.pages.find(page => page.url === scopedUrl)
+    }, 'hidden guest gets a popup in its own browser')
+    assert.equal(popup.owner, 'human:' + browserSessionId)
+    assert.equal(await exists(activeBrowser + ' [data-browser-tab="' + popup.id + '"]'), false)
+    await select(originalChat.path)
+    await eventually(async () => (await visibleUrl())?.endsWith('/scoped-popup'), 'the popup is selected in its own conversation')
+    await click('[data-browser-tab="' + popup.id + '"] button[aria-label="Close page"]')
+    await eventually(async () => (await visibleUrl()) === 'about:blank', 'selects the original blank page')
+    assert.equal(await evaluate('document.querySelector(' + JSON.stringify(activeBrowser + ' webview') + ') === originalGuest'), true)
+
+    await select(secondChat.path)
+    await eventually(async () => (await visibleUrl())?.endsWith('/second-chat'), 'other chat restores its own selected page')
+    await click('[data-sidebar-tab="browser"] button[aria-label="Close Browser"]')
+    await select(originalChat.path)
+    await eventually(async () => await stripRows() === 1 && (await visibleUrl()) === 'about:blank', 'closing a browser leaves the other chat intact')
+    await resetProgressShows()
+    scopedGuestTeardowns = await evaluate('window.__finishRestoreGuestTeardowns()')
+    pass('ui', 'conversations in one project retain separate live guests, selections and background popups')
+  }
+
   // ================= Iron rule 3 (LIVE): the three-state visibility rule =====
   // The rule's judged site is the renderer, and both directions are driven live
   // here: an unselected HUMAN page (created through the real IPC; the start page
@@ -478,7 +559,7 @@ try {
   const humanId = await evaluate('window.pi.browserCreatePage().then((meta) => meta.id)')
   await eventually(() => evaluate(`Boolean(document.querySelector('[data-browser-page=${JSON.stringify(humanId)}]'))`), 'unselected human page row', 15_000)
   const agentId = 'p-iron3-agent'
-  await evaluate(`window.pi.browserSeen({ id: ${JSON.stringify(agentId)}, owner: 'agent:check', url: 'https://example.test/iron3-agent' })`)
+  await evaluate(`window.pi.browserSeen({ id: ${JSON.stringify(agentId)}, owner: ${JSON.stringify(agentBrowserOwner)}, url: 'https://example.test/iron3-agent' })`)
   await eventually(() => evaluate(`Boolean(document.querySelector('[data-browser-page=${JSON.stringify(agentId)}]'))`), 'agent-owned page row', 15_000)
   const visibility = await evaluate(`(() => {
     const read = (id) => {
@@ -501,7 +582,7 @@ try {
   const pageViewNoComments = (await read('src/renderer/src/components/app/BrowserPageView.tsx'))
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/^\s*\/\/.*$/gm, '')
-  assert.match(pageViewNoComments, /backgroundAgent = !selected && page\.owner !== HUMAN_OWNER/, 'the visibility predicate is owner-based, not a constant')
+  assert.match(pageViewNoComments, /backgroundAgent = !selected && !isHumanBrowserOwner\(page\.owner\)/, 'the visibility predicate uses page ownership')
   assert.match(pageViewNoComments, /!selected && !backgroundAgent && 'hidden'/, "display:none is applied only when the page is NOT a background agent page")
   assert.doesNotMatch(pageViewNoComments, /display: 'none'/, 'no inline display:none escapes the guard')
   // Both rows go away again: later legs count strip rows.
@@ -781,7 +862,7 @@ try {
   await evaluate(`(() => { const w = document.querySelector('webview'); w && w.blur && w.blur(); const b = document.querySelector('[data-browser-toolbar] button'); b && b.focus(); return 1 })()`)
   pass('flow', 'agent keys stay in the page: while the shell owned focus a guest-bound Shift also fired in the shell DOM; after the <webview> took DOM focus the same key reached the shell zero times — the fact BrowserService.focusGuest uses before every keyboard action')
   await assertSource('agent keys focus the guest before dispatch (main awaits the renderer)', ['src/main/ipc.ts'], /target\.webContents\.send\('browser:focus-guest', payload\)/)
-  await assertSource('the pane focuses the guest <webview> and acks', ['src/renderer/src/components/app/BrowserPane.tsx'], /element\?\.focus\(\)[\s\S]{0,120}browserFocusGuestDone\(requestId\)/)
+  await assertSource('the workspace focuses the guest <webview> and acks', ['src/renderer/src/lib/browser/use-workspace-browsers.ts'], /guest\?\.focus\(\)[\s\S]{0,120}browserFocusGuestDone\(requestId\)/)
 
   // ================= Download (flow) =========================================
   await guest.locator('#download').click({ force: true, timeout: 10_000 })
@@ -792,18 +873,6 @@ try {
   }, 'downloaded fixture file', 20_000)
   assert.equal(await readFile(downloadPath, 'utf8'), 'browser download fixture')
   pass('flow', `guest download is intercepted by the browser session: toolbar indicator appears and the file lands complete (${downloadPath})`)
-  const downloadSource = await eventually(() => evaluate(`(async()=>{const result=await window.pi.libraryPage({query:${JSON.stringify(downloadName)}});return result.ok?result.value.items.find(item=>item.source==='download'&&item.name===${JSON.stringify(downloadName)}):null})()`), 'completed browser download source', 20_000)
-  assert.equal(downloadSource.kind, 'web'); assert(downloadSource.url.endsWith('/download.txt'))
-  assert(!downloadSource.originalPath, 'download bytes do not enter Files without an attachment or present declaration')
-  assert(downloadSource.archivedPath?.endsWith('.json'), 'Web downloads retain the current JSON source snapshot')
-  const downloadSnapshot = JSON.parse(await readFile(downloadSource.archivedPath, 'utf8'))
-  assert.equal(downloadSnapshot.schema, LIBRARY_WEB_SNAPSHOT_SCHEMA)
-  assert.equal(downloadSnapshot.url, downloadSource.url)
-  assert.equal(downloadSnapshot.source, 'download')
-  assert.equal(downloadSnapshot.excerpt, '', 'a download reference does not invent page content')
-  assert.equal(await evaluate(`window.pi.libraryPage({kind:'file',query:${JSON.stringify(downloadName)}}).then(result => result.ok && result.value.total)`), 0)
-  assert(downloadSource.sessionPath, 'human browser download URLs retain the originating conversation')
-  pass('flow', 'completed download retains its source URL in a Web JSON snapshot; library Files remain limited to attachments and present')
 
   // ================= Popup routing (flow + iron 10 live) =====================
   await guest.locator('#popup').click({ force: true, timeout: 10_000 })
@@ -827,7 +896,7 @@ try {
   await assertSource(
     'popup owner inheritance mapping',
     ['src/renderer/src/components/app/BrowserPane.tsx'],
-    /wcIdMapRef\.current\.get\(popup\.openerWebContentsId\)\?\.owner \?\? HUMAN_OWNER/
+    /popup\.owner \?\? wcIdMapRef\.current\.get\(popup\.openerWebContentsId\)\?\.owner \?\? store\.humanOwner/
   )
   trims.push('popup owner inheritance: source-asserted (BrowserPane wcIdMapRef opener map); an agent-owned opener is not reachable without an SDK session')
 
@@ -1179,19 +1248,35 @@ try {
   const annotationWheels=await evaluate('window.__annotateWheels.map(event=>({x:event.deltaX,y:event.deltaY}))')
   assert.deepEqual(annotationWheels,[{x:-18,y:-12},{x:-12,y:-20},{x:-8,y:-90}],'annotation forwarding preserves both axes and inverted pixel deltas')
   await evaluate('window.__restoreAnnotateWheel()')
-  await eventually(()=>guest.evaluate(()=>window.scrollX>0&&window.scrollY>0),'annotate diagonal input scrolls both guest axes')
-  await guest.evaluate(previous=>{document.body.style.minWidth=previous;window.scrollTo(0,0)},annotationWidth)
+  const wheelPoint = await evaluate(`(() => {
+    const box = document.querySelector('[data-browser-annotate-capture]').getBoundingClientRect()
+    return { x: Math.round(box.left + 40), y: Math.round(box.top + 40) }
+  })()`)
+  await send('Page.bringToFront')
+  await eventually(async () => {
+    if (await guest.evaluate(() => window.scrollX > 0 && window.scrollY > 0)) return true
+    // Native wheel delivery can coalesce the initial synthetic burst.
+    await send('Input.dispatchMouseEvent', { type: 'mouseWheel', ...wheelPoint, deltaX: 36, deltaY: 60 })
+    return false
+  }, 'annotate diagonal input scrolls both guest axes')
+  await pause(350)
+  await guest.evaluate(previous => {
+    document.body.style.minWidth = previous
+    window.scrollTo({ left: 0, top: 0, behavior: 'instant' })
+  }, annotationWidth)
   await eventually(()=>guest.evaluate(()=>window.scrollX===0&&window.scrollY===0),'guest returns to the annotation target')
   pass('ui','annotate diagonal swipe forwards both axes through momentum')
   await evaluate('window.__pithAnnotations = []; window.addEventListener("pith:browser-annotation", (e) => window.__pithAnnotations.push(e.detail))')
-  // Click the h1: zoom is 1.0 here, so guest (40,40) maps to the webview
-  // element's origin + (40,40) (the device pin moved the origin — measured
-  // live, never assumed; BrowserAnnotate does its own inverse mapping from
-  // these client coordinates). Real CDP mouse input, not a synthetic event.
+  // Measure a point inside the heading, away from the preceding wheel hover.
+  // At 100% zoom its coordinates are relative to the webview's live bounds.
   {
+    const target = await guest.evaluate(() => {
+      const bounds = document.querySelector('h1').getBoundingClientRect()
+      return { x: bounds.left + Math.min(120, bounds.width / 2), y: bounds.top + bounds.height / 2 }
+    })
     const point = JSON.parse(await evaluate(`JSON.stringify((()=>{
       const wv=document.querySelector('webview'); const r=wv.getBoundingClientRect();
-      return {x:r.x+40,y:r.y+40};
+      return {x:r.x+${target.x},y:r.y+${target.y}};
     })())`))
     // The theme view-transition reveal hides the live DOM from hit-testing
     // while it runs; wait until the capture layer is the top hit-test target.
@@ -1288,7 +1373,7 @@ try {
   // The agent row is materialized through the pane's own popup path (a
   // browserSeen with marker url + navigateTo; the service performs the goto
   // after registration) so it is a REAL loaded page at snapshot time.
-  const agentRestoreOwner = 'agent:check-restore'
+  const agentRestoreOwner = agentBrowserOwner
   // A DISTINCT pathname (the fixture serves its main page for any unmatched
   // path) so the active-tab assertions below discriminate THIS row from a
   // human row parked on the fixture root.
@@ -1740,24 +1825,12 @@ try {
   // Track these added teardowns separately: each destroyed guest may emit
   // Electron's existing Invalid guestInstanceId cleanup exception, while the
   // original suite retains its fixed exception budget.
-  await evaluate(`(() => {
-    let count = 0;
-    const removed = new WeakSet();
-    const observer = new MutationObserver(records => {
-      for (const record of records) for (const node of record.removedNodes) {
-        if (!(node instanceof Element)) continue;
-        const guests = node.matches('webview') ? [node] : [...node.querySelectorAll('webview')];
-        for (const guest of guests) if (!removed.has(guest)) { removed.add(guest); count += 1; }
-      }
-    });
-    observer.observe(document.body, { childList: true, subtree: true });
-    window.__finishRestoreGuestTeardowns = () => { observer.disconnect(); return count; };
-  })()`)
+  await watchGuestTeardowns()
   const reopenBrowser = async () => {
     await evaluate('window.dispatchEvent(new CustomEvent("pith:browser-open-link"))')
     await eventually(() => evaluate('Boolean(document.querySelector("[data-browser-pane]"))'), 'browser reopened')
   }
-  const openPagesSnapshot = () => evaluate('JSON.parse(localStorage.getItem("pi-app:browser-open-pages") ?? "[]")')
+  const openPagesSnapshot = () => evaluate(`new Map(JSON.parse(localStorage.getItem("pi-app:browser-open-pages:v2") ?? "[]")).get(${JSON.stringify(browserSessionId)}) ?? []`)
   const openReadyTab = async () => {
     const id = await openNewTab()
     await eventually(() => evaluate(`Boolean(document.querySelector('[data-browser-tab=${JSON.stringify(id)}] [role=tab][aria-selected="true"]')) && window.pi.browserStatus().then(status => status.pages.some(page => page.id === ${JSON.stringify(id)}) && !status.pendingCreates.some(page => page.id === ${JSON.stringify(id)}))`), 'new page selected and registered before navigation')
@@ -1843,6 +1916,7 @@ try {
   await click('[data-sidebar-tab="browser"] button[aria-label="Close Browser"]')
   await eventually(() => evaluate('!document.querySelector("[data-panel=right]")'), 'final browser fixture cleanup')
   pass('ui', 'restore-tabs disabled: closing the last rail tab survives the exit animation and still reopens blank')
+
   const restoreGuestTeardowns = await evaluate('window.__finishRestoreGuestTeardowns()')
 
   // ================= Iron rule 12 (live + app-side source) ==================
@@ -1961,7 +2035,7 @@ try {
   const COSMETIC_EXCEPTION_CAP = 24
   for (const [kind, count] of cosmeticKinds) {
     const cap = kind === 'Electron webview teardown on the designed close path (Invalid guestInstanceId)'
-      ? COSMETIC_EXCEPTION_CAP + restoreGuestTeardowns : COSMETIC_EXCEPTION_CAP
+      ? COSMETIC_EXCEPTION_CAP + scopedGuestTeardowns + restoreGuestTeardowns : COSMETIC_EXCEPTION_CAP
     assert.ok(count <= cap, `cosmetic exception class fired ${count} times (> ${cap}) — that is a regression, not teardown noise: ${kind}`)
   }
   const realExceptions = exceptions.filter((detail) => !cosmeticException(detail))

@@ -30,7 +30,7 @@ import type { UsageStatsDTO, UsageTurnRecordDTO } from '../../../../../../shared
 /**
  * Settings → Usage → trends: summary stat cards, a stacked cumulative area
  * chart per model/provider and the per-request records table, ported from
- * pi-web. beUI-native chrome (Select, segment Tabs, Buttons); the chart SVG
+ * pi-web. beUI-native chrome (Select, underline Tabs, Buttons); the chart SVG
  * and its crosshair readout are data visualization.
  */
 
@@ -553,10 +553,10 @@ export function UsageTrendsPanel({ stats, today }: { stats: UsageStatsDTO; today
             <div className="mt-0.5 text-xs text-muted-foreground">{t('settings.usage.chart.subtitle')}</div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Select value={groupBy} onValueChange={(value) => setGroupBy(value as UsageGroupBy)}>
+            <Select value={groupBy} onValueChange={(value) => setGroupBy(value as UsageGroupBy)} textClassName="text-caption">
               <SelectTrigger
                 aria-label={t('settings.usage.groupBy')}
-                className="h-7 gap-1.5 rounded-control px-2.5 text-caption"
+                className="h-7 gap-1.5 rounded-control px-2.5"
               >
                 {groupBy === 'model' ? t('settings.usage.groupBy.model') : t('settings.usage.groupBy.provider')}
               </SelectTrigger>
@@ -565,7 +565,7 @@ export function UsageTrendsPanel({ stats, today }: { stats: UsageStatsDTO; today
                 <SelectItem value="provider" className="py-1.5">{t('settings.usage.groupBy.provider')}</SelectItem>
               </SelectContent>
             </Select>
-            <Tabs value={range} onValueChange={(value) => setRange(value as UsageRangeKey)} variant="segment" className="min-w-0">
+            <Tabs value={range} onValueChange={(value) => setRange(value as UsageRangeKey)} variant="underline" className="min-w-0">
               <TabsList className="h-7 bg-transparent p-0">
                 {RANGE_KEYS.map((key) => (
                   <TabsTrigger key={key} value={key} className="min-h-0 px-2.5 py-1 text-caption">

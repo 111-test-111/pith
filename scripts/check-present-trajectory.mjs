@@ -377,9 +377,10 @@ try {
   const toolInterrupted = toolFixture.session.prompt('cancel during tool execution')
   await toolStarted
   await toolFixture.session.abort(); await toolInterrupted
-  // The offline provider deliberately completes normally after cancellation;
-  // the aborted run signal must still determine the overall outcome.
-  assert.equal(toolFixture.session.messages.at(-1).stopReason, 'stop')
+  // The pinned SDK/app abort gate ends the tool run before another provider call.
+  // The durable run record must retain cancellation after the tool result settles.
+  assert.equal(toolFixture.session.messages.at(-1).stopReason, 'aborted')
+  assert.equal(toolFixture.requests.length, 1, 'cancelling a tool must not start a provider continuation')
   await toolFixture.managed.trajectory.flush()
   const toolTrace = await toolFixture.app.trajectoryPage({ sessionPath: toolFixture.managed.path })
   assert.equal(toolTrace.items.find(x => x.kind === 'run').status, 'cancelled')

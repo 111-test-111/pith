@@ -6,6 +6,8 @@
 
 import type { AskUserRecordDTO, PendingAskUserDTO } from './ask-user'
 import type { GoalSnapshotDTO } from './goal'
+import type { AssistantMessageDiagnosticDTO } from './provider-errors'
+import type { VisionStateDTO, VisionErrorDTO } from './vision'
 import type { CompactionProcessDTO, CompactionProcessStateDTO, CompactionQueueStateDTO } from './compaction'
 import type { TableFormat } from './table'
 import type { BrowserPageMeta, BrowserSearchEngine } from './browser'
@@ -126,6 +128,8 @@ export interface CompletedAt {
 
 export interface UserMsg extends CompletedAt {
   sessionEntryId?: string
+  /** How the SDK delivered this queued input. Idle prompts have no queue delivery. */
+  queuedDelivery?: 'steer' | 'followUp'
   role: 'user'
   content: UserContent
   timestamp: number
@@ -150,6 +154,7 @@ export interface AssistantMsg extends CompletedAt {
   usage?: UsageDTO
   stopReason: string
   errorMessage?: string
+  diagnostics?: AssistantMessageDiagnosticDTO[]
   timestamp: number
 }
 
@@ -236,7 +241,11 @@ export type ChatMessage =
 /** A pi AgentSessionEvent after IPC serialization, routed to its owning session. */
 export interface PiEvent {
   type: string
+  /** Set when a run starts or a queued follow-up opens a new change scope. */
+  changeScopeId?: string | null
   rewindError?: RewindErrorDTO
+  visionError?: VisionErrorDTO
+  vision?: VisionStateDTO
   /** Present on session-scoped events. Legacy/global errors may omit routing. */
   sessionId?: string
   sessionPath?: string
@@ -245,6 +254,10 @@ export interface PiEvent {
   eventSequence?: number
   /** Transient manual-compaction metadata with its own revision. */
   compactionQueue?: CompactionQueueStateDTO
+  /** On `queue_update`: the queued messages the run just consumed. The renderer
+   * echoes their user rows in the same commit as the card's removal; images
+   * stay off the wire (the persisted message carries them). */
+  delivered?: QueuedItemDTO[]
   compactionProcess?: CompactionProcessStateDTO
   /** True when this event belongs to a subagent child session. A child's turns
    * are steps of its parent's run, so notification cues (renderer-side) skip
@@ -809,6 +822,7 @@ export interface ToolRunDTO {
 }
 
 export interface SessionSnapshotDTO {
+  vision?: VisionStateDTO
   goal?: GoalSnapshotDTO | null
   goalSeq?: number
   jevWorkflow?: JevWorkflowDTO | null
@@ -1200,6 +1214,8 @@ export interface BrowserStatusDTO {
 }
 
 export interface AppInfoDTO {
+  /** Automatically name regular conversations after a settled turn. */
+  autoNameSessions: boolean
   checkpointsEnabled: boolean
   bashMaxWaitMs: number
   /** DSH file-sandbox mode: which file effects bash/edit/write may perform. */
@@ -1368,6 +1384,8 @@ export interface FileBrowserRequest {
 export type HtmlPreviewDTO = { url: string; error?: never } | { url?: never; error: FileBrowserError }
 export interface HtmlPreviewLinkDTO { webContentsId: number; url: string }
 export interface FileActionResultDTO { status: 'ok' | 'cancelled' | 'error' }
+/** Native application artwork, serialized as a bounded PNG data URL. */
+export interface FileDefaultAppDTO { name: string; icon: string }
 export type FileBrowserError = 'missing' | 'directory' | 'binary' | 'unreadable' | 'tooLarge' | 'git'
 export interface FileDirectoryEntryDTO {
   name: string
@@ -1466,6 +1484,8 @@ export interface AuthNotifyDTO {
 }
 
 export interface PromptPayload {
+  /** Reject a draft whose visible session changed before main admission. */
+  sessionPath?: string
   text: string
   images: ImageContent[]
   files: string[]
@@ -2121,6 +2141,7 @@ export interface DebugTerminalRequest {
   requestId: string
   title: string
   cwd: string
+  sessionPath: string
 }
 
 /** Renderer → main answer for a DebugTerminalRequest. */
@@ -2156,4 +2177,3 @@ export type DebugPanelRequest = { sessionPath: string; debugId: string; stopId?:
 export type { TrajectoryKind, TrajectoryStatus, TrajectoryRecord, TrajectoryQuery, TrajectoryPage, TrajectoryDetail, TrajectoryNodeRequest, TrajectoryNodePage, TrajectoryNode, TrajectoryDocumentKind, TrajectoryUsage } from './trajectory'
 
 export type { PresentedFile, PresentResult } from './present'
-export type { LibraryItem, LibraryKind, LibrarySource, LibraryStorage, LibraryPreferences, LibraryQuery, LibraryPage, LibraryStatus, LibraryResult, LibrarySettingsUpdate } from './library'

@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
-import { ArrowLeft, Bell, BookOpen, Chart, Gavel, Globe, Keyboard, KeyRound, Monitor, Palette, PictureInPicture2, Plug, Puzzle, Settings2, Skills, Subagent, TextAlignCenter, Wrench } from '@/lib/icons'
+import { AnimatePresence, motion, PresenceContext, useReducedMotion } from 'motion/react'
+import { ArrowLeft, Bell, Chart, Gavel, Globe, Keyboard, KeyRound, Monitor, Palette, PictureInPicture2, Plug, Puzzle, Settings2, Skills, Subagent, TextAlignCenter, Wrench } from '@/lib/icons'
 import { Button } from '@/components/motion/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/motion/tabs'
 import { EASE_OUT } from '@/lib/ease'
@@ -23,7 +23,6 @@ import { BrowserSection } from './BrowserSection'
 import { UsageSection } from './UsageSection'
 import { JevSection } from './JevSection'
 import { WindowTitlebar } from '../WindowTitlebar'
-import { LibrarySection } from './LibrarySection'
 import { ResourcesSection } from './ResourcesSection'
 
 interface SectionProps {
@@ -94,13 +93,6 @@ const SECTIONS: {
     descriptionKey: 'shortcuts.description',
     icon: <Keyboard className="size-[18px]" />,
     render: () => <ShortcutsSection />
-  },
-  {
-    id: 'library',
-    labelKey: 'library.title',
-    descriptionKey: 'library.settingsDesc',
-    icon: <BookOpen className="size-[18px]" />,
-    render: () => <LibrarySection />
   },
   {
     id: 'browser',
@@ -232,6 +224,9 @@ export function SettingsPage({ open, onBack, requestedSection, ...sectionProps }
           data-shortcut-layer
           data-shortcut-passthrough="openSettings"
         >
+          {/* The page owns its exit. Hidden retained sections and persistent
+              overlay owners must not extend the page's presence lifetime. */}
+          <PresenceContext.Provider value={null}>
           <WindowTitlebar className="gap-1.5 border-b border-border/50">
             <Button variant="ghost" size="icon" aria-label={t('settings.back')} onClick={onBack}>
               <ArrowLeft className="size-4" />
@@ -284,6 +279,7 @@ export function SettingsPage({ open, onBack, requestedSection, ...sectionProps }
               </TabsContent>
             ))}
           </Tabs>
+          </PresenceContext.Provider>
         </motion.div>
       ) : null}
     </AnimatePresence>

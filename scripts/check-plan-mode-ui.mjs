@@ -9,7 +9,7 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { _electron } from 'playwright-core'
 import electron from 'electron'
-import { checkPromptEditor } from './lib/check-prompt-editor.mjs'
+import { checkComposerActions, checkPromptEditor } from './lib/check-prompt-editor.mjs'
 const repo = fileURLToPath(new URL('..', import.meta.url))
 const temporary = await mkdtemp(join(tmpdir(), 'pith-plan-ui-'))
 const fixture = String.raw`<!doctype html><html><body style="margin:0"><div id="root" style="max-width:800px;margin:40px auto"></div><script type="module">
@@ -82,7 +82,7 @@ try {
     // The plus menu enters Plan Mode; only the active mode has a bottom control.
     const planAction = page.locator('[data-plan-mode-control]')
     const enterPlan = async () => {
-      await page.getByRole('button', { name: 'Add to prompt' }).click()
+      await page.locator('[data-composer-actions-trigger]').click()
       await page.getByRole('button', { name: locale === 'en' ? 'Plan mode' : '计划模式', exact: true }).click()
     }
     const draftFocused = () => editor.evaluate(node => document.activeElement === node)
@@ -212,6 +212,10 @@ try {
       }
     }
   }
+  await page.goto(url + '?locale=zh-TW')
+  await page.locator('[data-prompt-editor]').waitFor()
+  await checkComposerActions(page, 'zh-TW')
+
   // Option B: a mode chosen mid-initialization queues — the control shows
   // immediately, no IPC — and applies when the session reports initialized;
   // a failed flush reverts the optimistic UI and surfaces the reason.

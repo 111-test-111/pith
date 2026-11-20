@@ -11,6 +11,7 @@ import { setCompactTools, useCompactTools } from '@/lib/compact-tools'
 import { useShowReasoning } from '@/lib/show-reasoning'
 import { useSpinnerVerbs } from '@/lib/spinner-verbs'
 import { useToolGrouping } from '@/lib/tool-grouping'
+import { setDiffStyle, useDiffStyle } from '@/lib/diff-style'
 import { useI18n, LOCALE_NAMES, type Locale } from '@/i18n'
 import { ACCENT_PRESETS, CUSTOM_ACCENT, useCustomAccent } from '@/lib/accent'
 import type { UiStyle } from '@/lib/ui-style'
@@ -23,6 +24,7 @@ import { CodeThemesGroup } from './CodeThemesGroup'
  * They are one choice on purpose — the two dimensions can never disagree. */
 export const UI_STYLE_OPTIONS = [
   { id: 'square', labelKey: 'settings.uiStyleSquare' },
+  { id: 'rounded', labelKey: 'settings.uiStyleRounded' },
   { id: 'squircle', labelKey: 'settings.uiStyleSquircle' }
 ] as const
 
@@ -86,6 +88,7 @@ export function AppearanceSection({
   const [sidebarGlass, setSidebarGlass] = useSidebarGlass()
   const reduceMotion = useReduceMotion()
   const compactTools = useCompactTools()
+  const diffStyle = useDiffStyle()
   // Transcript display preferences, shared with the message rows.
   const [showReasoning, setShowReasoning] = useShowReasoning()
   const [toolGrouping, setToolGrouping] = useToolGrouping()
@@ -204,6 +207,12 @@ export function AppearanceSection({
       </SettingsGroup>
 
       <SettingsGroup title={t('settings.interfaceGroup')}>
+        <SettingsRow label={t('settings.diffStyle')} description={t('settings.diffStyleDesc')}>
+          <RadioGroup orientation="horizontal" value={diffStyle} onValueChange={setDiffStyle} className="gap-6">
+            <RadioGroupItem value="detailed" label={t('settings.diffStyleDetailed')} />
+            <RadioGroupItem value="simple" label={t('settings.diffStyleSimple')} />
+          </RadioGroup>
+        </SettingsRow>
         <SettingsRow
           label={t('settings.sidebarGlass')}
           description={t('settings.sidebarGlassDesc')}
